@@ -56,8 +56,12 @@ async def test_claude_launch_session_shapes_oauth_home_environment(tmp_path: Pat
                 "runtimeMaterializationMode": "oauth_home",
                 "volumeRef": "claude_auth_volume",
                 "volumeMountPath": "/home/app/.claude",
+                # #3821: backend-derived isolation policy for
+                # claude_code/anthropic/oauth.
                 "clearEnvKeys": [
                     "ANTHROPIC_API_KEY",
+                    "ANTHROPIC_AUTH_TOKEN",
+                    "ANTHROPIC_BASE_URL",
                     "CLAUDE_API_KEY",
                     "OPENAI_API_KEY",
                 ],
@@ -109,6 +113,15 @@ async def test_claude_launch_session_redacts_auth_path_failures(tmp_path: Path) 
                     "runtimeMaterializationMode": "oauth_home",
                     "volumeRef": "claude_auth_volume",
                     "volumeMountPath": "/home/app/.claude",
+                    # #3821: backend-derived isolation policy for
+                    # claude_code/anthropic/oauth.
+                    "clearEnvKeys": [
+                        "ANTHROPIC_API_KEY",
+                        "ANTHROPIC_AUTH_TOKEN",
+                        "ANTHROPIC_BASE_URL",
+                        "CLAUDE_API_KEY",
+                        "OPENAI_API_KEY",
+                    ],
                 },
             }
         )

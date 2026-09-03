@@ -39,7 +39,6 @@ from moonmind.workflows.temporal.artifacts import (
 from moonmind.workflows.temporal import activity_runtime
 from moonmind.workflows.temporal.activity_runtime import (
     TemporalActivityRuntimeError,
-    TemporalProposalActivities,
 )
 from moonmind.workflows.temporal.activity_runtime import TemporalAgentRuntimeActivities
 from moonmind.workflows.temporal.activity_runtime import TemporalManifestActivities
@@ -388,9 +387,6 @@ def test_build_worker_activity_bindings_only_registers_selected_fleet(tmp_path: 
                     artifact_service=service,
                     client_factory=lambda: None,
                 ),
-                proposal_activities=TemporalProposalActivities(
-                    artifact_service=service,
-                ),
                 agent_skills_activities=AgentSkillsActivities(),
             )
 
@@ -432,9 +428,6 @@ def test_build_worker_activity_bindings_registers_mm_skill_execute_on_sandbox_fl
                     artifact_service=service,
                     client_factory=lambda: None,
                 ),
-                proposal_activities=TemporalProposalActivities(
-                    artifact_service=service,
-                ),
                 agent_skills_activities=AgentSkillsActivities(),
             )
 
@@ -474,9 +467,6 @@ def test_build_worker_activity_bindings_registers_workload_run_on_agent_runtime_
                     client_factory=lambda: None,
                 ),
                 agent_runtime_activities=TemporalAgentRuntimeActivities(),
-                proposal_activities=TemporalProposalActivities(
-                    artifact_service=service,
-                ),
                 agent_skills_activities=AgentSkillsActivities(),
             )
 

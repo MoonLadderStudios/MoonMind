@@ -89,6 +89,16 @@ class _Session:
             secret_refs={},
             credential_bindings=[],
             command_behavior={"auth_readiness": {"launch_ready": True}},
+            last_auth_method=None,
+            # #3821: backend-derived isolation policy for
+            # codex_cli/openai/oauth.
+            clear_env_keys=[
+                "OPENAI_API_KEY",
+                "OPENAI_BASE_URL",
+                "OPENAI_ORG_ID",
+                "OPENAI_PROJECT",
+                "MINIMAX_API_KEY",
+            ],
         )
         self.usage = None
         self.added = []
@@ -850,6 +860,16 @@ class _GenericV2Session(_Session):
             secret_refs={},
             credential_bindings=[],
             command_behavior={"auth_readiness": {"launch_ready": True}},
+            last_auth_method=None,
+            # #3821: backend-derived isolation policy for
+            # codex_cli/openai/oauth (unknown strategies stay blocked).
+            clear_env_keys=[
+                "OPENAI_API_KEY",
+                "OPENAI_BASE_URL",
+                "OPENAI_ORG_ID",
+                "OPENAI_PROJECT",
+                "MINIMAX_API_KEY",
+            ],
         )
 
 

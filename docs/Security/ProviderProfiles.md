@@ -1146,8 +1146,8 @@ Two states are ambiguous rather than exempt, and both are rejected:
 
 Its primary placement is the authority handoff every launch converges on,
 `TemporalExecutionService.create_execution`. Direct execution submission (both
-the task/workflow envelope and the raw request shape), proposal promotion,
-rerun, continuation, checkpoint branching, manifest ingest, and deployment
+the task/workflow envelope and the raw request shape), rerun, continuation,
+checkpoint branching, manifest ingest, and deployment
 operations all reach a launch through that method, so an alternate client
 cannot find a submission shape that accepts a pair the runtime-scoped selectors
 would never offer. Routers translate the typed rejection into the same 409
@@ -1166,13 +1166,6 @@ enforce the same contract themselves:
 - A recurring schedule persists the target whose `initialParameters` a later
   schedule action launches, so its create and update paths validate the pair
   before the target is stored, not only when a run is started.
-- A proposal promotion marks the proposal `promoted` before the execution is
-  created, and its `runtimeMode` override rewrites `targetRuntime` and
-  `workflow.runtime.mode` while leaving any authored Provider Profile ref
-  untouched. The pair is therefore validated on the final payload before that
-  state transition, so a rejected promotion leaves the proposal promotable
-  rather than terminal with no execution behind it.
-
 Enforcement at the launch handoff matters beyond the API surface: the runtime
 node carries `profileId` into the launcher, which selects the launch strategy
 from the profile's `runtime_id`. A mismatched pair that reached launch would

@@ -51,6 +51,19 @@ export interface ProviderProfile {
   readiness?: ProviderProfileReadiness | null;
   authentication_method?: AuthenticationMethod | null;
   creation_capabilities?: ProviderProfileCreationCapabilities | null;
+  launch_isolation?: ProviderProfileLaunchIsolation | null;
+}
+
+export interface ProviderProfileLaunchIsolation {
+  effective_keys: string[];
+  source: string;
+  derived: boolean;
+  editable: boolean;
+  lock_reason: string;
+  strategy_id: string;
+  classification: string;
+  explanations: Record<string, string>;
+  audit_reason_present: boolean;
 }
 
 type AuthenticationMethod = 'oauth' | 'api_key' | 'none';
@@ -91,6 +104,34 @@ interface ProviderProfileCreationCapabilities {
   supported: boolean;
   authentication_methods: AuthenticationMethodCapability[];
   diagnostics: string[];
+}
+
+interface ProviderProfileTierCapabilities {
+  version: string;
+  profile_id: string | null;
+  runtime_id: string;
+  provider_id: string;
+  evidence: {
+    source: string;
+    credential_generation: number | null;
+    image_ref: string | null;
+    observed_at: string | null;
+    stale: boolean;
+  };
+  tier_constraints: { min_count: number; max_count: number | null };
+  model: {
+    runtime_default: string | null;
+    allow_custom: boolean;
+    options: Array<{ value: string; label: string; description: string | null; status: string; recommended?: boolean }>;
+  };
+  effort: {
+    supported: boolean;
+    runtime_default: string | null;
+    allow_custom: boolean;
+    application: string;
+    options: Array<{ value: string; label: string; description: string | null; status: string; compatible_models: string[] | null }>;
+  };
+  diagnostics: Array<{ code: string; level: string; message: string }>;
 }
 
 export interface ProviderModelEffortTier {
@@ -1017,7 +1058,9 @@ function buildSavePayload(
     delete payload.tags;
   }
   omitWhenRecommended('priority', 'priority');
-  omitWhenRecommended('clear_env_keys', 'clear_env_keys');
+  // #3821: standard guided creation never authors clear_env_keys; the
+  // backend isolation authority owns the value.
+  delete payload.clear_env_keys;
 
   if (options.importExistingCredentialVolume) {
     payload.import_existing_credential_volume = true;
@@ -1065,6 +1108,44 @@ export function ProviderProfilesManager({
   const [importedVolumeRef, setImportedVolumeRef] = useState('');
   const [importedVolumeValidated, setImportedVolumeValidated] = useState(false);
   const startOAuthFromCreationRef = useRef<(profile: ProviderProfile) => void>(() => undefined);
+  // Create-time "use as runtime default" intent cannot be honored at creation:
+  // guided creation stores the profile disabled with is_default=false until
+  // credential validation, so the intent is persisted here and applied once
+  // the readiness-completing operation (OAuth finalize or API-key enrollment)
+  // succeeds for that profile.
+  const pendingDefaultIntentRef = useRef<Set<string>>(new Set());
+  const applyPendingDefaultIntent = async (profileId: string) => {
+    if (!pendingDefaultIntentRef.current.has(profileId)) return;
+    pendingDefaultIntentRef.current.delete(profileId);
+    try {
+      const response = await fetch(
+        `/api/v1/provider-profiles/${encodeURIComponent(profileId)}`,
+        {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+          body: JSON.stringify({ is_default: true }),
+        },
+      );
+      if (!response.ok) {
+        const errorPayload = await response.json().catch(() => ({}));
+        throw new Error(
+          extractErrorMessage(
+            errorPayload,
+            `Failed to set "${profileId}" as the runtime default.`,
+          ),
+        );
+      }
+      queryClient.invalidateQueries({ queryKey: PROVIDER_PROFILE_QUERY_KEY });
+      onNotice({ level: 'ok', text: `Provider profile "${profileId}" is now the runtime default.` });
+    } catch (error) {
+      onNotice({
+        level: 'error',
+        text: error instanceof Error
+          ? error.message
+          : `Failed to set "${profileId}" as the runtime default.`,
+      });
+    }
+  };
   const [tierDrafts, setTierDrafts] = useState<ProviderProfileTierDraft[]>(() => [runtimeDefaultTierDraft()]);
   const [defaultTierClientId, setDefaultTierClientId] = useState<string | null>(() => tierDrafts[0]?.clientId ?? null);
   const [tierBaseline, setTierBaseline] = useState<ProviderProfileTierDraft[] | null>(
@@ -1080,9 +1161,14 @@ export function ProviderProfilesManager({
   const [tierUndo, setTierUndo] = useState<{ tier: ProviderProfileTierDraft; index: number; wasDefault: boolean } | null>(null);
   const [tierRemoveDialog, setTierRemoveDialog] = useState<{ index: number; tier: ProviderProfileTierDraft; isDefault: boolean; isMiddle: boolean } | null>(null);
   const [tierRemoveReplacementId, setTierRemoveReplacementId] = useState<string | null>(null);
+  const [tierCapabilities, setTierCapabilities] = useState<ProviderProfileTierCapabilities | null>(null);
+  const [tierCapabilitiesError, setTierCapabilitiesError] = useState<string | null>(null);
+  const [tierCapabilitiesLoading, setTierCapabilitiesLoading] = useState(false);
+  const [customModelEntryTiers, setCustomModelEntryTiers] = useState<Set<string>>(new Set());
   const tierSectionRef = useRef<HTMLElement | null>(null);
   const tierLiveRef = useRef<HTMLDivElement | null>(null);
   const focusedTierClientIdRef = useRef<string | null>(null);
+  const [showResetPreview, setShowResetPreview] = useState(false);
 
   const activeRuntimeFilterValue = selectedRuntimeId ?? ALL_RUNTIMES_FILTER_VALUE;
   // Canonical runtime IDs are the option values; the shared runtime formatter
@@ -1208,14 +1294,80 @@ export function ProviderProfilesManager({
     return () => controller.abort();
   }, [editingProfile, editingProfileId, form.providerId, form.runtimeId]);
 
+  // Tier capabilities: profile-scoped for edit, draft-scoped for create — MoonLadderStudios/MoonMind#3815
   useEffect(() => {
-    if (editingProfileId !== null) {
-      setCreationPreset(null);
-      setCreationPresetLoading(false);
-      setCreationPresetError(null);
+    if (isEditing && editingProfileId) {
+      setTierCapabilitiesLoading(true);
+      setTierCapabilitiesError(null);
+      const controller = new AbortController();
+      void fetch(`/api/v1/provider-profiles/${encodeURIComponent(editingProfileId)}/capabilities`, {
+        headers: { Accept: 'application/json' },
+        signal: controller.signal,
+      })
+        .then(async (response) => {
+          if (!response.ok) {
+            const payload = await response.json().catch(() => ({}));
+            throw new Error(extractErrorMessage(payload));
+          }
+          return response.json() as Promise<ProviderProfileTierCapabilities>;
+        })
+        .then((caps) => {
+          setTierCapabilities(caps);
+          if (caps.evidence?.stale) {
+            setTierCapabilitiesError('Model choices could not be refreshed. Existing values are preserved. Server validation remains authoritative.');
+          }
+        })
+        .catch((error: unknown) => {
+          if (controller.signal.aborted) return;
+          setTierCapabilities(null);
+          setTierCapabilitiesError(
+            error instanceof Error ? error.message : 'Model choices could not be refreshed. Existing values are preserved. Server validation remains authoritative.',
+          );
+        })
+        .finally(() => setTierCapabilitiesLoading(false));
+      return () => controller.abort();
+    }
+    const runtimeId = form.runtimeId.trim();
+    const providerId = form.providerId.trim();
+    if (!runtimeId || !providerId) {
+      setTierCapabilities(null);
+      setTierCapabilitiesError(null);
       return;
     }
+    if (isEditing) return;
+    setTierCapabilitiesLoading(true);
+    setTierCapabilitiesError(null);
+    const controller = new AbortController();
+    void fetch(
+      `/api/v1/provider-profiles/capabilities?runtime_id=${encodeURIComponent(runtimeId)}&provider_id=${encodeURIComponent(providerId)}`,
+      { headers: { Accept: 'application/json' }, signal: controller.signal },
+    )
+      .then(async (response) => {
+        if (!response.ok) {
+          const payload = await response.json().catch(() => ({}));
+          throw new Error(extractErrorMessage(payload));
+        }
+        return response.json() as Promise<ProviderProfileTierCapabilities>;
+      })
+      .then((caps) => {
+        setTierCapabilities(caps);
+        if (caps.evidence?.stale) {
+          setTierCapabilitiesError('Model choices could not be refreshed. Existing values are preserved. Server validation remains authoritative.');
+        }
+      })
+      .catch((error: unknown) => {
+        if (controller.signal.aborted) return;
+        setTierCapabilities(null);
+        setTierCapabilitiesError(
+          error instanceof Error ? error.message : 'Model choices could not be refreshed. Existing values are preserved. Server validation remains authoritative.',
+        );
+      })
+      .finally(() => setTierCapabilitiesLoading(false));
+    return () => controller.abort();
+  }, [isEditing, editingProfileId, form.runtimeId, form.providerId]);
 
+  useEffect(() => {
+    const isEditingProfile = editingProfileId !== null;
     const runtimeId = form.runtimeId.trim();
     const providerId = form.providerId.trim();
     const authenticationMethod = form.authenticationMethod;
@@ -1253,7 +1405,20 @@ export function ProviderProfilesManager({
         return payload as ProviderProfileCreationPreset;
       })
       .then((preset) => {
+        if (
+          !preset ||
+          typeof preset.version !== 'string' ||
+          !preset.fields ||
+          typeof preset.fields !== 'object'
+        ) {
+          throw new Error('Failed to load the Provider Profile creation preset.');
+        }
         setCreationPreset(preset);
+        if (isEditingProfile) {
+          // Editing never auto-applies the preset to the draft; it is only
+          // the source for an explicit "reset to recommended" action.
+          return;
+        }
         if (preset.supported) {
           setForm((current) =>
             current.runtimeId.trim() === preset.runtime_id &&
@@ -1286,6 +1451,27 @@ export function ProviderProfilesManager({
     form.authenticationMethod,
     creationPresetRefreshKey,
   ]);
+  // #1205: OAuth may populate account_label from validated provider identity.
+  // Only populate the draft that still represents the completed profile:
+  // after a successful creation the form resets, so an unrelated later
+  // success (for example profile A completing while draft B is open) must
+  // not copy A's identity label into B's draft.
+  useEffect(() => {
+    if (isEditing) return;
+    const draftProfileId = form.profileId.trim();
+    if (!draftProfileId) return;
+    const succeeded = Object.values(oauthSessions).find(
+      (s) => s.status === 'succeeded' && s.profileId === draftProfileId,
+    );
+    if (!succeeded) return;
+    const profileId = succeeded.profileId;
+    if (!profileId) return;
+    const linked = profiles.find((p) => p.profile_id === profileId);
+    const validatedLabel = linked?.account_label?.trim();
+    if (validatedLabel && !form.accountLabel.trim()) {
+      setForm((cur) => (cur.accountLabel.trim() ? cur : { ...cur, accountLabel: validatedLabel }));
+    }
+  }, [oauthSessions, profiles, isEditing, form.accountLabel, form.profileId]);
 
   const updateClaudeEnrollmentForProfile = (
     profileId: string,
@@ -1700,6 +1886,7 @@ export function ProviderProfilesManager({
         level: 'ok',
         text: `Anthropic API key enrollment completed for "${profileId}".`,
       });
+      void applyPendingDefaultIntent(profileId);
     },
     onError: (error, { profileId, submittedToken }) => {
       if (claudeEnrollmentProfileIdRef.current !== profileId) {
@@ -1862,6 +2049,7 @@ export function ProviderProfilesManager({
         level: 'ok',
         text: `${copy.credentialLabel} enrollment completed for "${profileId}".`,
       });
+      void applyPendingDefaultIntent(profileId);
     },
     onError: (error, { profileId, submittedToken, profile }) => {
       const copy = apiKeyEnrollmentCopy(profile);
@@ -1997,6 +2185,11 @@ export function ProviderProfilesManager({
     },
     onSuccess: (savedProfile, submittedForm) => {
       const createdProfile = !isEditing;
+      if (createdProfile && submittedForm.isDefault && !savedProfile.is_default) {
+        // Creation stores the profile non-default until credential validation;
+        // carry the checked intent forward to the readiness-completing step.
+        pendingDefaultIntentRef.current.add(savedProfile.profile_id);
+      }
       onNotice({
         level: 'ok',
         text: isEditing
@@ -2291,6 +2484,7 @@ export function ProviderProfilesManager({
       );
       queryClient.invalidateQueries({ queryKey: PROVIDER_PROFILE_QUERY_KEY });
       onNotice({ level: 'ok', text: `OAuth session for "${profileId}" finalized.` });
+      void applyPendingDefaultIntent(profileId);
     },
     onError: (error: Error) => {
       onNotice({ level: 'error', text: error.message });
@@ -3476,12 +3670,12 @@ export function ProviderProfilesManager({
             saveMutation.mutate(form);
           }}
         >
-          {/* ── Required: Identity ── */}
+          {/* ── 1. Identity (Profile ID, Runtime, Provider, Account label) ── */}
           <fieldset className="rounded-2xl border border-amber-200/60 dark:border-amber-800/40 bg-amber-50/30 dark:bg-amber-900/10 p-5 space-y-4">
             <legend className="px-2 text-sm font-semibold text-amber-700 dark:text-amber-400">
               Identity <span className="font-normal text-slate-500 dark:text-slate-400">&mdash; required</span>
             </legend>
-            <div className="grid gap-4 md:grid-cols-3">
+            <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
               <label className="flex flex-col gap-1.5 text-sm font-medium text-slate-700 dark:text-slate-300">
                 <span>Profile ID <span className="text-amber-600 dark:text-amber-400">*</span></span>
                 <input
@@ -3519,14 +3713,6 @@ export function ProviderProfilesManager({
                   required
                 />
               </label>
-            </div>
-          </fieldset>
-
-          <fieldset className="rounded-2xl border border-slate-200 dark:border-slate-700 p-5 space-y-4">
-            <legend className="px-2 text-sm font-semibold text-slate-700 dark:text-slate-300">
-              Provider and account
-            </legend>
-            <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
               <label className="flex flex-col gap-1.5 text-sm font-medium text-slate-700 dark:text-slate-300">
                 <span>Account label</span>
                 <input
@@ -3537,189 +3723,9 @@ export function ProviderProfilesManager({
                   }
                   placeholder="Team account"
                 />
-                <p className="text-xs text-slate-400 dark:text-slate-500">Optional friendly account identity</p>
-              </label>
-              <label className="flex flex-col gap-1.5 text-sm font-medium text-slate-700 dark:text-slate-300">
-                <span>Max parallel runs</span>
-                <input
-                  type="number"
-                  min="1"
-                  disabled={isCodexOAuthForm}
-                  className="w-full rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 px-3 py-2 text-sm text-slate-900 dark:text-white shadow-sm"
-                  value={isCodexOAuthForm ? '1' : form.maxParallelRuns}
-                  onChange={(event) =>
-                    setForm((current) => ({ ...current, maxParallelRuns: event.target.value }))
-                  }
-                />
-                <p className="text-xs text-slate-400 dark:text-slate-500">
-                  {isCodexOAuthForm
-                    ? 'Fixed at 1 because the Codex OAuth home is an exclusive mutable identity.'
-                    : `Default: ${defaultFormValues.maxParallelRuns}`}
-                </p>
-              </label>
-              <label className="flex items-center gap-3 rounded-2xl border border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-800 px-4 py-3 text-sm font-medium text-slate-700 dark:text-slate-300">
-                <input
-                  type="checkbox"
-                  checked={form.isDefault}
-                  onChange={(event) =>
-                    setForm((current) => ({ ...current, isDefault: event.target.checked }))
-                  }
-                />
-                Runtime default
+                <p className="text-xs text-slate-400 dark:text-slate-500">Optional friendly account identity — auto-populated from OAuth identity when available</p>
               </label>
             </div>
-          </fieldset>
-
-          {/* ── Model & effort tiers ── */}
-          <fieldset ref={tierSectionRef as unknown as React.RefObject<HTMLFieldSetElement>} className="rounded-2xl border border-slate-200 dark:border-slate-700 p-5 space-y-4" aria-labelledby="tier-section-title">
-            <legend id="tier-section-title" className="px-2 text-sm font-semibold text-slate-700 dark:text-slate-300">Model &amp; effort tiers</legend>
-            <p className="text-sm text-slate-600 dark:text-slate-400">Map workflow tier requests to a model and effort for this profile. Future launches use the saved policy. Historical runs keep their record.</p>
-            {canWriteProviderProfiles ? (
-              <div className="flex flex-wrap items-center gap-3 text-sm">
-                <span className="font-medium text-slate-700 dark:text-slate-300">{tierDrafts.length} tiers{defaultTierClientId ? ` · Default: Tier ${tierDrafts.findIndex((t) => t.clientId === defaultTierClientId) + 1}` : ''}</span>
-                <button type="button" className="inline-flex items-center justify-center rounded-lg bg-slate-900 dark:bg-slate-100 px-4 py-2 text-sm font-semibold text-white dark:text-slate-900" onClick={handleAddTier}>Add tier</button>
-                {invalidSavedDefaultIndex !== null ? <span className="rounded bg-amber-100 dark:bg-amber-900/30 px-2 py-1 text-xs font-semibold text-amber-700 dark:text-amber-300">Invalid saved default: Tier {invalidSavedDefaultIndex}</span> : null}
-              </div>
-            ) : (
-              <div className="text-sm font-medium text-slate-700 dark:text-slate-300">{tierDrafts.length} tiers{defaultTierClientId ? ` · Default: Tier ${tierDrafts.findIndex((t) => t.clientId === defaultTierClientId) + 1}` : ''}</div>
-            )}
-            {isTierRepair ? (
-              <div className="rounded-xl border border-amber-300 dark:border-amber-800 bg-amber-50 dark:bg-amber-950/30 p-4 text-sm text-amber-800 dark:text-amber-300">
-                <p>This profile has no model tiers and cannot be saved in this state.</p>
-                {canWriteProviderProfiles ? <button type="button" className="mt-3 inline-flex items-center justify-center rounded-lg bg-amber-600 px-4 py-2 text-sm font-semibold text-white" onClick={handleCreateRepairTier}>Create runtime-default Tier 1</button> : <p className="mt-2 text-xs">Read-only: complete policy not available.</p>}
-              </div>
-            ) : null}
-            {tierUndo ? (
-              <div className="flex items-center gap-3 rounded-xl border border-sky-200 dark:border-sky-900 bg-sky-50 dark:bg-sky-950/30 p-3 text-sm text-sky-800 dark:text-sky-300">
-                <span>Tier removed. </span>
-                <button type="button" className="underline" onClick={handleUndoLastRemove}>Undo</button>
-              </div>
-            ) : null}
-            <div className="sr-only" aria-live="polite" ref={tierLiveRef}>{tierLiveMessage}</div>
-            <ol className="space-y-4" aria-label="Model and effort tiers">
-              {tierDrafts.map((tier, index) => {
-                const tierNumber = index + 1;
-                const isDefault = tier.clientId === defaultTierClientId;
-                const isOnlyTier = tierDrafts.length === 1;
-                return (
-                  <li key={tier.clientId} data-tier-client-id={tier.clientId} className={`rounded-2xl border p-4 shadow-sm ${isDefault ? 'border-violet-300 dark:border-violet-700 bg-violet-50/40 dark:bg-violet-950/20' : 'border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800'}`}>
-                    <fieldset className="space-y-3">
-                      <legend className="flex w-full items-center justify-between">
-                        <span className="text-sm font-semibold text-slate-900 dark:text-white">Tier {tierNumber}{tier.label ? ` · ${tier.label}` : ''}{isDefault ? <span className="ml-2 inline-flex rounded bg-violet-100 dark:bg-violet-900/30 px-2 py-0.5 text-xs font-semibold text-violet-700 dark:text-violet-300">Default</span> : null}</span>
-                        {canWriteProviderProfiles ? (
-                          <span className="flex items-center gap-2">
-                            <button type="button" className="text-xs font-medium text-slate-600 dark:text-slate-400 hover:underline" onClick={() => handleDuplicateTier(tier)} aria-label={`Duplicate Tier ${tierNumber} as new last tier`}>Duplicate as new last tier</button>
-                            <button type="button" className={`text-xs font-medium ${isOnlyTier ? 'text-slate-400 cursor-not-allowed' : 'text-rose-600 dark:text-rose-400 hover:underline'}`} disabled={isOnlyTier} onClick={() => requestRemoveTier(index)} aria-label={`Remove Tier ${tierNumber}`}>Remove tier</button>
-                          </span>
-                        ) : null}
-                      </legend>
-                      {canWriteProviderProfiles ? (
-                        <label className="flex items-center gap-2 text-sm font-medium text-slate-700 dark:text-slate-300">
-                          <input type="radio" name="default-tier-group" value={tier.clientId} checked={isDefault} onChange={() => setDefaultTierClientId(tier.clientId)} aria-label={isDefault ? 'Default tier' : `Use Tier ${tierNumber} as default`} />
-                          {isDefault ? 'Default tier' : `Use Tier ${tierNumber} as default`}
-                        </label>
-                      ) : (
-                        <div className="text-sm font-medium text-slate-700 dark:text-slate-300">{isDefault ? 'Default tier' : `Tier ${tierNumber}`}</div>
-                      )}
-                      {canWriteProviderProfiles ? (
-                        <>
-                          <label className="flex flex-col gap-1.5 text-sm font-medium text-slate-700 dark:text-slate-300">
-                            <span>Label</span>
-                            <input className="w-full rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 px-3 py-2 text-sm" value={tier.label} onChange={(e) => handleTierLabelChange(tier.clientId, e.target.value)} placeholder="Optional tier label" aria-label={`Tier ${tierNumber} label`} />
-                          </label>
-                          <div className="grid gap-4 md:grid-cols-2">
-                            <label className="flex flex-col gap-1.5 text-sm font-medium text-slate-700 dark:text-slate-300">
-                              <span>Model</span>
-                              <select className="w-full rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 px-3 py-2 text-sm" value={tier.model ?? '__runtime_default__'} onChange={(e) => handleTierModelChange(tier.clientId, e.target.value === '__runtime_default__' ? null : e.target.value)} aria-label={`Tier ${tierNumber} model`}>
-                                <option value="__runtime_default__">Runtime default</option>
-                                {tier.model && tier.model !== '__runtime_default__' ? <option value={tier.model}>{tier.model} (existing)</option> : null}
-                              </select>
-                              {tierFieldErrors[`${tier.clientId}.model`] ? <span className="text-xs text-rose-600">{tierFieldErrors[`${tier.clientId}.model`]}</span> : null}
-                            </label>
-                            <label className="flex flex-col gap-1.5 text-sm font-medium text-slate-700 dark:text-slate-300">
-                              <span>Effort level</span>
-                              <select className="w-full rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 px-3 py-2 text-sm" value={tier.effort ?? '__runtime_default__'} onChange={(e) => handleTierEffortChange(tier.clientId, e.target.value === '__runtime_default__' ? null : e.target.value)} aria-label={`Tier ${tierNumber} effort`}>
-                                <option value="__runtime_default__">Runtime default</option>
-                                {tier.effort && tier.effort !== '__runtime_default__' ? <option value={tier.effort}>{tier.effort} (existing)</option> : null}
-                                <option value="low">low</option>
-                                <option value="medium">medium</option>
-                                <option value="high">high</option>
-                                <option value="xhigh">xhigh</option>
-                              </select>
-                              {tierFieldErrors[`${tier.clientId}.effort`] ? <span className="text-xs text-rose-600">{tierFieldErrors[`${tier.clientId}.effort`]}</span> : null}
-                            </label>
-                          </div>
-                          <div className="text-xs text-slate-500 dark:text-slate-400">Resolves to {tierDisplayModel(tier.model)} · {tierDisplayEffort(tier.effort)}</div>
-                          <details className="rounded-xl border border-slate-200 dark:border-slate-800 p-3">
-                            <summary className="cursor-pointer text-sm font-medium text-slate-700 dark:text-slate-300">Advanced tier options</summary>
-                            <div className="mt-3 space-y-3">
-                              <label className="flex flex-col gap-1.5 text-sm">
-                                <span>Parameters (JSON)</span>
-                                <textarea rows={3} className="w-full rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 px-3 py-2 font-mono text-xs" defaultValue={JSON.stringify(tier.parameters, null, 2)} onBlur={(e) => handleTierParametersChange(tier.clientId, e.target.value)} aria-label={`Tier ${tierNumber} parameters`} />
-                                {tierFieldErrors[`${tier.clientId}.parameters`] ? <span className="text-xs text-rose-600">{tierFieldErrors[`${tier.clientId}.parameters`]}</span> : null}
-                              </label>
-                              <label className="flex flex-col gap-1.5 text-sm">
-                                <span>Annotations (JSON)</span>
-                                <textarea rows={3} className="w-full rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 px-3 py-2 font-mono text-xs" defaultValue={JSON.stringify(tier.annotations, null, 2)} onBlur={(e) => handleTierAnnotationsChange(tier.clientId, e.target.value)} aria-label={`Tier ${tierNumber} annotations`} />
-                                {tierFieldErrors[`${tier.clientId}.annotations`] ? <span className="text-xs text-rose-600">{tierFieldErrors[`${tier.clientId}.annotations`]}</span> : null}
-                              </label>
-                            </div>
-                          </details>
-                        </>
-                      ) : (
-                        <div className="space-y-2 text-sm text-slate-700 dark:text-slate-300">
-                          <div>Label: {tier.label || `Tier ${tierNumber}`}</div>
-                          <div>Model: <span className="font-mono">{tierDisplayModel(tier.model)}</span></div>
-                          <div>Effort: <span className="font-mono">{tierDisplayEffort(tier.effort)}</span></div>
-                          {Object.keys(tier.parameters).length > 0 ? <div>Parameters: <span className="font-mono text-xs">{JSON.stringify(tier.parameters)}</span></div> : null}
-                          {Object.keys(tier.annotations).length > 0 ? <div>Annotations: <span className="font-mono text-xs">{JSON.stringify(tier.annotations)}</span></div> : null}
-                        </div>
-                      )}
-                    </fieldset>
-                  </li>
-                );
-              })}
-            </ol>
-            {!isTierRepair ? <button type="button" className="w-full rounded-xl border border-slate-300 dark:border-slate-700 px-4 py-2 text-sm font-semibold text-slate-700 dark:text-slate-300" onClick={handleAddTier}>Add tier</button> : null}
-            <p className="text-xs text-slate-500 dark:text-slate-400">Future launches use the saved policy. Historical runs keep their record.</p>
-            {tierRemoveDialog ? (
-              <div role="dialog" aria-modal="true" aria-labelledby="tier-remove-title" className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/40 p-4" onMouseDown={(e) => { if (e.target === e.currentTarget) setTierRemoveDialog(null); }}>
-                <div className="w-full max-w-lg rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 p-5 shadow-2xl">
-                  <h4 id="tier-remove-title" className="text-sm font-semibold text-slate-900 dark:text-white">Remove Tier {tierRemoveDialog.index + 1}?</h4>
-                  {tierRemoveDialog.isMiddle ? (
-                    <div className="mt-3 text-sm text-slate-600 dark:text-slate-400">
-                      <p>This changes future tier-number resolution for this profile:</p>
-                      <ul className="mt-2 list-disc pl-5">
-                        {computeTierRenumberingImpact(tierDrafts, tierRemoveDialog.index).map((item) => (
-                          <li key={`${item.from}-${item.to}`}>Tier {item.from}: {item.label} → becomes Tier {item.to}</li>
-                        ))}
-                      </ul>
-                      <p className="mt-2 text-xs">Existing historical runs do not change.</p>
-                    </div>
-                  ) : null}
-                  {tierRemoveDialog.isDefault ? (
-                    <div className="mt-3 space-y-2">
-                      <p className="text-sm text-slate-600 dark:text-slate-400">Choose a replacement default tier:</p>
-                      <div className="space-y-2">
-                        {tierDrafts.filter((_, i) => i !== tierRemoveDialog.index).map((t) => {
-                          const originalIndex = tierDrafts.findIndex((x) => x.clientId === t.clientId);
-                          return (
-                            <label key={t.clientId} className="flex items-center gap-2 text-sm">
-                              <input type="radio" name="replacement-default-tier" value={t.clientId} checked={tierRemoveReplacementId === t.clientId} onChange={() => setTierRemoveReplacementId(t.clientId)} />
-                              Tier {originalIndex + 1}{originalIndex >= tierRemoveDialog.index ? ` → Tier ${originalIndex}` : ''}: {t.label || `Tier ${originalIndex + 1}`}
-                            </label>
-                          );
-                        })}
-                      </div>
-                    </div>
-                  ) : null}
-                  <div className="mt-5 flex justify-end gap-3">
-                    <button type="button" className="rounded-lg border border-slate-300 dark:border-slate-700 px-4 py-2 text-sm" onClick={() => setTierRemoveDialog(null)}>Cancel</button>
-                    <button type="button" className="rounded-lg bg-rose-600 px-4 py-2 text-sm font-semibold text-white" onClick={confirmRemoveTier}>Remove and renumber</button>
-                  </div>
-                </div>
-              </div>
-            ) : null}
           </fieldset>
 
           <fieldset className="rounded-2xl border border-emerald-200/70 dark:border-emerald-900/60 bg-emerald-50/30 dark:bg-emerald-950/20 p-5 space-y-4">
@@ -3801,6 +3807,331 @@ export function ProviderProfilesManager({
               OAuth and API-key setup use dedicated backend flows. No credential plaintext, volume name, mount path, or SecretRef JSON is collected here.
             </p>
           </fieldset>
+
+
+          {/* ── Model & effort tiers ── */}
+          <fieldset ref={tierSectionRef as unknown as React.RefObject<HTMLFieldSetElement>} className="rounded-2xl border border-slate-200 dark:border-slate-700 p-5 space-y-4" aria-labelledby="tier-section-title">
+            <legend id="tier-section-title" className="px-2 text-sm font-semibold text-slate-700 dark:text-slate-300">Model &amp; effort tiers</legend>
+            <p className="text-sm text-slate-600 dark:text-slate-400">Map workflow tier requests to a model and effort for this profile. Future launches use the saved policy. Historical runs keep their record.</p>
+            {canWriteProviderProfiles ? (
+              <div className="flex flex-wrap items-center gap-3 text-sm">
+                <span className="font-medium text-slate-700 dark:text-slate-300">{tierDrafts.length} tiers{defaultTierClientId ? ` · Default: Tier ${tierDrafts.findIndex((t) => t.clientId === defaultTierClientId) + 1}` : ''}</span>
+                <button type="button" className="inline-flex items-center justify-center rounded-lg bg-slate-900 dark:bg-slate-100 px-4 py-2 text-sm font-semibold text-white dark:text-slate-900" onClick={handleAddTier}>Add tier</button>
+                {invalidSavedDefaultIndex !== null ? <span className="rounded bg-amber-100 dark:bg-amber-900/30 px-2 py-1 text-xs font-semibold text-amber-700 dark:text-amber-300">Invalid saved default: Tier {invalidSavedDefaultIndex}</span> : null}
+              </div>
+            ) : (
+              <div className="text-sm font-medium text-slate-700 dark:text-slate-300">{tierDrafts.length} tiers{defaultTierClientId ? ` · Default: Tier ${tierDrafts.findIndex((t) => t.clientId === defaultTierClientId) + 1}` : ''}</div>
+            )}
+            {isTierRepair ? (
+              <div className="rounded-xl border border-amber-300 dark:border-amber-800 bg-amber-50 dark:bg-amber-950/30 p-4 text-sm text-amber-800 dark:text-amber-300">
+                <p>This profile has no model tiers and cannot be saved in this state.</p>
+                {canWriteProviderProfiles ? <button type="button" className="mt-3 inline-flex items-center justify-center rounded-lg bg-amber-600 px-4 py-2 text-sm font-semibold text-white" onClick={handleCreateRepairTier}>Create runtime-default Tier 1</button> : <p className="mt-2 text-xs">Read-only: complete policy not available.</p>}
+              </div>
+            ) : null}
+            {tierUndo ? (
+              <div className="flex items-center gap-3 rounded-xl border border-sky-200 dark:border-sky-900 bg-sky-50 dark:bg-sky-950/30 p-3 text-sm text-sky-800 dark:text-sky-300">
+                <span>Tier removed. </span>
+                <button type="button" className="underline" onClick={handleUndoLastRemove}>Undo</button>
+              </div>
+            ) : null}
+            {tierCapabilitiesLoading ? (
+              <p className="text-xs text-slate-500 dark:text-slate-400">Loading model choices from backend capabilities…</p>
+            ) : null}
+            {tierCapabilitiesError ? (
+              <div className="rounded-xl border border-amber-200 dark:border-amber-800 bg-amber-50 dark:bg-amber-950/30 p-3 text-sm text-amber-800 dark:text-amber-300">
+                {tierCapabilitiesError}
+              </div>
+            ) : null}
+            {tierCapabilities?.evidence?.stale ? (
+              <div className="rounded-xl border border-amber-200 dark:border-amber-800 bg-amber-50 dark:bg-amber-950/30 p-3 text-xs text-amber-800 dark:text-amber-300">
+                Model catalog evidence is stale; observed catalog choices are disabled until the profile is revalidated. Runtime default and custom model entry remain available.
+              </div>
+            ) : null}
+            {tierCapabilities?.diagnostics?.length ? (
+              <ul className="space-y-1 text-xs text-amber-700 dark:text-amber-300">
+                {tierCapabilities.diagnostics.map((d, idx) => (
+                  <li key={`${d.code}-${idx}`}>{d.message}</li>
+                ))}
+              </ul>
+            ) : null}
+            <div className="sr-only" aria-live="polite" ref={tierLiveRef}>{tierLiveMessage}</div>
+            <ol className="space-y-4" aria-label="Model and effort tiers">
+              {tierDrafts.map((tier, index) => {
+                const tierNumber = index + 1;
+                const isDefault = tier.clientId === defaultTierClientId;
+                const isOnlyTier = tierDrafts.length === 1;
+                return (
+                  <li key={tier.clientId} data-tier-client-id={tier.clientId} className={`rounded-2xl border p-4 shadow-sm ${isDefault ? 'border-violet-300 dark:border-violet-700 bg-violet-50/40 dark:bg-violet-950/20' : 'border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800'}`}>
+                    <fieldset className="space-y-3">
+                      <legend className="flex w-full items-center justify-between">
+                        <span className="text-sm font-semibold text-slate-900 dark:text-white">Tier {tierNumber}{tier.label ? ` · ${tier.label}` : ''}{isDefault ? <span className="ml-2 inline-flex rounded bg-violet-100 dark:bg-violet-900/30 px-2 py-0.5 text-xs font-semibold text-violet-700 dark:text-violet-300">Default</span> : null}</span>
+                        {canWriteProviderProfiles ? (
+                          <span className="flex items-center gap-2">
+                            <button type="button" className="text-xs font-medium text-slate-600 dark:text-slate-400 hover:underline" onClick={() => handleDuplicateTier(tier)} aria-label={`Duplicate Tier ${tierNumber} as new last tier`}>Duplicate as new last tier</button>
+                            <button type="button" className={`text-xs font-medium ${isOnlyTier ? 'text-slate-400 cursor-not-allowed' : 'text-rose-600 dark:text-rose-400 hover:underline'}`} disabled={isOnlyTier} onClick={() => requestRemoveTier(index)} aria-label={`Remove Tier ${tierNumber}`}>Remove tier</button>
+                          </span>
+                        ) : null}
+                      </legend>
+                      {canWriteProviderProfiles ? (
+                        <label className="flex items-center gap-2 text-sm font-medium text-slate-700 dark:text-slate-300">
+                          <input type="radio" name="default-tier-group" value={tier.clientId} checked={isDefault} onChange={() => setDefaultTierClientId(tier.clientId)} aria-label={isDefault ? 'Default tier' : `Use Tier ${tierNumber} as default`} />
+                          {isDefault ? 'Default tier' : `Use Tier ${tierNumber} as default`}
+                        </label>
+                      ) : (
+                        <div className="text-sm font-medium text-slate-700 dark:text-slate-300">{isDefault ? 'Default tier' : `Tier ${tierNumber}`}</div>
+                      )}
+                      {canWriteProviderProfiles ? (
+                        <>
+                          <label className="flex flex-col gap-1.5 text-sm font-medium text-slate-700 dark:text-slate-300">
+                            <span>Label</span>
+                            <input className="w-full rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 px-3 py-2 text-sm" value={tier.label} onChange={(e) => handleTierLabelChange(tier.clientId, e.target.value)} placeholder="Optional tier label" aria-label={`Tier ${tierNumber} label`} />
+                          </label>
+                          <div className="grid gap-4 md:grid-cols-2">
+                            <label className="flex flex-col gap-1.5 text-sm font-medium text-slate-700 dark:text-slate-300">
+                              <span>Model</span>
+                              {(() => {
+                                const catalogOptions = tierCapabilities?.model?.options ?? [];
+                                const staleCatalog = tierCapabilities?.evidence?.stale === true;
+                                const allowCustomModel = tierCapabilities?.model?.allow_custom === true;
+                                const knownValues = new Set([
+                                  '__runtime_default__',
+                                  ...catalogOptions.map((o) => o.value),
+                                  ...(tierCapabilities === null ? ['gpt-5.5', 'gpt-4o'] : []),
+                                ]);
+                                const currentValue = tier.model ?? '__runtime_default__';
+                                const isCustomValue = tier.model != null && tier.model !== '' && !knownValues.has(tier.model);
+                                const isCustomDraft = customModelEntryTiers.has(tier.clientId);
+                                // Catalog freshness controls observed options. The backend's
+                                // explicit allow_custom policy independently authorizes manual
+                                // entry, which the write/launch boundaries still validate.
+                                const selectValue = isCustomValue || isCustomDraft ? '__custom__' : currentValue;
+                                const showCustomInput = allowCustomModel && (isCustomValue || isCustomDraft);
+                                return (
+                                  <>
+                                    <select className="w-full rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 px-3 py-2 text-sm" value={selectValue} onChange={(e) => {
+                                      const next = e.target.value;
+                                      if (next === '__custom__') {
+                                        setCustomModelEntryTiers((prev) => new Set(prev).add(tier.clientId));
+                                        return;
+                                      }
+                                      setCustomModelEntryTiers((prev) => {
+                                        if (!prev.has(tier.clientId)) return prev;
+                                        const nextSet = new Set(prev);
+                                        nextSet.delete(tier.clientId);
+                                        return nextSet;
+                                      });
+                                      handleTierModelChange(tier.clientId, next === '__runtime_default__' ? null : next);
+                                    }} aria-label={`Tier ${tierNumber} model`}>
+                                      <option value="__runtime_default__">Runtime default{tierCapabilities?.model?.runtime_default ? ` — ${tierCapabilities.model.runtime_default}` : ''}</option>
+                                      {catalogOptions.map((opt) => (
+                                        <option key={opt.value} value={opt.value} disabled={staleCatalog && opt.value !== tier.model}>
+                                          {opt.label}
+                                          {opt.status === 'deprecated' ? ' (Deprecated)' : ''}
+                                          {opt.recommended ? ' · Recommended' : ''}
+                                        </option>
+                                      ))}
+                                      {tierCapabilities === null ? (
+                                        <>
+                                          <option value="gpt-5.5">GPT-5.5</option>
+                                          <option value="gpt-4o">GPT-4o</option>
+                                        </>
+                                      ) : null}
+                                      {tier.model && !knownValues.has(tier.model) && tier.model !== '' ? (
+                                        <option value={tier.model}>{tier.model} (existing — custom or unavailable)</option>
+                                      ) : null}
+                                      {allowCustomModel ? (
+                                        <option value="__custom__">Custom value…</option>
+                                      ) : null}
+                                    </select>
+                                    {allowCustomModel && showCustomInput ? (
+                                      <input
+                                        className="w-full rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 px-3 py-2 text-sm font-normal"
+                                        value={tier.model ?? ''}
+                                        onChange={(e) => {
+                                          const text = e.target.value.trim();
+                                          handleTierModelChange(tier.clientId, text === '' ? null : text);
+                                        }}
+                                        placeholder="Custom model id"
+                                        aria-label={`Tier ${tierNumber} custom model`}
+                                      />
+                                    ) : null}
+                                  </>
+                                );
+                              })()}
+                              {tierFieldErrors[`${tier.clientId}.model`] ? <span className="text-xs text-rose-600">{tierFieldErrors[`${tier.clientId}.model`]}</span> : null}
+                            </label>
+                            <label className="flex flex-col gap-1.5 text-sm font-medium text-slate-700 dark:text-slate-300">
+                              <span>Effort level</span>
+                              <select className="w-full rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 px-3 py-2 text-sm" value={tier.effort ?? '__runtime_default__'} onChange={(e) => handleTierEffortChange(tier.clientId, e.target.value === '__runtime_default__' ? null : e.target.value)} aria-label={`Tier ${tierNumber} effort`}>
+                                <option value="__runtime_default__">Runtime default{tierCapabilities?.effort?.runtime_default ? ` — ${tierCapabilities.effort.runtime_default}` : ''}</option>
+                                {(tierCapabilities?.effort?.options ?? []).map((opt) => (
+                                  <option key={opt.value} value={opt.value}>
+                                    {opt.label}
+                                    {opt.status !== 'available' ? ` (${opt.status})` : ''}
+                                  </option>
+                                ))}
+                                {tierCapabilities === null ? (
+                                  <>
+                                    <option value="low">low</option>
+                                    <option value="medium">medium</option>
+                                    <option value="high">high</option>
+                                    <option value="xhigh">xhigh</option>
+                                  </>
+                                ) : null}
+                                {tier.effort && !tierCapabilities?.effort?.options.some((o) => o.value === tier.effort) && tier.effort !== '__runtime_default__' ? (
+                                  <option value={tier.effort}>{tier.effort} (existing — custom or unavailable)</option>
+                                ) : null}
+                              </select>
+                              {tierFieldErrors[`${tier.clientId}.effort`] ? <span className="text-xs text-rose-600">{tierFieldErrors[`${tier.clientId}.effort`]}</span> : null}
+                            </label>
+                          </div>
+                          <div className="text-xs text-slate-500 dark:text-slate-400">Resolves to {tierDisplayModel(tier.model)} · {tierDisplayEffort(tier.effort)}</div>
+                          <details className="rounded-xl border border-slate-200 dark:border-slate-800 p-3">
+                            <summary className="cursor-pointer text-sm font-medium text-slate-700 dark:text-slate-300">Advanced tier options</summary>
+                            <div className="mt-3 space-y-3">
+                              <label className="flex flex-col gap-1.5 text-sm">
+                                <span>Parameters (JSON)</span>
+                                <textarea rows={3} className="w-full rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 px-3 py-2 font-mono text-xs" defaultValue={JSON.stringify(tier.parameters, null, 2)} onBlur={(e) => handleTierParametersChange(tier.clientId, e.target.value)} aria-label={`Tier ${tierNumber} parameters`} />
+                                {tierFieldErrors[`${tier.clientId}.parameters`] ? <span className="text-xs text-rose-600">{tierFieldErrors[`${tier.clientId}.parameters`]}</span> : null}
+                              </label>
+                              <label className="flex flex-col gap-1.5 text-sm">
+                                <span>Annotations (JSON)</span>
+                                <textarea rows={3} className="w-full rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 px-3 py-2 font-mono text-xs" defaultValue={JSON.stringify(tier.annotations, null, 2)} onBlur={(e) => handleTierAnnotationsChange(tier.clientId, e.target.value)} aria-label={`Tier ${tierNumber} annotations`} />
+                                {tierFieldErrors[`${tier.clientId}.annotations`] ? <span className="text-xs text-rose-600">{tierFieldErrors[`${tier.clientId}.annotations`]}</span> : null}
+                              </label>
+                            </div>
+                          </details>
+                        </>
+                      ) : (
+                        <div className="space-y-2 text-sm text-slate-700 dark:text-slate-300">
+                          <div>Label: {tier.label || `Tier ${tierNumber}`}</div>
+                          <div>Model: <span className="font-mono">{tierDisplayModel(tier.model)}</span></div>
+                          <div>Effort: <span className="font-mono">{tierDisplayEffort(tier.effort)}</span></div>
+                          {Object.keys(tier.parameters).length > 0 ? <div>Parameters: <span className="font-mono text-xs">{JSON.stringify(tier.parameters)}</span></div> : null}
+                          {Object.keys(tier.annotations).length > 0 ? <div>Annotations: <span className="font-mono text-xs">{JSON.stringify(tier.annotations)}</span></div> : null}
+                        </div>
+                      )}
+                    </fieldset>
+                  </li>
+                );
+              })}
+            </ol>
+            {!isTierRepair ? <button type="button" className="w-full rounded-xl border border-slate-300 dark:border-slate-700 px-4 py-2 text-sm font-semibold text-slate-700 dark:text-slate-300" onClick={handleAddTier}>Add tier</button> : null}
+            <p className="text-xs text-slate-500 dark:text-slate-400">Future launches use the saved policy. Historical runs keep their record.</p>
+            {tierRemoveDialog ? (
+              <div role="dialog" aria-modal="true" aria-labelledby="tier-remove-title" className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/40 p-4" onMouseDown={(e) => { if (e.target === e.currentTarget) setTierRemoveDialog(null); }}>
+                <div className="w-full max-w-lg rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 p-5 shadow-2xl">
+                  <h4 id="tier-remove-title" className="text-sm font-semibold text-slate-900 dark:text-white">Remove Tier {tierRemoveDialog.index + 1}?</h4>
+                  {tierRemoveDialog.isMiddle ? (
+                    <div className="mt-3 text-sm text-slate-600 dark:text-slate-400">
+                      <p>This changes future tier-number resolution for this profile:</p>
+                      <ul className="mt-2 list-disc pl-5">
+                        {computeTierRenumberingImpact(tierDrafts, tierRemoveDialog.index).map((item) => (
+                          <li key={`${item.from}-${item.to}`}>Tier {item.from}: {item.label} → becomes Tier {item.to}</li>
+                        ))}
+                      </ul>
+                      <p className="mt-2 text-xs">Existing historical runs do not change.</p>
+                    </div>
+                  ) : null}
+                  {tierRemoveDialog.isDefault ? (
+                    <div className="mt-3 space-y-2">
+                      <p className="text-sm text-slate-600 dark:text-slate-400">Choose a replacement default tier:</p>
+                      <div className="space-y-2">
+                        {tierDrafts.filter((_, i) => i !== tierRemoveDialog.index).map((t) => {
+                          const originalIndex = tierDrafts.findIndex((x) => x.clientId === t.clientId);
+                          return (
+                            <label key={t.clientId} className="flex items-center gap-2 text-sm">
+                              <input type="radio" name="replacement-default-tier" value={t.clientId} checked={tierRemoveReplacementId === t.clientId} onChange={() => setTierRemoveReplacementId(t.clientId)} />
+                              Tier {originalIndex + 1}{originalIndex >= tierRemoveDialog.index ? ` → Tier ${originalIndex}` : ''}: {t.label || `Tier ${originalIndex + 1}`}
+                            </label>
+                          );
+                        })}
+                      </div>
+                    </div>
+                  ) : null}
+                  <div className="mt-5 flex justify-end gap-3">
+                    <button type="button" className="rounded-lg border border-slate-300 dark:border-slate-700 px-4 py-2 text-sm" onClick={() => setTierRemoveDialog(null)}>Cancel</button>
+                    <button type="button" className="rounded-lg bg-rose-600 px-4 py-2 text-sm font-semibold text-white" onClick={confirmRemoveTier}>Remove and renumber</button>
+                  </div>
+                </div>
+              </div>
+            ) : null}
+          </fieldset>
+
+
+
+          {/* ── 4. Capacity ── */}
+          <fieldset className="rounded-2xl border border-slate-200 dark:border-slate-700 p-5 space-y-4">
+            <legend className="px-2 text-sm font-semibold text-slate-700 dark:text-slate-300">Capacity</legend>
+            <div className="grid gap-4 md:grid-cols-2">
+              <label className="flex flex-col gap-1.5 text-sm font-medium text-slate-700 dark:text-slate-300">
+                <span>Max parallel runs</span>
+                <input
+                  type="number"
+                  min="1"
+                  disabled={isCodexOAuthForm}
+                  className="w-full rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 px-3 py-2 text-sm text-slate-900 dark:text-white shadow-sm"
+                  value={isCodexOAuthForm ? '1' : form.maxParallelRuns}
+                  onChange={(event) =>
+                    setForm((current) => ({ ...current, maxParallelRuns: event.target.value }))
+                  }
+                />
+                <p className="text-xs text-slate-400 dark:text-slate-500">
+                  {isCodexOAuthForm
+                    ? 'Fixed at 1 because the Codex OAuth home is an exclusive mutable identity.'
+                    : `Default: ${defaultFormValues.maxParallelRuns}`}
+                </p>
+              </label>
+              <div className="rounded-xl border border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-900 p-4 text-sm text-slate-600 dark:text-slate-400">
+                Capacity is the one Runtime Limits value most users can reason about directly. The backend creation preset owns the recommended value.
+              </div>
+            </div>
+          </fieldset>
+
+
+
+          {/* ── 5. Use as runtime default (readiness-gated) ── */}
+          <fieldset className="rounded-2xl border border-slate-200 dark:border-slate-700 p-5 space-y-3">
+            <legend className="px-2 text-sm font-semibold text-slate-700 dark:text-slate-300">Use as runtime default</legend>
+            {(() => {
+              const readiness = editingProfile?.readiness ?? null;
+              const launchReady = isEditing ? Boolean(readiness?.launch_ready) : Boolean(selectedAuthenticationCapability?.launch_ready_after_setup || selectedAuthenticationCapability?.fields.may_become_runtime_default?.value);
+              // The readiness gate prevents assigning an unready profile as
+              // default, but an already-default profile may still be demoted.
+              const assignBlocked = isEditing && !launchReady && !form.isDefault;
+              const demoteAllowed = isEditing && !launchReady && form.isDefault;
+              return (
+                <>
+                  <label className={`flex items-center gap-3 rounded-2xl border px-4 py-3 text-sm font-medium ${assignBlocked ? 'border-amber-300 bg-amber-50 text-amber-800 dark:border-amber-800 dark:bg-amber-950/30 dark:text-amber-300' : 'border-slate-200 bg-slate-50 text-slate-700 dark:border-slate-800 dark:bg-slate-800 dark:text-slate-300'}`}>
+                    <input
+                      type="checkbox"
+                      checked={form.isDefault}
+                      disabled={assignBlocked}
+                      aria-label="Runtime default"
+                      onChange={(event) =>
+                        setForm((current) => ({ ...current, isDefault: event.target.checked }))
+                      }
+                    />
+                    Use as runtime default
+                  </label>
+                  {assignBlocked ? (
+                    <p className="text-xs text-amber-700 dark:text-amber-300">
+                      Default assignment is disabled until launch readiness succeeds. Complete credential setup and resolve readiness blockers first.
+                    </p>
+                  ) : demoteAllowed ? (
+                    <p className="text-xs text-amber-700 dark:text-amber-300">
+                      This profile is currently the runtime default but is not launch-ready. You may clear this checkbox to demote it; re-assigning default requires launch readiness.
+                    </p>
+                  ) : (
+                    <p className="text-xs text-slate-500 dark:text-slate-400">
+                      When enabled, this profile becomes the preferred launch target for its runtime after readiness succeeds.
+                    </p>
+                  )}
+                </>
+              );
+            })()}
+          </fieldset>
+
 
           <div className="rounded-2xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800/50 p-5 space-y-3">
             <label className="flex items-center gap-3 text-sm font-semibold text-slate-800 dark:text-slate-200">
@@ -4045,11 +4376,11 @@ export function ProviderProfilesManager({
                   </label>
                 </div>
                 {manualCreationAllowed ? (
-                  <label className="flex flex-col gap-1.5 text-sm font-medium text-slate-700 dark:text-slate-300">
-                    <span>Clear env keys</span>
+                  <label className="flex flex-col gap-1.5 text-sm font-medium text-amber-800 dark:text-amber-300">
+                    <span>Clear env keys — manual expert path (validated; overrides are audited)</span>
                     <textarea
                       rows={3}
-                      className="w-full rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 px-3 py-2 font-mono text-sm"
+                      className="w-full rounded-xl border border-amber-300 dark:border-amber-800 bg-amber-50 dark:bg-amber-950/30 px-3 py-2 font-mono text-sm"
                       value={form.clearEnvKeysText}
                       onChange={(event) =>
                         setForm((current) => ({
@@ -4058,12 +4389,141 @@ export function ProviderProfilesManager({
                         }))
                       }
                     />
+                    <p className="text-xs text-amber-700 dark:text-amber-300">Warning: freeform clear_env_keys is only allowed for unsupported combinations via the manual creation path. Values are validated by the backend (known keys, valid names, bounded list, no unsafe keys); updates to supported profiles require superuser permission with an audit reason and warning acknowledgement, and are recorded with actor metadata. Bypassing backend-recommended isolation can break launches or leak credentials, so review it carefully.</p>
                   </label>
                 ) : (
                   <div className="rounded-xl bg-slate-50 dark:bg-slate-900 p-3 text-xs text-slate-500 dark:text-slate-400">
-                    Clear environment keys: {selectedAuthenticationCapability?.fields.clear_env_keys ? String((selectedAuthenticationCapability.fields.clear_env_keys.value as string[]).join(', ')) : form.clearEnvKeysText || 'Backend strategy'}
-                    <div>Source: {selectedAuthenticationCapability?.fields.clear_env_keys?.source ?? 'existing_profile'} · Locked by backend launch-safety policy</div>
+                    <div className="font-medium text-slate-700 dark:text-slate-300">Launch environment isolation — clear environment keys</div>
+                    {isEditing && editingProfile?.launch_isolation ? (
+                      <>
+                        <div>Classification: {editingProfile.launch_isolation.classification} · Strategy: {editingProfile.launch_isolation.strategy_id}</div>
+                        <div>Effective keys: {editingProfile.launch_isolation.effective_keys.join(', ') || 'empty'}</div>
+                        <div>Source: {editingProfile.launch_isolation.source}{editingProfile.launch_isolation.derived ? ' (backend-derived)' : ''} · {editingProfile.launch_isolation.editable ? 'Editable' : 'Locked by backend launch-safety policy'}</div>
+                        <div>Lock reason: {editingProfile.launch_isolation.lock_reason}</div>
+                        {editingProfile.launch_isolation.classification === 'expert_override' ? (
+                          <div>Audited expert override recorded{editingProfile.launch_isolation.audit_reason_present ? ' with audit reason' : ' (audit reason missing)'}. Standard edits remain locked.</div>
+                        ) : null}
+                        {Object.entries(editingProfile.launch_isolation.explanations ?? {}).length > 0 ? (
+                          <ul className="mt-1 list-disc pl-5">
+                            {Object.entries(editingProfile.launch_isolation.explanations ?? {}).map(([key, explanation]) => (
+                              <li key={key}>{key}: {String(explanation)}</li>
+                            ))}
+                          </ul>
+                        ) : null}
+                      </>
+                    ) : (
+                      <>
+                        <div>Value: {selectedAuthenticationCapability?.fields.clear_env_keys ? String((selectedAuthenticationCapability.fields.clear_env_keys.value as string[]).join(', ') || 'empty') : (form.clearEnvKeysText || (editingProfile?.clear_env_keys?.join(', ') || 'Backend strategy — runtime_provider_isolation_policy'))}</div>
+                        <div>Source: {selectedAuthenticationCapability?.fields.clear_env_keys?.source ?? 'runtime_provider_isolation_policy'} · Locked by backend launch-safety policy</div>
+                        <div>Lock reason: {selectedAuthenticationCapability?.fields.clear_env_keys?.lock_reason ?? 'Environment clearing is backend-owned launch security policy.'}</div>
+                      </>
+                    )}
                   </div>
+                )}
+              </fieldset>
+              <fieldset className="rounded-2xl border border-slate-200 dark:border-slate-700 p-5 space-y-4">
+                <legend className="px-2 text-sm font-semibold text-slate-700 dark:text-slate-300">Reset advanced options</legend>
+                {!creationPreset && !isEditing ? (
+                  <p className="text-sm text-slate-500 dark:text-slate-400">Load a backend preset to preview recommended values.</p>
+                ) : isEditing && !creationPreset ? (
+                  creationPresetLoading ? (
+                    <p className="text-sm text-slate-500 dark:text-slate-400">Loading backend-recommended values…</p>
+                  ) : (
+                    <>
+                      <p className="text-sm text-slate-500 dark:text-slate-400">
+                        No backend preset is available for this profile type
+                        {creationPresetError ? ` (${creationPresetError})` : ''}, so
+                        recommended values cannot be previewed. Discarding unsaved
+                        advanced edits restores the last saved values instead.
+                      </p>
+                      <button
+                        type="button"
+                        className="rounded-lg border border-slate-300 dark:border-slate-700 px-4 py-2 text-sm font-semibold text-slate-700 dark:text-slate-300"
+                        onClick={() => {
+                          setForm(formBaseline);
+                          setTierDrafts(tierBaseline ? cloneTierDrafts(tierBaseline) : [runtimeDefaultTierDraft()]);
+                          if (tierBaselineDefaultId) setDefaultTierClientId(tierBaselineDefaultId);
+                          onNotice({ level: 'ok', text: 'Unsaved advanced edits discarded; restored last saved values.' });
+                        }}
+                      >
+                        Discard unsaved advanced edits
+                      </button>
+                    </>
+                  )
+                ) : (
+                  <>
+                    {!showResetPreview ? (
+                      <button
+                        type="button"
+                        className="rounded-lg border border-slate-300 dark:border-slate-700 px-4 py-2 text-sm font-semibold text-slate-700 dark:text-slate-300"
+                        onClick={() => setShowResetPreview(true)}
+                      >
+                        Reset advanced options to recommended
+                      </button>
+                    ) : (
+                      <div className="space-y-3">
+                        <div className="rounded-xl border border-amber-200 dark:border-amber-800 bg-amber-50 dark:bg-amber-950/30 p-3 text-sm text-amber-800 dark:text-amber-300">
+                          <p className="font-semibold">Preview — recommended values will replace draft overrides:</p>
+                          <ul className="mt-2 list-disc pl-5 text-xs">
+                            {(() => {
+                              const preset = creationPreset;
+                              const fields = preset?.fields ?? {};
+                              const items: string[] = [];
+                              if (creationPreset) {
+                                if (fields.cooldown_after_429_seconds) items.push(`cooldown_after_429_seconds: ${String(fields.cooldown_after_429_seconds.value)} (concrete recommended)`);
+                                if (fields.rate_limit_policy) items.push(`rate_limit_policy: ${String(fields.rate_limit_policy.value)} (concrete recommended)`);
+                                if (fields.priority) items.push(`priority: ${String(fields.priority.value)} (concrete recommended)`);
+                                if (fields.clear_env_keys) items.push(`clear_env_keys: ${(fields.clear_env_keys.value as string[]).join(', ') || 'empty'} — recalculated security fields (runtime_provider_isolation_policy)`);
+                                items.push('credential_source / runtime_materialization_mode — omitted to inherit backend-derived values');
+                                items.push('secret_refs / volume refs — omitted unless explicitly bound');
+                              } else if (isEditing && editingProfile) {
+                                items.push('Backend preset unavailable — preview unavailable; use “Discard unsaved advanced edits” to restore last saved values');
+                              } else {
+                                items.push('No preset available — preview unavailable');
+                              }
+                              return items.map((it) => <li key={it}>{it}</li>);
+                            })()}
+                          </ul>
+                          <p className="mt-2 text-xs">Fields changed from explicit override to inherited/omitted will be normalized by the server. Generated security fields will be recalculated.</p>
+                        </div>
+                        <div className="flex gap-3">
+                          <button
+                            type="button"
+                            className="rounded-lg bg-slate-900 dark:bg-slate-100 px-4 py-2 text-sm font-semibold text-white dark:text-slate-900"
+                            onClick={() => {
+                              if (creationPreset) {
+                                setForm((cur) => {
+                                  const next = applyCreationPresetToForm(cur, creationPreset);
+                                  // isDefault/enabled are identity toggles outside
+                                  // advanced options; an advanced reset while
+                                  // editing must not flip them as a side effect.
+                                  return isEditing
+                                    ? { ...next, isDefault: cur.isDefault, enabled: cur.enabled }
+                                    : next;
+                                });
+                              } else if (isEditing && editingProfile) {
+                                setForm(formBaseline);
+                                setTierDrafts(tierBaseline ? cloneTierDrafts(tierBaseline) : [runtimeDefaultTierDraft()]);
+                                if (tierBaselineDefaultId) setDefaultTierClientId(tierBaselineDefaultId);
+                              }
+                              setShowResetPreview(false);
+                              onNotice({ level: 'ok', text: 'Advanced options reset to recommended preview applied.' });
+                            }}
+                          >
+                            Apply reset
+                          </button>
+                          <button
+                            type="button"
+                            className="rounded-lg border border-slate-300 dark:border-slate-700 px-4 py-2 text-sm"
+                            onClick={() => setShowResetPreview(false)}
+                          >
+                            Cancel
+                          </button>
+                        </div>
+                      </div>
+                    )}
+                    <p className="text-xs text-slate-500 dark:text-slate-400">Distinguishes concrete recommended values vs omit-to-inherit vs recalculated security fields and launch impact.</p>
+                  </>
                 )}
               </fieldset>
             </div>

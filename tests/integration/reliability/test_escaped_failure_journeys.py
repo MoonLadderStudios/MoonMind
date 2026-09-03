@@ -2,11 +2,13 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import io
 import json
 import re
 import runpy
 import sqlite3
 import subprocess
+import tarfile
 import threading
 import time
 from datetime import datetime, timedelta, timezone
@@ -53,9 +55,12 @@ from moonmind.omnigent.execute import (
     OmnigentTurnNotStartedError,
     _await_marked_turn_terminal,
     _build_omnigent_first_message,
+    _durable_terminal_status_with_evidence,
     _first_message_text,
     _marked_turn_item_state,
+    _marked_turn_timeout_diagnostics,
     _persisted_pre_dispatch_item_ids,
+    _resolved_marked_turn_timeout_seconds,
     _safe_heartbeat,
     _snapshot_confirms_current_turn_terminal,
     _snapshot_contains_current_turn_progress,
@@ -111,6 +116,7 @@ from moonmind.schemas.agent_runtime_models import (
     AgentRuntimeStepExecutionLaunch,
     AgentTerminalContract,
     ManagedRunRecord,
+    OmnigentExecutionPlanBinding,
 )
 from moonmind.schemas.workspace_locator_models import WorkspaceLocatorResolutionError
 from moonmind.provider_profiles.lease_client import (
@@ -161,6 +167,9 @@ from moonmind.workflows.temporal.remediation_loop import (
     RemediationLoopSpec,
     materialize_attempt_nodes,
 )
+from moonmind.workflows.temporal.remediation_workspace_head import (
+    RemediationWorkspaceHead,
+)
 from moonmind.workflows.temporal.runtime.codex_session_runtime import (
     CodexManagedSessionRuntime,
 )
@@ -176,6 +185,9 @@ from moonmind.workflows.temporal.schedule_mapping import (
 from moonmind.workflows.temporal.workflows import agent_run as agent_run_module
 from moonmind.workflows.temporal.workflows import (
     checkpoint_branch_turn as checkpoint_branch_turn_module,
+)
+from moonmind.workflows.temporal.workflows import (
+    merge_automation as merge_automation_module,
 )
 
 
@@ -210,6 +222,10 @@ from moonmind.workflows.temporal.workflows.run import (
     NATIVE_PR_BRANCH_DEFAULTS_PATCH,
     RUN_AGENT_REQUIRED_CAPABILITIES_PROPAGATION_PATCH,
     RUN_HEADLESS_REMEDIATION_VERIFIED_WORKSPACE_PATCH,
+    RUN_ISSUE_IMPLEMENT_PR_HANDOFF_AUTHORITY_PATCH,
+    RUN_MERGE_AUTOMATION_OMNIGENT_RESOLVER_PLAN_PATCH,
+    RUN_OMNIGENT_PUBLICATION_CHECKPOINT_RESTORE_PATCH,
+    RUN_OMNIGENT_REMEDIATION_CHECKPOINT_RESTORE_PATCH,
     RUN_WORKFLOW_HEADLESS_REMEDIATION_PATCH,
     RUN_WORKFLOW_OWNED_REMEDIATION_HEAD_PATCH,
     RUN_OMNIGENT_STOCK_AGENT_IDENTITY_PATCH,
@@ -219,6 +235,9 @@ from moonmind.workflows.temporal.workflows.run import (
     RUN_REMEDIATION_EXPLICIT_EVIDENCE_INPUTS_PATCH,
     RUN_TERMINAL_GATE_PUBLISHED_HEAD_FEASIBILITY_PATCH,
     MoonMindRunWorkflow,
+)
+from moonmind.workflows.temporal.workflows.merge_automation import (
+    MoonMindMergeAutomationWorkflow,
 )
 from moonmind.workflows.terminal_evidence import evaluate_terminal_evidence
 from tests.integration.reliability.helpers import (
@@ -2250,6 +2269,323 @@ async def test_invalid_batch_range_records_terminal_failure_without_retry(
     assert expected["parentState"] == "failed"
 
 
+async def test_batch_github_fanout_preserves_checkout_authority_replay(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Replay mm:f724a9b2 through child authoring and workspace checkout."""
+    from api_service.api.routers.executions import (
+        _normalize_submitted_repository,
+        _validate_repository_submission_compatibility,
+    )
+    from moonmind.omnigent.host_services.workspace import (
+        OmnigentWorkspaceMaterializer,
+    )
+    from moonmind.omnigent.workspace_intent import compile_workspace_intent
+
+    replay_id = "batch-github-fanout-repository-authority"
+    manifest = load_replay(replay_id, "manifest.json")
+    expected = load_replay(replay_id, "expected-outcome.json")
+    skill = runpy.run_path(
+        str(
+            REPO_ROOT
+            / ".agents"
+            / "skills"
+            / "batch-github-workflows"
+            / "bin"
+            / "batch_workflows.py"
+        )
+    )
+
+    def fake_github_query(command: list[str], **_kwargs: object):
+        return subprocess.CompletedProcess(
+            command,
+            0,
+            stdout=json.dumps(manifest["githubResponse"]),
+            stderr="",
+        )
+
+    targets = skill["resolve_github_issue_range"](
+        manifest["repository"],
+        manifest["issueRange"],
+        connection_ref=manifest["repositoryTarget"]["connectionRef"],
+        run_command=fake_github_query,
+    )
+    request = skill["build_child_request"](
+        targets[0],
+        config=skill["TargetConfig"](
+            target_kind="preset",
+            target_slug="github-issue-implement",
+            publish_mode="none",
+        ),
+        runtime=skill["RuntimeSelection"](mode="omnigent"),
+        batch_scope="replay:mm:f724a9b2",
+        inherit_runtime_from_caller=True,
+    )
+
+    assert manifest["failedWorkspaceSpec"]["repository"] == expected[
+        "discardedRepository"
+    ]
+    assert "branch" not in manifest["failedWorkspaceSpec"]
+    assert request is not None
+    assert request["payload"]["repository"] == expected["repositoryTarget"]
+
+    normalized_repository, scalar_repository = _normalize_submitted_repository(
+        request["payload"]["repository"]
+    )
+    _validate_repository_submission_compatibility(
+        repository_payload=normalized_repository,
+        task_payload={
+            "inputs": {
+                "github_issue": {"repository": manifest["repository"]},
+            }
+        },
+        publish_payload={"mode": "none"},
+    )
+    assert scalar_repository == manifest["repository"]
+    workflow_id = "replay:mm:f724a9b2"
+    step_execution_id = f"{workflow_id}:implementation"
+    workspace_id = hashlib.sha256(
+        f"{workflow_id}:{step_execution_id}".encode("utf-8")
+    ).hexdigest()[:24]
+    execution_request = AgentExecutionRequest(
+        agentKind="external",
+        agentId="omnigent",
+        correlationId=workflow_id,
+        idempotencyKey=step_execution_id,
+        workspaceSpec={
+            "workspaceLocator": {
+                "kind": "sandbox",
+                "workspaceId": workspace_id,
+                "relativePath": "repo",
+            },
+            "repository": normalized_repository,
+            "repositoryTarget": normalized_repository,
+        },
+    )
+    intent = compile_workspace_intent(
+        execution_request,
+        workflow_id=workflow_id,
+        step_execution_id=step_execution_id,
+    )
+    assert intent.repository == manifest["repository"]
+    assert intent.connection_ref == manifest["repositoryTarget"]["connectionRef"]
+    assert intent.starting_branch == "main"
+
+    captured: list[tuple[list[str], bytes | None]] = []
+
+    async def runner(
+        argv: list[str], input_bytes: bytes | None = None
+    ) -> tuple[int, str, str]:
+        captured.append((argv, input_bytes))
+        if "clone" in " ".join(argv):
+            relative_target = argv[-1].removeprefix("/work/")
+            (tmp_path / relative_target).mkdir(parents=True)
+        return 0, "", ""
+
+    async def fake_token() -> str:
+        return "fixture-replay-token"
+
+    monkeypatch.setattr(
+        "moonmind.workflows.temporal.runtime.managed_api_key_resolve."
+        "resolve_github_token_for_launch",
+        fake_token,
+    )
+    materialized = await OmnigentWorkspaceMaterializer(
+        command_runner=runner,
+        workspace_root=tmp_path,
+    ).materialize(execution_request)
+
+    clone_argv, clone_input = captured[0]
+    assert materialized["kind"] == "bind"
+    assert clone_argv[-3:] == [
+        "main",
+        "https://github.com/MoonLadderStudios/MoonMind.git",
+        f"/work/temporal_sandbox/{workspace_id}/repo",
+    ]
+    assert 'git check-ref-format --branch "$1"' in " ".join(clone_argv)
+    assert clone_input == b"fixture-replay-token"
+
+
+async def test_omnigent_dynamic_remediation_restores_workspace_archive_replay(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Replay the failed child at the workflow-to-host restore boundary."""
+
+    replay_id = "omnigent-remediation-prematerialization-checkpoint"
+    manifest = load_replay(replay_id, "manifest.json")
+    expected = load_replay(replay_id, "expected-outcome.json")
+    parent = MoonMindRunWorkflow()
+    parent._remediation_workspace_head = RemediationWorkspaceHead.model_validate(
+        manifest["remediationWorkspaceHead"]
+    )
+    node = json.loads(json.dumps(manifest["dynamicRemediationNode"]))
+    node_inputs = dict(node["inputs"])
+    parent._remediation_loop_runtime = dict(node_inputs["runtime"])
+    parent._inject_remediation_workspace_baseline(
+        node=node,
+        node_inputs=node_inputs,
+    )
+    monkeypatch.setattr(
+        run_workflow_module.workflow,
+        "patched",
+        lambda patch_id: patch_id
+        in {
+            RUN_OMNIGENT_REMEDIATION_CHECKPOINT_RESTORE_PATCH,
+            RUN_OMNIGENT_PUBLICATION_CHECKPOINT_RESTORE_PATCH,
+        },
+    )
+    monkeypatch.setattr(
+        run_workflow_module.workflow,
+        "info",
+        lambda: SimpleNamespace(
+            workflow_id=manifest["incidentChildWorkflowId"],
+            run_id="replay-run",
+        ),
+    )
+
+    restore_ref = parent._trusted_omnigent_remediation_checkpoint_restore_ref(
+        node=node,
+        node_inputs=node_inputs,
+    )
+    request = parent._build_agent_execution_request(
+        node_inputs=node_inputs,
+        node_id=node["id"],
+        tool_name="omnigent",
+        workflow_parameters={},
+        trusted_remediation_checkpoint_restore_ref=restore_ref,
+    )
+
+    assert restore_ref == expected["workspaceCheckpointRestoreRef"]
+    assert request.workspace_spec["workspaceCheckpointRestoreRef"] == restore_ref
+    assert request.workspace_spec["repositoryTarget"] == manifest["repositoryTarget"]
+
+    publication_node = json.loads(json.dumps(manifest["publicationNode"]))
+    publication_ref = parent._omnigent_publication_checkpoint_restore_ref(
+        node=publication_node,
+        node_inputs=publication_node["inputs"],
+    )
+    publication_request = parent._build_agent_execution_request(
+        node_inputs=publication_node["inputs"],
+        node_id=publication_node["id"],
+        tool_name="omnigent",
+        workflow_parameters={},
+        trusted_remediation_checkpoint_restore_ref=publication_ref,
+    )
+    assert publication_ref == expected["publicationCheckpointRestoreRef"]
+    assert (
+        publication_request.workspace_spec["workspaceCheckpointRestoreRef"]
+        == publication_ref
+    )
+
+    plan_binding = OmnigentExecutionPlanBinding(
+        planRef="omnigent-execution-plan:sha256:" + "1" * 64,
+        planDigest="sha256:" + "1" * 64,
+        planArtifactRef="art_replay_plan",
+        taskInputSnapshotRef="art_replay_task_input",
+        taskInputSnapshotDigest="sha256:" + "2" * 64,
+    )
+    compact_request = request.model_copy(
+        update={"omnigent_execution_plan": plan_binding}
+    )
+    compact_payload = MoonMindAgentRun._omnigent_resolve_intent_payload(
+        compact_request,
+        workflow_id=manifest["incidentChildWorkflowId"],
+        step_execution_id="replay-step-execution",
+        agent_run_id="replay-agent-run",
+        admitted_feature_generation="omnigent-session-v1",
+        compact_plan_authority=True,
+        compact_workspace_checkpoint_authority=True,
+    )
+    assert compact_payload["workspaceCheckpointRestoreRef"] == expected[
+        "compactIntentCheckpointRestoreRef"
+    ]
+
+    archive_buffer = io.BytesIO()
+    restored_content = manifest["archiveMember"]["content"].encode("utf-8")
+    with tarfile.open(fileobj=archive_buffer, mode="w:gz") as archive:
+        member = tarfile.TarInfo(manifest["archiveMember"]["path"])
+        member.size = len(restored_content)
+        archive.addfile(member, io.BytesIO(restored_content))
+
+    class ReplayArtifactService:
+        async def read(self, *, artifact_id: str, **_kwargs: object):
+            assert f"artifact://{artifact_id}" == restore_ref
+            return {}, archive_buffer.getvalue()
+
+    workflow_id = "workflow-1"
+    step_execution_id = "step-1"
+    workspace_id = hashlib.sha256(
+        f"{workflow_id}:{step_execution_id}".encode("utf-8")
+    ).hexdigest()[:24]
+    workspace = tmp_path / "temporal_sandbox" / workspace_id / "repo"
+    workspace.mkdir(parents=True)
+    runtime = OmnigentOAuthHostRuntime(
+        client=SimpleNamespace(),
+        workspace_root=tmp_path,
+    )
+    prepare_kwargs = dict(
+        workspace_locator={"kind": "sandbox", "workspaceId": workspace_id},
+        current_workflow_id=workflow_id,
+        current_step_execution_id=step_execution_id,
+        workspace_checkpoint_restore_ref=restore_ref,
+        artifact_gateway=ReplayArtifactService(),
+    )
+    await runtime._prepare_workspace(**prepare_kwargs)
+
+    restored = workspace / manifest["archiveMember"]["path"]
+    assert restored.read_text(encoding="utf-8") == expected["restoredContent"]
+    restored.write_text(expected["retryPreservedContent"], encoding="utf-8")
+    await runtime._prepare_workspace(**prepare_kwargs)
+    assert restored.read_text(encoding="utf-8") == expected["retryPreservedContent"]
+
+    # The incident's OpenCode profile is admitted through
+    # ``generic-omnigent-host@1``. Exercise that production materializer too;
+    # validating only the legacy OAuth host left the escaped regression intact.
+    from moonmind.omnigent.host_services.workspace import (
+        OmnigentWorkspaceMaterializer,
+    )
+
+    generic_workflow_id = "generic-workflow-1"
+    generic_step_execution_id = "generic-step-1"
+    generic_workspace_id = hashlib.sha256(
+        f"{generic_workflow_id}:{generic_step_execution_id}".encode("utf-8")
+    ).hexdigest()[:24]
+    generic_workspace = (
+        tmp_path / "temporal_sandbox" / generic_workspace_id / "repo"
+    )
+    generic_workspace.mkdir(parents=True)
+    generic_request = AgentExecutionRequest(
+        agentKind="external",
+        agentId="omnigent",
+        correlationId=generic_workflow_id,
+        idempotencyKey=generic_step_execution_id,
+        workspaceSpec={
+            "workspaceLocator": {
+                "kind": "sandbox",
+                "workspaceId": generic_workspace_id,
+                "relativePath": "repo",
+            },
+            "repository": "MoonLadderStudios/MoonMind",
+            "branch": "main",
+            "workspaceCheckpointRestoreRef": restore_ref,
+        },
+    )
+
+    async def no_clone(*_args: object, **_kwargs: object):
+        raise AssertionError("pre-materialized replay workspace must not be cloned")
+
+    await OmnigentWorkspaceMaterializer(
+        command_runner=no_clone,
+        workspace_root=tmp_path,
+        artifact_service=ReplayArtifactService(),
+    ).materialize(generic_request)
+    assert (
+        generic_workspace / manifest["archiveMember"]["path"]
+    ).read_text(encoding="utf-8") == expected["restoredContent"]
+
+
 async def test_standalone_omnigent_resolver_rejects_unowned_continuation_without_retry(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -2281,6 +2617,123 @@ async def test_standalone_omnigent_resolver_rejects_unowned_continuation_without
     assert retryable is expected["retryable"]
     assert expected["genericRetryCount"] == 0
     assert expected["parentState"] == "failed"
+
+
+async def test_omnigent_merge_resolver_recompiles_child_plan_before_launch(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Replay resolver:pr:813 at both workflow authority handoffs."""
+
+    replay_id = "omnigent-merge-resolver-child-plan"
+    manifest = load_replay(replay_id, "manifest.json")
+    expected = load_replay(replay_id, "expected-outcome.json")
+    parent = MoonMindRunWorkflow()
+    parent._repo = manifest["repository"]
+    parent._publish_context.update(
+        {
+            "branch": manifest["pullRequest"]["headBranch"],
+            "baseRef": manifest["pullRequest"]["baseBranch"],
+        }
+    )
+    monkeypatch.setattr(
+        parent,
+        "_workflow_patch_enabled",
+        lambda patch_id: patch_id
+        == RUN_MERGE_AUTOMATION_OMNIGENT_RESOLVER_PLAN_PATCH,
+    )
+
+    merge_input = parent._build_merge_gate_start_payload(
+        parameters=manifest["parentParameters"],
+        pull_request_url=manifest["pullRequest"]["url"],
+        head_sha=manifest["pullRequest"]["headSha"],
+        parent_workflow_id=manifest["parentWorkflowId"],
+        parent_run_id=manifest["parentRunId"],
+    )
+
+    assert merge_input is not None
+    parent_plan = manifest["parentParameters"]["omnigentExecutionPlan"]
+    assert merge_input["resolverTemplate"]["parentOmnigentExecutionPlan"] == (
+        parent_plan
+    )
+    resolver = MoonMindMergeAutomationWorkflow()
+    resolver._input = merge_automation_module.MergeAutomationStartInput.model_validate(
+        merge_input
+    )
+    resolver_request = merge_automation_module.build_resolver_run_request(
+        parent_workflow_id=manifest["parentWorkflowId"],
+        pull_request=resolver._input.pull_request,
+        jira_issue_key=resolver._input.jira_issue_key,
+        merge_method=resolver._input.config.resolver.merge_method,
+        resolver_template=resolver._input.resolver_template,
+    )
+    child_plan = {
+        "planRef": "omnigent-execution-plan:sha256:" + "c" * 64,
+        "planDigest": "sha256:" + "c" * 64,
+        "planArtifactRef": expected["childPlanArtifactRef"],
+        "taskInputSnapshotRef": "art-child-task",
+        "taskInputSnapshotDigest": "sha256:" + "d" * 64,
+    }
+    calls: list[dict[str, object]] = []
+
+    async def prepare_child_plan(
+        activity_type: str,
+        activity_payload: dict[str, object],
+        **kwargs: object,
+    ) -> dict[str, object]:
+        calls.append(
+            {
+                "activityType": activity_type,
+                "payload": activity_payload,
+                "taskQueue": kwargs.get("task_queue"),
+            }
+        )
+        prepared = json.loads(json.dumps(activity_payload["childWorkflowRequest"]))
+        prepared["initial_parameters"]["omnigentExecutionPlan"] = child_plan
+        prepared["initial_parameters"]["resolvedSkillsetRef"] = expected[
+            "resolvedSkillsetRef"
+        ]
+        return prepared
+
+    monkeypatch.setattr(
+        merge_automation_module.workflow,
+        "execute_activity",
+        prepare_child_plan,
+    )
+    prepared = await resolver._prepare_omnigent_resolver_request(
+        resolver_request,
+        resolver_workflow_id=expected["childWorkflowId"],
+    )
+
+    assert calls[0]["activityType"] == expected["preparationActivity"]
+    assert calls[0]["taskQueue"] == expected["activityTaskQueue"]
+    assert calls[0]["payload"]["parentExecutionPlan"] == parent_plan
+    assert prepared["initial_parameters"]["omnigentExecutionPlan"] == child_plan
+    assert prepared["initial_parameters"]["resolvedSkillsetRef"] == expected[
+        "resolvedSkillsetRef"
+    ]
+    assert prepared["initial_parameters"]["task"]["tool"]["name"] == expected[
+        "resolvedSkill"
+    ]
+    workspace_spec = prepared["initial_parameters"]["workspaceSpec"]
+    assert workspace_spec["startingBranch"] == expected["startingBranch"]
+    assert workspace_spec["targetBranch"] == expected["targetBranch"]
+
+    # Inputs created before the parent-plan field existed recover the same
+    # immutable authority from the canonical parent execution in the Activity.
+    legacy_merge_input = json.loads(json.dumps(merge_input))
+    legacy_merge_input["resolverTemplate"].pop("parentOmnigentExecutionPlan")
+    legacy_resolver = MoonMindMergeAutomationWorkflow()
+    legacy_resolver._input = (
+        merge_automation_module.MergeAutomationStartInput.model_validate(
+            legacy_merge_input
+        )
+    )
+    await legacy_resolver._prepare_omnigent_resolver_request(
+        resolver_request,
+        resolver_workflow_id=expected["childWorkflowId"],
+    )
+    assert calls[1]["payload"]["parentWorkflowId"] == manifest["parentWorkflowId"]
+    assert "parentExecutionPlan" not in calls[1]["payload"]
 
 
 async def test_completed_batch_no_op_replays_through_production_activity_route(
@@ -4081,6 +4534,103 @@ async def test_accepted_turn_that_never_starts_fails_within_start_budget(
     assert dispatched.provider_error_code == expected["failureCode"]
     assert dispatched.retry_recommendation == expected["retryRecommendation"]
     assert dispatched.diagnostics_ref == result.diagnostics_ref
+
+
+async def test_active_tool_turn_uses_published_budget_and_preserves_retry() -> None:
+    """Replay mm:8d94711e at the budget and generic-dispatch boundaries."""
+
+    from moonmind.workflows.temporal.activities.omnigent_activities import (
+        _try_generic_realizer_dispatch,
+    )
+    from tests.unit.omnigent.test_generic_platform_production_services import _plan
+
+    replay_id = "omnigent-active-tool-execution-budget"
+    manifest = load_replay(replay_id, "manifest.json")
+    expected = load_replay(replay_id, "expected-outcome.json")
+    snapshot = manifest["terminalSnapshot"]
+    marker = snapshot["items"][0]["data"]["content"][0]["text"]
+    turn_state = _marked_turn_item_state(snapshot, marker=marker)
+    diagnostics = _marked_turn_timeout_diagnostics(
+        session_id=manifest["sessionId"],
+        snapshot=snapshot,
+        timeout_seconds=manifest["legacyMarkedTurnTimeoutSeconds"],
+        event_count=manifest["observedProviderEventCount"],
+        turn_state=turn_state,
+    )
+
+    assert turn_state["progress"] is expected["currentTurnProgress"]
+    assert turn_state["unfinishedToolCall"] is expected["unfinishedToolCall"]
+    assert diagnostics["lastItemType"] == expected["lastItemType"]
+    assert diagnostics["lastToolName"] == expected["lastToolName"]
+    assert (
+        diagnostics["providerRateLimitEvidence"]
+        == expected["providerRateLimitEvidence"]
+    )
+
+    plan = _plan("opencode-go/model")
+    request = AgentExecutionRequest(
+        agentKind="external",
+        agentId="omnigent",
+        correlationId=manifest["incidentWorkflowId"],
+        idempotencyKey="step-active-tool-budget",
+        resolvedSkillsetRef="artifact:skills",
+        omnigentExecutionPlan=OmnigentExecutionPlanBinding(
+            planRef=plan.planRef,
+            planDigest="sha256:" + plan.planRef.rsplit(":", 1)[-1],
+            planArtifactRef="artifact:replay-plan",
+            taskInputSnapshotRef="artifact:replay-task-input",
+            taskInputSnapshotDigest="sha256:" + "a" * 64,
+        ),
+        timeoutPolicy=manifest["requestTimeoutPolicy"],
+        parameters={"executionPlanRef": plan.planRef},
+    )
+    assert (
+        _resolved_marked_turn_timeout_seconds(request)
+        == expected["markedTurnTimeoutSeconds"]
+    )
+    assert (
+        expected["activityBudgetSeconds"] - expected["markedTurnTimeoutSeconds"]
+        == expected["retryReserveSeconds"]
+    )
+    coarse_bridge_projection = SimpleNamespace(
+        status=manifest["bridgeProjection"]["status"],
+        first_message_posted_at=(
+            object() if manifest["bridgeProjection"]["firstMessagePosted"] else None
+        ),
+        terminal_refs=manifest["bridgeProjection"]["terminalRefs"],
+    )
+    assert (
+        _durable_terminal_status_with_evidence(coarse_bridge_projection) is not None
+    ) is expected["coarseBridgeStatusAuthoritative"]
+
+    class PlanStore:
+        async def load(self, plan_ref):
+            assert plan_ref == plan.planRef
+            return plan
+
+    class Realizer:
+        async def execute(self, runtime_request, admitted):
+            raise OmnigentSessionStillRunningError(
+                "current marked turn is still executing a tool",
+                session_id=manifest["sessionId"],
+                snapshot=snapshot,
+                timeout_seconds=manifest["legacyMarkedTurnTimeoutSeconds"],
+                event_count=manifest["observedProviderEventCount"],
+                turn_state=turn_state,
+            )
+
+    class Registry:
+        def require(self, ref):
+            assert ref == manifest["executionRealizerRef"]
+            return Realizer()
+
+    with pytest.raises(OmnigentSessionStillRunningError):
+        await _try_generic_realizer_dispatch(
+            request,
+            plan_store=PlanStore(),
+            realizer_registry=Registry(),
+        )
+    assert expected["ambiguousTerminalRemainsRetryable"] is True
 
 
 async def test_transient_injection_response_does_not_hide_never_started_turn() -> None:
@@ -6076,6 +6626,11 @@ async def test_instructionless_inflight_remediation_loop_remains_replayable(
         "info",
         lambda: SimpleNamespace(run_id="inflight-replay-run"),
     )
+    monkeypatch.setattr(
+        run_workflow_module.workflow,
+        "patched",
+        lambda _patch_id: False,
+    )
 
     parent._initialize_remediation_loop_controller(
         ordered_nodes=[manifest["controllerPlanNode"]],
@@ -7172,3 +7727,89 @@ async def test_verified_no_commit_publication_reaches_the_workflow_publish_hando
             AgentRunResult(summary="Created the pull request for the pushed work."),
         )
     assert unverified.value.code == expected["staleRemoteEvidenceFailureCode"]
+
+
+@pytest.mark.asyncio
+async def test_partial_issue_no_commit_handoff_creates_pr_before_status_update(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Replay the false no-commit completion from mm:f194565c."""
+
+    replay_id = "omnigent-issue-implement-missing-pr-authority"
+    manifest = load_replay(replay_id, "manifest.json")
+    expected = load_replay(replay_id, "expected-outcome.json")
+    parent = MoonMindRunWorkflow()
+    parent._owner_type = "user"
+    parent._owner_id = "issue-pr-authority-replay"
+    parent._integration = None
+    parent._repo = manifest["repository"]
+    parent._canonical_no_commit_outcome_enabled = True
+    parent._assessment_context = {
+        "assessmentVerdict": manifest["assessmentVerdict"],
+        "assessmentArtifactRef": manifest["assessmentArtifactRef"],
+    }
+    parent._record_accepted_published_head(
+        {"acceptedRepositoryEvidence": manifest["acceptedRepositoryEvidence"]}
+    )
+    monkeypatch.setattr(
+        run_workflow_module.workflow,
+        "patched",
+        lambda patch_id: patch_id == RUN_ISSUE_IMPLEMENT_PR_HANDOFF_AUTHORITY_PATCH,
+    )
+    activity_calls: list[tuple[str, dict[str, object]]] = []
+
+    async def fake_execute_activity(activity_type: str, payload: dict, **_kwargs):
+        activity_calls.append((activity_type, payload))
+        return {"url": expected["pullRequestUrl"]}
+
+    monkeypatch.setattr(
+        run_workflow_module.workflow,
+        "execute_activity",
+        fake_execute_activity,
+    )
+    parameters = {
+        "publishMode": "pr",
+        "workflow": {
+            "title": "Implement GitHub issue",
+            "publish": {"prBaseBranch": "main"},
+            "inputs": {"github_issue": manifest["githubIssue"]},
+            "appliedStepTemplates": [
+                {"slug": "github-issue-implement", "version": "1.0.0"},
+            ],
+        },
+    }
+
+    parent._record_publish_result(
+        parameters=parameters,
+        execution_result={"outputs": {"push_status": "no_commits"}},
+    )
+    assert parent._publish_status == expected["preHandoffPublishStatus"]
+
+    pull_request_url = await parent._ensure_issue_implement_pr_before_status(
+        node={
+            "annotations": {"issueImplementRole": "code-review-handoff"},
+        },
+        parameters=parameters,
+    )
+
+    assert pull_request_url == expected["pullRequestUrl"]
+    assert parent._publish_status == expected["postHandoffPublishStatus"]
+    assert parent._publish_context["pullRequestUrl"] == pull_request_url
+    assert activity_calls == [
+        (
+            "repo.create_pr",
+            {
+                "repo": manifest["repository"],
+                "head": manifest["acceptedRepositoryEvidence"]["branch"],
+                "base": manifest["acceptedRepositoryEvidence"]["baseBranch"],
+                "title": (
+                    "Implement GitHub issue "
+                    f"({manifest['repository']}#{manifest['githubIssue']['number']})"
+                ),
+                "body": (
+                    "Automated changes by MoonMind.\n\n"
+                    f"Closes {manifest['repository']}#{manifest['githubIssue']['number']}\n"
+                ),
+            },
+        )
+    ]

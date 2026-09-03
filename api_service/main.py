@@ -89,9 +89,6 @@ from api_service.api.routers.omnigent_session_timeline import (
 from api_service.api.routers.omnigent_bootstrap import (
     router as omnigent_bootstrap_router,
 )
-from api_service.api.routers.workflow_proposals import (
-    router as workflow_proposals_router,
-)
 from api_service.api.routers.presets import (
     router as presets_router,
 )
@@ -838,7 +835,6 @@ app.include_router(executions_router)
 app.include_router(execution_integrations_router)
 app.include_router(automation_router)
 
-app.include_router(workflow_proposals_router)
 app.include_router(recurring_workflows_router)
 app.include_router(agent_runs_router, prefix="/api")
 app.include_router(sessions_router, prefix="/api")
@@ -1150,6 +1146,43 @@ async def _auto_seed_provider_profiles() -> list[str]:
     # First-party setup profiles are visible but disabled until OAuth setup
     # succeeds or an API key is added. API-key profiles are inserted only when
     # the corresponding env key is configured.
+    def _seed_clear_env_keys(
+        *,
+        runtime_id: str,
+        provider_id: str,
+        authentication_method: str,
+        credential_source: str,
+        runtime_materialization_mode: str,
+        fallback: list[str],
+    ) -> list[str]:
+        """Resolve seed clear_env_keys from the isolation authority.
+
+        Falls back to the curated static list only when the strategy table
+        has no entry; the fallback must still match the authority (covered
+        by test_provider_profile_auto_seed assertions).
+        """
+        try:
+            from moonmind.provider_profiles.isolation_policy import (
+                derive_isolation_policy as _derive_seed_policy,
+            )
+
+            _derived = _derive_seed_policy(
+                runtime_id=runtime_id,
+                provider_id=provider_id,
+                authentication_method=authentication_method,
+                credential_source=credential_source,
+                runtime_materialization_mode=runtime_materialization_mode,
+            )
+            if _derived is not None:
+                return list(_derived.keys)
+        except Exception:
+            logger.warning(
+                "provider_profile_seed_isolation_derive_failed runtime=%s provider=%s",
+                runtime_id,
+                provider_id,
+                exc_info=True,
+            )
+        return list(fallback)
     def _make_first_party_oauth_command_behavior() -> dict[str, Any]:
         return {
             "supported_auth_methods": ["oauth_volume", "secret_ref"],
@@ -1336,11 +1369,19 @@ async def _auto_seed_provider_profiles() -> list[str]:
                 "credential_source": ProviderCredentialSource.SECRET_REF,
                 "runtime_materialization_mode": RuntimeMaterializationMode.ENV_BUNDLE,
                 "secret_refs": {"provider_api_key": "env://MINIMAX_API_KEY"},
-                "clear_env_keys": [
-                    "ANTHROPIC_API_KEY",
-                    "ANTHROPIC_AUTH_TOKEN",
-                    "OPENAI_API_KEY",
-                ],
+                "clear_env_keys": _seed_clear_env_keys(
+                    runtime_id="claude_code",
+                    provider_id="minimax",
+                    authentication_method="api_key",
+                    credential_source="secret_ref",
+                    runtime_materialization_mode="env_bundle",
+                    fallback=[
+                        "ANTHROPIC_API_KEY",
+                        "ANTHROPIC_AUTH_TOKEN",
+                        "ANTHROPIC_BASE_URL",
+                        "MINIMAX_API_KEY",
+                    ],
+                ),
                 "env_template": {
                     "ANTHROPIC_BASE_URL": "https://api.minimax.io/anthropic",
                     "ANTHROPIC_AUTH_TOKEN": {
@@ -1379,12 +1420,18 @@ async def _auto_seed_provider_profiles() -> list[str]:
                 "secret_refs": {
                     "provider_api_key": "env://MINIMAX_API_KEY",
                 },
-                "clear_env_keys": [
-                    "OPENAI_API_KEY",
-                    "OPENAI_BASE_URL",
-                    "OPENAI_ORG_ID",
-                    "OPENAI_PROJECT",
-                ],
+                "clear_env_keys": _seed_clear_env_keys(
+                    runtime_id="codex_cli",
+                    provider_id="minimax",
+                    authentication_method="api_key",
+                    credential_source="secret_ref",
+                    runtime_materialization_mode="composite",
+                    fallback=[
+                        "MINIMAX_API_KEY",
+                        "OPENAI_API_KEY",
+                        "OPENAI_BASE_URL",
+                    ],
+                ),
                 "env_template": {
                     "MINIMAX_API_KEY": {
                         "from_secret_ref": "provider_api_key",
@@ -1470,8 +1517,15 @@ async def _auto_seed_provider_profiles() -> list[str]:
         generic_host_enabled,
         opencode_support_enabled,
     )
+    from moonmind.omnigent.bootstrap.opencode import (
+        DEFAULT_OPENCODE_MODEL_DISPLAY,
+        DEFAULT_OPENCODE_QUALIFIED,
+        ZEN_FREE_MODEL_DISPLAY,
+        ZEN_FREE_QUALIFIED,
+    )
 
-    if opencode_support_enabled() and generic_host_enabled():
+    opencode_defaults_enabled = opencode_support_enabled() and generic_host_enabled()
+    if opencode_defaults_enabled:
         _DEFAULT_PROFILES.append(
             {
                 "profile_id": "opencode-zen-free",
@@ -1479,12 +1533,12 @@ async def _auto_seed_provider_profiles() -> list[str]:
                 "is_default": False,
                 "provider_id": "opencode",
                 "provider_label": "OpenCode Zen",
-                "default_model": "opencode/muse-spark-1.2-contributor-free",
+                "default_model": ZEN_FREE_QUALIFIED,
                 "default_effort": "xhigh",
                 "model_tiers": [
                     {
-                        "label": "Muse Spark 1.2 Contributor Free",
-                        "model": "opencode/muse-spark-1.2-contributor-free",
+                        "label": ZEN_FREE_MODEL_DISPLAY,
+                        "model": ZEN_FREE_QUALIFIED,
                         "effort": "xhigh",
                         "parameters": {},
                         "annotations": {},
@@ -1806,6 +1860,96 @@ async def _auto_seed_provider_profiles() -> list[str]:
                     touched_runtime_ids.add(str(zen_current["runtime_id"]))
                     needs_commit = True
 
+            # Upgrade only the bootstrap-owned OpenCode Go default policy. A
+            # custom or multi-tier policy is operator-authored and remains
+            # untouched. This also repairs profiles created before bootstrap
+            # explicitly populated the tier contract, whose sole tier was
+            # persisted as Runtime default.
+            go_profile_id = "opencode-go-default"
+            go_current = existing_by_id.get(go_profile_id)
+            legacy_go_model = "opencode-go/muse-spark-1.2-contributor"
+            legacy_go_display = "Muse Spark 1.2 Contributor"
+            if (
+                opencode_defaults_enabled
+                and go_current is not None
+                and str(go_current.get("default_model") or "").strip()
+                == legacy_go_model
+            ):
+                go_tiers = list(go_current.get("model_tiers") or [])
+                expected_go_effort = str(
+                    go_current.get("default_effort") or "xhigh"
+                )
+                # Bootstrap-owned labels only: an operator who kept the legacy
+                # model but customized label/effort/parameters/annotations must
+                # not have the tier silently replaced.
+                bootstrap_owned_labels = {
+                    "",
+                    "Runtime default",
+                    legacy_go_display,
+                    DEFAULT_OPENCODE_MODEL_DISPLAY,
+                }
+
+                def _is_bootstrap_owned_go_tier(tier: Any) -> bool:
+                    if not isinstance(tier, dict):
+                        return False
+                    if (
+                        str(tier.get("model") or "").strip()
+                        not in {"", legacy_go_model}
+                    ):
+                        return False
+                    if str(tier.get("label") or "").strip() not in (
+                        bootstrap_owned_labels
+                    ):
+                        return False
+                    tier_effort = str(tier.get("effort") or "").strip()
+                    if tier_effort and tier_effort != expected_go_effort:
+                        return False
+                    if tier.get("parameters") not in (None, {}):
+                        return False
+                    if tier.get("annotations") not in (None, {}):
+                        return False
+                    return True
+
+                bootstrap_owned_tiers = (
+                    not go_tiers
+                    or (
+                        len(go_tiers) == 1
+                        and _is_bootstrap_owned_go_tier(go_tiers[0])
+                    )
+                )
+                if bootstrap_owned_tiers:
+                    # Migrating the model changes the launchable identity. The
+                    # revalidation fingerprint does not include the model, so a
+                    # previously exhausted failure record would otherwise skip
+                    # every probe for the newly selected model.
+                    go_behavior = dict(go_current.get("command_behavior") or {})
+                    go_behavior.pop("runtime_revalidation_failure", None)
+                    go_updates: dict[str, Any] = {
+                        "default_model": DEFAULT_OPENCODE_QUALIFIED,
+                        "model_tiers": [
+                            {
+                                "label": DEFAULT_OPENCODE_MODEL_DISPLAY,
+                                "model": DEFAULT_OPENCODE_QUALIFIED,
+                                "effort": expected_go_effort,
+                                "parameters": {},
+                                "annotations": {},
+                            }
+                        ],
+                        "default_model_tier": 1,
+                    }
+                    if go_behavior != (go_current.get("command_behavior") or {}):
+                        go_updates["command_behavior"] = go_behavior
+                    await session.execute(
+                        update(ManagedAgentProviderProfile)
+                        .where(
+                            ManagedAgentProviderProfile.profile_id == go_profile_id
+                        )
+                        .values(**go_updates)
+                    )
+                    existing_by_id[go_profile_id].update(go_updates)
+                    touched_runtime_ids.add(str(go_current["runtime_id"]))
+                    needs_commit = True
+
             to_insert = [
                 p for p in _DEFAULT_PROFILES if p["profile_id"] not in existing_ids
             ]
@@ -1980,6 +2124,25 @@ async def ensure_provider_profile_managers_started():
 
     # Auto-seed default profiles if table is empty.
     await _auto_seed_provider_profiles()
+
+    # #3821: bounded startup reconciliation of backend-owned launch-safety
+    # isolation policy. Normalizes order-equivalent derived values, preserves
+    # intentional legacy custom behavior, and flags unsafe profiles for repair
+    # via readiness diagnostics. Resilient by design: reconciliation must never
+    # fail startup.
+    try:
+        from api_service.services.provider_profile_service import (
+            reconcile_provider_profile_isolation_policies,
+        )
+
+        async with get_async_session_context() as session:
+            await reconcile_provider_profile_isolation_policies(session=session)
+            await session.commit()
+    except Exception as exc:  # pragma: no cover - bounded startup reconciliation
+        logger.warning(
+            "Provider profile isolation reconciliation deferred: %s",
+            exc,
+        )
 
     logger.info("Ensuring ProviderProfileManager workflows are started...")
     try:

@@ -1354,7 +1354,6 @@ describe('Workflow Detail Entrypoint', () => {
         ['planning', 'Planning workflow'],
         ['awaiting_slot', 'Slot wait workflow'],
         ['executing', 'Executing workflow'],
-        ['proposals', 'Proposals workflow'],
         ['awaiting_external', 'External wait workflow'],
         ['finalizing', 'Finalizing workflow'],
         ['no_commit', 'No commit workflow'],
@@ -1385,7 +1384,6 @@ describe('Workflow Detail Entrypoint', () => {
       ['Planning workflow', 'Status: Planning', 'status-planning', null],
       ['Slot wait workflow', 'Status: Awaiting slot', 'status-awaiting-slot', 'lucide-hourglass'],
       ['Executing workflow', 'Status: Executing', 'status-running', null],
-      ['Proposals workflow', 'Status: Proposals', 'status-running', 'lucide-lightbulb'],
       ['External wait workflow', 'Status: Awaiting external', 'status-awaiting-external', 'lucide-hand'],
       ['Finalizing workflow', 'Status: Finalizing', 'status-finalizing', null],
       ['No commit workflow', 'Status: No commit', 'status-no-commit', 'lucide-minus'],
@@ -3806,116 +3804,6 @@ describe('Workflow Detail Entrypoint', () => {
       expect(screen.getByText('runtime.log')).toBeTruthy();
       expect(screen.getByText('fix.patch')).toBeTruthy();
       expect(screen.getByText('output.txt').closest('tr')?.textContent).toContain('reports');
-    });
-  });
-
-  it('renders compact proposal delivery diagnostics from execution detail outcomes', async () => {
-    window.history.pushState({}, 'Overview Test', '/workflows/test-123/overview?source=temporal');
-    const mockExecution = {
-      taskId: 'test-123',
-      workflowId: 'test-123',
-      namespace: 'default',
-      temporalRunId: '02-run',
-      runId: '02-run',
-      source: 'temporal',
-      workflowType: 'MoonMind.UserWorkflow',
-      title: 'Proposal detail task',
-      summary: 'Execution summary',
-      status: 'running',
-      state: 'proposals',
-      rawState: 'proposals',
-      temporalStatus: 'running',
-      createdAt: '2026-04-09T00:00:00Z',
-      updatedAt: '2026-04-09T00:00:04Z',
-      actions: {},
-      proposalSummary: {
-        requested: true,
-        generatedCount: 3,
-        submittedCount: 3,
-        deliveredCount: 1,
-        externalLinks: [],
-        dedupUpdates: [
-          {
-            provider: 'github',
-            externalKey: '42',
-            created: false,
-            duplicateSource: 'existing-open-issue',
-          },
-        ],
-        validationErrors: [
-          { code: 'proposal_validation_error', message: 'proposal skipped: [REDACTED]' },
-        ],
-        deliveryFailures: [
-          { provider: 'jira', code: 'delivery_failed', message: 'delivery failed: [REDACTED]' },
-        ],
-      },
-      proposalOutcomes: [
-        {
-          provider: 'jira',
-          externalKey: 'MM-901',
-          externalUrl: 'https://jira.example/browse/MM-901',
-          deliveryStatus: 'delivered',
-          deliveredAt: '2026-04-09T00:01:00Z',
-          lastSyncedAt: '2026-04-09T00:02:00Z',
-          taskPreview: {
-            repository: 'MoonLadderStudios/MoonMind',
-            runtimeMode: 'codex_cli',
-            publishMode: 'pr',
-            priority: 4,
-            maxAttempts: 2,
-            taskSkills: ['fix-ci'],
-            presetProvenance: 'jira-preset',
-          },
-          promotionResult: {
-            promotedExecutionId: 'mm-promoted-1',
-            promotedExecutionUrl: '/workflows/mm-promoted-1?source=temporal',
-          },
-        },
-        {
-          provider: 'github',
-          externalKey: '42',
-          deliveryStatus: 'updated',
-          created: false,
-          duplicateSource: 'existing-open-issue',
-        },
-        {
-          provider: 'jira',
-          externalKey: 'MM-902',
-          deliveryStatus: 'failed',
-          message: 'delivery failed: [REDACTED]',
-        },
-      ],
-    };
-    fetchSpy.mockImplementation((input: RequestInfo | URL) => {
-      const url = String(input);
-      if (url.includes('/artifacts')) {
-        return Promise.resolve({ ok: true, json: async () => ({ artifacts: [] }) } as Response);
-      }
-      return Promise.resolve({ ok: true, json: async () => mockExecution } as Response);
-    });
-
-    renderWithClient(<WorkflowDetailPage payload={stepsPayload} />);
-
-    await waitFor(() => {
-      expect(screen.getByRole('heading', { name: 'Proposal Outcomes' })).toBeTruthy();
-      const metricText = (label: string) =>
-        screen.getAllByText(label)
-          .map((element) => element.closest('.metric-strip-item')?.textContent || '')
-          .find(Boolean) || '';
-      expect(metricText('Delivered')).toContain('1');
-      expect(metricText('Updated')).toContain('1');
-      expect(metricText('Failed')).toContain('2');
-      expect(screen.getByText('jira: MM-901')).toBeTruthy();
-      expect(screen.getAllByText('Delivery Status').length).toBeGreaterThan(0);
-      expect(screen.getByText('delivered')).toBeTruthy();
-      expect(screen.getByText('MoonLadderStudios/MoonMind')).toBeTruthy();
-      expect(screen.getByText('Codex CLI')).toBeTruthy();
-      expect(screen.getByText('fix-ci')).toBeTruthy();
-      expect(screen.getByText('jira-preset')).toBeTruthy();
-      expect(screen.getByText('existing-open-issue')).toBeTruthy();
-      expect(screen.getByText('mm-promoted-1')).toBeTruthy();
-      expect(screen.getAllByText('delivery failed: [REDACTED]').length).toBeGreaterThan(0);
-      expect(screen.queryByText(/ghp_secret/i)).toBeNull();
     });
   });
 

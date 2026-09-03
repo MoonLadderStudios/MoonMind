@@ -284,6 +284,14 @@ async def test_readiness_ready_when_projection_fresh_and_provider_compatible(ses
             enabled=True,
             auth_state=ProviderProfileAuthState.CONNECTED,
             secret_refs={"openai_api_key": "env://OPENAI_API_KEY"},
+            # #3821: backend-derived isolation policy for
+            # codex_cli/openai/api_key.
+            clear_env_keys=[
+                "OPENAI_BASE_URL",
+                "OPENAI_ORG_ID",
+                "OPENAI_PROJECT",
+                "MINIMAX_API_KEY",
+            ],
         )
     )
     await session.commit()
@@ -406,6 +414,15 @@ async def _seed_opencode_smoke_admission(session, *, validated_at: datetime):
         enabled=True,
         auth_state=ProviderProfileAuthState.CONNECTED,
         secret_refs={"opencode_api_key": "env://OPENCODE_API_KEY"},
+        # #3821: backend-derived isolation policy for
+        # opencode/opencode-go/api_key.
+        clear_env_keys=[
+            "OPENCODE_AUTH_CONTENT",
+            "OPENCODE_CONFIG",
+            "OPENCODE_CONFIG_CONTENT",
+            "OPENAI_API_KEY",
+            "ANTHROPIC_API_KEY",
+        ],
         credential_generation=4,
         model_catalog_evidence_json={
             "credentialGeneration": 4,

@@ -59,8 +59,51 @@ class ProviderProfileMaterializer:
         """
         env = self._base_env.copy()
 
-        # Step 2: Clear keys
-        for k in profile.clear_env_keys:
+        # Step 2: Clear keys — #3821 launch-boundary defense. Revalidate or
+        # rederive the effective clearing policy through the single isolation
+        # authority and fail closed when required policy cannot be produced.
+        # Only key names (safe metadata) are recorded; never credential values.
+        from moonmind.provider_profiles.isolation_policy import (
+            IsolationPolicyError,
+            resolve_launch_clear_env_keys,
+        )
+
+        _behavior = profile.command_behavior
+        _behavior_map = _behavior if isinstance(_behavior, dict) else {}
+        try:
+            _effective_keys, _isolation_meta = resolve_launch_clear_env_keys(
+                {
+                    "runtime_id": profile.runtime_id,
+                    "provider_id": profile.provider_id,
+                    "authentication_method": profile.auth_mode,
+                    "credential_source": profile.credential_source,
+                    "runtime_materialization_mode": profile.runtime_materialization_mode,
+                    "auth_state": profile.auth_state,
+                    "clear_env_keys": list(profile.clear_env_keys or []),
+                    "command_behavior": dict(_behavior_map),
+                }
+            )
+        except IsolationPolicyError as exc:
+            logger.warning(
+                "provider_profile_isolation_launch_blocked profile_id=%s runtime=%s provider=%s reason=%s",
+                profile.profile_id,
+                profile.runtime_id,
+                profile.provider_id,
+                exc.as_detail().get("code", "isolation_error"),
+            )
+            raise ValueError(
+                "Launch blocked: required launch-safety isolation policy cannot "
+                f"be safely produced ({exc.message}). Repair the Provider Profile "
+                "before launch."
+            ) from exc
+        logger.debug(
+            "provider_profile_isolation_launch_resolved profile_id=%s strategy=%s source=%s keys=%d",
+            profile.profile_id,
+            _isolation_meta.get("strategy_id"),
+            _isolation_meta.get("source"),
+            len(_effective_keys),
+        )
+        for k in _effective_keys:
             env.pop(k, None)
 
         # Step 3: Resolve Plaintext Secrets Just In Time

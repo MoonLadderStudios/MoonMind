@@ -254,6 +254,50 @@ class TemporalOmnigentArtifactGateway(OmnigentArtifactGateway):
             )
         return payload
 
+    async def read_chunks(
+        self,
+        *,
+        artifact_id: str,
+        principal: str,
+        allow_restricted_raw: bool = False,
+        chunk_size: int,
+    ) -> tuple[Any, Any]:
+        """Expose the bounded artifact stream used by workspace projection."""
+
+        from moonmind.workflows.temporal.artifacts import (
+            TemporalArtifactRepository,
+            TemporalArtifactService,
+        )
+
+        async with self._session_factory() as session:
+            service = TemporalArtifactService(TemporalArtifactRepository(session))
+            return await service.read_chunks(
+                artifact_id=self._artifact_id(artifact_id),
+                principal=principal,
+                allow_restricted_raw=allow_restricted_raw,
+                chunk_size=chunk_size,
+            )
+
+    async def get_metadata(
+        self,
+        *,
+        artifact_id: str,
+        principal: str,
+    ) -> tuple[Any, ...]:
+        """Expose artifact links so attachment authority is verified pre-launch."""
+
+        from moonmind.workflows.temporal.artifacts import (
+            TemporalArtifactRepository,
+            TemporalArtifactService,
+        )
+
+        async with self._session_factory() as session:
+            service = TemporalArtifactService(TemporalArtifactRepository(session))
+            return await service.get_metadata(
+                artifact_id=self._artifact_id(artifact_id),
+                principal=principal,
+            )
+
 
 class LocalOmnigentArtifactGateway(OmnigentArtifactGateway):
     """Local MoonMind artifact gateway for Omnigent evidence capture."""

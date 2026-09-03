@@ -2023,8 +2023,8 @@ class TemporalExecutionService:
 
         # Provider Profiles are runtime-owned launch contracts, so the
         # runtime/profile pair has to be valid at the boundary every
-        # launch-authoring caller converges on — direct submission, proposal
-        # promotion, rerun, continuation, checkpoint branching, manifest ingest,
+        # launch-authoring caller converges on — direct submission, rerun,
+        # continuation, checkpoint branching, manifest ingest,
         # and deployment operations all reach a launch through here. Enforcing
         # the shared invariant once at this handoff keeps an alternate client
         # from finding a route that accepts a pair the runtime-scoped selectors

@@ -260,6 +260,43 @@ describe("buildEditParametersPatch", () => {
       collections: ["docs"],
     });
   });
+
+  it("strips retired follow-up fields from a historical canonical workflow", () => {
+    const patch = buildEditParametersPatch({
+      execution: {
+        workflowId: "mm:edit-retired-follow-up-fields",
+        inputParameters: {
+          workflow: {
+            instructions: "Keep going.",
+            runtime: { mode: "codex_cli" },
+            proposeTasks: true,
+            propose_tasks: true,
+            proposalPolicy: { enabled: true },
+            proposal_policy: { enabled: true },
+          },
+        },
+      },
+      submittedPayload: {
+        workflow: {
+          instructions: "Keep going.",
+          runtime: { mode: "codex_cli" },
+        },
+      },
+      submittedWorkflow: {
+        instructions: "Keep going.",
+        runtime: { mode: "codex_cli" },
+      },
+    });
+
+    expect(patch.workflow).toMatchObject({
+      instructions: "Keep going.",
+      runtime: { mode: "codex_cli" },
+    });
+    expect(patch.workflow).not.toHaveProperty("proposeTasks");
+    expect(patch.workflow).not.toHaveProperty("propose_tasks");
+    expect(patch.workflow).not.toHaveProperty("proposalPolicy");
+    expect(patch.workflow).not.toHaveProperty("proposal_policy");
+  });
 });
 
 describe("WorkflowStartPage loading placeholders", () => {
@@ -1021,22 +1058,24 @@ describe("MoonLadderStudios/MoonMind#3451 Omnigent readiness", () => {
     expect(JSON.stringify(request)).not.toMatch(/hostId|volume|credential|registrationToken|image|network|mount/i);
   });
 
-  it("submits the exact generic v2 profile digest selected from readiness", async () => {
+  it("follows current generic v2 readiness and submits its latest refresh", async () => {
     vi.mocked(navigateTo).mockClear();
-    const digest = `sha256:${"d".repeat(64)}`;
+    const staleDigest = `sha256:${"c".repeat(64)}`;
+    const currentDigest = `sha256:${"d".repeat(64)}`;
+    const submitDigest = `sha256:${"e".repeat(64)}`;
     const genericProfiles = [{
       profileId: "omnigent-opencode-default",
       displayName: "OpenCode via Omnigent",
       state: "active",
-      activeVersion: 1,
+      activeVersion: 197,
       defaultForRuntime: true,
       versions: [{
-        version: 1,
-        digest,
+        version: 197,
+        digest: staleDigest,
         document: {
           schemaVersion: "moonmind.omnigent-agent-profile.v2",
           execution: {
-            defaultExecutionProfileRef: "omnigent-opencode-default@1",
+            defaultExecutionProfileRef: "omnigent-opencode-default@197",
           },
         },
         validationResult: { ready: true },
@@ -1047,12 +1086,12 @@ describe("MoonLadderStudios/MoonMind#3451 Omnigent readiness", () => {
       runtimeId: "omnigent",
       displayName: "Omnigent",
       executionTargets: [{
-        ref: "omnigent-opencode-default@1",
+        ref: "omnigent-opencode-default@201",
         harnessId: "opencode-native",
         agentProfileRef: {
           profileId: "omnigent-opencode-default",
-          version: 1,
-          digest,
+          version: 201,
+          digest: currentDigest,
         },
         available: true,
         supportTier: "experimental",
@@ -1068,6 +1107,19 @@ describe("MoonLadderStudios/MoonMind#3451 Omnigent readiness", () => {
         gateReasons: [],
       }],
     };
+    const submitReadiness = {
+      ...genericReadiness,
+      executionTargets: [{
+        ...genericReadiness.executionTargets[0],
+        ref: "omnigent-opencode-default@202",
+        agentProfileRef: {
+          profileId: "omnigent-opencode-default",
+          version: 202,
+          digest: submitDigest,
+        },
+      }],
+    };
+    let genericReadinessRequests = 0;
 
     fetchSpy.mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
       const url = String(input);
@@ -1075,7 +1127,13 @@ describe("MoonLadderStudios/MoonMind#3451 Omnigent readiness", () => {
         return Promise.resolve({ ok: true, json: async () => readyOmnigentCatalog } as Response);
       }
       if (url === "/api/omnigent/execution-readiness") {
-        return Promise.resolve({ ok: true, json: async () => genericReadiness } as Response);
+        genericReadinessRequests += 1;
+        return Promise.resolve({
+          ok: true,
+          json: async () => genericReadinessRequests > 1
+            ? submitReadiness
+            : genericReadiness,
+        } as Response);
       }
       if (url === "/api/omnigent/agent-profiles") {
         return Promise.resolve({ ok: true, json: async () => genericProfiles } as Response);
@@ -1111,7 +1169,7 @@ describe("MoonLadderStudios/MoonMind#3451 Omnigent readiness", () => {
     });
     await waitFor(() => expect(
       (screen.getByLabelText("Execution target") as HTMLSelectElement).value,
-    ).toBe("omnigent-opencode-default@1"));
+    ).toBe("omnigent-opencode-default@201"));
     const startButton = screen.getByRole("button", { name: "Start Workflow" });
     await waitFor(() => expect((startButton as HTMLButtonElement).disabled).toBe(false));
     fireEvent.click(startButton);
@@ -1126,14 +1184,14 @@ describe("MoonLadderStudios/MoonMind#3451 Omnigent readiness", () => {
     const request = JSON.parse(String((createCall?.[1] as RequestInit | undefined)?.body));
     expect(request.payload.agentProfile).toEqual({
       profileId: "omnigent-opencode-default",
-      version: 1,
-      digest,
+      version: 202,
+      digest: submitDigest,
       providerProfileRef: "opencode-1",
       launchPolicyRef: "omnigent-on-demand@1",
     });
     expect(request.payload.task.runtime.agentProfile).toEqual(request.payload.agentProfile);
     expect(request.payload.omnigent).toEqual({
-      executionTargetRef: "omnigent-opencode-default@1",
+      executionTargetRef: "omnigent-opencode-default@202",
       launchPolicyRef: "omnigent-on-demand@1",
     });
   });
@@ -3998,8 +4056,6 @@ describe.skip("Task Create Entrypoint", () => {
                   appliedTemplates: [],
                   dependencies: [],
                   attachments: [],
-                  proposeTasks: false,
-                  proposalPolicy: null,
                 },
               }),
           } as Response);
@@ -4883,12 +4939,10 @@ describe.skip("Task Create Entrypoint", () => {
               request: "Preserve target-only legacy branch as metadata.",
             },
           },
-          appliedTemplates: [],
-          dependencies: [],
-          attachments: [],
-          proposeTasks: false,
-          proposalPolicy: null,
-        },
+        appliedTemplates: [],
+        dependencies: [],
+        attachments: [],
+      },
       },
     );
 
@@ -5232,8 +5286,6 @@ describe.skip("Task Create Entrypoint", () => {
           appliedTemplates: [],
           dependencies: [],
           attachments: [],
-          proposeTasks: false,
-          proposalPolicy: null,
         },
       },
     );
@@ -6552,7 +6604,6 @@ describe.skip("Task Create Entrypoint", () => {
         profileId: "profile:claude-default",
         task: {
           instructions: "Save edited Temporal inputs.",
-          proposeTasks: true,
           tool: {
             type: "skill",
             name: "speckit-demo",
@@ -6587,6 +6638,7 @@ describe.skip("Task Create Entrypoint", () => {
         },
       },
     });
+    expect(request.parametersPatch.task).not.toHaveProperty("proposeTasks");
     expect(request.parametersPatch).not.toHaveProperty("startingBranch");
     expect(request.parametersPatch).not.toHaveProperty("targetBranch");
     expect(request.inputArtifactRef).toBeUndefined();
@@ -7163,7 +7215,6 @@ describe.skip("Task Create Entrypoint", () => {
           publish: {
             mode: "pr",
           },
-          proposeTasks: false,
         },
       },
     });
@@ -11093,11 +11144,8 @@ describe.skip("Task Create Entrypoint", () => {
         Node.DOCUMENT_POSITION_FOLLOWING,
     ).toBeTruthy();
     expect(
-      screen
-        .getByRole("checkbox", { name: "Propose follow-up work" })
-        .compareDocumentPosition(reportToggle) &
-        Node.DOCUMENT_POSITION_FOLLOWING,
-    ).toBeTruthy();
+      screen.queryByRole("checkbox", { name: "Propose follow-up work" }),
+    ).toBeNull();
     expect(
       addStepButton.compareDocumentPosition(createButton) &
         Node.DOCUMENT_POSITION_FOLLOWING,
@@ -16190,56 +16238,6 @@ describe("Task Create MM-641 authoring validation", () => {
     });
   });
 
-  it("remembers the Propose Tasks selection across Create page mounts", async () => {
-    const preferenceKey = "moonmind.workflow-start.propose-tasks";
-    const { unmount } = renderWithClient(
-      <WorkflowStartPage payload={mockPayload} />,
-    );
-
-    const checkbox = await screen.findByRole("checkbox", {
-      name: "Propose follow-up work",
-    });
-    expect((checkbox as HTMLInputElement).checked).toBe(false);
-
-    fireEvent.click(checkbox);
-    await waitFor(() => {
-      expect(window.localStorage.getItem(preferenceKey)).toBe("true");
-    });
-
-    unmount();
-    renderWithClient(<WorkflowStartPage payload={mockPayload} />);
-
-    const proposeCheckbox = await screen.findByRole("checkbox", {
-      name: "Propose follow-up work",
-    });
-    expect(proposeCheckbox.getAttribute("name")).toBe("proposeTasks");
-    expect((proposeCheckbox as HTMLInputElement).checked).toBe(true);
-  });
-
-  it("does not overwrite the Propose Tasks server default on initial mount", async () => {
-    const preferenceKey = "moonmind.workflow-start.propose-tasks";
-    const payload = {
-      ...mockPayload,
-      initialData: {
-        ...(mockPayload.initialData as Record<string, unknown>),
-        dashboardConfig: {
-          ...mockDashboardConfig,
-          system: {
-            ...mockDashboardConfig.system,
-            defaultProposeTasks: true,
-          },
-        },
-      },
-    } as BootPayload;
-
-    renderWithClient(<WorkflowStartPage payload={payload} />);
-
-    const checkbox = await screen.findByRole("checkbox", {
-      name: "Propose follow-up work",
-    });
-    expect((checkbox as HTMLInputElement).checked).toBe(true);
-    expect(window.localStorage.getItem(preferenceKey)).toBeNull();
-  });
 });
 
 describe("Task Create submit arrow animation", () => {

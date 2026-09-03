@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState, type ReactNode } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { Navigate, useSearchParams } from 'react-router-dom';
+import { Navigate, useLocation, useSearchParams } from 'react-router-dom';
 
 import type { BootPayload } from '../boot/parseBootPayload';
 import { LoadingPlaceholder } from '../components/dashboard/LoadingPlaceholder';
@@ -25,6 +25,7 @@ import {
   SettingsDraftGuardProvider,
   useSettingsDraftGuard,
 } from '../components/settings/SettingsDraftGuard';
+import { filterSettingsQueryForTarget } from '../lib/dashboardRoutes';
 import { resetDashboardPreferences } from '../utils/dashboardPreferences';
 
 const NON_PROFILE_OWNING_RUNTIMES = new Set(['omnigent']);
@@ -483,18 +484,24 @@ export function OperationsSettingsPage({ payload }: { payload: BootPayload }) {
 
 export function SettingsEntryPage({ payload }: { payload: BootPayload }) {
   const permissions = settingsPermissions(payload);
+  const { search } = useLocation();
+  // SettingsPage.md 5.2: /settings is an entry point, not a destination. It
+  // resolves with replacement history to the first authorized Configuration
+  // page, keeping only that page's approved filters. `section` is retired page
+  // identity (5.3) and is dropped rather than mapped back to a destination.
+  const entryTarget = (target: string) => filterSettingsQueryForTarget(search, target);
   if (
     permissions.has('provider_profiles.read') ||
     permissions.has('secrets.metadata.read') ||
     permissions.has('settings.effective.read')
   ) {
-    return <Navigate to="/settings/providers-secrets" replace />;
+    return <Navigate to={entryTarget('/settings/providers-secrets')} replace />;
   }
   if (permissions.has('settings.catalog.read')) {
-    return <Navigate to="/settings/user-workspace" replace />;
+    return <Navigate to={entryTarget('/settings/user-workspace')} replace />;
   }
   if (permissions.has('operations.read')) {
-    return <Navigate to="/settings/operations" replace />;
+    return <Navigate to={entryTarget('/settings/operations')} replace />;
   }
   return (
     <SettingsPageFrame

@@ -121,7 +121,6 @@ const HIDDEN_PRESET_INPUT_KEYS: Record<string, Set<string>> = {
   ]),
   [MOONSPEC_ORCHESTRATE_PRESET_SLUG]: new Set(["orchestrationmode"]),
 };
-const PROPOSE_TASKS_PREFERENCE_KEY = "moonmind.workflow-start.propose-tasks";
 const LAST_REPOSITORY_OPTION_PREFERENCE_KEY =
   "moonmind.workflow-start.last-repository-option";
 const JIRA_LAST_PROJECT_SESSION_KEY =
@@ -211,35 +210,6 @@ function randomWorkflowStartHeading(except?: string): string {
     candidates.length > 0 ? candidates : WORKFLOW_START_HEADING_QUOTES;
   const index = Math.floor(Math.random() * choices.length);
   return choices[index] ?? "Start Workflow";
-}
-
-function readProposeTasksPreference(defaultValue: boolean): boolean {
-  try {
-    const raw = window.localStorage.getItem(PROPOSE_TASKS_PREFERENCE_KEY);
-    if (raw === null) {
-      return defaultValue;
-    }
-    if (raw === "true" || raw === "1") {
-      return true;
-    }
-    if (raw === "false" || raw === "0") {
-      return false;
-    }
-  } catch {
-    // Preserve default behavior when localStorage is unavailable.
-  }
-  return defaultValue;
-}
-
-function writeProposeTasksPreference(value: boolean): void {
-  try {
-    window.localStorage.setItem(
-      PROPOSE_TASKS_PREFERENCE_KEY,
-      value ? "true" : "false",
-    );
-  } catch {
-    // Ignore localStorage write failures to keep task submission behavior unaffected.
-  }
 }
 
 function readLocalPreference(key: string): string {
@@ -372,7 +342,6 @@ interface DashboardConfig {
     defaultEffort?: string;
     defaultTaskEffort?: string;
     defaultPublishMode?: string;
-    defaultProposeTasks?: boolean;
     defaultModelByRuntime?: Record<string, string>;
     defaultTaskModelByRuntime?: Record<string, string>;
     defaultEffortByRuntime?: Record<string, string>;
@@ -1739,12 +1708,6 @@ export function buildEditParametersPatch({
   );
   const editWorkflow = { ...submittedWorkflow };
 
-  // This field is not reconstructed into the edit form yet. Preserve the
-  // existing value instead of letting the create-form default overwrite it.
-  if ("proposeTasks" in editWorkflow) {
-    delete editWorkflow.proposeTasks;
-  }
-
   const mergedWorkflow: Record<string, unknown> = {
     ...baseWorkflow,
     ...editWorkflow,
@@ -1758,6 +1721,13 @@ export function buildEditParametersPatch({
       recordValue(editWorkflow.publish),
     ),
   };
+  // Historical executions remain readable, but removed follow-up fields must
+  // never be reconstructed into a new edit or rerun submission. Strip after
+  // merging so a canonical inputParameters.workflow snapshot cannot restore
+  // values that the submitted draft correctly omitted.
+  for (const field of ["proposeTasks", "propose_tasks", "proposalPolicy", "proposal_policy"]) {
+    delete mergedWorkflow[field];
+  }
   const mergedGit = recordValue(mergedWorkflow.git);
   delete mergedGit.startingBranch;
   delete mergedGit.targetBranch;
@@ -6091,9 +6061,6 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
   const defaultPublishMode = String(
     dashboardConfig.system?.defaultPublishMode || "pr",
   );
-  const defaultProposeTasks = Boolean(
-    dashboardConfig.system?.defaultProposeTasks,
-  );
   const defaultTaskModelByRuntime =
     dashboardConfig.system?.defaultModelByRuntime ||
     dashboardConfig.system?.defaultTaskModelByRuntime ||
@@ -6162,10 +6129,6 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
   const [produceReport, setProduceReport] = useState(false);
   const [priority, setPriority] = useState(DEFAULT_PRIORITY);
   const [maxAttempts, setMaxAttempts] = useState(DEFAULT_MAX_ATTEMPTS);
-  const [proposeTasks, setProposeTasks] = useState(() =>
-    readProposeTasksPreference(defaultProposeTasks),
-  );
-  const isInitialMount = useRef(true);
   const [scheduleMode, setScheduleMode] = useState<ScheduleMode>(() => {
     if (typeof window === "undefined") {
       return "immediate";
@@ -6585,11 +6548,8 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
   const selectedProfileIsGenericV2 =
     selectedOmnigentAgentProfileVersion?.document?.schemaVersion ===
       "moonmind.omnigent-agent-profile.v2";
-  const submittedOmnigentAgentProfileVersion = selectedProfileIsGenericV2
-    ? selectedOmnigentAgentProfileVersion?.version
-    : authoredOmnigentAgentProfileVersion;
   useEffect(() => {
-    if (runtime !== "omnigent") return;
+    if (runtime !== "omnigent" || selectedProfileIsGenericV2) return;
     const profileExecutionTargetRef = String(
       selectedOmnigentAgentProfileVersion?.document?.execution
         ?.defaultExecutionProfileRef || "",
@@ -6604,6 +6564,7 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
     omnigentExecutionTargetRef,
     runtime,
     selectedOmnigentAgentProfileVersion,
+    selectedProfileIsGenericV2,
   ]);
   useEffect(() => {
     if (runtime !== "omnigent" || agentProfile) return;
@@ -6648,10 +6609,20 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
     refetchOnWindowFocus: true,
   });
   const selectedGenericOmnigentTarget = omnigentExecutionReadinessQuery.data?.executionTargets?.find(
-    (target) => target.agentProfileRef.profileId === agentProfile &&
-      target.agentProfileRef.version === selectedOmnigentAgentProfileVersion?.version &&
-      target.agentProfileRef.digest === selectedOmnigentAgentProfileVersion?.digest,
+    (target) =>
+      target.agentProfileRef.profileId === agentProfile &&
+      (authoredOmnigentAgentProfileVersion === undefined ||
+        (target.agentProfileRef.version === selectedOmnigentAgentProfileVersion?.version &&
+          target.agentProfileRef.digest === selectedOmnigentAgentProfileVersion?.digest)),
   );
+  const submittedOmnigentAgentProfileVersion = selectedProfileIsGenericV2
+    ? selectedGenericOmnigentTarget?.agentProfileRef.version ||
+      selectedOmnigentAgentProfileVersion?.version
+    : authoredOmnigentAgentProfileVersion;
+  const submittedOmnigentAgentProfileDigest = selectedProfileIsGenericV2
+    ? selectedGenericOmnigentTarget?.agentProfileRef.digest ||
+      selectedOmnigentAgentProfileVersion?.digest
+    : undefined;
   const activeProviderProfiles: ProviderProfile[] = runtime === "omnigent"
     ? selectedProfileIsGenericV2
       ? (selectedGenericOmnigentTarget?.compatibleProviderProfiles || []).map((profile) => {
@@ -6912,14 +6883,6 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
     providerProfile,
     runtime,
   ]);
-
-  useEffect(() => {
-    if (isInitialMount.current) {
-      isInitialMount.current = false;
-      return;
-    }
-    writeProposeTasksPreference(proposeTasks);
-  }, [proposeTasks]);
 
   useEffect(() => {
     if (pageMode.mode === "create" || !temporalDraftQuery.data) {
@@ -10402,6 +10365,10 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
 
     const normalizedRuntime = runtime.trim().toLowerCase();
     let submittedOmnigentLaunchPolicyRef = omnigentLaunchPolicyRef;
+    let effectiveOmnigentAgentProfileVersion =
+      submittedOmnigentAgentProfileVersion;
+    let effectiveOmnigentAgentProfileDigest = submittedOmnigentAgentProfileDigest;
+    let effectiveOmnigentExecutionTargetRef = omnigentExecutionTargetRef;
     const supportedAgentRuntimeIds = runtimeOptions.map((item) =>
       item.trim().toLowerCase(),
     );
@@ -10418,8 +10385,9 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
         const target = refreshed.data?.executionTargets?.find(
           (item) =>
             item.agentProfileRef.profileId === agentProfile &&
-            item.agentProfileRef.version === selectedOmnigentAgentProfileVersion?.version &&
-            item.agentProfileRef.digest === selectedOmnigentAgentProfileVersion?.digest,
+            (authoredOmnigentAgentProfileVersion === undefined ||
+              (item.agentProfileRef.version === selectedOmnigentAgentProfileVersion?.version &&
+                item.agentProfileRef.digest === selectedOmnigentAgentProfileVersion?.digest)),
         );
         if (refreshed.isError || !target?.available) {
           setSubmitMessage(
@@ -10428,6 +10396,12 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
           );
           clearSubmitBusy();
           return;
+        }
+        effectiveOmnigentAgentProfileVersion = target.agentProfileRef.version;
+        effectiveOmnigentAgentProfileDigest = target.agentProfileRef.digest;
+        effectiveOmnigentExecutionTargetRef = target.ref;
+        if (target.ref !== omnigentExecutionTargetRef) {
+          setOmnigentExecutionTargetRef(target.ref);
         }
         if (!target.compatibleProviderProfiles.some(
           (profile) => profile.profileId === providerProfile,
@@ -11585,7 +11559,6 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
       ...(taskSkillSelectors ? { skills: taskSkillSelectors } : {}),
       ...(Object.keys(primarySkillArgs).length > 0 ? { inputs: primarySkillArgs } : {}),
       ...(explicitTitle ? { title: explicitTitle } : {}),
-      proposeTasks,
       runtime: {
         mode: normalizedRuntime,
         authored: runtimeAuthored,
@@ -11601,12 +11574,12 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
           ? {
               agentProfile: {
                 profileId: agentProfile,
-                ...(submittedOmnigentAgentProfileVersion
-                  ? { version: submittedOmnigentAgentProfileVersion }
+                ...(effectiveOmnigentAgentProfileVersion
+                  ? { version: effectiveOmnigentAgentProfileVersion }
                   : {}),
                 ...(selectedProfileIsGenericV2 &&
-                selectedOmnigentAgentProfileVersion?.digest
-                  ? { digest: selectedOmnigentAgentProfileVersion.digest }
+                effectiveOmnigentAgentProfileDigest
+                  ? { digest: effectiveOmnigentAgentProfileDigest }
                   : {}),
                 providerProfileRef: providerProfile,
                 ...(submittedOmnigentLaunchPolicyRef
@@ -11677,12 +11650,12 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
           ? {
               agentProfile: {
                 profileId: agentProfile,
-                ...(submittedOmnigentAgentProfileVersion
-                  ? { version: submittedOmnigentAgentProfileVersion }
+                ...(effectiveOmnigentAgentProfileVersion
+                  ? { version: effectiveOmnigentAgentProfileVersion }
                   : {}),
                 ...(selectedProfileIsGenericV2 &&
-                selectedOmnigentAgentProfileVersion?.digest
-                  ? { digest: selectedOmnigentAgentProfileVersion.digest }
+                effectiveOmnigentAgentProfileDigest
+                  ? { digest: effectiveOmnigentAgentProfileDigest }
                   : {}),
                 providerProfileRef: providerProfile,
                 ...(submittedOmnigentLaunchPolicyRef
@@ -11691,10 +11664,10 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
               },
             }
           : {}),
-        ...(normalizedRuntime === "omnigent" && omnigentExecutionTargetRef
+        ...(normalizedRuntime === "omnigent" && effectiveOmnigentExecutionTargetRef
           ? {
               omnigent: {
-                executionTargetRef: omnigentExecutionTargetRef,
+                executionTargetRef: effectiveOmnigentExecutionTargetRef,
                 ...(submittedOmnigentLaunchPolicyRef
                   ? { launchPolicyRef: submittedOmnigentLaunchPolicyRef }
                   : {}),
@@ -14364,15 +14337,6 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
           </div>
         ) : null}
 
-        <label className="checkbox">
-          <input
-            type="checkbox"
-            name="proposeTasks"
-            checked={proposeTasks}
-            onChange={(event) => setProposeTasks(event.target.checked)}
-          />
-          Propose follow-up work
-        </label>
         <label className="checkbox">
           <input
             type="checkbox"

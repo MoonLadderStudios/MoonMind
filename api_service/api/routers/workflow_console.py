@@ -85,7 +85,6 @@ _WORKFLOW_DETAIL_TABS = {"chat", "overview", "steps", "artifacts", "runs", "debu
 _RESERVED_WORKFLOW_ROUTE_SEGMENTS = {
     "manifests",
     "new",
-    "proposals",
     "queue",
     "schedules",
     "secrets",
@@ -668,6 +667,39 @@ def _settings_redirect_path(user: User, preferred_destination_key: str) -> str:
         if permissions & read_permissions:
             return _dashboard_destination(destination_key).canonical_path
     return "/settings"
+
+
+def _settings_redirect_url(request: Request, user: User, preferred_destination_key: str) -> str:
+    """Build redirect URL preserving safe page-local query params.
+
+    Per SettingsPage.md 5.4, redirects use replacement history, preserve approved
+    page-relevant query parameters, and drop parameters that no longer have meaning
+    on the target page. At minimum, drop retired `section` page identity.
+    Unknown legacy aliases fall back to the first authorized destination.
+    """
+    canonical = _settings_redirect_path(user, preferred_destination_key)
+    # Preserve safe filters (runtime, scope, q, status, etc.) but drop `section`
+    # which is retired as page identity (SettingsPage.md 5.3).
+    if not request.query_params:
+        return canonical
+    preserved = [(k, v) for k, v in request.query_params.multi_items() if k != "section"]
+    # Filter to page-relevant keys per target to avoid leaking irrelevant filters.
+    # Providers & Secrets owns `runtime`; User/Workspace owns `scope`+`q`; Operations owns `status`.
+    if preserved:
+        allow_by_target = {
+            "/settings/providers-secrets": {"runtime"},
+            "/settings/user-workspace": {"scope", "q"},
+            "/settings/operations": {"status"},
+            "/settings": set(),
+        }
+        allowed = allow_by_target.get(canonical)
+        if allowed is not None:
+            preserved = [(k, v) for k, v in preserved if k in allowed]
+        # If target is unknown, keep only generic safe keys (none) to avoid confusion.
+        query = "&".join(f"{quote(k, safe='')}={quote(v, safe='')}" for k, v in preserved)
+        if query:
+            return f"{canonical}?{query}"
+    return canonical
 
 
 def _is_extensionless_collection_route(request: Request, destination_keys: set[str]) -> bool:
@@ -1300,7 +1332,7 @@ async def secrets_route(
 ) -> RedirectResponse:
     """Redirect the legacy secrets page to its canonical Settings route."""
     return RedirectResponse(
-        url=_settings_redirect_path(_user, "settings-providers-secrets"),
+        url=_settings_redirect_url(request, _user, "settings-providers-secrets"),
         status_code=307,
     )
 
@@ -1472,7 +1504,7 @@ async def task_workers_route(
 ) -> RedirectResponse:
     """Redirect the legacy workers page to its canonical Settings route."""
     return RedirectResponse(
-        url=_settings_redirect_path(_user, "settings-operations"),
+        url=_settings_redirect_url(request, _user, "settings-operations"),
         status_code=307,
     )
 
@@ -1502,8 +1534,13 @@ async def settings_spa_fallback_route(
     session: AsyncSession = Depends(get_async_session),
     _user: User = Depends(get_current_user()),
 ) -> HTMLResponse:
-    """Serve the settings SPA shell for extensionless settings sub-routes."""
-    if not _is_extensionless_dashboard_path(dashboard_path):
+    """Serve the settings SPA shell for extensionless settings sub-routes.
+
+    An empty sub-path is the trailing-slash form of the bare `/settings` entry
+    point. The client normalizes it the same way, so a direct load must resolve
+    to the same page and boot payload rather than 404.
+    """
+    if dashboard_path and not _is_extensionless_dashboard_path(dashboard_path):
         _raise_dashboard_route_not_found()
     return await task_settings_route(request, session=session, _user=_user)
 

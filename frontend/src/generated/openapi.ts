@@ -844,6 +844,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/provider-profiles/capabilities": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Tier Capabilities For Draft
+         * @description Tier editor capabilities for a not-yet-persisted profile — MoonLadderStudios/MoonMind#3815.
+         */
+        get: operations["get_tier_capabilities_for_draft_api_v1_provider_profiles_capabilities_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/provider-profiles/creation-capabilities": {
         parameters: {
             query?: never;
@@ -853,6 +873,26 @@ export interface paths {
         };
         /** Get Creation Capabilities */
         get: operations["get_creation_capabilities_api_v1_provider_profiles_creation_capabilities_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/provider-profiles/{profile_id}/capabilities": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Tier Capabilities For Profile
+         * @description Tier editor capabilities scoped to profile evidence — MoonLadderStudios/MoonMind#3815.
+         */
+        get: operations["get_tier_capabilities_for_profile_api_v1_provider_profiles__profile_id__capabilities_get"];
         put?: never;
         post?: never;
         delete?: never;
@@ -2666,184 +2706,6 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/proposals": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /** List Proposals */
-        get: operations["list_proposals_api_proposals_get"];
-        put?: never;
-        /** Create Proposal */
-        post: operations["create_proposal_api_proposals_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/proposals/{proposal_id}": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /** Get Proposal */
-        get: operations["get_proposal_api_proposals__proposal_id__get"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/proposals/{proposal_id}/promote": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /** Promote Proposal */
-        post: operations["promote_proposal_api_proposals__proposal_id__promote_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/proposals/{proposal_id}/provider-decision": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /** Provider Decision */
-        post: operations["provider_decision_api_proposals__proposal_id__provider_decision_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/proposals/{proposal_id}/github-decision": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /**
-         * Github Provider Decision
-         * @description Ingest a GitHub reviewer decision after provider-boundary verification.
-         *
-         *     MM-857 / source MM-853: callers cannot supply trusted booleans for GitHub
-         *     decisions. Authenticity, marker ownership, provider identity, and actor
-         *     authorization are derived from the GitHub payload before service invocation.
-         */
-        post: operations["github_provider_decision_api_proposals__proposal_id__github_decision_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/proposals/{proposal_id}/delivery": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /** Inspect Proposal Delivery */
-        get: operations["inspect_proposal_delivery_api_proposals__proposal_id__delivery_get"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/proposals/{proposal_id}/redeliver": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /** Redeliver Proposal */
-        post: operations["redeliver_proposal_api_proposals__proposal_id__redeliver_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/proposals/{proposal_id}/sync": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /** Sync Proposal Delivery */
-        post: operations["sync_proposal_delivery_api_proposals__proposal_id__sync_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/proposals/{proposal_id}/dismiss": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /** Dismiss Proposal */
-        post: operations["dismiss_proposal_api_proposals__proposal_id__dismiss_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/proposals/{proposal_id}/priority": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /** Update Priority */
-        post: operations["update_priority_api_proposals__proposal_id__priority_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
     "/api/recurring-workflows": {
         parameters: {
             query?: never;
@@ -4364,6 +4226,10 @@ export interface paths {
         /**
          * Settings Spa Fallback Route
          * @description Serve the settings SPA shell for extensionless settings sub-routes.
+         *
+         *     An empty sub-path is the trailing-slash form of the bare `/settings` entry
+         *     point. The client normalizes it the same way, so a direct load must resolve
+         *     to the same page and boot payload rather than 404.
          */
         get: operations["settings_spa_fallback_route_settings__dashboard_path__get"];
         put?: never;
@@ -5811,7 +5677,7 @@ export interface components {
             apiKey: string;
             /**
              * Modeldisplayname
-             * @default Muse Spark 1.2 Contributor
+             * @default Muse Spark 1.3 Contributor
              */
             modelDisplayName: string;
             /**
@@ -8677,14 +8543,6 @@ export interface components {
             logContext?: {
                 [key: string]: unknown;
             } | null;
-            /** Proposalsummary */
-            proposalSummary?: {
-                [key: string]: unknown;
-            } | null;
-            /** Proposaloutcomes */
-            proposalOutcomes?: {
-                [key: string]: unknown;
-            }[];
             /** Finishoutcomecode */
             finishOutcomeCode?: string | null;
             /** Finishsummary */
@@ -11440,6 +11298,10 @@ export interface components {
             /** Authentication Method */
             authentication_method?: string | null;
             creation_capabilities: components["schemas"]["ProviderProfileCreationCapabilitiesResponse"];
+            /** Launch Isolation */
+            launch_isolation?: {
+                [key: string]: unknown;
+            } | null;
             /** Created At */
             created_at: string | null;
             /** Updated At */
@@ -14324,344 +14186,6 @@ export interface components {
             fallbackEvidenceRefs?: string[];
         };
         /**
-         * WorkflowProposalCreateRequest
-         * @description Request payload for creating a workflow proposal.
-         */
-        WorkflowProposalCreateRequest: {
-            /** Title */
-            title: string;
-            /** Summary */
-            summary: string;
-            /** Category */
-            category?: string | null;
-            /** Tags */
-            tags?: string[] | null;
-            origin: components["schemas"]["WorkflowProposalOriginModel"];
-            /** Workflowcreaterequest */
-            workflowCreateRequest: {
-                [key: string]: unknown;
-            };
-            /** Reviewpriority */
-            reviewPriority?: string | null;
-            /** Provider */
-            provider?: string | null;
-            /** Providermetadata */
-            providerMetadata?: {
-                [key: string]: unknown;
-            } | null;
-            /** Resolvedpolicy */
-            resolvedPolicy?: {
-                [key: string]: unknown;
-            } | null;
-        };
-        /**
-         * WorkflowProposalDismissRequest
-         * @description Dismissal note payload.
-         */
-        WorkflowProposalDismissRequest: {
-            /** Note */
-            note?: string | null;
-        };
-        /**
-         * WorkflowProposalListResponse
-         * @description Response payload for listing proposals.
-         */
-        WorkflowProposalListResponse: {
-            /** Items */
-            items?: components["schemas"]["WorkflowProposalModel"][];
-            /** Nextcursor */
-            nextCursor?: string | null;
-        };
-        /**
-         * WorkflowProposalModel
-         * @description Serialized proposal model.
-         */
-        WorkflowProposalModel: {
-            /**
-             * Id
-             * Format: uuid
-             */
-            id: string;
-            status: components["schemas"]["WorkflowProposalStatus"];
-            /** Title */
-            title: string;
-            /** Summary */
-            summary: string;
-            /** Category */
-            category?: string | null;
-            /** Tags */
-            tags?: string[];
-            /** Repository */
-            repository: string;
-            /** Dedupkey */
-            dedupKey: string;
-            /** Deduphash */
-            dedupHash: string;
-            /**
-             * Provider
-             * @default github
-             */
-            provider: string;
-            /** Externalkey */
-            externalKey?: string | null;
-            /** Externalurl */
-            externalUrl?: string | null;
-            /** Deliveredat */
-            deliveredAt?: string | null;
-            /** Lastsyncedat */
-            lastSyncedAt?: string | null;
-            /** Workflowsnapshotref */
-            workflowSnapshotRef?: string | null;
-            /** Providermetadata */
-            providerMetadata?: {
-                [key: string]: unknown;
-            };
-            /** Resolvedpolicy */
-            resolvedPolicy?: {
-                [key: string]: unknown;
-            };
-            /** Reviewdelivery */
-            reviewDelivery?: {
-                [key: string]: unknown;
-            };
-            /** @default normal */
-            reviewPriority: components["schemas"]["WorkflowProposalReviewPriority"];
-            /** Priorityoverridereason */
-            priorityOverrideReason?: string | null;
-            /** Proposedbyworkerid */
-            proposedByWorkerId?: string | null;
-            /** Proposedbyuserid */
-            proposedByUserId?: string | null;
-            /** Promotedat */
-            promotedAt?: string | null;
-            /** Promotedbyuserid */
-            promotedByUserId?: string | null;
-            /** Decidedbyuserid */
-            decidedByUserId?: string | null;
-            /** Decisionnote */
-            decisionNote?: string | null;
-            /**
-             * Createdat
-             * Format: date-time
-             */
-            createdAt: string;
-            /**
-             * Updatedat
-             * Format: date-time
-             */
-            updatedAt: string;
-            origin: components["schemas"]["WorkflowProposalOriginModel"];
-            /** Workflowcreaterequest */
-            workflowCreateRequest: {
-                [key: string]: unknown;
-            };
-            taskPreview?: components["schemas"]["WorkflowProposalPreview"] | null;
-            /** Promotionresult */
-            promotionResult?: {
-                [key: string]: unknown;
-            } | null;
-            /** Similar */
-            similar?: components["schemas"]["WorkflowProposalSimilarModel"][];
-        };
-        /**
-         * WorkflowProposalOriginModel
-         * @description Origin metadata for a proposal.
-         */
-        WorkflowProposalOriginModel: {
-            source: components["schemas"]["WorkflowProposalOriginSource"];
-            /** Id */
-            id?: string | null;
-            /** Metadata */
-            metadata?: {
-                [key: string]: unknown;
-            } | null;
-        };
-        /**
-         * WorkflowProposalOriginSource
-         * @description Accepted proposal origin sources for auditing.
-         * @enum {string}
-         */
-        WorkflowProposalOriginSource: "queue" | "workflow" | "manual";
-        /**
-         * WorkflowProposalPreview
-         * @description Derived summary of the canonical task payload.
-         */
-        WorkflowProposalPreview: {
-            /** Repository */
-            repository: string;
-            /** Runtimemode */
-            runtimeMode?: string | null;
-            /** Skillid */
-            skillId?: string | null;
-            /** Taskskills */
-            taskSkills?: string[] | null;
-            /** Publishmode */
-            publishMode?: string | null;
-            /** Priority */
-            priority?: number | null;
-            /** Maxattempts */
-            maxAttempts?: number | null;
-            /** Startingbranch */
-            startingBranch?: string | null;
-            /** Targetbranch */
-            targetBranch?: string | null;
-            /** Instructions */
-            instructions?: string | null;
-            /** Presetprovenance */
-            presetProvenance?: string | null;
-            /**
-             * Authoredpresetcount
-             * @default 0
-             */
-            authoredPresetCount: number;
-            /** Stepsourcekinds */
-            stepSourceKinds?: string[];
-            /** Presetsourcemetadata */
-            presetSourceMetadata?: {
-                [key: string]: unknown;
-            }[];
-        };
-        /**
-         * WorkflowProposalPriorityRequest
-         * @description Reviewer priority update request.
-         */
-        WorkflowProposalPriorityRequest: {
-            /** Priority */
-            priority: string;
-        };
-        /**
-         * WorkflowProposalPromoteRequest
-         * @description Optional overrides supplied during promotion.
-         */
-        WorkflowProposalPromoteRequest: {
-            /** Priority */
-            priority?: number | null;
-            /** Maxattempts */
-            maxAttempts?: number | null;
-            /** Note */
-            note?: string | null;
-            /**
-             * Runtimemode
-             * @description Shortcut to override only the agent runtime mode (e.g. jules, codex) while preserving the reviewed proposal payload.
-             */
-            runtimeMode?: string | null;
-        };
-        /**
-         * WorkflowProposalPromoteResponse
-         * @description Promotion response containing proposal + queue job.
-         */
-        WorkflowProposalPromoteResponse: {
-            proposal: components["schemas"]["WorkflowProposalModel"];
-            /** PromotedExecutionId */
-            promotedExecutionId: string;
-        };
-        /**
-         * WorkflowProposalProviderAuthenticityModel
-         * @description Provider authenticity verification summary for decision ingress.
-         */
-        WorkflowProposalProviderAuthenticityModel: {
-            /**
-             * Verified
-             * @default false
-             */
-            verified: boolean;
-            /** Method */
-            method?: string | null;
-        };
-        /**
-         * WorkflowProposalProviderDecisionRequest
-         * @description Trusted provider decision ingress payload.
-         */
-        WorkflowProposalProviderDecisionRequest: {
-            /** Provider */
-            provider: string;
-            /** Externalkey */
-            externalKey: string;
-            /** Providereventid */
-            providerEventId: string;
-            /** Actor */
-            actor: string;
-            /** Action */
-            action?: string | null;
-            /**
-             * Body
-             * @default
-             */
-            body: string;
-            /** Note */
-            note?: string | null;
-            /** Observedat */
-            observedAt?: string | null;
-            authenticity?: components["schemas"]["WorkflowProposalProviderAuthenticityModel"];
-            /** Runtimemode */
-            runtimeMode?: string | null;
-            /** Externalstate */
-            externalState?: string | null;
-        };
-        /**
-         * WorkflowProposalProviderDecisionResponse
-         * @description Sanitized provider decision ingestion response.
-         */
-        WorkflowProposalProviderDecisionResponse: {
-            /** Accepted */
-            accepted: boolean;
-            /** Decision */
-            decision?: string | null;
-            /** Reason */
-            reason?: string | null;
-            /** Actor */
-            actor: string;
-            /** Providereventid */
-            providerEventId: string;
-            /** Note */
-            note?: string | null;
-            /** Priority */
-            priority?: string | null;
-            /** Deferuntil */
-            deferUntil?: string | null;
-            /** Runtimemode */
-            runtimeMode?: string | null;
-            /** Resultingexternalstate */
-            resultingExternalState?: string | null;
-            /** Promotedexecutionid */
-            promotedExecutionId?: string | null;
-            proposal: components["schemas"]["WorkflowProposalModel"];
-        };
-        /**
-         * WorkflowProposalReviewPriority
-         * @description Reviewer-defined triage priority.
-         * @enum {string}
-         */
-        WorkflowProposalReviewPriority: "low" | "normal" | "high" | "urgent";
-        /**
-         * WorkflowProposalSimilarModel
-         * @description Slim representation of similar proposals.
-         */
-        WorkflowProposalSimilarModel: {
-            /**
-             * Id
-             * Format: uuid
-             */
-            id: string;
-            /** Title */
-            title: string;
-            /** Category */
-            category?: string | null;
-            /** Repository */
-            repository: string;
-            /**
-             * Createdat
-             * Format: date-time
-             */
-            createdAt: string;
-        };
-        /**
-         * WorkflowProposalStatus
-         * @description Lifecycle states for workflow proposals.
-         * @enum {string}
-         */
-        WorkflowProposalStatus: "open" | "promoted" | "dismissed" | "accepted" | "rejected";
-        /**
          * WorkflowRecoveryTargetModel
          * @description Frozen, bounded input shared by the API and recovery workflow.
          */
@@ -16297,6 +15821,40 @@ export interface operations {
             };
         };
     };
+    get_tier_capabilities_for_draft_api_v1_provider_profiles_capabilities_get: {
+        parameters: {
+            query: {
+                runtime_id: string;
+                provider_id: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     get_creation_capabilities_api_v1_provider_profiles_creation_capabilities_get: {
         parameters: {
             query: {
@@ -16316,6 +15874,39 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["ProviderProfileCreationCapabilitiesResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_tier_capabilities_for_profile_api_v1_provider_profiles__profile_id__capabilities_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                profile_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
                 };
             };
             /** @description Validation Error */
@@ -20063,373 +19654,6 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content?: never;
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    list_proposals_api_proposals_get: {
-        parameters: {
-            query?: {
-                status?: string | null;
-                category?: string | null;
-                repository?: string | null;
-                originSource?: string | null;
-                originId?: string | null;
-                limit?: number;
-                cursor?: string | null;
-            };
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["WorkflowProposalListResponse"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    create_proposal_api_proposals_post: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["WorkflowProposalCreateRequest"];
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            201: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["WorkflowProposalModel"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    get_proposal_api_proposals__proposal_id__get: {
-        parameters: {
-            query?: {
-                includeSimilars?: boolean;
-            };
-            header?: never;
-            path: {
-                proposal_id: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["WorkflowProposalModel"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    promote_proposal_api_proposals__proposal_id__promote_post: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                proposal_id: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: {
-            content: {
-                "application/json": components["schemas"]["WorkflowProposalPromoteRequest"];
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["WorkflowProposalPromoteResponse"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    provider_decision_api_proposals__proposal_id__provider_decision_post: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                proposal_id: string;
-            };
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["WorkflowProposalProviderDecisionRequest"];
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["WorkflowProposalProviderDecisionResponse"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    github_provider_decision_api_proposals__proposal_id__github_decision_post: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                proposal_id: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["WorkflowProposalProviderDecisionResponse"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    inspect_proposal_delivery_api_proposals__proposal_id__delivery_get: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                proposal_id: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["WorkflowProposalModel"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    redeliver_proposal_api_proposals__proposal_id__redeliver_post: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                proposal_id: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["WorkflowProposalModel"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    sync_proposal_delivery_api_proposals__proposal_id__sync_post: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                proposal_id: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["WorkflowProposalModel"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    dismiss_proposal_api_proposals__proposal_id__dismiss_post: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                proposal_id: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: {
-            content: {
-                "application/json": components["schemas"]["WorkflowProposalDismissRequest"];
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["WorkflowProposalModel"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    update_priority_api_proposals__proposal_id__priority_post: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                proposal_id: string;
-            };
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["WorkflowProposalPriorityRequest"];
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["WorkflowProposalModel"];
-                };
             };
             /** @description Validation Error */
             422: {

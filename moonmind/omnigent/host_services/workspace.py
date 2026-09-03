@@ -12,6 +12,10 @@ from moonmind.omnigent.harness_platform.failures import (
     HarnessPlatformError,
     HarnessPlatformFailure,
 )
+from moonmind.omnigent.workspace_artifacts import (
+    WorkspaceArtifactProjectionError,
+    WorkspaceArtifactProjector,
+)
 from moonmind.schemas.agent_runtime_models import AgentExecutionRequest
 from moonmind.schemas.workspace_locator_models import SandboxWorkspaceLocator
 from moonmind.workflows.temporal.runtime.workspace_locators import (
@@ -22,9 +26,6 @@ from moonmind.workflows.temporal.runtime.workspace_locators import (
 )
 
 _SAFE_VOLUME = re.compile(r"^[a-zA-Z0-9][a-zA-Z0-9_.-]{0,127}$")
-_SAFE_CLONE_REF = re.compile(
-    r"^[A-Za-z0-9][A-Za-z0-9._/@+-]{0,253}(?<!\.lock)$"
-)
 
 
 class DaemonCommandRunner(Protocol):
@@ -87,6 +88,7 @@ class OmnigentWorkspaceMaterializer:
         command_runner: DaemonCommandRunner,
         workspace_root: str | Path | None = None,
         workspace_volume: str | None = None,
+        artifact_service: Any | None = None,
     ) -> None:
         self._runner = command_runner
         self._root = Path(
@@ -98,6 +100,7 @@ class OmnigentWorkspaceMaterializer:
             or os.getenv("MOONMIND_AGENT_WORKSPACES_VOLUME_NAME")
             or "agent_workspaces"
         ).strip()
+        self._artifact_projector = WorkspaceArtifactProjector(artifact_service)
 
     async def materialize(
         self,
@@ -116,6 +119,17 @@ class OmnigentWorkspaceMaterializer:
             request.workspace_spec if isinstance(request.workspace_spec, dict) else {}
         )
         locator = spec.get("workspaceLocator")
+        step_execution = getattr(request, "step_execution", None)
+        owner_workflow_id = str(
+            getattr(step_execution, "workflow_id", None)
+            or getattr(request, "correlation_id", "")
+        ).strip()
+        owner_step_execution_id = str(
+            getattr(step_execution, "step_execution_id", None)
+            or getattr(request, "idempotency_key", "")
+        ).strip()
+        record_store: SandboxWorkspaceRecordStore | None = None
+        workspace_id: str | None = None
         authored = str(spec.get("workspacePath") or spec.get("path") or "").strip()
         if authored:
             candidate = Path(authored).resolve()
@@ -128,15 +142,6 @@ class OmnigentWorkspaceMaterializer:
                     "sandbox workspace locator is invalid",
                     code=HarnessPlatformFailure.OMNIGENT_HOST_LAUNCH_FAILED,
                 ) from exc
-            step_execution = getattr(request, "step_execution", None)
-            owner_workflow_id = str(
-                getattr(step_execution, "workflow_id", None)
-                or getattr(request, "correlation_id", "")
-            ).strip()
-            owner_step_execution_id = str(
-                getattr(step_execution, "step_execution_id", None)
-                or getattr(request, "idempotency_key", "")
-            ).strip()
             if not owner_workflow_id or not owner_step_execution_id:
                 raise HarnessPlatformError(
                     "sandbox workspace owner identity is unavailable",
@@ -158,6 +163,7 @@ class OmnigentWorkspaceMaterializer:
                 relative_path=sandbox_locator.relative_path,
             )
             record_store = SandboxWorkspaceRecordStore(self._root)
+            workspace_id = sandbox_locator.workspace_id
             record_store.ensure(owner_record)
             resolve_sandbox_workspace_locator(
                 sandbox_locator,
@@ -199,6 +205,35 @@ class OmnigentWorkspaceMaterializer:
                 "authoritative workspace is unavailable or unsafe",
                 code=HarnessPlatformFailure.OMNIGENT_HOST_LAUNCH_FAILED,
             )
+        materialization_complete = bool(
+            record_store is not None
+            and workspace_id is not None
+            and record_store.is_materialized(workspace_id)
+        )
+        if not materialization_complete:
+            restore_refs = spec.get("restoreInputRefs")
+            if not isinstance(restore_refs, (list, tuple)):
+                restore_refs = ()
+            attachment_refs = getattr(request, "input_refs", ())
+            if not isinstance(attachment_refs, (list, tuple)):
+                attachment_refs = ()
+            checkpoint_ref = str(
+                spec.get("workspaceCheckpointRestoreRef") or ""
+            ).strip()
+            try:
+                await self._artifact_projector.project(
+                    candidate,
+                    checkpoint_ref=checkpoint_ref or None,
+                    restore_refs=tuple(str(ref) for ref in restore_refs),
+                    attachment_refs=tuple(str(ref) for ref in attachment_refs),
+                    workflow_id=owner_workflow_id,
+                    runtime_uid=runtime_uid,
+                    runtime_gid=runtime_gid,
+                )
+            except WorkspaceArtifactProjectionError as exc:
+                raise HarnessPlatformError(str(exc), code=exc.code) from exc
+            if record_store is not None and workspace_id is not None:
+                record_store.mark_materialized(workspace_id)
         daemon_root = await resolve_daemon_workspace_root(
             runner=self._runner,
             workspace_volume=self._workspace_volume,
@@ -256,7 +291,7 @@ class OmnigentWorkspaceMaterializer:
             or ""
         ).strip()
         clone_source = normalize_github_clone_source(repo_ref)
-        if clone_source is None or not branch or not _SAFE_CLONE_REF.fullmatch(branch):
+        if clone_source is None or not branch or len(branch) > 400:
             raise HarnessPlatformError(
                 "sandbox workspace preparation needs a GitHub repository and safe branch ref",
                 code=HarnessPlatformFailure.OMNIGENT_HOST_LAUNCH_FAILED,
@@ -357,6 +392,7 @@ def build_daemon_git_clone_argv(
         "set -eu; umask 077; token_file=$(mktemp); "
         "trap 'rm -f \"$token_file\"' EXIT HUP INT TERM; "
         "cat > \"$token_file\"; "
+        "git check-ref-format --branch \"$1\" >/dev/null; "
         "credential_helper='!f() { test \"$1\" = get || exit 0; "
         "printf \"username=x-access-token\\npassword=\"; "
         "cat \"$MM_GIT_TOKEN_FILE\"; printf \"\\n\"; }; f'; "

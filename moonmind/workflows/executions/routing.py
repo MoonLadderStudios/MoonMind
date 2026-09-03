@@ -49,7 +49,6 @@ def get_routing_target_for_workflow(
     execution substrates are deprecated and no longer supported.
 
     ``task_payload`` is accepted for API stability; run routing does not branch on it.
-    Proposal generation (``task.proposeTasks``) is handled inside Temporal workflows.
     """
     if not settings.temporal_dashboard.submit_enabled:
         raise TemporalSubmitDisabledError(
