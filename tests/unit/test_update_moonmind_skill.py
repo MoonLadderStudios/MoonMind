@@ -57,7 +57,10 @@ def _run_update_scenario(
     tmp_path: Path,
     *,
     changed_file: str,
+    checkout_already_current: bool = False,
+    agent_runtime_revision_state: str | None = None,
     include_all_commands: bool = False,
+    no_compose_pull: bool = False,
     remove_agent_runtime_after_update: bool = False,
 ) -> list[str]:
     bash = _modern_bash()
@@ -90,6 +93,23 @@ def _run_update_scenario(
     _run_git("push", "origin", "main", cwd=seed)
     expected_head = _run_git("rev-parse", "HEAD", cwd=seed).stdout.strip()
 
+    if checkout_already_current:
+        _run_git("fetch", "origin", "main", cwd=checkout)
+        _run_git("reset", "--hard", expected_head, cwd=checkout)
+
+    if agent_runtime_revision_state is None:
+        agent_runtime_revision = ""
+    elif agent_runtime_revision_state == "missing":
+        agent_runtime_revision = ""
+    elif agent_runtime_revision_state == "stale":
+        agent_runtime_revision = initial_head
+    elif agent_runtime_revision_state == "current":
+        agent_runtime_revision = expected_head
+    else:
+        raise AssertionError(
+            f"unsupported agent runtime revision state: {agent_runtime_revision_state}"
+        )
+
     fake_bin.mkdir()
     fake_docker = fake_bin / "docker"
     fake_docker_script = """#!/usr/bin/env bash
@@ -97,6 +117,14 @@ set -euo pipefail
 printf '%s\\n' "$*" >> "$DOCKER_LOG"
 
 if [[ "${1:-}" == "ps" ]]; then
+  exit 0
+fi
+if [[ "${1:-}" == "inspect" ]]; then
+  if [[ "$*" == *".State.Status"* ]]; then
+    printf '%s\\n' running
+  elif [[ "$*" == *"moonmind.runtime_source_revision"* ]]; then
+    printf '%s\\n' "$FAKE_AGENT_RUNTIME_SOURCE_REVISION"
+  fi
   exit 0
 fi
 if [[ "${1:-}" != "compose" ]]; then
@@ -127,10 +155,23 @@ case "${1:-} ${2:-}" in
   "pull ")
     exit 0
     ;;
-  "ps -a"|"ps -q")
-    exit 0
+  "ps -a")
+    if [[ "${4:-}" == "temporal-worker-agent-runtime" ]] \
+      && [[ "$FAKE_AGENT_RUNTIME_CONTAINER" == "true" ]]; then
+      printf '%s\\n' container-agent-runtime
+    fi
+    ;;
+  "ps -q")
+    if [[ "${3:-}" == "temporal-worker-agent-runtime" ]] \
+      && [[ "$FAKE_AGENT_RUNTIME_CONTAINER" == "true" ]]; then
+      printf '%s\\n' container-agent-runtime
+    fi
     ;;
   "up -d")
+    if [[ "${MOONMIND_RUNTIME_SOURCE_REVISION:-}" != "$(git -C "$UPDATE_CHECKOUT" rev-parse HEAD)" ]]; then
+      printf 'runtime source revision was not exported for compose up\\n' >&2
+      exit 42
+    fi
     exit 0
     ;;
 esac
@@ -149,8 +190,22 @@ esac
     env["DOCKER_LOG"] = str(docker_log)
     env["UPDATE_CHECKOUT"] = str(checkout)
     env["UPDATE_INITIAL_HEAD"] = initial_head
+    env["FAKE_AGENT_RUNTIME_CONTAINER"] = str(
+        agent_runtime_revision_state is not None
+    ).lower()
+    env["FAKE_AGENT_RUNTIME_SOURCE_REVISION"] = agent_runtime_revision
+    update_command = [
+        bash,
+        str(UPDATE_SCRIPT),
+        "--repo",
+        str(checkout),
+        "--branch",
+        "main",
+    ]
+    if no_compose_pull:
+        update_command.append("--no-compose-pull")
     update = subprocess.run(
-        [bash, str(UPDATE_SCRIPT), "--repo", str(checkout), "--branch", "main"],
+        update_command,
         cwd=ROOT,
         env=env,
         check=False,
@@ -206,6 +261,42 @@ def test_documentation_update_does_not_force_recreate_services(
     assert "postgres" in up_commands[0]
     assert "temporal-worker-workflow" in up_commands[0]
     assert "temporal-worker-deployment-control" not in up_commands[0]
+
+
+@pytest.mark.parametrize("agent_runtime_revision_state", ["missing", "stale"])
+def test_stale_runtime_source_revision_is_recreated_when_checkout_is_current(
+    tmp_path: Path,
+    agent_runtime_revision_state: str,
+) -> None:
+    up_commands = _run_update_scenario(
+        tmp_path,
+        changed_file="moonmind/example.py",
+        checkout_already_current=True,
+        agent_runtime_revision_state=agent_runtime_revision_state,
+        no_compose_pull=True,
+    )
+
+    recreate_commands = [
+        command for command in up_commands if "--force-recreate" in command
+    ]
+    assert len(recreate_commands) == 1
+    assert "temporal-worker-agent-runtime" in recreate_commands[0]
+    assert "api" not in recreate_commands[0]
+    assert "temporal-worker-workflow" not in recreate_commands[0]
+
+
+def test_current_runtime_source_revision_is_not_recreated_without_changes(
+    tmp_path: Path,
+) -> None:
+    up_commands = _run_update_scenario(
+        tmp_path,
+        changed_file="moonmind/example.py",
+        checkout_already_current=True,
+        agent_runtime_revision_state="current",
+        no_compose_pull=True,
+    )
+
+    assert all("--force-recreate" not in command for command in up_commands)
 
 
 def test_skill_source_update_quiesces_resolver_before_checkout_mutation(

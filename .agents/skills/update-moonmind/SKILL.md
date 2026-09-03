@@ -32,6 +32,9 @@ metadata:
      (unless `noComposePull` is set)
    - recreate the resolver worker only when it still exists in the post-checkout
      Compose topology
+   - stamp each recreated application container with the exact checked-out git
+     revision and force-recreate any existing application process whose recorded
+     revision is missing or stale, even when no new commit was fetched
    - detect files changed between pre-pull and post-pull commits, force-recreate only application processes affected by bind-mounted runtime source, and use normal Compose reconciliation for other selected services
    - restart services with image drift or stopped service state so runtime stays healthy
    - exclude the deployment-control worker from update targets so it can finish and verify the operation
