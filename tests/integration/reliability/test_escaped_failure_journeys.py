@@ -53,6 +53,7 @@ from moonmind.omnigent.execute import (
     OmnigentSameSessionContinuationRequired,
     OmnigentSessionStillRunningError,
     OmnigentTurnNotStartedError,
+    _MarkedTurnStartWatchdog,
     _await_marked_turn_terminal,
     _build_omnigent_first_message,
     _durable_terminal_status_with_evidence,
@@ -4687,6 +4688,80 @@ async def test_transient_injection_response_does_not_hide_never_started_turn() -
     assert client.calls >= 2
     assert excinfo.value.code == expected["failureCode"]
     assert excinfo.value.snapshot == running_snapshot
+
+
+async def test_terminal_response_cannot_retain_live_turn_authority(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Replay mm:d24809bd at the provider and parent retry boundaries."""
+
+    replay_id = "omnigent-terminal-response-stays-active"
+    manifest = load_replay(replay_id, "manifest.json")
+    expected = load_replay(replay_id, "expected-outcome.json")
+    snapshot = manifest["staleActiveSnapshot"]
+    marker = manifest["currentTurnMarker"]
+
+    state = _marked_turn_item_state(snapshot, marker=marker)
+    assert state["boundarySource"] == expected["terminalBoundarySource"]
+    assert state["progress"] is expected["acceptCurrentTurnProgress"]
+    assert snapshot["active_response_id"] == manifest["terminalResponseId"]
+    assert (
+        manifest["observedProviderEvents"][-1]["response"]["id"]
+        == manifest["terminalResponseId"]
+    )
+
+    class StaleActiveClient:
+        async def get_session(self, _session_id: str) -> dict[str, object]:
+            return snapshot
+
+    loop = asyncio.get_running_loop()
+    watchdog = _MarkedTurnStartWatchdog(
+        loop=loop,
+        timeout_seconds=0.05,
+        started_at=loop.time() - 1.0,
+    )
+    for event in manifest["observedProviderEvents"]:
+        watchdog.observe_terminal_response_event(event)
+
+    with pytest.raises(OmnigentTurnNotStartedError) as excinfo:
+        await _await_marked_turn_terminal(
+            client=StaleActiveClient(),
+            session_id=manifest["sessionId"],
+            marker=marker,
+            event_count=len(manifest["observedProviderEvents"]),
+            terminal_status="completed",
+            timeout_seconds=1.0,
+            interval_seconds=0.001,
+            start_watchdog=watchdog,
+        )
+
+    assert excinfo.value.code == expected["failureCode"]
+    assert watchdog.currently_active is expected["terminalResponseRetainsLiveAuthority"]
+    assert watchdog.active_response_known_terminal is True
+    assert expected["boundedByTurnStartBudget"] is True
+
+    # The exact typed result from the child must authorize a fresh parent Step
+    # Execution even though its category is integration_error rather than the
+    # generic execution_error previously required by the retry classifier.
+    monkeypatch.setattr(run_workflow_module.workflow, "patched", lambda _patch: True)
+    workflow_instance = MoonMindRunWorkflow()
+    result = {
+        "status": "FAILED",
+        "outputs": {
+            "error": expected["failureClass"],
+            "failureClass": expected["failureClass"],
+            "providerErrorCode": expected["failureCode"],
+            "retryRecommendation": expected["retryRecommendation"],
+        },
+    }
+    assert (
+        workflow_instance._activity_result_retryable(
+            result,
+            failure_message=expected["failureClass"],
+            tool_type="agent_runtime",
+        )
+        is expected["parentStartsFreshStepExecution"]
+    )
 
 
 async def test_omnigent_server_is_reachable_from_isolated_host_network() -> None:
