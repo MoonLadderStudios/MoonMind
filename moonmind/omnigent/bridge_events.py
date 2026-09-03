@@ -20,6 +20,22 @@ from moonmind.schemas.agent_runtime_models import AgentExecutionRequest
 BRIDGE_EVENT_SCHEMA_VERSION = "moonmind.omnigent_bridge.event.v1"
 BRIDGE_EVENT_DEDUPLICATION_KEY_MAX_LENGTH = 128
 
+_COMPLETED_RESPONSE_EVENT_TYPES = frozenset({"response.completed"})
+_FAILED_RESPONSE_EVENT_TYPES = frozenset(
+    {
+        "response.error",
+        "response.failed",
+        "response.incomplete",
+        "response.policy_denied",
+    }
+)
+_CANCELED_RESPONSE_EVENT_TYPES = frozenset({"response.cancelled"})
+TERMINAL_RESPONSE_EVENT_TYPES = frozenset(
+    _COMPLETED_RESPONSE_EVENT_TYPES
+    | _FAILED_RESPONSE_EVENT_TYPES
+    | _CANCELED_RESPONSE_EVENT_TYPES
+)
+
 _TERMINAL_STATUSES = {
     "completed",
     "failed",
@@ -245,19 +261,17 @@ def _normalize_status(
     event_type = _event_type(payload)
     if event_type == "stream.done":
         return None
-    if event_type in {"response.completed", "turn.completed", "completed"}:
+    if event_type in _COMPLETED_RESPONSE_EVENT_TYPES | {
+        "turn.completed",
+        "completed",
+    }:
         return "completed"
-    if event_type in {
-        "response.error",
-        "response.failed",
-        "response.incomplete",
-        "response.policy_denied",
+    if event_type in _FAILED_RESPONSE_EVENT_TYPES | {
         "turn.failed",
         "failed",
     }:
         return "failed"
-    if event_type in {
-        "response.cancelled",
+    if event_type in _CANCELED_RESPONSE_EVENT_TYPES | {
         "session.interrupted",
         "session.superseded",
         "turn.cancelled",
@@ -428,6 +442,7 @@ def _agent_run_id(request: AgentExecutionRequest) -> str:
 
 __all__ = [
     "BRIDGE_EVENT_SCHEMA_VERSION",
+    "TERMINAL_RESPONSE_EVENT_TYPES",
     "BridgeEventNormalization",
     "build_omnigent_bridge_event",
     "normalize_omnigent_observation",

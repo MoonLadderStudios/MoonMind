@@ -1347,7 +1347,20 @@ async def test_start_watchdog_keeps_budget_visible_while_activity_defers_it() ->
 
 
 @pytest.mark.asyncio
-async def test_start_watchdog_rejects_active_id_for_known_terminal_response() -> None:
+@pytest.mark.parametrize(
+    "event_type",
+    [
+        "response.completed",
+        "response.failed",
+        "response.error",
+        "response.incomplete",
+        "response.policy_denied",
+        "response.cancelled",
+    ],
+)
+async def test_start_watchdog_rejects_active_id_for_known_terminal_response(
+    event_type: str,
+) -> None:
     """An exact terminal response id is stale projection, not live-work authority."""
 
     loop = asyncio.get_running_loop()
@@ -1358,7 +1371,7 @@ async def test_start_watchdog_rejects_active_id_for_known_terminal_response() ->
     )
     watchdog.observe_terminal_response_event(
         {
-            "type": "response.completed",
+            "type": event_type,
             "response": {"id": "injection-response", "status": "completed"},
         }
     )
@@ -1374,6 +1387,66 @@ async def test_start_watchdog_rejects_active_id_for_known_terminal_response() ->
     assert fields["turnCurrentlyActive"] is False
     assert fields["turnActiveResponseKnownTerminal"] is True
     assert fields["turnTerminalResponseIds"] == ["injection-response"]
+
+
+@pytest.mark.asyncio
+async def test_start_watchdog_restores_terminal_ids_from_durable_journal(
+    tmp_path,
+) -> None:
+    """Durable terminal events survive a crash before the next heartbeat."""
+
+    gateway = LocalOmnigentArtifactGateway(root=tmp_path)
+    request = _request()
+    raw_ref = await gateway.write_text(
+        request=request,
+        name="runtime.omnigent.sse.raw.jsonl",
+        payload=(
+            '{"type":"response.failed",'
+            '"response":{"id":"durable-terminal-response"}}\n'
+        ),
+        link_type="runtime.omnigent.sse.raw",
+        content_type="application/x-ndjson",
+    )
+    normalized_ref = await gateway.write_text(
+        request=request,
+        name="runtime.omnigent.sse.normalized.jsonl",
+        payload=(
+            '{"eventType":"response.failed",'
+            '"normalizedStatus":"failed","sequence":1}\n'
+        ),
+        link_type="runtime.omnigent.sse.normalized",
+        content_type="application/x-ndjson",
+    )
+
+    class DurableRow:
+        raw_events_ref = raw_ref
+        normalized_events_ref = normalized_ref
+
+    raw_events, _ = await _restore_active_journals(
+        artifact_gateway=gateway,
+        durable_row=DurableRow(),
+    )
+    loop = asyncio.get_running_loop()
+    watchdog = _MarkedTurnStartWatchdog(
+        loop=loop,
+        timeout_seconds=0.01,
+        started_at=loop.time() - 1.0,
+    )
+    watchdog.restore_terminal_response_events(raw_events)
+
+    with pytest.raises(OmnigentTurnNotStartedError):
+        watchdog.observe(
+            {
+                "status": "running",
+                "active_response_id": "durable-terminal-response",
+            },
+            {"boundarySource": "marker", "progress": False},
+            observation_started_at=loop.time(),
+        )
+
+    assert watchdog.heartbeat_fields()["turnTerminalResponseIds"] == [
+        "durable-terminal-response"
+    ]
 
 
 @pytest.mark.asyncio

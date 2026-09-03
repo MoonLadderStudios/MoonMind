@@ -27,6 +27,7 @@ from moonmind.omnigent.bridge_artifacts import (
     build_omnigent_terminal_refs,
 )
 from moonmind.omnigent.bridge_events import (
+    TERMINAL_RESPONSE_EVENT_TYPES,
     build_omnigent_bridge_event,
     normalize_omnigent_observation,
 )
@@ -94,7 +95,6 @@ _NON_TERMINAL_STATUSES = {
     "idle",
 }
 _TERMINAL_STATUSES = {"completed", "failed", "canceled", "timed_out"}
-_TERMINAL_RESPONSE_EVENT_TYPES = {"response.completed"}
 _logger = logging.getLogger(__name__)
 
 _ACTIVITY_HEARTBEAT_INTERVAL_SECONDS = 30.0
@@ -269,7 +269,13 @@ class _MarkedTurnStartWatchdog:
         self.currently_active = False
         self.active_response_known_terminal = False
         self.progress = False
-        self._terminal_response_ids: set[str] = set()
+        self._terminal_response_ids: dict[str, None] = {}
+
+    def _remember_terminal_response_id(self, response_id: str) -> None:
+        self._terminal_response_ids.pop(response_id, None)
+        self._terminal_response_ids[response_id] = None
+        while len(self._terminal_response_ids) > 8:
+            del self._terminal_response_ids[next(iter(self._terminal_response_ids))]
 
     @property
     def armed(self) -> bool:
@@ -279,11 +285,11 @@ class _MarkedTurnStartWatchdog:
         """Remember exact provider responses that have reached a terminal edge."""
 
         event_type = str(event.get("type") or event.get("eventType") or "").strip()
-        if event_type not in _TERMINAL_RESPONSE_EVENT_TYPES:
+        if event_type not in TERMINAL_RESPONSE_EVENT_TYPES:
             return
         response_id = _provider_response_id(event)
         if response_id:
-            self._terminal_response_ids.add(response_id)
+            self._remember_terminal_response_id(response_id)
 
     def restore_terminal_response_ids(self, response_ids: Any) -> None:
         """Restore bounded terminal-response evidence from an Activity heartbeat."""
@@ -293,7 +299,16 @@ class _MarkedTurnStartWatchdog:
         for value in response_ids[-8:]:
             response_id = str(value or "").strip()
             if response_id:
-                self._terminal_response_ids.add(response_id)
+                self._remember_terminal_response_id(response_id)
+
+    def restore_terminal_response_events(self, events: Any) -> None:
+        """Rebuild terminal-response evidence from the durable event journal."""
+
+        if not isinstance(events, list):
+            return
+        for event in events:
+            if isinstance(event, Mapping):
+                self.observe_terminal_response_event(event)
 
     def observe(
         self,
@@ -338,7 +353,7 @@ class _MarkedTurnStartWatchdog:
             "turnEverActive": self.ever_active,
             "turnCurrentlyActive": self.currently_active,
             "turnActiveResponseKnownTerminal": self.active_response_known_terminal,
-            "turnTerminalResponseIds": sorted(self._terminal_response_ids)[-8:],
+            "turnTerminalResponseIds": list(self._terminal_response_ids),
             "turnStartWaitSeconds": (
                 round(self._loop.time() - self.started_at, 3)
                 if not self.progress
@@ -2731,6 +2746,7 @@ async def run_omnigent_execution(
             start_watchdog.restore_terminal_response_ids(
                 retry_state.get("turnTerminalResponseIds")
             )
+            start_watchdog.restore_terminal_response_events(raw_events)
             if (
                 terminal_status is None
                 and first_message_posted
