@@ -354,6 +354,8 @@ def _complete_fake_profile(
             if _derived is not None:
                 completed["clear_env_keys"] = list(_derived.keys)
         except Exception:
+            # Best-effort fixture enrichment only; a derivation failure leaves
+            # the profile without keys, preserving the pre-existing behavior.
             pass
     return completed
 
