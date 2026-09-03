@@ -1,3 +1,5 @@
+"""Unit coverage for the workflow proposal removal migration."""
+
 from __future__ import annotations
 
 import importlib
