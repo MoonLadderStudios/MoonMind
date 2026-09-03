@@ -2553,6 +2553,15 @@ class TestBuildAgentExecutionRequest(unittest.TestCase):
                 "secret_refs": {
                     "opencode_api_key": "env://OPENCODE_API_KEY"
                 },
+                # #3821: backend-derived isolation policy for
+                # opencode/opencode-go/api_key.
+                "clear_env_keys": [
+                    "OPENCODE_AUTH_CONTENT",
+                    "OPENCODE_CONFIG",
+                    "OPENCODE_CONFIG_CONTENT",
+                    "OPENAI_API_KEY",
+                    "ANTHROPIC_API_KEY",
+                ],
             }
         }
 

@@ -381,6 +381,26 @@ def apply_oauth_connected_state(
     validated_at: datetime,
 ) -> None:
     """Stamp connected command_behavior + home overrides after OAuth success."""
+    # #3821: OAuth enrollment reuses the single isolation authority so the
+    # persisted policy always matches readiness and launch.
+    try:
+        from moonmind.provider_profiles.isolation_policy import (
+            derive_isolation_policy,
+            merge_enrollment_policy,
+        )
+
+        profile.clear_env_keys = merge_enrollment_policy(
+            stored_keys=list(profile.clear_env_keys or []),
+            derived=derive_isolation_policy(
+                runtime_id=profile.runtime_id,
+                provider_id=profile.provider_id,
+                authentication_method="oauth",
+                credential_source="oauth_volume",
+                runtime_materialization_mode="oauth_home",
+            ),
+        )
+    except Exception:
+        logger.warning("provider_profile_isolation_oauth_merge_failed", exc_info=True)
     if mapping is not None:
         profile.home_path_overrides = {
             **(profile.home_path_overrides or {}),
@@ -400,6 +420,100 @@ def apply_oauth_connected_state(
             "launch_ready": True,
         },
     )
+
+
+async def reconcile_provider_profile_isolation_policies(
+    *,
+    session: AsyncSession,
+) -> dict[str, int]:
+    """Bounded startup reconciliation for #3821 launch-safety isolation policy.
+
+    Walks every persisted Provider Profile through the single isolation
+    authority (``reconciliation_action``) and normalizes only order-equivalent
+    derived values to canonical order. Intentional legacy custom values are
+    preserved untouched; unsafe, unknown-malformed, incomplete, or missing
+    values are left stored and surfaced via readiness/launch fail-closed paths
+    (plus a warning naming only safe metadata: profile id, classification,
+    strategy). Never rewrites custom behavior and never records secret values.
+    """
+    from api_service.services.provider_profile_creation import (
+        infer_authentication_method,
+        provider_profile_creation_capabilities,
+    )
+    from moonmind.provider_profiles.isolation_policy import (
+        derive_isolation_policy,
+        reconciliation_action,
+    )
+
+    counts = {
+        "normalized": 0,
+        "preserve_custom": 0,
+        "repair_required": 0,
+        "skipped": 0,
+    }
+    rows = list((await session.execute(select(ManagedAgentProviderProfile))).scalars().all())
+    for row in rows:
+        try:
+            capabilities = provider_profile_creation_capabilities(
+                runtime_id=row.runtime_id,
+                provider_id=row.provider_id,
+            )
+            method = infer_authentication_method(
+                credential_source=row.credential_source,
+                runtime_materialization_mode=row.runtime_materialization_mode,
+                authentication_methods=capabilities["authentication_methods"],
+                auth_state=row.auth_state,
+                last_auth_method=row.last_auth_method,
+            )
+            derived = derive_isolation_policy(
+                runtime_id=row.runtime_id,
+                provider_id=row.provider_id,
+                authentication_method=method or "",
+                credential_source=row.credential_source,
+                runtime_materialization_mode=row.runtime_materialization_mode,
+            )
+            decision = reconciliation_action(
+                stored_keys=list(row.clear_env_keys or []),
+                derived=derived,
+                credential_free=derived is not None and len(derived.keys) == 0,
+            )
+        except Exception:
+            logger.warning(
+                "provider_profile_isolation_reconcile_skipped profile_id=%s",
+                getattr(row, "profile_id", "unknown"),
+                exc_info=True,
+            )
+            counts["skipped"] += 1
+            continue
+        action = str(decision.get("action") or "")
+        if action == "normalize" and derived is not None:
+            row.clear_env_keys = list(derived.keys)
+            counts["normalized"] += 1
+        elif action == "preserve_custom":
+            counts["preserve_custom"] += 1
+            logger.info(
+                "provider_profile_isolation_reconcile_preserve profile_id=%s classification=%s",
+                row.profile_id,
+                decision.get("classification"),
+            )
+        elif action == "repair_required":
+            counts["repair_required"] += 1
+            logger.warning(
+                "provider_profile_isolation_reconcile_repair_required profile_id=%s classification=%s strategy=%s",
+                row.profile_id,
+                decision.get("classification"),
+                derived.strategy_id if derived is not None else "unknown",
+            )
+    if counts["normalized"]:
+        await session.flush()
+    logger.info(
+        "provider_profile_isolation_reconcile_done normalized=%d preserve_custom=%d repair_required=%d skipped=%d",
+        counts["normalized"],
+        counts["preserve_custom"],
+        counts["repair_required"],
+        counts["skipped"],
+    )
+    return counts
 
 
 def apply_oauth_validation_failure(

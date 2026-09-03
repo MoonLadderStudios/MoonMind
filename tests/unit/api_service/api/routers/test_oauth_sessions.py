@@ -1151,6 +1151,14 @@ async def test_finalize_oauth_session_rejects_failed_volume_verification(
                 credential_source=ProviderCredentialSource.SECRET_REF,
                 runtime_materialization_mode=RuntimeMaterializationMode.API_KEY_ENV,
                 secret_refs={"openai_api_key": "env://OPENAI_API_KEY"},
+                # #3821: backend-derived isolation policy for
+                # codex_cli/openai/api_key.
+                clear_env_keys=[
+                    "OPENAI_BASE_URL",
+                    "OPENAI_ORG_ID",
+                    "OPENAI_PROJECT",
+                    "MINIMAX_API_KEY",
+                ],
                 max_parallel_runs=1,
                 cooldown_after_429_seconds=300,
                 enabled=True,
@@ -1732,7 +1740,17 @@ async def test_finalize_oauth_session_registers_claude_oauth_profile(
         assert profile.volume_mount_path == "/home/app/.claude"
         assert profile.max_parallel_runs == 1
         assert "credentials" not in repr(profile.__dict__)
-        assert "token" not in repr(profile.__dict__).lower()
+        # #3821: clear_env_keys now persists backend-derived key *names*
+        # (e.g. ANTHROPIC_AUTH_TOKEN) as safe launch-isolation metadata.
+        # The no-secret-values assertion must ignore those key names.
+        _profile_repr_no_keys = repr(
+            {
+                k: v
+                for k, v in profile.__dict__.items()
+                if k not in ("clear_env_keys", "_sa_instance_state")
+            }
+        ).lower()
+        assert "token" not in _profile_repr_no_keys
     assert synced_runtimes == ["claude_code"]
 
 @pytest.mark.asyncio

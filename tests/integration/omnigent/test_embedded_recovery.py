@@ -335,6 +335,15 @@ async def test_remediation_continuation_janitor_uses_real_authority_chain(
                 enabled=True,
                 auth_state=ProviderProfileAuthState.CONNECTED,
                 last_auth_method=ProviderProfileAuthMethod.OAUTH_VOLUME,
+                # #3821: backend-derived isolation policy for
+                # codex_cli/openai/oauth.
+                clear_env_keys=[
+                    "OPENAI_API_KEY",
+                    "OPENAI_BASE_URL",
+                    "OPENAI_ORG_ID",
+                    "OPENAI_PROJECT",
+                    "MINIMAX_API_KEY",
+                ],
             )
         )
         await session.commit()
