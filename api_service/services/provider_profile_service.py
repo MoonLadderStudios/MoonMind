@@ -422,6 +422,100 @@ def apply_oauth_connected_state(
     )
 
 
+async def reconcile_provider_profile_isolation_policies(
+    *,
+    session: AsyncSession,
+) -> dict[str, int]:
+    """Bounded startup reconciliation for #3821 launch-safety isolation policy.
+
+    Walks every persisted Provider Profile through the single isolation
+    authority (``reconciliation_action``) and normalizes only order-equivalent
+    derived values to canonical order. Intentional legacy custom values are
+    preserved untouched; unsafe, unknown-malformed, incomplete, or missing
+    values are left stored and surfaced via readiness/launch fail-closed paths
+    (plus a warning naming only safe metadata: profile id, classification,
+    strategy). Never rewrites custom behavior and never records secret values.
+    """
+    from api_service.services.provider_profile_creation import (
+        infer_authentication_method,
+        provider_profile_creation_capabilities,
+    )
+    from moonmind.provider_profiles.isolation_policy import (
+        derive_isolation_policy,
+        reconciliation_action,
+    )
+
+    counts = {
+        "normalized": 0,
+        "preserve_custom": 0,
+        "repair_required": 0,
+        "skipped": 0,
+    }
+    rows = list((await session.execute(select(ManagedAgentProviderProfile))).scalars().all())
+    for row in rows:
+        try:
+            capabilities = provider_profile_creation_capabilities(
+                runtime_id=row.runtime_id,
+                provider_id=row.provider_id,
+            )
+            method = infer_authentication_method(
+                credential_source=row.credential_source,
+                runtime_materialization_mode=row.runtime_materialization_mode,
+                authentication_methods=capabilities["authentication_methods"],
+                auth_state=row.auth_state,
+                last_auth_method=row.last_auth_method,
+            )
+            derived = derive_isolation_policy(
+                runtime_id=row.runtime_id,
+                provider_id=row.provider_id,
+                authentication_method=method or "",
+                credential_source=row.credential_source,
+                runtime_materialization_mode=row.runtime_materialization_mode,
+            )
+            decision = reconciliation_action(
+                stored_keys=list(row.clear_env_keys or []),
+                derived=derived,
+                credential_free=derived is not None and len(derived.keys) == 0,
+            )
+        except Exception:
+            logger.warning(
+                "provider_profile_isolation_reconcile_skipped profile_id=%s",
+                getattr(row, "profile_id", "unknown"),
+                exc_info=True,
+            )
+            counts["skipped"] += 1
+            continue
+        action = str(decision.get("action") or "")
+        if action == "normalize" and derived is not None:
+            row.clear_env_keys = list(derived.keys)
+            counts["normalized"] += 1
+        elif action == "preserve_custom":
+            counts["preserve_custom"] += 1
+            logger.info(
+                "provider_profile_isolation_reconcile_preserve profile_id=%s classification=%s",
+                row.profile_id,
+                decision.get("classification"),
+            )
+        elif action == "repair_required":
+            counts["repair_required"] += 1
+            logger.warning(
+                "provider_profile_isolation_reconcile_repair_required profile_id=%s classification=%s strategy=%s",
+                row.profile_id,
+                decision.get("classification"),
+                derived.strategy_id if derived is not None else "unknown",
+            )
+    if counts["normalized"]:
+        await session.flush()
+    logger.info(
+        "provider_profile_isolation_reconcile_done normalized=%d preserve_custom=%d repair_required=%d skipped=%d",
+        counts["normalized"],
+        counts["preserve_custom"],
+        counts["repair_required"],
+        counts["skipped"],
+    )
+    return counts
+
+
 def apply_oauth_validation_failure(
     profile: ManagedAgentProviderProfile,
     *,

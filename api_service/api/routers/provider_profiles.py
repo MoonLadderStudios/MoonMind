@@ -756,7 +756,37 @@ def _normalized_create_values(body: ProviderProfileCreate) -> dict[str, Any]:
         except IsolationPolicyError as exc:
             raise HTTPException(status_code=422, detail=exc.as_detail()) from exc
     elif values.get("clear_env_keys") is None:
-        values["clear_env_keys"] = []
+        # #3821: omitted expert-manual policy inherits the backend-derived
+        # value when the strategy is known; unknown strategies preserve
+        # legacy empty behavior (classified as legacy_custom, warning only).
+        try:
+            from moonmind.provider_profiles.isolation_policy import (
+                derive_isolation_policy as _derive_manual_default,
+            )
+
+            _manual_inferred = infer_authentication_method(
+                credential_source=values.get("credential_source"),
+                runtime_materialization_mode=values.get(
+                    "runtime_materialization_mode"
+                ),
+                authentication_methods=capabilities["authentication_methods"],
+                auth_state=values.get("auth_state"),
+                last_auth_method=values.get("last_auth_method"),
+            )
+            _manual_derived = _derive_manual_default(
+                runtime_id=body.runtime_id,
+                provider_id=body.provider_id,
+                authentication_method=_manual_inferred or "",
+                credential_source=values.get("credential_source"),
+                runtime_materialization_mode=values.get(
+                    "runtime_materialization_mode"
+                ),
+            )
+            values["clear_env_keys"] = (
+                list(_manual_derived.keys) if _manual_derived is not None else []
+            )
+        except Exception:
+            values["clear_env_keys"] = []
 
     manual_defaults: dict[str, Any] = {
         "priority": 100,
@@ -1338,12 +1368,33 @@ async def update_profile(
     # below. The backend isolation authority owns the value for all
     # supported combinations.
     if "clear_env_keys" in update_data and not bool(getattr(current_user, "is_superuser", False)):
+        # #3821: derive the prospective contract from update_data so an atomic
+        # provider/credential change plus its new backend-derived policy can be
+        # validated together. An import flag resolves to the oauth contract it
+        # will materialize below.
+        if import_existing_credential_volume:
+            _target_credential_source: Any = "oauth_volume"
+            _target_materialization_mode: Any = "oauth_home"
+            _target_auth_state: Any = update_data.get("auth_state", profile.auth_state)
+            _target_last_auth_method: Any = "oauth_volume"
+        else:
+            _target_credential_source = update_data.get(
+                "credential_source", profile.credential_source
+            )
+            _target_materialization_mode = update_data.get(
+                "runtime_materialization_mode",
+                profile.runtime_materialization_mode,
+            )
+            _target_auth_state = update_data.get("auth_state", profile.auth_state)
+            _target_last_auth_method = update_data.get(
+                "last_auth_method", profile.last_auth_method
+            )
         inferred_method = infer_authentication_method(
-            credential_source=profile.credential_source,
-            runtime_materialization_mode=profile.runtime_materialization_mode,
+            credential_source=_target_credential_source,
+            runtime_materialization_mode=_target_materialization_mode,
             authentication_methods=capabilities["authentication_methods"],
-            auth_state=profile.auth_state,
-            last_auth_method=profile.last_auth_method,
+            auth_state=_target_auth_state,
+            last_auth_method=_target_last_auth_method,
         )
         if inferred_method is not None:
             try:
@@ -1353,7 +1404,7 @@ async def update_profile(
 
                 preset_for_profile = get_provider_profile_creation_preset(
                     runtime_id=profile.runtime_id,
-                    provider_id=profile.provider_id,
+                    provider_id=target_provider_id,
                     authentication_method=_PresetMethod(inferred_method),
                 )
                 preset_clear_field = preset_for_profile.fields.get("clear_env_keys")
@@ -1368,20 +1419,73 @@ async def update_profile(
                     req_norm = sorted(requested or [])
                     exist_norm = sorted(existing)
                     if req_norm != exist_norm:
-                        raise HTTPException(
-                            status_code=422,
-                            detail={
-                                "code": "provider_profile_clear_env_keys_locked",
-                                "message": (
-                                    "clear_env_keys is backend-owned launch-security metadata "
-                                    "and cannot be edited directly for this runtime/provider. "
-                                    "Use the guided creation preset or an authorized manual profile path."
-                                ),
-                                "field": "clear_env_keys",
-                                "lock_reason": preset_clear_field.lock_reason,
-                                "source": preset_clear_field.source,
-                            },
-                        )
+                        # #3821: guided repair affordance — a non-superuser may
+                        # converge a stale profile back to exactly the
+                        # backend-derived policy. This is normalization, not
+                        # freeform authorship: any other value stays locked.
+                        # Repair applies only to stored policies classified as
+                        # missing/stale/unsafe; intentional legacy_custom
+                        # supersets and audited expert overrides stay locked.
+                        _repair_accepted = False
+                        try:
+                            from moonmind.provider_profiles.isolation_policy import (
+                                classify_existing_policy as _classify_repair_policy,
+                                derive_isolation_policy as _derive_repair_policy,
+                            )
+
+                            _repair_derived = _derive_repair_policy(
+                                runtime_id=profile.runtime_id,
+                                provider_id=target_provider_id,
+                                authentication_method=inferred_method,
+                                credential_source=_target_credential_source,
+                                runtime_materialization_mode=_target_materialization_mode,
+                            )
+                            _stored_behavior = (
+                                dict(profile.command_behavior or {})
+                                if isinstance(profile.command_behavior, dict)
+                                else {}
+                            )
+                            _stored_marker = _stored_behavior.get("_isolation_override")
+                            _has_expert_override = isinstance(
+                                _stored_marker, dict
+                            ) and isinstance(_stored_marker.get("keys"), list)
+                            _stored_classification = _classify_repair_policy(
+                                stored_keys=list(existing),
+                                derived=_repair_derived,
+                                credential_free=_repair_derived is not None
+                                and len(_repair_derived.keys) == 0,
+                            )
+                            if (
+                                _repair_derived is not None
+                                and req_norm == sorted(_repair_derived.keys)
+                                and not _has_expert_override
+                                and _stored_classification
+                                in {
+                                    "missing_or_stale",
+                                    "unsafe_unknown_incomplete",
+                                }
+                            ):
+                                update_data["clear_env_keys"] = list(_repair_derived.keys)
+                                _repair_accepted = True
+                        except Exception:
+                            _repair_accepted = False
+                        if not _repair_accepted:
+                            raise HTTPException(
+                                status_code=422,
+                                detail={
+                                    "code": "provider_profile_clear_env_keys_locked",
+                                    "message": (
+                                        "clear_env_keys is backend-owned launch-security metadata "
+                                        "and cannot be edited directly for this runtime/provider. "
+                                        "To repair a stale profile, submit exactly the backend-derived "
+                                        "policy shown in launch isolation, or use the guided creation "
+                                        "preset or an authorized manual profile path."
+                                    ),
+                                    "field": "clear_env_keys",
+                                    "lock_reason": preset_clear_field.lock_reason,
+                                    "source": preset_clear_field.source,
+                                },
+                            )
             except Exception as exc:
                 # Re-raise our own HTTPException; otherwise fall through and allow the
                 # update (unknown/unsupported profile retains round-trip).
@@ -1501,6 +1605,34 @@ async def update_profile(
                 "last_auth_method": ProviderProfileAuthMethod.OAUTH_VOLUME.value,
             }
         )
+        # #3821: imported OAuth volumes materialize the backend-derived
+        # isolation policy so the subsequent launchable check sees a
+        # current policy instead of a stale empty value.
+        try:
+            from moonmind.provider_profiles.isolation_policy import (
+                derive_isolation_policy as _derive_import_policy,
+            )
+            from moonmind.provider_profiles.isolation_policy import (
+                merge_enrollment_policy as _merge_import_policy,
+            )
+
+            _import_derived = _derive_import_policy(
+                runtime_id=profile.runtime_id,
+                provider_id=update_data.get("provider_id", profile.provider_id),
+                authentication_method="oauth",
+                credential_source="oauth_volume",
+                runtime_materialization_mode="oauth_home",
+            )
+            update_data["clear_env_keys"] = _merge_import_policy(
+                stored_keys=list(profile.clear_env_keys or []),
+                derived=_import_derived,
+            )
+        except Exception:
+            logger.warning(
+                "provider_profile_isolation_import_merge_failed profile_id=%s",
+                profile_id,
+                exc_info=True,
+            )
         profile.credential_generation = int(profile.credential_generation) + 1
     model_tiers_supplied = "model_tiers" in update_data
     default_model_tier_supplied = "default_model_tier" in update_data
