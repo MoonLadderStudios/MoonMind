@@ -13,7 +13,10 @@ from moonmind.omnigent.harness_platform.failures import (
     HarnessPlatformFailure,
 )
 from moonmind.omnigent.harness_platform.host_classes import LaunchPolicy
-from moonmind.omnigent.workspace_intent import authored_required_capabilities
+from moonmind.omnigent.workspace_intent import (
+    authored_connection_ref,
+    authored_required_capabilities,
+)
 from moonmind.security.execution_fanout_capabilities import (
     EXECUTION_FANOUT_REQUIRED_CAPABILITY,
     ExecutionFanoutCapabilityError,
@@ -88,7 +91,7 @@ class OmnigentRuntimeEnvironmentService:
                 "execution fan-out runtime identity is incomplete",
                 code=HarnessPlatformFailure.OMNIGENT_HOST_LAUNCH_FAILED,
             )
-        return {
+        environment = {
             "MOONMIND_URL": self._moonmind_url,
             "MOONMIND_AGENT_RUN_ID": step_execution_id,
             "MOONMIND_TASK_WORKFLOW_ID": workflow_id,
@@ -107,6 +110,12 @@ class OmnigentRuntimeEnvironmentService:
                 )
             ),
         }
+        repository_connection_ref = authored_connection_ref(request)
+        if repository_connection_ref:
+            environment["MOONMIND_REPOSITORY_CONNECTION_REF"] = (
+                repository_connection_ref
+            )
+        return environment
 
 
 __all__ = ["OmnigentRuntimeEnvironmentService"]

@@ -153,6 +153,9 @@ def test_opencode_projection_restores_scoped_fanout_file_selector() -> None:
         "MOONMIND_TASK_WORKFLOW_ID": "workflow-1",
         "MOONMIND_STEP_ID": "step-1",
         "MOONMIND_RUNTIME_ID": "opencode-native",
+        "MOONMIND_REPOSITORY_CONNECTION_REF": (
+            "repository-connection:git-default"
+        ),
         "MOONMIND_EXECUTION_FANOUT_BEARER_TOKEN_FILE": (
             "/run/moonmind-host-auth/execution-fanout"
         ),
