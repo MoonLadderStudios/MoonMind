@@ -1670,6 +1670,33 @@ describe('Dashboard shared entry', () => {
     expect(screen.queryByRole('radiogroup', { name: 'Workflow list display' })).toBeNull();
   });
 
+  it.each([
+    '/settings/',
+    '/settings/providers-secrets/',
+    '/settings/user-workspace/',
+    '/settings/operations/',
+  ])(
+    'MoonLadderStudios/MoonMind#3816 mounts the route-owned Settings page for the trailing-slash direct load %s',
+    async (path) => {
+      window.history.replaceState({}, '', path);
+      renderWithClient(<DashboardApp payload={{ page: 'dashboard', apiBase: '/api' }} />);
+
+      expect(await screen.findByText('Settings permissions:')).toBeTruthy();
+      expect(screen.queryByText('Unknown dashboard page:')).toBeNull();
+      // A trailing slash is a canonical route, not an unknown Settings alias, so
+      // it is never rewritten back to the /settings entry point.
+      expect(window.location.pathname).toBe(path);
+    },
+  );
+
+  it('MoonLadderStudios/MoonMind#3816 sends an unknown Settings alias back to the entry point', async () => {
+    window.history.replaceState({}, '', '/settings/provider-profiles/?runtime=codex');
+    renderWithClient(<DashboardApp payload={{ page: 'dashboard', apiBase: '/api' }} />);
+
+    await waitFor(() => expect(window.location.pathname).toBe('/settings'));
+    expect(window.location.search).toBe('');
+  });
+
   it('does not register a dashboard proposal review page for MM-859', async () => {
     window.history.replaceState({}, '', '/proposals');
     renderWithClient(<DashboardApp payload={{ page: 'dashboard', apiBase: '/api' }} />);

@@ -6,6 +6,7 @@ import {
   DASHBOARD_REACT_ROUTE_PATHS,
   destinationState,
   destinationForPath,
+  filterSettingsQueryForTarget,
   isDashboardInternalUrl,
   legacySettingsRedirect,
   matchesDashboardDestinationRegistry,
@@ -268,6 +269,68 @@ describe('dashboard route resolution', () => {
       expect(dest.menuGroupKey).toBe('configuration');
       expect(dest.navigationGroup).toBe('system');
     }
+  });
+
+  describe('MoonLadderStudios/MoonMind#3816 canonical configuration routes', () => {
+    it.each([
+      ['/settings/', 'settings-entry', '/settings'],
+      ['/settings/providers-secrets/', 'settings-providers-secrets', '/settings/providers-secrets'],
+      ['/settings/user-workspace/', 'settings-user-workspace', '/settings/user-workspace'],
+      ['/settings/operations/', 'settings-operations', '/settings/operations'],
+    ])('normalizes the trailing-slash Settings route %s to %s', (path, page, currentPath) => {
+      expect(resolveDashboardRoute(path)).toEqual({
+        page,
+        dataWidePanel: true,
+        currentPath,
+      });
+    });
+
+    it.each([
+      ['/settings/providers-secrets/', 'settings-providers-secrets'],
+      ['/settings/user-workspace/', 'settings-user-workspace'],
+      ['/settings/operations/', 'settings-operations'],
+    ])('resolves the trailing-slash Settings route %s to the %s destination', (path, key) => {
+      expect(destinationForPath(path)?.key).toBe(key);
+    });
+
+    it('keeps trailing-slash unknown Settings aliases outside the route-owned page registry', () => {
+      expect(resolveDashboardRoute('/settings/provider-profiles/')).toBeNull();
+      expect(destinationForPath('/settings/provider-profiles/')).toBeNull();
+    });
+
+    it('retires ?section= as Settings page identity instead of aliasing it', () => {
+      // SettingsPage.md 5.3: `section` carries no page identity. It is dropped from
+      // every redirect target and never maps back to a sibling Configuration page.
+      for (const section of ['providers-secrets', 'user-workspace', 'operations', 'legacy-alias']) {
+        expect(filterSettingsQueryForTarget(`?section=${section}`, '/settings/providers-secrets'))
+          .toBe('/settings/providers-secrets');
+        expect(filterSettingsQueryForTarget(`?section=${section}`, '/settings/user-workspace'))
+          .toBe('/settings/user-workspace');
+        expect(filterSettingsQueryForTarget(`?section=${section}`, '/settings/operations'))
+          .toBe('/settings/operations');
+        expect(legacySettingsRedirect('/secrets', `?section=${section}`))
+          .toBe('/settings/providers-secrets');
+        expect(legacySettingsRedirect('/workers', `?section=${section}`))
+          .toBe('/settings/operations');
+      }
+    });
+
+    it('keeps a canonical Settings route resolution independent of any ?section= value', () => {
+      const origin = window.location.origin;
+      for (const path of [
+        '/settings/providers-secrets',
+        '/settings/user-workspace',
+        '/settings/operations',
+      ]) {
+        const url = new URL(`${origin}${path}?section=operations`);
+        expect(isDashboardInternalUrl(url)).toBe(true);
+        expect(resolveDashboardRoute(url.pathname)).toEqual({
+          page: path.slice(1).replace('/', '-'),
+          dataWidePanel: true,
+          currentPath: path,
+        });
+      }
+    });
   });
 
   describe('resolveAuthorizedLegacySettingsTarget', () => {
