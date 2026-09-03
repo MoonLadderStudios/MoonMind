@@ -410,6 +410,15 @@ async def test_requalification_uses_the_current_provider_profile_model(
         runtime_materialization_mode=RuntimeMaterializationMode.COMPOSITE,
         cooldown_after_429_seconds=0,
         secret_refs={"opencode_api_key": "db://opencode-go-default-api-key"},
+        # #3821: backend-derived isolation policy for
+        # opencode/opencode-go/api_key.
+        clear_env_keys=[
+            "OPENCODE_AUTH_CONTENT",
+            "OPENCODE_CONFIG",
+            "OPENCODE_CONFIG_CONTENT",
+            "OPENAI_API_KEY",
+            "ANTHROPIC_API_KEY",
+        ],
         command_behavior={},
         default_model="opencode-go/gpt-5.6-luna",
         default_effort="high",
@@ -670,6 +679,15 @@ async def test_requalification_stops_when_runtime_revalidation_fails(
         runtime_materialization_mode=RuntimeMaterializationMode.COMPOSITE,
         cooldown_after_429_seconds=0,
         secret_refs={"opencode_api_key": "db://opencode-go-default-api-key"},
+        # #3821: backend-derived isolation policy for
+        # opencode/opencode-go/api_key.
+        clear_env_keys=[
+            "OPENCODE_AUTH_CONTENT",
+            "OPENCODE_CONFIG",
+            "OPENCODE_CONFIG_CONTENT",
+            "OPENAI_API_KEY",
+            "ANTHROPIC_API_KEY",
+        ],
         command_behavior={},
         default_model="opencode-go/gpt-5.6-luna",
         default_effort="high",

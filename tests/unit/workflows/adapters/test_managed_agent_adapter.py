@@ -322,6 +322,39 @@ def _complete_fake_profile(
             completed.setdefault(
                 "secret_refs", {secret_role: f"env://{env_key}"}
             )
+    # #3821: adapter fixtures carry backend-derived isolation policy so the
+    # shared launch-ready predicate evaluates them the way production does.
+    if "clear_env_keys" not in completed and "clearEnvKeys" not in completed:
+        try:
+            from moonmind.provider_profiles.isolation_policy import (
+                derive_isolation_policy as _derive_fixture_policy,
+            )
+
+            _source = completed.get("credential_source")
+            _source = getattr(_source, "value", _source) or ""
+            _materialization = completed.get("runtime_materialization_mode")
+            _materialization = (
+                getattr(_materialization, "value", _materialization) or ""
+            )
+            if _source == "oauth_volume" and _materialization == "oauth_home":
+                _method = "oauth"
+            elif _source == "secret_ref":
+                _method = "api_key"
+            elif _source == "none":
+                _method = "none"
+            else:
+                _method = ""
+            _derived = _derive_fixture_policy(
+                runtime_id=runtime_id,
+                provider_id=completed.get("provider_id"),
+                authentication_method=_method,
+                credential_source=_source,
+                runtime_materialization_mode=_materialization,
+            )
+            if _derived is not None:
+                completed["clear_env_keys"] = list(_derived.keys)
+        except Exception:
+            pass
     return completed
 
 
@@ -1036,7 +1069,11 @@ async def test_start_passes_rich_provider_profile_fields_to_launcher() -> None:
                 "CODEX_HOME": "{{runtime_support_dir}}/codex-home",
             },
             "secret_refs": {"provider_api_key": "env://OPENROUTER_API_KEY"},
-            "clear_env_keys": ["OPENAI_API_KEY", "OPENROUTER_API_KEY"],
+            "clear_env_keys": [
+                "OPENAI_API_KEY",
+                "OPENAI_BASE_URL",
+                "OPENROUTER_API_KEY",
+            ],
             "command_template": ["codex", "exec"],
         }
     ]
@@ -1760,7 +1797,12 @@ async def test_provider_profile_list_preserves_secret_ref_materialization_fields
                     credential_source=ProviderCredentialSource.SECRET_REF,
                     runtime_materialization_mode=RuntimeMaterializationMode.ENV_BUNDLE,
                     secret_refs={"provider_api_key": "env://MINIMAX_API_KEY"},
-                    clear_env_keys=["ANTHROPIC_API_KEY", "OPENAI_API_KEY"],
+                    clear_env_keys=[
+                        "ANTHROPIC_API_KEY",
+                        "ANTHROPIC_AUTH_TOKEN",
+                        "ANTHROPIC_BASE_URL",
+                        "MINIMAX_API_KEY",
+                    ],
                     env_template={
                         "ANTHROPIC_AUTH_TOKEN": {
                             "from_secret_ref": "provider_api_key"
@@ -1803,7 +1845,9 @@ async def test_provider_profile_list_preserves_secret_ref_materialization_fields
         }
         assert profiles[0]["clear_env_keys"] == [
             "ANTHROPIC_API_KEY",
-            "OPENAI_API_KEY",
+            "ANTHROPIC_AUTH_TOKEN",
+            "ANTHROPIC_BASE_URL",
+            "MINIMAX_API_KEY",
         ]
         assert profiles[0]["env_template"] == {
             "ANTHROPIC_AUTH_TOKEN": {
@@ -1827,7 +1871,11 @@ async def test_provider_profile_list_preserves_path_aware_codex_materialization_
                     credential_source=ProviderCredentialSource.SECRET_REF,
                     runtime_materialization_mode=RuntimeMaterializationMode.COMPOSITE,
                     secret_refs={"provider_api_key": "env://OPENROUTER_API_KEY"},
-                    clear_env_keys=["OPENAI_API_KEY", "OPENROUTER_API_KEY"],
+                    clear_env_keys=[
+                        "OPENAI_API_KEY",
+                        "OPENAI_BASE_URL",
+                        "OPENROUTER_API_KEY",
+                    ],
                     env_template={
                         "OPENROUTER_API_KEY": {
                             "from_secret_ref": "provider_api_key"

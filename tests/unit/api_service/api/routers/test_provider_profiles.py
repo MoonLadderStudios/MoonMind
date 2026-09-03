@@ -906,6 +906,7 @@ class _TrackedProfile:
         volume_mount_path: str | None = None,
         command_behavior: dict | None = None,
         provider_id: str = "unknown",
+        clear_env_keys: list[str] | None = None,
     ) -> None:
         self.profile_id = profile_id
         self.runtime_id = runtime_id
@@ -922,6 +923,43 @@ class _TrackedProfile:
         self.volume_mount_path = volume_mount_path
         self.command_behavior = command_behavior or {}
         self.priority = priority
+        if clear_env_keys is not None:
+            self.clear_env_keys = list(clear_env_keys)
+        else:
+            # #3821: default fixtures to the backend-derived isolation policy
+            # so the shared launch-ready predicate evaluates them the way
+            # production does. Unknown strategies keep no policy (blocked).
+            self.clear_env_keys = None
+            try:
+                from moonmind.provider_profiles.isolation_policy import (
+                    derive_isolation_policy as _derive_fixture_policy,
+                )
+                from api_service.services.provider_profile_creation import (
+                    infer_authentication_method as _infer_fixture_method,
+                    provider_profile_creation_capabilities as _fixture_capabilities,
+                )
+
+                _capabilities = _fixture_capabilities(
+                    runtime_id=runtime_id, provider_id=provider_id
+                )
+                _method = _infer_fixture_method(
+                    credential_source=credential_source,
+                    runtime_materialization_mode=runtime_materialization_mode,
+                    authentication_methods=_capabilities["authentication_methods"],
+                    auth_state=auth_state,
+                    last_auth_method=None,
+                )
+                _derived = _derive_fixture_policy(
+                    runtime_id=runtime_id,
+                    provider_id=provider_id,
+                    authentication_method=_method or "",
+                    credential_source=credential_source,
+                    runtime_materialization_mode=runtime_materialization_mode,
+                )
+                if _derived is not None:
+                    self.clear_env_keys = list(_derived.keys)
+            except Exception:
+                self.clear_env_keys = None
         self._is_default = is_default
         self._events = events
 
@@ -3050,6 +3088,14 @@ async def test_update_claude_anthropic_can_replace_minimax_runtime_default(
                     credential_source=ProviderCredentialSource.SECRET_REF,
                     runtime_materialization_mode=RuntimeMaterializationMode.API_KEY_ENV,
                     secret_refs={"ANTHROPIC_AUTH_TOKEN": "env://MINIMAX_API_KEY"},
+                    # #3821: backend-derived isolation policy for
+                    # claude_code/minimax/api_key.
+                    clear_env_keys=[
+                        "ANTHROPIC_API_KEY",
+                        "ANTHROPIC_AUTH_TOKEN",
+                        "ANTHROPIC_BASE_URL",
+                        "MINIMAX_API_KEY",
+                    ],
                     enabled=True,
                     auth_state=ProviderProfileAuthState.CONNECTED,
                     disabled_reason=None,
@@ -3066,6 +3112,15 @@ async def test_update_claude_anthropic_can_replace_minimax_runtime_default(
                     runtime_materialization_mode=RuntimeMaterializationMode.OAUTH_HOME,
                     volume_ref="claude_auth_volume",
                     volume_mount_path="/home/app/.claude",
+                    # #3821: backend-derived isolation policy for
+                    # claude_code/anthropic/oauth.
+                    clear_env_keys=[
+                        "ANTHROPIC_API_KEY",
+                        "ANTHROPIC_AUTH_TOKEN",
+                        "ANTHROPIC_BASE_URL",
+                        "CLAUDE_API_KEY",
+                        "OPENAI_API_KEY",
+                    ],
                     enabled=True,
                     auth_state=ProviderProfileAuthState.CONNECTED,
                     disabled_reason=None,
@@ -3812,6 +3867,14 @@ async def test_provider_api_key_setup_failed_validation_updates_state_without_se
                     credential_source=ProviderCredentialSource.SECRET_REF,
                     runtime_materialization_mode=RuntimeMaterializationMode.API_KEY_ENV,
                     secret_refs={"openai_api_key": "env://OPENAI_API_KEY"},
+                    # #3821: backend-derived isolation policy for
+                    # codex_cli/openai/api_key.
+                    clear_env_keys=[
+                        "OPENAI_BASE_URL",
+                        "OPENAI_ORG_ID",
+                        "OPENAI_PROJECT",
+                        "MINIMAX_API_KEY",
+                    ],
                     enabled=True,
                     is_default=False,
                     priority=10_000,
