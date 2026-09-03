@@ -1150,6 +1150,43 @@ async def _auto_seed_provider_profiles() -> list[str]:
     # First-party setup profiles are visible but disabled until OAuth setup
     # succeeds or an API key is added. API-key profiles are inserted only when
     # the corresponding env key is configured.
+    def _seed_clear_env_keys(
+        *,
+        runtime_id: str,
+        provider_id: str,
+        authentication_method: str,
+        credential_source: str,
+        runtime_materialization_mode: str,
+        fallback: list[str],
+    ) -> list[str]:
+        """Resolve seed clear_env_keys from the isolation authority.
+
+        Falls back to the curated static list only when the strategy table
+        has no entry; the fallback must still match the authority (covered
+        by test_provider_profile_auto_seed assertions).
+        """
+        try:
+            from moonmind.provider_profiles.isolation_policy import (
+                derive_isolation_policy as _derive_seed_policy,
+            )
+
+            _derived = _derive_seed_policy(
+                runtime_id=runtime_id,
+                provider_id=provider_id,
+                authentication_method=authentication_method,
+                credential_source=credential_source,
+                runtime_materialization_mode=runtime_materialization_mode,
+            )
+            if _derived is not None:
+                return list(_derived.keys)
+        except Exception:
+            logger.warning(
+                "provider_profile_seed_isolation_derive_failed runtime=%s provider=%s",
+                runtime_id,
+                provider_id,
+                exc_info=True,
+            )
+        return list(fallback)
     def _make_first_party_oauth_command_behavior() -> dict[str, Any]:
         return {
             "supported_auth_methods": ["oauth_volume", "secret_ref"],
@@ -1336,11 +1373,19 @@ async def _auto_seed_provider_profiles() -> list[str]:
                 "credential_source": ProviderCredentialSource.SECRET_REF,
                 "runtime_materialization_mode": RuntimeMaterializationMode.ENV_BUNDLE,
                 "secret_refs": {"provider_api_key": "env://MINIMAX_API_KEY"},
-                "clear_env_keys": [
-                    "ANTHROPIC_API_KEY",
-                    "ANTHROPIC_AUTH_TOKEN",
-                    "OPENAI_API_KEY",
-                ],
+                "clear_env_keys": _seed_clear_env_keys(
+                    runtime_id="claude_code",
+                    provider_id="minimax",
+                    authentication_method="api_key",
+                    credential_source="secret_ref",
+                    runtime_materialization_mode="env_bundle",
+                    fallback=[
+                        "ANTHROPIC_API_KEY",
+                        "ANTHROPIC_AUTH_TOKEN",
+                        "ANTHROPIC_BASE_URL",
+                        "MINIMAX_API_KEY",
+                    ],
+                ),
                 "env_template": {
                     "ANTHROPIC_BASE_URL": "https://api.minimax.io/anthropic",
                     "ANTHROPIC_AUTH_TOKEN": {
@@ -1379,12 +1424,18 @@ async def _auto_seed_provider_profiles() -> list[str]:
                 "secret_refs": {
                     "provider_api_key": "env://MINIMAX_API_KEY",
                 },
-                "clear_env_keys": [
-                    "OPENAI_API_KEY",
-                    "OPENAI_BASE_URL",
-                    "OPENAI_ORG_ID",
-                    "OPENAI_PROJECT",
-                ],
+                "clear_env_keys": _seed_clear_env_keys(
+                    runtime_id="codex_cli",
+                    provider_id="minimax",
+                    authentication_method="api_key",
+                    credential_source="secret_ref",
+                    runtime_materialization_mode="composite",
+                    fallback=[
+                        "MINIMAX_API_KEY",
+                        "OPENAI_API_KEY",
+                        "OPENAI_BASE_URL",
+                    ],
+                ),
                 "env_template": {
                     "MINIMAX_API_KEY": {
                         "from_secret_ref": "provider_api_key",

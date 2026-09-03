@@ -805,6 +805,16 @@ def _normalized_create_values(body: ProviderProfileCreate) -> dict[str, Any]:
         values["disabled_reason"] = (
             None if values["enabled"] else "missing_credentials"
         )
+    # #3821: expert-override markers are recorded only through the audited
+    # superuser update path. Strip any caller-supplied marker at creation so
+    # override state can never be forged without audit metadata.
+    _create_behavior = values.get("command_behavior")
+    if isinstance(_create_behavior, dict) and "_isolation_override" in _create_behavior:
+        values["command_behavior"] = {
+            key: value
+            for key, value in _create_behavior.items()
+            if key != "_isolation_override"
+        }
     return values
 
 
@@ -1539,7 +1549,10 @@ async def update_profile(
     # clear_env_keys plus command_behavior._isolation_override with a
     # non-empty audit_reason and warning_acknowledged=true. Keys are
     # validated (shape, known keys, strategy compatibility), normalized, and
-    # recorded with actor/timestamp metadata. No secret values are logged.
+    # recorded with actor/timestamp metadata. The free-form audit reason is
+    # redacted through the sensitive-payload redactor before logging; only
+    # key names and structured audit metadata reach the log stream.
+    _override_branch_rewrote_behavior = False
     if "clear_env_keys" in update_data and bool(getattr(current_user, "is_superuser", False)):
         from moonmind.provider_profiles.isolation_policy import (
             IsolationPolicyError,
@@ -1598,7 +1611,21 @@ async def update_profile(
         except IsolationPolicyError as exc:
             raise HTTPException(status_code=422, detail=exc.as_detail()) from exc
         _actor = str(getattr(current_user, "id", "superuser") or "superuser")
-        _audited_behavior = dict(_override_behavior)
+        # Merge only the reserved marker into the persisted behavior: a
+        # documented expert-override request supplies just
+        # command_behavior._isolation_override, and wholesale assignment
+        # would delete unrelated auth_strategy/auth_actions/billing/runtime
+        # command metadata.
+        _stored_behavior_for_override = (
+            dict(profile.command_behavior or {})
+            if isinstance(profile.command_behavior, dict)
+            else {}
+        )
+        _audited_behavior = dict(_stored_behavior_for_override)
+        if isinstance(_override_behavior, dict):
+            for _behavior_key, _behavior_value in _override_behavior.items():
+                if _behavior_key != "_isolation_override":
+                    _audited_behavior[_behavior_key] = _behavior_value
         _audited_behavior["_isolation_override"] = {
             "keys": list(_validated_override),
             "audit_reason": _audit_reason.strip(),
@@ -1607,16 +1634,69 @@ async def update_profile(
             "strategy_id": _derived.strategy_id if _derived else "unknown",
             "overridden_at": datetime.now(UTC).isoformat(),
         }
+        _redacted_audit_reason = str(
+            redact_sensitive_payload(_audit_reason.strip())
+        )[:200]
         update_data["clear_env_keys"] = list(_validated_override)
         update_data["command_behavior"] = _audited_behavior
+        _override_branch_rewrote_behavior = True
         logger.info(
             "provider_profile_isolation_override profile_id=%s strategy=%s keys=%s actor=%s reason=%s",
             profile_id,
             _derived.strategy_id if _derived else "unknown",
             ",".join(_validated_override),
             _actor,
-            _audit_reason.strip()[:200],
+            _redacted_audit_reason,
         )
+
+    # #3821: the reserved _isolation_override marker is backend-owned audit
+    # metadata. Any command_behavior update outside the audited superuser
+    # branch above must preserve an existing valid marker exactly and must
+    # not introduce a new one; otherwise an ordinary profile owner could
+    # erase the recorded actor/reason or forge override state without
+    # superuser authorization.
+    if "command_behavior" in update_data and not _override_branch_rewrote_behavior:
+        _requested_behavior = update_data.get("command_behavior")
+        if isinstance(_requested_behavior, dict):
+            _existing_behavior = (
+                profile.command_behavior
+                if isinstance(profile.command_behavior, dict)
+                else {}
+            )
+            _existing_marker = _existing_behavior.get("_isolation_override")
+            _existing_marker_valid = isinstance(
+                _existing_marker, dict
+            ) and isinstance(_existing_marker.get("keys"), list)
+            _requested_marker = _requested_behavior.get("_isolation_override")
+            if _existing_marker_valid and _requested_marker != _existing_marker:
+                raise HTTPException(
+                    status_code=422,
+                    detail={
+                        "code": "provider_profile_isolation_override_locked",
+                        "message": (
+                            "command_behavior._isolation_override is audited "
+                            "backend-owned metadata and cannot be altered or "
+                            "removed by a standard profile update. Use the "
+                            "superuser expert-override path with audit_reason "
+                            "and warning_acknowledged=true."
+                        ),
+                        "field": "command_behavior._isolation_override",
+                    },
+                )
+            if not _existing_marker_valid and "_isolation_override" in _requested_behavior:
+                raise HTTPException(
+                    status_code=422,
+                    detail={
+                        "code": "provider_profile_isolation_override_locked",
+                        "message": (
+                            "command_behavior._isolation_override can only be "
+                            "recorded through the superuser expert-override "
+                            "path with audit_reason and "
+                            "warning_acknowledged=true."
+                        ),
+                        "field": "command_behavior._isolation_override",
+                    },
+                )
 
     if import_existing_credential_volume:
         _require_privileged_credential_volume_import(current_user)
@@ -2119,17 +2199,21 @@ async def commit_claude_manual_auth(
     # #3821: credential enrollment reuses the isolation authority.
     from moonmind.provider_profiles.isolation_policy import derive_isolation_policy as _derive_manual_policy
     from moonmind.provider_profiles.isolation_policy import merge_enrollment_policy as _merge_manual_policy
+    from moonmind.provider_profiles.isolation_policy import IsolationPolicyError as _ManualMergeError
 
-    profile.clear_env_keys = _merge_manual_policy(
-        stored_keys=list(profile.clear_env_keys or []),
-        derived=_derive_manual_policy(
-            runtime_id=profile.runtime_id,
-            provider_id=profile.provider_id,
-            authentication_method="api_key",
-            credential_source="secret_ref",
-            runtime_materialization_mode="api_key_env",
-        ),
-    )
+    try:
+        profile.clear_env_keys = _merge_manual_policy(
+            stored_keys=list(profile.clear_env_keys or []),
+            derived=_derive_manual_policy(
+                runtime_id=profile.runtime_id,
+                provider_id=profile.provider_id,
+                authentication_method="api_key",
+                credential_source="secret_ref",
+                runtime_materialization_mode="api_key_env",
+            ),
+        )
+    except _ManualMergeError as exc:
+        raise HTTPException(status_code=422, detail=exc.as_detail()) from exc
     profile.env_template = {
         **(profile.env_template or {}),
         "ANTHROPIC_API_KEY": {"from_secret_ref": "anthropic_api_key"},
@@ -2520,6 +2604,9 @@ def _apply_api_key_setup_to_profile(
     from moonmind.provider_profiles.isolation_policy import (
         merge_enrollment_policy as _merge_enrollment_policy,
     )
+    from moonmind.provider_profiles.isolation_policy import (
+        IsolationPolicyError as _EnrollmentMergeError,
+    )
 
     _enrollment_derived = _derive_enrollment_policy(
         runtime_id=row.runtime_id,
@@ -2528,10 +2615,13 @@ def _apply_api_key_setup_to_profile(
         credential_source="secret_ref",
         runtime_materialization_mode=row.runtime_materialization_mode,
     )
-    row.clear_env_keys = _merge_enrollment_policy(
-        stored_keys=list(row.clear_env_keys or []),
-        derived=_enrollment_derived,
-    )
+    try:
+        row.clear_env_keys = _merge_enrollment_policy(
+            stored_keys=list(row.clear_env_keys or []),
+            derived=_enrollment_derived,
+        )
+    except _EnrollmentMergeError as exc:
+        raise HTTPException(status_code=422, detail=exc.as_detail()) from exc
     if file_materialized:
         # OpenCode auth is a file materialized via opencode-auth-json@1 trusted
         # materializer, which knows the exact target path and permissions. Do not

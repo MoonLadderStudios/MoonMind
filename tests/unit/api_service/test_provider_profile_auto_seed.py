@@ -698,7 +698,8 @@ async def test_auto_seed_includes_minimax_when_env_set(_module_db, monkeypatch):
     assert mm_profile.clear_env_keys == [
         "ANTHROPIC_API_KEY",
         "ANTHROPIC_AUTH_TOKEN",
-        "OPENAI_API_KEY",
+        "ANTHROPIC_BASE_URL",
+        "MINIMAX_API_KEY",
     ]
     assert mm_profile.default_model == "MiniMax-M2.7"
     assert mm_profile.volume_ref is None
@@ -724,10 +725,9 @@ async def test_auto_seed_includes_minimax_when_env_set(_module_db, monkeypatch):
         "MINIMAX_API_KEY": {"from_secret_ref": "provider_api_key"}
     }
     assert codex_mm_profile.clear_env_keys == [
+        "MINIMAX_API_KEY",
         "OPENAI_API_KEY",
         "OPENAI_BASE_URL",
-        "OPENAI_ORG_ID",
-        "OPENAI_PROJECT",
     ]
     assert codex_mm_profile.file_templates[0]["merge_strategy"] == "deep_merge"
     assert codex_mm_profile.file_templates[0]["permissions"] == "0600"

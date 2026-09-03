@@ -62,6 +62,17 @@ def provider_profile_launch_ready(
         managed_secret_statuses=managed_secret_statuses or {},
     ):
         return False
+    if not _isolation_policy_launch_ready(
+        runtime_id=row.runtime_id,
+        provider_id=row.provider_id,
+        credential_source=row.credential_source,
+        materialization_mode=row.runtime_materialization_mode,
+        auth_state=row.auth_state,
+        last_auth_method=getattr(row, "last_auth_method", None),
+        clear_env_keys=getattr(row, "clear_env_keys", None),
+        command_behavior=getattr(row, "command_behavior", None),
+    ):
+        return False
     return _provider_validation_launch_ready(getattr(row, "command_behavior", None))
 
 
@@ -148,6 +159,24 @@ def provider_profile_launch_ready_from_payload(
         if launch_ready is False:
             return False
 
+    # Launch-safety isolation is enforced on the strict path only. Replay of
+    # histories recorded with the earlier compact payload shape
+    # (require_registered_capability=False) preserves the recorded routing
+    # decision; all live callers use the strict predicate.
+    if require_registered_capability and not _isolation_policy_launch_ready(
+        runtime_id=profile.get("runtime_id", profile.get("runtimeId")),
+        provider_id=profile.get("provider_id", profile.get("providerId")),
+        credential_source=credential_source,
+        materialization_mode=materialization_mode,
+        auth_state=profile.get("auth_state", profile.get("authState")),
+        last_auth_method=profile.get(
+            "last_auth_method", profile.get("lastAuthMethod")
+        ),
+        clear_env_keys=profile.get("clear_env_keys", profile.get("clearEnvKeys")),
+        command_behavior=command_behavior,
+    ):
+        return False
+
     if isinstance(command_behavior, dict):
         return _provider_validation_launch_ready(command_behavior)
 
@@ -199,6 +228,77 @@ def _credential_contract_launch_ready(
         home_path_overrides=home_path_overrides,
         command_behavior=command_behavior,
     )
+
+
+def _isolation_policy_launch_ready(
+    *,
+    runtime_id: object,
+    provider_id: object,
+    credential_source: object,
+    materialization_mode: object,
+    auth_state: object,
+    last_auth_method: object,
+    clear_env_keys: object,
+    command_behavior: object,
+) -> bool:
+    """Return False when launch-safety isolation blocks routing/selection.
+
+    Mirrors the router display readiness contract: ``current``,
+    ``legacy_custom`` (preserved intentional superset, warning), consistent
+    audited expert overrides, and credential-free empty policies are
+    routable; missing/stale/unsafe policies are not, so a stale profile can
+    no longer be selected and leased only to fail in the materializer.
+    Fail-closed on unexpected evaluation errors.
+    """
+    try:
+        from moonmind.provider_profiles.isolation_policy import (
+            classify_existing_policy,
+            derive_isolation_policy,
+        )
+
+        capabilities = provider_profile_creation_capabilities(
+            runtime_id=str(runtime_id or ""),
+            provider_id=str(provider_id or ""),
+        )
+        authentication_method = infer_authentication_method(
+            credential_source=credential_source,
+            runtime_materialization_mode=materialization_mode,
+            authentication_methods=capabilities["authentication_methods"],
+            auth_state=auth_state,
+            last_auth_method=last_auth_method,
+        )
+        derived = derive_isolation_policy(
+            runtime_id=runtime_id,
+            provider_id=provider_id,
+            authentication_method=authentication_method or "",
+            credential_source=credential_source,
+            runtime_materialization_mode=materialization_mode,
+        )
+        stored = (
+            list(clear_env_keys)
+            if isinstance(clear_env_keys, (list, tuple))
+            else []
+        )
+        if stored and isinstance(command_behavior, dict):
+            marker = command_behavior.get("_isolation_override")
+            if (
+                isinstance(marker, dict)
+                and isinstance(marker.get("keys"), list)
+                and sorted(str(k) for k in marker["keys"]) == sorted(str(k) for k in stored)
+            ):
+                return True
+        classification = classify_existing_policy(
+            stored_keys=stored,
+            derived=derived,
+            credential_free=derived is not None and len(derived.keys) == 0,
+        )
+        return classification in {
+            "current",
+            "legacy_custom",
+            "empty_safe_only_credential_free",
+        }
+    except Exception:
+        return False
 
 
 def _credential_bindings_launch_ready(

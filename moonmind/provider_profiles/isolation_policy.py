@@ -321,7 +321,13 @@ def classify_existing_policy(
     Returns one of: current | legacy_custom | unsafe_unknown_incomplete |
     empty_safe_only_credential_free | missing_or_stale.
     """
-    stored = normalize_isolation_keys(stored_keys or [])
+    try:
+        stored = normalize_isolation_keys(stored_keys or [])
+    except IsolationPolicyError:
+        # Malformed persisted values (e.g. blank entries from legacy rows)
+        # must surface as a repair diagnostic, never raise through
+        # readiness serialization.
+        return "unsafe_unknown_incomplete"
     if not stored:
         if derived is not None and len(derived.keys) == 0:
             return "current"
@@ -363,6 +369,11 @@ def merge_enrollment_policy(
     Derived keys always win; regex-valid unknown stored keys are preserved
     (never silently discarded); invalid/forbidden keys are dropped because
     the launch boundary would reject them anyway.
+
+    Raises IsolationPolicyError when the merged policy would exceed
+    MAX_ISOLATION_KEYS instead of silently truncating preserved keys, which
+    would weaken the policy by dropping ambient credentials from the end.
+    Callers must surface this as an actionable repair error.
     """
     stored = normalize_isolation_keys(stored_keys or [])
     base = list(derived.keys) if derived is not None else []
@@ -375,8 +386,16 @@ def merge_enrollment_policy(
         if key in FORBIDDEN_ISOLATION_KEYS:
             continue
         merged.append(key)
-    # Bound the merged list; derived keys take precedence.
-    return merged[:MAX_ISOLATION_KEYS]
+    # Bound the merged list; derived keys take precedence. Never truncate:
+    # an over-limit merge must be rejected or repaired with explicit audit.
+    if len(merged) > MAX_ISOLATION_KEYS:
+        raise IsolationPolicyError(
+            f"Isolation policy merge would exceed {MAX_ISOLATION_KEYS} keys; "
+            "refusing to silently drop preserved keys. Repair the profile "
+            "through the audited expert-override path.",
+            code="provider_profile_isolation_key_unbounded",
+        )
+    return merged
 
 
 def resolve_launch_clear_env_keys(
@@ -390,11 +409,21 @@ def resolve_launch_clear_env_keys(
     """
     runtime_id = profile.get("runtime_id")
     provider_id = profile.get("provider_id")
-    method = (
-        profile.get("authentication_method")
-        or profile.get("authenticationMethod")
-        or _infer_method_from_contract(profile)
+    # The explicit method is authoritative only when it is a recognized
+    # strategy method consistent with the canonical credential contract.
+    # Retained legacy values (e.g. ManagedRuntimeProfile.auth_mode="volume")
+    # are never authoritative: accepting them would miss the strategy table
+    # and let an incomplete stored list launch as legacy_custom.
+    explicit_method = _normalized(
+        profile.get("authentication_method") or profile.get("authenticationMethod")
     )
+    if explicit_method and explicit_method not in {"oauth", "api_key", "none"}:
+        explicit_method = ""
+    inferred_method = _infer_method_from_contract(profile)
+    if explicit_method and inferred_method and explicit_method != inferred_method:
+        method: str | None = inferred_method
+    else:
+        method = explicit_method or inferred_method
     credential_source = profile.get("credential_source", profile.get("credentialSource"))
     materialization = profile.get(
         "runtime_materialization_mode", profile.get("runtimeMaterializationMode")
@@ -517,7 +546,10 @@ def reconciliation_action(
     custom behavior; keep and surface a warning) | repair_required (unsafe,
     unknown-malformed, or incomplete; block until repaired).
     """
-    stored = normalize_isolation_keys(stored_keys or [])
+    try:
+        stored = normalize_isolation_keys(stored_keys or [])
+    except IsolationPolicyError:
+        return {"action": "repair_required", "classification": "unsafe_unknown_incomplete"}
     classification = classify_existing_policy(
         stored_keys=stored, derived=derived, credential_free=credential_free
     )

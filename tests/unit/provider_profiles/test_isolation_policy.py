@@ -5,10 +5,12 @@ from __future__ import annotations
 import pytest
 
 from moonmind.provider_profiles.isolation_policy import (
+    MAX_ISOLATION_KEYS,
     IsolationPolicyError,
     classify_existing_policy,
     derive_isolation_policy,
     merge_enrollment_policy,
+    reconciliation_action,
     resolve_launch_clear_env_keys,
     validate_expert_override_keys,
     validate_isolation_key_shape,
@@ -239,3 +241,97 @@ def test_no_secret_values_in_policy_errors() -> None:
         }
     else:  # pragma: no cover
         raise AssertionError("expected IsolationPolicyError")
+
+
+def test_blank_stored_keys_classify_unsafe_without_raising() -> None:
+    """Legacy rows with blank entries surface a repair diagnostic, not a 500."""
+    derived = derive_isolation_policy(
+        runtime_id="codex_cli",
+        provider_id="openai",
+        authentication_method="api_key",
+    )
+    assert derived is not None
+    assert (
+        classify_existing_policy(stored_keys=["OPENAI_BASE_URL", "  "], derived=derived)
+        == "unsafe_unknown_incomplete"
+    )
+    action = reconciliation_action(stored_keys=[""], derived=derived)
+    assert action["action"] == "repair_required"
+    assert action["classification"] == "unsafe_unknown_incomplete"
+
+
+def test_merge_enrollment_policy_rejects_over_limit() -> None:
+    """Over-limit merges raise instead of silently truncating preserved keys."""
+    derived = derive_isolation_policy(
+        runtime_id="codex_cli",
+        provider_id="openai",
+        authentication_method="api_key",
+    )
+    assert derived is not None
+    stored = list(derived.keys) + [
+        f"CUSTOM_KEY_{i:02d}" for i in range(MAX_ISOLATION_KEYS)
+    ]
+    with pytest.raises(IsolationPolicyError) as exc_info:
+        merge_enrollment_policy(stored_keys=stored, derived=derived)
+    assert (
+        exc_info.value.as_detail()["code"]
+        == "provider_profile_isolation_key_unbounded"
+    )
+
+
+def test_resolve_launch_ignores_legacy_auth_mode() -> None:
+    """A retained legacy auth_mode never overrides canonical contract inference."""
+    effective, meta = resolve_launch_clear_env_keys(
+        {
+            "runtime_id": "codex_cli",
+            "provider_id": "openai",
+            "authentication_method": "volume",
+            "credential_source": "secret_ref",
+            "runtime_materialization_mode": "api_key_env",
+            "clear_env_keys": [
+                "OPENAI_BASE_URL",
+                "OPENAI_ORG_ID",
+                "OPENAI_PROJECT",
+                "MINIMAX_API_KEY",
+            ],
+        }
+    )
+    assert meta["strategy_id"] == "codex_cli/openai/api_key"
+    assert effective == [
+        "OPENAI_BASE_URL",
+        "OPENAI_ORG_ID",
+        "OPENAI_PROJECT",
+        "MINIMAX_API_KEY",
+    ]
+
+
+def test_resolve_launch_conflicting_method_prefers_contract() -> None:
+    """An explicit method contradicting the credential contract loses."""
+    effective, meta = resolve_launch_clear_env_keys(
+        {
+            "runtime_id": "codex_cli",
+            "provider_id": "openai",
+            "authentication_method": "oauth",
+            "credential_source": "secret_ref",
+            "runtime_materialization_mode": "api_key_env",
+            "clear_env_keys": [
+                "OPENAI_API_KEY",
+                "OPENAI_BASE_URL",
+                "OPENAI_ORG_ID",
+                "OPENAI_PROJECT",
+                "MINIMAX_API_KEY",
+            ],
+        }
+    )
+    # The api_key contract wins over the explicit "oauth": the stored OAuth
+    # key set is a superset of the derived api_key policy, hence preserved
+    # legacy custom under the api_key strategy — not "current" under oauth.
+    assert meta["strategy_id"] == "codex_cli/openai/api_key"
+    assert meta["source"] == "legacy_custom_preserved"
+    assert effective == [
+        "MINIMAX_API_KEY",
+        "OPENAI_API_KEY",
+        "OPENAI_BASE_URL",
+        "OPENAI_ORG_ID",
+        "OPENAI_PROJECT",
+    ]
