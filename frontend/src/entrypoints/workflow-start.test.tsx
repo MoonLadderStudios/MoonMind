@@ -260,6 +260,43 @@ describe("buildEditParametersPatch", () => {
       collections: ["docs"],
     });
   });
+
+  it("strips retired follow-up fields from a historical canonical workflow", () => {
+    const patch = buildEditParametersPatch({
+      execution: {
+        workflowId: "mm:edit-retired-follow-up-fields",
+        inputParameters: {
+          workflow: {
+            instructions: "Keep going.",
+            runtime: { mode: "codex_cli" },
+            proposeTasks: true,
+            propose_tasks: true,
+            proposalPolicy: { enabled: true },
+            proposal_policy: { enabled: true },
+          },
+        },
+      },
+      submittedPayload: {
+        workflow: {
+          instructions: "Keep going.",
+          runtime: { mode: "codex_cli" },
+        },
+      },
+      submittedWorkflow: {
+        instructions: "Keep going.",
+        runtime: { mode: "codex_cli" },
+      },
+    });
+
+    expect(patch.workflow).toMatchObject({
+      instructions: "Keep going.",
+      runtime: { mode: "codex_cli" },
+    });
+    expect(patch.workflow).not.toHaveProperty("proposeTasks");
+    expect(patch.workflow).not.toHaveProperty("propose_tasks");
+    expect(patch.workflow).not.toHaveProperty("proposalPolicy");
+    expect(patch.workflow).not.toHaveProperty("proposal_policy");
+  });
 });
 
 describe("WorkflowStartPage loading placeholders", () => {

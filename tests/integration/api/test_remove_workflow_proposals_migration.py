@@ -165,5 +165,30 @@ def test_fresh_postgres_upgrade_ends_without_proposal_tables_or_enums(
                 )
             ).scalars()
             assert list(retained_types) == []
+            workflow_state_values = connection.execute(
+                sa.text(
+                    """
+                    select enumlabel
+                    from pg_enum
+                    join pg_type on pg_enum.enumtypid = pg_type.oid
+                    where pg_type.typname = 'moonmindworkflowstate'
+                    order by enumsortorder
+                    """
+                )
+            ).scalars()
+            assert list(workflow_state_values) == [
+                "scheduled",
+                "initializing",
+                "waiting_on_dependencies",
+                "planning",
+                "awaiting_slot",
+                "executing",
+                "awaiting_external",
+                "finalizing",
+                "no_commit",
+                "completed",
+                "failed",
+                "canceled",
+            ]
     finally:
         engine.dispose()

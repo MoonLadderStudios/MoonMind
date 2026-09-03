@@ -22,9 +22,11 @@ from moonmind.workflows.executions.job_types import (
 )
 from moonmind.workflows.executions.model_resolver import resolve_effective_model
 
+
 def test_canonical_job_type_value_is_unchanged_for_legacy_run_histories() -> None:
     assert CANONICAL_WORKFLOW_JOB_TYPE == "task"
     assert LEGACY_WORKFLOW_JOB_TYPES == frozenset({"codex_exec", "codex_skill"})
+
 
 @pytest.mark.parametrize("field", ["proposeTasks", "proposalPolicy"])
 def test_payload_rejects_removed_follow_up_fields(field: str) -> None:
@@ -40,6 +42,7 @@ def test_payload_rejects_removed_follow_up_fields(field: str) -> None:
 
     with pytest.raises(ValidationError, match=rf"workflow\.{field} has been removed"):
         CanonicalWorkflowExecutionPayload.model_validate(workflow_shaped)
+
 
 def test_canonical_view_emits_workflow_wire_keys() -> None:
     canonical = build_canonical_workflow_view(
@@ -58,15 +61,15 @@ def test_canonical_view_emits_workflow_wire_keys() -> None:
     assert "task" not in canonical
     assert canonical["workflow"]["publish"]["mode"]
 
+
 def test_stage_plan_values_are_replay_stable() -> None:
-    stages = build_workflow_stage_plan(
-        {"workflow": {"publish": {"mode": "pr"}}}
-    )
+    stages = build_workflow_stage_plan({"workflow": {"publish": {"mode": "pr"}}})
     assert stages == [
         "moonmind.task.prepare",
         "moonmind.task.execute",
         "moonmind.task.publish",
     ]
+
 
 def test_model_source_value_task_override_is_unchanged() -> None:
     resolved, source = resolve_effective_model(
@@ -76,6 +79,7 @@ def test_model_source_value_task_override_is_unchanged() -> None:
     )
     assert resolved == "gpt-5.5"
     assert source == "task_override"
+
 
 def test_workflow_scoped_session_patch_ids_keep_legacy_values() -> None:
     """Replay-stable workflow.patched ids must not change for MoonMind.UserWorkflow."""
@@ -116,6 +120,11 @@ def test_workflow_scoped_session_patch_ids_keep_legacy_values() -> None:
         run_module.RUN_WORKFLOW_SCOPED_SESSION_TERMINATION_ACTIVITY_SIGNAL_PATCH
         == "run-task-scoped-session-termination-v4"
     )
+    assert (
+        run_module.RUN_WORKFLOW_NESTED_PROPOSE_TASKS_PATCH
+        == "run-workflow-nested-propose-tasks"
+    )
+
 
 def test_checkpoint_payload_keeps_task_input_snapshot_wire_key() -> None:
     from moonmind.schemas.temporal_models import StepExecutionCheckpointModel

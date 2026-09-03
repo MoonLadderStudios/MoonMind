@@ -1708,12 +1708,6 @@ export function buildEditParametersPatch({
   );
   const editWorkflow = { ...submittedWorkflow };
 
-  // Historical executions remain readable, but removed follow-up fields must
-  // never be reconstructed into a new edit or rerun submission.
-  for (const field of ["proposeTasks", "propose_tasks", "proposalPolicy", "proposal_policy"]) {
-    delete editWorkflow[field];
-  }
-
   const mergedWorkflow: Record<string, unknown> = {
     ...baseWorkflow,
     ...editWorkflow,
@@ -1727,6 +1721,13 @@ export function buildEditParametersPatch({
       recordValue(editWorkflow.publish),
     ),
   };
+  // Historical executions remain readable, but removed follow-up fields must
+  // never be reconstructed into a new edit or rerun submission. Strip after
+  // merging so a canonical inputParameters.workflow snapshot cannot restore
+  // values that the submitted draft correctly omitted.
+  for (const field of ["proposeTasks", "propose_tasks", "proposalPolicy", "proposal_policy"]) {
+    delete mergedWorkflow[field];
+  }
   const mergedGit = recordValue(mergedWorkflow.git);
   delete mergedGit.startingBranch;
   delete mergedGit.targetBranch;
