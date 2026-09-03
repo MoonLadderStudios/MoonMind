@@ -319,8 +319,103 @@ export function destinationForPath(pathname: string): DashboardDestination | nul
   )) ?? null;
 }
 
+const LEGACY_SETTINGS_REDIRECTS: Record<string, string> = {
+  '/secrets': '/settings/providers-secrets',
+  '/workers': '/settings/operations',
+};
+
+// Only preserve page-relevant filters per target.
+const SETTINGS_QUERY_ALLOWLIST_BY_TARGET: Record<string, Set<string>> = {
+  '/settings/providers-secrets': new Set(['runtime']),
+  '/settings/operations': new Set(['status']),
+  '/settings/user-workspace': new Set(['scope', 'q']),
+};
+
+export function filterSettingsQueryForTarget(search: string, target: string): string {
+  const params = new URLSearchParams(search);
+  params.delete('section');
+  const allowed = SETTINGS_QUERY_ALLOWLIST_BY_TARGET[target];
+  if (allowed) {
+    for (const key of Array.from(params.keys())) {
+      if (!allowed.has(key)) params.delete(key);
+    }
+  } else {
+    // Fallback: drop all except section already removed -> empty.
+    for (const key of Array.from(params.keys())) params.delete(key);
+  }
+  const query = params.toString();
+  return query ? `${target}?${query}` : target;
+}
+
+export function legacySettingsRedirect(pathname: string, search: string): string | null {
+  const normalized = withoutTrailingSlash(pathname);
+  const canonical = LEGACY_SETTINGS_REDIRECTS[normalized];
+  if (!canonical) return null;
+  if (!search) return canonical;
+  return filterSettingsQueryForTarget(search, canonical);
+}
+
+const LEGACY_SETTINGS_CAPABILITY_BY_PATH: Record<string, string> = {
+  '/settings/providers-secrets': 'settingsProvidersSecrets',
+  '/settings/user-workspace': 'settingsUserWorkspace',
+  '/settings/operations': 'settingsOperations',
+};
+
+const LEGACY_SETTINGS_FALLBACK_ORDER: readonly string[] = [
+  '/settings/providers-secrets',
+  '/settings/user-workspace',
+  '/settings/operations',
+];
+
+export type LegacySettingsTarget =
+  | { status: 'none' }
+  | { status: 'pending' }
+  | { status: 'redirect'; target: string };
+
+export function resolveAuthorizedLegacySettingsTarget(
+  pathname: string,
+  search: string,
+  uiInfo: DashboardUiInfo | null,
+  isUiInfoPending: boolean,
+): LegacySettingsTarget {
+  const rawTarget = legacySettingsRedirect(pathname, search);
+  if (!rawTarget) return { status: 'none' };
+  // Permission-aware fallback: never land on an unauthorized destination.
+  // Mimics the backend _settings_redirect_path ordering.
+  if (uiInfo && !isUiInfoPending) {
+    const canonicalPath = rawTarget.split('?')[0] ?? rawTarget;
+    const preferredCapability = LEGACY_SETTINGS_CAPABILITY_BY_PATH[canonicalPath];
+    const isShown = (key: string) => uiInfo.features?.[key] === true;
+    if (preferredCapability && !isShown(preferredCapability)) {
+      const preferredIndex = LEGACY_SETTINGS_FALLBACK_ORDER.indexOf(canonicalPath);
+      const orderedFallback = preferredIndex >= 0
+        ? [canonicalPath, ...LEGACY_SETTINGS_FALLBACK_ORDER.filter((p) => p !== canonicalPath)]
+        : [...LEGACY_SETTINGS_FALLBACK_ORDER];
+      for (const path of orderedFallback) {
+        const cap = LEGACY_SETTINGS_CAPABILITY_BY_PATH[path];
+        if (cap && isShown(cap)) {
+          // Re-filter the original query for the resolved target: the raw
+          // target already discarded parameters that are valid for the
+          // fallback destination.
+          return { status: 'redirect', target: filterSettingsQueryForTarget(search, path) };
+        }
+      }
+      return { status: 'redirect', target: '/settings' };
+    }
+    return { status: 'redirect', target: rawTarget };
+  }
+  if (isUiInfoPending) {
+    // Wait for capability data before deciding the fallback; the caller
+    // renders a loading shell to avoid a flash of unauthorized redirect.
+    return { status: 'pending' };
+  }
+  return { status: 'redirect', target: rawTarget };
+}
+
 export function isDashboardInternalUrl(url: URL): boolean {
-  return url.origin === window.location.origin && resolveDashboardRoute(url.pathname) !== null;
+  if (url.origin !== window.location.origin) return false;
+  if (resolveDashboardRoute(url.pathname) !== null) return true;
+  return legacySettingsRedirect(url.pathname, url.search) !== null;
 }
 
 function baseInitialData(payload: BootPayload): Record<string, unknown> {

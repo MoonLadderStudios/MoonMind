@@ -37,6 +37,7 @@ import { DashboardSystemMenu } from '../components/DashboardSystemMenu';
 import {
   isDashboardInternalUrl,
   payloadForDashboardRoute,
+  resolveAuthorizedLegacySettingsTarget,
   resolveDashboardRoute,
   DASHBOARD_REACT_ROUTE_PATHS,
   DASHBOARD_DESTINATIONS,
@@ -1067,6 +1068,24 @@ function RoutedDashboardPage({
     () => readDashboardPreferences().lastSelectedSkillId.trim() || null,
   );
   const [resolutionStatus, setResolutionStatus] = useState<string | null>(null);
+  // Legacy path redirects per SettingsPage.md 5.4: /secrets -> providers-secrets, /workers -> operations, preserving safe filters with replacement history.
+  // Computed unconditionally here; the redirect is returned only after every
+  // hook below has been called so the hook count stays stable across renders.
+  const legacyResolution = resolveAuthorizedLegacySettingsTarget(
+    location.pathname,
+    location.search,
+    uiInfo,
+    isUiInfoPending,
+  );
+  const legacyPending = legacyResolution.status === 'pending';
+  const legacyTarget = legacyResolution.status === 'redirect' ? legacyResolution.target : null;
+  // Unknown Settings alias fallback per 5.4: any /settings/* not matched resolves to the default entry point with replacement.
+  // No query preservation for unknown alias: /settings entry resolves via permission-aware fallback without carrying stale filters.
+  // Computed here and returned after every hook below so the hook count stays stable across renders.
+  const unknownSettingsAliasTarget =
+    location.pathname.startsWith('/settings/') && !resolveDashboardRoute(location.pathname)
+      ? `/settings${location.hash || ''}`
+      : null;
   const route = resolveDashboardRoute(location.pathname);
   const apiBase = typeof uiInfo?.apiBase === 'string' ? uiInfo.apiBase : '/api';
   const resolvedDisplay = resolveWorkflowListDisplay({
@@ -1429,6 +1448,36 @@ function RoutedDashboardPage({
     }
   };
 
+  // Redirects computed above are returned here, after every hook, so SPA
+  // navigation to a redirecting path cannot change the hook count between
+  // renders of this component.
+  if (legacyPending) {
+    // Wait for capability data before deciding the fallback; show loading to avoid flash of unauthorized redirect.
+    return (
+      <AppShell
+        dataWidePanel={true}
+        uiInfo={uiInfo}
+        listDisplayAccessibleName={undefined}
+        listDisplayMode={null}
+        listDisplayStatus={null}
+        onListDisplayModeSelect={() => undefined}
+      >
+        <div className="mx-auto max-w-5xl px-4 py-6 sm:px-6 lg:px-8">
+          <div className="rounded-3xl border border-mm-border/80 bg-transparent p-6 text-sm text-slate-500 shadow-sm dark:text-slate-400">
+            Loading MoonMind...
+          </div>
+        </div>
+      </AppShell>
+    );
+  }
+  if (legacyTarget) {
+    const targetHash = location.hash || '';
+    return <Navigate to={`${legacyTarget}${targetHash}`} replace />;
+  }
+  if (unknownSettingsAliasTarget) {
+    return <Navigate to={unknownSettingsAliasTarget} replace />;
+  }
+
   if (!route) {
     return (
       <AppShell
@@ -1572,6 +1621,8 @@ function DashboardRouter({ payload }: { payload: BootPayload }) {
       {DASHBOARD_REACT_ROUTE_PATHS.map((path) => (
         <Route key={path} path={path} element={routedDashboardPage} />
       ))}
+      <Route path="/secrets" element={routedDashboardPage} />
+      <Route path="/workers" element={routedDashboardPage} />
       <Route path="/oauth-terminal" element={routedDashboardPage} />
       <Route path="/index-health" element={routedDashboardPage} />
       <Route
