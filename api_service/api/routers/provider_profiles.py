@@ -970,6 +970,24 @@ async def get_creation_preset(
 
 
 @router.get(
+    "/capabilities",
+    response_model=dict,
+)
+async def get_tier_capabilities_for_draft(
+    runtime_id: str,
+    provider_id: str,
+    current_user: User = Depends(get_current_user()),
+) -> dict[str, Any]:
+    """Tier editor capabilities for a not-yet-persisted profile — MoonLadderStudios/MoonMind#3815."""
+    _require_provider_profile_permission(current_user, "provider_profiles.read")
+    from api_service.services.provider_profile_tier_capabilities import (
+        tier_capabilities_for_draft,
+    )
+
+    return tier_capabilities_for_draft(runtime_id=runtime_id, provider_id=provider_id)
+
+
+@router.get(
     "/creation-capabilities",
     response_model=ProviderProfileCreationCapabilitiesResponse,
 )
@@ -983,6 +1001,32 @@ async def get_creation_capabilities(
         runtime_id=runtime_id,
         provider_id=provider_id,
     )
+
+
+@router.get(
+    "/{profile_id}/capabilities",
+    response_model=dict,
+)
+async def get_tier_capabilities_for_profile(
+    profile_id: str,
+    session: AsyncSession = Depends(_get_session()),  # type: ignore[assignment]
+    current_user: User = Depends(get_current_user()),
+) -> dict[str, Any]:
+    """Tier editor capabilities scoped to profile evidence — MoonLadderStudios/MoonMind#3815."""
+    _require_provider_profile_permission(current_user, "provider_profiles.read")
+    from api_service.services.provider_profile_tier_capabilities import (
+        tier_capabilities_for_profile,
+    )
+
+    row = await session.get(ManagedAgentProviderProfile, profile_id)
+    if not row:
+        raise HTTPException(status_code=404, detail="Profile not found")
+    if not _can_view_profile(row, current_user):
+        raise HTTPException(
+            status_code=403,
+            detail="Not authorized to view this provider profile.",
+        )
+    return tier_capabilities_for_profile(row)
 
 
 @router.post(

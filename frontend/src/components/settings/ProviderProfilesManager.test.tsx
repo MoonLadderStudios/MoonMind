@@ -1,5 +1,5 @@
 import { QueryClient, QueryClientProvider, useQuery } from '@tanstack/react-query';
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, describe, it, expect, vi } from 'vitest';
 import type { ProviderProfile } from './ProviderProfilesManager';
 import {
@@ -190,6 +190,19 @@ describe('backend creation presets', () => {
     const fetchSpy = vi.spyOn(window, 'fetch').mockImplementation(
       async (input, init) => {
         const url = String(input);
+        if (url.startsWith('/api/v1/provider-profiles/capabilities?') || /\/api\/v1\/provider-profiles\/[^/]+\/capabilities/.test(url)) {
+          return { ok: true, json: async () => ({
+            version: 'tier-cap-v1-test',
+            profile_id: null,
+            runtime_id: 'codex_cli',
+            provider_id: 'openai',
+            evidence: { source: 'runtime_draft', credential_generation: null, image_ref: null, observed_at: null, stale: false },
+            tier_constraints: { min_count: 1, max_count: null },
+            model: { runtime_default: 'gpt-5.5', allow_custom: true, options: [{ value: 'gpt-5.5', label: 'GPT-5.5', description: 'General coding model', status: 'available', recommended: true }, { value: 'gpt-4o', label: 'GPT-4o', description: null, status: 'available', recommended: false }] },
+            effort: { supported: true, runtime_default: 'medium', allow_custom: false, application: 'native', options: [{ value: 'low', label: 'Low', description: null, status: 'available', compatible_models: null }, { value: 'medium', label: 'Medium', description: null, status: 'available', compatible_models: null }, { value: 'high', label: 'High', description: null, status: 'available', compatible_models: null }, { value: 'xhigh', label: 'Extra high', description: null, status: 'available', compatible_models: null }] },
+            diagnostics: [],
+          }) } as Response;
+        }
         if (url.startsWith('/api/v1/provider-profiles/creation-capabilities?')) {
           return {
             ok: true,
@@ -330,6 +343,19 @@ describe('backend creation presets', () => {
     const fetchSpy = vi.spyOn(window, 'fetch').mockImplementation(
       async (input, init) => {
         const url = String(input);
+        if (url.startsWith('/api/v1/provider-profiles/capabilities?') || /\/api\/v1\/provider-profiles\/[^/]+\/capabilities/.test(url)) {
+          return { ok: true, json: async () => ({
+            version: 'tier-cap-v1-test',
+            profile_id: null,
+            runtime_id: 'codex_cli',
+            provider_id: 'openai',
+            evidence: { source: 'runtime_draft', credential_generation: null, image_ref: null, observed_at: null, stale: false },
+            tier_constraints: { min_count: 1, max_count: null },
+            model: { runtime_default: 'gpt-5.5', allow_custom: true, options: [{ value: 'gpt-5.5', label: 'GPT-5.5', description: 'General coding model', status: 'available', recommended: true }, { value: 'gpt-4o', label: 'GPT-4o', description: null, status: 'available', recommended: false }] },
+            effort: { supported: true, runtime_default: 'medium', allow_custom: false, application: 'native', options: [{ value: 'low', label: 'Low', description: null, status: 'available', compatible_models: null }, { value: 'medium', label: 'Medium', description: null, status: 'available', compatible_models: null }, { value: 'high', label: 'High', description: null, status: 'available', compatible_models: null }, { value: 'xhigh', label: 'Extra high', description: null, status: 'available', compatible_models: null }] },
+            diagnostics: [],
+          }) } as Response;
+        }
         if (url.startsWith('/api/v1/provider-profiles/creation-capabilities?')) {
           return {
             ok: true,
@@ -474,6 +500,19 @@ describe('backend creation presets', () => {
     const fetchSpy = vi.spyOn(window, 'fetch').mockImplementation(
       async (input, init) => {
         const url = String(input);
+        if (url.startsWith('/api/v1/provider-profiles/capabilities?') || /\/api\/v1\/provider-profiles\/[^/]+\/capabilities/.test(url)) {
+          return { ok: true, json: async () => ({
+            version: 'tier-cap-v1-test',
+            profile_id: null,
+            runtime_id: 'codex_cli',
+            provider_id: 'openai',
+            evidence: { source: 'runtime_draft', credential_generation: null, image_ref: null, observed_at: null, stale: false },
+            tier_constraints: { min_count: 1, max_count: null },
+            model: { runtime_default: 'gpt-5.5', allow_custom: true, options: [{ value: 'gpt-5.5', label: 'GPT-5.5', description: 'General coding model', status: 'available', recommended: true }, { value: 'gpt-4o', label: 'GPT-4o', description: null, status: 'available', recommended: false }] },
+            effort: { supported: true, runtime_default: 'medium', allow_custom: false, application: 'native', options: [{ value: 'low', label: 'Low', description: null, status: 'available', compatible_models: null }, { value: 'medium', label: 'Medium', description: null, status: 'available', compatible_models: null }, { value: 'high', label: 'High', description: null, status: 'available', compatible_models: null }, { value: 'xhigh', label: 'Extra high', description: null, status: 'available', compatible_models: null }] },
+            diagnostics: [],
+          }) } as Response;
+        }
         if (url.startsWith('/api/v1/provider-profiles/creation-capabilities?')) {
           return {
             ok: true,
@@ -1000,7 +1039,7 @@ describe('ProviderProfilesManager form controls', () => {
       );
     });
 
-    const fetchCall = fetchSpy.mock.calls[0];
+    const fetchCall = fetchSpy.mock.calls.find((call) => { const init = call[1] as RequestInit | undefined; return String(call[0]).includes('/api/v1/provider-profiles/codex-secondary') && init?.method === 'PATCH'; });
     if (!fetchCall) {
       throw new Error('Expected provider profile update request');
     }
@@ -1016,14 +1055,13 @@ describe('ProviderProfilesManager form controls', () => {
   });
 
   it('sends tier effort changes when updating an edited profile (MoonLadderStudios/MoonMind#3348)', async () => {
-    const fetchSpy = vi.spyOn(window, 'fetch').mockResolvedValue({
-      ok: true,
-      json: async () => ({
-        ...profile,
-        model_tiers: [{ label: null, model: null, effort: 'high', parameters: {}, annotations: {} }],
-        default_model_tier: 1,
-      }),
-    } as Response);
+    const fetchSpy = vi.spyOn(window, 'fetch').mockImplementation(async (input) => {
+      const url = String(input);
+      if (url.includes('/capabilities')) {
+        return { ok: true, json: async () => ({ version: 'tier-cap-v1-test', profile_id: profile.profile_id, runtime_id: profile.runtime_id, provider_id: profile.provider_id, evidence: { source: 'profile_catalog_evidence', credential_generation: 1, image_ref: null, observed_at: null, stale: false }, tier_constraints: { min_count: 1, max_count: null }, model: { runtime_default: 'gpt-5.5', allow_custom: true, options: [{ value: 'gpt-5.5', label: 'GPT-5.5', description: null, status: 'available' }] }, effort: { supported: true, runtime_default: 'medium', allow_custom: false, application: 'native', options: [{ value: 'low', label: 'Low', description: null, status: 'available', compatible_models: null }, { value: 'medium', label: 'Medium', description: null, status: 'available', compatible_models: null }, { value: 'high', label: 'High', description: null, status: 'available', compatible_models: null }, { value: 'xhigh', label: 'Extra high', description: null, status: 'available', compatible_models: null }] }, diagnostics: [] }) } as Response;
+      }
+      return { ok: true, json: async () => ({ ...profile, model_tiers: [{ label: null, model: null, effort: 'high', parameters: {}, annotations: {} }], default_model_tier: 1 }) } as Response;
+    });
 
     renderProviderProfilesManager([profile]);
 
@@ -1043,12 +1081,73 @@ describe('ProviderProfilesManager form controls', () => {
       );
     });
 
-    const [, requestInit] = fetchSpy.mock.calls[0] ?? [];
-    const payload = JSON.parse(String((requestInit as RequestInit).body));
+    const tierSaveCall = fetchSpy.mock.calls.find((call) => { const init = call[1] as RequestInit | undefined; return String(call[0]).includes('/api/v1/provider-profiles/codex-default') && (init?.method === 'PATCH'); });
+    const [, requestInit] = tierSaveCall ?? [];
+    const payload = JSON.parse(String((requestInit as RequestInit)?.body ?? '{}'));
     expect(payload.model_tiers).toEqual([{ label: null, model: null, effort: 'high', parameters: {}, annotations: {} }]);
     expect(payload.default_model_tier).toBe(1);
     expect(payload).not.toHaveProperty('default_model');
     expect(payload).not.toHaveProperty('default_effort');
+  });
+
+  it('disables catalog model choices while evidence is stale but preserves existing values', async () => {
+    const staleCapabilities = { version: 'tier-cap-v1-stale', profile_id: profile.profile_id, runtime_id: profile.runtime_id, provider_id: profile.provider_id, evidence: { source: 'profile_catalog_evidence', credential_generation: 1, image_ref: null, observed_at: null, stale: true }, tier_constraints: { min_count: 1, max_count: null }, model: { runtime_default: 'gpt-5.5', allow_custom: true, options: [{ value: 'gpt-5.5', label: 'GPT-5.5', description: null, status: 'available' }, { value: 'gpt-4o', label: 'GPT-4o', description: null, status: 'available', compatible_models: null }] }, effort: { supported: true, runtime_default: 'medium', allow_custom: false, application: 'native', options: [{ value: 'medium', label: 'Medium', description: null, status: 'available', compatible_models: null }] }, diagnostics: [] };
+    vi.spyOn(window, 'fetch').mockImplementation(async (input) => {
+      const url = String(input);
+      if (url.includes('/capabilities')) {
+        return { ok: true, json: async () => staleCapabilities } as Response;
+      }
+      return { ok: true, json: async () => ({ ...profile }) } as Response;
+    });
+    const staleProfile: ProviderProfile = {
+      ...profile,
+      model_tiers: [{ label: null, model: 'gpt-4o', effort: null, parameters: {}, annotations: {} }],
+      default_model_tier: 1,
+    };
+
+    renderProviderProfilesManager([staleProfile]);
+    fireEvent.click(screen.getByRole('button', { name: 'Edit' }));
+
+    await screen.findByText(/catalog choices are disabled/);
+    const modelSelect = screen.getByLabelText('Tier 1 model') as HTMLSelectElement;
+    expect(modelSelect.value).toBe('gpt-4o');
+    const options = within(modelSelect).getAllByRole('option') as HTMLOptionElement[];
+    const byValue = new Map(options.map((o) => [o.value, o]));
+    expect(byValue.get('__runtime_default__')?.disabled).toBe(false);
+    expect(byValue.get('gpt-5.5')?.disabled).toBe(true);
+    expect(byValue.get('gpt-4o')?.disabled).toBe(false);
+    expect(within(modelSelect).queryByRole('option', { name: 'Custom value…' })).toBeNull();
+    expect(screen.queryByLabelText('Tier 1 custom model')).toBeNull();
+  });
+
+  it('offers a custom model entry when the backend allows custom models', async () => {
+    const fetchSpy = vi.spyOn(window, 'fetch').mockImplementation(async (input) => {
+      const url = String(input);
+      if (url.includes('/capabilities')) {
+        return { ok: true, json: async () => ({ version: 'tier-cap-v1-test', profile_id: profile.profile_id, runtime_id: profile.runtime_id, provider_id: profile.provider_id, evidence: { source: 'profile_catalog_evidence', credential_generation: 1, image_ref: null, observed_at: null, stale: false }, tier_constraints: { min_count: 1, max_count: null }, model: { runtime_default: 'gpt-5.5', allow_custom: true, options: [{ value: 'gpt-5.5', label: 'GPT-5.5', description: null, status: 'available' }] }, effort: { supported: true, runtime_default: 'medium', allow_custom: false, application: 'native', options: [{ value: 'medium', label: 'Medium', description: null, status: 'available', compatible_models: null }] }, diagnostics: [] }) } as Response;
+      }
+      return { ok: true, json: async () => ({ ...profile, model_tiers: [{ label: null, model: null, effort: null, parameters: {}, annotations: {} }], default_model_tier: 1 }) } as Response;
+    });
+
+    renderProviderProfilesManager([profile]);
+    fireEvent.click(screen.getByRole('button', { name: 'Edit' }));
+
+    const modelSelect = await screen.findByLabelText('Tier 1 model') as HTMLSelectElement;
+    fireEvent.change(modelSelect, { target: { value: '__custom__' } });
+    const customInput = screen.getByLabelText('Tier 1 custom model') as HTMLInputElement;
+    fireEvent.change(customInput, { target: { value: 'my-custom-model' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Update provider profile' }));
+
+    await waitFor(() => {
+      expect(fetchSpy).toHaveBeenCalledWith(
+        '/api/v1/provider-profiles/codex-default',
+        expect.objectContaining({ method: 'PATCH' }),
+      );
+    });
+    const patchCall = fetchSpy.mock.calls.find((call) => { const init = call[1] as RequestInit | undefined; return String(call[0]).includes('/api/v1/provider-profiles/codex-default') && (init?.method === 'PATCH'); });
+    const [, requestInit] = patchCall ?? [];
+    const payload = JSON.parse(String((requestInit as RequestInit)?.body ?? '{}'));
+    expect(payload.model_tiers).toEqual([{ label: null, model: 'my-custom-model', effort: null, parameters: {}, annotations: {} }]);
   });
 
   it('requires a backend-supported authentication method before creation', async () => {
@@ -1083,7 +1182,7 @@ describe('ProviderProfilesManager form controls', () => {
         text: 'Choose a supported authentication method.',
       });
     });
-    expect(fetchSpy).toHaveBeenCalledTimes(1);
+    expect(fetchSpy).toHaveBeenCalledTimes(2);
   });
 
   it('starts a Codex OAuth session from the profile OAuth action', async () => {
@@ -1874,7 +1973,45 @@ describe('MoonLadderStudios/MoonMind#3820 guided provider-profile creation', () 
     diagnostics: [],
   };
 
+  function tierCapabilitiesResponse(url: string): Response | null {
+    if (url.startsWith('/api/v1/provider-profiles/capabilities?')) {
+      return {
+        ok: true,
+        json: async () => ({
+          version: 'tier-cap-v1-test',
+          profile_id: null,
+          runtime_id: 'codex_cli',
+          provider_id: 'openai',
+          evidence: { source: 'runtime_draft', credential_generation: null, image_ref: null, observed_at: null, stale: false },
+          tier_constraints: { min_count: 1, max_count: null },
+          model: { runtime_default: 'gpt-5.5', allow_custom: true, options: [{ value: 'gpt-5.5', label: 'GPT-5.5', description: 'General coding model', status: 'available', recommended: true }, { value: 'gpt-4o', label: 'GPT-4o', description: null, status: 'available', recommended: false }] },
+          effort: { supported: true, runtime_default: 'medium', allow_custom: false, application: 'native', options: [{ value: 'low', label: 'Low', description: null, status: 'available', compatible_models: null }, { value: 'medium', label: 'Medium', description: null, status: 'available', compatible_models: null }, { value: 'high', label: 'High', description: null, status: 'available', compatible_models: null }, { value: 'xhigh', label: 'Extra high', description: null, status: 'available', compatible_models: null }] },
+          diagnostics: [],
+        }),
+      } as Response;
+    }
+    if (/\/api\/v1\/provider-profiles\/[^/]+\/capabilities/.test(url)) {
+      return {
+        ok: true,
+        json: async () => ({
+          version: 'tier-cap-v1-test-profile',
+          profile_id: 'test-profile',
+          runtime_id: 'codex_cli',
+          provider_id: 'openai',
+          evidence: { source: 'profile_catalog_evidence', credential_generation: 1, image_ref: null, observed_at: null, stale: false },
+          tier_constraints: { min_count: 1, max_count: null },
+          model: { runtime_default: 'gpt-5.5', allow_custom: true, options: [{ value: 'gpt-5.5', label: 'GPT-5.5', description: 'General coding model', status: 'available', recommended: true }, { value: 'gpt-4o', label: 'GPT-4o', description: null, status: 'available', recommended: false }] },
+          effort: { supported: true, runtime_default: 'medium', allow_custom: false, application: 'native', options: [{ value: 'low', label: 'Low', description: null, status: 'available', compatible_models: null }, { value: 'medium', label: 'Medium', description: null, status: 'available', compatible_models: null }, { value: 'high', label: 'High', description: null, status: 'available', compatible_models: null }, { value: 'xhigh', label: 'Extra high', description: null, status: 'available', compatible_models: null }] },
+          diagnostics: [],
+        }),
+      } as Response;
+    }
+    return null;
+  }
+
   function openAiCreationResponse(url: string): Response | null {
+    const tier = tierCapabilitiesResponse(url);
+    if (tier) return tier;
     if (url.startsWith('/api/v1/provider-profiles/creation-capabilities?')) {
       return { ok: true, json: async () => openAiCapabilities } as Response;
     }
@@ -2038,7 +2175,7 @@ describe('MoonLadderStudios/MoonMind#3820 guided provider-profile creation', () 
     fireEvent.click(screen.getByRole('button', { name: 'Cancel API key enrollment' }));
 
     expect(screen.queryByDisplayValue('one-way-test-key')).toBeNull();
-    expect(fetchSpy).toHaveBeenCalledTimes(4);
+    expect(fetchSpy).toHaveBeenCalledTimes(5);
   });
 
   it('keeps a selected existing SecretRef and skips plaintext enrollment', async () => {
@@ -2084,7 +2221,7 @@ describe('MoonLadderStudios/MoonMind#3820 guided provider-profile creation', () 
     });
     fireEvent.click(screen.getByRole('button', { name: 'Create provider profile' }));
 
-    await waitFor(() => expect(fetchSpy).toHaveBeenCalledTimes(3));
+    await waitFor(() => expect(fetchSpy).toHaveBeenCalledTimes(4));
     expect(
       screen.queryByRole('dialog', {
         name: 'OpenAI API key enrollment for codex-guided-existing-key',
@@ -2162,7 +2299,7 @@ describe('MoonLadderStudios/MoonMind#3820 guided provider-profile creation', () 
     fireEvent.click(screen.getByRole('button', { name: 'Create provider profile' }));
 
     await waitFor(() => expect(openSpy).toHaveBeenCalledTimes(1));
-    expect(fetchSpy).toHaveBeenCalledTimes(4);
+    expect(fetchSpy).toHaveBeenCalledTimes(5);
   });
 
   it('preserves an unknown existing SecretRef role for inspection', () => {
@@ -2376,16 +2513,20 @@ describe('MoonLadderStudios/MoonMind#3348 tier editor', () => {
   });
 
   it('saves only canonical ordered tier policy not legacy fields (MoonLadderStudios/MoonMind#3348)', async () => {
-    const fetchSpy = vi.spyOn(window, 'fetch').mockResolvedValue({
-      ok: true,
-      json: async () => ({ ...tierProfile, model_tiers: tierProfile.model_tiers, default_model_tier: 2 }),
-    } as Response);
+    const fetchSpy = vi.spyOn(window, 'fetch').mockImplementation(async (input) => {
+      const url = String(input);
+      if (url.includes('/capabilities')) {
+        return { ok: true, json: async () => ({ version: 'tier-cap-v1-test', profile_id: tierProfile.profile_id, runtime_id: tierProfile.runtime_id, provider_id: tierProfile.provider_id, evidence: { source: 'profile_catalog_evidence', credential_generation: 1, image_ref: null, observed_at: null, stale: false }, tier_constraints: { min_count: 1, max_count: null }, model: { runtime_default: 'gpt-5.5', allow_custom: true, options: [{ value: 'gpt-5.5', label: 'GPT-5.5', description: null, status: 'available' }] }, effort: { supported: true, runtime_default: 'medium', allow_custom: false, application: 'native', options: [{ value: 'medium', label: 'Medium', description: null, status: 'available', compatible_models: null }] }, diagnostics: [] }) } as Response;
+      }
+      return { ok: true, json: async () => ({ ...tierProfile, model_tiers: tierProfile.model_tiers, default_model_tier: 2 }) } as Response;
+    });
     renderProviderProfilesManager([tierProfile]);
     fireEvent.click(screen.getByRole('button', { name: 'Edit' }));
     fireEvent.change(screen.getByLabelText('Tier 1 label'), { target: { value: 'Plan updated' } });
     fireEvent.click(screen.getByRole('button', { name: 'Update provider profile' }));
     await waitFor(() => expect(fetchSpy).toHaveBeenCalled());
-    const payload = JSON.parse(String(fetchSpy.mock.calls[0]?.[1]?.body));
+    const saveCall2 = fetchSpy.mock.calls.find((call) => { const init = call[1] as RequestInit | undefined; return Boolean(init?.body && String(init.body).includes('model_tiers')); });
+    const payload = JSON.parse(String((saveCall2?.[1] as RequestInit)?.body ?? '{}'));
     expect(payload.model_tiers[0].label).toBe('Plan updated');
     expect(payload.default_model_tier).toBe(2);
     expect(payload).not.toHaveProperty('default_model');
@@ -2529,7 +2670,13 @@ describe('MoonLadderStudios/MoonMind#3815 cross-boundary verification (#3822 cov
         expect.objectContaining({ method: 'PATCH' }),
       );
     });
-    const [, requestInit] = fetchSpy.mock.calls[0] ?? [];
+    const patchCall = fetchSpy.mock.calls.find(
+      ([url, init]) =>
+        url === '/api/v1/provider-profiles/blocked-current-default' &&
+        (init as RequestInit | undefined)?.method === 'PATCH',
+    );
+    expect(patchCall).toBeTruthy();
+    const [, requestInit] = patchCall ?? [];
     expect(JSON.parse(String((requestInit as RequestInit).body)).is_default).toBe(false);
   });
 
