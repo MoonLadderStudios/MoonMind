@@ -1,0 +1,43 @@
+{
+  "failureShapeId": "omnigent-merge-resolver-child-plan",
+  "incidentWorkflowId": "resolver:pr:813:head:1430266ef052:h:546a49d948b70256:1",
+  "parentWorkflowId": "mm:125990d1-b9aa-4c65-beba-c5b402666e47",
+  "parentRunId": "replay-parent-run",
+  "boundary": "root execution plan to merge-automation resolver child admission",
+  "escapedFailure": {
+    "activity": "omnigent.ensure_host",
+    "message": "profile is not a supported Omnigent OAuth profile",
+    "cause": "the Temporal-started resolver child inherited only the flat Provider Profile id, so generic OpenCode execution reached the legacy OAuth host path without immutable plan authority"
+  },
+  "repository": "MoonLadderStudios/MoonMind",
+  "pullRequest": {
+    "number": 813,
+    "url": "https://github.com/MoonLadderStudios/MoonMind/pull/813",
+    "headSha": "1430266ef0520000000000000000000000000000",
+    "headBranch": "resolver-plan-replay",
+    "baseBranch": "main"
+  },
+  "parentParameters": {
+    "publishMode": "none",
+    "targetRuntime": "omnigent",
+    "profileId": "opencode-zen-free",
+    "model": "opencode/muse-spark-1.3-contributor-free",
+    "effort": "xhigh",
+    "omnigentExecutionPlan": {
+      "planRef": "omnigent-execution-plan:sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "planDigest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "planArtifactRef": "art-parent-plan",
+      "taskInputSnapshotRef": "art-parent-task",
+      "taskInputSnapshotDigest": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+    },
+    "workflow": {
+      "publish": {
+        "mergeAutomation": {
+          "enabled": true,
+          "mergeMethod": "squash"
+        }
+      }
+    }
+  },
+  "invariant": "an Omnigent resolver child is admitted with a freshly compiled child-scoped plan and Skill snapshot before any host side effect"
+}
