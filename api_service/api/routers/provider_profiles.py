@@ -1368,20 +1368,48 @@ async def update_profile(
                     req_norm = sorted(requested or [])
                     exist_norm = sorted(existing)
                     if req_norm != exist_norm:
-                        raise HTTPException(
-                            status_code=422,
-                            detail={
-                                "code": "provider_profile_clear_env_keys_locked",
-                                "message": (
-                                    "clear_env_keys is backend-owned launch-security metadata "
-                                    "and cannot be edited directly for this runtime/provider. "
-                                    "Use the guided creation preset or an authorized manual profile path."
-                                ),
-                                "field": "clear_env_keys",
-                                "lock_reason": preset_clear_field.lock_reason,
-                                "source": preset_clear_field.source,
-                            },
-                        )
+                        # #3821: guided repair affordance — a non-superuser may
+                        # converge a stale profile back to exactly the
+                        # backend-derived policy. This is normalization, not
+                        # freeform authorship: any other value stays locked.
+                        _repair_accepted = False
+                        try:
+                            from moonmind.provider_profiles.isolation_policy import (
+                                derive_isolation_policy as _derive_repair_policy,
+                            )
+
+                            _repair_derived = _derive_repair_policy(
+                                runtime_id=profile.runtime_id,
+                                provider_id=profile.provider_id,
+                                authentication_method=inferred_method,
+                                credential_source=profile.credential_source,
+                                runtime_materialization_mode=profile.runtime_materialization_mode,
+                            )
+                            if (
+                                _repair_derived is not None
+                                and req_norm == sorted(_repair_derived.keys)
+                            ):
+                                update_data["clear_env_keys"] = list(_repair_derived.keys)
+                                _repair_accepted = True
+                        except Exception:
+                            _repair_accepted = False
+                        if not _repair_accepted:
+                            raise HTTPException(
+                                status_code=422,
+                                detail={
+                                    "code": "provider_profile_clear_env_keys_locked",
+                                    "message": (
+                                        "clear_env_keys is backend-owned launch-security metadata "
+                                        "and cannot be edited directly for this runtime/provider. "
+                                        "To repair a stale profile, submit exactly the backend-derived "
+                                        "policy shown in launch isolation, or use the guided creation "
+                                        "preset or an authorized manual profile path."
+                                    ),
+                                    "field": "clear_env_keys",
+                                    "lock_reason": preset_clear_field.lock_reason,
+                                    "source": preset_clear_field.source,
+                                },
+                            )
             except Exception as exc:
                 # Re-raise our own HTTPException; otherwise fall through and allow the
                 # update (unknown/unsupported profile retains round-trip).

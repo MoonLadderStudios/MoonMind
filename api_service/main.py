@@ -1981,6 +1981,24 @@ async def ensure_provider_profile_managers_started():
     # Auto-seed default profiles if table is empty.
     await _auto_seed_provider_profiles()
 
+    # #3821: bounded startup reconciliation of backend-owned launch-safety
+    # isolation policy. Normalizes order-equivalent derived values, preserves
+    # intentional legacy custom behavior, and flags unsafe profiles for repair
+    # via readiness diagnostics. Resilient by design: reconciliation must never
+    # fail startup.
+    try:
+        from api_service.services.provider_profile_service import (
+            reconcile_provider_profile_isolation_policies,
+        )
+
+        async with get_async_session_context() as session:
+            await reconcile_provider_profile_isolation_policies(session=session)
+    except Exception as exc:  # pragma: no cover - bounded startup reconciliation
+        logger.warning(
+            "Provider profile isolation reconciliation deferred: %s",
+            exc,
+        )
+
     logger.info("Ensuring ProviderProfileManager workflows are started...")
     try:
         async with get_async_session_context() as session:
