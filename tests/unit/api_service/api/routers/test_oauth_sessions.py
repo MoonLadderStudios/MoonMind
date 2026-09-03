@@ -1151,6 +1151,14 @@ async def test_finalize_oauth_session_rejects_failed_volume_verification(
                 credential_source=ProviderCredentialSource.SECRET_REF,
                 runtime_materialization_mode=RuntimeMaterializationMode.API_KEY_ENV,
                 secret_refs={"openai_api_key": "env://OPENAI_API_KEY"},
+                # #3821: backend-derived isolation policy for
+                # codex_cli/openai/api_key.
+                clear_env_keys=[
+                    "OPENAI_BASE_URL",
+                    "OPENAI_ORG_ID",
+                    "OPENAI_PROJECT",
+                    "MINIMAX_API_KEY",
+                ],
                 max_parallel_runs=1,
                 cooldown_after_429_seconds=300,
                 enabled=True,

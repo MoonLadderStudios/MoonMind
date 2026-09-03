@@ -47,6 +47,43 @@ def _fake_profiles(profiles: list[dict[str, Any]]):
                 "max_parallel_runs": 1,
                 **profile,
             }
+            # #3821: adapter fixtures carry backend-derived isolation policy
+            # so the shared launch-ready predicate evaluates them the way
+            # production does.
+            if "clear_env_keys" not in completed and "clearEnvKeys" not in completed:
+                try:
+                    from moonmind.provider_profiles.isolation_policy import (
+                        derive_isolation_policy as _derive_fixture_policy,
+                    )
+
+                    _source = str(completed.get("credential_source") or "")
+                    _materialization = str(
+                        completed.get("runtime_materialization_mode") or ""
+                    )
+                    if (
+                        _source == "oauth_volume"
+                        and _materialization == "oauth_home"
+                    ):
+                        _method = "oauth"
+                    elif _source == "secret_ref":
+                        _method = "api_key"
+                    elif _source == "none":
+                        _method = "none"
+                    else:
+                        _method = ""
+                    _derived = _derive_fixture_policy(
+                        runtime_id=runtime_id,
+                        provider_id=completed.get("provider_id"),
+                        authentication_method=_method,
+                        credential_source=completed.get("credential_source"),
+                        runtime_materialization_mode=completed.get(
+                            "runtime_materialization_mode"
+                        ),
+                    )
+                    if _derived is not None:
+                        completed["clear_env_keys"] = list(_derived.keys)
+                except Exception:
+                    pass
             completed_profiles.append(completed)
         return {"profiles": completed_profiles}
 
