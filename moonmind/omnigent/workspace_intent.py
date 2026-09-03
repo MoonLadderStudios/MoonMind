@@ -112,14 +112,14 @@ def authored_checkout_commit(request: AgentExecutionRequest) -> str | None:
 
 def authored_connection_ref(request: AgentExecutionRequest) -> str | None:
     spec = _spec(request)
-    repository = spec.get("repositoryTarget")
-    if not isinstance(repository, Mapping):
-        # Already-recorded requests may carry the typed target directly under
-        # ``repository``. New Run workflow requests use ``repositoryTarget``.
-        repository = spec.get("repository")
-    if not isinstance(repository, Mapping):
-        return None
-    value = str(repository.get("connectionRef") or "").strip()
+    for repository in (spec.get("repositoryTarget"), spec.get("repository")):
+        if isinstance(repository, Mapping):
+            value = str(repository.get("connectionRef") or "").strip()
+            if value:
+                return value
+    # Preserve the payload shape already recorded by in-flight Temporal runs.
+    # New Run workflow requests carry this authority under ``repositoryTarget``.
+    value = str(spec.get("connectionRef") or "").strip()
     return value or None
 
 
