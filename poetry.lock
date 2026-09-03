@@ -504,14 +504,14 @@ files = [
 
 [[package]]
 name = "banks"
-version = "2.4.2"
+version = "2.4.5"
 description = "A prompt programming language"
 optional = false
 python-versions = ">=3.9"
 groups = ["main"]
 files = [
-    {file = "banks-2.4.2-py3-none-any.whl", hash = "sha256:5fe407cc48c101f3e13d1cf732b83b8246003337612f13c0705d2e81f6faffb7"},
-    {file = "banks-2.4.2.tar.gz", hash = "sha256:cda6013bd377ea7b701933578bfb9370fc21ad70bc13cedfc3f5cb2c034ca3dc"},
+    {file = "banks-2.4.5-py3-none-any.whl", hash = "sha256:ac2e0091b4c79379d4773c9d04a138a0d937ee27c5803bf0142acc6d6769eea1"},
+    {file = "banks-2.4.5.tar.gz", hash = "sha256:ff575732fc67d5493a73c21e0d7268bc49e86fff02b0b8735e8efb9fcb9af3a4"},
 ]
 
 [package.dependencies]
