@@ -4349,6 +4349,7 @@ async def test_run_marks_blocked_outcome_as_failed_terminal_state(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     workflow = MoonMindRunWorkflow()
+    deprecated_patches: list[str] = []
     blocker_summary = "Workflow blocked by plan step: blocked upstream."
     finalizing_calls: list[dict[str, Any]] = []
     terminal_calls: list[dict[str, Any]] = []
@@ -4442,6 +4443,11 @@ async def test_run_marks_blocked_outcome_as_failed_terminal_state(
     )
     monkeypatch.setattr(
         run_workflow_module.workflow,
+        "deprecate_patch",
+        deprecated_patches.append,
+    )
+    monkeypatch.setattr(
+        run_workflow_module.workflow,
         "upsert_memo",
         lambda _memo: None,
     )
@@ -4492,6 +4498,9 @@ async def test_run_marks_blocked_outcome_as_failed_terminal_state(
     ]
     assert states[-1] == ("failed", blocker_summary)
     assert workflow._close_status == "failed"
+    assert deprecated_patches == [
+        run_workflow_module.RUN_WORKFLOW_NESTED_PROPOSE_TASKS_PATCH
+    ]
 
 @pytest.mark.asyncio
 async def test_run_observes_cancel_after_late_stages_before_completion(
@@ -4581,6 +4590,7 @@ async def test_run_observes_cancel_after_late_stages_before_completion(
         lambda: datetime.now(timezone.utc),
     )
     monkeypatch.setattr(run_workflow_module.workflow, "patched", _all_patches_except_empty_skillset)
+    monkeypatch.setattr(run_workflow_module.workflow, "deprecate_patch", lambda _patch_id: None)
     monkeypatch.setattr(run_workflow_module.workflow, "upsert_memo", lambda _memo: None)
     monkeypatch.setattr(
         run_workflow_module.workflow,
@@ -4708,6 +4718,7 @@ async def test_run_records_no_commit_terminal_state_for_skipped_publish(
         lambda: datetime.now(timezone.utc),
     )
     monkeypatch.setattr(run_workflow_module.workflow, "patched", _all_patches_except_empty_skillset)
+    monkeypatch.setattr(run_workflow_module.workflow, "deprecate_patch", lambda _patch_id: None)
     monkeypatch.setattr(run_workflow_module.workflow, "upsert_memo", lambda _memo: None)
     monkeypatch.setattr(
         run_workflow_module.workflow,
