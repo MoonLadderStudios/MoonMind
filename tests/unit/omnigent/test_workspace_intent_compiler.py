@@ -147,6 +147,22 @@ def test_canonical_repository_target_persists_connection_authority() -> None:
                 "repository": {"name": "acme/widgets"},
                 "branch": {"name": "main"},
             },
+            "connectionRef": "repository-connection:stale-in-flight-value",
+        },
+        parameters={"publishMode": "none", "requiredCapabilities": ["git"]},
+    )
+
+    assert _compile(request).connection_ref == "repository-connection:git-default"
+
+
+def test_top_level_connection_ref_survives_in_flight_request_replay() -> None:
+    """Persisted Temporal requests retain their pre-repositoryTarget authority."""
+
+    request = _request(
+        workspace_spec={
+            "workspaceLocator": _locator(),
+            "repository": "acme/widgets",
+            "connectionRef": "repository-connection:git-default",
         },
         parameters={"publishMode": "none", "requiredCapabilities": ["git"]},
     )
