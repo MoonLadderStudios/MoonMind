@@ -89,7 +89,7 @@ class ProviderProfileMaterializer:
                 profile.profile_id,
                 profile.runtime_id,
                 profile.provider_id,
-                exc.code if hasattr(exc, "code") else "isolation_error",
+                exc.as_detail().get("code", "isolation_error"),
             )
             raise ValueError(
                 "Launch blocked: required launch-safety isolation policy cannot "

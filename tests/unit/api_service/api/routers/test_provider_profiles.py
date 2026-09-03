@@ -39,6 +39,7 @@ from api_service.services.provider_profile_creation_presets import (
 from api_service.services.provider_profile_service import (
     _managed_secret_statuses_for_profiles,
     _manager_profile_payload,
+    apply_oauth_connected_state,
     normalize_runtime_default_profile,
 )
 from api_service.services.provider_profile_readiness import (
@@ -4829,3 +4830,293 @@ async def test_mm3788_runtime_filter_still_applies_profile_visibility(
     assert "mm3788_visible_owned" in listed_ids
     # Runtime scoping narrows the result set; it never widens visibility.
     assert "mm3788_hidden_other_owner" not in listed_ids
+
+
+# ---- MoonLadderStudios/MoonMind#3821 launch-safety isolation wiring ----
+
+_MM3821_CODEX_API_KEY_DERIVED = [
+    "OPENAI_BASE_URL",
+    "OPENAI_ORG_ID",
+    "OPENAI_PROJECT",
+    "MINIMAX_API_KEY",
+]
+
+
+@pytest.mark.asyncio
+async def test_3821_guided_create_with_clear_env_keys_rejected(
+    client_app: AsyncClient, _module_db
+) -> None:
+    _override_current_user()
+    profile_id = f"mm3821-locked-create-{uuid4().hex}"
+
+    async with client_app as client:
+        response = await client.post(
+            "/api/v1/provider-profiles",
+            json={
+                "profile_id": profile_id,
+                "runtime_id": "codex_cli",
+                "provider_id": "openai",
+                "authentication_method": "api_key",
+                "preset_version": CODEX_OPENAI_API_KEY_PRESET_VERSION,
+                "clear_env_keys": ["OPENAI_API_KEY"],
+            },
+        )
+
+    assert response.status_code == 422
+    detail = response.json()["detail"]
+    assert detail["code"] == "provider_profile_clear_env_keys_locked"
+    assert detail["field"] == "clear_env_keys"
+    async with db_base.async_session_maker() as session:
+        assert await session.get(ManagedAgentProviderProfile, profile_id) is None
+
+
+@pytest.mark.asyncio
+async def test_3821_non_superuser_update_of_clear_env_keys_locked(
+    client_app: AsyncClient, _module_db
+) -> None:
+    _override_current_user()
+    profile_id = f"mm3821-locked-update-{uuid4().hex}"
+    async with db_base.async_session_maker() as session:
+        session.add(
+            ManagedAgentProviderProfile(
+                profile_id=profile_id,
+                runtime_id="codex_cli",
+                provider_id="openai",
+                credential_source=ProviderCredentialSource.SECRET_REF,
+                runtime_materialization_mode=RuntimeMaterializationMode.API_KEY_ENV,
+                secret_refs={"openai_api_key": "env://OPENAI_API_KEY"},
+                clear_env_keys=list(_MM3821_CODEX_API_KEY_DERIVED),
+                enabled=True,
+                auth_state=ProviderProfileAuthState.CONNECTED,
+            )
+        )
+        await session.commit()
+
+    async with client_app as client:
+        response = await client.patch(
+            f"/api/v1/provider-profiles/{profile_id}",
+            json={"clear_env_keys": ["OPENAI_API_KEY"]},
+        )
+
+    assert response.status_code == 422
+    assert (
+        response.json()["detail"]["code"]
+        == "provider_profile_clear_env_keys_locked"
+    )
+    async with db_base.async_session_maker() as session:
+        persisted = await session.get(ManagedAgentProviderProfile, profile_id)
+        assert persisted is not None
+        assert sorted(persisted.clear_env_keys) == sorted(
+            _MM3821_CODEX_API_KEY_DERIVED
+        )
+
+
+@pytest.mark.asyncio
+async def test_3821_non_superuser_update_repair_to_derived_accepted(
+    client_app: AsyncClient, _module_db
+) -> None:
+    _override_current_user()
+    profile_id = f"mm3821-repair-update-{uuid4().hex}"
+    secret_slug = f"mm3821-repair-openai-{uuid4().hex}"
+    async with db_base.async_session_maker() as session:
+        session.add(
+            ManagedSecret(
+                slug=secret_slug,
+                ciphertext="encrypted-test-value",
+                status=SecretStatus.ACTIVE,
+                details={},
+            )
+        )
+        session.add(
+            ManagedAgentProviderProfile(
+                profile_id=profile_id,
+                runtime_id="codex_cli",
+                provider_id="openai",
+                credential_source=ProviderCredentialSource.SECRET_REF,
+                runtime_materialization_mode=RuntimeMaterializationMode.API_KEY_ENV,
+                secret_refs={"openai_api_key": f"db://{secret_slug}"},
+                clear_env_keys=["OPENAI_API_KEY"],
+                enabled=True,
+                auth_state=ProviderProfileAuthState.CONNECTED,
+            )
+        )
+        await session.commit()
+
+    async with client_app as client:
+        response = await client.patch(
+            f"/api/v1/provider-profiles/{profile_id}",
+            json={"clear_env_keys": list(reversed(_MM3821_CODEX_API_KEY_DERIVED))},
+        )
+        assert response.status_code == 200
+        fetched = await client.get(f"/api/v1/provider-profiles/{profile_id}")
+
+    assert fetched.status_code == 200
+    assert fetched.json()["clear_env_keys"] == _MM3821_CODEX_API_KEY_DERIVED
+    isolation = fetched.json()["launch_isolation"]
+    assert isolation["classification"] == "current"
+    assert isolation["source"] == "runtime_provider_isolation_policy"
+
+
+@pytest.mark.asyncio
+async def test_3821_stale_isolation_policy_blocks_readiness(
+    client_app: AsyncClient, _module_db
+) -> None:
+    _override_current_user()
+    profile_id = f"mm3821-stale-readiness-{uuid4().hex}"
+    async with db_base.async_session_maker() as session:
+        session.add(
+            ManagedAgentProviderProfile(
+                profile_id=profile_id,
+                runtime_id="codex_cli",
+                provider_id="openai",
+                credential_source=ProviderCredentialSource.SECRET_REF,
+                runtime_materialization_mode=RuntimeMaterializationMode.API_KEY_ENV,
+                secret_refs={"openai_api_key": "env://OPENAI_API_KEY"},
+                clear_env_keys=["OPENAI_API_KEY"],
+                enabled=True,
+                auth_state=ProviderProfileAuthState.CONNECTED,
+            )
+        )
+        await session.commit()
+
+    async with client_app as client:
+        response = await client.get(f"/api/v1/provider-profiles/{profile_id}")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["launch_ready"] is False
+    assert payload["readiness"]["status"] == "blocked"
+    isolation_check = next(
+        check
+        for check in payload["readiness"]["checks"]
+        if check["id"] == "launch_isolation"
+    )
+    assert isolation_check["status"] == "error"
+    assert "repair" in isolation_check["message"].lower()
+
+
+@pytest.mark.asyncio
+async def test_3821_launch_isolation_shape_in_get(
+    client_app: AsyncClient, _module_db
+) -> None:
+    _override_current_user()
+    profile_id = f"mm3821-isolation-shape-{uuid4().hex}"
+
+    async with client_app as client:
+        created = await client.post(
+            "/api/v1/provider-profiles",
+            json={
+                "profile_id": profile_id,
+                "runtime_id": "codex_cli",
+                "provider_id": "openai",
+                "authentication_method": "api_key",
+                "preset_version": CODEX_OPENAI_API_KEY_PRESET_VERSION,
+            },
+        )
+        assert created.status_code == 201
+        response = await client.get(f"/api/v1/provider-profiles/{profile_id}")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["clear_env_keys"] == _MM3821_CODEX_API_KEY_DERIVED
+    isolation = payload["launch_isolation"]
+    assert isolation["effective_keys"] == _MM3821_CODEX_API_KEY_DERIVED
+    assert isolation["source"] == "runtime_provider_isolation_policy"
+    assert isolation["derived"] is True
+    assert isolation["editable"] is False
+    assert isolation["lock_reason"]
+    assert isolation["strategy_id"] == "codex_cli/openai/api_key"
+    assert set(isolation["explanations"]) == set(_MM3821_CODEX_API_KEY_DERIVED)
+    assert isolation["classification"] == "current"
+
+
+def test_3821_oauth_enrollment_merge_preserves_unknown_keys() -> None:
+    from datetime import datetime, timezone
+
+    profile = ManagedAgentProviderProfile(
+        profile_id="mm3821-enrollment-merge",
+        runtime_id="codex_cli",
+        provider_id="openai",
+        credential_source=ProviderCredentialSource.OAUTH_VOLUME,
+        runtime_materialization_mode=RuntimeMaterializationMode.OAUTH_HOME,
+        clear_env_keys=["CUSTOM_LEGACY_KEY"],
+        command_behavior={},
+        home_path_overrides={},
+        auth_state=ProviderProfileAuthState.OAUTH_PENDING,
+    )
+    apply_oauth_connected_state(
+        profile,
+        mapping=None,
+        validated_at=datetime.now(timezone.utc),
+    )
+
+    assert "CUSTOM_LEGACY_KEY" in profile.clear_env_keys
+    assert "OPENAI_API_KEY" in profile.clear_env_keys
+
+
+@pytest.mark.asyncio
+async def test_3821_startup_reconciliation_normalizes_and_flags(
+    _module_db,
+) -> None:
+    from api_service.services.provider_profile_service import (
+        reconcile_provider_profile_isolation_policies,
+    )
+
+    normalize_id = f"mm3821-reconcile-normalize-{uuid4().hex}"
+    preserve_id = f"mm3821-reconcile-preserve-{uuid4().hex}"
+    repair_id = f"mm3821-reconcile-repair-{uuid4().hex}"
+    async with db_base.async_session_maker() as session:
+        session.add(
+            ManagedAgentProviderProfile(
+                profile_id=normalize_id,
+                runtime_id="codex_cli",
+                provider_id="openai",
+                credential_source=ProviderCredentialSource.SECRET_REF,
+                runtime_materialization_mode=RuntimeMaterializationMode.API_KEY_ENV,
+                clear_env_keys=list(reversed(_MM3821_CODEX_API_KEY_DERIVED)),
+                enabled=False,
+                auth_state=ProviderProfileAuthState.CONNECTED,
+            )
+        )
+        session.add(
+            ManagedAgentProviderProfile(
+                profile_id=preserve_id,
+                runtime_id="codex_cli",
+                provider_id="openai",
+                credential_source=ProviderCredentialSource.SECRET_REF,
+                runtime_materialization_mode=RuntimeMaterializationMode.API_KEY_ENV,
+                clear_env_keys=[*_MM3821_CODEX_API_KEY_DERIVED, "CUSTOM_LEGACY_KEY"],
+                enabled=False,
+                auth_state=ProviderProfileAuthState.CONNECTED,
+            )
+        )
+        session.add(
+            ManagedAgentProviderProfile(
+                profile_id=repair_id,
+                runtime_id="codex_cli",
+                provider_id="openai",
+                credential_source=ProviderCredentialSource.SECRET_REF,
+                runtime_materialization_mode=RuntimeMaterializationMode.API_KEY_ENV,
+                clear_env_keys=["OPENAI_API_KEY"],
+                enabled=False,
+                auth_state=ProviderProfileAuthState.CONNECTED,
+            )
+        )
+        await session.commit()
+
+        counts = await reconcile_provider_profile_isolation_policies(session=session)
+        await session.commit()
+
+        normalized = await session.get(ManagedAgentProviderProfile, normalize_id)
+        preserved = await session.get(ManagedAgentProviderProfile, preserve_id)
+        repair = await session.get(ManagedAgentProviderProfile, repair_id)
+
+    assert counts["normalized"] >= 1
+    assert counts["preserve_custom"] >= 1
+    assert counts["repair_required"] >= 1
+    assert normalized is not None
+    assert list(normalized.clear_env_keys) == _MM3821_CODEX_API_KEY_DERIVED
+    assert preserved is not None
+    assert "CUSTOM_LEGACY_KEY" in preserved.clear_env_keys
+    assert repair is not None
+    assert repair.clear_env_keys == ["OPENAI_API_KEY"]
