@@ -57,6 +57,21 @@ def resolve_deployed_server_build_digest() -> str:
     )
 
 
+def _resolve_deployed_host_image_ref(harness_id: str) -> str | None:
+    """Resolve the deployment image for a supported generic host harness."""
+
+    from moonmind.omnigent.harness_platform.host_classes import (
+        get_opencode_host_image_ref,
+        get_pi_host_image_ref,
+    )
+
+    if harness_id == "opencode-native":
+        return get_opencode_host_image_ref()
+    if harness_id == "pi-native":
+        return get_pi_host_image_ref()
+    return None
+
+
 def assert_plan_matches_deployed_runtime(plan_payload: Any) -> None:
     """Reject a plan whose qualified server or host is no longer deployed.
 
@@ -82,20 +97,18 @@ def assert_plan_matches_deployed_runtime(plan_payload: Any) -> None:
             "execution plan targets an Omnigent server build that is no longer "
             "deployed; create a fresh execution to compile current runtime authority"
         )
-    if getattr(plan_payload, "harnessId", None) != "opencode-native":
+    harness_id = str(getattr(plan_payload, "harnessId", None) or "").strip()
+    deployed_host = _resolve_deployed_host_image_ref(harness_id)
+    if deployed_host is None:
         return
     planned_host = str(getattr(plan_payload, "hostImageRef", None) or "").strip()
     if not _IMAGE_REF.fullmatch(planned_host):
         raise OmnigentDeploymentIdentityConflict(
-            "execution plan lacks exact OpenCode host image authority"
+            "execution plan lacks exact host image authority"
         )
-    from moonmind.omnigent.harness_platform.host_classes import (
-        get_opencode_host_image_ref,
-    )
-
-    if planned_host != get_opencode_host_image_ref():
+    if planned_host != deployed_host:
         raise OmnigentDeploymentIdentityConflict(
-            "execution plan targets an OpenCode host image that is no longer "
+            "execution plan targets a host image that is no longer "
             "deployed; create a fresh execution to compile current runtime authority"
         )
 

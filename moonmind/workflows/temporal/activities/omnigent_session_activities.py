@@ -318,11 +318,12 @@ async def omnigent_evaluate_session_admission_activity(
 
 
 def _validate_plan_support_authority(plan: Any) -> None:
-    """Validate immutable support identity against its mutable endpoint.
+    """Validate the plan's immutable support identity.
 
-    Host Class and policy defaults are never re-selected here. The plan's
-    qualified server build must still be the server currently deployed before
-    a new runtime binding can acquire leases or launch the selected host.
+    Mutable deployment identity is checked by exact-rerun admission and at the
+    fresh-host launch boundary. Session admission may be replayed while an
+    already-attested host remains bound, so it must not compare that host with
+    newly deployed image defaults.
     """
 
     from moonmind.omnigent.harness_platform.capabilities import (
@@ -409,11 +410,6 @@ def _validate_plan_support_authority(plan: Any) -> None:
         or not plan.payload.effectiveLaunchSnapshotDigest
     ):
         raise ValueError("persisted exact-artifact evidence is incomplete")
-    from moonmind.omnigent.deployment_identity import (
-        assert_plan_matches_deployed_runtime,
-    )
-
-    assert_plan_matches_deployed_runtime(plan.payload)
 
 
 async def _load_intent_request(

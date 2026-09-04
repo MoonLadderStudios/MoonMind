@@ -24,6 +24,16 @@ def _opencode_plan_payload(
     return payload
 
 
+def _pi_plan_payload(
+    server_build: str,
+    host_image_ref: str,
+) -> SimpleNamespace:
+    payload = _generic_plan_payload(server_build)
+    payload.harnessId = "pi-native"
+    payload.hostImageRef = host_image_ref
+    return payload
+
+
 def test_plan_deployment_identity_accepts_exact_server_build(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -82,6 +92,30 @@ def test_plan_deployment_identity_rejects_stale_opencode_host_before_launch(
     ):
         deployment_identity.assert_plan_matches_deployed_runtime(
             _opencode_plan_payload(server_digest, stale_host)
+        )
+
+
+def test_plan_deployment_identity_rejects_stale_pi_host_before_launch(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from moonmind.omnigent.harness_platform import host_classes
+
+    server_digest = "sha256:" + "a" * 64
+    current_host = "ghcr.io/example/pi@sha256:" + "b" * 64
+    stale_host = "ghcr.io/example/pi@sha256:" + "c" * 64
+    monkeypatch.setattr(
+        deployment_identity,
+        "resolve_deployed_server_build_digest",
+        lambda: server_digest,
+    )
+    monkeypatch.setattr(host_classes, "get_pi_host_image_ref", lambda: current_host)
+
+    with pytest.raises(
+        deployment_identity.OmnigentDeploymentIdentityConflict,
+        match="host image that is no longer deployed",
+    ):
+        deployment_identity.assert_plan_matches_deployed_runtime(
+            _pi_plan_payload(server_digest, stale_host)
         )
 
 
