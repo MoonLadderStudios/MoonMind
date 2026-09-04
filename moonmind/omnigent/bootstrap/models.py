@@ -52,6 +52,9 @@ class ResolvedOmnigentDeploymentState(BaseModel):
     server_image_ref: str | None = Field(default=None, alias="serverImageRef")
     opencode_host_image_ref: str | None = Field(default=None, alias="opencodeHostImageRef")
     pi_host_image_ref: str | None = Field(default=None, alias="piHostImageRef")
+    shared_host_image_ref: str | None = Field(
+        default=None, alias="sharedHostImageRef"
+    )
     omnigent_build_digest: str | None = Field(default=None, alias="omnigentBuildDigest")
     architecture: str = Field(default="linux/amd64")
     resolved_at: datetime = Field(default_factory=lambda: datetime.now(UTC), alias="resolvedAt")

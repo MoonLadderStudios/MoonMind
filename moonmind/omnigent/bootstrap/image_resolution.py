@@ -6,8 +6,8 @@ import asyncio
 import json
 import os
 import re
+from collections.abc import Mapping
 from datetime import UTC, datetime
-from typing import Mapping
 
 from moonmind.omnigent.bootstrap.models import ResolvedOmnigentDeploymentState
 
@@ -315,6 +315,15 @@ async def resolve_omnigent_images(
         "OMNIGENT_PI_HOST_IMAGE_REF",
         source,
     )
+    # Shared neutral host image (optional until Codex/Claude Host Classes are
+    # selected; resolution stays best-effort so OpenCode-only deployments do
+    # not require it).
+    shared_ref, _ = await _resolve_image(
+        "OMNIGENT_SHARED_HOST_IMAGE",
+        "OMNIGENT_SHARED_HOST_IMAGE_TAG",
+        "OMNIGENT_SHARED_HOST_IMAGE_REF",
+        source,
+    )
     # Fall back to previous if still None
     if (
         not server_requires_live_evidence
@@ -328,6 +337,8 @@ async def resolve_omnigent_images(
         opencode_ref = previous.opencode_host_image_ref
     if not pi_ref and previous and previous.pi_host_image_ref:
         pi_ref = previous.pi_host_image_ref
+    if not shared_ref and previous and previous.shared_host_image_ref:
+        shared_ref = previous.shared_host_image_ref
 
     # The default release embeds the exact server repository digest as its
     # paired runtime-pack identity. It is distinct from the custom host image's
@@ -406,6 +417,7 @@ async def resolve_omnigent_images(
         serverImageRef=server_ref,
         opencodeHostImageRef=opencode_ref,
         piHostImageRef=pi_ref,
+        sharedHostImageRef=shared_ref,
         omnigentBuildDigest=omnigent_build_digest,
         architecture=arch,
         resolvedAt=datetime.now(UTC),
@@ -439,6 +451,7 @@ _PUBLISHED_IMAGE_KEYS = (
     "OMNIGENT_BUILD_DIGEST",
     "OMNIGENT_OPENCODE_HOST_IMAGE_REF",
     "OMNIGENT_PI_HOST_IMAGE_REF",
+    "OMNIGENT_SHARED_HOST_IMAGE_REF",
 )
 _operator_image_baseline: dict[str, str] | None = None
 
@@ -501,6 +514,7 @@ async def publish_resolved_omnigent_images() -> ResolvedOmnigentDeploymentState:
         "OMNIGENT_BUILD_DIGEST": state.omnigent_build_digest,
         "OMNIGENT_OPENCODE_HOST_IMAGE_REF": state.opencode_host_image_ref,
         "OMNIGENT_PI_HOST_IMAGE_REF": state.pi_host_image_ref,
+        "OMNIGENT_SHARED_HOST_IMAGE_REF": state.shared_host_image_ref,
     }
     for key, value in exported.items():
         cleaned = str(value or "").strip()

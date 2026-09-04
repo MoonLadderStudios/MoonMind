@@ -104,10 +104,15 @@ def _select_opencode_host_class(catalog):
     )
 
 
-def _test_codex_host_class(implementation_ref: str):
+def _test_codex_host_class(
+    implementation_ref: str,
+    host_class_id: str = "omnigent-codex-current",
+    harness_id: str = "codex-native",
+    materializer_refs: tuple[str, ...] = ("codex-oauth-home@1",),
+):
     return HostClass.model_validate(
         {
-            "hostClassId": "omnigent-codex-current",
+            "hostClassId": host_class_id,
             "version": 1,
             "imageRef": "ghcr.io/example/codex-host@sha256:" + "d" * 64,
             "omnigentVersion": "1.0.0",
@@ -115,13 +120,13 @@ def _test_codex_host_class(implementation_ref: str):
             "architectures": ["linux/amd64"],
             "declaredHarnessImplementations": [
                 {
-                    "harnessId": "codex-native",
+                    "harnessId": harness_id,
                     "implementationRef": implementation_ref,
                     "runtimeDependencies": [],
                 }
             ],
             "integrationModes": ["native-server"],
-            "materializerRefs": ["codex-oauth-home@1"],
+            "materializerRefs": list(materializer_refs),
             "features": {
                 "readOnlyRoot": True,
                 "restrictedEgress": True,
@@ -397,3 +402,289 @@ def test_realizer_registry_no_fallback():
     source = inspect.getsource(registry.require)
     assert 'harness == "opencode' not in source
     assert 'harness == "codex' not in source
+
+# ---- #3830/#3831: generic Codex / Claude realizer admission gates ----
+
+_GATE_ENV = "MOONMIND_OMNIGENT_GENERIC_CODEX_QUALIFIED"
+_CLAUDE_GATE_ENV = "MOONMIND_OMNIGENT_GENERIC_CLAUDE_QUALIFIED"
+_SHARED_REF = "ghcr.io/moonladderstudios/omnigent-host-moonmind@sha256:" + "e" * 64
+
+
+def _compile_claude_plan(**kwargs):
+    """Compile a claude-native plan with the shared-image Host Class."""
+    from moonmind.omnigent.harness_platform.credential_bindings import (
+        create_binding_set as _cbs,
+    )
+    from moonmind.omnigent.harness_platform.planner import (
+        compile_execution_plan as _compile,
+    )
+    from moonmind.omnigent.harness_platform.skills import ResolvedSkillSet as _rss
+
+    catalog = _make_catalog(harness_id="claude-native", digest="sha256:" + "f" * 64)
+    impl = HarnessImplementationIdentity.model_validate(
+        {
+            "sourceKind": "core",
+            "package": "omnigent",
+            "version": "1.0.0",
+            "digest": "sha256:" + "f" * 64,
+            "pluginEntryPoint": None,
+        }
+    )
+    trust = classify_harness_trust(
+        harnessId="claude-native",
+        implementation=impl,
+        trustState=TrustState.core_trusted,
+    )
+    profile = OmnigentAgentProfileV2.model_validate(
+        {
+            "schemaVersion": "moonmind.omnigent-agent-profile.v2",
+            "endpointRef": "default",
+            "source": {
+                "kind": "upstream",
+                "upstreamId": "claude-native-ui",
+                "upstreamVersion": "1.0.0",
+                "upstreamSnapshotDigest": "sha256:" + "d" * 64,
+            },
+            "harness": {
+                "id": "claude-native",
+                "catalogRef": catalog.catalogRef,
+                "implementationRef": impl.implementation_ref(),
+            },
+            "requirements": {
+                "harness": {"required": []},
+                "moonmind": {"required": []},
+                "host": {"required": []},
+            },
+            "credentialSlots": [
+                {
+                    "id": "primary-model",
+                    "optional": False,
+                    "acceptedAuthModels": ["oauth_volume"],
+                    "acceptedProviderIds": ["anthropic"],
+                }
+            ],
+            "model": {},
+            "workspace": {},
+            "skills": [],
+            "tools": [],
+            "capture": {},
+            "continuations": {},
+            "publish": {},
+            "allowedLaunchPolicyRefs": ["claude-on-demand@1"],
+        }
+    )
+    skills = _rss.model_validate(
+        {
+            "resolvedSkillSetRef": "artifact:test",
+            "resolvedSkillSetDigest": "sha256:" + "a" * 64,
+            "skillDeliveryRef": "skill-delivery:sha256:" + "b" * 64,
+        }
+    )
+    bs = _cbs(
+        bindingSetId="claude",
+        version=1,
+        bindings={
+            "primary-model": {
+                "providerProfileRef": "p1",
+                "materializerRef": "claude-oauth-home@1",
+            }
+        },
+    )
+    host_class = _test_codex_host_class(
+        impl.implementation_ref(),
+        host_class_id="omnigent-claude",
+        harness_id="claude-native",
+        materializer_refs=("claude-oauth-home@1",),
+    )
+    return _compile(
+        agent_profile=profile,
+        harness_catalog=catalog,
+        trust_record=trust,
+        resolved_skills=skills,
+        credential_binding_set=bs,
+        host_class_ref="omnigent-claude@1",
+        host_class=host_class,
+        launch_policy_ref="claude-on-demand@1",
+        model_qualified_id="claude/sonnet",
+        model_effort=None,
+        model_route_ref="anthropic",
+        model_normalized_options={},
+        **kwargs,
+    )
+
+
+def _compile_codex_plan(**kwargs):
+    """Compile a codex-native plan with the shared-image Host Class."""
+    from moonmind.omnigent.harness_platform.credential_bindings import (
+        create_binding_set as _cbs,
+    )
+    from moonmind.omnigent.harness_platform.planner import (
+        compile_execution_plan as _compile,
+    )
+    from moonmind.omnigent.harness_platform.skills import ResolvedSkillSet as _rss
+
+    catalog = _make_catalog(harness_id="codex-native", digest="sha256:" + "e" * 64)
+    impl = HarnessImplementationIdentity.model_validate(
+        {
+            "sourceKind": "core",
+            "package": "omnigent",
+            "version": "1.0.0",
+            "digest": "sha256:" + "e" * 64,
+            "pluginEntryPoint": None,
+        }
+    )
+    trust = classify_harness_trust(
+        harnessId="codex-native",
+        implementation=impl,
+        trustState=TrustState.core_trusted,
+    )
+    profile = OmnigentAgentProfileV2.model_validate(
+        {
+            "schemaVersion": "moonmind.omnigent-agent-profile.v2",
+            "endpointRef": "default",
+            "source": {
+                "kind": "upstream",
+                "upstreamId": "codex-native-ui",
+                "upstreamVersion": "1.0.0",
+                "upstreamSnapshotDigest": "sha256:" + "d" * 64,
+            },
+            "harness": {
+                "id": "codex-native",
+                "catalogRef": catalog.catalogRef,
+                "implementationRef": impl.implementation_ref(),
+            },
+            "requirements": {
+                "harness": {"required": []},
+                "moonmind": {"required": []},
+                "host": {"required": []},
+            },
+            "credentialSlots": [
+                {
+                    "id": "primary-model",
+                    "optional": False,
+                    "acceptedAuthModels": ["oauth_volume"],
+                    "acceptedProviderIds": ["openai"],
+                }
+            ],
+            "model": {},
+            "workspace": {},
+            "skills": [],
+            "tools": [],
+            "capture": {},
+            "continuations": {},
+            "publish": {},
+            "allowedLaunchPolicyRefs": ["codex-on-demand@1"],
+        }
+    )
+    skills = _rss.model_validate(
+        {
+            "resolvedSkillSetRef": "artifact:test",
+            "resolvedSkillSetDigest": "sha256:" + "a" * 64,
+            "skillDeliveryRef": "skill-delivery:sha256:" + "b" * 64,
+        }
+    )
+    bs = _cbs(
+        bindingSetId="codex",
+        version=1,
+        bindings={
+            "primary-model": {
+                "providerProfileRef": "p1",
+                "materializerRef": "codex-oauth-home@1",
+            }
+        },
+    )
+    host_class = _test_codex_host_class(
+        impl.implementation_ref(), host_class_id="omnigent-codex"
+    )
+    return _compile(
+        agent_profile=profile,
+        harness_catalog=catalog,
+        trust_record=trust,
+        resolved_skills=skills,
+        credential_binding_set=bs,
+        host_class_ref="omnigent-codex@1",
+        host_class=host_class,
+        launch_policy_ref="codex-on-demand@1",
+        model_qualified_id="gpt-5",
+        model_effort=None,
+        model_route_ref="openai",
+        model_normalized_options={},
+        **kwargs,
+    )
+
+
+def test_select_execution_realizer_codex_gate():
+    from moonmind.omnigent.harness_platform.planner import (
+        select_execution_realizer,
+    )
+
+    # Unqualified (default): codex keeps the retained profile-bound realizer.
+    assert (
+        select_execution_realizer(harness_id="codex-native", is_codex=True)
+        == "codex-profile-bound@1"
+    )
+    # Claude Code (no legacy lane) owns the generic realizer directly.
+    assert (
+        select_execution_realizer(harness_id="claude-native", is_codex=False)
+        == "generic-omnigent-host@1"
+    )
+    assert (
+        select_execution_realizer(harness_id="opencode-native", is_codex=False)
+        == "generic-omnigent-host@1"
+    )
+
+
+def test_codex_generic_plan_fails_closed_until_qualified(monkeypatch):
+    from moonmind.omnigent.harness_platform.planner import (
+        select_execution_realizer,
+    )
+    from moonmind.omnigent.settings import generic_codex_qualified
+
+    monkeypatch.delenv(_GATE_ENV, raising=False)
+    assert generic_codex_qualified() is False
+    # Default trusted selection stays on the retained profile-bound realizer.
+    assert (
+        select_execution_realizer(harness_id="codex-native", is_codex=True)
+        == "codex-profile-bound@1"
+    )
+    # Explicit generic selection fails closed — never a silent fallback.
+    with pytest.raises(Exception) as exc:
+        _compile_codex_plan(execution_realizer_ref="generic-omnigent-host@1")
+    assert "execution realizer" in str(exc.value).lower()
+
+
+def test_codex_generic_plan_when_qualified(monkeypatch):
+    from moonmind.omnigent.harness_platform.planner import (
+        select_execution_realizer,
+    )
+
+    monkeypatch.setenv(_GATE_ENV, "1")
+    assert select_execution_realizer(harness_id="codex-native", is_codex=True) == (
+        "generic-omnigent-host@1"
+    )
+    envelope = _compile_codex_plan()
+    assert envelope.payload.executionRealizerRef == "generic-omnigent-host@1"
+    # Explicit profile-bound remains selectable while the realizer exists.
+    envelope2 = _compile_codex_plan(execution_realizer_ref="codex-profile-bound@1")
+    assert envelope2.payload.executionRealizerRef == "codex-profile-bound@1"
+
+
+def test_generic_codex_gate_env_is_explicit_only(monkeypatch):
+    from moonmind.omnigent.settings import generic_codex_qualified
+
+    monkeypatch.delenv(_GATE_ENV, raising=False)
+    assert generic_codex_qualified() is False
+    monkeypatch.setenv(_GATE_ENV, "1")
+    assert generic_codex_qualified() is True
+    monkeypatch.setenv(_GATE_ENV, "true")
+    assert generic_codex_qualified() is True
+    monkeypatch.setenv(_GATE_ENV, "0")
+    assert generic_codex_qualified() is False
+
+
+def test_claude_plans_record_generic_realizer(monkeypatch):
+    monkeypatch.setenv(_CLAUDE_GATE_ENV, "1")
+    envelope = _compile_claude_plan()
+    assert envelope.payload.executionRealizerRef == "generic-omnigent-host@1"
+    assert envelope.payload.harnessId == "claude-native"
+    assert envelope.payload.hostClassRef == "omnigent-claude@1"
