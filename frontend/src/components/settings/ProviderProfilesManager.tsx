@@ -645,11 +645,32 @@ function extractErrorCode(payload: unknown): string | null {
   return null;
 }
 
+/**
+ * FastAPI request validation answers with `detail: [{ loc: ['body', <field>, ...] }]`,
+ * so read the first body-scoped location instead of treating the array as an
+ * object that carries a `field` key.
+ */
+function extractValidationDetailField(detail: readonly unknown[]): string | null {
+  for (const entry of detail) {
+    if (!entry || typeof entry !== 'object') continue;
+    const loc = (entry as Record<string, unknown>).loc;
+    if (!Array.isArray(loc)) continue;
+    const bodyIndex = loc.indexOf('body');
+    if (bodyIndex < 0) continue;
+    const field = loc[bodyIndex + 1];
+    if (typeof field === 'string') return field;
+  }
+  return null;
+}
+
 /** Canonical Provider Profile field a server validation failure targets. */
 function extractErrorField(payload: unknown): string | null {
   if (!payload || typeof payload !== 'object') return null;
   const record = payload as Record<string, unknown>;
   if (typeof record.field === 'string') return record.field;
+  if (Array.isArray(record.detail)) {
+    return extractValidationDetailField(record.detail);
+  }
   if (record.detail && typeof record.detail === 'object') {
     const detail = record.detail as Record<string, unknown>;
     if (typeof detail.field === 'string') return detail.field;
