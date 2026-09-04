@@ -19,10 +19,15 @@ server=${OMNIGENT_SERVER_URL:-http://omnigent:8000}
 state_root=${OMNIGENT_STATE_PATH:-/home/app/.omnigent}
 skills=${MOONMIND_ACTIVE_SKILLS_DIR:-/opt/moonmind-skills}
 
-# --- 1. Trusted pack selection (exact match only) -----------------------------
+# --- 1. Trusted pack/materializer selection (exact match only) ---------------
 case "$pack_ref" in
   codex-native-pack@1|claude-native-pack@1) ;;
   *) echo "unsupported runtime pack ref: ${pack_ref:-<unset>}" >&2; exit 64 ;;
+esac
+materializer_ref=${MOONMIND_OMNIGENT_CREDENTIAL_MATERIALIZER_REF:-}
+case "$pack_ref:$materializer_ref" in
+  "codex-native-pack@1:codex-oauth-home@1"|"claude-native-pack@1:claude-oauth-home@1") ;;
+  *) echo "unsupported runtime pack/materializer combination: ${pack_ref:-<unset>}/${materializer_ref:-<unset>}" >&2; exit 64 ;;
 esac
 
 # --- 2. Reject unapproved ambient authority -----------------------------------
