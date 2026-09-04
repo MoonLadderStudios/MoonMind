@@ -320,6 +320,38 @@ def test_explicit_step_retry_accepts_typed_integration_failure(
     )
 
 
+def test_explicit_step_retry_accepts_transport_failure_before_work(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A status-less transport failure before any provider work is retryable.
+
+    Regression for mm:2ebfad84-1c13-4572-af6f-bc1140f72842: an Omnigent
+    ``ReadTimeout`` during first-message POST surfaced as
+    ``integration_error``/``omnigent_http_error`` with no retry recommendation
+    and failed the workflow permanently after one 150s attempt. The executor
+    now recommends a fresh step execution when no work exists to preserve,
+    and the parent honors it through the existing explicit-retry contract.
+    """
+
+    monkeypatch.setattr(run_workflow_module.workflow, "patched", lambda _patch: True)
+    workflow = MoonMindRunWorkflow()
+    result = {
+        "status": "FAILED",
+        "outputs": {
+            "error": "integration_error",
+            "failureClass": "integration_error",
+            "providerErrorCode": "omnigent_http_error",
+            "retryRecommendation": "retry_step_execution",
+        },
+    }
+
+    assert workflow._activity_result_retryable(
+        result,
+        failure_message="integration_error",
+        tool_type="agent_runtime",
+    )
+
+
 def test_explicit_step_retry_does_not_override_permanent_failure(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
