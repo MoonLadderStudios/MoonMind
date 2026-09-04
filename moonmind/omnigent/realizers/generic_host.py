@@ -232,6 +232,8 @@ class GenericOmnigentHostRealizer:
         # plan; no call site below names its own label.
         harness_id = plan.payload.harnessId
         launch_readiness_recorded = False
+        # The attested-resume lifecycle is its own terminal telemetry owner.
+        resume_owns_terminal_outcome = False
 
         try:
             await self._notify_execution_state(
@@ -320,6 +322,11 @@ class GenericOmnigentHostRealizer:
                         plan=plan,
                         host_context=host_context,
                     )
+                    # A resume launches no host and reports its own cleanup
+                    # outcome, so this lifecycle must not add a second cleanup
+                    # outcome or a launch-readiness failure when the resumed
+                    # session raises through here.
+                    resume_owns_terminal_outcome = True
                     return await self._resume_attested_host(
                         request=request,
                         plan=plan,
@@ -526,7 +533,7 @@ class GenericOmnigentHostRealizer:
         except BaseException as exc:
             primary_error = exc
 
-        if not launch_readiness_recorded:
+        if not launch_readiness_recorded and not resume_owns_terminal_outcome:
             # Only a launch that never reached an attested ready host is a
             # launch-readiness failure; a session that failed afterwards is not.
             control_plane_metrics.record_safely(
@@ -560,7 +567,7 @@ class GenericOmnigentHostRealizer:
             except BaseException as exc:
                 cleanup_error = exc
 
-        if binding is not None or acquired:
+        if (binding is not None or acquired) and not resume_owns_terminal_outcome:
             # An execution that never held a resource has no cleanup outcome to
             # report; counting it as clean would inflate the operator view.
             self._record_cleanup_outcome(
