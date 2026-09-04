@@ -17088,6 +17088,134 @@ describe("Task Create MM-578 Preset expansion", () => {
     );
   });
 
+  it("preserves an edited publish mode over a policy expanded during submit", async () => {
+    const workflowPublish = {
+      mode: "none",
+      mergeAutomation: { enabled: true },
+    };
+    fetchSpy.mockImplementation((input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.startsWith("/api/presets?scope=global")) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({
+            items: [
+              {
+                slug: "publish-nothing-preset",
+                scope: "global",
+                title: "Publish Nothing Preset",
+                description: "Preset that publishes nothing by default.",
+                presetDigest: "digest-publish-nothing",
+                inputs: [
+                  {
+                    name: "target_ref",
+                    label: "Target Ref",
+                    type: "text",
+                    required: true,
+                  },
+                ],
+              },
+            ],
+          }),
+        } as Response);
+      }
+      if (url.startsWith("/api/presets/publish-nothing-preset?scope=global")) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({
+            slug: "publish-nothing-preset",
+            scope: "global",
+            title: "Publish Nothing Preset",
+            description: "Preset that publishes nothing by default.",
+            presetDigest: "digest-publish-nothing",
+            inputs: [
+              {
+                name: "target_ref",
+                label: "Target Ref",
+                type: "text",
+                required: true,
+              },
+            ],
+          }),
+        } as Response);
+      }
+      if (
+        url.startsWith("/api/presets/publish-nothing-preset:expand?scope=global")
+      ) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({
+            steps: [
+              {
+                id: "tpl:publish-nothing-preset:01",
+                title: "Break the request down",
+                instructions: "Break the request down.",
+                skill: { id: "moonspec", args: {} },
+              },
+            ],
+            publish: workflowPublish,
+            appliedTemplate: {
+              slug: "publish-nothing-preset",
+              presetDigest: "digest-publish-nothing",
+              inputs: { target_ref: "Ship it" },
+              stepIds: ["tpl:publish-nothing-preset:01"],
+            },
+            capabilities: ["git"],
+            warnings: [],
+          }),
+        } as Response);
+      }
+      return mockMm578PresetFetch(input);
+    });
+
+    renderWithClient(<WorkflowStartPage payload={mockPayload} />);
+
+    const step = (await screen.findByText("Step 1")).closest(
+      "section",
+    ) as HTMLElement;
+    selectStepType(step, "Preset");
+    const presetSelect = within(step).getByLabelText(
+      "Preset Template",
+    ) as HTMLSelectElement;
+    await waitFor(() => {
+      expect(
+        Array.from(presetSelect.options).some(
+          (option) => option.value === "global::::publish-nothing-preset",
+        ),
+      ).toBe(true);
+    });
+    fireEvent.change(presetSelect, {
+      target: { value: "global::::publish-nothing-preset" },
+    });
+    fireEvent.change(await within(step).findByLabelText("Target Ref"), {
+      target: { value: "Ship it" },
+    });
+
+    // The operator changes the visible control and starts without expanding
+    // first, so expansion happens during submit.
+    fireEvent.change(screen.getByLabelText("Publish Mode"), {
+      target: { value: "pr" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Start Workflow" }));
+
+    await waitFor(() => {
+      expect(fetchSpy).toHaveBeenCalledWith(
+        "/api/executions",
+        expect.objectContaining({ method: "POST" }),
+      );
+    });
+    const request = latestCreateRequest() as {
+      payload: {
+        publishMode?: string;
+        task: { publish?: Record<string, unknown> };
+      };
+    };
+    // The preset's `none` policy must not silently disable the requested
+    // publication.
+    expect(request.payload.publishMode).toBe("pr");
+    expect(request.payload.task.publish).toEqual({ mode: "pr" });
+  });
+
   it("preserves a publish override when a later submit-time preset has no policy", async () => {
     const workflowPublish = {
       mode: "pr",
@@ -18604,6 +18732,14 @@ describe("Task Create schema-driven capability inputs", () => {
           title: "Publish override",
           enum: ["none", "branch", "pr"],
         },
+        source_note: {
+          type: "string",
+          title: "Source Note",
+        },
+        derived_note: {
+          type: "string",
+          title: "Derived Note",
+        },
       },
     },
     uiSchema: {
@@ -18614,6 +18750,14 @@ describe("Task Create schema-driven capability inputs", () => {
         defaultFrom: {
           field: "run_ref",
           map: { "skill:verify": "none", "preset:implement": "pr" },
+        },
+      },
+      // An unconstrained text source proves the rule only reads its own
+      // declared entries.
+      derived_note: {
+        defaultFrom: {
+          field: "source_note",
+          map: { alpha: "alpha-default" },
         },
       },
     },
@@ -19396,6 +19540,49 @@ describe("Task Create schema-driven capability inputs", () => {
     fireEvent.click(within(step).getByRole("button", { name: "Expand" }));
     await waitFor(() => {
       expect(latestBatchExpandInputs().publish_mode).toBe("branch");
+    });
+  });
+
+  it("ignores an inherited object member when a dependent source is unconstrained text", async () => {
+    const step = await selectBatchSchemaPreset();
+
+    // `constructor` resolves an `Object.prototype` member through a plain
+    // lookup; cloning that function would throw and take the page down.
+    fireEvent.change(within(step).getByLabelText("Source Note"), {
+      target: { value: "constructor" },
+    });
+
+    const derived = within(step).getByLabelText(
+      "Derived Note",
+    ) as HTMLInputElement;
+    expect(derived.value).toBe("");
+
+    fireEvent.click(within(step).getByRole("button", { name: "Expand" }));
+    await waitFor(() => {
+      expect(latestBatchExpandInputs()).not.toHaveProperty("derived_note");
+    });
+  });
+
+  it("derives a dependent default for a target the operator cleared", async () => {
+    const step = await selectBatchSchemaPreset();
+    fireEvent.change(within(step).getByLabelText("Source Note"), {
+      target: { value: "alpha" },
+    });
+    await waitFor(() => {
+      expect(
+        (within(step).getByLabelText("Derived Note") as HTMLInputElement).value,
+      ).toBe("alpha-default");
+    });
+
+    // Expansion treats a blank dependent target as omitted and derives the
+    // mapped value, so clearing the field must not submit something else.
+    fireEvent.change(within(step).getByLabelText("Derived Note"), {
+      target: { value: "" },
+    });
+
+    fireEvent.click(within(step).getByRole("button", { name: "Expand" }));
+    await waitFor(() => {
+      expect(latestBatchExpandInputs().derived_note).toBe("alpha-default");
     });
   });
 

@@ -3956,7 +3956,15 @@ function dependentCapabilityDefault(
     return undefined;
   }
   const source = capabilityInputValue(values, detail.defaults, field);
-  const mapped = map[String(source ?? "").trim()];
+  const sourceKey = String(source ?? "").trim();
+  // Only an entry the rule actually declares may supply a default. A plain
+  // lookup would resolve an inherited `Object.prototype` member such as
+  // `constructor` for an unconstrained source value, and cloning that function
+  // throws while rendering.
+  if (!Object.prototype.hasOwnProperty.call(map, sourceKey)) {
+    return undefined;
+  }
+  const mapped = map[sourceKey];
   if (mapped === undefined || containsSecretLikeCapabilityValue(mapped)) {
     return undefined;
   }
@@ -4088,11 +4096,22 @@ function resolveSchemaCapabilityValues(
     } else if (explicit !== undefined && widget === "jira.issue-picker") {
       explicit = normalizeJiraIssuePickerValue(explicit);
     }
+    const dependentFallback = dependentCapabilityDefault(
+      detail,
+      explicitValues,
+      name,
+    );
     const fallback =
-      dependentCapabilityDefault(detail, explicitValues, name) ??
+      dependentFallback ??
       safeCapabilityDefault(detail.defaults, name) ??
       safeCapabilityDefault(fieldSchema, "default");
     if (explicit !== undefined) {
+      // Expansion treats a blank dependent target as omitted and derives the
+      // mapped default, so a cleared field has to resolve the same way here.
+      if (explicit === "" && dependentFallback !== undefined) {
+        values[name] = dependentFallback;
+        continue;
+      }
       if (
         explicit === "" &&
         !required.has(name) &&
@@ -6169,6 +6188,9 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
   const [publishMode, setPublishMode] = useState(
     normalizePublishModeForSubmit(defaultPublishMode),
   );
+  // Tracks an operator edit of the visible Publish Mode control so a preset
+  // expanded during submit cannot silently replace that explicit choice.
+  const [publishModeTouched, setPublishModeTouched] = useState(false);
   const [produceReport, setProduceReport] = useState(false);
   const [priority, setPriority] = useState(DEFAULT_PRIORITY);
   const [maxAttempts, setMaxAttempts] = useState(DEFAULT_MAX_ATTEMPTS);
@@ -9712,6 +9734,9 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
       expansion.workflowPublish,
     );
     if (pageMode.mode === "create" && expandedPublishSelection) {
+      // The expanded preset's policy becomes the new visible baseline, so any
+      // earlier edit is no longer an override of it.
+      setPublishModeTouched(false);
       setPublishMode(expandedPublishSelection);
     }
     const autoFillSuffix =
@@ -10675,11 +10700,13 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
       String(submitExpandedWorkflowPublish?.mode || ""),
     );
     // A preset expanded during this submit has not yet had a chance to update
-    // the visible form control. Use its workflow-level policy for this request.
-    // For an already-applied preset, a different visible mode is an explicit
-    // operator override and therefore wins over the annotation.
+    // the visible form control. Use its workflow-level policy for this request
+    // unless the operator already edited that control: an explicit selection
+    // wins whether the preset was expanded before or during submit.
     const requestedPublishMode =
-      submitExpandedWorkflowPublish && submitExpandedPublishMode
+      submitExpandedWorkflowPublish &&
+      submitExpandedPublishMode &&
+      !publishModeTouched
         ? submitExpandedPublishMode
         : formPublishMode;
     const effectiveSubmissionSkillId = primarySkillId;
@@ -14743,7 +14770,10 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
                 aria-label="Publish Mode"
                 title={publishModeTooltip}
                 value={publishMode}
-                onChange={(event) => setPublishMode(event.target.value)}
+                onChange={(event) => {
+                  setPublishModeTouched(true);
+                  setPublishMode(event.target.value);
+                }}
               >
                 <option
                   value="auto"
