@@ -400,6 +400,23 @@ direct runtime consumers
 
 The first-party Codex and Claude OAuth contract fixes `max_parallel_runs = 1`.
 
+Configured profile capacity is a ceiling. Effective concurrency is the minimum
+of the configured ceiling, provider/cooldown backpressure, generic-host
+capacity, and Temporal execution capacity. A lower effective limit never
+rewrites the configured ceiling and never kills active workflows; it stops new
+admission until usage falls below the effective limit.
+
+Lease purposes are purpose-aware (MoonMind #3878):
+
+- shared execution leases (`execution_direct`, `execution_omnigent`) admit at
+  most `max_parallel_runs` concurrent consumers per profile;
+- credentialless validation (`credential_validation` on `credential_source:
+  none`, e.g. OpenCode Zen `none@1`) is single-flight shared refresh for one
+  exact evidence identity and coexists with execution leases on any capacity;
+- exclusive maintenance (OAuth connect/reconnect/disconnect, repair, and
+  validation on a mutable credential) drains existing consumers first and
+  blocks new execution admission while held.
+
 Capacity rules:
 
 - selection never silently changes the chosen profile;
@@ -415,14 +432,17 @@ Capacity rules:
 
 Execution may be constrained by several independent layers:
 
-1. Provider Profile account capacity;
-2. profile-bound host count;
-3. sessions per host;
-4. worker or Docker machine capacity;
-5. image and runtime resource policy;
-6. network and egress policy;
-7. workspace and mount availability;
-8. approval policy.
+1. Provider Profile configured capacity (`max_parallel_runs` ceiling);
+2. Provider Profile effective capacity (cooldown/operator backpressure lowers
+   admission without changing the configured ceiling);
+3. profile-bound host count;
+4. sessions per host;
+5. generic-host aggregate machine capacity and cold-launch rate;
+6. Temporal worker execution capacity;
+7. image and runtime resource policy;
+8. network and egress policy;
+9. workspace and mount availability;
+10. approval policy.
 
 The status projection identifies the blocking layer. Counters are not conflated, and success at one layer does not bypass another.
 

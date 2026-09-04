@@ -520,6 +520,65 @@ class MoonMindProviderProfileManagerWorkflow:
         return purpose.value
 
     @staticmethod
+    def _is_credentialless_profile(profile: ProfileSlotState) -> bool:
+        """Return whether a profile uses credential-free materialization.
+
+        MoonMind #3878 invariant 3: credentialless validation (``none``
+        credential source, e.g. OpenCode Zen ``none@1``) carries no shared
+        mutable credential state, so its model-catalog revalidation must not
+        require the profile itself to have capacity one.
+        """
+
+        source = getattr(profile, "credential_source", None)
+        source = getattr(source, "value", source)
+        return str(source or "").strip().lower() == "none"
+
+    @staticmethod
+    def _profile_validation_lease_holders(profile: ProfileSlotState) -> list[str]:
+        """Return active ``credential_validation`` lease holders for a profile."""
+
+        holders: list[str] = []
+        for lease_id in profile.current_leases:
+            metadata = profile.lease_metadata.get(lease_id) or {}
+            if (
+                str(metadata.get("purpose") or "")
+                == CredentialLeasePurpose.CREDENTIAL_VALIDATION.value
+            ):
+                holders.append(lease_id)
+        return holders
+
+    @classmethod
+    def _profile_has_exclusive_maintenance_lease(
+        cls, profile: ProfileSlotState
+    ) -> bool:
+        """Return whether a profile holds an exclusive maintenance lease.
+
+        Credentialless ``credential_validation`` is shared single-flight
+        evidence refresh: it coexists with execution leases and never blocks
+        admission. Every other maintenance purpose (OAuth connect/reconnect,
+        repair, or validation on a mutable credential) is exclusive: while
+        held, new execution consumers must wait and the holder must have
+        drained existing consumers first (MoonMind #3878 invariants 3-4).
+        """
+
+        for lease_id in profile.current_leases:
+            metadata = profile.lease_metadata.get(lease_id) or {}
+            purpose = str(metadata.get("purpose") or "")
+            if purpose in {
+                CredentialLeasePurpose.EXECUTION_DIRECT.value,
+                CredentialLeasePurpose.EXECUTION_OMNIGENT.value,
+                "",
+            }:
+                continue
+            if (
+                purpose == CredentialLeasePurpose.CREDENTIAL_VALIDATION.value
+                and cls._is_credentialless_profile(profile)
+            ):
+                continue
+            return True
+        return False
+
+    @staticmethod
     def _safe_lease_metadata(payload: dict[str, Any]) -> dict[str, Any]:
         source = payload.get("metadata")
         if not isinstance(source, dict):
@@ -845,13 +904,74 @@ class MoonMindProviderProfileManagerWorkflow:
                 launch_ready=False,
             )
             self._profiles[profile_id] = profile
-        if profile.max_parallel_runs != 1:
+        # MoonMind #3878 invariants 3-4: purpose-aware maintenance.
+        # Credentialless validation is single-flight shared refresh that
+        # coexists with execution leases on any configured capacity N.
+        # All other maintenance is exclusive: it drains existing consumers
+        # first and blocks new execution admission while held. Mutable
+        # OAuth-home capacity-one enforcement stays in
+        # _validated_profile_capacity / oauth_policy (invariant 5).
+        is_credentialless_validation = (
+            purpose == CredentialLeasePurpose.CREDENTIAL_VALIDATION.value
+            and self._is_credentialless_profile(profile)
+        )
+        if is_credentialless_validation:
+            while not self._shutdown_requested:
+                holders = self._profile_validation_lease_holders(profile)
+                if not holders:
+                    granted_at = workflow.now()
+                    profile.current_leases.append(requester_id)
+                    profile.lease_granted_at[requester_id] = granted_at.isoformat()
+                    profile.lease_metadata[requester_id] = {
+                        "leaseId": requester_id,
+                        "ownerId": requester_id,
+                        "purpose": purpose,
+                        "acquiredAt": granted_at.isoformat(),
+                        "expiresAt": (
+                            granted_at
+                            + timedelta(
+                                seconds=profile.max_lease_duration_seconds
+                            )
+                        ).isoformat(),
+                        **self._safe_lease_metadata(payload),
+                    }
+                    if workflow.patched(DB_LEASE_PERSISTENCE_PATCH):
+                        persisted = await self._sync_leases_to_db()
+                        if (
+                            workflow.patched(DURABLE_LEASE_GRANT_PATCH)
+                            and not persisted
+                        ):
+                            profile.release(requester_id)
+                            raise exceptions.ApplicationError(
+                                "Provider profile lease persistence failed before maintenance grant",
+                                type="ProviderProfileLeasePersistenceFailed",
+                            )
+                    return {
+                        "profile_id": profile_id,
+                        "lease_id": requester_id,
+                        "already_held": False,
+                    }
+                try:
+                    await workflow.wait_condition(
+                        lambda: (
+                            self._shutdown_requested
+                            or requester_id in profile.current_leases
+                            or not self._profile_validation_lease_holders(profile)
+                        ),
+                        timeout=timedelta(seconds=60),
+                    )
+                except TimeoutError:
+                    continue
             raise exceptions.ApplicationError(
-                "credential maintenance requires exclusive profile capacity",
-                non_retryable=True,
+                "provider profile manager is shutting down", non_retryable=True
             )
         while not self._shutdown_requested:
-            if profile.reserve(
+            # Exclusive maintenance drains all credential consumers first and,
+            # once granted, blocks new execution admission via
+            # _profile_has_exclusive_maintenance_lease (MoonMind #3878
+            # invariant 4). Reducing capacity never kills active workflows;
+            # this waits durably instead.
+            if not profile.current_leases and profile.reserve(
                 requester_id,
                 workflow.now(),
                 purpose=purpose,
@@ -1698,13 +1818,24 @@ class MoonMindProviderProfileManagerWorkflow:
                     selector=selector,
                     exact_profile_id=exact_profile_id,
                 ):
-                    self._handoff_reservations.pop(normalized_group_id, None)
-                    return reserved_profile
+                    # MoonMind #3878 invariant 4: an exclusive maintenance
+                    # lease blocks even handoff-pinned admission.
+                    if not self._profile_has_exclusive_maintenance_lease(
+                        reserved_profile
+                    ):
+                        self._handoff_reservations.pop(normalized_group_id, None)
+                        return reserved_profile
                 self._handoff_reservations.pop(normalized_group_id, None)
 
         if exact_profile_id:
             exact_profile = self._profiles.get(exact_profile_id)
             if exact_profile is None or not exact_profile.is_available():
+                return None
+            # MoonMind #3878 invariant 4: exclusive maintenance blocks new
+            # execution consumers until existing consumers drain and the
+            # maintenance lease releases. Credentialless validation is
+            # explicitly shared and does not block here.
+            if self._profile_has_exclusive_maintenance_lease(exact_profile):
                 return None
             reserved_slots = self._reserved_slot_count_for_other_groups(
                 exact_profile.profile_id, normalized_group_id
@@ -1724,6 +1855,8 @@ class MoonMindProviderProfileManagerWorkflow:
         eligible_profiles: list[ProfileSlotState] = []
         for profile in self._profiles.values():
             if not profile.is_available():
+                continue
+            if self._profile_has_exclusive_maintenance_lease(profile):
                 continue
             reserved_slots = self._reserved_slot_count_for_other_groups(
                 profile.profile_id, normalized_group_id
