@@ -46,6 +46,18 @@ import {
 import { DEFAULT_REMEDIATION_ACTION_POLICY } from "../lib/workflowActions";
 import { ContextRetrievalControls } from "../components/ContextRetrievalControls";
 import {
+  formatRolloutStateLabel,
+  formatRuntimeLabel as formatRuntimeTargetLabel,
+  preferredTargetForRuntime,
+  resolveDefaultRuntimeId,
+  runtimeOptionGroups,
+  runtimeUnavailableReason,
+} from "../runtime/runtimeTargets";
+import type {
+  RuntimeTargetCatalog,
+  RuntimeTargetRolloutState,
+} from "../runtime/runtimeTargets";
+import {
   type ContextRetrievalAuthoring,
   compileContextRetrievalParameters,
   defaultContextRetrievalAuthoring,
@@ -369,6 +381,7 @@ interface DashboardConfig {
       }>;
       policies?: Array<{ ref?: string; hostMode?: string }>;
     };
+    runtimeTargetCatalog?: RuntimeTargetCatalog;
     presetCatalog?: {
       enabled?: boolean;
       templateSaveEnabled?: boolean;
@@ -646,6 +659,13 @@ interface OmnigentExecutionReadinessV3 {
     policies: string[];
     models: string[];
     gateReasons: OmnigentCatalogGateReason[];
+    // Versioned runtime-provider rollout authority for this exact target
+    // (MoonLadderStudios/MoonMind#3833).
+    rolloutTargetId?: string | null;
+    rolloutState?: RuntimeTargetRolloutState | null;
+    rolloutGeneration?: number | null;
+    rolloutPolicyVersion?: string | null;
+    compatibilityPath?: boolean;
   }>;
 }
 
@@ -3365,31 +3385,11 @@ function attachmentLimitMessage(policy: AttachmentPolicy): string {
   return `Up to ${policy.maxCount} files across all steps, ${formatAttachmentBytes(policy.maxBytes)} each, ${formatAttachmentBytes(policy.totalBytes)} total.`;
 }
 
-// Human-friendly display names for agent runtimes. Raw runtime ids such as
-// `claude_code` should never surface to operators in the UI.
-const RUNTIME_DISPLAY_LABELS: Record<string, string> = {
-  claude_code: "Claude Code",
-  codex_cli: "Codex CLI",
-  codex_cloud: "Codex Cloud",
-  omnigent: "Codex via Omnigent",
-};
-
-function formatRuntimeLabel(runtimeId: string): string {
-  const known = RUNTIME_DISPLAY_LABELS[runtimeId];
-  if (known) {
-    return known;
-  }
-  const formatted = runtimeId
-    .split(/[_\s-]+/)
-    .filter(Boolean)
-    .map((word) =>
-      word.toLowerCase() === "cli"
-        ? "CLI"
-        : word.charAt(0).toUpperCase() + word.slice(1),
-    )
-    .join(" ");
-  return formatted || runtimeId;
-}
+// Runtime labels come from the server-owned runtime-provider target catalog
+// (MoonLadderStudios/MoonMind#3833) so the UI shows the truthful selected path
+// — "Codex via generic Omnigent", "Direct Codex compatibility", and so on —
+// instead of a hard-coded display-name map. `../runtime/runtimeTargets` owns
+// the derivation, including the offline fallback.
 
 function validateAttachmentFiles(
   files: File[],
@@ -6093,13 +6093,18 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
     };
   }, [dashboardConfig.system?.attachmentPolicy]);
 
-  // Server-owned default: `dashboardConfig.system.defaultRuntime` from `build_runtime_config`
-  // is authoritative (now defaults to omnigent via `settings.workflow.default_runtime` and
-  // `DEFAULT_WORKFLOW_RUNTIME`). The hardcoded fallback is only for offline/legacy payloads.
-  const defaultRuntime = String(
-    dashboardConfig.system?.defaultRuntime ||
-      dashboardConfig.system?.defaultAgentRuntime ||
-      "omnigent",
+  // Server-owned default. `build_runtime_config` resolves it through the shared
+  // runtime-target selection boundary, which asks the versioned
+  // runtime-provider rollout policy which target is promoted for new work
+  // (MoonLadderStudios/MoonMind#3833). `resolveDefaultRuntimeId` owns the one
+  // documented offline fallback.
+  const runtimeTargetCatalog = dashboardConfig.system?.runtimeTargetCatalog;
+  const defaultRuntime = resolveDefaultRuntimeId(
+    [
+      dashboardConfig.system?.defaultRuntime,
+      dashboardConfig.system?.defaultAgentRuntime,
+    ],
+    runtimeTargetCatalog,
   );
   const defaultRepository = String(
     dashboardConfig.system?.defaultRepository || "",
@@ -6133,6 +6138,16 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
     ?.supportedAgentRuntimes ||
     dashboardConfig.system?.supportedRuntimes || ["omnigent", "codex_cli", "claude_code"];
   const runtimeOptions = Array.from(new Set(supportedAgentRuntimes));
+  // Recommended vs explicitly labeled compatibility paths come from the
+  // server-owned rollout policy, never from a client-side runtime map.
+  const agentRuntimeOptionGroups = useMemo(
+    () => runtimeOptionGroups(runtimeOptions, runtimeTargetCatalog),
+    [runtimeOptions, runtimeTargetCatalog],
+  );
+  const stepRuntimeOptionGroups = useMemo(
+    () => runtimeOptionGroups(supportedAgentRuntimes, runtimeTargetCatalog),
+    [supportedAgentRuntimes, runtimeTargetCatalog],
+  );
 
   const [steps, setSteps] = useState<StepState[]>([createStepStateEntry(1)]);
   const stepsRef = useRef<StepState[]>(steps);
@@ -6536,6 +6551,17 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
     },
   });
 
+  // The truthful selected path, plus the exact reason when no qualified target
+  // exists for the authored runtime. An unavailable runtime is never silently
+  // replaced with another one.
+  const selectedRuntimeTarget = useMemo(
+    () => preferredTargetForRuntime(runtimeTargetCatalog, runtime),
+    [runtimeTargetCatalog, runtime],
+  );
+  const selectedRuntimeUnavailableReason = useMemo(
+    () => runtimeUnavailableReason(runtime, runtimeTargetCatalog),
+    [runtime, runtimeTargetCatalog],
+  );
   const selectedOmnigentExecutionProfile = omnigentProfiles.find(
     (profile) => profile.ref === omnigentExecutionTargetRef,
   );
@@ -8547,7 +8573,7 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
       ? selectedOmnigentAgentProfile?.displayName ||
         omnigentExecutionReadinessQuery.data?.displayName ||
         "Omnigent"
-      : formatRuntimeLabel(providerProfileRuntime);
+      : formatRuntimeTargetLabel(providerProfileRuntime, runtimeTargetCatalog);
   const selectedOmnigentReadiness = (omnigentCatalogQuery.data?.executionProfiles || []).find(
     (profile) => profile.ref === omnigentExecutionTargetRef,
   );
@@ -13807,11 +13833,28 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
                           }
                         >
                           <option value="">Inherit agent runtime</option>
-                          {supportedAgentRuntimes.map((runtimeOption) => (
-                            <option key={runtimeOption} value={runtimeOption}>
-                              {formatRuntimeLabel(runtimeOption)}
+                          {stepRuntimeOptionGroups.recommended.map((option) => (
+                            <option
+                              key={option.runtimeId}
+                              value={option.runtimeId}
+                            >
+                              {option.label}
                             </option>
                           ))}
+                          {stepRuntimeOptionGroups.compatibility.length > 0 ? (
+                            <optgroup label="Compatibility paths">
+                              {stepRuntimeOptionGroups.compatibility.map(
+                                (option) => (
+                                  <option
+                                    key={option.runtimeId}
+                                    value={option.runtimeId}
+                                  >
+                                    {option.label}
+                                  </option>
+                                ),
+                              )}
+                            </optgroup>
+                          ) : null}
                         </select>
                       </label>
                       <label>
@@ -14110,11 +14153,20 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
                 setRuntimeAuthored(true);
               }}
             >
-              {runtimeOptions.map((runtimeOption) => (
-                <option key={runtimeOption} value={runtimeOption}>
-                  {formatRuntimeLabel(runtimeOption)}
+              {agentRuntimeOptionGroups.recommended.map((option) => (
+                <option key={option.runtimeId} value={option.runtimeId}>
+                  {option.label}
                 </option>
               ))}
+              {agentRuntimeOptionGroups.compatibility.length > 0 ? (
+                <optgroup label="Compatibility paths">
+                  {agentRuntimeOptionGroups.compatibility.map((option) => (
+                    <option key={option.runtimeId} value={option.runtimeId}>
+                      {option.label}
+                    </option>
+                  ))}
+                </optgroup>
+              ) : null}
             </select>
             {runtime === "omnigent" && (
               selectedProfileIsGenericV2
@@ -14129,6 +14181,31 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
               </span>
             ) : null}
           </label>
+
+          {/* The truthful selected path and rollout state live outside the
+              label so the Runtime field's accessible name stays "Runtime". */}
+          {selectedRuntimeTarget || selectedRuntimeUnavailableReason ? (
+            <div className="stack">
+              {selectedRuntimeTarget ? (
+                <span className="small" data-runtime-target-state>
+                  {selectedRuntimeTarget.label}
+                  {" \u00b7 "}
+                  {formatRolloutStateLabel(
+                    selectedGenericOmnigentTarget?.rolloutState ||
+                      selectedRuntimeTarget.rolloutState,
+                  )}
+                  {selectedRuntimeTarget.compatibilityPath
+                    ? " \u00b7 compatibility path"
+                    : ""}
+                </span>
+              ) : null}
+              {selectedRuntimeUnavailableReason ? (
+                <span className="small" role="status" data-runtime-unavailable>
+                  {selectedRuntimeUnavailableReason}
+                </span>
+              ) : null}
+            </div>
+          ) : null}
 
           {runtime === "omnigent" ? (
             <label>

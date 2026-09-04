@@ -54,6 +54,10 @@ from moonmind.workflows.executions.execution_contract import (
     build_authoritative_workflow_input_snapshot,
 )
 from moonmind.workflows.executions.preset_expansion import expand_preset_for_child_run
+from moonmind.workflows.executions.runtime_target_selection import (
+    AuthoringSurface,
+    resolve_runtime_target_selection,
+)
 from moonmind.workflows.executions.repository_contract import (
     repository_branch_from_value,
     repository_name_from_value,
@@ -873,10 +877,20 @@ def _derive_pr_resolver_title(
 
 
 def _normalize_runtime_mode(raw_mode: Any) -> str:
+    """Resolve a step's runtime mode through the shared selection boundary.
+
+    An omitted mode never falls back to a literal or an environment variable:
+    the versioned runtime-provider rollout policy owns the default
+    (MoonLadderStudios/MoonMind#3833).
+    """
+
     normalized = str(raw_mode or "").strip().lower()
-    if not normalized:
-        return str(settings.workflow.default_runtime or "omnigent").strip().lower()
-    return normalized
+    if normalized:
+        return normalized
+    return resolve_runtime_target_selection(
+        surface=AuthoringSurface.worker_normalization,
+        workflow_settings=settings.workflow,
+    ).runtime_id
 
 
 def _compile_repository_operation(

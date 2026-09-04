@@ -319,6 +319,10 @@ class PersistedOmnigentExecutionPlan:
     artifact_refs: tuple[str, ...]
     resolved_skillset_ref: str
     resolved_skillset_digest: str
+    # Frozen runtime-provider rollout decision the plan was admitted under
+    # (MoonLadderStudios/MoonMind#3833). ``None`` only for a plan compiled
+    # before the contract existed.
+    runtime_provider_rollout: dict[str, Any] | None = None
 
 
 def selected_skill_names(initial_parameters: Mapping[str, Any]) -> list[str]:
@@ -1149,9 +1153,15 @@ async def compile_and_persist_execution_plan(
         taskInputSnapshotRef=task_input_snapshot_ref,
         taskInputSnapshotDigest=task_input_snapshot_digest,
     )
+    frozen_rollout = persisted.payload.runtimeProviderRollout
     return PersistedOmnigentExecutionPlan(
         envelope=persisted,
         binding=binding,
+        runtime_provider_rollout=(
+            frozen_rollout.model_dump(mode="json", by_alias=True)
+            if frozen_rollout is not None
+            else None
+        ),
         artifact_refs=(
             policy_artifact_ref,
             effective_launch_ref,

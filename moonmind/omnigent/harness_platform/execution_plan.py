@@ -174,6 +174,44 @@ class AdmissionAuthority(BaseModel):
         return self
 
 
+class RuntimeProviderRolloutRecord(BaseModel):
+    """Frozen runtime-provider rollout authority for one admitted plan.
+
+    Source: MoonLadderStudios/MoonMind#3833. Changing the live rollout policy
+    after admission can never reinterpret this execution: the plan carries the
+    exact combination key, the rule generation, and the policy generation that
+    admitted it.
+    """
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    policyVersion: str = Field(alias="policyVersion")
+    policyGeneration: int = Field(alias="policyGeneration", ge=0)
+    combinationKey: str = Field(alias="combinationKey")
+    targetId: str = Field(alias="targetId")
+    pathClass: str = Field(alias="pathClass")
+    state: str
+    ruleGeneration: int = Field(alias="ruleGeneration", ge=0)
+    reasonCode: str = Field(alias="reasonCode")
+
+    @model_validator(mode="after")
+    def validate_record(self) -> "RuntimeProviderRolloutRecord":
+        if not self.combinationKey.startswith(
+            "omnigent-runtime-provider-combination:sha256:"
+        ):
+            raise ValueError("combinationKey must be a combination digest")
+        for field_name in (
+            "policyVersion",
+            "targetId",
+            "pathClass",
+            "state",
+            "reasonCode",
+        ):
+            if not str(getattr(self, field_name) or "").strip():
+                raise ValueError(f"{field_name} is required")
+        return self
+
+
 class OmnigentExecutionPlanPayload(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
 
@@ -227,6 +265,12 @@ class OmnigentExecutionPlanPayload(BaseModel):
     # identity. New admissions always populate it.
     supportIdentity: SupportKeyPayload | None = Field(
         default=None, alias="supportIdentity"
+    )
+    # Optional for replay compatibility with plans admitted before
+    # MoonLadderStudios/MoonMind#3833 froze the rollout decision. New
+    # admissions always populate it.
+    runtimeProviderRollout: RuntimeProviderRolloutRecord | None = Field(
+        default=None, alias="runtimeProviderRollout"
     )
 
     @model_validator(mode="after")
@@ -299,6 +343,7 @@ def canonical_payload_bytes(
         "effectiveLaunchSnapshotDigest",
         "admissionAuthority",
         "supportIdentity",
+        "runtimeProviderRollout",
     ):
         if data.get(optional_v1_field) is None:
             data.pop(optional_v1_field, None)

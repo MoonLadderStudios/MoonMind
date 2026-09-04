@@ -83,6 +83,9 @@ from api_service.api.routers.omnigent_native_ui import (
 )
 from api_service.api.routers.omnigent_catalog import router as omnigent_catalog_router
 from api_service.api.routers.omnigent_policies import router as omnigent_policies_router
+from api_service.api.routers.omnigent_runtime_provider_migration import (
+    router as omnigent_runtime_provider_migration_router,
+)
 from api_service.api.routers.omnigent_session_timeline import (
     router as omnigent_session_timeline_router,
 )
@@ -849,6 +852,7 @@ app.include_router(
 app.include_router(native_ui_router, prefix=NATIVE_UI_MOUNT_PATH)
 app.include_router(omnigent_catalog_router)
 app.include_router(omnigent_policies_router)
+app.include_router(omnigent_runtime_provider_migration_router)
 app.include_router(omnigent_session_timeline_router)
 app.include_router(omnigent_bootstrap_router)
 app.include_router(workflow_console_router)

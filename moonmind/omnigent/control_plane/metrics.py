@@ -130,6 +130,70 @@ BOUNDED_LABEL_VALUES: dict[str, frozenset[str]] = {
         }
     ),
     "readiness": frozenset({"ready", "not_ready", "unknown"}),
+    # --- Runtime-provider migration (MoonLadderStudios/MoonMind#3833) ---
+    # Harness *class*, never a harness display name or a profile identity.
+    "harness_class": frozenset(
+        {"codex", "claude", "opencode", "pi", "unregistered"}
+    ),
+    "realizer_class": frozenset(
+        {"generic_omnigent", "legacy_profile_bound_omnigent", "direct_compatibility"}
+    ),
+    "selection_source": frozenset(
+        {"authored", "rollout_default", "recorded", "configured_default"}
+    ),
+    "rollout_state": frozenset(
+        {
+            "disabled",
+            "explicit_only",
+            "canary",
+            "preferred",
+            "new_work_default",
+            "direct_compatibility_only",
+            "retired_for_new_work",
+        }
+    ),
+    "denial_reason": frozenset(
+        {
+            "combination_not_registered",
+            "rollout_disabled",
+            "rollout_canary_cohort_excluded",
+            "support_evidence_missing",
+            "support_evidence_stale",
+            "target_not_launch_ready",
+            "model_not_qualified",
+            "architecture_unsupported",
+            "host_mode_unavailable",
+            "provider_profile_unavailable",
+            "rollback_new_admission_stopped",
+            "rollback_legacy_default_restored",
+            "rollback_all_omnigent_stopped",
+        }
+    ),
+    "followup_kind": frozenset(
+        {
+            "workflow_chat",
+            "repository_continuation",
+            "steering",
+            "approval_response",
+            "remediation",
+            "checkpoint_resume",
+            "linked_branch",
+        }
+    ),
+    "availability": frozenset({"available", "unavailable"}),
+    "cleanup_outcome": frozenset(
+        {"cancelled_clean", "cancelled_incomplete", "completed_clean", "leaked"}
+    ),
+    "rollback_control": frozenset(
+        {
+            "stop_new_generic_codex_admission",
+            "stop_new_generic_claude_admission",
+            "stop_new_opencode_shared_image_admission",
+            "restore_legacy_or_direct_default",
+            "disable_native_interactive_chat",
+            "stop_all_new_omnigent_work",
+        }
+    ),
 }
 
 #: Fallback label values emitted by :func:`_normalize_labels`: an
@@ -206,6 +270,27 @@ EXACT_IMAGE_CONFORMANCE = "omnigent_exact_image_conformance"
 PROTECTED_LIVE_EVIDENCE_AGE = "omnigent_protected_live_evidence_age_seconds"
 PROVIDER_VERIFICATION_RUNNER_HEALTH = "omnigent_provider_verification_runner_health"
 
+# --- Runtime-provider migration (#3833) --------------------------------------
+#
+# One bounded family per required migration signal. Every label value is drawn
+# from a closed vocabulary above, and no user, workflow, session, profile,
+# repository, or credential identity may appear (enforced by
+# :data:`FORBIDDEN_LABEL_KEYS`).
+
+MIGRATION_SELECTED_PATH = "omnigent_migration_selected_path"
+MIGRATION_ROLLOUT_STATE = "omnigent_migration_rollout_state"
+MIGRATION_LAUNCH_READINESS = "omnigent_migration_launch_readiness"
+MIGRATION_SUPPORT_EVIDENCE_DENIAL = "omnigent_migration_support_evidence_denial"
+MIGRATION_PROVIDER_PROFILE_WAIT = (
+    "omnigent_migration_provider_profile_wait_seconds"
+)
+MIGRATION_HOST_LATENCY = "omnigent_migration_host_latency_seconds"
+MIGRATION_FIRST_TURN_LATENCY = "omnigent_migration_first_turn_latency_seconds"
+MIGRATION_FOLLOWUP_AVAILABILITY = "omnigent_migration_followup_availability"
+MIGRATION_CLEANUP_OUTCOME = "omnigent_migration_cleanup_outcome"
+MIGRATION_FALLBACK_DENIED = "omnigent_migration_fallback_denied"
+MIGRATION_ROLLBACK_ACTIVATION = "omnigent_migration_rollback_activation"
+
 
 METRICS: dict[str, MetricDefinition] = {
     m.name: m
@@ -239,6 +324,52 @@ METRICS: dict[str, MetricDefinition] = {
         _def(EXACT_IMAGE_CONFORMANCE, COUNTER, ("status",)),
         _def(PROTECTED_LIVE_EVIDENCE_AGE, OBSERVATION, (), "seconds"),
         _def(PROVIDER_VERIFICATION_RUNNER_HEALTH, COUNTER, ("status",)),
+        # Runtime-provider migration (#3833)
+        _def(
+            MIGRATION_SELECTED_PATH,
+            COUNTER,
+            ("harness_class", "realizer_class", "selection_source"),
+        ),
+        _def(
+            MIGRATION_ROLLOUT_STATE,
+            COUNTER,
+            ("harness_class", "realizer_class", "rollout_state"),
+        ),
+        _def(MIGRATION_LAUNCH_READINESS, COUNTER, ("harness_class", "readiness")),
+        _def(
+            MIGRATION_SUPPORT_EVIDENCE_DENIAL,
+            COUNTER,
+            ("harness_class", "denial_reason"),
+        ),
+        _def(
+            MIGRATION_PROVIDER_PROFILE_WAIT,
+            OBSERVATION,
+            ("harness_class",),
+            "seconds",
+        ),
+        _def(MIGRATION_HOST_LATENCY, OBSERVATION, ("harness_class",), "seconds"),
+        _def(
+            MIGRATION_FIRST_TURN_LATENCY,
+            OBSERVATION,
+            ("harness_class",),
+            "seconds",
+        ),
+        _def(
+            MIGRATION_FOLLOWUP_AVAILABILITY,
+            COUNTER,
+            ("harness_class", "followup_kind", "availability"),
+        ),
+        _def(
+            MIGRATION_CLEANUP_OUTCOME,
+            COUNTER,
+            ("harness_class", "cleanup_outcome"),
+        ),
+        _def(
+            MIGRATION_FALLBACK_DENIED,
+            COUNTER,
+            ("harness_class", "denial_reason"),
+        ),
+        _def(MIGRATION_ROLLBACK_ACTIVATION, COUNTER, ("rollback_control",)),
     )
 }
 
@@ -368,10 +499,87 @@ def snapshot() -> dict[str, object]:
     return {"counters": counters, "observations": observations}
 
 
+def counter_series() -> tuple[tuple[str, dict[str, str], int], ...]:
+    """Return structured counter samples for operator status projections.
+
+    ``snapshot`` formats keys for human diagnostics; this returns the same
+    aggregates as ``(metric name, labels, value)`` so a projection can filter by
+    a bounded label without parsing a formatted string.
+    """
+
+    with _lock:
+        return tuple(
+            (name, dict(labels), count)
+            for (name, labels), count in _counters.items()
+        )
+
+
 def label_inventory() -> dict[str, tuple[str, ...]]:
     """Return the declared label keys for every metric (for contract tests)."""
 
     return {name: metric.labels for name, metric in METRICS.items()}
+
+
+# --- Runtime-provider migration recording helpers ----------------------------
+
+#: Exact harness id -> bounded harness *class* label. Matching is by exact id,
+#: never by substring, so a new harness collapses to ``unregistered`` instead of
+#: silently joining another class.
+_HARNESS_CLASSES: dict[str, str] = {
+    "codex-native": "codex",
+    "claude-native": "claude",
+    "opencode-native": "opencode",
+    "pi-native": "pi",
+}
+
+
+def harness_class_for(harness_id: object) -> str:
+    """Return the bounded harness class label for an exact harness id."""
+
+    return _HARNESS_CLASSES.get(str(harness_id or "").strip(), "unregistered")
+
+
+def record_runtime_target_selection(
+    *,
+    harness_id: object,
+    realizer_class: object,
+    selection_source: object,
+    rollout_state: object,
+    available: bool,
+    denial_reason: object = None,
+) -> None:
+    """Record one runtime-target selection through the shared boundary.
+
+    Emits the selected-path, rollout-state, and (when the target is
+    unavailable) the fallback-denial counters in one place so every authoring
+    surface reports the migration the same way.
+    """
+
+    harness_class = harness_class_for(harness_id)
+    increment(
+        MIGRATION_SELECTED_PATH,
+        harness_class=harness_class,
+        realizer_class=realizer_class,
+        selection_source=selection_source,
+    )
+    increment(
+        MIGRATION_ROLLOUT_STATE,
+        harness_class=harness_class,
+        realizer_class=realizer_class,
+        rollout_state=rollout_state,
+    )
+    if not available:
+        increment(
+            MIGRATION_FALLBACK_DENIED,
+            harness_class=harness_class,
+            denial_reason=denial_reason,
+        )
+
+
+def record_rollback_activation(control: object) -> None:
+    """Record activation of one runtime-provider rollback control."""
+
+    increment(MIGRATION_ROLLBACK_ACTIVATION, rollback_control=control)
 
 
 def reset() -> None:
@@ -394,6 +602,7 @@ __all__ = [
     "increment",
     "observe",
     "snapshot",
+    "counter_series",
     "label_inventory",
     "reset",
     # names
@@ -422,4 +631,18 @@ __all__ = [
     "EXACT_IMAGE_CONFORMANCE",
     "PROTECTED_LIVE_EVIDENCE_AGE",
     "PROVIDER_VERIFICATION_RUNNER_HEALTH",
+    "MIGRATION_SELECTED_PATH",
+    "MIGRATION_ROLLOUT_STATE",
+    "MIGRATION_LAUNCH_READINESS",
+    "MIGRATION_SUPPORT_EVIDENCE_DENIAL",
+    "MIGRATION_PROVIDER_PROFILE_WAIT",
+    "MIGRATION_HOST_LATENCY",
+    "MIGRATION_FIRST_TURN_LATENCY",
+    "MIGRATION_FOLLOWUP_AVAILABILITY",
+    "MIGRATION_CLEANUP_OUTCOME",
+    "MIGRATION_FALLBACK_DENIED",
+    "MIGRATION_ROLLBACK_ACTIVATION",
+    "harness_class_for",
+    "record_runtime_target_selection",
+    "record_rollback_activation",
 ]
