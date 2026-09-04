@@ -296,6 +296,76 @@ def test_existing_history_preserves_provider_retry_decision(
     )
 
 
+def test_explicit_step_retry_accepts_typed_integration_failure(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The Omnigent dropped-turn contract authorizes a fresh Step Execution."""
+
+    monkeypatch.setattr(run_workflow_module.workflow, "patched", lambda _patch: True)
+    workflow = MoonMindRunWorkflow()
+    result = {
+        "status": "FAILED",
+        "outputs": {
+            "error": "integration_error",
+            "failureClass": "integration_error",
+            "providerErrorCode": "OMNIGENT_CURRENT_TURN_NOT_STARTED",
+            "retryRecommendation": "retry_step_execution",
+        },
+    }
+
+    assert workflow._activity_result_retryable(
+        result,
+        failure_message="integration_error",
+        tool_type="agent_runtime",
+    )
+
+
+def test_explicit_step_retry_does_not_override_permanent_failure(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Contradictory retry metadata cannot override permanent failure authority."""
+
+    monkeypatch.setattr(run_workflow_module.workflow, "patched", lambda _patch: True)
+    workflow = MoonMindRunWorkflow()
+    result = {
+        "status": "FAILED",
+        "outputs": {
+            "error": "permanent",
+            "retryRecommendation": "retry_step_execution",
+        },
+    }
+
+    assert not workflow._activity_result_retryable(
+        result,
+        failure_message="permanent",
+        tool_type="agent_runtime",
+    )
+
+
+def test_existing_history_does_not_adopt_explicit_integration_retry(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The new retry decision is gated away from in-flight workflow histories."""
+
+    monkeypatch.setattr(run_workflow_module.workflow, "patched", lambda _patch: False)
+    workflow = MoonMindRunWorkflow()
+    result = {
+        "status": "FAILED",
+        "outputs": {
+            "error": "integration_error",
+            "failureClass": "integration_error",
+            "providerErrorCode": "OMNIGENT_CURRENT_TURN_NOT_STARTED",
+            "retryRecommendation": "retry_step_execution",
+        },
+    }
+
+    assert not workflow._activity_result_retryable(
+        result,
+        failure_message="integration_error",
+        tool_type="agent_runtime",
+    )
+
+
 def test_empty_merge_gate_without_parent_is_not_gated() -> None:
     workflow = MoonMindRunWorkflow()
     params = _ungated_resolver_parameters()

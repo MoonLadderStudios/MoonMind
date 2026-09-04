@@ -1,0 +1,11 @@
+{
+  "acceptCurrentTurnProgress": false,
+  "terminalBoundarySource": "marker",
+  "turnStartTimeoutSeconds": 300,
+  "failureCode": "OMNIGENT_CURRENT_TURN_NOT_STARTED",
+  "failureClass": "integration_error",
+  "retryRecommendation": "retry_step_execution",
+  "boundedByTurnStartBudget": true,
+  "terminalResponseRetainsLiveAuthority": false,
+  "parentStartsFreshStepExecution": true
+}
