@@ -22,6 +22,7 @@
     "ui:test": "./tools/test_unit.sh --dashboard-only --ui-args",
     "ui:test:browser": "vitest run --config frontend/vitest.browser.config.ts",
     "ui:test:workflow-start": "./tools/test_unit.sh --dashboard-only --ui-args frontend/src/entrypoints/workflow-start.test.tsx",
+    "ui:test:settings-redesign": "./tools/test_unit.sh --dashboard-only --ui-args RedesignConformance",
     "ui:test:watch": "node ./node_modules/vitest/vitest.mjs --config frontend/vite.config.ts",
     "api:types": "bash tools/run_repo_python.sh tools/generate_openapi_types.py",
     "api:types:check": "npm run api:types && git diff --exit-code -- frontend/src/generated/openapi.ts",

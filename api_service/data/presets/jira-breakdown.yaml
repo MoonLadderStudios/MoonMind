@@ -13,6 +13,10 @@ requiredCapabilities:
 annotations:
   sourceSkill: moonspec-breakdown
   output: jira
+  # Jira issue creation is an external side effect, not repository publication: the
+  # story breakdown is a temporary artifact, so this workflow publishes nothing.
+  workflowPublish:
+    mode: none
 inputs:
   - name: feature_request
     label: Workflow Instructions

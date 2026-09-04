@@ -63,6 +63,8 @@ annotations:
       publish_mode:
         type: string
         title: Publish override
+        description: Publish mode applied to every queued child workflow. Both run
+          options implement code, so children publish a pull request by default.
         enum:
         - none
         - branch
@@ -82,7 +84,7 @@ annotations:
     run_ref: preset:github-issue-implement
     max_workflows: '25'
     run_verify: true
-    publish_mode: none
+    publish_mode: pr
 inputs:
 - name: issue_range
   label: GitHub Issue Number Range
@@ -116,7 +118,7 @@ inputs:
   label: Publish Override
   type: enum
   required: false
-  default: none
+  default: pr
   options:
   - none
   - branch

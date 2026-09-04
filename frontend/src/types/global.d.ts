@@ -12,6 +12,10 @@ declare const process: {
 
 declare module "node:fs" {
   export function readFileSync(path: string, encoding: "utf8"): string;
+  export function readdirSync(
+    path: string,
+    options: { withFileTypes: true },
+  ): Array<{ name: string; isDirectory(): boolean }>;
 }
 
 declare module "node:module" {
@@ -20,4 +24,5 @@ declare module "node:module" {
 
 declare module "node:path" {
   export function resolve(...paths: string[]): string;
+  export function join(...paths: string[]): string;
 }
