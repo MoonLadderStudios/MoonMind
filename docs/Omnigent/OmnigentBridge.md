@@ -579,6 +579,14 @@ For `host_type = external`:
 }
 ```
 
+Event dispatch has a 150-second transport budget because a native message can
+synchronously ensure the runner terminal before the provider accepts it. This
+budget covers a connect-time bootstrap and one serialized recovery attempt with
+margin. The enclosing `omnigent.submit_turn` Activity allows 180 seconds per
+attempt and 600 seconds across retries. Ordinary JSON and non-message control
+events retain a 60-second budget, while the SSE read remains unbounded and is
+governed by the marked-turn progress budgets below.
+
 ### 9.2 First-message marker
 
 ```text
