@@ -255,6 +255,7 @@ COPY omnigent/omnigent /app/omnigent/omnigent/
 COPY pr_resolver_core /app/pr_resolver_core/
 COPY services/omnigent/tools/manifest.lock.json /app/services/omnigent/tools/manifest.lock.json
 COPY services/omnigent/profile/moonmind-tools.sh /app/services/omnigent/profile/moonmind-tools.sh
+COPY services/omnigent/opencode-host/verify-warm-plugin-cache.sh /app/services/omnigent/opencode-host/verify-warm-plugin-cache.sh
 RUN --mount=type=cache,target=/root/.cache/pip \
     pip install --disable-pip-version-check --no-deps .
 COPY api_service /app/api_service/

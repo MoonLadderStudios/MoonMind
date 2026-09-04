@@ -2274,7 +2274,8 @@ async def test_generic_realizer_records_host_log_publication_failure() -> None:
 
 
 @pytest.mark.asyncio
-async def test_generic_realizer_publishes_host_logs_from_failed_host_realization() -> (
+@pytest.mark.parametrize("cleanup_fails", [False, True])
+async def test_generic_realizer_publishes_host_logs_from_failed_host_realization(cleanup_fails) -> (
     None
 ):
     """Logs captured when the runtime removes an unattested host are still published.
@@ -2329,6 +2330,8 @@ async def test_generic_realizer_publishes_host_logs_from_failed_host_realization
 
     async def cleanup_without_container(**_kwargs):
         harness.events.append("host-cleaned")
+        if cleanup_fails:
+            raise RuntimeError("proxy unavailable after host removal")
         return {"containerRemoved": True}
 
     realizer._host_runtime.realize = realize_fails
@@ -2345,6 +2348,9 @@ async def test_generic_realizer_publishes_host_logs_from_failed_host_realization
     assert artifacts.text_writes[0]["payload"].startswith(
         "runner: registration timed out"
     )
+    if cleanup_fails:
+        assert not any(write["name"] == "generic-host-cleanup.json" for write in artifacts.json_writes)
+        return
     host_results = next(
         write["payload"]
         for write in artifacts.json_writes
@@ -2356,7 +2362,8 @@ async def test_generic_realizer_publishes_host_logs_from_failed_host_realization
 
 
 @pytest.mark.asyncio
-async def test_generic_host_runtime_carries_cleanup_evidence_on_failed_realization() -> (
+@pytest.mark.parametrize("cleanup_fails", [False, True])
+async def test_generic_host_runtime_carries_cleanup_evidence_on_failed_realization(cleanup_fails) -> (
     None
 ):
     """The runtime's own failure cleanup keeps the host log tail on the failure."""
@@ -2400,6 +2407,8 @@ async def test_generic_host_runtime_carries_cleanup_evidence_on_failed_realizati
     class Cleanup:
         async def cleanup(self, **kwargs):
             cleanup_calls.append(dict(kwargs))
+            if cleanup_fails:
+                raise RuntimeError("cleanup unavailable")
             return {
                 "containerRemoved": True,
                 "hostLogs": "runner: registration never completed\n",
@@ -2483,6 +2492,9 @@ async def test_generic_host_runtime_carries_cleanup_evidence_on_failed_realizati
         )
 
     assert [call["container_name"] for call in cleanup_calls] == ["mm-host-realize-1"]
+    if cleanup_fails:
+        assert excinfo.value.host_cleanup_error == "RuntimeError"
+        return
     evidence = excinfo.value.host_cleanup_evidence
     assert evidence["containerRemoved"] is True
     assert evidence["hostLogs"].startswith("runner: registration never completed")

@@ -1,0 +1,9 @@
+{
+  "workflowId": "mm:efb89891-b490-4b5f-b10f-3b5bbcf81fe0",
+  "hostImageRef": "ghcr.io/moonladderstudios/omnigent-host-opencode@sha256:f228955fb42417a300ab8907a626c3e68736216da6ac397541e09c108a4f3cf8",
+  "hostStartupError": "opencode host image is missing the warm plugin npm cache at /opt/moonmind/opencode-npm-cache",
+  "hostExitCode": 1,
+  "registrationStatus": 404,
+  "cleanupFailure": "untyped docker inspect falls through missing container to proxy-forbidden resource types",
+  "expected": "quarantine images missing bootstrap prerequisites; detect dead hosts before further polling; preserve startup logs despite cleanup failure; typed cleanup is idempotent"
+}
