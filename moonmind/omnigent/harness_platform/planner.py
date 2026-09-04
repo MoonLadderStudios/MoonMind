@@ -145,6 +145,9 @@ def compile_execution_plan(
     execution_realizer_ref: str | None = None,
     execution_authority: dict[str, Any] | None = None,
     agent_profile_snapshot_ref: str | None = None,
+    rollout_policy_version: str | None = None,
+    rollout_generation: int | None = None,
+    rollout_state: str | None = None,
 ) -> OmnigentExecutionPlanEnvelope:
     # 1. Validate agent profile (resolve snapshot)
     profile = validate_agent_profile(agent_profile)
@@ -508,6 +511,17 @@ def compile_execution_plan(
     )
     support_key = compute_support_combination_key(support_payload)
 
+    # Rollout authority (#3833) is atomic: version, generation, and state are
+    # persisted together or not at all. Partial rollout authority fails closed.
+    rollout_fields = (rollout_policy_version, rollout_generation, rollout_state)
+    if any(value is not None for value in rollout_fields) and not all(
+        value is not None for value in rollout_fields
+    ):
+        raise HarnessPlatformError(
+            "rollout authority must be recorded atomically",
+            code=HarnessPlatformFailure.OMNIGENT_EXECUTION_PLAN_CONFLICT,
+        )
+
     # Build plan payload
     runtime_validation_requirements = (
         "exact-harness-implementation",
@@ -599,6 +613,9 @@ def compile_execution_plan(
             "supportIdentity": support_payload.model_dump(
                 by_alias=True, mode="json"
             ),
+            "rolloutPolicyVersion": rollout_policy_version,
+            "rolloutGeneration": rollout_generation,
+            "rolloutState": rollout_state,
         }
     )
 
