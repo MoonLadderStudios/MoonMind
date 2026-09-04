@@ -576,6 +576,23 @@ validateProviderProfileDraft
 - Cancel restores the normalized server profile.
 - Read-only users can inspect effective advanced policy without edit controls.
 
+### 14.6 Conformance suite
+
+The end-to-end contract above is machine-verified by
+`frontend/src/components/settings/providerProfileRedesignConformance.test.tsx`,
+which exercises the standard-creation matrix for every authentication and
+materialization class the repository supports, progressive disclosure and draft
+preservation, hidden-field validation focus, the integrated model-tier create
+journey, existing-profile compatibility, and the guard that rejects a second
+hand-maintained creation-preset schema in React. The per-behavior unit tests
+remain in `frontend/src/components/settings/ProviderProfilesManager.test.tsx`.
+
+Focused local command:
+
+```bash
+npm run ui:test:settings-redesign
+```
+
 ---
 
 ## 15. Acceptance Criteria
