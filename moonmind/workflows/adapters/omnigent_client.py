@@ -19,6 +19,15 @@ from moonmind.utils.logging import (
 
 _AGENT_CATALOG_PAGE_SIZE = 1000
 _MAX_AGENT_CATALOG_PAGES = 100
+_DEFAULT_REQUEST_TIMEOUT_SECONDS = 60.0
+# A message event can synchronously wait for the runner's native-terminal
+# bootstrap. The runner may spend 30 seconds resolving the harness version and
+# another 30 seconds waiting for its loopback server; when a connect-time
+# bootstrap loses that race, the serialized event ensure can repeat the same
+# bounded work. Keep enough margin for both attempts so the provider returns
+# its authoritative success or structured startup failure before MoonMind
+# releases the on-demand host.
+_DEFAULT_EVENT_TIMEOUT_SECONDS = 150.0
 
 
 class OmnigentClientError(RuntimeError):
@@ -58,7 +67,8 @@ class OmnigentHttpClient:
         *,
         base_url: str,
         api_token: str = "",
-        timeout_seconds: float = 60.0,
+        timeout_seconds: float = _DEFAULT_REQUEST_TIMEOUT_SECONDS,
+        event_timeout_seconds: float = _DEFAULT_EVENT_TIMEOUT_SECONDS,
         stream_timeout_seconds: float | None = None,
         transport: httpx.AsyncBaseTransport | None = None,
         client: httpx.AsyncClient | None = None,
@@ -68,6 +78,7 @@ class OmnigentHttpClient:
         self._base = str(base_url).rstrip("/")
         self._api_token = api_token
         self._timeout = httpx.Timeout(timeout_seconds)
+        self._event_timeout = httpx.Timeout(event_timeout_seconds)
         self._stream_timeout = httpx.Timeout(
             timeout_seconds,
             read=stream_timeout_seconds,
@@ -251,6 +262,7 @@ class OmnigentHttpClient:
             "POST",
             f"/v1/sessions/{quote(session_id, safe='')}/events",
             json=dict(event),
+            request_timeout=self._event_timeout,
         )
 
     async def stream_events(self, session_id: str) -> AsyncIterator[dict[str, Any]]:
@@ -267,7 +279,7 @@ class OmnigentHttpClient:
                         yield event
             except httpx.HTTPError as exc:
                 raise OmnigentClientError(
-                    self._redact(f"Omnigent transport error: {exc!s}"),
+                    self._transport_error_message(exc),
                     failure_class="integration_error",
                 ) from exc
             return
@@ -286,7 +298,7 @@ class OmnigentHttpClient:
                         yield event
             except httpx.HTTPError as exc:
                 raise OmnigentClientError(
-                    self._redact(f"Omnigent transport error: {exc!s}"),
+                    self._transport_error_message(exc),
                     failure_class="integration_error",
                 ) from exc
 
@@ -380,25 +392,33 @@ class OmnigentHttpClient:
             f"/v1/sessions/{quote(session_id, safe='')}{query}",
         )
 
-    async def _request(self, method: str, path: str, **kwargs: Any) -> dict[str, Any]:
+    async def _request(
+        self,
+        method: str,
+        path: str,
+        *,
+        request_timeout: httpx.Timeout | None = None,
+        **kwargs: Any,
+    ) -> dict[str, Any]:
+        timeout = request_timeout or self._timeout
         if self._client is not None:
             try:
                 response = await self._client.request(
                     method,
                     f"{self._base}{path}",
                     headers=self._headers(),
-                    timeout=self._timeout,
+                    timeout=timeout,
                     **kwargs,
                 )
             except httpx.HTTPError as exc:
                 raise OmnigentClientError(
-                    self._redact(f"Omnigent transport error: {exc!s}"),
+                    self._transport_error_message(exc),
                     failure_class="integration_error",
                 ) from exc
             return self._parse_json_response(response)
 
         async with httpx.AsyncClient(
-            timeout=self._timeout,
+            timeout=timeout,
             transport=self._transport,
         ) as client:
             try:
@@ -410,7 +430,7 @@ class OmnigentHttpClient:
                 )
             except httpx.HTTPError as exc:
                 raise OmnigentClientError(
-                    self._redact(f"Omnigent transport error: {exc!s}"),
+                    self._transport_error_message(exc),
                     failure_class="integration_error",
                 ) from exc
         return self._parse_json_response(response)
@@ -439,7 +459,7 @@ class OmnigentHttpClient:
                 )
             except httpx.HTTPError as exc:
                 raise OmnigentClientError(
-                    self._redact(f"Omnigent transport error: {exc!s}"),
+                    self._transport_error_message(exc),
                     failure_class="integration_error",
                 ) from exc
             if response.status_code < 200 or response.status_code >= 300:
@@ -458,7 +478,7 @@ class OmnigentHttpClient:
                 )
             except httpx.HTTPError as exc:
                 raise OmnigentClientError(
-                    self._redact(f"Omnigent transport error: {exc!s}"),
+                    self._transport_error_message(exc),
                     failure_class="integration_error",
                 ) from exc
         if response.status_code < 200 or response.status_code >= 300:
@@ -484,6 +504,12 @@ class OmnigentHttpClient:
 
     def _redact(self, value: str) -> str:
         return redact_sensitive_text(self._redactor.scrub(value))
+
+    def _transport_error_message(self, exc: httpx.HTTPError) -> str:
+        """Return a useful redacted message even for empty httpx timeout text."""
+
+        detail = str(exc).strip() or type(exc).__name__
+        return self._redact(f"Omnigent transport error: {detail}")
 
 
 def parse_sse_line(line: str) -> dict[str, Any] | None:

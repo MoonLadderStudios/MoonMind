@@ -1,0 +1,17 @@
+{
+  "invariant": "the bounded first-message dispatch outlives two serialized native bootstrap attempts while ordinary calls remain independently bounded",
+  "minimumEventTimeoutSeconds": 120.0,
+  "ordinaryTimeout": {
+    "connect": 60.0,
+    "read": 60.0,
+    "write": 60.0,
+    "pool": 60.0
+  },
+  "eventTimeout": {
+    "connect": 150.0,
+    "read": 150.0,
+    "write": 150.0,
+    "pool": 150.0
+  },
+  "emptyReadTimeoutMessage": "Omnigent transport error: ReadTimeout"
+}

@@ -132,21 +132,30 @@ async def test_injected_http_client_preserves_omnigent_timeout_contract() -> Non
         client = OmnigentHttpClient(
             base_url="https://omnigent.test",
             timeout_seconds=47.0,
+            event_timeout_seconds=131.0,
             stream_timeout_seconds=None,
             client=injected_client,
         )
 
+        assert await client.get_session("sess_1") == {"ok": True}
         assert await client.post_event("sess_1", {"type": "message"}) == {
             "ok": True
         }
         assert [event async for event in client.stream_events("sess_1")] == []
 
-    request_timeout = observed_timeouts["/v1/sessions/sess_1/events"]
-    assert request_timeout == {
+    ordinary_timeout = observed_timeouts["/v1/sessions/sess_1"]
+    assert ordinary_timeout == {
         "connect": 47.0,
         "read": 47.0,
         "write": 47.0,
         "pool": 47.0,
+    }
+    request_timeout = observed_timeouts["/v1/sessions/sess_1/events"]
+    assert request_timeout == {
+        "connect": 131.0,
+        "read": 131.0,
+        "write": 131.0,
+        "pool": 131.0,
     }
     stream_timeout = observed_timeouts["/v1/sessions/sess_1/stream"]
     assert stream_timeout == {
@@ -155,6 +164,25 @@ async def test_injected_http_client_preserves_omnigent_timeout_contract() -> Non
         "write": 47.0,
         "pool": 47.0,
     }
+
+
+@pytest.mark.asyncio
+async def test_omnigent_client_names_empty_transport_timeout() -> None:
+    """httpx timeout strings may be empty, but diagnostics must identify them."""
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        raise httpx.ReadTimeout("", request=request)
+
+    client = OmnigentHttpClient(
+        base_url="https://omnigent.test",
+        transport=httpx.MockTransport(handler),
+    )
+
+    with pytest.raises(
+        OmnigentClientError,
+        match="Omnigent transport error: ReadTimeout",
+    ):
+        await client.post_event("sess_1", {"type": "message"})
 
 
 @pytest.mark.asyncio

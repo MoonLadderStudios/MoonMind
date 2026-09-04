@@ -579,6 +579,12 @@ For `host_type = external`:
 }
 ```
 
+Event dispatch has a 150-second transport budget because a native message can
+synchronously ensure the runner terminal before the provider accepts it. This
+budget covers a connect-time bootstrap and one serialized recovery attempt with
+margin. Ordinary JSON operations retain a 60-second budget, while the SSE read
+remains unbounded and is governed by the marked-turn progress budgets below.
+
 ### 9.2 First-message marker
 
 ```text
