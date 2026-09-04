@@ -204,7 +204,7 @@ def build_generic_omnigent_execution_services(
             signing_secret=str(settings.security.JWT_SECRET_KEY or ""),
         ),
         registration_waiter=OmnigentHostRegistrationService(
-            client=client, expected_owner=expected_owner
+            client=client, expected_owner=expected_owner, backend=docker
         ),
         host_attestor=DockerOmnigentHostAttestor(
             backend=docker, client=client, artifacts=artifacts
