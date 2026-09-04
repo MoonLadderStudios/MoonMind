@@ -11,6 +11,10 @@ requiredCapabilities:
 annotations:
   sourceSkill: document-update-orchestrate
   output: document-update-tasks
+  # Parent discovery only: each child document-update workflow carries its own
+  # publish and merge-automation policy, so this workflow has nothing to publish.
+  workflowPublish:
+    mode: none
 inputs:
   - name: document_directory
     label: Document Directory

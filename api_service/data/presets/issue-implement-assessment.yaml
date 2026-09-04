@@ -12,6 +12,10 @@ requiredCapabilities:
 annotations:
   sourceSkill: issue-implement-assessment
   issueProvider: neutral
+  # Repository-read assessment: this preset forbids code changes and only writes
+  # local handoff artifacts for later steps, so it publishes nothing.
+  workflowPublish:
+    mode: none
 inputs:
 - name: issue_provider
   label: Issue Provider
