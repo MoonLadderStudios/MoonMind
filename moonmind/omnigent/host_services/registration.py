@@ -66,11 +66,13 @@ class OmnigentHostRegistrationService:
         expected_owner: str,
         attempts: int = HOST_REGISTRATION_ATTEMPTS,
         interval_seconds: float = HOST_REGISTRATION_INTERVAL_SECONDS,
+        backend: Any | None = None,
     ) -> None:
         self._client = client
         self._owner = expected_owner.strip()
         self._attempts = attempts
         self._interval = interval_seconds
+        self._backend = backend
         if not self._owner:
             raise HarnessPlatformError(
                 "generic host registration requires an expected Omnigent owner",
@@ -113,6 +115,39 @@ class OmnigentHostRegistrationService:
         jitter = random.uniform(-0.2 * capped, 0.2 * capped)
         return max(0.1, capped + jitter)
 
+    async def _check_host_process(self, correlation_name: str) -> None:
+        """A dead process cannot register; do not spend the readiness budget on it."""
+        if self._backend is None:
+            return
+        code, out, _err = await self._backend.run(
+            [
+                "docker", "container", "inspect", "--format",
+                "{{.State.Status}}|{{.State.ExitCode}}", correlation_name,
+            ],
+            check=False,
+            timeout_seconds=10,
+        )
+        if code != 0:
+            raise HarnessPlatformError(
+                "launched host process inspection unavailable",
+                code=HarnessPlatformFailure.OMNIGENT_HOST_LAUNCH_FAILED,
+            )
+        status, _, exit_code = out.strip().partition("|")
+        if status in {"exited", "dead", "removing"}:
+            safe_exit = (
+                str(int(exit_code)) if exit_code.lstrip("-").isdigit() else "unknown"
+            )
+            raise HarnessPlatformError(
+                f"launched host exited before registration (exitCode={safe_exit}); "
+                "inspect host logs",
+                code=HarnessPlatformFailure.OMNIGENT_HOST_LAUNCH_FAILED,
+            )
+        if status not in {"created", "running", "restarting"}:
+            raise HarnessPlatformError(
+                "launched host process is not runnable",
+                code=HarnessPlatformFailure.OMNIGENT_HOST_LAUNCH_FAILED,
+            )
+
     async def _wait_for_targeted_registration(
         self,
         *,
@@ -124,6 +159,7 @@ class OmnigentHostRegistrationService:
         from moonmind.workflows.adapters.omnigent_client import OmnigentClientError
 
         for attempt in range(self._attempts):
+            await self._check_host_process(correlation_name)
             try:
                 host = await self._client.get_host(expected_host_id)
             except OmnigentClientError as exc:
@@ -210,6 +246,7 @@ class OmnigentHostRegistrationService:
         credentialless: bool,
     ) -> dict[str, Any]:
         for attempt in range(self._attempts):
+            await self._check_host_process(correlation_name)
             observed_at = datetime.now(UTC)
             hosts = await self._client.list_hosts()
             matches = [

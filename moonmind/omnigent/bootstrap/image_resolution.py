@@ -8,6 +8,7 @@ import os
 import re
 from collections.abc import Mapping
 from datetime import UTC, datetime
+from pathlib import Path
 
 from moonmind.omnigent.bootstrap.models import ResolvedOmnigentDeploymentState
 
@@ -372,6 +373,8 @@ async def resolve_omnigent_images(
             compatibility_failure = "omnigent_server_host_version_probe_failed"
         elif server_version != host_version:
             compatibility_failure = "omnigent_server_host_version_mismatch"
+        elif not await _image_opencode_bootstrap_ready(opencode_ref):
+            compatibility_failure = "omnigent_host_bootstrap_contract_missing"
 
     if compatibility_failure:
         # Keep the current server as catalog authority while quarantining the
@@ -438,6 +441,24 @@ async def resolve_omnigent_images(
         },
     )
     return state
+
+
+async def _image_opencode_bootstrap_ready(image_ref: str) -> bool:
+    """Execute the release bootstrap contract against the selected image.
+
+    Labels and matching Omnigent versions cannot attest the derived image's
+    contents. Reuse the portable release probe so operator-supplied images also
+    prove the full plugin closure and server startup with networking disabled.
+    """
+    probe = (
+        Path(__file__).resolve().parents[3]
+        / "services/omnigent/opencode-host/verify-warm-plugin-cache.sh"
+    )
+    code, _, _ = await _run(
+        ["sh", str(probe), image_ref, "60"],
+        timeout=90,
+    )
+    return code == 0
 
 
 # The digests published below are written back into the process environment so
