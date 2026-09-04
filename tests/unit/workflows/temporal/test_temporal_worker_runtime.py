@@ -4771,3 +4771,68 @@ async def test_build_runtime_activities_registers_unrestricted_mode(
     assert mock_agent_runtime_activities_cls.call_args.kwargs["workflow_docker_mode"] == "unrestricted"
     # Legacy workload handlers are not registered on the agent-facing dispatcher.
     await resources.aclose()
+
+
+@pytest.mark.asyncio
+async def test_build_runtime_activities_degraded_when_generic_not_ready():
+    """Missing resolved Omnigent images must not crash-loop the worker.
+
+    Regression for mm:5151c917 where OMNIGENT_IMAGE_REF-less startup crashed
+    the agent_runtime worker during a 95-minute profile-bound turn, starving
+    heartbeats and producing activity Heartbeat timeout after 2 attempts.
+    """
+    from unittest.mock import AsyncMock, MagicMock, patch
+
+    topology = MagicMock()
+    topology.activity_types = ["integration.omnigent.execute"]
+    topology.fleet = "other"
+
+    @asynccontextmanager
+    async def _fake_session_context():
+        yield "session"
+
+    with (
+        patch(
+            "moonmind.omnigent.settings.generic_host_enabled",
+            return_value=True,
+        ),
+        patch(
+            "moonmind.omnigent.production.build_generic_omnigent_execution_services",
+            side_effect=Exception("OMNIGENT_IMAGE_REF must identify digest"),
+        ),
+        patch(
+            "moonmind.workflows.temporal.worker_runtime.get_async_session_context",
+            side_effect=_fake_session_context,
+        ),
+        patch(
+            "moonmind.workflows.temporal.worker_runtime.TemporalArtifactActivities",
+            return_value=MagicMock(),
+        ),
+        patch(
+            "moonmind.workflows.temporal.worker_runtime.TemporalPlanActivities",
+            return_value=MagicMock(),
+        ),
+        patch(
+            "moonmind.workflows.temporal.worker_runtime.SkillActivityDispatcher",
+            return_value=MagicMock(),
+        ),
+        patch(
+            "moonmind.workflows.temporal.worker_runtime.TemporalSkillActivities",
+            return_value=MagicMock(),
+        ),
+        patch(
+            "moonmind.workflows.temporal.worker_runtime.TemporalSandboxActivities",
+            return_value=MagicMock(),
+        ),
+        patch(
+            "moonmind.workflows.temporal.worker_runtime.TemporalIntegrationActivities",
+            return_value=MagicMock(),
+        ),
+        patch(
+            "moonmind.workflows.temporal.worker_runtime.build_worker_activity_bindings",
+            return_value=[],
+        ),
+    ):
+        resources, _handlers = await _build_runtime_activities(topology)
+
+    await resources.aclose()

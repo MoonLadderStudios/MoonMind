@@ -25,6 +25,7 @@ from moonmind.omnigent.bridge_store import (
 )
 from moonmind.omnigent.execute import (
     _ACTIVITY_HEARTBEAT_STATE,
+    _safe_heartbeat,
     OmnigentContractError,
     OmnigentSessionStillRunningError,
     OmnigentTurnNotStartedError,
@@ -5346,3 +5347,30 @@ async def test_run_omnigent_execution_redacts_raw_events_before_persistence(
     )
     assert "sk-should-not-persist" not in persisted
     assert "[REDACTED]" in persisted
+
+
+def test_safe_heartbeat_swallows_transient_errors(monkeypatch):
+    """A transient heartbeat transport failure must not kill the liveness task.
+
+    Regression for mm:5151c917 where activity Heartbeat timeout fired on a
+    healthy turn after the background heartbeat task died on a non-RuntimeError.
+    """
+    from unittest.mock import patch
+
+    with patch(
+        "moonmind.omnigent.execute.activity.heartbeat",
+        side_effect=ConnectionError("transient"),
+    ):
+        _safe_heartbeat({"activityAlive": True})
+
+
+def test_safe_heartbeat_reraises_cancellation():
+    """Cancellation owns the lifecycle; heartbeat must never swallow it."""
+    from unittest.mock import patch
+
+    with patch(
+        "moonmind.omnigent.execute.activity.heartbeat",
+        side_effect=asyncio.CancelledError(),
+    ):
+        with pytest.raises(asyncio.CancelledError):
+            _safe_heartbeat({"activityAlive": True})
