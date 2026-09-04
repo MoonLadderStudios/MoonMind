@@ -6,6 +6,7 @@ import asyncio
 import random
 from datetime import UTC, datetime
 from typing import Any
+from uuid import UUID
 
 from moonmind.omnigent.harness_platform.failures import (
     HarnessPlatformError,
@@ -161,7 +162,17 @@ class OmnigentHostRegistrationService:
     ) -> dict[str, Any] | None:
         observed_at = datetime.now(UTC)
         host_id = str(host.get("host_id") or host.get("id") or "").strip()
-        if host_id != expected_host_id:
+        identity_matches = host_id == expected_host_id
+        if not identity_matches:
+            # Persisted launch specs may carry the dashed UUID emitted before
+            # canonical host-ID generation. Omnigent registers that same UUID
+            # as bare hex. Compare UUID values without accepting another host
+            # or changing the persisted spec; retain the server ID as evidence.
+            try:
+                identity_matches = UUID(host_id) == UUID(expected_host_id)
+            except ValueError:
+                pass
+        if not identity_matches:
             raise HarnessPlatformError(
                 "launched host identity mismatch",
                 code=HarnessPlatformFailure.OMNIGENT_HOST_REGISTRATION_TIMEOUT,

@@ -1,0 +1,14 @@
+{
+  "incidentWorkflowId": "mm:9556a9c0-f461-40a0-852b-6fdb388b6f78",
+  "failureShape": "Exact host lookup returned HTTP 200 after registration, but the dashed launch UUID was compared literally against Omnigent's bare hexadecimal UUID.",
+  "boundary": "lease-derived launch identity to HTTP host registration and attestation handoff",
+  "persistedExpectedHostId": "d4ad2354-2db9-5413-9d35-92eff5f026bb",
+  "host": {
+    "host_id": "d4ad23542db954139d3592eff5f026bb",
+    "name": "mm-host-registration-replay",
+    "owner": "local",
+    "status": "online",
+    "configured_harnesses": {"opencode-native": "ready"},
+    "runners": []
+  }
+}
