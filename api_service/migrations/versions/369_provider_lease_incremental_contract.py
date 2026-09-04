@@ -73,6 +73,10 @@ def upgrade() -> None:
         "UPDATE provider_profile_slot_leases SET lease_state = 'held' "
         "WHERE lease_state IS NULL"
     )
+    op.execute(
+        "UPDATE provider_profile_slot_leases SET lease_id = workflow_id "
+        "WHERE lease_id IS NULL"
+    )
     with op.batch_alter_table("provider_profile_slot_leases") as batch:
         batch.alter_column("owner_kind", existing_type=sa.String(32), nullable=False)
         batch.alter_column(

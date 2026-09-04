@@ -94,6 +94,7 @@ async def aclose_shared_pool_client() -> None:
         try:
             await client.aclose()
         except Exception:
+            # Best-effort shutdown; a close failure must not fail worker teardown.
             pass
 
 
@@ -428,12 +429,42 @@ class OmnigentHttpClient:
                 errors="replace",
             )
             raise self._error_from_response(response.status_code, body)
-        async for line in response.aiter_lines():
-            if len(line) > _MAX_SSE_LINE_BYTES:
+        pending = bytearray()
+        async for chunk in response.aiter_bytes():
+            pending.extend(chunk)
+            if len(pending) > _MAX_SSE_LINE_BYTES + 1_000_000:
+                raise OmnigentClientError(
+                    "Omnigent SSE frame exceeds bounded buffer size",
+                    failure_class="integration_error",
+                )
+            while True:
+                newline = pending.find(b"\n")
+                if newline < 0:
+                    break
+                raw = bytes(pending[:newline])
+                del pending[: newline + 1]
+                if len(raw) > _MAX_SSE_LINE_BYTES:
+                    raise OmnigentClientError(
+                        "Omnigent SSE frame exceeds bounded line size",
+                        failure_class="integration_error",
+                    )
+                try:
+                    line = raw.decode("utf-8", errors="replace")
+                except Exception:
+                    continue
+                event = parse_sse_line(line)
+                if event is not None:
+                    yield event
+        if pending:
+            if len(pending) > _MAX_SSE_LINE_BYTES:
                 raise OmnigentClientError(
                     "Omnigent SSE frame exceeds bounded line size",
                     failure_class="integration_error",
                 )
+            try:
+                line = bytes(pending).decode("utf-8", errors="replace")
+            except Exception:
+                return
             event = parse_sse_line(line)
             if event is not None:
                 yield event
