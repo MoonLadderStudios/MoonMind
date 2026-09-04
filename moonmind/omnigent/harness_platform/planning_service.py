@@ -39,9 +39,9 @@ from moonmind.omnigent.harness_platform.failures import (
 )
 from moonmind.omnigent.harness_platform.host_classes import (
     HostClass,
-    LaunchPolicy,
     OmnigentHostClassSelector,
     get_launch_policy,
+    launch_policy_from_effective_launch,
 )
 from moonmind.omnigent.harness_platform.materializers import (
     get_materializer,
@@ -66,6 +66,15 @@ def _digest(value: Any) -> str:
         default=str,
     ).encode("utf-8")
     return "sha256:" + hashlib.sha256(encoded).hexdigest()
+
+
+def _canonical_json_bytes(value: Any) -> bytes:
+    return json.dumps(
+        value,
+        sort_keys=True,
+        separators=(",", ":"),
+        ensure_ascii=False,
+    ).encode("utf-8")
 
 
 def _ref(prefix: str, value: Any) -> str:
@@ -372,7 +381,24 @@ class OmnigentExecutionPlanningService:
             )
             skills = await self._skills.resolve(request=request, profile=profile)
             policy_ref = self._launch_policy_ref(request, profile)
-            policy = get_launch_policy(policy_ref)
+            from api_service.services.omnigent_policies import OmnigentPolicyService
+            from moonmind.omnigent.profile_bound_execution import (
+                _compile_persisted_effective_launch,
+            )
+
+            policy_service = OmnigentPolicyService(session)
+            policy_snapshot = await policy_service.resolve_runtime_snapshot(policy_ref)
+            effective_launch = _compile_persisted_effective_launch(
+                policy_snapshot,
+                provider_profile_id=str(provider_profile.profile_id),
+            )
+            policy = launch_policy_from_effective_launch(
+                effective_launch,
+                expected_ref=policy_ref,
+            )
+            host_architecture = str(
+                request.parameters.get("architecture") or "linux/amd64"
+            )
             integration_mode = harness.capabilities.integrationMode or "native-server"
             host_class = self._host_classes.select(
                 harness=harness,
@@ -382,9 +408,7 @@ class OmnigentExecutionPlanningService:
                 materializer_refs=[
                     item.materializerRef for item in binding_set.bindings.values()
                 ],
-                architecture=str(
-                    request.parameters.get("architecture") or "linux/amd64"
-                ),
+                architecture=host_architecture,
                 requested_host_mode=policy.hostMode,
                 requested_host_class_ref=self._requested_host_class_ref(request),
             )
@@ -393,12 +417,29 @@ class OmnigentExecutionPlanningService:
                 model,
                 expected_image_ref=host_class.imageRef,
             )
+            if str(effective_launch.get("hostImageRef") or "") != (
+                host_class.imageRef
+            ):
+                raise HarnessPlatformError(
+                    "effective launch host image conflicts with the selected "
+                    "Host Class",
+                    code=HarnessPlatformFailure.OMNIGENT_LAUNCH_POLICY_INCOMPATIBLE,
+                )
+            (
+                policy_artifact_ref,
+                policy_artifact_digest,
+                effective_launch_artifact_ref,
+                effective_launch_artifact_digest,
+            ) = await self._persist_exact_launch_authority(
+                request=request,
+                policy_snapshot=policy_snapshot,
+                effective_launch=effective_launch,
+            )
             workspace_payload = {
                 "profile": profile.workspace,
                 "request": request.workspace_spec,
             }
             capture_payload = dict(profile.capture)
-            policy_payload = policy.model_dump(by_alias=True, mode="json")
             return compile_execution_plan(
                 agent_profile=profile,
                 harness_catalog=catalog_result.snapshot,
@@ -409,6 +450,7 @@ class OmnigentExecutionPlanningService:
                 host_class_ref=host_class.ref,
                 host_class=host_class,
                 launch_policy_ref=policy.ref,
+                launch_policy=policy,
                 model_qualified_id=model,
                 model_effort=effort,
                 model_route_ref=route_ref,
@@ -421,8 +463,46 @@ class OmnigentExecutionPlanningService:
                 },
                 workspace_intent_ref=_ref("workspace-intent", workspace_payload),
                 capture_policy_ref=_ref("capture-policy", capture_payload),
-                policy_snapshot_ref=_ref("omnigent-policy", policy_payload),
+                policy_snapshot_ref=policy_artifact_ref,
+                policy_snapshot_digest=policy_artifact_digest,
+                effective_launch_snapshot_ref=effective_launch_artifact_ref,
+                effective_launch_snapshot_digest=effective_launch_artifact_digest,
+                host_image_ref=host_class.imageRef,
+                omnigent_host_build_digest=host_class.omnigentBuildDigest,
+                host_architecture=host_architecture,
             )
+
+    async def _persist_exact_launch_authority(
+        self,
+        *,
+        request: AgentExecutionRequest,
+        policy_snapshot: Mapping[str, Any],
+        effective_launch: Mapping[str, Any],
+    ) -> tuple[str, str, str, str]:
+        """Persist the exact launch inputs with digests over stored bytes."""
+
+        policy_body = _canonical_json_bytes(policy_snapshot)
+        effective_launch_body = _canonical_json_bytes(effective_launch)
+        policy_ref = await self._artifacts.write_bytes(
+            request=request,
+            name="launch-policy-snapshot.json",
+            payload=policy_body,
+            link_type="input.launch_policy_snapshot",
+            content_type="application/json",
+        )
+        effective_launch_ref = await self._artifacts.write_bytes(
+            request=request,
+            name="effective-launch-snapshot.json",
+            payload=effective_launch_body,
+            link_type="input.effective_launch_snapshot",
+            content_type="application/json",
+        )
+        return (
+            policy_ref,
+            "sha256:" + hashlib.sha256(policy_body).hexdigest(),
+            effective_launch_ref,
+            "sha256:" + hashlib.sha256(effective_launch_body).hexdigest(),
+        )
 
     @staticmethod
     def _trust_record(
@@ -826,7 +906,15 @@ class OmnigentPlannedHostResolver:
                 "execution plan harness implementation is absent from its catalog",
                 code=HarnessPlatformFailure.OMNIGENT_HARNESS_BUILD_MISMATCH,
             )
-        policy = get_launch_policy(plan.payload.launchPolicyRef)
+        launch: Mapping[str, Any] | None = None
+        if plan.payload.hostImageRef is not None:
+            launch = await self._load_exact_launch(plan)
+            policy = launch_policy_from_effective_launch(
+                launch,
+                expected_ref=plan.payload.launchPolicyRef,
+            )
+        else:
+            policy = get_launch_policy(plan.payload.launchPolicyRef)
         host_class = self._selector.select(
             harness=harness,
             omnigent_version=catalog.snapshot.omnigentVersion,
@@ -841,20 +929,18 @@ class OmnigentPlannedHostResolver:
             requested_host_class_ref=plan.payload.hostClassRef,
         )
         if plan.payload.hostImageRef is not None:
-            host_class, policy = await self._resolve_exact_launch(
+            host_class = self._resolve_exact_host(
                 plan=plan,
                 host_class=host_class,
+                launch=launch,
             )
         return host_class, policy
 
-    async def _resolve_exact_launch(
+    async def _load_exact_launch(
         self,
-        *,
         plan: OmnigentExecutionPlanEnvelope,
-        host_class: HostClass,
-    ) -> tuple[HostClass, LaunchPolicy]:
-        """Rehydrate runtime inputs from the plan's immutable launch artifact."""
-
+    ) -> Mapping[str, Any]:
+        """Load and validate the plan's immutable launch artifact."""
         if self._artifacts is None:
             raise HarnessPlatformError(
                 "exact execution plan launch artifact cannot be resolved",
@@ -897,6 +983,22 @@ class OmnigentPlannedHostResolver:
                 "effective launch artifact conflicts with the execution plan",
                 code=HarnessPlatformFailure.OMNIGENT_EXECUTION_PLAN_CONFLICT,
             )
+        return launch
+
+    @staticmethod
+    def _resolve_exact_host(
+        *,
+        plan: OmnigentExecutionPlanEnvelope,
+        host_class: HostClass,
+        launch: Mapping[str, Any] | None,
+    ) -> HostClass:
+        """Rehydrate exact Host Class inputs from immutable launch authority."""
+
+        if launch is None:
+            raise HarnessPlatformError(
+                "exact execution plan launch artifact cannot be resolved",
+                code=HarnessPlatformFailure.OMNIGENT_EXECUTION_PLAN_CONFLICT,
+            )
         architecture = str(plan.payload.hostArchitecture or "").strip()
         normalized_architectures = tuple(
             value if "/" in value else f"linux/{value}"
@@ -928,38 +1030,7 @@ class OmnigentPlannedHostResolver:
                 },
             }
         )
-        limits = launch.get("limits")
-        capture = launch.get("capture")
-        cleanup = launch.get("cleanup")
-        if not all(isinstance(value, Mapping) for value in (limits, capture, cleanup)):
-            raise HarnessPlatformError(
-                "effective launch artifact lacks bounded runtime policy",
-                code=HarnessPlatformFailure.OMNIGENT_EXECUTION_PLAN_CONFLICT,
-            )
-        policy_id, separator, version = plan.payload.launchPolicyRef.rpartition("@")
-        if not separator:
-            raise HarnessPlatformError(
-                "execution plan launch policy identity is invalid",
-                code=HarnessPlatformFailure.OMNIGENT_EXECUTION_PLAN_CONFLICT,
-            )
-        exact_policy = LaunchPolicy.model_validate(
-            {
-                "policyId": policy_id,
-                "version": int(version),
-                "hostMode": launch.get("hostMode"),
-                "hostClassSelector": {"requiredFeatures": []},
-                "isolation": {
-                    "runDedicated": launch.get("hostMode")
-                    in {"on-demand", "on_demand_docker"}
-                },
-                "limits": dict(limits),
-                "network": {"egressPolicyRef": launch.get("egressProfileRef")},
-                "capture": dict(capture),
-                "cleanup": dict(cleanup),
-                "controlCapabilities": list(launch.get("controlCapabilities") or []),
-            }
-        )
-        return exact_host, exact_policy
+        return exact_host
 
 
 __all__ = [
