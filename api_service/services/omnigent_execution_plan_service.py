@@ -719,6 +719,14 @@ async def compile_and_persist_execution_plan(
         provider_profile_id=provider_profile_ref,
         follow_up_retrieval=follow_up,
     )
+    from moonmind.omnigent.harness_platform.host_classes import (
+        launch_policy_from_effective_launch,
+    )
+
+    planner_launch_policy = launch_policy_from_effective_launch(
+        effective_launch,
+        expected_ref=launch_policy_ref,
+    )
     expected_execution_profile = str(
         agent_profile_snapshot.get("executionProfileRef") or ""
     ).strip()
@@ -1032,6 +1040,7 @@ async def compile_and_persist_execution_plan(
         host_class_ref=host_class.ref,
         host_class=host_class,
         launch_policy_ref=launch_policy_ref,
+        launch_policy=planner_launch_policy,
         model_qualified_id=(
             str(
                 initial_parameters.get("model") or model_mapping.get("model") or ""

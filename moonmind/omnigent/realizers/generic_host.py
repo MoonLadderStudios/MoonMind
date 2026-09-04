@@ -8,6 +8,7 @@ the existing Omnigent session driver owns provider interaction after creation.
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 from contextlib import suppress
 from typing import Any, Awaitable, Callable
@@ -94,6 +95,7 @@ class GenericOmnigentHostRealizer:
         cleanup_authority: Any | None = None,
         execution_state_notifier: Callable[[str, str, str], Awaitable[None]]
         | None = None,
+        deployment_validator: Callable[[Any], None] | None = None,
         heartbeat_interval_seconds: float = 60.0,
         heartbeat_ttl_seconds: int = 900,
     ) -> None:
@@ -135,6 +137,13 @@ class GenericOmnigentHostRealizer:
         # The notifier projects that authoritative wait into the owning user
         # workflow without moving or duplicating lease semantics.
         self._execution_state_notifier = execution_state_notifier
+        if deployment_validator is None:
+            from moonmind.omnigent.deployment_identity import (
+                assert_plan_matches_deployed_runtime,
+            )
+
+            deployment_validator = assert_plan_matches_deployed_runtime
+        self._deployment_validator = deployment_validator
         if heartbeat_interval_seconds <= 0 or heartbeat_ttl_seconds <= 0:
             raise ValueError("generic host heartbeat interval and TTL must be positive")
         self._heartbeat_interval = heartbeat_interval_seconds
@@ -203,7 +212,6 @@ class GenericOmnigentHostRealizer:
         primary_error: BaseException | None = None
         cleanup_error: BaseException | None = None
 
-        host_class, launch_policy = await self._resolve_host(plan)
         try:
             await self._notify_execution_state(
                 workflow_id,
@@ -277,6 +285,10 @@ class GenericOmnigentHostRealizer:
                     RuntimeBindingState.session_creating,
                     RuntimeBindingState.session_active,
                 }:
+                    await self._validate_bound_host_identity(
+                        plan=plan,
+                        host_context=host_context,
+                    )
                     return await self._resume_attested_host(
                         request=request,
                         plan=plan,
@@ -291,6 +303,8 @@ class GenericOmnigentHostRealizer:
                     code=HarnessPlatformFailure.OMNIGENT_CLEANUP_DEFERRED,
                 )
 
+            self._deployment_validator(plan.payload)
+            host_class, launch_policy = await self._resolve_host(plan)
             credential_handles = await self._credentials.materialize_all(
                 request=request,
                 plan=plan,
@@ -494,6 +508,50 @@ class GenericOmnigentHostRealizer:
         # not overwrite an objectively completed provider turn.
         _ = cleanup_error
         return result
+
+    async def _validate_bound_host_identity(
+        self,
+        *,
+        plan: OmnigentExecutionPlanEnvelope,
+        host_context: dict[str, Any] | None,
+    ) -> None:
+        """Validate a continuation against its immutable host attestation."""
+
+        if plan.payload.hostImageRef is None:
+            return
+        attestation_ref = str(
+            (host_context or {}).get("hostHarnessAttestationRef") or ""
+        ).strip()
+        if self._artifacts is None or not attestation_ref:
+            raise HarnessPlatformError(
+                "attested host retry authority is incomplete",
+                code=HarnessPlatformFailure.OMNIGENT_RUNTIME_BINDING_CONFLICT,
+            )
+        try:
+            evidence = json.loads(await self._artifacts.read_bytes(attestation_ref))
+        except Exception as exc:  # noqa: BLE001 - normalize artifact boundary failures
+            raise HarnessPlatformError(
+                "attested host retry evidence is unavailable or invalid",
+                code=HarnessPlatformFailure.OMNIGENT_RUNTIME_BINDING_CONFLICT,
+            ) from exc
+        expected = {
+            "imageRef": plan.payload.hostImageRef,
+            "architecture": plan.payload.hostArchitecture,
+            "omnigentBuildDigest": plan.payload.omnigentHostBuildDigest,
+            "harnessId": plan.payload.harnessId,
+            "harnessImplementationRef": plan.payload.harnessImplementationRef,
+            "omnigentHostId": str(
+                (host_context or {}).get("omnigentHostId") or ""
+            ),
+        }
+        if not isinstance(evidence, dict) or any(
+            str(evidence.get(key) or "") != str(value or "")
+            for key, value in expected.items()
+        ):
+            raise HarnessPlatformError(
+                "attested host retry identity conflicts with the execution plan",
+                code=HarnessPlatformFailure.OMNIGENT_RUNTIME_BINDING_CONFLICT,
+            )
 
     @staticmethod
     def _persisted_host_context(

@@ -6546,6 +6546,62 @@ async def test_exact_rerun_rejects_replaced_omnigent_server_before_launch(
     load.assert_awaited_once_with(manifest["planRef"])
 
 
+async def test_exact_rerun_rejects_replaced_opencode_host_before_launch(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Replay mm:814cd965 at the exact-rerun authority boundary."""
+
+    replay_id = "omnigent-stale-plan-host-image"
+    manifest = load_replay(replay_id, "manifest.json")
+    expected = load_replay(replay_id, "expected-outcome.json")
+    plan = SimpleNamespace(
+        payload=SimpleNamespace(
+            executionRealizerRef="generic-omnigent-host@1",
+            harnessId="opencode-native",
+            hostImageRef=manifest["planHostImageRef"],
+            supportIdentity=SimpleNamespace(
+                omnigentServerBuildRef=manifest["serverBuildRef"]
+            ),
+        )
+    )
+    load = AsyncMock(return_value=plan)
+    monkeypatch.setattr(
+        "moonmind.omnigent.harness_platform.stores.SessionExecutionPlanStore",
+        lambda _session: SimpleNamespace(load=load),
+    )
+    monkeypatch.setattr(
+        "moonmind.omnigent.deployment_identity."
+        "resolve_deployed_server_build_digest",
+        lambda: manifest["serverBuildRef"],
+    )
+    monkeypatch.setattr(
+        "moonmind.omnigent.harness_platform.host_classes."
+        "get_opencode_host_image_ref",
+        lambda: manifest["deployedHostImageRef"],
+    )
+    service = TemporalExecutionService(SimpleNamespace())
+
+    with pytest.raises(TemporalExecutionRerunPlanError) as exc_info:
+        await service.validate_exact_rerun_execution_plan(
+            parameters={
+                "omnigentExecutionPlan": {
+                    "planRef": manifest["planRef"],
+                    "planDigest": manifest["planRef"].replace(
+                        "omnigent-execution-plan:", ""
+                    ),
+                    "planArtifactRef": "art_replay_plan",
+                    "taskInputSnapshotRef": "art_replay_task_input",
+                    "taskInputSnapshotDigest": "sha256:" + "1" * 64,
+                }
+            }
+        )
+
+    assert exc_info.value.detail["code"] == expected["code"]
+    assert exc_info.value.detail["nextAction"] == expected["nextAction"]
+    assert expected["hostLaunchAttempted"] is False
+    load.assert_awaited_once_with(manifest["planRef"])
+
+
 async def test_checkpointless_remediation_keeps_the_verified_repository_branch(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
