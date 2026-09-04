@@ -529,15 +529,18 @@ def get_launch_policy(ref: str) -> LaunchPolicy:
         return policy
     # Deployment policy versions evolve with image digests (persisted in DB
     # snapshots), while code-level features (hostMode, requiredFeatures) are
-    # stable per policy_id. Resolve any version of a known policy_id to its
-    # registered definition so bootstrap version bumps do not block admission.
-    # The DB snapshot remains authoritative for image and limits.
+    # stable per policy_id. Resolve any version of a known policy_id by
+    # borrowing the registered definition but preserving the requested exact
+    # ref, so compile_execution_plan pins the same version its persisted
+    # policy/effective-launch artifacts carry. The DB snapshot remains
+    # authoritative for image and limits.
     cleaned = str(ref or "").strip()
     policy_id, _, version_text = cleaned.rpartition("@")
     if policy_id and version_text.isdigit() and int(version_text) >= 1:
-        for registered_ref, registered in LAUNCH_POLICIES.items():
+        requested_version = int(version_text)
+        for registered in LAUNCH_POLICIES.values():
             if registered.policyId == policy_id:
-                return registered
+                return registered.model_copy(update={"version": requested_version})
     raise HarnessPlatformError(
         f"launch policy {ref} incompatible or unavailable",
         code=HarnessPlatformFailure.OMNIGENT_LAUNCH_POLICY_INCOMPATIBLE,
