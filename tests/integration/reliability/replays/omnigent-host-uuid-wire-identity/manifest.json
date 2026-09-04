@@ -1,0 +1,12 @@
+{
+  "incidentWorkflowId": "mm:30c8ad15-84c9-4694-8717-5363e470bfda",
+  "incidentRunId": "01a06e00-62b5-7365-a085-cd8a9b9559bf",
+  "failureShape": "targeted registration compared a dashed expected UUID with the same host's canonical bare-hex UUID and destroyed the ready host",
+  "boundary": "lease-derived launch identity through Omnigent HTTP host registration",
+  "protocol": "Omnigent 0.12.0 GET /v1/hosts/{host_id}",
+  "eventScript": ["not_found", "offline", "online"],
+  "hostLeaseRef": "replay-host-lease",
+  "hostLeaseGeneration": 1,
+  "workspaceArtifacts": [],
+  "expectedInvariant": "exact registered host is accepted; other IDs, owners, and names remain rejected"
+}

@@ -103,7 +103,11 @@ def expected_omnigent_host_id(host_lease_ref: str, host_lease_generation: int) -
     import uuid as _uuid
 
     seed = f"{host_lease_ref}:{int(host_lease_generation)}"
-    return str(_uuid.uuid5(_uuid.NAMESPACE_URL, seed))
+    # Omnigent normalizes host IDs to bare UUID hex at registration and in its
+    # HTTP catalog. Derive that wire identity before launch so targeted lookup
+    # and exact identity verification use the same representation. The UUID
+    # bytes stay unchanged for hosts launched by earlier Activity attempts.
+    return _uuid.uuid5(_uuid.NAMESPACE_URL, seed).hex
 
 @runtime_checkable
 class OmnigentWorkspaceMaterializationPort(Protocol):
