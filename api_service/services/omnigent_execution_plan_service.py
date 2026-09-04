@@ -177,7 +177,9 @@ async def _try_load_real_harness_config(
             else "default"
         )
         repo = DbHarnessCatalogRepository(session_factory)
-        # Try catalogRef first, then latest
+        # Load the immutable profile authority first. A separate latest
+        # observation supplies freshness/liveness evidence; it must never
+        # replace the catalog ref pinned by the Agent Profile.
         catalog_result = None
         if catalog_ref:
             catalog_result = await repo.load(catalog_ref)
@@ -185,6 +187,7 @@ async def _try_load_real_harness_config(
             catalog_result = await repo.latest(endpoint_ref)
         if catalog_result is None:
             return None
+        latest_catalog_result = await repo.latest(endpoint_ref)
         harness_record = next(
             (h for h in catalog_result.snapshot.harnesses if h.id == harness_id),
             None,
@@ -207,6 +210,11 @@ async def _try_load_real_harness_config(
             "authModel": auth_model,
             "integrationMode": integration_mode,
             "_catalogSnapshot": catalog_result.snapshot,
+            "_freshnessCatalogSnapshot": (
+                latest_catalog_result.snapshot
+                if latest_catalog_result is not None
+                else catalog_result.snapshot
+            ),
             "_harnessRecord": harness_record,
         }
     except Exception:
@@ -632,6 +640,9 @@ async def compile_and_persist_execution_plan(
     if config is None:
         raise ValueError(f"unsupported trusted Omnigent harness: {harness_id!r}")
     exact_catalog = real_config.get("_catalogSnapshot") if real_config else None
+    freshness_catalog = (
+        real_config.get("_freshnessCatalogSnapshot") if real_config else None
+    )
     exact_harness = real_config.get("_harnessRecord") if real_config else None
     # Production uses the exact catalog pinned by the Agent Profile. The
     # latest lookup only supplies a version to hermetic/legacy profiles that do
@@ -1034,6 +1045,7 @@ async def compile_and_persist_execution_plan(
             additional_tools=mounted_skill_tools,
         ),
         harness_catalog=catalog,
+        freshness_catalog=freshness_catalog,
         trust_record=trust,
         resolved_skills=resolved_skills,
         credential_binding_set=binding_set,
