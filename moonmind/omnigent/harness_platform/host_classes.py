@@ -465,11 +465,12 @@ def _register_policy(
     policy_id: str,
     host_mode: Literal["on-demand", "static-connected"],
     required_features: list[str],
+    version: int = 1,
 ) -> None:
     register_launch_policy(
         {
             "policyId": policy_id,
-            "version": 1,
+            "version": version,
             "hostMode": host_mode,
             "hostClassSelector": {"requiredFeatures": required_features},
             "isolation": {"runDedicated": host_mode == "on-demand"},
@@ -497,9 +498,21 @@ _register_policy(
     ["readOnlyRoot", "restrictedEgress", "workspaceBind"],
 )
 _register_policy(
+    "omnigent-on-demand",
+    "on-demand",
+    ["readOnlyRoot", "restrictedEgress", "workspaceBind"],
+    version=2,
+)
+_register_policy(
     "opencode-on-demand",
     "on-demand",
     ["readOnlyRoot", "restrictedEgress", "workspaceBind"],
+)
+_register_policy(
+    "opencode-on-demand",
+    "on-demand",
+    ["readOnlyRoot", "restrictedEgress", "workspaceBind"],
+    version=2,
 )
 _register_policy("opencode-static", "static-connected", ["workspaceBind"])
 _register_policy(
@@ -512,12 +525,23 @@ _register_policy("codex-static", "static-connected", ["workspaceBind"])
 
 def get_launch_policy(ref: str) -> LaunchPolicy:
     policy = LAUNCH_POLICIES.get(ref)
-    if policy is None:
-        raise HarnessPlatformError(
-            f"launch policy {ref} incompatible or unavailable",
-            code=HarnessPlatformFailure.OMNIGENT_LAUNCH_POLICY_INCOMPATIBLE,
-        )
-    return policy
+    if policy is not None:
+        return policy
+    # Deployment policy versions evolve with image digests (persisted in DB
+    # snapshots), while code-level features (hostMode, requiredFeatures) are
+    # stable per policy_id. Resolve any version of a known policy_id to its
+    # registered definition so bootstrap version bumps do not block admission.
+    # The DB snapshot remains authoritative for image and limits.
+    cleaned = str(ref or "").strip()
+    policy_id, _, version_text = cleaned.rpartition("@")
+    if policy_id and version_text.isdigit() and int(version_text) >= 1:
+        for registered_ref, registered in LAUNCH_POLICIES.items():
+            if registered.policyId == policy_id:
+                return registered
+    raise HarnessPlatformError(
+        f"launch policy {ref} incompatible or unavailable",
+        code=HarnessPlatformFailure.OMNIGENT_LAUNCH_POLICY_INCOMPATIBLE,
+    )
 
 
 def validate_policy_for_host_class(
