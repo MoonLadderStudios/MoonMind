@@ -4691,7 +4691,6 @@ async def test_transient_injection_response_does_not_hide_never_started_turn() -
     assert excinfo.value.snapshot == running_snapshot
 
 
-@pytest.mark.integration_ci
 async def test_terminal_response_cannot_retain_live_turn_authority(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
