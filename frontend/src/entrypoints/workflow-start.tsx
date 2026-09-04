@@ -23,6 +23,7 @@ import {
   readDashboardPreferences,
   updateDashboardPreferences,
 } from "../utils/dashboardPreferences";
+import { compatibilitySuffixForRuntime } from "../utils/omnigentTargetIdentity";
 import {
   buildTemporalArtifactEditUpdatePayload,
   buildRuntimeCommandVersionWarnings,
@@ -6671,6 +6672,39 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
     staleTime: 0,
     refetchOnWindowFocus: true,
   });
+  const omnigentRolloutStatusQuery = useQuery({
+    queryKey: ["workflow-start", "omnigent-rollout-status-v1"],
+    queryFn: async (): Promise<{
+      policyConfigured: boolean;
+      policyGeneration: number;
+      combinations: Array<{
+        harnessImplementation?: string;
+        executionRealizer?: string;
+        rolloutState?: string;
+      }>;
+    }> => {
+      const response = await fetch("/api/omnigent/rollout-status", {
+        headers: { Accept: "application/json" },
+        cache: "no-store",
+      });
+      if (!response.ok) {
+        throw new Error(await responseErrorMessage(response, "Failed to load Omnigent rollout status."));
+      }
+      return (await response.json()) as {
+        policyConfigured: boolean;
+        policyGeneration: number;
+        combinations: Array<{
+          harnessImplementation?: string;
+          executionRealizer?: string;
+          rolloutState?: string;
+        }>;
+      };
+    },
+    staleTime: 60_000,
+    refetchOnWindowFocus: false,
+    retry: false,
+  });
+  const rolloutCombinations = omnigentRolloutStatusQuery.data?.combinations;
   const selectedGenericOmnigentTarget = omnigentExecutionReadinessQuery.data?.executionTargets?.find(
     (target) =>
       target.agentProfileRef.profileId === agentProfile &&
@@ -13809,7 +13843,7 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
                           <option value="">Inherit agent runtime</option>
                           {supportedAgentRuntimes.map((runtimeOption) => (
                             <option key={runtimeOption} value={runtimeOption}>
-                              {formatRuntimeLabel(runtimeOption)}
+                              {`${formatRuntimeLabel(runtimeOption)}${compatibilitySuffixForRuntime(runtimeOption, rolloutCombinations)}`}
                             </option>
                           ))}
                         </select>
@@ -14112,10 +14146,15 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
             >
               {runtimeOptions.map((runtimeOption) => (
                 <option key={runtimeOption} value={runtimeOption}>
-                  {formatRuntimeLabel(runtimeOption)}
+                  {`${formatRuntimeLabel(runtimeOption)}${compatibilitySuffixForRuntime(runtimeOption, rolloutCombinations)}`}
                 </option>
               ))}
             </select>
+            {omnigentRolloutStatusQuery.data?.policyConfigured ? (
+              <span className="small" role="status">
+                {`Omnigent default policy generation ${omnigentRolloutStatusQuery.data.policyGeneration}. Direct options are compatibility-only where a qualified generic target is promoted.`}
+              </span>
+            ) : null}
             {runtime === "omnigent" && (
               selectedProfileIsGenericV2
                 ? selectedGenericOmnigentTarget?.available === false

@@ -44,6 +44,7 @@ import { SkillProvenanceBadge } from '../components/skills/SkillProvenanceBadge'
 import { LogPanel } from '../components/dashboard/LogPanel';
 import { LoadingPlaceholder } from '../components/dashboard/LoadingPlaceholder';
 import { formatDurationMs, formatRuntimeLabel, formatStatusLabel } from '../utils/formatters';
+import { isCompatibilityPath, targetIdentityLabel } from '../utils/omnigentTargetIdentity';
 import {
   readDashboardPreferences,
   updateDashboardPreferences,
@@ -10377,6 +10378,44 @@ function WorkflowDetailPageContent({ payload }: { payload: BootPayload }) {
                       {execution.omnigentExecutionPlan.planDigest}
                     </code>
                   </Fact>
+                  {(() => {
+                    const planView = execution.omnigentExecutionPlan as unknown as Record<
+                      string,
+                      unknown
+                    >;
+                    const harnessId =
+                      typeof planView.harnessId === 'string' ? planView.harnessId : null;
+                    const realizerRef =
+                      typeof planView.executionRealizerRef === 'string'
+                        ? planView.executionRealizerRef
+                        : null;
+                    const rolloutState =
+                      planView.rolloutState == null ? null : String(planView.rolloutState);
+                    const rolloutGeneration =
+                      planView.rolloutGeneration == null
+                        ? '—'
+                        : String(planView.rolloutGeneration);
+                    if (!harnessId || !realizerRef) return null;
+                    let selectedPath: string;
+                    try {
+                      const label = targetIdentityLabel(harnessId, realizerRef);
+                      selectedPath = isCompatibilityPath(harnessId, realizerRef)
+                        ? `${label} (compatibility)`
+                        : label;
+                    } catch {
+                      selectedPath = `${harnessId} via ${realizerRef}`;
+                    }
+                    return (
+                      <>
+                        <Fact label="Selected Path">{selectedPath}</Fact>
+                        {rolloutState ? (
+                          <Fact label="Rollout State">
+                            {`${rolloutState} · generation ${rolloutGeneration}`}
+                          </Fact>
+                        ) : null}
+                      </>
+                    );
+                  })()}
                   {execution.omnigentRuntimeBinding ? (
                     <>
                       <Fact label="Runtime Binding">

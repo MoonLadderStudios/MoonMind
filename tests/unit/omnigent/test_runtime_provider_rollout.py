@@ -80,7 +80,7 @@ def test_combination_key_is_exact_and_stable():
     second = combination_key(_combination())
     assert first == second
     assert first.startswith("omnigent-rollout-combination:sha256:")
-    other = combination_key(_combination(host_class="omnigent-claude@1"))
+    other = combination_key(_combination(hostClass="omnigent-claude@1"))
     assert other != first
 
 
@@ -188,16 +188,16 @@ def test_compatibility_labels_preserve_truthful_identity():
 def test_direct_compatibility_only_rejects_generic():
     policy = _policy(
         RolloutState.DIRECT_COMPATIBILITY_ONLY,
-        combination=_combination(execution_realizer="generic-omnigent-host@1"),
+        combination=_combination(executionRealizer="generic-omnigent-host@1"),
     )
     with pytest.raises(RolloutAdmissionError, match="direct_compatibility_only"):
         select_authoring_target(
             policy=policy,
             surface=AuthoringSurface.WORKFLOW_CREATE,
-            combination=_combination(execution_realizer="generic-omnigent-host@1"),
+            combination=_combination(executionRealizer="generic-omnigent-host@1"),
             explicit=True,
         )
-    direct = _combination(execution_realizer="direct")
+    direct = _combination(executionRealizer="direct")
     direct_policy = _policy(
         RolloutState.DIRECT_COMPATIBILITY_ONLY, combination=direct
     )
@@ -245,7 +245,7 @@ def test_rerun_preserves_recorded_target_without_silent_replacement():
         upgrade_requested=False,
     )
     assert kept == recorded
-    changed = _combination(model_config_class="codex-gpt-5.6@1")
+    changed = _combination(modelConfigClass="codex-gpt-5.6@1")
     with pytest.raises(RolloutAdmissionError, match="without_explicit_upgrade"):
         preserve_or_upgrade_target(
             recorded=recorded,

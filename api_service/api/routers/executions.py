@@ -6172,6 +6172,56 @@ async def _hydrate_provider_profile_metadata(
         }
     )
 
+
+async def _hydrate_omnigent_rollout_authority(
+    execution: ExecutionModel, session: AsyncSession | None
+) -> ExecutionModel:
+    """Project recorded rollout/realizer authority onto Workflow Detail (#3833).
+
+    The truthful selected path (harness, realizer, rollout generation/state)
+    comes from the immutable execution plan, never from friendly labels. Plans
+    admitted before default promotion carry no rollout authority and render
+    without it. A hydration failure never overwrites the primary success.
+    """
+
+    plan_view = execution.omnigent_execution_plan
+    if not isinstance(plan_view, dict) or session is None:
+        return execution
+    plan_ref = str(plan_view.get("planRef") or "").strip()
+    if not plan_ref:
+        return execution
+    try:
+        from moonmind.omnigent.harness_platform.stores import (
+            SessionExecutionPlanStore,
+        )
+        from moonmind.omnigent.runtime_provider_rollout import (
+            admitted_authority_from_plan,
+        )
+
+        plan = await SessionExecutionPlanStore(session).load(plan_ref)
+        if plan is None:
+            return execution
+        payload = plan.payload.model_dump(by_alias=True, mode="json")
+        authority = admitted_authority_from_plan(payload)
+        enriched = {
+            **plan_view,
+            "harnessId": payload.get("harnessId"),
+            "harnessImplementationRef": payload.get("harnessImplementationRef"),
+            "executionRealizerRef": payload.get("executionRealizerRef"),
+            **authority,
+        }
+    except Exception as exc:
+        logger.warning(
+            "Failed to hydrate Omnigent rollout authority for execution %s plan %s: %s",
+            execution.workflow_id,
+            plan_ref,
+            exc,
+            exc_info=True,
+        )
+        return execution
+    return execution.model_copy(update={"omnigent_execution_plan": enriched})
+
+
 def _managed_run_store_root() -> str:
     return os.path.join(
         os.environ.get("MOONMIND_AGENT_RUNTIME_STORE", "/work/agent_jobs"),
@@ -16391,6 +16441,7 @@ async def describe_execution(
         user=user,
     )
     execution = await _hydrate_provider_profile_metadata(execution, session)
+    execution = await _hydrate_omnigent_rollout_authority(execution, session)
     if execution.workflow_type == "MoonMind.UserWorkflow":
         if _execution_uses_live_workflow_queries(execution):
             progress, queried_run_id = await _load_execution_progress(

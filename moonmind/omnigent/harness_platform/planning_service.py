@@ -440,6 +440,19 @@ class OmnigentExecutionPlanningService:
                 "request": request.workspace_spec,
             }
             capture_payload = dict(profile.capture)
+            rollout_triple = self._rollout_authority_for_plan(
+                request,
+                selection=selection,
+                provider_profile=provider_profile,
+                host_class=host_class,
+                launch_policy=policy,
+                model_route_ref=route_ref,
+                host_architecture=host_architecture,
+                catalog_ref=catalog_result.snapshot.catalogRef,
+                trust_implementation_ref=trust.implementationRef,
+                harness_id=profile.harness.id,
+                harness_implementation=profile.harness.implementationRef,
+            )
             return compile_execution_plan(
                 agent_profile=profile,
                 harness_catalog=catalog_result.snapshot,
@@ -470,7 +483,77 @@ class OmnigentExecutionPlanningService:
                 host_image_ref=host_class.imageRef,
                 omnigent_host_build_digest=host_class.omnigentBuildDigest,
                 host_architecture=host_architecture,
+                rollout_policy_version=rollout_triple[0],
+                rollout_generation=rollout_triple[1],
+                rollout_state=rollout_triple[2],
             )
+
+    @staticmethod
+    def _rollout_authority_for_plan(
+        request: AgentExecutionRequest,
+        *,
+        selection: AgentProfileSelection,
+        provider_profile: Any,
+        host_class: Any,
+        launch_policy: Any,
+        model_route_ref: str,
+        host_architecture: str,
+        catalog_ref: str,
+        trust_implementation_ref: str,
+        harness_id: str,
+        harness_implementation: str,
+    ) -> tuple[str | None, int | None, str | None]:
+        """Admit the compiled target through the rollout policy (#3833).
+
+        This is the shared backend admission boundary for every authoring
+        surface: all submissions funnel through plan compilation. Without a
+        deployment-owned policy the plan keeps its historical canonical form
+        (null rollout authority); with a policy, denial fails closed.
+        """
+
+        from moonmind.omnigent.harness_platform.materializers import (
+            materializer_ref_for_provider,
+        )
+        from moonmind.omnigent.harness_platform.planner import (
+            select_execution_realizer,
+        )
+        from moonmind.omnigent.harness_platform.rollout_admission import (
+            admit_rollout_for_plan,
+            build_rollout_combination,
+            owner_cohort_from_parameters,
+            rollout_policy_configured,
+        )
+
+        if not rollout_policy_configured():
+            return None, None, None
+        realizer = select_execution_realizer(
+            harness_id=harness_id,
+            is_codex=(harness_id == "codex-native"),
+        )
+        combination = build_rollout_combination(
+            harness_implementation=harness_implementation,
+            agent_profile_ref=(
+                f"{selection.profile_id}@v{selection.version}#{selection.digest}"
+            ),
+            provider_runtime=str(provider_profile.runtime_id or ""),
+            provider_class=str(provider_profile.provider_id or ""),
+            host_class_ref=str(host_class.ref or ""),
+            runtime_pack=str(host_class.imageRef or ""),
+            credential_materializer=materializer_ref_for_provider(
+                provider_profile.runtime_id, provider_profile.provider_id
+            ),
+            launch_policy_ref=str(launch_policy.ref or ""),
+            host_mode=str(launch_policy.hostMode or ""),
+            architecture=host_architecture,
+            model_config_class=str(model_route_ref or ""),
+            execution_realizer=realizer,
+            support_evidence_ref=f"{catalog_ref}#{trust_implementation_ref}",
+            owner_cohort=owner_cohort_from_parameters(request.parameters),
+        )
+        return admit_rollout_for_plan(
+            parameters=request.parameters,
+            combination=combination,
+        )
 
     async def _persist_exact_launch_authority(
         self,

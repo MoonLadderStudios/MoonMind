@@ -627,6 +627,79 @@ def _build_v2_profile(
     )
 
 
+def _rollout_authority_for_compiled_plan(
+    *,
+    initial_parameters: Mapping[str, Any],
+    agent_profile_snapshot: Mapping[str, Any],
+    harness_id: str,
+    harness_implementation: str,
+    provider_runtime_id: str,
+    provider_id: str,
+    host_class: Any,
+    launch_policy: Any,
+    host_mode: str,
+    host_architecture: str,
+    model_config_class: str,
+    catalog_ref: str,
+    trust_implementation_ref: str,
+    materializer_ref: str,
+) -> tuple[str | None, int | None, str | None]:
+    """Admit a compiled plan through the rollout policy (#3833).
+
+    Shared backend admission boundary with the pre-session planning service:
+    preset expansion, schedules, edit/rerun refresh, branch, remediation, and
+    linked continuation all compile through this path. Without a
+    deployment-owned policy the plan keeps its historical canonical form;
+    with a policy, denial fails closed with the exact unavailable reason.
+    """
+
+    from moonmind.omnigent.harness_platform.planner import select_execution_realizer
+    from moonmind.omnigent.harness_platform.rollout_admission import (
+        admit_rollout_for_plan,
+        build_rollout_combination,
+        owner_cohort_from_parameters,
+        rollout_policy_configured,
+    )
+
+    if not rollout_policy_configured():
+        return None, None, None
+    profile_id = str(
+        agent_profile_snapshot.get("profileId")
+        or agent_profile_snapshot.get("profile_id")
+        or ""
+    ).strip()
+    profile_version = str(agent_profile_snapshot.get("version") or "").strip()
+    profile_digest = str(agent_profile_snapshot.get("digest") or "").strip()
+    agent_profile_ref = (
+        f"{profile_id}@v{profile_version}#{profile_digest}"
+        if profile_id and profile_version
+        else profile_digest
+    )
+    combination = build_rollout_combination(
+        harness_implementation=harness_implementation,
+        agent_profile_ref=agent_profile_ref,
+        provider_runtime=provider_runtime_id,
+        provider_class=provider_id,
+        host_class_ref=str(getattr(host_class, "ref", "") or ""),
+        runtime_pack=str(getattr(host_class, "imageRef", "") or ""),
+        credential_materializer=materializer_ref,
+        launch_policy_ref=str(getattr(launch_policy, "ref", "") or ""),
+        host_mode=host_mode,
+        architecture=host_architecture,
+        model_config_class=model_config_class,
+        execution_realizer=select_execution_realizer(
+            harness_id=harness_id,
+            is_codex=(harness_id == "codex-native"),
+        ),
+        support_evidence_ref=f"{catalog_ref}#{trust_implementation_ref}",
+        owner_cohort=owner_cohort_from_parameters(initial_parameters),
+    )
+    return admit_rollout_for_plan(
+        parameters=initial_parameters,
+        combination=combination,
+    )
+
+
 async def compile_and_persist_execution_plan(
     *,
     session_factory: Any,
@@ -1067,6 +1140,22 @@ async def compile_and_persist_execution_plan(
     }
     model = document.get("model")
     model_mapping = dict(model) if isinstance(model, Mapping) else {}
+    rollout_triple = _rollout_authority_for_compiled_plan(
+        initial_parameters=initial_parameters,
+        agent_profile_snapshot=agent_profile_snapshot,
+        harness_id=harness_id,
+        harness_implementation=implementation.implementation_ref(),
+        provider_runtime_id=provider_runtime_id,
+        provider_id=provider_id,
+        host_class=host_class,
+        launch_policy=planner_launch_policy,
+        host_mode=str(effective_launch.get("hostMode") or ""),
+        host_architecture=host_architecture,
+        model_config_class=provider_id,
+        catalog_ref=catalog.catalogRef,
+        trust_implementation_ref=trust.implementationRef,
+        materializer_ref=str(config.get("materializerRef") or ""),
+    )
     plan = compile_execution_plan(
         agent_profile=_build_v2_profile(
             snapshot=agent_profile_snapshot,
@@ -1125,6 +1214,9 @@ async def compile_and_persist_execution_plan(
         capture_policy_ref=_digest_ref("capture-policy", document.get("capture") or {}),
         execution_authority=authority,
         agent_profile_snapshot_ref=f"artifact:{profile_snapshot_ref}",
+        rollout_policy_version=rollout_triple[0],
+        rollout_generation=rollout_triple[1],
+        rollout_state=rollout_triple[2],
     )
     from moonmind.omnigent.session_supervisor_rollback import (
         SUPERVISOR_ROLLBACK_POLICY_VERSION,
