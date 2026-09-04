@@ -427,6 +427,11 @@ Expansion reads `workflowPublish` from the **root** preset only. A preset that i
 included as a child keeps its own annotation for the case where an operator runs
 it directly, and that annotation never overwrites the including workflow's policy.
 
+A preset expanded at submit time supplies the workflow publish mode only while
+the visible Publish Mode control still shows a derived value. Once the operator
+changes that control, their selection is an explicit override and wins over the
+annotation, exactly as it does for a preset that was expanded before submit.
+
 A preset declares `mode: none` when the workflow itself publishes nothing to the
 repository:
 
@@ -473,8 +478,13 @@ explicitly submitted value, including one the operator changed away from the
 derived default, is never replaced. A source value with no entry in `map` falls
 back to the field's static default.
 
-A malformed `defaultFrom` is rejected when the preset is seeded rather than
-silently falling back to the static default.
+A `defaultFrom` rule is validated against the preset's own inputs when the
+preset is seeded, rather than silently falling back to the static default when
+an operator runs it. Seeding fails when the rule is malformed, when its target
+or source names an input the preset does not declare, when a `map` key is not a
+value the source field can hold, or when a mapped value is one the target field
+would reject. Only a declared `map` entry supplies a default, so a source value
+that happens to name an inherited object member resolves nothing.
 
 ## Nested Presets
 
