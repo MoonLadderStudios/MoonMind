@@ -585,7 +585,11 @@ budget covers a connect-time bootstrap and one serialized recovery attempt with
 margin. The enclosing `omnigent.submit_turn` Activity allows 180 seconds per
 attempt and 600 seconds across retries. Ordinary JSON and non-message control
 events retain a 60-second budget, while the SSE read remains unbounded and is
-governed by the marked-turn progress budgets below.
+governed by the marked-turn progress budgets below. The budget assumes the
+OpenCode host image's warm plugin SDK npm cache
+(`docs/Omnigent/OpenCodeHost.md`); a cold `@opencode-ai/plugin` download from
+the registry during native-terminal ensure is a host image defect to fix at the
+image boundary, not a reason to raise this budget.
 
 ### 9.2 First-message marker
 

@@ -1,0 +1,20 @@
+{
+  "invariant": "an OpenCode host launch resolves the plugin SDK from an image-owned npm cache that is seeded before Omnigent starts, so the first native-terminal ensure never waits on registry.npmjs.org",
+  "imageCacheSeed": "/opt/moonmind/opencode-npm-cache",
+  "runtimeCache": "/home/app/.omnigent/moonmind/opencode-npm-cache",
+  "npmrcPath": "/home/app/.npmrc",
+  "npmrcLines": [
+    "cache=/home/app/.omnigent/moonmind/opencode-npm-cache",
+    "prefer-offline=true",
+    "audit=false",
+    "fund=false",
+    "update-notifier=false"
+  ],
+  "missingSeedExitCode": 78,
+  "hostStart": "exec omnigent host --server \"$1\" --non-interactive",
+  "dockerfileCacheArg": "ARG OPENCODE_PLUGIN_NPM_CACHE=/opt/moonmind/opencode-npm-cache",
+  "dockerfilePackageJson": "{\"dependencies\":{\"@opencode-ai/plugin\":\"%s\"}}",
+  "dockerfileOfflineVerify": "--cache \"${OPENCODE_PLUGIN_NPM_CACHE}\" --no-audit --no-fund --offline",
+  "releaseVerifyScript": "services/omnigent/opencode-host/verify-warm-plugin-cache.sh",
+  "releaseWorkflow": ".github/workflows/docker-publish-opencode-host.yml"
+}

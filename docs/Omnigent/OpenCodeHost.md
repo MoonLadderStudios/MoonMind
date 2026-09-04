@@ -42,6 +42,9 @@ Conceptually:
 FROM ghcr.io/omnigent-ai/omnigent-host@sha256:<base-digest>
 RUN npm install -g --no-audit --no-fund 'opencode-ai@1.18.11'
 RUN opencode --version
+# Warm the OpenCode plugin SDK closure and prove it resolves offline.
+RUN npm install --cache /opt/moonmind/opencode-npm-cache '@opencode-ai/plugin@1.18.11' \
+    && npm install --cache /opt/moonmind/opencode-npm-cache --offline '@opencode-ai/plugin@1.18.11'
 ```
 
 ### Desired shared-image implementation
@@ -71,6 +74,7 @@ The shared image must:
 
 - derive from an immutable compatible Omnigent host base
 - install or inherit every supported runtime at image-build time
+- warm every dependency a supported runtime installs on its own first start (today the OpenCode plugin SDK npm cache) and prove it resolves offline
 - perform no package installation during workflow launch
 - run as the normal non-root Omnigent host user
 - preserve `/home/app` as the runtime home contract
@@ -173,6 +177,47 @@ probes:
 ```
 
 The runtime pack is deployment-owned. Workflows cannot author its commands, paths, environment, or materializer allowlist.
+
+### OpenCode plugin SDK cache
+
+The first `opencode serve` in a config directory writes
+`package.json` = `{"dependencies": {"@opencode-ai/plugin": "<opencode version>"}}`
+next to `opencode.json` and runs `npm install` there. Omnigent gives every
+session a fresh per-session `XDG_CONFIG_HOME`, and MoonMind gives every
+on-demand host a fresh tmpfs home, so a host without a warm cache downloads the
+whole closure (about 60 MB) from `registry.npmjs.org` through the restricted
+egress proxy while the first user message is blocked on the native-terminal
+ensure. That download is not bounded by MoonMind's dispatch budget and was the
+cause of the `Omnigent transport error: ReadTimeout` failures replayed by
+`tests/integration/reliability/replays/omnigent-opencode-cold-plugin-install/`.
+
+The contract is therefore split across the image and the MoonMind entrypoint:
+
+```text
+image build:   npm install --cache /opt/moonmind/opencode-npm-cache  (warm)
+               npm install --cache /opt/moonmind/opencode-npm-cache --offline  (prove)
+               chown 1000:1000; label moonmind.opencode.plugin_npm_cache
+host launch:   test -d /opt/moonmind/opencode-npm-cache || exit 78
+               cp -a /opt/moonmind/opencode-npm-cache /home/app/.omnigent/moonmind/opencode-npm-cache
+               write /home/app/.npmrc:
+                 cache=/home/app/.omnigent/moonmind/opencode-npm-cache
+                 prefer-offline=true
+                 audit=false
+                 fund=false
+                 update-notifier=false
+release CI:    services/omnigent/opencode-host/verify-warm-plugin-cache.sh <digest>
+               (opencode serve becomes ready with --network none)
+```
+
+npm reads `$HOME/.npmrc`, and `HOME` is one of the few variables Omnigent
+forwards from the host to the OpenCode server, so no `npm_config_*` environment
+crosses the host, runner, or server boundary. The seed is copied into the
+run-owned state volume rather than the tmpfs home so the cache costs disk, not
+the host's memory limit. A host image without the seed fails the launch with an
+explicit message in the captured host log instead of degrading to the cold
+registry install; deployments that pin `OMNIGENT_OPENCODE_HOST_IMAGE_REF` must
+move to a digest built with the warm cache when they adopt this MoonMind
+revision.
 
 ## 5. Credential materializer: `opencode-auth-json@1`
 
@@ -459,6 +504,7 @@ The shared release workflow should:
 - verify `codex --version`
 - verify `claude --version`
 - verify `opencode --version`
+- verify `opencode serve` becomes ready with the network disabled from the warmed plugin SDK npm cache
 - verify the expected harness catalog and implementation identities
 - record each vendor runtime independently
 - generate provenance and SBOM data
