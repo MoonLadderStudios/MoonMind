@@ -281,8 +281,10 @@ jobs:
         run: |
           IMAGE_NAME="${{ needs.metadata.outputs.image_name }}"
           VERSION_TAG="${{ needs.metadata.outputs.version_tag }}"
+          OPENCODE_VERSION="${{ needs.metadata.outputs.opencode_version }}"
           docker buildx imagetools create \
             -t "${IMAGE_NAME}:${VERSION_TAG}" \
+            -t "${IMAGE_NAME}:${OPENCODE_VERSION}" \
             -t "${IMAGE_NAME}:latest" \
             $(printf "${IMAGE_NAME}@sha256:%s " *)
 
@@ -290,6 +292,7 @@ jobs:
         run: |
           IMAGE_NAME="${{ needs.metadata.outputs.image_name }}"
           VERSION="${{ needs.metadata.outputs.version_tag }}"
+          OPENCODE_VERSION="${{ needs.metadata.outputs.opencode_version }}"
           docker buildx imagetools inspect "${IMAGE_NAME}:latest"
           DIGEST="$(docker buildx imagetools inspect "${IMAGE_NAME}:latest" --format '{{json .Manifest}}' | grep -o '"digest":"[^"]*"' | head -n1 | cut -d'"' -f4)"
           if [ -z "${DIGEST}" ]; then
@@ -299,6 +302,7 @@ jobs:
             echo "### omnigent-host-moonmind published"
             echo ""
             echo "- Version tag: \`${IMAGE_NAME}:${VERSION}\`"
+            echo "- OpenCode alias tag: \`${IMAGE_NAME}:${OPENCODE_VERSION}\`"
             echo "- Current build channel: \`${IMAGE_NAME}:latest\`"
             echo "- Digest: \`${DIGEST}\`"
             echo "- Digest-pinned reference: \`${IMAGE_NAME}@${DIGEST}\`"

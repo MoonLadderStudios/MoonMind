@@ -80,8 +80,11 @@ def select_execution_realizer(
     shared-image Codex row passes its conformance gates (#3832). That operator
     qualification is the one gate (``generic_codex_qualified``); there is no
     silent fallback — an explicit generic selection before qualification fails
-    fast, and the same plan always reconciles to the same realizer. All other
-    harnesses own the generic realizer directly.
+    fast, and the same plan always reconciles to the same realizer.
+    ``claude-native`` follows the same fail-closed contract (#3831): the
+    generic realizer is returned only after ``generic_claude_qualified`` opts
+    in; otherwise planning fails fast instead of advertising an unqualified
+    combination. All other harnesses own the generic realizer directly.
     """
 
     if harness_id == "codex-native" and is_codex:
@@ -90,6 +93,23 @@ def select_execution_realizer(
         if generic_codex_qualified():
             return "generic-omnigent-host@1"
         return "codex-profile-bound@1"
+    if harness_id == "claude-native":
+        from moonmind.omnigent.harness_platform.failures import (
+            HarnessPlatformError as _HarnessPlatformError,
+        )
+        from moonmind.omnigent.harness_platform.failures import (
+            HarnessPlatformFailure as _HarnessPlatformFailure,
+        )
+        from moonmind.omnigent.settings import generic_claude_qualified
+
+        if generic_claude_qualified():
+            return "generic-omnigent-host@1"
+        raise _HarnessPlatformError(
+            "execution realizer generic-omnigent-host@1 is not qualified "
+            "for claude-native in this deployment; explicit generic "
+            "selection is fail-closed",
+            code=_HarnessPlatformFailure.OMNIGENT_EXECUTION_REALIZER_UNAVAILABLE,
+        )
     return "generic-omnigent-host@1"
 
 
@@ -351,6 +371,10 @@ def compile_execution_plan(
             profile.harness.id == "codex-native"
             and execution_realizer_ref == "generic-omnigent-host@1"
         )
+        generic_claude_requested = (
+            profile.harness.id == "claude-native"
+            and execution_realizer_ref == "generic-omnigent-host@1"
+        )
         if generic_codex_requested:
             from moonmind.omnigent.settings import generic_codex_qualified
 
@@ -358,6 +382,16 @@ def compile_execution_plan(
                 raise HarnessPlatformError(
                     "execution realizer generic-omnigent-host@1 is not qualified "
                     "for codex-native in this deployment; explicit generic "
+                    "selection is fail-closed",
+                    code=HarnessPlatformFailure.OMNIGENT_EXECUTION_REALIZER_UNAVAILABLE,
+                )
+        elif generic_claude_requested:
+            from moonmind.omnigent.settings import generic_claude_qualified
+
+            if not generic_claude_qualified():
+                raise HarnessPlatformError(
+                    "execution realizer generic-omnigent-host@1 is not qualified "
+                    "for claude-native in this deployment; explicit generic "
                     "selection is fail-closed",
                     code=HarnessPlatformFailure.OMNIGENT_EXECUTION_REALIZER_UNAVAILABLE,
                 )
@@ -397,10 +431,28 @@ def compile_execution_plan(
             and entry.implementationRef == profile.harness.implementationRef
         ):
             for dep in entry.runtimeDependencies:
-                # dep is dict with name, version, digest
-                vendor_refs.append(
-                    f"{dep.get('name')}@{dep.get('version')}#{dep.get('digest')}"
-                )
+                # dep is dict with name, version, and optional digest.
+                # Packs pin the vendor version identity while the launched
+                # image attests the installed runtime; bind the support key
+                # to the exact host image digest when no per-runtime digest
+                # is recorded so rebuilt images cannot reuse prior evidence.
+                # Never emit a literal "#None" suffix.
+                name = dep.get("name")
+                version = dep.get("version")
+                digest = dep.get("digest")
+                if digest:
+                    vendor_refs.append(f"{name}@{version}#{digest}")
+                else:
+                    image_ref = str(selected_host_class.imageRef or "")
+                    image_digest = (
+                        image_ref.split("@", 1)[1]
+                        if "@" in image_ref
+                        else ""
+                    )
+                    if image_digest:
+                        vendor_refs.append(f"{name}@{version}#{image_digest}")
+                    else:
+                        vendor_refs.append(f"{name}@{version}")
             break
     # Full agent source identity (not just ID) to differentiate bundles with same ID but different version/content
     agent_source_full = profile.source.model_dump(by_alias=True, mode="json")

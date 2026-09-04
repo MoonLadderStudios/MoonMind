@@ -407,7 +407,6 @@ def test_realizer_registry_no_fallback():
 
 _GATE_ENV = "MOONMIND_OMNIGENT_GENERIC_CODEX_QUALIFIED"
 _CLAUDE_GATE_ENV = "MOONMIND_OMNIGENT_GENERIC_CLAUDE_QUALIFIED"
-_SHARED_REF = "ghcr.io/moonladderstudios/omnigent-host-moonmind@sha256:" + "e" * 64
 
 
 def _compile_claude_plan(**kwargs):
@@ -613,21 +612,21 @@ def _compile_codex_plan(**kwargs):
     )
 
 
-def test_select_execution_realizer_codex_gate():
+def test_select_execution_realizer_codex_gate(monkeypatch):
     from moonmind.omnigent.harness_platform.planner import (
         select_execution_realizer,
     )
 
     # Unqualified (default): codex keeps the retained profile-bound realizer.
+    monkeypatch.delenv(_CLAUDE_GATE_ENV, raising=False)
     assert (
         select_execution_realizer(harness_id="codex-native", is_codex=True)
         == "codex-profile-bound@1"
     )
-    # Claude Code (no legacy lane) owns the generic realizer directly.
-    assert (
+    # Claude Code is fail-closed until qualified: no legacy lane to fall back to.
+    with pytest.raises(Exception) as exc:
         select_execution_realizer(harness_id="claude-native", is_codex=False)
-        == "generic-omnigent-host@1"
-    )
+    assert "execution realizer" in str(exc.value).lower()
     assert (
         select_execution_realizer(harness_id="opencode-native", is_codex=False)
         == "generic-omnigent-host@1"
@@ -688,3 +687,16 @@ def test_claude_plans_record_generic_realizer(monkeypatch):
     assert envelope.payload.executionRealizerRef == "generic-omnigent-host@1"
     assert envelope.payload.harnessId == "claude-native"
     assert envelope.payload.hostClassRef == "omnigent-claude@1"
+
+
+def test_claude_generic_plan_fails_closed_until_qualified(monkeypatch):
+    from moonmind.omnigent.settings import generic_claude_qualified
+
+    monkeypatch.delenv(_CLAUDE_GATE_ENV, raising=False)
+    assert generic_claude_qualified() is False
+    with pytest.raises(Exception) as exc:
+        _compile_claude_plan()
+    assert "execution realizer" in str(exc.value).lower()
+    with pytest.raises(Exception) as exc2:
+        _compile_claude_plan(execution_realizer_ref="generic-omnigent-host@1")
+    assert "execution realizer" in str(exc2.value).lower()

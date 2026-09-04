@@ -143,35 +143,23 @@ class _DockerMaterializerBackendMixin:
         return stdout
 
     async def _resolve_writer_ref(self, ref: str) -> str:
-        # Local dev fallback: if digest-pinned image is not present locally (not pushed to GHCR), try tag
+        # Fail closed on digest-pinned writers: the selected Host Class image
+        # is immutable launch authority, and a mutable-tag fallback would grant
+        # a different image read-write access to persistent OAuth credentials.
+        # Return the exact ref so a missing local image fails with an actionable
+        # Docker error instead of silently substituting another image.
         code, _, _ = await self._backend.run(
             ["docker", "image", "inspect", ref, "--format", "{{.Id}}"]
         )
         if code == 0:
             return ref
         if "@sha256:" in ref:
-            candidates = [
-                ref.split("@")[0] + ":1.18.11",
-                "ghcr.io/moonladderstudios/omnigent-host-opencode:1.18.11",
-            ]
-            import os
-
-            env_image = os.getenv("OMNIGENT_OPENCODE_HOST_IMAGE", "").strip()
-            if env_image:
-                env_tag = (
-                    f"{env_image}:1.18.11"
-                    if ":" not in env_image.split("/")[-1]
-                    else env_image
-                )
-                candidates.insert(0, env_tag)
-            for cand in candidates:
-                if not cand:
-                    continue
-                c, _, _ = await self._backend.run(
-                    ["docker", "image", "inspect", cand, "--format", "{{.Id}}"]
-                )
-                if c == 0:
-                    return cand
+            raise HarnessPlatformError(
+                f"digest-pinned writer image is not present locally: {ref}; "
+                "pull the selected Host Class image instead of substituting "
+                "a mutable tag",
+                code=HarnessPlatformFailure.OMNIGENT_CREDENTIAL_MATERIALIZATION_FAILED,
+            )
         return ref
 
     async def _volume_presence(self, volume: str, *, failure: str) -> bool:
@@ -810,13 +798,21 @@ class DockerOauthHomeMaterializer(_DockerMaterializerBackendMixin):
         # Stage the generation marker inside the profile-owned home. Re-staging
         # is idempotent for the same generation and rejects a newer (rotated)
         # generation so a stale lease can never fence a replacement home.
+        # Normalize the enrollment-owned layout to the exact-host contract
+        # (root 0700, top-level files 0600, owned 1000:1000) so helper-synced
+        # or imported volumes pass attestation without manual repair.
         stage_script = (
             "set -eu; "
+            "chown 1000:1000 /credential; "
+            "chmod 0700 /credential; "
             "if [ -f /credential/.moonmind-generation ]; then "
             "current=$(cat /credential/.moonmind-generation); "
             'if [ "$current" -gt "$1" ]; then '
             "echo 'credential home generation is newer than the acquired lease' >&2; "
             "exit 79; fi; fi; "
+            'for f in /credential/*; do [ -e "$f" ] || continue; '
+            '[ -f "$f" ] || continue; '
+            'chown 1000:1000 "$f"; chmod 0600 "$f"; done; '
             "printf '%s\\n' \"$1\" > /credential/.moonmind-generation.tmp; "
             "chown 1000:1000 /credential/.moonmind-generation.tmp; "
             "chmod 0600 /credential/.moonmind-generation.tmp; "
@@ -861,6 +857,8 @@ class DockerOauthHomeMaterializer(_DockerMaterializerBackendMixin):
             "ownership": "profile",
             "attachment": attachment,
             "owner": "1000:1000",
+            "directoryMode": "0700",
+            "fileMode": "0600",
             "secretCopied": False,
             "secretValueRecorded": False,
         }
