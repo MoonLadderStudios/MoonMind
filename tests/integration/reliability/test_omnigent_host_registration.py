@@ -23,9 +23,12 @@ pytestmark = [
 @pytest.mark.parametrize(
     "persisted", [False, True], ids=["new-launch", "in-flight-launch"]
 )
-@pytest.mark.parametrize("harness", ["opencode-native", "codex-native", "claude-native"])
+@pytest.mark.parametrize(
+    "harness", ["opencode-native", "codex-native", "claude-native"]
+)
+@pytest.mark.parametrize("credentialless", [False, True])
 async def test_targeted_registration_stock_uuid_handoff(
-    monkeypatch: pytest.MonkeyPatch, persisted: bool, harness: str
+    monkeypatch: pytest.MonkeyPatch, persisted: bool, harness: str, credentialless: bool
 ) -> None:
     manifest = load_replay("omnigent-targeted-host-uuid", "manifest.json")
     expected_id = (
@@ -34,7 +37,9 @@ async def test_targeted_registration_stock_uuid_handoff(
         else expected_omnigent_host_id("registration-replay-lease", 1)
     )
     host = dict(manifest["host"], host_id=UUID(expected_id).hex)
-    host["configured_harnesses"] = {harness: "ready"}
+    host["configured_harnesses"] = {
+        harness: "needs-auth" if credentialless else "ready"
+    }
     calls = []
 
     async def handler(request: httpx.Request) -> httpx.Response:
@@ -54,11 +59,15 @@ async def test_targeted_registration_stock_uuid_handoff(
     )
     monkeypatch.setattr(registration, "_registration_delay", lambda _attempt: 0)
     result = await registration.wait_for_registration(
-        correlation_name=host["name"], harness_id=harness, expected_host_id=expected_id
+        correlation_name=host["name"],
+        harness_id=harness,
+        expected_host_id=expected_id,
+        credentialless=credentialless,
     )
     assert len(calls) == 3
     assert result["lookupMode"] == "targeted"
     assert result["harnessReady"] is True
+    assert result["credentialless"] is credentialless
     # Attestation and subsequent session creation consume the server's exact ID.
     assert result["omnigentHostId"] == host["host_id"]
     assert result["host"] == host

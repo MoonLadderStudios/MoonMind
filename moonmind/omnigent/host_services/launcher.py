@@ -271,7 +271,6 @@ class DockerOmnigentHostLauncher:
             command.extend(["--label", f"{key}={value}"])
         environment = {
             **runtime_environment,
-            "OMNIGENT_HOST_ID": container_name,
             "OMNIGENT_HOST_NAME": container_name,
         }
         # The upstream Omnigent CLI treats managed-host launches as
