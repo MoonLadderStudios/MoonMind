@@ -3,7 +3,7 @@
 **Status:** OpenCode implementation is current; shared-image migration is desired state  
 **Document Class:** System / Operator Guide  
 **Owners:** MoonMind Platform  
-**Last updated:** 2026-09-03
+**Last updated:** 2026-09-04
 **Authority:** OpenCode runtime contract and transition from `omnigent-host-opencode` to the shared MoonMind Omnigent host image
 
 ## Related documents
@@ -297,6 +297,7 @@ credentialSource: none
 runtimeMaterializationMode: composite
 secretRefs: {}
 enabled: true
+isDefault: true
 authState: connected
 defaultModel: opencode/muse-spark-1.3-contributor-free
 defaultEffort: xhigh
@@ -306,6 +307,24 @@ The seed runs before the first bootstrap reconciliation. Startup validates the
 model against the exact pinned host and publishes the same deployment evidence
 required by key-backed profiles. An existing explicit operator disable remains
 authoritative.
+
+The seed declares `isDefault: true`, so it holds runtime-default authority for
+`opencode` from first start rather than inheriting it only while it happens to
+be the sole launch-ready profile. Two things release that authority, and nothing
+else does:
+
+- an explicit operator disable of `opencode-zen-free`, which removes it from the
+  launch-ready set and hands the default to the next ranked profile; or
+- an explicit default selection on another profile (the Settings
+  `make_default` action).
+
+Configuring `OPENCODE_API_KEY` is neither. Deployment enrollment of
+`opencode-go-default` validates and enables that profile alongside the Zen
+default without transferring runtime-default authority.
+
+Every launch surface derives OpenCode eligibility from the runtime/provider
+capability, not from the presence of a secret reference, so a credentialless
+profile is advertised and selectable on the same terms as a key-backed one.
 
 Deployment qualification is independent of runtime-default selection. MoonMind
 publishes one exact signed entry for each launch-ready OpenCode materializer

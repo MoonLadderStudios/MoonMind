@@ -1045,11 +1045,17 @@ async def get_omnigent_codex_catalog_readiness(
         queue_when_busy = (
             getattr(row.rate_limit_policy, "value", row.rate_limit_policy) == "queue"
         )
+        # MoonLadderStudios/MoonMind#3877: OpenCode's built-in Zen Contributor
+        # Free route is credentialless (`credential_source == "none"`, the
+        # `none@1` materializer), so eligibility must be derived from the
+        # runtime/provider capability rather than from the presence of a secret
+        # reference. Filtering on `secret_ref` alone hid the default provider
+        # profile from every launch surface that reads this projection.
         compatible = (
             credential_source == "oauth_volume" and materialization == "oauth_home"
         ) or (
             runtime_id == "opencode"
-            and credential_source == "secret_ref"
+            and credential_source in {"secret_ref", "none"}
             and materialization in {"composite", "api_key_env", "config_bundle"}
             and row.provider_id in {"opencode-go", "opencode"}
         )

@@ -1530,7 +1530,12 @@ async def _auto_seed_provider_profiles() -> list[str]:
             {
                 "profile_id": "opencode-zen-free",
                 "runtime_id": "opencode",
-                "is_default": False,
+                # MoonLadderStudios/MoonMind#3877: the credentialless Zen seed
+                # declares the OpenCode runtime default instead of inheriting it
+                # only while it happens to be the sole launch-ready profile. An
+                # explicit operator disable or an explicit default selection
+                # stays authoritative; deployment key enrollment does not.
+                "is_default": True,
                 "provider_id": "opencode",
                 "provider_label": "OpenCode Zen",
                 "default_model": ZEN_FREE_QUALIFIED,
