@@ -320,3 +320,172 @@ async def test_malformed_dependent_default_rule_is_rejected_at_seed_time(
             service = PresetCatalogService(session)
             with pytest.raises(PresetValidationError, match=expected_message):
                 await service.sync_seed_templates(seed_dir=seed_dir)
+
+
+def _write_schema_dependent_default_preset(seed_dir: Path, ui_schema: dict) -> None:
+    """Seed a capability-contract preset carrying the given ``uiSchema``."""
+
+    seed_dir.mkdir(exist_ok=True)
+    (seed_dir / "dependent.yaml").write_text(
+        yaml.safe_dump(
+            {
+                "slug": "dependent-default-preset",
+                "title": "Dependent Default Preset",
+                "description": "Preset with a dependent input default.",
+                "scope": "global",
+                "annotations": {
+                    "inputSchema": {
+                        "type": "object",
+                        "required": ["run_ref"],
+                        "properties": {
+                            "run_ref": {
+                                "type": "string",
+                                "title": "Run",
+                                "enum": ["skill:verify", "preset:implement"],
+                            },
+                            "publish_mode": {
+                                "type": "string",
+                                "title": "Publish override",
+                                "enum": ["none", "branch", "pr"],
+                            },
+                        },
+                    },
+                    "uiSchema": ui_schema,
+                    "defaults": {
+                        "run_ref": "skill:verify",
+                        "publish_mode": "none",
+                    },
+                },
+                "inputs": [
+                    {
+                        "name": "run_ref",
+                        "label": "Run",
+                        "type": "enum",
+                        "required": True,
+                        "options": ["skill:verify", "preset:implement"],
+                        "default": "skill:verify",
+                    },
+                    {
+                        "name": "publish_mode",
+                        "label": "Publish override",
+                        "type": "enum",
+                        "options": ["none", "branch", "pr"],
+                        "default": "none",
+                    },
+                ],
+                "steps": [
+                    {
+                        "title": "Do nothing",
+                        "instructions": "Do nothing.",
+                        "skill": {"id": "noop"},
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+
+@pytest.mark.parametrize(
+    ("ui_schema", "expected_message"),
+    [
+        # A typo in the source field silently reinstates the static default.
+        (
+            {
+                "publish_mode": {
+                    "defaultFrom": {
+                        "field": "run_reff",
+                        "map": {"skill:verify": "none"},
+                    }
+                }
+            },
+            "reads 'run_reff'",
+        ),
+        # A typo in the target field derives a value nothing reads.
+        (
+            {
+                "publish_modee": {
+                    "defaultFrom": {
+                        "field": "run_ref",
+                        "map": {"skill:verify": "none"},
+                    }
+                }
+            },
+            "targets 'publish_modee'",
+        ),
+        # A source value the source field cannot hold never matches.
+        (
+            {
+                "publish_mode": {
+                    "defaultFrom": {
+                        "field": "run_ref",
+                        "map": {"skill:verifyy": "none"},
+                    }
+                }
+            },
+            "which is not a 'run_ref' option",
+        ),
+        # A mapped value outside the target enum fails only at run time.
+        (
+            {
+                "publish_mode": {
+                    "defaultFrom": {
+                        "field": "run_ref",
+                        "map": {"preset:implement": "pr_with_merge_automation"},
+                    }
+                }
+            },
+            "cannot hold",
+        ),
+    ],
+)
+async def test_unresolvable_dependent_default_reference_is_rejected_at_seed_time(
+    tmp_path,
+    ui_schema,
+    expected_message,
+):
+    """A rule that can never derive its value fails before an operator runs it."""
+
+    seed_dir = tmp_path / "presets"
+    _write_schema_dependent_default_preset(seed_dir, ui_schema)
+
+    async with _catalog_db(tmp_path) as sessions:
+        async with sessions() as session:
+            service = PresetCatalogService(session)
+            with pytest.raises(PresetValidationError, match=expected_message):
+                await service.sync_seed_templates(seed_dir=seed_dir)
+
+
+async def test_valid_dependent_default_reference_seeds_and_expands(tmp_path):
+    """The validated rule still derives the dependent default at expansion."""
+
+    seed_dir = tmp_path / "presets"
+    _write_schema_dependent_default_preset(
+        seed_dir,
+        {
+            "publish_mode": {
+                "widget": "select",
+                "defaultFrom": {
+                    "field": "run_ref",
+                    "map": {
+                        "skill:verify": "none",
+                        "preset:implement": "pr",
+                    },
+                },
+            }
+        },
+    )
+
+    async with _catalog_db(tmp_path) as sessions:
+        async with sessions() as session:
+            service = PresetCatalogService(session)
+            await service.sync_seed_templates(seed_dir=seed_dir)
+            expanded = await service.expand_template(
+                slug="dependent-default-preset",
+                scope="global",
+                scope_ref=None,
+                inputs={"run_ref": "preset:implement"},
+                context=None,
+            )
+
+    assert expanded["appliedTemplate"]["inputs"]["publish_mode"] == "pr"

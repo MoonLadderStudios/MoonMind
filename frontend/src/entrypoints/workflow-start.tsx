@@ -3956,7 +3956,14 @@ function dependentCapabilityDefault(
     return undefined;
   }
   const source = capabilityInputValue(values, detail.defaults, field);
-  const mapped = map[String(source ?? "").trim()];
+  const key = String(source ?? "").trim();
+  // Only an entry the preset actually declared may supply a default. A source
+  // value such as `constructor` would otherwise resolve an inherited
+  // `Object.prototype` member that `structuredClone` cannot clone.
+  if (!Object.hasOwn(map, key)) {
+    return undefined;
+  }
+  const mapped = map[key];
   if (mapped === undefined || containsSecretLikeCapabilityValue(mapped)) {
     return undefined;
   }
@@ -4088,11 +4095,21 @@ function resolveSchemaCapabilityValues(
     } else if (explicit !== undefined && widget === "jira.issue-picker") {
       explicit = normalizeJiraIssuePickerValue(explicit);
     }
+    const dependentDefault = dependentCapabilityDefault(
+      detail,
+      explicitValues,
+      name,
+    );
     const fallback =
-      dependentCapabilityDefault(detail, explicitValues, name) ??
+      dependentDefault ??
       safeCapabilityDefault(detail.defaults, name) ??
       safeCapabilityDefault(fieldSchema, "default");
-    if (explicit !== undefined) {
+    // Expansion treats a blank dependent target as omitted, so clearing a text
+    // or textarea field must derive the rule's value here too instead of
+    // submitting an empty string the server would replace.
+    const derivesBlank =
+      dependentDefault !== undefined && (explicit === "" || explicit === null);
+    if (explicit !== undefined && !derivesBlank) {
       if (
         explicit === "" &&
         !required.has(name) &&
@@ -6169,6 +6186,9 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
   const [publishMode, setPublishMode] = useState(
     normalizePublishModeForSubmit(defaultPublishMode),
   );
+  // Set only by the visible Publish Mode control. A preset expanded during
+  // submit may not overwrite a mode the operator chose for this run.
+  const [publishModeTouched, setPublishModeTouched] = useState(false);
   const [produceReport, setProduceReport] = useState(false);
   const [priority, setPriority] = useState(DEFAULT_PRIORITY);
   const [maxAttempts, setMaxAttempts] = useState(DEFAULT_MAX_ATTEMPTS);
@@ -10675,11 +10695,14 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
       String(submitExpandedWorkflowPublish?.mode || ""),
     );
     // A preset expanded during this submit has not yet had a chance to update
-    // the visible form control. Use its workflow-level policy for this request.
-    // For an already-applied preset, a different visible mode is an explicit
-    // operator override and therefore wins over the annotation.
+    // the visible form control. Use its workflow-level policy for this request
+    // unless the operator already chose a mode: an edited control is an
+    // explicit override and wins over the annotation, exactly as it does for an
+    // already-applied preset.
     const requestedPublishMode =
-      submitExpandedWorkflowPublish && submitExpandedPublishMode
+      submitExpandedWorkflowPublish &&
+      submitExpandedPublishMode &&
+      !publishModeTouched
         ? submitExpandedPublishMode
         : formPublishMode;
     const effectiveSubmissionSkillId = primarySkillId;
@@ -14743,7 +14766,10 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
                 aria-label="Publish Mode"
                 title={publishModeTooltip}
                 value={publishMode}
-                onChange={(event) => setPublishMode(event.target.value)}
+                onChange={(event) => {
+                  setPublishModeTouched(true);
+                  setPublishMode(event.target.value);
+                }}
               >
                 <option
                   value="auto"

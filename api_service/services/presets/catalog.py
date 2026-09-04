@@ -1154,8 +1154,54 @@ def _input_schema_defaults_by_name(inputs_schema: list[dict[str, Any]]) -> dict[
     }
 
 
+def _dependent_default_input_properties(
+    annotations: Mapping[str, Any] | None,
+    inputs_schema: Sequence[Mapping[str, Any]] | None,
+) -> dict[str, Mapping[str, Any]]:
+    """Return the field schemas a ``defaultFrom`` rule may reference.
+
+    A preset declares its inputs either as a capability ``inputSchema``
+    annotation or as the legacy ``inputs`` list, so both are reduced to the same
+    ``{name: field schema}`` view before a rule is validated.
+    """
+
+    raw_input_schema = (annotations or {}).get("inputSchema")
+    raw_properties = (
+        raw_input_schema.get("properties")
+        if isinstance(raw_input_schema, Mapping)
+        else None
+    )
+    if isinstance(raw_properties, Mapping) and raw_properties:
+        return {
+            str(name or "").strip(): field
+            for name, field in raw_properties.items()
+            if isinstance(field, Mapping)
+        }
+    properties: dict[str, Mapping[str, Any]] = {}
+    for definition in inputs_schema or []:
+        if not isinstance(definition, Mapping):
+            continue
+        name = str(definition.get("name") or "").strip()
+        if not name:
+            continue
+        field_schema = definition.get("schema")
+        if isinstance(field_schema, Mapping):
+            properties[name] = field_schema
+            continue
+        options = definition.get("options")
+        input_type = str(definition.get("type") or "text").strip().lower()
+        if input_type == "enum" and isinstance(options, list):
+            properties[name] = {"enum": [str(option) for option in options]}
+        elif input_type == "boolean":
+            properties[name] = {"type": "boolean"}
+        else:
+            properties[name] = {"type": "string"}
+    return properties
+
+
 def _dependent_input_default_rules(
     annotations: Mapping[str, Any] | None,
+    inputs_schema: Sequence[Mapping[str, Any]] | None = None,
 ) -> dict[str, tuple[str, dict[str, Any]]]:
     """Parse ``uiSchema.<field>.defaultFrom`` rules into ``{field: (source, map)}``.
 
@@ -1163,11 +1209,16 @@ def _dependent_input_default_rules(
     selection instead of a single static value - for example a batch parent
     whose child publish mode depends on the selected child capability. The rule
     is declarative so the Create page and expansion derive the same default.
+
+    Each rule is validated against the preset input schema so an unresolvable
+    reference fails at seed time instead of silently reinstating the static
+    default when an operator runs the preset.
     """
 
     ui_schema = (annotations or {}).get("uiSchema")
     if not isinstance(ui_schema, Mapping):
         return {}
+    properties = _dependent_default_input_properties(annotations, inputs_schema)
     rules: dict[str, tuple[str, dict[str, Any]]] = {}
     for raw_name, raw_field_ui in ui_schema.items():
         if not isinstance(raw_field_ui, Mapping):
@@ -1191,11 +1242,82 @@ def _dependent_input_default_rules(
             raise PresetValidationError(
                 f"uiSchema.{name}.defaultFrom map contains a secret-like value."
             )
-        rules[name] = (
-            source,
-            {str(key or "").strip(): value for key, value in mapping.items()},
+        normalized_map = {
+            str(key or "").strip(): value for key, value in mapping.items()
+        }
+        _validate_dependent_default_references(
+            properties=properties,
+            name=name,
+            source=source,
+            mapping=normalized_map,
         )
+        rules[name] = (source, normalized_map)
     return rules
+
+
+def _validate_dependent_default_references(
+    *,
+    properties: Mapping[str, Any],
+    name: str,
+    source: str,
+    mapping: Mapping[str, Any],
+) -> None:
+    """Reject a ``defaultFrom`` rule that can never derive its declared value.
+
+    An unknown target or source field, a source value the source field cannot
+    hold, or a mapped value the target field would reject all leave the input
+    silently falling back to its static default. That is exactly how a typo
+    restores the unsafe default this rule exists to replace, so the rule is
+    checked against the preset input schema instead of only its own shape.
+    """
+
+    target_schema = properties.get(name)
+    if not isinstance(target_schema, Mapping):
+        raise PresetValidationError(
+            f"uiSchema.{name}.defaultFrom targets '{name}', which is not a "
+            "preset input."
+        )
+    source_schema = properties.get(source)
+    if not isinstance(source_schema, Mapping):
+        raise PresetValidationError(
+            f"uiSchema.{name}.defaultFrom reads '{source}', which is not a "
+            "preset input."
+        )
+    source_enum = source_schema.get("enum")
+    if isinstance(source_enum, list):
+        allowed_sources = {str(option or "").strip() for option in source_enum}
+        for key in mapping:
+            if key not in allowed_sources:
+                raise PresetValidationError(
+                    f"uiSchema.{name}.defaultFrom maps '{key}', which is not a "
+                    f"'{source}' option."
+                )
+    for key, value in mapping.items():
+        if not _value_matches_input_schema(target_schema, value):
+            raise PresetValidationError(
+                f"uiSchema.{name}.defaultFrom maps '{key}' to a value "
+                f"'{name}' cannot hold."
+            )
+
+
+def _value_matches_input_schema(field_schema: Mapping[str, Any], value: Any) -> bool:
+    enum = field_schema.get("enum")
+    if isinstance(enum, list):
+        return value in enum
+    field_type = str(field_schema.get("type") or "").strip().lower()
+    if field_type == "boolean":
+        return isinstance(value, bool)
+    if field_type == "integer":
+        return isinstance(value, int) and not isinstance(value, bool)
+    if field_type == "number":
+        return isinstance(value, (int, float)) and not isinstance(value, bool)
+    if field_type == "string":
+        return isinstance(value, str)
+    if field_type == "array":
+        return isinstance(value, list)
+    if field_type == "object":
+        return isinstance(value, Mapping)
+    return value is not None
 
 
 def _apply_dependent_input_defaults(
@@ -1211,7 +1333,7 @@ def _apply_dependent_input_defaults(
     wins.
     """
 
-    rules = _dependent_input_default_rules(annotations)
+    rules = _dependent_input_default_rules(annotations, inputs_schema)
     if not rules:
         return submitted
     adjusted = dict(submitted)
@@ -1342,10 +1464,17 @@ def _normalize_seed_annotations(item: Mapping[str, Any]) -> dict[str, Any]:
         raise PresetValidationError(
             "Capability schema defaults contain a secret-like value."
         )
-    return _normalize_preset_annotations(annotations)
+    raw_inputs = item.get("inputs")
+    return _normalize_preset_annotations(
+        annotations,
+        raw_inputs if isinstance(raw_inputs, list) else None,
+    )
 
 
-def _normalize_preset_annotations(annotations: Mapping[str, Any] | None) -> dict[str, Any]:
+def _normalize_preset_annotations(
+    annotations: Mapping[str, Any] | None,
+    inputs_schema: Sequence[Mapping[str, Any]] | None = None,
+) -> dict[str, Any]:
     normalized = dict(annotations or {})
     checkpoint_branching_alias = normalized.pop("checkpoint_branching", None)
     if (
@@ -1358,9 +1487,10 @@ def _normalize_preset_annotations(annotations: Mapping[str, Any] | None) -> dict
         normalized["checkpointBranching"] = _normalize_checkpoint_branching_policy(
             checkpoint_branching
         )
-    # Reject a malformed dependent-default rule at seed time rather than letting
-    # an input silently fall back to its static default at expansion.
-    _dependent_input_default_rules(normalized)
+    # Reject a malformed or unresolvable dependent-default rule at seed time
+    # rather than letting an input silently fall back to its static default at
+    # expansion.
+    _dependent_input_default_rules(normalized, inputs_schema)
     return normalized
 
 
@@ -1995,7 +2125,7 @@ class PresetCatalogService:
             required_capabilities=derived_capabilities,
             inputs_schema=validated_inputs,
             steps=validated_steps,
-            annotations=_normalize_preset_annotations(annotations),
+            annotations=_normalize_preset_annotations(annotations, validated_inputs),
             max_step_count=max(25, len(validated_steps)),
             release_status=release_status,
             seed_source=seed_source,
