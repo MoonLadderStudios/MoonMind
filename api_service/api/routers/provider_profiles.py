@@ -1327,6 +1327,7 @@ async def create_profile(
         preferred_profile_id=(
             profile.profile_id if values["is_default"] else None
         ),
+        operator_selected=bool(values["is_default"]),
     )
     await session.commit()
     await session.refresh(profile)
@@ -1897,6 +1898,7 @@ async def update_profile(
 
     if requested_is_default is False:
         profile.is_default = False
+        profile.default_selected_by_operator = False
 
     _validate_codex_oauth_profile_row(profile)
     await session.flush()
@@ -1904,6 +1906,7 @@ async def update_profile(
         session=session,
         runtime_id=profile.runtime_id,
         preferred_profile_id=profile.profile_id if requested_is_default else None,
+        operator_selected=bool(requested_is_default),
     )
     await session.commit()
     await session.refresh(profile)
@@ -2129,6 +2132,7 @@ async def setup_provider_api_key(
         session=session,
         runtime_id=profile.runtime_id,
         preferred_profile_id=profile.profile_id if body.make_default else None,
+        operator_selected=bool(body.make_default),
     )
     await session.commit()
     await session.refresh(profile)

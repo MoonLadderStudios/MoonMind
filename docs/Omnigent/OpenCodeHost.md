@@ -322,6 +322,29 @@ Configuring `OPENCODE_API_KEY` is neither. Deployment enrollment of
 `opencode-go-default` validates and enables that profile alongside the Zen
 default without transferring runtime-default authority.
 
+The rule is declared on every start, not only when the row is first written.
+Startup seeding states `opencode-zen-free` as the runtime-default preference
+whenever the profile is not operator-disabled, and
+`normalize_runtime_default_profile` settles the single-default invariant from
+there. A deployment whose persisted rows still assign the default elsewhere —
+including one upgraded from the release where a configured `OPENCODE_API_KEY`
+transferred it to `opencode-go-default` — returns the default to the Zen profile
+on its next restart.
+
+An explicit default selection is durable because it is persisted, not inferred.
+The Settings `make_default` action and an explicit `isDefault` create or update
+record `defaultSelectedByOperator` on the chosen profile, and the automatic
+preference above never overrules a launchable profile that carries it. The
+marker moves with the default: whichever profile loses runtime-default authority
+also loses the marker, so at most one profile per runtime carries an operator
+claim.
+
+Deployments upgrading to this behavior are cut over once. The migration that
+adds `defaultSelectedByOperator` backfills every existing row to `false`,
+because releases before it recorded nothing that distinguishes an operator
+selection from the automatic transfer. An operator who wants a different
+`opencode` profile to hold the default re-selects it once after the upgrade.
+
 Every launch surface derives OpenCode eligibility from the runtime/provider
 capability, not from the presence of a secret reference, so a credentialless
 profile is advertised and selectable on the same terms as a key-backed one.

@@ -3,13 +3,17 @@
 import asyncio
 from datetime import UTC, datetime
 from enum import Enum
+from contextlib import asynccontextmanager
 from types import SimpleNamespace
+from uuid import uuid4
 
 import pytest
+from httpx import ASGITransport, AsyncClient
 from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 from sqlalchemy.orm import sessionmaker
 
+from api_service.auth_providers import get_current_user
 from api_service.db import base as db_base
 from api_service.db.models import (
     Base,
@@ -413,6 +417,293 @@ async def test_operator_disabled_zen_hands_the_runtime_default_to_opencode_go(
     assert profiles["opencode-zen-free"].is_default is False
     assert profiles["opencode-go-default"].enabled is True
     assert profiles["opencode-go-default"].is_default is True
+    assert sum(profile.is_default for profile in profiles.values()) == 1
+
+
+async def _opencode_profiles() -> dict[str, ManagedAgentProviderProfile]:
+    async with db_base.async_session_maker() as session:
+        result = await session.execute(
+            select(ManagedAgentProviderProfile).where(
+                ManagedAgentProviderProfile.runtime_id == "opencode"
+            )
+        )
+        return {profile.profile_id: profile for profile in result.scalars()}
+
+
+async def _apply_pre_change_go_default_authority(
+    *,
+    zen_operator_disabled: bool = False,
+    go_selected_by_operator: bool = False,
+) -> None:
+    """Persist the runtime-default assignment the pre-#3877 controller produced.
+
+    Before the fix, enrolling the deployment ``OPENCODE_API_KEY`` transferred
+    ``is_default`` to ``opencode-go-default``. Deployments upgraded from that
+    release still carry the assignment, and nothing in the row distinguishes it
+    from an explicit operator selection -- which is exactly why
+    ``default_selected_by_operator`` exists.
+    """
+
+    async with db_base.async_session_maker() as session:
+        zen = await session.get(ManagedAgentProviderProfile, "opencode-zen-free")
+        go = await session.get(ManagedAgentProviderProfile, "opencode-go-default")
+        assert zen is not None and go is not None
+        zen.is_default = False
+        zen.default_selected_by_operator = False
+        if zen_operator_disabled:
+            zen.enabled = False
+            zen.disabled_reason = ProviderProfileDisabledReason.USER_DISABLED
+        await session.flush()
+        go.is_default = True
+        go.default_selected_by_operator = go_selected_by_operator
+        await session.commit()
+
+
+@pytest.mark.asyncio
+async def test_restart_reclaims_opencode_default_from_pre_change_go_authority(
+    _module_db, monkeypatch
+):
+    """MoonLadderStudios/MoonMind#3877: the upgrade path repairs persisted rows.
+
+    Replay/in-flight compatibility for the persisted ``is_default`` flag: a
+    deployment that already transferred runtime-default authority to
+    ``opencode-go-default`` via a configured ``OPENCODE_API_KEY`` must return it
+    to the credentialless Zen profile on the next restart, because neither
+    documented release condition (an explicit operator disable, or an explicit
+    default selection) occurred.
+    """
+
+    from api_service.main import _auto_seed_provider_profiles
+
+    await _auto_seed_provider_profiles()
+    await _enroll_opencode_go_with_pinned_runtime(monkeypatch)
+    await _apply_pre_change_go_default_authority()
+
+    before = await _opencode_profiles()
+    assert before["opencode-zen-free"].is_default is False
+    assert before["opencode-go-default"].is_default is True
+
+    # A plain restart: the seeder runs again over the pre-change rows.
+    await _auto_seed_provider_profiles()
+
+    profiles = await _opencode_profiles()
+    assert profiles["opencode-zen-free"].enabled is True
+    assert profiles["opencode-zen-free"].is_default is True
+    assert profiles["opencode-zen-free"].default_selected_by_operator is False
+    assert profiles["opencode-go-default"].enabled is True
+    assert profiles["opencode-go-default"].is_default is False
+    assert sum(profile.is_default for profile in profiles.values()) == 1
+
+
+@pytest.mark.asyncio
+async def test_restart_leaves_the_opencode_default_with_operator_disabled_zen(
+    _module_db, monkeypatch
+):
+    """The paired negative: an explicit operator disable stays authoritative."""
+
+    from api_service.main import _auto_seed_provider_profiles
+
+    await _auto_seed_provider_profiles()
+    await _enroll_opencode_go_with_pinned_runtime(monkeypatch)
+    await _apply_pre_change_go_default_authority(zen_operator_disabled=True)
+
+    await _auto_seed_provider_profiles()
+
+    profiles = await _opencode_profiles()
+    assert profiles["opencode-zen-free"].enabled is False
+    assert (
+        profiles["opencode-zen-free"].disabled_reason
+        == ProviderProfileDisabledReason.USER_DISABLED
+    )
+    assert profiles["opencode-zen-free"].is_default is False
+    assert profiles["opencode-go-default"].is_default is True
+    assert sum(profile.is_default for profile in profiles.values()) == 1
+
+
+@pytest.mark.asyncio
+async def test_restart_preserves_an_explicit_operator_default_selection(
+    _module_db, monkeypatch
+):
+    """The other documented release condition: an explicit default selection."""
+
+    from api_service.main import _auto_seed_provider_profiles
+
+    await _auto_seed_provider_profiles()
+    await _enroll_opencode_go_with_pinned_runtime(monkeypatch)
+    await _apply_pre_change_go_default_authority(go_selected_by_operator=True)
+
+    await _auto_seed_provider_profiles()
+
+    profiles = await _opencode_profiles()
+    assert profiles["opencode-zen-free"].enabled is True
+    assert profiles["opencode-zen-free"].is_default is False
+    assert profiles["opencode-go-default"].is_default is True
+    assert profiles["opencode-go-default"].default_selected_by_operator is True
+    assert sum(profile.is_default for profile in profiles.values()) == 1
+
+
+@pytest.mark.asyncio
+async def test_first_zen_seed_reclaims_the_default_from_an_incumbent_go_profile(
+    _module_db, monkeypatch
+):
+    """The upgrade that introduces the Zen row at the same restart.
+
+    ``is_default=True`` on INSERT is not enough on its own: an incumbent
+    ``opencode-go-default`` already holds the runtime default, and the
+    single-default invariant keeps whichever row it finds first unless the
+    seeder states its preference.
+    """
+
+    from api_service.main import _auto_seed_provider_profiles
+
+    await _auto_seed_provider_profiles()
+    await _enroll_opencode_go_with_pinned_runtime(monkeypatch)
+    await _apply_pre_change_go_default_authority()
+
+    async with db_base.async_session_maker() as session:
+        zen = await session.get(ManagedAgentProviderProfile, "opencode-zen-free")
+        assert zen is not None
+        await session.delete(zen)
+        await session.commit()
+
+    seeded = await _auto_seed_provider_profiles()
+    assert "opencode" in seeded
+
+    profiles = await _opencode_profiles()
+    assert set(profiles) == {"opencode-zen-free", "opencode-go-default"}
+    assert profiles["opencode-zen-free"].is_default is True
+    assert profiles["opencode-go-default"].is_default is False
+    assert sum(profile.is_default for profile in profiles.values()) == 1
+
+
+@pytest.mark.asyncio
+async def test_restart_is_idempotent_once_the_zen_default_is_settled(
+    _module_db, monkeypatch
+):
+    """A second restart over correct rows leaves the settled default alone."""
+
+    from api_service.main import _auto_seed_provider_profiles
+
+    await _auto_seed_provider_profiles()
+    await _enroll_opencode_go_with_pinned_runtime(monkeypatch)
+
+    await _auto_seed_provider_profiles()
+    await _auto_seed_provider_profiles()
+
+    profiles = await _opencode_profiles()
+    assert profiles["opencode-zen-free"].is_default is True
+    assert profiles["opencode-zen-free"].default_selected_by_operator is False
+    assert profiles["opencode-go-default"].is_default is False
+    assert sum(profile.is_default for profile in profiles.values()) == 1
+
+
+@asynccontextmanager
+async def _operator_client():
+    """Real HTTP client for the provider-profile API with an authorized operator."""
+
+    from api_service.main import app
+
+    user = SimpleNamespace(
+        id=uuid4(),
+        email="operator@example.com",
+        is_active=True,
+        is_superuser=False,
+        settings_permissions={
+            "provider_profiles.read",
+            "provider_profiles.write",
+        },
+    )
+    dependencies = {
+        dep.call
+        for route in app.routes
+        if getattr(route, "path", "").startswith("/api/v1/provider-profiles")
+        and getattr(route, "dependant", None) is not None
+        for dep in route.dependant.dependencies
+        if getattr(dep.call, "__name__", "") == "_current_user_fallback"
+    } or {get_current_user()}
+    for dependency in dependencies:
+        app.dependency_overrides[dependency] = lambda user=user: user
+    try:
+        async with AsyncClient(
+            transport=ASGITransport(app=app), base_url="http://testserver"
+        ) as client:
+            yield client
+    finally:
+        app.dependency_overrides.clear()
+
+
+@pytest.mark.asyncio
+async def test_operator_selected_opencode_default_survives_restart(
+    _module_db, monkeypatch
+):
+    """End-to-end operator authority across the real API and the real seeder.
+
+    An explicit ``PATCH is_default`` is the documented way to release the Zen
+    default. The stamp the endpoint persists is what the next startup reads, so
+    the automatic Zen preference must not take the default back.
+    """
+
+    from api_service.main import _auto_seed_provider_profiles
+
+    await _auto_seed_provider_profiles()
+    await _enroll_opencode_go_with_pinned_runtime(monkeypatch)
+
+    async with _operator_client() as client:
+        response = await client.patch(
+            "/api/v1/provider-profiles/opencode-go-default",
+            json={"is_default": True},
+        )
+
+    assert response.status_code == 200, response.text
+    assert response.json()["is_default"] is True
+
+    selected = await _opencode_profiles()
+    assert selected["opencode-go-default"].is_default is True
+    assert selected["opencode-go-default"].default_selected_by_operator is True
+    assert selected["opencode-zen-free"].is_default is False
+    assert selected["opencode-zen-free"].default_selected_by_operator is False
+
+    await _auto_seed_provider_profiles()
+
+    profiles = await _opencode_profiles()
+    assert profiles["opencode-go-default"].is_default is True
+    assert profiles["opencode-go-default"].default_selected_by_operator is True
+    assert profiles["opencode-zen-free"].enabled is True
+    assert profiles["opencode-zen-free"].is_default is False
+    assert sum(profile.is_default for profile in profiles.values()) == 1
+
+
+@pytest.mark.asyncio
+async def test_operator_returning_the_default_to_zen_clears_the_prior_stamp(
+    _module_db, monkeypatch
+):
+    """Reselecting Zen moves the stamp, so no stale claim outlives the change."""
+
+    from api_service.main import _auto_seed_provider_profiles
+
+    await _auto_seed_provider_profiles()
+    await _enroll_opencode_go_with_pinned_runtime(monkeypatch)
+
+    async with _operator_client() as client:
+        away = await client.patch(
+            "/api/v1/provider-profiles/opencode-go-default",
+            json={"is_default": True},
+        )
+        back = await client.patch(
+            "/api/v1/provider-profiles/opencode-zen-free",
+            json={"is_default": True},
+        )
+
+    assert away.status_code == 200, away.text
+    assert back.status_code == 200, back.text
+
+    await _auto_seed_provider_profiles()
+
+    profiles = await _opencode_profiles()
+    assert profiles["opencode-zen-free"].is_default is True
+    assert profiles["opencode-zen-free"].default_selected_by_operator is True
+    assert profiles["opencode-go-default"].is_default is False
+    assert profiles["opencode-go-default"].default_selected_by_operator is False
     assert sum(profile.is_default for profile in profiles.values()) == 1
 
 
