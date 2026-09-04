@@ -1531,7 +1531,12 @@ async def _auto_seed_provider_profiles() -> list[str]:
             {
                 "profile_id": "opencode-zen-free",
                 "runtime_id": "opencode",
-                "is_default": False,
+                # MoonLadderStudios/MoonMind#3877: the credentialless Zen seed
+                # declares the OpenCode runtime default instead of inheriting it
+                # only while it happens to be the sole launch-ready profile. An
+                # explicit operator disable or an explicit default selection
+                # stays authoritative; deployment key enrollment does not.
+                "is_default": True,
                 "provider_id": "opencode",
                 "provider_label": "OpenCode Zen",
                 "default_model": ZEN_FREE_QUALIFIED,
@@ -1694,6 +1699,12 @@ async def _auto_seed_provider_profiles() -> list[str]:
                 for profile_def in _DEFAULT_PROFILES
             }
             touched_runtime_ids: set[str] = set()
+            # MoonLadderStudios/MoonMind#3877: automatic runtime-default
+            # preferences applied when the single-default invariant is settled
+            # below. Seeding owns the desired default; normalize_runtime_default_profile
+            # owns the invariant and refuses to overrule an explicit operator
+            # selection.
+            runtime_default_preferences: dict[str, str] = {}
 
             # Codex owns and mutates its OAuth home (including refresh-token
             # state), so every existing OAuth-backed Codex profile must remain
@@ -1784,16 +1795,32 @@ async def _auto_seed_provider_profiles() -> list[str]:
             # separately selected opencode-go profile.
             zen_profile_id = "opencode-zen-free"
             zen_current = existing_by_id.get(zen_profile_id)
+            zen_operator_disabled = (
+                zen_current is not None
+                and getattr(
+                    zen_current.get("disabled_reason"),
+                    "value",
+                    zen_current.get("disabled_reason"),
+                )
+                == ProviderProfileDisabledReason.USER_DISABLED.value
+            )
+            if zen_profile_id in default_profile_by_id and not zen_operator_disabled:
+                # MoonLadderStudios/MoonMind#3877: the Zen default is declared on
+                # every start, not only on INSERT. Deployments upgraded from the
+                # release where a configured OPENCODE_API_KEY transferred
+                # runtime-default authority to opencode-go-default still carry
+                # that persisted assignment, and neither documented release
+                # condition (an explicit operator disable, or an explicit
+                # default selection) occurred. Reclaiming it here is the one
+                # boundary that repairs those rows; an explicit operator
+                # selection recorded on another profile still wins.
+                zen_runtime_id = str(
+                    default_profile_by_id[zen_profile_id]["runtime_id"]
+                )
+                runtime_default_preferences[zen_runtime_id] = zen_profile_id
+                touched_runtime_ids.add(zen_runtime_id)
             if zen_current is not None and zen_profile_id in default_profile_by_id:
                 zen_definition = default_profile_by_id[zen_profile_id]
-                operator_disabled = (
-                    getattr(
-                        zen_current.get("disabled_reason"),
-                        "value",
-                        zen_current.get("disabled_reason"),
-                    )
-                    == ProviderProfileDisabledReason.USER_DISABLED.value
-                )
                 zen_desired = {
                     "provider_id": zen_definition["provider_id"],
                     "provider_label": zen_definition["provider_label"],
@@ -1810,7 +1837,7 @@ async def _auto_seed_provider_profiles() -> list[str]:
                     "tags": zen_definition["tags"],
                     "last_auth_method": None,
                 }
-                if operator_disabled:
+                if zen_operator_disabled:
                     behavior = dict(zen_current.get("command_behavior") or {})
                     readiness = dict(behavior.get("auth_readiness") or {})
                     readiness.update(
@@ -2022,12 +2049,15 @@ async def _auto_seed_provider_profiles() -> list[str]:
                         needs_commit = True
 
             if not to_insert:
-                if needs_commit:
+                if needs_commit or runtime_default_preferences:
                     await session.flush()
-                    for runtime_id in touched_runtime_ids:
+                    for runtime_id in sorted(touched_runtime_ids):
                         await normalize_runtime_default_profile(
                             session=session,
                             runtime_id=runtime_id,
+                            preferred_profile_id=runtime_default_preferences.get(
+                                runtime_id
+                            ),
                         )
                     await session.commit()
                 return []
@@ -2036,6 +2066,17 @@ async def _auto_seed_provider_profiles() -> list[str]:
                 "Auto-seeding %d missing provider profile(s)",
                 len(to_insert),
             )
+
+            # ux_provider_profiles_runtime_default is a partial unique index, so
+            # a seed that declares is_default cannot be INSERTed while another
+            # row of the same runtime still holds it. normalize_runtime_default_profile
+            # owns the invariant: insert unclaimed and let the runtime-default
+            # preference settle who ends up holding it.
+            runtimes_with_persisted_default = {
+                str(row["runtime_id"])
+                for row in existing_by_id.values()
+                if row.get("is_default")
+            }
 
             for profile_def in to_insert:
                 profile = ManagedAgentProviderProfile(
@@ -2071,7 +2112,11 @@ async def _auto_seed_provider_profiles() -> list[str]:
                         ManagedAgentRateLimitPolicy.BACKOFF,
                     ),
                     enabled=bool(profile_def.get("enabled", False)),
-                    is_default=bool(profile_def.get("is_default", False)),
+                    is_default=(
+                        bool(profile_def.get("is_default", False))
+                        and str(profile_def["runtime_id"])
+                        not in runtimes_with_persisted_default
+                    ),
                     max_lease_duration_seconds=profile_def.get(
                         "max_lease_duration_seconds", 7200
                     ),
@@ -2103,10 +2148,11 @@ async def _auto_seed_provider_profiles() -> list[str]:
                 seeded.append(runtime_id)
 
             await session.flush()
-            for runtime_id in touched_runtime_ids:
+            for runtime_id in sorted(touched_runtime_ids):
                 await normalize_runtime_default_profile(
                     session=session,
                     runtime_id=runtime_id,
+                    preferred_profile_id=runtime_default_preferences.get(runtime_id),
                 )
 
             await session.commit()
