@@ -75,7 +75,8 @@ def test_network_contract_is_anchored_to_pinned_stock_sources() -> None:
     fixture = json.loads(_CONTRACT_FIXTURE.read_text(encoding="utf-8"))
     evidence = fixture["evidence"]
     pinned_commit = subprocess.run(
-        ["git", "-C", str(_REPO_ROOT), "rev-parse", "HEAD:omnigent"],
+        ["git", "rev-parse", "HEAD"],
+        cwd=_REPO_ROOT / "omnigent",
         check=True,
         capture_output=True,
         text=True,
@@ -169,6 +170,15 @@ def test_native_http_classifier_fails_closed_on_unknown_method_or_route() -> Non
     assert compat.classify_native_ui_http(
         "PATCH", "v1/sessions/b1/resources/terminals/t1"
     ) is None
+
+
+def test_v012_local_import_requires_compatibility_review() -> None:
+    match = compat.classify_native_ui_http("POST", "v1/imports/local")
+
+    assert match is not None
+    assert match.route.name == "local_session_import"
+    assert match.route.operation_class == compat.CLASS_SESSION_IMPORT
+    assert match.route.disposition == compat.DISPOSITION_COMPAT_REVIEW
 
 
 def test_every_native_ui_transport_class_is_represented() -> None:
