@@ -1581,7 +1581,7 @@ async def test_provider_profile_list_returns_empty_for_unknown_runtime(tmp_path:
         finally:
             _db_base_mod.get_async_session_context = orig
 
-        assert result == {"profiles": [], "profile_statuses": []}
+        assert result == {"profiles": [], "profile_statuses": [], "scopes": []}
 
 async def test_provider_profile_list_filters_by_runtime_id(tmp_path: Path):
     async with _in_memory_db(tmp_path) as session_factory:

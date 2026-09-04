@@ -3331,9 +3331,7 @@ class ManagedAgentProviderProfile(Base):
 
     __tablename__ = "managed_agent_provider_profiles"
     __table_args__ = (
-        UniqueConstraint(
-            "capacity_scope_ref", name="uq_provider_profile_capacity_scope"
-        ),
+        Index("ix_provider_profile_capacity_scope", "capacity_scope_ref"),
         Index("ix_provider_profiles_runtime", "runtime_id"),
         Index("ix_provider_profiles_provider", "provider_id"),
         Index("ix_provider_profiles_runtime_provider", "runtime_id", "provider_id"),
@@ -3570,6 +3568,84 @@ class ManagedAgentProviderProfile(Base):
         Integer, nullable=False, default=7200, server_default=text("7200")
     )
     owner_user_id: Mapped[Optional[UUID]] = mapped_column(Uuid, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=func.now(),
+        onupdate=func.now(),
+    )
+
+
+class ProviderCapacityScope(Base):
+    """Durable provider-capacity aggregate shared by compatible profiles.
+
+    ``scope_ref`` identifies a real upstream allowance (route, account,
+    deployment, model family, or provider/IP limit) that one or more
+    Provider Profiles draw from. Admission grants only when both the
+    profile effective limit and the scope effective limit have room.
+    Configured and effective limits are persisted separately so adaptive
+    backpressure can reduce future admission without rewriting operator
+    intent or active lease authority. Contains no secret, token,
+    session identity, repository identity, or unbounded provider output.
+    """
+
+    __tablename__ = "provider_capacity_scopes"
+    __table_args__ = (
+        Index("ix_capacity_scopes_runtime", "runtime_id"),
+        CheckConstraint(
+            "configured_limit >= 1",
+            name="ck_capacity_scopes_configured_positive",
+        ),
+        CheckConstraint(
+            "effective_limit >= 1",
+            name="ck_capacity_scopes_effective_positive",
+        ),
+        CheckConstraint(
+            "generation >= 1",
+            name="ck_capacity_scopes_generation_positive",
+        ),
+        CheckConstraint(
+            "backpressure_state IN ("
+            "'healthy', 'reduced', 'cooldown', 'probing', 'disabled'"
+            ")",
+            name="ck_capacity_scopes_backpressure_state",
+        ),
+    )
+
+    scope_ref: Mapped[str] = mapped_column(String(255), primary_key=True)
+    runtime_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    provider_class: Mapped[str] = mapped_column(
+        String(64), nullable=False, default="unknown", server_default=text("'unknown'")
+    )
+    generation: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=1, server_default=text("1")
+    )
+    configured_limit: Mapped[int] = mapped_column(Integer, nullable=False)
+    effective_limit: Mapped[int] = mapped_column(Integer, nullable=False)
+    cooldown_until: Mapped[Optional[datetime]] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    backpressure_state: Mapped[str] = mapped_column(
+        String(32), nullable=False, default="healthy", server_default=text("'healthy'")
+    )
+    recovery_policy_ref: Mapped[str] = mapped_column(
+        String(128),
+        nullable=False,
+        default="additive-increase-multiplicative-decrease@1",
+        server_default=text("'additive-increase-multiplicative-decrease@1'"),
+    )
+    healthy_since: Mapped[Optional[datetime]] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    last_decrease_at: Mapped[Optional[datetime]] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    last_increase_at: Mapped[Optional[datetime]] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=func.now()
     )
@@ -3839,9 +3915,14 @@ class ProviderProfileSlotLease(Base):
     __table_args__ = (
         Index("ix_provider_slot_leases_runtime", "runtime_id"),
         Index("ix_provider_slot_leases_workflow", "workflow_id"),
+        Index("ix_provider_slot_leases_lease", "lease_id"),
+        Index("ix_provider_slot_leases_owner", "owner_id"),
+        Index("ix_provider_slot_leases_profile", "profile_id"),
+        Index("ix_provider_slot_leases_scope", "capacity_scope_ref"),
         UniqueConstraint(
             "runtime_id", "workflow_id", name="uq_provider_slot_lease_runtime_workflow"
         ),
+        UniqueConstraint("lease_id", name="uq_provider_slot_lease_lease_id"),
     )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
@@ -3850,11 +3931,17 @@ class ProviderProfileSlotLease(Base):
     profile_id: Mapped[str] = mapped_column(String(128), nullable=False)
     lease_id: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
     owner_id: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    owner_kind: Mapped[str] = mapped_column(
+        String(32), nullable=False, default="workflow", server_default=text("'workflow'")
+    )
     purpose: Mapped[str] = mapped_column(
         String(64),
         nullable=False,
         default="execution_direct",
         server_default=text("'execution_direct'"),
+    )
+    compatibility_class: Mapped[str] = mapped_column(
+        String(128), nullable=False, default="execution_direct", server_default=text("'execution_direct'")
     )
     owner_is_workflow: Mapped[bool] = mapped_column(
         Boolean, nullable=False, default=True, server_default=text("true")
@@ -3862,11 +3949,30 @@ class ProviderProfileSlotLease(Base):
     step_execution_id: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
     oauth_session_id: Mapped[Optional[str]] = mapped_column(String(128), nullable=True)
     idempotency_key: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    execution_plan_ref: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    capacity_scope_ref: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    scope_generation: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=1, server_default=text("1")
+    )
+    credential_generation: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    lease_state: Mapped[str] = mapped_column(
+        String(32), nullable=False, default="held", server_default=text("'held'")
+    )
+    fencing_generation: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=1, server_default=text("1")
+    )
+    safe_metadata_json: Mapped[Optional[dict[str, Any]]] = mapped_column(JSON, nullable=True)
     expires_at: Mapped[Optional[datetime]] = mapped_column(
         DateTime(timezone=True), nullable=True
     )
     granted_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+    heartbeat_at: Mapped[Optional[datetime]] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    released_at: Mapped[Optional[datetime]] = mapped_column(
+        DateTime(timezone=True), nullable=True
     )
 
 

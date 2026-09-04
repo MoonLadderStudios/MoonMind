@@ -1307,6 +1307,15 @@ def _safe_heartbeat(details: dict[str, Any]) -> None:
         activity.heartbeat(payload)
     except RuntimeError as exc:
         _logger.debug("Skipping Omnigent heartbeat outside activity context: %s", exc)
+    except asyncio.CancelledError:
+        # Cancellation owns the Activity lifecycle; a heartbeat must never
+        # swallow it or convert it into a terminal failure.
+        raise
+    except Exception as exc:
+        # A transient transport failure must not kill the background liveness
+        # task. The next interval retry preserves session/cursor evidence and
+        # keeps the 120s heartbeat timeout from firing on a healthy turn.
+        _logger.debug("Omnigent heartbeat failed, will retry next interval: %s", exc)
 
 
 @asynccontextmanager

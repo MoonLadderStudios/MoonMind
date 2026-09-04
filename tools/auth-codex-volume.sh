@@ -118,7 +118,7 @@ cmd_sync() {
     alpine:3.20 sh -c "
       cp -a /host-codex-auth/. '${CODEX_HOME}/' &&
       chown -R 1000:1000 '${CODEX_HOME}' &&
-      chmod 0775 '${CODEX_HOME}' &&
+      chmod 0700 '${CODEX_HOME}' &&
       echo '  Synced the following files:' &&
       find '${CODEX_HOME}' -maxdepth 2 -type f -exec basename {} \;
     "

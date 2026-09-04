@@ -134,8 +134,20 @@ register_harness_product(
             "harnessId": "codex-native",
             "aliases": ["codex"],
             "executionTargetRef": "omnigent-codex@1",
-            "hostClassRef": "omnigent-codex-current@1",
+            "hostClassRef": "omnigent-codex@1",
             "materializerRef": "codex-oauth-home@1",
+            "authModel": "oauth_volume",
+        }
+    )
+)
+register_harness_product(
+    HarnessProductRegistration.model_validate(
+        {
+            "harnessId": "claude-native",
+            "aliases": ["claude"],
+            "executionTargetRef": "omnigent-claude@1",
+            "hostClassRef": "omnigent-claude@1",
+            "materializerRef": "claude-oauth-home@1",
             "authModel": "oauth_volume",
         }
     )

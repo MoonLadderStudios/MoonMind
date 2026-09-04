@@ -270,3 +270,36 @@ def test_expert_minimax_capability_requires_provider_launch_templates() -> None:
         file_templates=[{"path": "config.toml", "content": "profile"}],
         home_path_overrides={"CODEX_HOME": "{{runtime_support_dir}}/codex-home"},
     )
+
+
+def test_parallel_ceiling_rejects_above_deployment_max(monkeypatch) -> None:
+    from fastapi import HTTPException
+
+    from api_service.api.routers.provider_profiles import _enforce_parallel_ceiling
+
+    monkeypatch.setenv("MOONMIND_MAX_PROVIDER_PROFILE_PARALLEL_RUNS", "4")
+    with pytest.raises(HTTPException) as exc_info:
+        _enforce_parallel_ceiling(5)
+    assert exc_info.value.status_code == 422
+    _enforce_parallel_ceiling(4)
+
+
+@pytest.mark.asyncio
+async def test_scope_compatibility_rejects_different_runtime() -> None:
+    from unittest.mock import AsyncMock
+
+    from fastapi import HTTPException
+
+    from api_service.api.routers.provider_profiles import _enforce_scope_compatibility
+
+    scope = type("Scope", (), {"runtime_id": "opencode"})()
+    session = AsyncMock()
+    session.get.return_value = scope
+    with pytest.raises(HTTPException) as exc_info:
+        await _enforce_scope_compatibility(
+            session, runtime_id="codex_cli", capacity_scope_ref="scope-1"
+        )
+    assert exc_info.value.status_code == 422
+    await _enforce_scope_compatibility(
+        session, runtime_id="opencode", capacity_scope_ref="scope-1"
+    )

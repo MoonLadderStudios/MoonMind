@@ -2444,6 +2444,7 @@ class TestProviderProfileManagerHelpers:
             calls.append("signal")
 
         wf._sync_leases_to_db = AsyncMock(side_effect=persist)
+        wf._grant_lease_to_db = AsyncMock(return_value=True)
         wf._signal_slot_assigned = AsyncMock(side_effect=signal)
 
         with patch(
@@ -2477,6 +2478,7 @@ class TestProviderProfileManagerHelpers:
         )
         wf._pending_requests = [request]
         wf._sync_leases_to_db = AsyncMock(return_value=False)
+        wf._grant_lease_to_db = AsyncMock(return_value=True)
         wf._signal_slot_assigned = AsyncMock()
 
         with patch(
@@ -2504,6 +2506,7 @@ class TestProviderProfileManagerHelpers:
             is_default=True,
         )
         wf._sync_leases_to_db = AsyncMock(return_value=False)
+        wf._grant_lease_to_db = AsyncMock(return_value=False)
 
         with patch(
             "moonmind.workflows.temporal.workflows.provider_profile_manager.workflow"
@@ -2532,6 +2535,7 @@ class TestProviderProfileManagerHelpers:
             is_default=True,
         )
         wf._sync_leases_to_db = AsyncMock(return_value=False)
+        wf._grant_lease_to_db = AsyncMock(return_value=False)
 
         with patch(
             "moonmind.workflows.temporal.workflows.provider_profile_manager.workflow"
@@ -2645,6 +2649,186 @@ class TestProviderProfileManagerHelpers:
             mock_wf.now.return_value = datetime.now(timezone.utc)
             wf._clear_expired_cooldowns()
         assert wf._profiles["p1"].cooldown_until is None
+
+    def test_shared_scope_admits_no_more_than_scope_limit(self):
+        from moonmind.workflows.temporal.workflows.provider_profile_manager import (
+            PROVIDER_CAPACITY_SCOPE_PATCH,
+            CapacityScopeState,
+        )
+
+        wf = self._make_workflow()
+        wf._scopes["scope-10"] = CapacityScopeState(
+            scope_ref="scope-10", configured_limit=10, effective_limit=10
+        )
+        for pid in ("a", "b"):
+            wf._profiles[pid] = ProfileSlotState(
+                profile_id=pid,
+                max_parallel_runs=8,
+                cooldown_after_429_seconds=300,
+                rate_limit_policy="backoff",
+                enabled=True,
+                capacity_scope_ref="scope-10",
+                effective_limit=8,
+            )
+        for i in range(5):
+            wf._profiles["a"].current_leases.append(f"wf-a-{i}")
+            wf._profiles["b"].current_leases.append(f"wf-b-{i}")
+        assert wf._scope_active_units("scope-10") == 10
+        with patch(
+            "moonmind.workflows.temporal.workflows.provider_profile_manager.workflow"
+        ) as mock_wf:
+            mock_wf.patched.return_value = True
+            mock_wf.now.return_value = datetime.now(timezone.utc)
+            assert wf._profile_admitted_by_capacity(wf._profiles["a"]) is False
+            assert wf._profile_admitted_by_capacity(wf._profiles["b"]) is False
+
+    def test_scope_rate_limit_halves_once_and_extends_cooldown(self):
+        from datetime import timezone
+
+        wf = self._make_workflow()
+        now = datetime.now(timezone.utc)
+        wf._apply_scope_rate_limit(
+            scope_ref="s1", retry_after_seconds=100, report_id="r1", now=now
+        )
+        # Default scope starts 1/1; use explicit scope for halving check.
+        wf._scopes["s2"] = wf._ensure_scope("s2")
+        wf._scopes["s2"].configured_limit = 8
+        wf._scopes["s2"].effective_limit = 8
+        wf._apply_scope_rate_limit(
+            scope_ref="s2", retry_after_seconds=100, report_id="r2", now=now
+        )
+        assert wf._scopes["s2"].effective_limit == 4
+        first_cooldown = wf._scopes["s2"].cooldown_until
+        wf._apply_scope_rate_limit(
+            scope_ref="s2", retry_after_seconds=100, report_id="r2", now=now
+        )
+        assert wf._scopes["s2"].effective_limit == 4
+        assert wf._scopes["s2"].cooldown_until == first_cooldown
+        later = now + timedelta(seconds=10)
+        wf._apply_scope_rate_limit(
+            scope_ref="s2", retry_after_seconds=500, report_id="r3", now=later
+        )
+        assert wf._scopes["s2"].effective_limit == 2
+        assert wf._scopes["s2"].cooldown_until is not None
+        assert wf._scopes["s2"].cooldown_until >= first_cooldown
+
+    def test_scope_recovers_gradually_without_exceeding_configured(self):
+        from moonmind.workflows.temporal.workflows.provider_profile_manager import (
+            CapacityScopeState,
+        )
+
+        wf = self._make_workflow()
+        now = datetime.now(timezone.utc)
+        wf._scopes["s1"] = CapacityScopeState(
+            scope_ref="s1",
+            configured_limit=8,
+            effective_limit=4,
+            healthy_since=(now - timedelta(seconds=600)).isoformat(),
+        )
+        wf._recover_scope_capacity(now)
+        assert wf._scopes["s1"].effective_limit == 5
+        wf._scopes["s1"].healthy_since = now.isoformat()
+        wf._recover_scope_capacity(now)
+        assert wf._scopes["s1"].effective_limit == 5
+
+    def test_lease_lookup_uses_index_without_scanning(self):
+        wf = self._make_workflow()
+        wf._profiles["p1"] = ProfileSlotState(
+            profile_id="p1",
+            max_parallel_runs=4,
+            cooldown_after_429_seconds=300,
+            rate_limit_policy="backoff",
+            enabled=True,
+            current_leases=["wf-1", "wf-2"],
+        )
+        wf._rebuild_lease_indexes()
+        with patch(
+            "moonmind.workflows.temporal.workflows.provider_profile_manager.workflow"
+        ) as mock_wf:
+            mock_wf.patched.return_value = True
+            assert wf._profile_id_for_lease("wf-2") == "p1"
+            assert wf._profile_id_for_lease("wf-missing") is None
+
+    @pytest.mark.asyncio
+    async def test_incremental_grant_performs_bounded_mutations(self):
+        from unittest.mock import AsyncMock
+
+        from moonmind.workflows.temporal.workflows.provider_profile_manager import (
+            CapacityScopeState,
+        )
+
+        wf = self._make_workflow()
+        wf._runtime_id = "opencode"
+        wf._scopes["scope-16"] = CapacityScopeState(
+            scope_ref="scope-16", configured_limit=16, effective_limit=16
+        )
+        wf._profiles["p1"] = ProfileSlotState(
+            profile_id="p1",
+            max_parallel_runs=16,
+            cooldown_after_429_seconds=300,
+            rate_limit_policy="backoff",
+            enabled=True,
+            is_default=True,
+            capacity_scope_ref="scope-16",
+            effective_limit=16,
+            current_leases=[f"wf-existing-{i}" for i in range(15)],
+        )
+        wf._rebuild_lease_indexes()
+        wf._grant_lease_to_db = AsyncMock(return_value=True)  # type: ignore[method-assign]
+        wf._sync_leases_to_db = AsyncMock(return_value=True)  # type: ignore[method-assign]
+        now = datetime.now(timezone.utc)
+        with patch(
+            "moonmind.workflows.temporal.workflows.provider_profile_manager.workflow"
+        ) as mock_wf:
+            mock_wf.now.return_value = now
+            mock_wf.patched.return_value = True
+            result = await wf.acquire_slot(
+                {
+                    "requester_workflow_id": "wf-new",
+                    "runtime_id": "opencode",
+                    "execution_profile_ref": "p1",
+                }
+            )
+        assert result["already_held"] is False
+        wf._grant_lease_to_db.assert_awaited_once()
+        wf._sync_leases_to_db.assert_not_awaited()
+
+    @pytest.mark.parametrize("concurrency", [1, 2, 4, 8, 16])
+    def test_shared_scope_enforces_joint_limit_at_each_concurrency(self, concurrency):
+        from moonmind.workflows.temporal.workflows.provider_profile_manager import (
+            CapacityScopeState,
+        )
+
+        wf = self._make_workflow()
+        wf._scopes["shared"] = CapacityScopeState(
+            scope_ref="shared",
+            configured_limit=concurrency,
+            effective_limit=concurrency,
+        )
+        for pid in ("a", "b"):
+            wf._profiles[pid] = ProfileSlotState(
+                profile_id=pid,
+                max_parallel_runs=concurrency,
+                cooldown_after_429_seconds=300,
+                rate_limit_policy="backoff",
+                enabled=True,
+                capacity_scope_ref="shared",
+                effective_limit=concurrency,
+            )
+        now = datetime.now(timezone.utc)
+        admitted = 0
+        with patch(
+            "moonmind.workflows.temporal.workflows.provider_profile_manager.workflow"
+        ) as mock_wf:
+            mock_wf.patched.return_value = True
+            mock_wf.now.return_value = now
+            for i in range(2 * concurrency):
+                target = wf._profiles["a" if i % 2 == 0 else "b"]
+                if wf._profile_admitted_by_capacity(target):
+                    target.current_leases.append(f"wf-{i}")
+                    admitted += 1
+        assert admitted == concurrency
+        assert wf._scope_active_units("shared") == concurrency
 
 # ---------------------------------------------------------------------------
 # Workflow registration sanity

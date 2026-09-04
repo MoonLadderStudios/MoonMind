@@ -276,6 +276,8 @@ async def test_default_resolution_requires_paired_build_identity_and_version(
             return HOST_REF, host_image_digest
         if ref_env == "OMNIGENT_PI_HOST_IMAGE_REF":
             return None, None
+        if ref_env == "OMNIGENT_SHARED_HOST_IMAGE_REF":
+            return None, None
         raise AssertionError(image_env)
 
     async def run(cmd, timeout=30):
