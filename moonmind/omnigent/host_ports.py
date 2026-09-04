@@ -50,6 +50,9 @@ class HostLaunchSpec(BaseModel):
     limits: dict[str, int]
     runtime: dict[str, Any]
     correlationName: str = Field(alias="correlationName")
+    expectedOmnigentHostId: str | None = Field(
+        default=None, alias="expectedOmnigentHostId"
+    )
     workspaceAttachment: dict[str, Any] = Field(alias="workspaceAttachment")
     skillAttachment: dict[str, Any] = Field(alias="skillAttachment")
     toolAttachments: tuple[dict[str, Any], ...] = Field(
@@ -87,6 +90,20 @@ class HostLaunchSpec(BaseModel):
 def host_correlation_identity(host_lease_ref: str) -> str:
     digest = hashlib.sha256(host_lease_ref.encode("utf-8")).hexdigest()[:24]
     return f"mm-host-{digest}"
+
+
+def expected_omnigent_host_id(host_lease_ref: str, host_lease_generation: int) -> str:
+    """Derive the fenced expected Omnigent host identity.
+
+    Deterministic from the exact host lease and generation before container
+    creation, so Activity retry and host reconciliation derive the same value
+    and a replacement generation receives a distinct identity. Contains no
+    provider, repository, credential, or secret material.
+    """
+    import uuid as _uuid
+
+    seed = f"{host_lease_ref}:{int(host_lease_generation)}"
+    return str(_uuid.uuid5(_uuid.NAMESPACE_URL, seed))
 
 @runtime_checkable
 class OmnigentWorkspaceMaterializationPort(Protocol):
@@ -197,6 +214,7 @@ class OmnigentHostRegistrationPort(Protocol):
         correlation_name: str,
         harness_id: str,
         credentialless: bool = False,
+        expected_host_id: str | None = None,
     ) -> dict[str, Any]: ...
 
 
@@ -318,5 +336,6 @@ __all__ = [
     "OmnigentMountedToolPort",
     "OmnigentSkillDeliveryPort",
     "OmnigentWorkspaceMaterializationPort",
+    "expected_omnigent_host_id",
     "host_correlation_identity",
 ]
