@@ -349,6 +349,7 @@ def _protected_support_evidence(plan_payload) -> dict[str, object]:
     [
         ("codex-native", "codex-on-demand@1", "codex-profile-bound@1"),
         ("opencode-native", "opencode-on-demand@1", "generic-omnigent-host@1"),
+        ("opencode-native", "opencode-on-demand@2", "generic-omnigent-host@1"),
     ],
 )
 async def test_product_boundary_persists_secret_free_plan_and_exact_realizer(

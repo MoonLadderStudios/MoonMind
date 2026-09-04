@@ -222,6 +222,21 @@ def test_unknown_stock_route_cannot_reach_upstream_root(method: str, suffix: str
     assert _CHAT_BINDING_ID not in response.text or suffix.count(_CHAT_BINDING_ID)  # binding may echo but provider never
 
 
+def test_v012_local_import_cannot_reach_upstream_before_compatibility_review() -> None:
+    client, proxy, _store = _build()
+
+    response = client.post(
+        _path("v1/imports/local"),
+        json={"host_id": "host-1", "source": "all", "limit": 25},
+    )
+
+    assert response.status_code == 409
+    assert response.json()["detail"]["code"] == compat.CODE_COMPAT_REVIEW_REQUIRED
+    assert proxy.sessions == []
+    assert proxy.resources == []
+    assert proxy.posted == []
+
+
 def test_every_inventory_entry_has_explicit_disposition() -> None:
     cmap = compat.compatibility_map()
     assert cmap["version"] == compat.NATIVE_UI_COMPAT_VERSION

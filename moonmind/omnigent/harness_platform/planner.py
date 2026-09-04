@@ -48,6 +48,7 @@ from moonmind.omnigent.harness_platform.failures import (
 )
 from moonmind.omnigent.harness_platform.host_classes import (
     HostClass,
+    LaunchPolicy,
     get_host_class,
     get_launch_policy,
     validate_policy_for_host_class,
@@ -96,6 +97,7 @@ def compile_execution_plan(
     host_class_ref: str,
     host_class: HostClass | None = None,
     launch_policy_ref: str,
+    launch_policy: LaunchPolicy | None = None,
     model_qualified_id: str | None,
     model_effort: str | None,
     model_route_ref: str | None,
@@ -210,7 +212,13 @@ def compile_execution_plan(
             f"selected Host Class {selected_host_class.ref} does not match {host_class_ref}",
             code=HarnessPlatformFailure.OMNIGENT_HOST_CLASS_UNAVAILABLE,
         )
-    launch_policy = get_launch_policy(launch_policy_ref)
+    selected_launch_policy = launch_policy or get_launch_policy(launch_policy_ref)
+    if selected_launch_policy.ref != launch_policy_ref:
+        raise HarnessPlatformError(
+            f"selected launch policy {selected_launch_policy.ref} does not match "
+            f"{launch_policy_ref}",
+            code=HarnessPlatformFailure.OMNIGENT_LAUNCH_POLICY_INCOMPATIBLE,
+        )
     # Reject launch policies outside the profile allowlist
     if (
         profile.allowedLaunchPolicyRefs
@@ -240,14 +248,14 @@ def compile_execution_plan(
         b.materializerRef for b in credential_binding_set.bindings.values()
     ]
     validate_policy_for_host_class(
-        policy=launch_policy,
+        policy=selected_launch_policy,
         host_class=selected_host_class,
         harness_integration_mode=integration_mode,
         materializer_refs=materializer_refs,
     )
 
     # Validate each materializer supports harness and host mode
-    host_mode_for_materializer = launch_policy.hostMode
+    host_mode_for_materializer = selected_launch_policy.hostMode
     # Normalize legacy modes
     if host_mode_for_materializer == "on_demand_docker":
         host_mode_for_materializer = "on-demand"
@@ -303,7 +311,7 @@ def compile_execution_plan(
             _ = exc
             continue
     bridge_caps = bridge_capabilities or {}
-    policy_caps = list(launch_policy.controlCapabilities)
+    policy_caps = list(selected_launch_policy.controlCapabilities)
 
     class_decision = compute_class_admission(
         workflow_requirements=wf_reqs,
@@ -416,7 +424,7 @@ def compile_execution_plan(
             "providerCompatibilityClass": credential_binding_set.bindingSetId,
             "hostClassRef": selected_host_class.ref,
             "architecture": support_architecture,
-            "launchPolicyRef": launch_policy.ref,
+            "launchPolicyRef": selected_launch_policy.ref,
             "modelConfigDigest": model_digest,
             "executionRealizerRef": realizer,
             "requiredCapabilitiesDigest": required_caps_digest,
@@ -444,7 +452,7 @@ def compile_execution_plan(
         )
     if policy_snapshot_ref is None:
         policy_payload = _json.dumps(
-            launch_policy.model_dump(by_alias=True, mode="json"),
+            selected_launch_policy.model_dump(by_alias=True, mode="json"),
             sort_keys=True,
             separators=(",", ":"),
         ).encode()
@@ -473,7 +481,7 @@ def compile_execution_plan(
             "hostImageRef": host_image_ref,
             "omnigentHostBuildDigest": omnigent_host_build_digest,
             "hostArchitecture": host_architecture,
-            "launchPolicyRef": launch_policy.ref,
+            "launchPolicyRef": selected_launch_policy.ref,
             "executionRealizerRef": realizer,
             "model": {
                 "qualifiedId": model_qualified_id,

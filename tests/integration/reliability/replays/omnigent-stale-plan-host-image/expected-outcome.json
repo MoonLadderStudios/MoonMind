@@ -1,0 +1,6 @@
+{
+  "invariant": "an exact rerun must prove that its immutable OpenCode host image is still the deployment-qualified image before any provider lease or host launch",
+  "code": "exact_rerun_execution_plan_stale",
+  "nextAction": "edit_for_rerun",
+  "hostLaunchAttempted": false
+}

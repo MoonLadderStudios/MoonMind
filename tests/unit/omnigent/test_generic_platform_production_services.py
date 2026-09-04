@@ -548,7 +548,12 @@ def _plan(model: str):
 
 
 @pytest.mark.asyncio
-async def test_planned_host_resolver_uses_exact_launch_artifact() -> None:
+@pytest.mark.parametrize(
+    "policy_ref", ["omnigent-on-demand@1", "omnigent-on-demand@2"]
+)
+async def test_planned_host_resolver_uses_exact_launch_artifact(
+    policy_ref: str,
+) -> None:
     implementation = HarnessImplementationIdentity.model_validate(
         {
             "sourceKind": "core",
@@ -596,7 +601,7 @@ async def test_planned_host_resolver_uses_exact_launch_artifact() -> None:
     exact_image = "ghcr.io/example/admitted@sha256:" + "a" * 64
     launch = {
         "schemaVersion": 3,
-        "launchPolicyRef": "omnigent-on-demand@1",
+        "launchPolicyRef": policy_ref,
         "harness": "opencode-native",
         "hostImageRef": exact_image,
         "hostMode": "on_demand_docker",
@@ -626,6 +631,7 @@ async def test_planned_host_resolver_uses_exact_launch_artifact() -> None:
     payload.update(
         {
             "harnessImplementationRef": implementation.implementation_ref(),
+            "launchPolicyRef": policy_ref,
             "hostImageRef": exact_image,
             "omnigentHostBuildDigest": "sha256:" + "b" * 64,
             "hostArchitecture": "linux/amd64",
@@ -666,6 +672,7 @@ async def test_planned_host_resolver_uses_exact_launch_artifact() -> None:
 
     assert host.imageRef == exact_image
     assert host.runtime["uid"] == 1000
+    assert policy.ref == policy_ref
     assert policy.limits["timeoutSeconds"] == 5400
 
 

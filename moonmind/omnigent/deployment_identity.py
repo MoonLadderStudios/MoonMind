@@ -17,7 +17,7 @@ _BUILD_DIGEST = re.compile(r"^sha256:[0-9a-f]{64}$")
 
 
 class OmnigentDeploymentIdentityConflict(ValueError):
-    """Raised when a plan targets a different deployed server build."""
+    """Raised when a plan targets a different deployed runtime build."""
 
 
 def resolve_deployed_server_build_digest() -> str:
@@ -57,8 +57,8 @@ def resolve_deployed_server_build_digest() -> str:
     )
 
 
-def assert_plan_matches_deployed_server(plan_payload: Any) -> None:
-    """Reject a plan whose qualified server is no longer deployed.
+def assert_plan_matches_deployed_runtime(plan_payload: Any) -> None:
+    """Reject a plan whose qualified server or host is no longer deployed.
 
     This check does not re-select or rewrite immutable plan authority. It
     verifies that the mutable endpoint the plan is about to call is still the
@@ -82,10 +82,26 @@ def assert_plan_matches_deployed_server(plan_payload: Any) -> None:
             "execution plan targets an Omnigent server build that is no longer "
             "deployed; create a fresh execution to compile current runtime authority"
         )
+    if getattr(plan_payload, "harnessId", None) != "opencode-native":
+        return
+    planned_host = str(getattr(plan_payload, "hostImageRef", None) or "").strip()
+    if not _IMAGE_REF.fullmatch(planned_host):
+        raise OmnigentDeploymentIdentityConflict(
+            "execution plan lacks exact OpenCode host image authority"
+        )
+    from moonmind.omnigent.harness_platform.host_classes import (
+        get_opencode_host_image_ref,
+    )
+
+    if planned_host != get_opencode_host_image_ref():
+        raise OmnigentDeploymentIdentityConflict(
+            "execution plan targets an OpenCode host image that is no longer "
+            "deployed; create a fresh execution to compile current runtime authority"
+        )
 
 
 __all__ = [
     "OmnigentDeploymentIdentityConflict",
-    "assert_plan_matches_deployed_server",
+    "assert_plan_matches_deployed_runtime",
     "resolve_deployed_server_build_digest",
 ]

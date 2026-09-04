@@ -4402,6 +4402,13 @@ async def _dispatch_native_ui_http(
     """Relay one explicitly inventoried HTTP operation through its binding."""
 
     route = match.route
+    if route.disposition != DISPOSITION_SERVED:
+        raise NativeUiCompatibilityError(
+            "The requested native UI operation requires compatibility review.",
+            failure_class="user_error",
+            status_code=status.HTTP_409_CONFLICT,
+            code=CODE_COMPAT_REVIEW_REQUIRED,
+        )
     provider_session_id = str(getattr(row, "omnigent_session_id", "") or "").strip()
     session_status = str(getattr(row, "status", "") or "")
     body = b""

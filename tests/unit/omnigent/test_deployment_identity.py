@@ -14,6 +14,16 @@ def _generic_plan_payload(server_build: str) -> SimpleNamespace:
     )
 
 
+def _opencode_plan_payload(
+    server_build: str,
+    host_image_ref: str,
+) -> SimpleNamespace:
+    payload = _generic_plan_payload(server_build)
+    payload.harnessId = "opencode-native"
+    payload.hostImageRef = host_image_ref
+    return payload
+
+
 def test_plan_deployment_identity_accepts_exact_server_build(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -24,7 +34,7 @@ def test_plan_deployment_identity_accepts_exact_server_build(
         lambda: digest,
     )
 
-    deployment_identity.assert_plan_matches_deployed_server(
+    deployment_identity.assert_plan_matches_deployed_runtime(
         _generic_plan_payload(digest)
     )
 
@@ -42,8 +52,36 @@ def test_plan_deployment_identity_rejects_stale_server_before_launch(
         deployment_identity.OmnigentDeploymentIdentityConflict,
         match="no longer deployed",
     ):
-        deployment_identity.assert_plan_matches_deployed_server(
+        deployment_identity.assert_plan_matches_deployed_runtime(
             _generic_plan_payload("sha256:" + "a" * 64)
+        )
+
+
+def test_plan_deployment_identity_rejects_stale_opencode_host_before_launch(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from moonmind.omnigent.harness_platform import host_classes
+
+    server_digest = "sha256:" + "a" * 64
+    current_host = "ghcr.io/example/opencode@sha256:" + "b" * 64
+    stale_host = "ghcr.io/example/opencode@sha256:" + "c" * 64
+    monkeypatch.setattr(
+        deployment_identity,
+        "resolve_deployed_server_build_digest",
+        lambda: server_digest,
+    )
+    monkeypatch.setattr(
+        host_classes,
+        "get_opencode_host_image_ref",
+        lambda: current_host,
+    )
+
+    with pytest.raises(
+        deployment_identity.OmnigentDeploymentIdentityConflict,
+        match="host image that is no longer deployed",
+    ):
+        deployment_identity.assert_plan_matches_deployed_runtime(
+            _opencode_plan_payload(server_digest, stale_host)
         )
 
 
@@ -59,7 +97,7 @@ def test_non_generic_replay_does_not_consult_generic_server_identity(
         probe,
     )
 
-    deployment_identity.assert_plan_matches_deployed_server(
+    deployment_identity.assert_plan_matches_deployed_runtime(
         SimpleNamespace(
             executionRealizerRef="codex-profile-bound@1",
             supportIdentity=None,
