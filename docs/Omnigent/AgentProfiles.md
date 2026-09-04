@@ -1,9 +1,10 @@
 # Omnigent Agent Profiles
 
 Status: **Desired-State Design**  
+Document Class: System / Feature Design View
 Owners: MoonMind Engineering  
 Issue: MoonLadderStudios/MoonMind#3517  
-Last updated: 2026-08-07
+Last updated: 2026-09-04
 
 ## Implementation status
 
@@ -79,3 +80,17 @@ Native Workflow Chat validation also proves that the binding-scoped facade can p
 ## Bootstrap
 
 The synchronized stock `codex-native-ui` identity is materialized as an explicit active bootstrap profile version after structural readiness passes. `OMNIGENT_DEFAULT_AGENT_NAME` may override that first-start selector only when durable profile state is absent in bootstrap/local development; its use is recorded. Durable state wins, and conflicts fail closed.
+
+## Deployment-managed default authority
+
+Exactly one profile holds `default_for_runtime`, and one boundary decides which MoonMind-managed profile that is. The default workflow runtime is Omnigent (OpenCode), so the built-in OpenCode profile `omnigent-opencode-default` holds the deployment default whenever its active version is launch ready and its observed upstream identity satisfies the document contract. The Codex bootstrap profile `omnigent-bootstrap-default` is the fallback and holds the default only while the OpenCode built-in cannot launch — for example when `MOONMIND_OMNIGENT_OPENCODE_ENABLED=false`.
+
+Explicit authority is never displaced:
+
+- an operator-authored profile that holds the default keeps it;
+- an operator `make_default` selection on a managed profile keeps it; and
+- `OMNIGENT_DEFAULT_AGENT_NAME` preserves the current default, because it selects the agent identity itself.
+
+Every transfer is recorded as a `managed_default_selected` audit event carrying the previous holder.
+
+A default launch resolves its Provider Profile from the default profile's own contract. A v2 profile declares accepted providers through its credential slots, so the default is the highest-ranked accepted Provider Profile the selected harness can materialize under every launch policy the document allows. On the default deployment path that is the credentialless `opencode-zen-free` seed, which holds the `opencode` runtime default (see [OpenCode Host](OpenCodeHost.md)). A v1 profile keeps pinning one credential contract through `providerRequirements`.

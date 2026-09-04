@@ -55,3 +55,17 @@ async def test_startup_profile_seeding(disabled_env_keys, tmp_path):
         assert zen.secret_refs == {}
         assert zen.default_model == "opencode/muse-spark-1.3-contributor-free"
         assert zen.default_effort == "xhigh"
+        # MoonLadderStudios/MoonMind#3877: the credentialless Zen seed holds
+        # runtime-default authority for `opencode` straight out of startup.
+        assert zen.is_default is True
+        opencode_defaults = list(
+            (
+                await session.execute(
+                    select(ManagedAgentProviderProfile.profile_id).where(
+                        ManagedAgentProviderProfile.runtime_id == "opencode",
+                        ManagedAgentProviderProfile.is_default.is_(True),
+                    )
+                )
+            ).scalars()
+        )
+        assert opencode_defaults == ["opencode-zen-free"]

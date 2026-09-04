@@ -47,6 +47,56 @@ def default_launch_policy_ref(allowed_launch_policy_refs: Any) -> str:
     raise ValueError("agent profile declares no allowed launch policy")
 
 
+def _accepted_provider_ids(document: Mapping[str, Any]) -> set[str]:
+    """Return the provider ids a v2 profile's credential slots accept."""
+
+    return {
+        str(provider_id)
+        for slot in document.get("credentialSlots") or ()
+        for provider_id in slot.get("acceptedProviderIds") or ()
+    }
+
+
+def _provider_materializer_error(
+    document: Mapping[str, Any], profile: ManagedAgentProviderProfile
+) -> HarnessPlatformError | None:
+    """Return why the selected harness cannot materialize this profile, if any.
+
+    A Provider Profile stays owned by its managed runtime even when it launches
+    through Omnigent, so the profile must be one the selected harness can
+    actually materialize under every launch policy the document allows. Proving
+    only that *some* materializer exists for the pair would accept a profile the
+    readiness projection excludes: ``codex-oauth-home@1`` is registered for
+    ``codex_cli/openai`` but is not accepted by the ``pi-native`` harness. This
+    is the same capability boundary the readiness projection uses to build
+    ``compatibleProviderProfiles``, not a second compatibility source.
+    """
+
+    from moonmind.omnigent.harness_platform.host_classes import get_launch_policy
+    from moonmind.omnigent.harness_platform.materializers import (
+        materializer_ref_for_provider,
+        validate_binding_materializer,
+    )
+
+    harness_selection = document.get("harness") or {}
+    try:
+        materializer_ref = materializer_ref_for_provider(
+            profile.runtime_id, profile.provider_id
+        )
+        for policy_ref in document.get("allowedLaunchPolicyRefs") or ():
+            validate_binding_materializer(
+                materializer_ref=materializer_ref,
+                harness_implementation_ref=str(
+                    harness_selection.get("implementationRef") or ""
+                ),
+                harness_id=str(harness_selection.get("id") or "") or None,
+                host_mode=get_launch_policy(policy_ref).hostMode,
+            )
+    except HarnessPlatformError as exc:
+        return exc
+    return None
+
+
 def _provider_profile_visibility_filter(user: User | None) -> Any | None:
     """Return the SQL visibility boundary shared by explicit/default selection."""
 
@@ -360,11 +410,7 @@ async def resolve_agent_profile_snapshot(
         if visibility_filter is not None:
             provider_query = provider_query.where(visibility_filter)
         compatible_provider = await session.scalar(provider_query.limit(1))
-        accepted_provider_ids = {
-            str(provider_id)
-            for slot in document.get("credentialSlots", [])
-            for provider_id in slot.get("acceptedProviderIds", [])
-        }
+        accepted_provider_ids = _accepted_provider_ids(document)
         if (
             compatible_provider is not None
             and accepted_provider_ids
@@ -372,39 +418,10 @@ async def resolve_agent_profile_snapshot(
         ):
             compatible_provider = None
         if compatible_provider is not None:
-            # A Provider Profile stays owned by its managed runtime even when it
-            # launches through Omnigent, so the requested profile must be one the
-            # selected harness can actually materialize under every launch policy
-            # the profile allows. Proving only that *some* materializer exists for
-            # the pair would accept a profile the readiness projection excludes:
-            # `codex-oauth-home@1` is registered for `codex_cli/openai` but is not
-            # accepted by the `pi-native` harness. This is the same capability
-            # boundary the readiness projection uses to build
-            # `compatibleProviderProfiles`, not a second compatibility source.
-            from moonmind.omnigent.harness_platform.host_classes import (
-                get_launch_policy,
+            materializer_error = _provider_materializer_error(
+                document, compatible_provider
             )
-            from moonmind.omnigent.harness_platform.materializers import (
-                materializer_ref_for_provider,
-                validate_binding_materializer,
-            )
-
-            harness_selection = document.get("harness") or {}
-            try:
-                materializer_ref = materializer_ref_for_provider(
-                    compatible_provider.runtime_id,
-                    compatible_provider.provider_id,
-                )
-                for policy_ref in document.get("allowedLaunchPolicyRefs") or ():
-                    validate_binding_materializer(
-                        materializer_ref=materializer_ref,
-                        harness_implementation_ref=str(
-                            harness_selection.get("implementationRef") or ""
-                        ),
-                        harness_id=str(harness_selection.get("id") or "") or None,
-                        host_mode=get_launch_policy(policy_ref).hostMode,
-                    )
-            except HarnessPlatformError as exc:
+            if materializer_error is not None:
                 raise HTTPException(
                     status.HTTP_409_CONFLICT,
                     (
@@ -413,7 +430,7 @@ async def resolve_agent_profile_snapshot(
                         f"{compatible_provider.runtime_id!r} and is not "
                         f"compatible with the selected Omnigent execution target"
                     ),
-                ) from exc
+                ) from materializer_error
     else:
         requirements = document["providerRequirements"]
         provider_query = select(ManagedAgentProviderProfile).where(
@@ -595,11 +612,30 @@ async def resolve_default_agent_profile_snapshot(
         )
     selected_provider_ref = str(provider_profile_ref or "").strip()
     if not selected_provider_ref:
-        requirements = version.document.get("providerRequirements") or {}
-        query = (
-            select(ManagedAgentProviderProfile)
-            .where(
-                ManagedAgentProviderProfile.enabled.is_(True),
+        document = version.document
+        is_v2 = (
+            document.get("schemaVersion") == "moonmind.omnigent-agent-profile.v2"
+        )
+        query = select(ManagedAgentProviderProfile).where(
+            ManagedAgentProviderProfile.enabled.is_(True)
+        )
+        if is_v2:
+            # A v2 profile declares which providers its credential slots accept
+            # instead of pinning one credential contract, so the default is the
+            # highest-ranked accepted Provider Profile the selected harness can
+            # materialize. MoonLadderStudios/MoonMind#3877: on the default
+            # deployment path that resolves the credentialless OpenCode Zen
+            # profile, which holds the OpenCode runtime default.
+            accepted_provider_ids = _accepted_provider_ids(document)
+            if accepted_provider_ids:
+                query = query.where(
+                    ManagedAgentProviderProfile.provider_id.in_(
+                        sorted(accepted_provider_ids)
+                    )
+                )
+        else:
+            requirements = document.get("providerRequirements") or {}
+            query = query.where(
                 ManagedAgentProviderProfile.runtime_id
                 == requirements.get("runtimeId"),
                 ManagedAgentProviderProfile.credential_source
@@ -607,22 +643,27 @@ async def resolve_default_agent_profile_snapshot(
                 ManagedAgentProviderProfile.runtime_materialization_mode
                 == requirements.get("materializationMode"),
             )
-            .order_by(
-                ManagedAgentProviderProfile.is_default.desc(),
-                ManagedAgentProviderProfile.priority.desc(),
-                ManagedAgentProviderProfile.profile_id.asc(),
-            )
+            if requirements.get("providerIds"):
+                query = query.where(
+                    ManagedAgentProviderProfile.provider_id.in_(
+                        requirements["providerIds"]
+                    )
+                )
+        query = query.order_by(
+            ManagedAgentProviderProfile.is_default.desc(),
+            ManagedAgentProviderProfile.priority.desc(),
+            ManagedAgentProviderProfile.profile_id.asc(),
         )
         visibility_filter = _provider_profile_visibility_filter(user)
         if visibility_filter is not None:
             query = query.where(visibility_filter)
-        if requirements.get("providerIds"):
-            query = query.where(
-                ManagedAgentProviderProfile.provider_id.in_(
-                    requirements["providerIds"]
-                )
-            )
         candidates = list((await session.scalars(query)).all())
+        if is_v2:
+            candidates = [
+                item
+                for item in candidates
+                if _provider_materializer_error(document, item) is None
+            ]
         candidate_statuses = await _managed_secret_statuses_for_profiles(
             session=session, rows=candidates
         )

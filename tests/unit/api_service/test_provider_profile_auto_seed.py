@@ -328,10 +328,15 @@ async def _enroll_opencode_go_with_pinned_runtime(
 
 
 @pytest.mark.asyncio
-async def test_opencode_go_enrollment_atomically_replaces_seeded_zen_default(
+async def test_opencode_go_enrollment_preserves_the_seeded_zen_default(
     _module_db, monkeypatch
 ):
-    """A configured key must coexist with the launch-ready Zen seed."""
+    """MoonLadderStudios/MoonMind#3877: configuration is not a default selection.
+
+    A deployment ``OPENCODE_API_KEY`` enrolls a launch-ready Go profile, but it
+    is not an explicit default selection, so runtime-default authority stays on
+    the credentialless Zen seed until that seed is explicitly disabled.
+    """
 
     from api_service.main import _auto_seed_provider_profiles
 
@@ -348,9 +353,9 @@ async def test_opencode_go_enrollment_atomically_replaces_seeded_zen_default(
 
     assert set(profiles) == {"opencode-zen-free", "opencode-go-default"}
     assert profiles["opencode-zen-free"].enabled is True
-    assert profiles["opencode-zen-free"].is_default is False
+    assert profiles["opencode-zen-free"].is_default is True
     assert profiles["opencode-go-default"].enabled is True
-    assert profiles["opencode-go-default"].is_default is True
+    assert profiles["opencode-go-default"].is_default is False
     assert profiles["opencode-go-default"].default_model == (
         "opencode-go/muse-spark-1.3-contributor"
     )
@@ -370,11 +375,45 @@ async def test_opencode_go_enrollment_atomically_replaces_seeded_zen_default(
     assert signal_name == "sync_profiles"
     manager_profiles = signal_payload["profiles"]
     assert [profile["profile_id"] for profile in manager_profiles] == [
-        "opencode-go-default",
         "opencode-zen-free",
+        "opencode-go-default",
     ]
     assert manager_profiles[0]["is_default"] is True
     assert manager_profiles[0]["launch_ready"] is True
+    assert manager_profiles[1]["is_default"] is False
+    assert manager_profiles[1]["launch_ready"] is True
+
+
+@pytest.mark.asyncio
+async def test_operator_disabled_zen_hands_the_runtime_default_to_opencode_go(
+    _module_db, monkeypatch
+):
+    """An explicit operator disable is the documented way to release the default."""
+
+    from api_service.main import _auto_seed_provider_profiles
+
+    await _auto_seed_provider_profiles()
+    async with db_base.async_session_maker() as session:
+        zen = await session.get(ManagedAgentProviderProfile, "opencode-zen-free")
+        assert zen is not None
+        zen.enabled = False
+        zen.disabled_reason = ProviderProfileDisabledReason.USER_DISABLED
+        await session.commit()
+
+    await _enroll_opencode_go_with_pinned_runtime(monkeypatch)
+
+    async with db_base.async_session_maker() as session:
+        result = await session.execute(
+            select(ManagedAgentProviderProfile).where(
+                ManagedAgentProviderProfile.runtime_id == "opencode"
+            )
+        )
+        profiles = {profile.profile_id: profile for profile in result.scalars()}
+
+    assert profiles["opencode-zen-free"].is_default is False
+    assert profiles["opencode-go-default"].enabled is True
+    assert profiles["opencode-go-default"].is_default is True
+    assert sum(profile.is_default for profile in profiles.values()) == 1
 
 
 @pytest.mark.asyncio
