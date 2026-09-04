@@ -500,6 +500,18 @@ describe('MoonLadderStudios/MoonMind#3822 Settings redesign conformance', () => 
             expect(candidate.closest(switcherSelector)).toBeNull();
           }
         }
+        // A plain wrapper-label radio group carries its text on the label, not
+        // on the control, so check the radios themselves too.
+        for (const radio of Array.from(
+          document.querySelectorAll<HTMLInputElement>('input[type="radio"]'),
+        )) {
+          const radioLabel = (
+            radio.getAttribute('aria-label') ??
+            radio.closest('label')?.textContent ??
+            ''
+          ).trim();
+          expect(destinationLabels).not.toContain(radioLabel);
+        }
       },
     );
 
