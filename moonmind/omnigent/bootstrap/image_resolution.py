@@ -372,6 +372,8 @@ async def resolve_omnigent_images(
             compatibility_failure = "omnigent_server_host_version_probe_failed"
         elif server_version != host_version:
             compatibility_failure = "omnigent_server_host_version_mismatch"
+        elif not await _image_opencode_bootstrap_ready(opencode_ref):
+            compatibility_failure = "omnigent_host_bootstrap_contract_missing"
 
     if compatibility_failure:
         # Keep the current server as catalog authority while quarantining the
@@ -438,6 +440,30 @@ async def resolve_omnigent_images(
         },
     )
     return state
+
+
+async def _image_opencode_bootstrap_ready(image_ref: str) -> bool:
+    """Verify startup prerequisites in the selected image, without credentials.
+
+    Labels and matching Omnigent versions cannot attest the derived image's
+    contents. The entrypoint requires this cache before it can register a host.
+    Image publication additionally exercises plugin-enabled startup offline.
+    """
+    from moonmind.omnigent.host_services.runtime_scripts import (
+        _OPENCODE_PLUGIN_NPM_CACHE_SEED,
+    )
+
+    code, _, _ = await _run(
+        [
+            "docker", "run", "--rm", "--network", "none", "--read-only",
+            "--cap-drop", "ALL", "--security-opt", "no-new-privileges",
+            "--entrypoint", "/bin/sh", image_ref, "-ec",
+            f"test -d {_OPENCODE_PLUGIN_NPM_CACHE_SEED}/_cacache "
+            "&& test -x /usr/local/bin/opencode",
+        ],
+        timeout=30,
+    )
+    return code == 0
 
 
 # The digests published below are written back into the process environment so

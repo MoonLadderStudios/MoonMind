@@ -82,6 +82,7 @@ class DockerOmnigentHostCleanupService:
         code, out, inspect_err = await self._backend.run(
             [
                 "docker",
+                "container",
                 "inspect",
                 "--format",
                 '{{ index .Config.Labels "moonmind.host_lease_ref" }}|{{ index .Config.Labels "moonmind.host_lease_generation" }}',
