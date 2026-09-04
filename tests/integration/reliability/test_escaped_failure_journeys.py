@@ -7960,3 +7960,72 @@ async def test_partial_issue_no_commit_handoff_creates_pr_before_status_update(
             },
         )
     ]
+
+
+async def test_omnigent_opencode_host_seeds_plugin_npm_cache_before_host_start() -> (
+    None
+):
+    """Replay mm:dd8b4275 at the host launch to native-terminal ensure boundary."""
+
+    replay_id = "omnigent-opencode-cold-plugin-install"
+    manifest = load_replay(replay_id, "manifest.json")
+    expected = load_replay(replay_id, "expected-outcome.json")
+
+    script, environment = OmnigentRuntimeScriptService().build_entrypoint(
+        credential_handles=[],
+        skill_attachment={"targetPath": "/opt/moonmind-skills"},
+        step_execution_id=f"{manifest['failedChildWorkflowId']}:execution:1",
+        enable_opencode_runtime=True,
+    )
+
+    seed = expected["imageCacheSeed"]
+    cache = expected["runtimeCache"]
+    guard = script.index(f"test -d {seed} || {{ ")
+    copy = script.index(f"rm -rf {cache}; cp -a {seed} {cache}; ")
+    npmrc = script.index(
+        "printf '%s\\n' "
+        + " ".join(f"'{line}'" for line in expected["npmrcLines"])
+        + f" > {expected['npmrcPath']}; chmod 0600 {expected['npmrcPath']}; "
+    )
+    host_start = script.index(expected["hostStart"])
+    assert (
+        guard < copy < npmrc < host_start
+    ), "the plugin npm cache must be seeded before Omnigent starts the runner"
+    assert f"exit {expected['missingSeedExitCode']}; }}" in script[guard:copy]
+    passthrough = environment["OMNIGENT_RUNNER_ENV_PASSTHROUGH"].split(",")
+    assert not any(name.lower().startswith("npm_config") for name in environment)
+    assert not any(name.lower().startswith("npm_config") for name in passthrough)
+    syntax = subprocess.run(
+        ["/bin/sh", "-n"],
+        input=script,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    assert syntax.returncode == 0, syntax.stderr
+
+    dockerfile = Path("services/omnigent/opencode-host/Dockerfile").read_text(
+        encoding="utf-8"
+    )
+    assert f"ARG OPENCODE_VERSION={manifest['opencodeVersion']}" in dockerfile
+    assert expected["dockerfileCacheArg"] in dockerfile
+    assert expected["dockerfilePackageJson"] in dockerfile
+    assert expected["dockerfileOfflineVerify"] in dockerfile
+    assert manifest["coldInstallPackage"] in expected["dockerfilePackageJson"]
+
+    verify_script = Path(expected["releaseVerifyScript"]).read_text(
+        encoding="utf-8"
+    )
+    assert "--network none" in verify_script
+    assert seed in verify_script
+    for line in expected["npmrcLines"][1:]:
+        assert line in verify_script
+    workflow = yaml.safe_load(
+        Path(expected["releaseWorkflow"]).read_text(encoding="utf-8")
+    )
+    verify_steps = [
+        step
+        for step in workflow["jobs"]["build"]["steps"]
+        if expected["releaseVerifyScript"] in str(step.get("run", ""))
+    ]
+    assert len(verify_steps) == 1
