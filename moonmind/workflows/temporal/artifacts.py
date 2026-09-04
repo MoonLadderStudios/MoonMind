@@ -3725,6 +3725,9 @@ class TemporalArtifactActivities:
                     "profile_id": row.profile_id,
                     "profile_version": provider_profile_version(row),
                     "runtime_id": row.runtime_id,
+                    # Capacity scope is the provider-side quota identity the
+                    # manager reports as the limiting layer (#3878 AC11).
+                    "capacity_scope_ref": row.capacity_scope_ref,
                     "is_default": row.is_default,
                     "provider_id": row.provider_id,
                     "provider_label": row.provider_label,
@@ -4050,7 +4053,29 @@ class TemporalArtifactActivities:
                     "cooldown_until": raw_profile.get("cooldown_until"),
                     "enabled": raw_profile.get("enabled"),
                     "launch_ready": raw_profile.get("launch_ready"),
+                    # MoonLadderStudios/MoonMind#3878 AC11: distinguish the
+                    # configured ceiling from the current effective limit and
+                    # name the capacity scope, without provider identity.
+                    "configured_capacity": raw_profile.get("configured_capacity"),
+                    "effective_capacity": raw_profile.get("effective_capacity"),
+                    "execution_lease_count": raw_profile.get(
+                        "execution_lease_count"
+                    ),
+                    "capacity_scope_ref": raw_profile.get("capacity_scope_ref"),
                 }
+
+        # Which profile, if any, this requester already holds a lease on. The
+        # Omnigent pre-Activity admission path reads this to recognize a grant
+        # that landed while its signal was in flight (#3878 invariant 6).
+        requester_profile_id = None
+        if requester_workflow_id and isinstance(profiles, dict):
+            for profile in profiles.values():
+                if not isinstance(profile, dict):
+                    continue
+                leases = profile.get("current_leases")
+                if isinstance(leases, list) and requester_workflow_id in leases:
+                    requester_profile_id = str(profile.get("profile_id") or "")
+                    break
 
         return {
             "running": True,
@@ -4064,6 +4089,7 @@ class TemporalArtifactActivities:
             "event_count": event_count if isinstance(event_count, int) else None,
             "requester_pending": requester_pending,
             "requester_queue_position": requester_queue_position,
+            "requester_profile_id": requester_profile_id,
             "requested_profile": requested_profile,
         }
 
@@ -4192,7 +4218,14 @@ class TemporalArtifactActivities:
         **load action**: Returns all persisted leases for the given runtime_id.
             Returns {"leases": [{"workflow_id": ..., "profile_id": ..., "granted_at": ...}, ...]}
 
-        **save action**: Upserts the provided leases (list of {workflow_id, profile_id}).
+        **save action**: Snapshot rewrite — replaces every row for the runtime
+            with the provided leases (list of {workflow_id, profile_id}).
+            Returns {"saved": count}
+
+        **upsert action**: Durably records only the provided leases without
+            touching any other row (MoonLadderStudios/MoonMind#3878). This is
+            the incremental grant path; a runtime-wide rewrite per grant makes
+            durable cost scale with active concurrency.
             Returns {"saved": count}
 
         **remove action**: Removes a specific lease by workflow_id.
@@ -4237,16 +4270,34 @@ class TemporalArtifactActivities:
                 ]
                 return {"leases": leases_data}
 
-            elif action == "save":
-                # Snapshot semantics: delete ALL rows for this runtime, then
-                # bulk-insert only the leases currently held in memory.
-                # This prevents stale rows from accumulating when leases
-                # disappear from memory (eviction, verify, release).
-                await session.execute(
-                    delete(ProviderProfileSlotLease).where(
-                        ProviderProfileSlotLease.runtime_id == runtime_id,
+            elif action in {"save", "upsert"}:
+                if action == "save":
+                    # Snapshot semantics: delete ALL rows for this runtime, then
+                    # bulk-insert only the leases currently held in memory.
+                    # This prevents stale rows from accumulating when leases
+                    # disappear from memory (eviction, verify, release).
+                    await session.execute(
+                        delete(ProviderProfileSlotLease).where(
+                            ProviderProfileSlotLease.runtime_id == runtime_id,
+                        )
                     )
-                )
+                else:
+                    # Incremental semantics: replace only the named rows so a
+                    # grant never rewrites unrelated concurrent leases.
+                    incremental_ids = [
+                        str(lease.get("workflow_id"))
+                        for lease in leases or []
+                        if lease.get("workflow_id") and lease.get("profile_id")
+                    ]
+                    if incremental_ids:
+                        await session.execute(
+                            delete(ProviderProfileSlotLease).where(
+                                ProviderProfileSlotLease.runtime_id == runtime_id,
+                                ProviderProfileSlotLease.workflow_id.in_(
+                                    incremental_ids
+                                ),
+                            )
+                        )
                 saved_count = 0
                 for lease in leases or []:
                     workflow_id = lease.get("workflow_id")
