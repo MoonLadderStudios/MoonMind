@@ -90,17 +90,10 @@ def upgrade() -> None:
     with op.batch_alter_table("managed_agent_provider_profiles") as batch:
         batch.drop_constraint("uq_provider_profile_capacity_scope", type_="unique")
         batch.create_index("ix_provider_profile_capacity_scope", ["capacity_scope_ref"])
-        batch.create_foreign_key(
-            "fk_provider_profiles_capacity_scope",
-            "provider_capacity_scopes",
-            ["capacity_scope_ref"],
-            ["scope_ref"],
-        )
 
 
 def downgrade() -> None:
     with op.batch_alter_table("managed_agent_provider_profiles") as batch:
-        batch.drop_constraint("fk_provider_profiles_capacity_scope", type_="foreignkey")
         batch.drop_index("ix_provider_profile_capacity_scope")
         # Fail-closed when scopes are shared: restoring 1:1 uniqueness with
         # shared refs would silently discard the shared allowance.
