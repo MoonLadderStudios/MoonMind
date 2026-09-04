@@ -534,6 +534,36 @@ class ExecutionDependencySummary:
     close_status: str | None
     workflow_type: str | None
 
+
+def _assert_recorded_rollout_not_reinterpreted(plan_payload: Any) -> None:
+    """Prove a current rollout policy change does not reinterpret a rerun.
+
+    Source issue: MoonLadderStudios/MoonMind#3833. Exact reruns reuse the
+    recorded plan and realizer; the recorded rollout generation travels with
+    the plan. When the deployment owns a rollout policy, assert the recorded
+    generation is not newer than current policy before reuse. Plans admitted
+    before default promotion carry no rollout authority and are unaffected.
+    """
+
+    generation = getattr(plan_payload, "rollout_generation", None)
+    if generation is None:
+        return
+    from moonmind.omnigent.harness_platform.rollout_admission import (
+        rollout_policy_configured,
+    )
+    from moonmind.omnigent.runtime_provider_rollout import (
+        assert_history_not_reinterpreted,
+        load_rollout_policy,
+    )
+
+    if not rollout_policy_configured():
+        return
+    assert_history_not_reinterpreted(
+        recorded={"rolloutGeneration": generation},
+        current_policy=load_rollout_policy(),
+    )
+
+
 class TemporalExecutionService:
     """Canonical execution store for Temporal workflows."""
 
@@ -2714,6 +2744,18 @@ class TemporalExecutionService:
                 "Exact rerun cannot verify the currently deployed Omnigent "
                 "server build. Repair deployment readiness before retrying.",
                 code="exact_rerun_deployment_identity_unavailable",
+            ) from exc
+        # Rollout authority (#3833) is immutable: a current policy change must
+        # never reinterpret the recorded plan. The rerun reuses the recorded
+        # target; an explicit upgrade compiles fresh authority via Edit.
+        try:
+            _assert_recorded_rollout_not_reinterpreted(plan.payload)
+        except ValueError as exc:
+            raise TemporalExecutionRerunPlanError(
+                "Exact rerun preserves the original Omnigent execution plan, "
+                f"but its recorded rollout authority is not admitted: {exc}. "
+                "Use Edit for rerun to compile fresh runtime authority.",
+                code="exact_rerun_rollout_authority_unavailable",
             ) from exc
 
     async def update_execution(

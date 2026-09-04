@@ -16,7 +16,7 @@ from pathlib import Path
 from typing import Any, Literal
 
 import httpx
-from fastapi import APIRouter, Depends, Request
+from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -232,7 +232,6 @@ class OmnigentExecutionReadiness(BaseModel):
 
 class AcceptanceBootstrapEvidence(BaseModel):
     """Bounded live observations supplied only by the protected canary."""
-
     model_config = ConfigDict(populate_by_name=True, extra="forbid")
 
     schema_version: Literal["moonmind.omnigent.catalog-bootstrap-evidence/v1"] = Field(
@@ -1765,6 +1764,121 @@ async def get_omnigent_execution_readiness(
             )
         )
     return OmnigentExecutionReadiness(executionTargets=targets)
+
+
+class OmnigentRolloutStatus(BaseModel):
+    """Operator-visible Omnigent default-migration state (#3833)."""
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    schema_version: Literal["moonmind.omnigent-rollout-status.v1"] = Field(
+        "moonmind.omnigent-rollout-status.v1", alias="schemaVersion"
+    )
+    policy_configured: bool = Field(alias="policyConfigured")
+    policy_generation: int = Field(alias="policyGeneration")
+    combinations: list[dict[str, Any]] = Field(
+        default_factory=list, alias="combinations"
+    )
+    telemetry: dict[str, int] = Field(default_factory=dict, alias="telemetry")
+
+
+@router.get(
+    "/rollout-status",
+    response_model=OmnigentRolloutStatus,
+    response_model_by_alias=True,
+)
+async def get_omnigent_rollout_status(
+    current_user: User = Depends(get_current_user()),
+) -> OmnigentRolloutStatus:
+    """Return the per-combination rollout migration view and telemetry.
+
+    Deployment-owned rollout policy state only: no credentials, session ids,
+    host paths, or endpoint authority are exposed. Telemetry labels exclude
+    user, workflow, session, profile, repository, and credential identity.
+    """
+
+    from moonmind.omnigent.harness_platform.rollout_admission import (
+        rollout_policy_configured,
+    )
+    from moonmind.omnigent.runtime_provider_rollout import (
+        empty_rollout_policy,
+        get_rollout_telemetry,
+        load_rollout_policy,
+        migration_status_view,
+    )
+
+    _require_provider_profile_permission(current_user, "provider_profiles.read")
+    if not rollout_policy_configured():
+        return OmnigentRolloutStatus(
+            policyConfigured=False,
+            policyGeneration=empty_rollout_policy().generation,
+            combinations=[],
+            telemetry=dict(get_rollout_telemetry()),
+        )
+    try:
+        policy = load_rollout_policy()
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "code": "rollout_policy_unavailable",
+                "message": str(exc),
+            },
+        ) from exc
+    return OmnigentRolloutStatus(
+        policyConfigured=True,
+        policyGeneration=policy.generation,
+        combinations=migration_status_view(policy=policy),
+        telemetry=dict(get_rollout_telemetry()),
+    )
+
+
+class OmnigentRolloutDefaultRequest(BaseModel):
+    """Resolve one promoted Omnigent default for a product intention."""
+
+    model_config = ConfigDict(populate_by_name=True, extra="forbid")
+
+    product_intention: str = Field(alias="productIntention")
+    authoring_surface: str = Field(default="api", alias="authoringSurface")
+    combination_template: dict[str, Any] = Field(alias="combinationTemplate")
+    owner_cohort: str | None = Field(default=None, alias="ownerCohort")
+
+
+@router.post("/rollout-resolve-default")
+async def resolve_omnigent_rollout_default(
+    payload: OmnigentRolloutDefaultRequest,
+    current_user: User = Depends(get_current_user()),
+) -> dict[str, Any]:
+    """Resolve the promoted Omnigent default for Workflow Create (#3833).
+
+    A ``preferred`` or ``new_work_default`` row preselects the qualified
+    Omnigent Agent Profile target while the submitted canonical identity
+    remains ``external/omnigent``. Anything else fails closed with the exact
+    reason (HTTP 409); no silent fallback is ever substituted.
+    """
+
+    from moonmind.omnigent.harness_platform.rollout_admission import (
+        resolve_rollout_default_for_intention,
+    )
+    from moonmind.omnigent.harness_platform.failures import HarnessPlatformError
+
+    _require_provider_profile_permission(current_user, "provider_profiles.read")
+    try:
+        admitted = resolve_rollout_default_for_intention(
+            product_intention=payload.product_intention,
+            surface=payload.authoring_surface,
+            combination_template=payload.combination_template,
+            owner_cohort=payload.owner_cohort,
+        )
+    except (HarnessPlatformError, ValueError) as exc:
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "code": "rollout_default_unavailable",
+                "message": str(exc),
+            },
+        ) from exc
+    return admitted.model_dump(by_alias=True, mode="json")
 
 
 @router.post("/harness-catalog/synchronize")

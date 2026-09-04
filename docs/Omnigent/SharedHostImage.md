@@ -103,11 +103,38 @@ The trusted planner (never the workflow) selects the execution realizer:
 
 Both gates default to false. No generic plan silently falls back to a direct, legacy, or another-harness path: a failed generic launch returns a typed terminal failure through the same plan and fenced binding.
 
-## 6. Explicitly deferred
+## 6. Product-default migration (#3833)
+
+The versioned runtime-provider rollout policy
+(`moonmind/omnigent/runtime_provider_rollout.py`) is wired into production:
+
+- Every authoring surface funnels through one shared backend admission
+  boundary (`moonmind/omnigent/harness_platform/rollout_admission.py`),
+  called from both plan compilation sites (pre-session planning service and
+  schedule/preset plan compilation). The frozen rollout decision and
+  generation persist with the execution plan; changing policy never
+  reinterprets an existing execution or Temporal history.
+- The policy is deployment-owned via `MOONMIND_OMNIGENT_ROLLOUT_POLICY_REF`.
+  Without it, plans keep their historical canonical form (null rollout
+  authority). With it, unknown, stale, or non-admissible combinations fail
+  closed with the exact unavailable reason.
+- `POST /api/omnigent/rollout-resolve-default` resolves the promoted
+  Omnigent default for a product intention (`preferred`/`new_work_default`
+  preselect the qualified profile; the submitted identity stays
+  `external/omnigent`).
+- `GET /api/omnigent/rollout-status` serves the operator migration view and
+  low-cardinality telemetry.
+- Workflow Create suffixes direct options as compatibility-only once a
+  qualified generic target is promoted; Workflow Detail shows the truthful
+  selected path, realizer, and rollout state from recorded plan authority.
+- Exact reruns reuse the recorded target and assert the recorded rollout
+  generation is not reinterpreted; schedule default refreshes create a new
+  schedule revision.
+
+## 7. Explicitly deferred
 
 These remain the owned child issues of the primary-runtime program and are not claimed by this design:
 
 - **Exact support evidence** (#3832): the support-key matrix, protected-live conformance rows for generic Codex/Claude, and qualification of the shared digest.
-- **Product-default migration** (#3833): versioned rollout policy, per-surface default promotion, canary/rollback controls, and migration telemetry.
 - **Compose consolidation** (#3834): converging static Codex/Claude hosts and startup scripts onto the shared image and generic startup.
 - **Retirement** (#3835): the code-owned retirement inventory and gated removal of direct and profile-bound lanes.

@@ -853,7 +853,19 @@ class RecurringWorkflowsService:
         ]
         definition.target = target
         definition.updated_at = datetime.now(UTC)
-        definition.version = int(definition.version or 0) + 1
+        # A refreshed Omnigent default creates a new schedule revision (#3833):
+        # unchanged defaults pin the recorded target version.
+        from moonmind.omnigent.runtime_provider_rollout import (
+            schedule_revision_for_default_change,
+        )
+
+        try:
+            definition.version = schedule_revision_for_default_change(
+                current_revision=int(definition.version or 0) or 1,
+                default_changed=True,
+            )
+        except ValueError:
+            definition.version = int(definition.version or 0) + 1
         await self._session.flush()
         return True
 
