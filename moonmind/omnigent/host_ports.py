@@ -98,12 +98,13 @@ def expected_omnigent_host_id(host_lease_ref: str, host_lease_generation: int) -
     Deterministic from the exact host lease and generation before container
     creation, so Activity retry and host reconciliation derive the same value
     and a replacement generation receives a distinct identity. Contains no
-    provider, repository, credential, or secret material.
+    provider, repository, credential, or secret material. Omnigent's host
+    identity loader and HTTP inventory use bare hexadecimal UUIDs.
     """
     import uuid as _uuid
 
     seed = f"{host_lease_ref}:{int(host_lease_generation)}"
-    return str(_uuid.uuid5(_uuid.NAMESPACE_URL, seed))
+    return _uuid.uuid5(_uuid.NAMESPACE_URL, seed).hex
 
 @runtime_checkable
 class OmnigentWorkspaceMaterializationPort(Protocol):
