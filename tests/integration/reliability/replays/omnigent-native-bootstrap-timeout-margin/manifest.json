@@ -1,0 +1,14 @@
+{
+  "incidentWorkflowId": "mm:4a85769c-4126-4689-88bb-87b486f25d37",
+  "incidentRunId": "01a06993-80c2-7581-a49b-a1d68c5defb6",
+  "failedChildWorkflowId": "mm:4a85769c-4126-4689-88bb-87b486f25d37:agent:tpl:batch-github-workflows:01:bb5d79f2",
+  "failedChildRunId": "01a06993-8371-71d5-b740-d34ab8ed1ef8",
+  "omnigentSessionId": "3ab4c98455e7487a9072df7690d58353",
+  "sessionId": "bootstrap-boundary-replay",
+  "ordinaryTimeoutSeconds": 60.0,
+  "eventTimeoutSeconds": 150.0,
+  "nativeBootstrapAttemptSeconds": 60.0,
+  "serializedAttemptCount": 2,
+  "failureShape": "the first-message HTTP request used the same 60-second bound as ordinary JSON calls, reached its read timeout while native terminal ensure was still authoritative, and cleanup disconnected the host before Omnigent could return terminal evidence",
+  "boundary": "MoonMind first-message dispatch to Omnigent native-terminal bootstrap"
+}

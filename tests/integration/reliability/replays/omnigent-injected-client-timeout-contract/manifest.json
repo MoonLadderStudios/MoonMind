@@ -6,6 +6,7 @@
   "omnigentSessionId": "6bbdd1e661c649ebbd59c20582283581",
   "sessionId": "session-replay",
   "requestTimeoutSeconds": 60.0,
+  "eventTimeoutSeconds": 150.0,
   "failureShape": "an injected default httpx client replaced MoonMind's request and SSE timeout contract, timed out during native terminal bootstrap, and cleanup disconnected the live host and runner",
   "boundary": "MoonMind Omnigent adapter to injected HTTP transport"
 }

@@ -1373,6 +1373,45 @@ def test_production_registry_and_catalog_include_supervisor_boundary() -> None:
     assert catalog.resolve_activity(
         "omnigent.read_event_batch"
     ).timeouts.start_to_close_seconds <= 30
+    submit_turn = catalog.resolve_activity("omnigent.submit_turn")
+    assert submit_turn.timeouts.start_to_close_seconds == 180
+    assert submit_turn.timeouts.schedule_to_close_seconds == 600
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("timeout_patch_active", "start_to_close_seconds", "schedule_to_close_seconds"),
+    ((True, 180, 600), (False, 60, 180)),
+)
+async def test_submit_turn_activity_timeout_covers_event_dispatch_and_replay(
+    timeout_patch_active: bool,
+    start_to_close_seconds: int,
+    schedule_to_close_seconds: int,
+) -> None:
+    """The workflow outlives dispatch while old histories retain prior commands."""
+
+    supervisor = MoonMindOmnigentSessionWorkflow()
+    execute_activity = AsyncMock(return_value={"outcome": "submitted"})
+
+    with (
+        patch(
+            "moonmind.workflows.temporal.workflows.omnigent_session.workflow.patched",
+            return_value=timeout_patch_active,
+        ),
+        patch(
+            "moonmind.workflows.temporal.workflows.omnigent_session.workflow.execute_activity",
+            execute_activity,
+        ),
+    ):
+        result = await supervisor._execute_activity("omnigent.submit_turn", {})
+
+    assert result == {"outcome": "submitted"}
+    assert execute_activity.await_args.kwargs["start_to_close_timeout"] == timedelta(
+        seconds=start_to_close_seconds
+    )
+    assert execute_activity.await_args.kwargs["schedule_to_close_timeout"] == timedelta(
+        seconds=schedule_to_close_seconds
+    )
 
 
 def test_continue_as_new_carries_only_bounded_summary_state() -> None:

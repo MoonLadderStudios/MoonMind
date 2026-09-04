@@ -64,6 +64,7 @@ MAX_PENDING_SIGNAL_INTENTS = 100
 # The janitor reclaims an assigned host this long after its last heartbeat,
 # independently of the much longer lease expiry.
 HOST_LEASE_HEARTBEAT_TIMEOUT_SECONDS = 90
+OMNIGENT_SUBMIT_TURN_TIMEOUT_PATCH = "omnigent-submit-turn-timeout-margin-v1"
 
 
 def _align_with_workflow_clock(
@@ -238,13 +239,22 @@ class MoonMindOmnigentSessionWorkflow:
         self, activity_name: str, payload: Mapping[str, Any]
     ) -> object:
         route = DEFAULT_ACTIVITY_CATALOG.resolve_activity(activity_name)
+        start_to_close_seconds = route.timeouts.start_to_close_seconds
+        schedule_to_close_seconds = route.timeouts.schedule_to_close_seconds
+        if activity_name == "omnigent.submit_turn" and not workflow.patched(
+            OMNIGENT_SUBMIT_TURN_TIMEOUT_PATCH
+        ):
+            # Preserve the command attributes already recorded by workflows
+            # whose histories predate the extended first-message budget.
+            start_to_close_seconds = 60
+            schedule_to_close_seconds = 180
         kwargs: dict[str, Any] = {
             "task_queue": route.task_queue,
             "start_to_close_timeout": timedelta(
-                seconds=route.timeouts.start_to_close_seconds
+                seconds=start_to_close_seconds
             ),
             "schedule_to_close_timeout": timedelta(
-                seconds=route.timeouts.schedule_to_close_seconds
+                seconds=schedule_to_close_seconds
             ),
             "retry_policy": self._retry_policy(route),
             "summary": f"Reconcile Omnigent session: {activity_name}",
