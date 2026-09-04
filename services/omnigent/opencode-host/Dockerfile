@@ -14,6 +14,10 @@
 ARG OMNIGENT_HOST_BASE_IMAGE
 ARG OMNIGENT_BUILD_DIGEST
 ARG OPENCODE_VERSION=1.18.11
+# Image-owned npm cache holding the exact dependency closure of the OpenCode
+# plugin SDK (`@opencode-ai/plugin@${OPENCODE_VERSION}`). See the warm-cache
+# stage below and docs/Omnigent/OpenCodeHost.md "OpenCode plugin SDK cache".
+ARG OPENCODE_PLUGIN_NPM_CACHE=/opt/moonmind/opencode-npm-cache
 # Pinned compatibility range enforced at build time (inclusive lower, exclusive upper)
 # MoonMind supports opencode-ai >=1.17.7,<1.19.0 for the current Omnigent revision.
 ARG OPENCODE_MIN_VERSION=1.17.7
@@ -26,6 +30,7 @@ ARG OPENCODE_VERSION
 ARG OMNIGENT_BUILD_DIGEST
 ARG OPENCODE_MIN_VERSION
 ARG OPENCODE_MAX_VERSION
+ARG OPENCODE_PLUGIN_NPM_CACHE
 
 SHELL ["/bin/bash", "-e", "-u", "-o", "pipefail", "-c"]
 
@@ -51,6 +56,31 @@ RUN npm config set fund false \
     && opencode --version \
     && (npm cache clean --force || true) \
     && echo "opencode host image ready"
+
+# Warm the OpenCode plugin SDK dependency closure at image build time.
+#
+# The first `opencode serve` in a config directory writes
+# `package.json` = {"dependencies": {"@opencode-ai/plugin": "<opencode version>"}}
+# next to `opencode.json` and runs `npm install` there. Omnigent gives every
+# session a fresh per-session config directory and MoonMind gives every
+# on-demand host a fresh home, so without a warm cache each workflow launch
+# downloads the whole closure (~60 MB) from registry.npmjs.org through the
+# restricted egress proxy while the first user message is blocked on the
+# native-terminal ensure. Populate an image-owned npm cache with exactly that
+# closure and prove a second install resolves from it with the network
+# disabled, so the workflow launch only copies files and never installs.
+RUN set -eu \
+    && warm="$(mktemp -d)" \
+    && verify="$(mktemp -d)" \
+    && printf '{"dependencies":{"@opencode-ai/plugin":"%s"}}\n' "${OPENCODE_VERSION}" > "${warm}/package.json" \
+    && cp "${warm}/package.json" "${verify}/package.json" \
+    && (cd "${warm}" && npm install --cache "${OPENCODE_PLUGIN_NPM_CACHE}" --no-audit --no-fund --prefer-online) \
+    && (cd "${verify}" && npm install --cache "${OPENCODE_PLUGIN_NPM_CACHE}" --no-audit --no-fund --offline) \
+    && test -f "${verify}/node_modules/@opencode-ai/plugin/package.json" \
+    && rm -rf "${warm}" "${verify}" "${OPENCODE_PLUGIN_NPM_CACHE}/_logs" \
+    && chown -R 1000:1000 "${OPENCODE_PLUGIN_NPM_CACHE}" \
+    && chmod -R u+rwX,go+rX "${OPENCODE_PLUGIN_NPM_CACHE}" \
+    && echo "opencode plugin npm cache warmed at ${OPENCODE_PLUGIN_NPM_CACHE} for @opencode-ai/plugin@${OPENCODE_VERSION}"
 
 # Verify unrelated harness CLIs are not bundled solely for this path.
 # The base image may intentionally contain shared tooling; this check ensures
@@ -84,4 +114,5 @@ LABEL org.opencontainers.image.title="omnigent-host-opencode" \
       org.opencontainers.image.source="https://github.com/MoonLadderStudios/MoonMind" \
       moonmind.harness="opencode-native" \
       moonmind.omnigent.build_digest="${OMNIGENT_BUILD_DIGEST}" \
-      moonmind.opencode.version="${OPENCODE_VERSION}"
+      moonmind.opencode.version="${OPENCODE_VERSION}" \
+      moonmind.opencode.plugin_npm_cache="${OPENCODE_PLUGIN_NPM_CACHE}"
