@@ -547,6 +547,69 @@ def get_launch_policy(ref: str) -> LaunchPolicy:
     )
 
 
+def launch_policy_from_effective_launch(
+    effective_launch: Mapping[str, Any],
+    *,
+    expected_ref: str | None = None,
+) -> LaunchPolicy:
+    """Adapt immutable persisted launch authority to planner/runtime policy."""
+
+    policy_ref = str(effective_launch.get("launchPolicyRef") or "").strip()
+    if expected_ref is not None and policy_ref != expected_ref:
+        raise HarnessPlatformError(
+            "effective launch policy conflicts with the selected policy",
+            code=HarnessPlatformFailure.OMNIGENT_EXECUTION_PLAN_CONFLICT,
+        )
+    policy_id, separator, version_text = policy_ref.rpartition("@")
+    try:
+        version = int(version_text)
+    except ValueError as exc:
+        raise HarnessPlatformError(
+            "effective launch policy identity is invalid",
+            code=HarnessPlatformFailure.OMNIGENT_EXECUTION_PLAN_CONFLICT,
+        ) from exc
+    if not separator or not policy_id:
+        raise HarnessPlatformError(
+            "effective launch policy identity is invalid",
+            code=HarnessPlatformFailure.OMNIGENT_EXECUTION_PLAN_CONFLICT,
+        )
+    limits = effective_launch.get("limits")
+    capture = effective_launch.get("capture")
+    cleanup = effective_launch.get("cleanup")
+    if not all(isinstance(value, Mapping) for value in (limits, capture, cleanup)):
+        raise HarnessPlatformError(
+            "effective launch artifact lacks bounded runtime policy",
+            code=HarnessPlatformFailure.OMNIGENT_EXECUTION_PLAN_CONFLICT,
+        )
+    try:
+        return LaunchPolicy.model_validate(
+            {
+                "policyId": policy_id,
+                "version": version,
+                "hostMode": effective_launch.get("hostMode"),
+                "hostClassSelector": {"requiredFeatures": []},
+                "isolation": {
+                    "runDedicated": effective_launch.get("hostMode")
+                    in {"on-demand", "on_demand_docker"}
+                },
+                "limits": dict(limits),
+                "network": {
+                    "egressPolicyRef": effective_launch.get("egressProfileRef")
+                },
+                "capture": dict(capture),
+                "cleanup": dict(cleanup),
+                "controlCapabilities": list(
+                    effective_launch.get("controlCapabilities") or []
+                ),
+            }
+        )
+    except (TypeError, ValueError) as exc:
+        raise HarnessPlatformError(
+            "effective launch runtime policy is invalid",
+            code=HarnessPlatformFailure.OMNIGENT_EXECUTION_PLAN_CONFLICT,
+        ) from exc
+
+
 def validate_policy_for_host_class(
     *,
     policy: LaunchPolicy,

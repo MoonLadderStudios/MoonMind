@@ -349,6 +349,7 @@ def _protected_support_evidence(plan_payload) -> dict[str, object]:
     [
         ("codex-native", "codex-on-demand@1", "codex-profile-bound@1"),
         ("opencode-native", "opencode-on-demand@1", "generic-omnigent-host@1"),
+        ("opencode-native", "opencode-on-demand@2", "generic-omnigent-host@1"),
     ],
 )
 async def test_product_boundary_persists_secret_free_plan_and_exact_realizer(
@@ -520,20 +521,14 @@ async def test_product_boundary_uses_exact_arm64_architecture_for_support_identi
     monkeypatch.setattr(
         deployment_identity,
         "resolve_deployed_server_build_digest",
-        lambda: result.envelope.payload.supportIdentity.omnigentServerBuildRef,
+        lambda: (_ for _ in ()).throw(
+            AssertionError("session admission consulted mutable deployment identity")
+        ),
     )
+    # Session admission validates immutable support only. Mutable deployment
+    # drift is enforced for exact reruns and immediately before a fresh launch,
+    # while a continuation uses its bound host attestation.
     _validate_plan_support_authority(result.envelope)
-
-    monkeypatch.setattr(
-        deployment_identity,
-        "resolve_deployed_server_build_digest",
-        lambda: "sha256:" + "9" * 64,
-    )
-    with pytest.raises(
-        deployment_identity.OmnigentDeploymentIdentityConflict,
-        match="no longer deployed",
-    ):
-        _validate_plan_support_authority(result.envelope)
 
 
 @pytest.mark.asyncio
