@@ -349,7 +349,7 @@ Trust is bound to implementation identity. A plugin name or canonical harness id
 
 ### 7.4 Freshness
 
-Catalog snapshots are immutable. New plans require a snapshot inside the configured freshness bound unless the selected policy explicitly permits a previously verified offline snapshot. Historical plans retain their original snapshot ref.
+Catalog snapshots are immutable. New plans retain the Agent Profile's pinned catalog as authority and require a current observation that attests the same endpoint, Omnigent build, and harness implementation. The current observation supplies freshness only; it never replaces the pinned authority. Historical plans retain their original snapshot ref.
 
 An endpoint outage may retain the last known catalog for diagnostics. It does not silently make stale harnesses launchable.
 

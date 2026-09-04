@@ -535,16 +535,16 @@ async def test_product_boundary_uses_exact_arm64_architecture_for_support_identi
 async def test_product_boundary_uses_profile_catalog_build_identity(
     monkeypatch,
 ) -> None:
-    """A server image manifest digest must not replace the shared build ref."""
+    """Fresh observation attests old profile authority without replacing it."""
 
     build_identity = "sha256:" + "b" * 64
     implementation_digest = "sha256:" + "c" * 64
-    catalog = create_catalog_snapshot(
+    authority_catalog = create_catalog_snapshot(
         endpointRef="default",
         omnigentVersion="0.11.0",
         omnigentBuildDigest=build_identity,
         sourceDigest="sha256:" + "d" * 64,
-        observedAt=datetime.now(UTC),
+        observedAt=datetime.now(UTC) - timedelta(seconds=106_285),
         harnesses=[
             {
                 "id": "opencode-native",
@@ -568,7 +568,18 @@ async def test_product_boundary_uses_profile_catalog_build_identity(
             }
         ],
     )
-    harness = catalog.harnesses[0]
+    harness = authority_catalog.harnesses[0]
+    freshness_catalog = create_catalog_snapshot(
+        endpointRef="default",
+        omnigentVersion=authority_catalog.omnigentVersion,
+        omnigentBuildDigest=authority_catalog.omnigentBuildDigest,
+        sourceDigest="sha256:" + "e" * 64,
+        observedAt=datetime.now(UTC),
+        harnesses=[
+            item.model_dump(mode="json", by_alias=True)
+            for item in authority_catalog.harnesses
+        ],
+    )
 
     async def load_authority(**_kwargs):
         return {
@@ -577,7 +588,8 @@ async def test_product_boundary_uses_profile_catalog_build_identity(
             "materializerRef": "opencode-auth-json@1",
             "authModel": "own-auth",
             "integrationMode": "native-server",
-            "_catalogSnapshot": catalog,
+            "_catalogSnapshot": authority_catalog,
+            "_freshnessCatalogSnapshot": freshness_catalog,
             "_harnessRecord": harness,
         }
 
@@ -634,7 +646,10 @@ async def test_product_boundary_uses_profile_catalog_build_identity(
     support = result.envelope.payload.supportIdentity
     assert support.omnigentServerBuildRef == build_identity
     assert support.omnigentHostBuildRef == build_identity
-    assert result.envelope.payload.harnessCatalogRef == catalog.catalogRef
+    assert (
+        result.envelope.payload.harnessCatalogRef == authority_catalog.catalogRef
+    )
+    assert result.envelope.payload.harnessCatalogRef != freshness_catalog.catalogRef
 
 
 async def _compile_opencode_plan(
