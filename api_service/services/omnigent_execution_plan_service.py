@@ -25,6 +25,7 @@ from moonmind.omnigent.harness_platform.agent_profile import OmnigentAgentProfil
 from moonmind.omnigent.harness_platform.catalog import (
     HarnessImplementationIdentity,
     HarnessRecord,
+    HarnessTrustRecord,
     TrustState,
     classify_harness_trust,
     create_catalog_snapshot,
@@ -177,7 +178,9 @@ async def _try_load_real_harness_config(
             else "default"
         )
         repo = DbHarnessCatalogRepository(session_factory)
-        # Try catalogRef first, then latest
+        # Load the immutable profile authority first. A separate latest
+        # observation supplies freshness/liveness evidence; it must never
+        # replace the catalog ref pinned by the Agent Profile.
         catalog_result = None
         if catalog_ref:
             catalog_result = await repo.load(catalog_ref)
@@ -185,12 +188,32 @@ async def _try_load_real_harness_config(
             catalog_result = await repo.latest(endpoint_ref)
         if catalog_result is None:
             return None
+        latest_catalog_result = await repo.latest(endpoint_ref)
+        if latest_catalog_result is None:
+            raise HarnessPlatformError(
+                "fresh harness catalog observation is unavailable",
+                code=HarnessPlatformFailure.OMNIGENT_HARNESS_CATALOG_UNAVAILABLE,
+            )
         harness_record = next(
             (h for h in catalog_result.snapshot.harnesses if h.id == harness_id),
             None,
         )
         if harness_record is None:
             return None
+        freshness_trust_record = next(
+            (
+                record
+                for record in latest_catalog_result.trust_records
+                if record.implementationRef
+                == harness_record.implementation.implementation_ref()
+            ),
+            None,
+        )
+        if freshness_trust_record is None:
+            raise HarnessPlatformError(
+                "fresh harness trust decision is unavailable",
+                code=HarnessPlatformFailure.OMNIGENT_HARNESS_UNTRUSTED,
+            )
         implementation_digest = harness_record.implementation.digest
         # Derive materializer/auth/integration from catalog capabilities
         registration = harness_registration(harness_id)
@@ -207,9 +230,18 @@ async def _try_load_real_harness_config(
             "authModel": auth_model,
             "integrationMode": integration_mode,
             "_catalogSnapshot": catalog_result.snapshot,
+            "_freshnessCatalogSnapshot": latest_catalog_result.snapshot,
+            "_freshnessTrustRecord": freshness_trust_record,
             "_harnessRecord": harness_record,
         }
-    except Exception:
+    except HarnessPlatformError:
+        raise
+    except Exception as exc:
+        if callable(session_factory):
+            raise HarnessPlatformError(
+                "harness catalog authority could not be loaded",
+                code=HarnessPlatformFailure.OMNIGENT_HARNESS_CATALOG_UNAVAILABLE,
+            ) from exc
         return None
 
 
@@ -632,6 +664,9 @@ async def compile_and_persist_execution_plan(
     if config is None:
         raise ValueError(f"unsupported trusted Omnigent harness: {harness_id!r}")
     exact_catalog = real_config.get("_catalogSnapshot") if real_config else None
+    freshness_catalog = (
+        real_config.get("_freshnessCatalogSnapshot") if real_config else None
+    )
     exact_harness = real_config.get("_harnessRecord") if real_config else None
     # Production uses the exact catalog pinned by the Agent Profile. The
     # latest lookup only supplies a version to hermetic/legacy profiles that do
@@ -953,11 +988,19 @@ async def compile_and_persist_execution_plan(
             }
         },
     )
-    trust = classify_harness_trust(
-        harnessId=harness_id,
-        implementation=implementation,
-        trustState=TrustState.core_trusted,
-    )
+    if real_config is not None:
+        trust = real_config.get("_freshnessTrustRecord")
+        if not isinstance(trust, HarnessTrustRecord):
+            raise HarnessPlatformError(
+                "fresh harness trust decision is unavailable",
+                code=HarnessPlatformFailure.OMNIGENT_HARNESS_UNTRUSTED,
+            )
+    else:
+        trust = classify_harness_trust(
+            harnessId=harness_id,
+            implementation=implementation,
+            trustState=TrustState.core_trusted,
+        )
     # The plan pins this exact catalog snapshot; persist it as durable
     # observation authority so launch-time host resolution can load it.
     # Hermetic callers may pass a non-callable session factory placeholder;
@@ -1034,6 +1077,7 @@ async def compile_and_persist_execution_plan(
             additional_tools=mounted_skill_tools,
         ),
         harness_catalog=catalog,
+        freshness_catalog=freshness_catalog,
         trust_record=trust,
         resolved_skills=resolved_skills,
         credential_binding_set=binding_set,
