@@ -66,7 +66,7 @@ cmd_sync() {
     alpine:3.20 sh -c "
       cp -a /host-claude-auth/. '${CLAUDE_HOME}/' &&
       chown -R 1000:1000 '${CLAUDE_HOME}' &&
-      chmod 0775 '${CLAUDE_HOME}' &&
+      chmod 0700 '${CLAUDE_HOME}' &&
       echo '  Synced the following files:' &&
       find '${CLAUDE_HOME}' -maxdepth 2 -type f -exec basename {} \;
     "
