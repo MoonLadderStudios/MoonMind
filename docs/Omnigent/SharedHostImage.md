@@ -105,9 +105,9 @@ Both gates default to false. No generic plan silently falls back to a direct, le
 
 ## 6. Explicitly deferred
 
-These remain the owned child issues of the primary-runtime program and are not claimed by this design:
+These are the owned child issues of the primary-runtime program. Completed items are recorded here so this design stays truthful about what it claims:
 
 - **Exact support evidence** (#3832): the support-key matrix, protected-live conformance rows for generic Codex/Claude, and qualification of the shared digest.
 - **Product-default migration** (#3833): versioned rollout policy, per-surface default promotion, canary/rollback controls, and migration telemetry.
-- **Compose consolidation** (#3834): converging static Codex/Claude hosts and startup scripts onto the shared image and generic startup.
+- **Compose consolidation** (#3834, completed in #3987): static Codex/Claude hosts and startup scripts converged onto the shared image and generic startup; legacy wrappers retained as thin aliases with retirement conditions in `services/omnigent/scripts/STATIC_HOST_STARTUP_INVENTORY.md`.
 - **Retirement** (#3835): the code-owned retirement inventory and gated removal of direct and profile-bound lanes.
