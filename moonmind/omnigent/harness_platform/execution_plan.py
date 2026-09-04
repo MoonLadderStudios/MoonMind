@@ -222,6 +222,14 @@ class OmnigentExecutionPlanPayload(BaseModel):
         default=None, alias="effectiveLaunchSnapshotDigest"
     )
     supportCombinationKey: str = Field(alias="supportCombinationKey")
+    # Rollout authority for MoonLadderStudios/MoonMind#3833. Optional so plans
+    # admitted before default promotion keep their historical canonical form;
+    # new admissions persist the frozen rollout decision and generation.
+    rollout_policy_version: str | None = Field(
+        default=None, alias="rolloutPolicyVersion"
+    )
+    rollout_generation: int | None = Field(default=None, alias="rolloutGeneration")
+    rollout_state: str | None = Field(default=None, alias="rolloutState")
     # Added as optional for replay compatibility with execution plans admitted
     # before MoonLadderStudios/MoonMind#3701 recorded the complete support
     # identity. New admissions always populate it.
@@ -231,6 +239,15 @@ class OmnigentExecutionPlanPayload(BaseModel):
 
     @model_validator(mode="after")
     def validate_no_forbidden(self) -> "OmnigentExecutionPlanPayload":
+        rollout_fields = (
+            self.rollout_policy_version,
+            self.rollout_generation,
+            self.rollout_state,
+        )
+        if any(value is not None for value in rollout_fields) and not all(
+            value is not None for value in rollout_fields
+        ):
+            raise ValueError("rollout authority must be recorded atomically")
         if self.supportIdentity is not None:
             if (
                 compute_support_combination_key(self.supportIdentity)
@@ -250,6 +267,18 @@ class OmnigentExecutionPlanPayload(BaseModel):
                 raise ValueError(
                     "supportIdentity differs from admitted execution authority"
                 )
+        if self.rollout_generation is not None and self.rollout_generation < 1:
+            raise ValueError("rolloutGeneration must be positive")
+        if self.rollout_state is not None and self.rollout_state not in {
+            "disabled",
+            "explicit_only",
+            "canary",
+            "preferred",
+            "new_work_default",
+            "direct_compatibility_only",
+            "retired_for_new_work",
+        }:
+            raise ValueError("rolloutState is not a rollout state")
         if self.workspaceMutation not in {
             "allowed",
             "read_only",
@@ -299,6 +328,9 @@ def canonical_payload_bytes(
         "effectiveLaunchSnapshotDigest",
         "admissionAuthority",
         "supportIdentity",
+        "rolloutPolicyVersion",
+        "rolloutGeneration",
+        "rolloutState",
     ):
         if data.get(optional_v1_field) is None:
             data.pop(optional_v1_field, None)
