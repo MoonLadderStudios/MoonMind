@@ -3938,6 +3938,52 @@ function safeCapabilityDefault(
   return structuredClone(value);
 }
 
+// A preset may declare `uiSchema.<field>.defaultFrom` when one input's default
+// has to follow another operator selection rather than a single static value.
+// The rule only supplies a default: once the operator sets the field, their
+// value lives in `values` and is never replaced.
+function dependentCapabilityDefault(
+  detail: Pick<PresetDetail, "uiSchema" | "defaults">,
+  values: Record<string, unknown>,
+  name: string,
+): unknown {
+  const defaultFrom = recordValue(
+    capabilityFieldUiSchema(detail.uiSchema, name)["defaultFrom"],
+  );
+  const field = String(defaultFrom["field"] ?? "").trim();
+  const map = recordValue(defaultFrom["map"]);
+  if (!field || Object.keys(map).length === 0) {
+    return undefined;
+  }
+  const source = capabilityInputValue(values, detail.defaults, field);
+  const key = String(source ?? "").trim();
+  // Only an entry the preset actually declared may supply a default. A source
+  // value such as `constructor` would otherwise resolve an inherited
+  // `Object.prototype` member that `structuredClone` cannot clone.
+  if (!Object.hasOwn(map, key)) {
+    return undefined;
+  }
+  const mapped = map[key];
+  if (mapped === undefined || containsSecretLikeCapabilityValue(mapped)) {
+    return undefined;
+  }
+  return structuredClone(mapped);
+}
+
+function capabilityEffectiveDefaults(
+  detail: Pick<PresetDetail, "uiSchema" | "defaults">,
+  values: Record<string, unknown>,
+): Record<string, unknown> {
+  const effective = { ...(detail.defaults || {}) };
+  for (const name of Object.keys(recordValue(detail.uiSchema))) {
+    const derived = dependentCapabilityDefault(detail, values, name);
+    if (derived !== undefined) {
+      effective[name] = derived;
+    }
+  }
+  return effective;
+}
+
 function capabilityInputValue(
   values: Record<string, unknown>,
   defaults: Record<string, unknown> | undefined,
@@ -4049,10 +4095,21 @@ function resolveSchemaCapabilityValues(
     } else if (explicit !== undefined && widget === "jira.issue-picker") {
       explicit = normalizeJiraIssuePickerValue(explicit);
     }
+    const dependentDefault = dependentCapabilityDefault(
+      detail,
+      explicitValues,
+      name,
+    );
     const fallback =
+      dependentDefault ??
       safeCapabilityDefault(detail.defaults, name) ??
       safeCapabilityDefault(fieldSchema, "default");
-    if (explicit !== undefined) {
+    // Expansion treats a blank dependent target as omitted, so clearing a text
+    // or textarea field must derive the rule's value here too instead of
+    // submitting an empty string the server would replace.
+    const derivesBlank =
+      dependentDefault !== undefined && (explicit === "" || explicit === null);
+    if (explicit !== undefined && !derivesBlank) {
       if (
         explicit === "" &&
         !required.has(name) &&
@@ -4396,6 +4453,9 @@ function SchemaCapabilityFields({
   if (fields.length === 0) {
     return null;
   }
+  // Dependent defaults are resolved against the current values so a field whose
+  // default follows another selection re-renders with the derived value.
+  const effectiveDefaults = capabilityEffectiveDefaults(detail, values);
   return (
     <div className="grid-2">
       {fields.map(([name, rawSchema]) => {
@@ -4403,7 +4463,7 @@ function SchemaCapabilityFields({
         const uiSchema = capabilityFieldUiSchema(detail.uiSchema, name);
         const widget = capabilityWidgetName(fieldSchema, uiSchema);
         const label = capabilityFieldLabel(name, fieldSchema);
-        const value = capabilityInputValue(values, detail.defaults, name);
+        const value = capabilityInputValue(values, effectiveDefaults, name);
         const inputId = `queue-capability-input-${name}`;
         const error = errors[name];
         const description = String(fieldSchema.description || "").trim();
@@ -4424,7 +4484,7 @@ function SchemaCapabilityFields({
                 id={inputId}
                 aria-label={label}
                 type="text"
-                value={capabilityInputTextValue(values, detail.defaults, name)}
+                value={capabilityInputTextValue(values, effectiveDefaults, name)}
                 disabled={disabled}
                 aria-invalid={Boolean(error)}
                 onChange={(event) => onChange(name, event.target.value)}
@@ -4574,7 +4634,7 @@ function SchemaCapabilityFields({
               <select
                 id={inputId}
                 aria-label={label}
-                value={capabilityInputTextValue(values, detail.defaults, name)}
+                value={capabilityInputTextValue(values, effectiveDefaults, name)}
                 disabled={disabled}
                 aria-invalid={Boolean(error)}
                 onChange={(event) => {
@@ -4605,7 +4665,7 @@ function SchemaCapabilityFields({
               <textarea
                 id={inputId}
                 aria-label={label}
-                value={capabilityInputTextValue(values, detail.defaults, name)}
+                value={capabilityInputTextValue(values, effectiveDefaults, name)}
                 disabled={disabled}
                 aria-invalid={Boolean(error)}
                 onChange={(event) =>
@@ -4658,7 +4718,7 @@ function SchemaCapabilityFields({
                   ? `${inputId}-options`
                   : undefined
               }
-              value={capabilityInputTextValue(values, detail.defaults, name)}
+              value={capabilityInputTextValue(values, effectiveDefaults, name)}
               disabled={disabled}
               aria-invalid={Boolean(error)}
               onChange={(event) =>
@@ -6126,6 +6186,9 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
   const [publishMode, setPublishMode] = useState(
     normalizePublishModeForSubmit(defaultPublishMode),
   );
+  // Set only by the visible Publish Mode control. A preset expanded during
+  // submit may not overwrite a mode the operator chose for this run.
+  const [publishModeTouched, setPublishModeTouched] = useState(false);
   const [produceReport, setProduceReport] = useState(false);
   const [priority, setPriority] = useState(DEFAULT_PRIORITY);
   const [maxAttempts, setMaxAttempts] = useState(DEFAULT_MAX_ATTEMPTS);
@@ -10632,11 +10695,14 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
       String(submitExpandedWorkflowPublish?.mode || ""),
     );
     // A preset expanded during this submit has not yet had a chance to update
-    // the visible form control. Use its workflow-level policy for this request.
-    // For an already-applied preset, a different visible mode is an explicit
-    // operator override and therefore wins over the annotation.
+    // the visible form control. Use its workflow-level policy for this request
+    // unless the operator already chose a mode: an edited control is an
+    // explicit override and wins over the annotation, exactly as it does for an
+    // already-applied preset.
     const requestedPublishMode =
-      submitExpandedWorkflowPublish && submitExpandedPublishMode
+      submitExpandedWorkflowPublish &&
+      submitExpandedPublishMode &&
+      !publishModeTouched
         ? submitExpandedPublishMode
         : formPublishMode;
     const effectiveSubmissionSkillId = primarySkillId;
@@ -14700,7 +14766,10 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
                 aria-label="Publish Mode"
                 title={publishModeTooltip}
                 value={publishMode}
-                onChange={(event) => setPublishMode(event.target.value)}
+                onChange={(event) => {
+                  setPublishModeTouched(true);
+                  setPublishMode(event.target.value);
+                }}
               >
                 <option
                   value="auto"
