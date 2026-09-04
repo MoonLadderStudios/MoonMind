@@ -1,10 +1,10 @@
 # OpenCode Host and Shared Omnigent Runtime Image
 
-**Status:** OpenCode implementation is current; shared-image migration is desired state  
+**Status:** Current
 **Document Class:** System / Operator Guide  
 **Owners:** MoonMind Platform  
 **Last updated:** 2026-09-04
-**Authority:** OpenCode runtime contract and transition from `omnigent-host-opencode` to the shared MoonMind Omnigent host image
+**Authority:** OpenCode runtime contract on the shared MoonMind Omnigent host image
 
 ## Related documents
 
@@ -16,9 +16,9 @@
 
 ## Advance organizer
 
-**One sentence:** `omnigent-host-opencode` is the first working generic Omnigent host image, and its image lineage should become the shared MoonMind Omnigent host for OpenCode, Codex, and Claude Code rather than remain a permanent OpenCode-only architecture.
+**One sentence:** OpenCode, Codex, and Claude Code use the shared MoonMind Omnigent image with separate Host Classes and credential authority.
 
-**One paragraph:** The current image derives from an immutable stock Omnigent host and adds a pinned OpenCode CLI at build time. The OpenCode Host Class, Provider Profile, materializer, exact-host attestation, and generic realizer remain valid. The next architecture stage publishes the same image lineage under a neutral name, verifies every approved runtime in the exact digest, and allows separate OpenCode, Codex, and Claude Host Classes to reference that digest. Credentials remain strictly isolated. A shared image does not share OAuth homes, API keys, materializers, Host Classes, or support evidence.
+**One paragraph:** The image derives from an immutable stock Omnigent host and installs pinned vendor CLIs at build time. Each Host Class, Provider Profile, materializer, and exact-host attestation authorizes only its selected runtime. Credentials remain strictly isolated. A shared image does not share OAuth homes, API keys, materializers, Host Classes, or support evidence.
 
 ## 1. Current and desired state
 
@@ -31,7 +31,7 @@ opencode-native
 + generic-omnigent-host@1
 + none@1 (OpenCode Zen) or opencode-auth-json@1 (OpenCode Go)
 + omnigent-opencode@1
-+ ghcr.io/moonladderstudios/omnigent-host-opencode@sha256:<digest>
++ ghcr.io/moonladderstudios/omnigent-host-moonmind@sha256:<digest>
 ```
 
 The image derives from the same immutable Omnigent host base as the stock host and adds the OpenCode CLI at image-build time. No workflow installs OpenCode dynamically.
@@ -47,15 +47,15 @@ RUN npm install --cache /opt/moonmind/opencode-npm-cache '@opencode-ai/plugin@1.
     && npm install --cache /opt/moonmind/opencode-npm-cache --offline '@opencode-ai/plugin@1.18.11'
 ```
 
-### Desired shared-image implementation
+### Shared-image implementation
 
-The image lineage should be renamed and promoted to a neutral shared image such as:
+The default Compose image is:
 
 ```text
 ghcr.io/moonladderstudios/omnigent-host-moonmind@sha256:<digest>
 ```
 
-The shared image should contain and verify the approved versions of:
+The shared image contains and verifies the approved versions of:
 
 ```text
 omnigent
@@ -64,7 +64,7 @@ claude
 opencode
 ```
 
-During migration, `omnigent-host-opencode` may remain as an alias to the same manifest digest. New documentation, Host Classes, deployment state, and support evidence should use the neutral image identity after cutover.
+An explicit `OMNIGENT_OPENCODE_HOST_IMAGE_REF` or image/tag override remains authoritative for specialized deployments. It must pass the same bootstrap checks. An incompatible pin is quarantined rather than silently replaced. Existing environment files selecting the old image repository must be updated explicitly.
 
 The image migration does not by itself move Codex or Claude execution to the generic realizer. Those changes require their own runtime-pack, credential-materializer, conformance, rollout, and replay-safe retirement work.
 
@@ -87,17 +87,28 @@ The shared image must:
 
 A shared image is an implementation artifact, not a permission boundary. The selected immutable plan still controls which harness, materializer, Provider Profile, model, and runtime pack are authorized.
 
+Image admission checks the selected digest's executable Omnigent version and
+OpenCode bootstrap prerequisites, including the warm plugin cache. Matching
+build labels alone cannot make an image launch-ready. Release CI exercises
+plugin-enabled OpenCode startup offline before publishing the shared manifest.
+
+Registration observes the launched container as well as the exact upstream
+host identity. An exited host produces `OMNIGENT_HOST_LAUNCH_FAILED` promptly;
+only a runnable host may consume the bounded registration wait. The captured
+startup log is published before later cleanup operations, so a cleanup outage
+does not hide the primary failure. Container cleanup uses typed Docker
+inspection and treats an absent container as already removed without probing
+unrelated resource types through the Docker proxy. Cleanup and credential
+release remain fenced by the durable lease owner.
+
 ## 3. Separate Host Classes share the image
 
-OpenCode should retain its own Host Class even when the image becomes shared.
+OpenCode retains its own Host Class on the shared image.
 
-The expected transition is:
+The default image mapping is:
 
 ```text
 omnigent-opencode@1
-  -> current omnigent-host-opencode digest
-
-omnigent-opencode@2
   -> shared omnigent-host-moonmind digest
 
 omnigent-codex@1
@@ -113,7 +124,7 @@ A representative OpenCode class remains:
 
 ```yaml
 hostClassId: omnigent-opencode
-version: 2
+version: 1
 imageRef: ghcr.io/moonladderstudios/omnigent-host-moonmind@sha256:...
 omnigentBuildDigest: sha256:...
 declaredHarnessImplementations:

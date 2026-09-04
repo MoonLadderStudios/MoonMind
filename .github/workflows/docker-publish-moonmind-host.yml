@@ -12,6 +12,7 @@ on:
     branches: [ main ]
     paths:
       - "services/omnigent/moonmind-host/**"
+      - "services/omnigent/opencode-host/verify-warm-plugin-cache.sh"
       - "moonmind/omnigent/harness_platform/host_classes.py"
       - "moonmind/omnigent/harness_platform/runtime_packs.py"
       - ".github/workflows/docker-publish-moonmind-host.yml"
@@ -234,6 +235,11 @@ jobs:
           docker run --rm "${image}" sh -c 'command -v codex && codex --version'
           docker run --rm "${image}" sh -c 'command -v claude && claude --version'
           docker run --rm "${image}" sh -c 'command -v opencode && opencode --version | grep -E "1\.(17|18)"'
+
+      - name: Verify offline OpenCode plugin startup
+        run: |
+          image="${{ steps.meta.outputs.image_name }}@${{ steps.build.outputs.digest }}"
+          sh ./services/omnigent/opencode-host/verify-warm-plugin-cache.sh "${image}"
 
       - name: Export digest
         run: |

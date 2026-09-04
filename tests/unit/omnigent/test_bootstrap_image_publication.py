@@ -21,6 +21,45 @@ HOST_REF = "ghcr.io/moonladderstudios/omnigent-host-opencode@sha256:" + "2" * 64
 BUILD_DIGEST = "sha256:" + "3" * 64
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize("cache_present", [False, True])
+async def test_image_admission_checks_bootstrap_contents_not_only_version(monkeypatch, cache_present):
+    from moonmind.omnigent.bootstrap import store
+
+    async def resolve(image_env, *_args):
+        return (SERVER_REF, BUILD_DIGEST) if image_env == "OMNIGENT_IMAGE" else (
+            (HOST_REF, BUILD_DIGEST) if image_env == "OMNIGENT_OPENCODE_HOST_IMAGE" else (None, None)
+        )
+
+    async def identity(_ref):
+        return BUILD_DIGEST
+
+    async def version(_ref):
+        return "0.12.0"
+
+    probes = []
+
+    async def run(argv, timeout=30):
+        if "/bin/sh" in argv:
+            probes.append(argv)
+            assert "--network" in argv and "none" in argv and "--read-only" in argv
+            assert HOST_REF in argv
+            return (0 if cache_present else 1), "", ""
+        return 0, "amd64", ""
+
+    monkeypatch.setattr(store, "load_resolved_state", lambda: None)
+    monkeypatch.setattr(image_resolution, "_resolve_image", resolve)
+    monkeypatch.setattr(image_resolution, "_image_build_identity", identity)
+    monkeypatch.setattr(image_resolution, "_image_omnigent_version", version)
+    monkeypatch.setattr(image_resolution, "_run", run)
+    result = await image_resolution.resolve_omnigent_images({"OMNIGENT_BUILD_DIGEST": BUILD_DIGEST})
+    compatibility = result.details["opencodeHostCompatibility"]
+    assert compatibility["status"] == ("ready" if cache_present else "blocked")
+    assert compatibility["failureCode"] == (None if cache_present else "omnigent_host_bootstrap_contract_missing")
+    assert result.opencode_host_image_ref == HOST_REF  # Never substitute another image.
+    assert len(probes) == 1
+
+
 def _state(**overrides) -> ResolvedOmnigentDeploymentState:
     payload = {
         "serverImageRef": SERVER_REF,
@@ -109,6 +148,9 @@ async def test_compatibility_uses_the_running_compose_server_image(
 
     async def run(cmd, timeout=30):
         del timeout
+        if '/bin/sh' in cmd:
+            assert 'test -d /opt/moonmind/opencode-npm-cache/_cacache' in cmd[-1]
+            return 0, '', ''
         if cmd[:4] == ["docker", "image", "inspect", HOST_REF]:
             return 0, "amd64", ""
         raise AssertionError(cmd)
@@ -163,6 +205,9 @@ async def test_mutable_server_fails_closed_without_live_compose_evidence(
 
     async def run(cmd, timeout=30):
         del timeout
+        if '/bin/sh' in cmd:
+            assert 'test -d /opt/moonmind/opencode-npm-cache/_cacache' in cmd[-1]
+            return 0, '', ''
         if cmd[:4] == ["docker", "image", "inspect", HOST_REF]:
             return 0, "amd64", ""
         raise AssertionError(cmd)
@@ -200,6 +245,9 @@ async def test_running_server_resolution_selects_the_compose_repository_digest(
 
     async def run(cmd, timeout=30):
         del timeout
+        if '/bin/sh' in cmd:
+            assert 'test -d /opt/moonmind/opencode-npm-cache/_cacache' in cmd[-1]
+            return 0, '', ''
         calls.append(cmd)
         if cmd[1] == "ps":
             return 0, "container-id\n", ""
@@ -282,6 +330,9 @@ async def test_default_resolution_requires_paired_build_identity_and_version(
 
     async def run(cmd, timeout=30):
         del timeout
+        if '/bin/sh' in cmd:
+            assert 'test -d /opt/moonmind/opencode-npm-cache/_cacache' in cmd[-1]
+            return 0, '', ''
         if cmd[:4] == ["docker", "image", "inspect", HOST_REF]:
             if cmd[-1] == "{{json .Config.Labels}}":
                 return (
@@ -342,6 +393,9 @@ async def test_resolution_quarantines_operator_and_host_build_identity_mismatch(
 
     async def run(cmd, timeout=30):
         del timeout
+        if '/bin/sh' in cmd:
+            assert 'test -d /opt/moonmind/opencode-npm-cache/_cacache' in cmd[-1]
+            return 0, '', ''
         if cmd[:4] == ["docker", "image", "inspect", HOST_REF]:
             if cmd[-1] == "{{json .Config.Labels}}":
                 return (
@@ -407,6 +461,9 @@ async def test_resolution_accepts_an_explicit_independently_paired_build(
 
     async def run(cmd, timeout=30):
         del timeout
+        if '/bin/sh' in cmd:
+            assert 'test -d /opt/moonmind/opencode-npm-cache/_cacache' in cmd[-1]
+            return 0, '', ''
         if cmd[:4] == ["docker", "image", "inspect", HOST_REF]:
             return 0, "amd64", ""
         raise AssertionError(cmd)
@@ -447,6 +504,9 @@ async def test_resolution_quarantines_server_and_host_build_drift(
 
     async def run(cmd, timeout=30):
         del timeout
+        if '/bin/sh' in cmd:
+            assert 'test -d /opt/moonmind/opencode-npm-cache/_cacache' in cmd[-1]
+            return 0, '', ''
         if cmd[:4] == ["docker", "image", "inspect", HOST_REF]:
             if cmd[-1] == "{{json .Config.Labels}}":
                 return (
@@ -504,6 +564,9 @@ async def test_resolution_quarantines_mislabeled_host_version_drift(
 
     async def run(cmd, timeout=30):
         del timeout
+        if '/bin/sh' in cmd:
+            assert 'test -d /opt/moonmind/opencode-npm-cache/_cacache' in cmd[-1]
+            return 0, '', ''
         if cmd[:4] == ["docker", "image", "inspect", HOST_REF]:
             if cmd[-1] == "{{json .Config.Labels}}":
                 return (
