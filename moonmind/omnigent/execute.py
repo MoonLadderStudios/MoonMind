@@ -3659,12 +3659,27 @@ async def run_omnigent_execution(
             external_state=external_state,
             capture_policy=capture_policy,
         )
+        # A transport failure before any provider work (first message never
+        # posted, no stream events captured) preserves nothing: retry as a
+        # new step execution with a fresh session, mirroring the
+        # never-started-turn contract. Failures after work started keep the
+        # existing non-retryable classification so partial progress is not
+        # silently discarded by a fresh session.
+        retry_recommendation = None
+        if (
+            status_code is None
+            and not first_message_posted
+            and not raw_events
+            and not normalized_events
+        ):
+            retry_recommendation = "retry_step_execution"
         return AgentRunResult(
             outputRefs=bundle.output_refs,
             summary=_compact_summary(exc, fallback="Omnigent integration error"),
             diagnosticsRef=bundle.diagnostics_ref,
             failureClass=failure_class,
             providerErrorCode=str(status_code or "omnigent_http_error"),
+            retryRecommendation=retry_recommendation,
             metadata={
                 "normalizedStatus": "failed",
                 "providerName": "omnigent",

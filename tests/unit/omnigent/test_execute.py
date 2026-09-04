@@ -2580,6 +2580,57 @@ async def test_run_omnigent_execution_reports_httpx_transport_errors(
     assert result.metadata["externalStateRef"].startswith("artifact://omnigent/")
     assert result.metadata["checkpointKind"] == "external_state_ref"
     assert "workspaceRootRef" not in result.metadata
+    # No provider work exists yet, so a fresh step execution is safe.
+    assert result.retry_recommendation == "retry_step_execution"
+
+
+@pytest.mark.asyncio
+async def test_run_omnigent_execution_http_status_does_not_request_fresh_retry(
+    monkeypatch,
+) -> None:
+    """Non-2xx provider responses keep the existing non-retryable contract.
+
+    Only status-less transport failures before any provider work recommend a
+    fresh step execution; a typed HTTP status may carry auth/billing or
+    post-work semantics that a blind fresh session would discard.
+    """
+
+    from moonmind.workflows.adapters.omnigent_client import OmnigentClientError
+
+    class FakeClient:
+        def __init__(self, **_: object) -> None:
+            pass
+
+        async def list_agents(self) -> dict[str, object]:
+            raise OmnigentClientError(
+                "Omnigent HTTP 500",
+                status_code=500,
+                failure_class="integration_error",
+            )
+
+    monkeypatch.setenv("OMNIGENT_ENABLED", "true")
+    monkeypatch.setenv("OMNIGENT_SERVER_URL", "https://omnigent.test")
+    monkeypatch.setattr("moonmind.omnigent.execute.OmnigentHttpClient", FakeClient)
+
+    result = await run_omnigent_execution(
+        AgentExecutionRequest(
+            agentKind="external",
+            agentId="omnigent",
+            correlationId="corr-1",
+            idempotencyKey="idem-1",
+            parameters={
+                "omnigent": {
+                    "agent": {"agentName": "codex-native-ui"},
+                    "session": {"allowEmptyWorkspace": True},
+                    "prompt": {"text": "Do the task"},
+                },
+            },
+        )
+    )
+
+    assert result.failure_class == "integration_error"
+    assert result.provider_error_code == "500"
+    assert result.retry_recommendation is None
 
 
 @pytest.mark.asyncio
