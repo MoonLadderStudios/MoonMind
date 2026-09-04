@@ -4861,6 +4861,15 @@ async def test_omnigent_native_bootstrap_has_dispatch_timeout_margin() -> None:
         * manifest["serializedAttemptCount"]
     )
     assert event["read"] >= expected["minimumEventTimeoutSeconds"]
+    submit_turn_route = build_default_activity_catalog().resolve_activity(
+        "omnigent.submit_turn"
+    )
+    assert submit_turn_route.timeouts.start_to_close_seconds == expected[
+        "submitTurnActivityTimeout"
+    ]["startToCloseSeconds"]
+    assert submit_turn_route.timeouts.schedule_to_close_seconds == expected[
+        "submitTurnActivityTimeout"
+    ]["scheduleToCloseSeconds"]
 
     async def timeout_handler(request: httpx.Request) -> httpx.Response:
         raise httpx.ReadTimeout("", request=request)
