@@ -123,7 +123,6 @@ class OmnigentHostRegistrationService:
         from moonmind.workflows.adapters.omnigent_client import OmnigentClientError
 
         for attempt in range(self._attempts):
-            observed_at = datetime.now(UTC)
             try:
                 host = await self._client.get_host(expected_host_id)
             except OmnigentClientError as exc:

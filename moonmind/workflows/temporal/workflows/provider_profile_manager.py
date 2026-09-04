@@ -814,7 +814,10 @@ class MoonMindProviderProfileManagerWorkflow:
                 if workflow.patched(DB_LEASE_PERSISTENCE_PATCH):
                     if workflow.patched(PROVIDER_INCREMENTAL_LEASE_PATCH):
                         persisted = await self._grant_lease_to_db(
-                            profile=profile, lease_id=requester_id
+                            profile=profile,
+                            lease_id=requester_id,
+                            purpose=purpose,
+                            metadata=lease_metadata,
                         )
                     else:
                         persisted = await self._sync_leases_to_db()
@@ -941,7 +944,13 @@ class MoonMindProviderProfileManagerWorkflow:
                 non_retryable=True,
             )
         while not self._shutdown_requested:
-            if profile.reserve(
+            try:
+                _maintenance_scope_gate = workflow.patched(PROVIDER_CAPACITY_SCOPE_PATCH)
+            except Exception:
+                _maintenance_scope_gate = False
+            if _maintenance_scope_gate and not self._profile_scope_available(profile):
+                pass
+            elif profile.reserve(
                 requester_id,
                 workflow.now(),
                 purpose=purpose,
@@ -952,7 +961,10 @@ class MoonMindProviderProfileManagerWorkflow:
                 if workflow.patched(DB_LEASE_PERSISTENCE_PATCH):
                     if workflow.patched(PROVIDER_INCREMENTAL_LEASE_PATCH):
                         persisted = await self._grant_lease_to_db(
-                            profile=profile, lease_id=requester_id
+                            profile=profile,
+                            lease_id=requester_id,
+                            purpose=purpose,
+                            metadata=self._safe_lease_metadata(payload),
                         )
                     else:
                         persisted = await self._sync_leases_to_db()
@@ -1750,7 +1762,10 @@ class MoonMindProviderProfileManagerWorkflow:
                 if durable_grants:
                     if workflow.patched(PROVIDER_INCREMENTAL_LEASE_PATCH):
                         persisted = await self._grant_lease_to_db(
-                            profile=profile, lease_id=req.requester_workflow_id
+                            profile=profile,
+                            lease_id=req.requester_workflow_id,
+                            purpose=req.purpose,
+                            metadata=req.lease_metadata,
                         )
                     else:
                         persisted = await self._sync_leases_to_db()
@@ -1970,6 +1985,8 @@ class MoonMindProviderProfileManagerWorkflow:
                     selector=selector,
                     exact_profile_id=exact_profile_id,
                 ):
+                    if not self._profile_admitted_by_capacity(reserved_profile):
+                        return None
                     self._handoff_reservations.pop(normalized_group_id, None)
                     return reserved_profile
                 self._handoff_reservations.pop(normalized_group_id, None)
@@ -2303,12 +2320,17 @@ class MoonMindProviderProfileManagerWorkflow:
     ) -> CapacityScopeState:
         scope = self._scopes.get(scope_ref)
         if scope is None:
+            derived_max = 0
+            for profile in self._profiles.values():
+                if (profile.capacity_scope_ref or f"provider-profile:{profile.profile_id}") == scope_ref:
+                    derived_max = max(derived_max, profile.max_parallel_runs)
+            configured = derived_max if derived_max > 0 else 1
             scope = CapacityScopeState(
                 scope_ref=scope_ref,
                 runtime_id=runtime_id,
                 provider_class=provider_class,
-                configured_limit=1,
-                effective_limit=1,
+                configured_limit=configured,
+                effective_limit=configured,
             )
             self._scopes[scope_ref] = scope
         return scope
@@ -2331,6 +2353,7 @@ class MoonMindProviderProfileManagerWorkflow:
                 if workflow.now() < cooldown_dt:
                     return False
             except (ValueError, TypeError):
+                # Expected: malformed cooldown never blocks admission.
                 pass
         return self._scope_active_units(scope.scope_ref) < max(1, scope.effective_limit)
 
@@ -2375,6 +2398,13 @@ class MoonMindProviderProfileManagerWorkflow:
                 scope.healthy_since = now.isoformat()
                 if scope.effective_limit >= scope.configured_limit:
                     scope.backpressure_state = "healthy"
+        for profile in self._profiles.values():
+            effective = profile.effective_limit or profile.max_parallel_runs
+            if effective >= profile.max_parallel_runs:
+                continue
+            if profile.cooldown_until is not None:
+                continue
+            profile.effective_limit = min(profile.max_parallel_runs, effective + 1)
 
     def _apply_scope_rate_limit(
         self,
@@ -2407,6 +2437,7 @@ class MoonMindProviderProfileManagerWorkflow:
                     if existing >= new_until:
                         new_until = existing
                 except (ValueError, TypeError):
+                    # Expected: malformed existing deadline never shortens the new one.
                     pass
             scope.cooldown_until = new_until.isoformat()
             scope.backpressure_state = "cooldown"
@@ -2645,9 +2676,17 @@ class MoonMindProviderProfileManagerWorkflow:
             )
 
     async def _grant_lease_to_db(
-        self, *, profile: ProfileSlotState, lease_id: str
+        self,
+        *,
+        profile: ProfileSlotState,
+        lease_id: str,
+        purpose: str = "execution_direct",
+        metadata: dict[str, Any] | None = None,
     ) -> bool:
         """Persist one lease grant; idempotent retry returns existing lease."""
+        safe = dict(metadata or {})
+        owner_id = str(safe.get("ownerId") or safe.get("workflowId") or lease_id)
+        owner_is_workflow = safe.get("ownerIsWorkflow", True) is not False
         try:
             result = await workflow.execute_activity(
                 "provider_profile.sync_slot_leases",
@@ -2656,11 +2695,11 @@ class MoonMindProviderProfileManagerWorkflow:
                     "leases": [
                         {
                             "lease_id": lease_id,
-                            "workflow_id": lease_id,
+                            "workflow_id": str(safe.get("workflowId") or lease_id),
                             "profile_id": profile.profile_id,
-                            "owner_id": lease_id,
-                            "owner_kind": "workflow",
-                            "purpose": "execution_direct",
+                            "owner_id": owner_id,
+                            "owner_kind": "workflow" if owner_is_workflow else "activity",
+                            "purpose": purpose,
                             "fencing_generation": 1,
                             "scope_generation": 1,
                             "capacity_scope_ref": (
@@ -2668,6 +2707,10 @@ class MoonMindProviderProfileManagerWorkflow:
                                 or f"provider-profile:{profile.profile_id}"
                             ),
                             "lease_state": "held",
+                            "stepExecutionId": safe.get("stepExecutionId"),
+                            "oauthSessionId": safe.get("oauthSessionId"),
+                            "idempotencyKey": safe.get("idempotencyKey"),
+                            "ownerIsWorkflow": owner_is_workflow,
                         }
                     ],
                     "action": "grant",
@@ -2788,6 +2831,11 @@ class MoonMindProviderProfileManagerWorkflow:
                             if lease.get(key) is not None
                         },
                     }
+                    self._index_lease(
+                        profile_id,
+                        wf_id,
+                        str(lease.get("ownerId") or wf_id),
+                    )
 
                 # Send slot_assigned to the workflow to reconnect
                 if is_maintenance:
