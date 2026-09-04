@@ -1,0 +1,17 @@
+{
+  "incidentWorkflowId": "mm:dd8b4275-cc2d-4e71-9b10-74fb29c6f074",
+  "incidentRunId": "01a06a85-f00d-7183-afd9-b100a5fbf5e5",
+  "failedChildWorkflowId": "mm:dd8b4275-cc2d-4e71-9b10-74fb29c6f074:agent:tpl:batch-github-workflows:01:82fc9b8d",
+  "failedChildRunId": "01a06a85-f361-711c-a664-7ee10043f15c",
+  "omnigentSessionId": "09d0fd3912d444e6946ec5472f6cafad",
+  "hostImageRef": "ghcr.io/moonladderstudios/omnigent-host-opencode@sha256:f228955fb42417a300ab8907a626c3e68736216da6ac397541e09c108a4f3cf8",
+  "harnessId": "opencode-native",
+  "opencodeVersion": "1.18.11",
+  "coldInstallPackage": "@opencode-ai/plugin",
+  "eventTimeoutSeconds": 150.0,
+  "observedStallSeconds": 146,
+  "observedRegistryTunnels": 28,
+  "observedRegistryHost": "registry.npmjs.org",
+  "failureShape": "the fresh on-demand host's first `opencode serve` ran `npm install @opencode-ai/plugin@1.18.11` into its empty per-session config directory through the restricted egress proxy; the native-terminal ensure stayed blocked behind that download, the 150-second first-message dispatch read-timed out with `Omnigent transport error: ReadTimeout`, and cleanup removed the host while the registry tunnels were still open",
+  "boundary": "on-demand OpenCode host launch to first native-terminal ensure"
+}
