@@ -1651,6 +1651,11 @@ async def test_run_execution_stage_retries_typed_omnigent_turn_failure_at_child_
         lambda patch_id: patch_id in enabled_patches,
     )
     monkeypatch.setattr(
+        run_workflow_module.workflow,
+        "wait_condition",
+        _immediate_wait_condition,
+    )
+    monkeypatch.setattr(
         workflow,
         "_maybe_bind_workflow_scoped_session",
         fake_bind_workflow_scoped_session,
