@@ -35,6 +35,9 @@ _BUILD = "sha256:" + "c" * 64
 _KEY = "omnigent-support:sha256:" + "d" * 64
 
 
+_IMPL = "omnigent-harness-implementation:sha256:" + "f" * 64
+
+
 def _admission_kwargs(row_id: str, **overrides):
     row = get_required_row(row_id)
     params = {
@@ -43,6 +46,8 @@ def _admission_kwargs(row_id: str, **overrides):
         "plan_realizer_ref": GENERIC_REALIZER_REF,
         "host_class_ref": row.hostClassRef,
         "declared_harness_ids": (row.harnessId,),
+        "declared_harness_implementation_refs": (_IMPL,),
+        "expected_harness_implementation_ref": _IMPL,
         "runtime_pack_ref": row.runtimePackRef,
         "materializer_refs": (row.materializerRef,),
         "support_combination_key": _KEY,
@@ -52,16 +57,33 @@ def _admission_kwargs(row_id: str, **overrides):
     return params
 
 
+def _observed_binaries():
+    return (
+        {"name": "codex", "version": "0.104.0"},
+        {"name": "claude", "version": "2.1.257"},
+        {"name": "opencode", "version": "1.18.11"},
+    )
+
+
 def test_required_row_catalog_covers_supported_trio_on_generic_realizer():
     assert SHARED_HOST_CONFORMANCE_CATALOG_VERSION.startswith("moonmind.")
-    by_harness = {row.harnessId: row for row in REQUIRED_ROWS}
-    assert set(by_harness) == {"opencode-native", "codex-native", "claude-native"}
-    assert by_harness["opencode-native"].materializerRef == "opencode-auth-json@1"
-    assert by_harness["opencode-native"].ownershipClass == "run_owned"
-    assert by_harness["codex-native"].materializerRef == "codex-oauth-home@1"
-    assert by_harness["codex-native"].ownershipClass == "profile_owned"
-    assert by_harness["claude-native"].materializerRef == "claude-oauth-home@1"
-    assert by_harness["claude-native"].ownershipClass == "profile_owned"
+    by_id = {row.rowId: row for row in REQUIRED_ROWS}
+    assert set(by_id) == {
+        "opencode-shared-generic-v1",
+        "opencode-shared-generic-zen-v1",
+        "codex-shared-generic-v1",
+        "claude-shared-generic-v1",
+    }
+    assert by_id["opencode-shared-generic-v1"].materializerRef == "opencode-auth-json@1"
+    assert by_id["opencode-shared-generic-v1"].ownershipClass == "run_owned"
+    assert by_id["opencode-shared-generic-v1"].hostClassRef == "omnigent-opencode@2"
+    assert by_id["opencode-shared-generic-zen-v1"].materializerRef == "none@1"
+    assert by_id["opencode-shared-generic-zen-v1"].ownershipClass == "none"
+    assert by_id["opencode-shared-generic-zen-v1"].hostClassRef == "omnigent-opencode@2"
+    assert by_id["codex-shared-generic-v1"].materializerRef == "codex-oauth-home@1"
+    assert by_id["codex-shared-generic-v1"].ownershipClass == "profile_owned"
+    assert by_id["claude-shared-generic-v1"].materializerRef == "claude-oauth-home@1"
+    assert by_id["claude-shared-generic-v1"].ownershipClass == "profile_owned"
     for row in REQUIRED_ROWS:
         assert row.executionRealizerRef == GENERIC_REALIZER_REF
         assert row.liveEvidence == "pending"
@@ -96,6 +118,7 @@ def test_shared_image_inventory_proves_contents_only():
     inventory = build_shared_host_image_inventory(
         image_ref=_IMAGE,
         architecture="linux/amd64",
+        observed_runtime_binaries=_observed_binaries(),
         omnigent_build_digest=_BUILD,
         sbom_ref="sbom:example-ref",
         provenance_ref="provenance:example-ref",
@@ -112,6 +135,21 @@ def test_shared_image_inventory_proves_contents_only():
         "claude-native",
         "opencode-native",
     }
+    # Observed versions must come from the exact image: an arbitrary digest
+    # with a drifted runtime cannot produce a passing inventory.
+    with pytest.raises(HarnessPlatformError):
+        build_shared_host_image_inventory(
+            image_ref=_IMAGE,
+            architecture="linux/amd64",
+            observed_runtime_binaries=(
+                {"name": "codex", "version": "9.999.0"},
+                {"name": "claude", "version": "2.1.257"},
+                {"name": "opencode", "version": "1.18.11"},
+            ),
+            omnigent_build_digest=_BUILD,
+            sbom_ref="sbom:example-ref",
+            provenance_ref="provenance:example-ref",
+        )
     with pytest.raises(HarnessPlatformError):
         build_conformance_evidence(
             moonmind_commit="abc",
@@ -120,10 +158,37 @@ def test_shared_image_inventory_proves_contents_only():
             architecture="linux/amd64",
             row_results=[],
         )
+    # Mutable server tags never become evidence authority.
+    with pytest.raises(HarnessPlatformError):
+        build_conformance_evidence(
+            moonmind_commit="abc",
+            server_image_ref="ghcr.io/omnigent-ai/omnigent-server:latest",
+            shared_host_image_ref=_IMAGE,
+            architecture="linux/amd64",
+            row_results=[],
+        )
 
 
 def test_one_harness_admission_and_substitution_rejected_before_provider_work():
     assert_one_harness_admission(**_admission_kwargs("codex-shared-generic-v1"))
+    # Exact harness implementation is part of admission, not just the ID.
+    with pytest.raises(HarnessPlatformError):
+        assert_one_harness_admission(
+            **_admission_kwargs(
+                "codex-shared-generic-v1",
+                declared_harness_implementation_refs=(
+                    "omnigent-harness-implementation:sha256:" + "0" * 64,
+                ),
+            )
+        )
+    with pytest.raises(HarnessPlatformError):
+        assert_one_harness_admission(
+            **_admission_kwargs(
+                "codex-shared-generic-v1",
+                declared_harness_implementation_refs=None,
+                expected_harness_implementation_ref=None,
+            )
+        )
     # Another installed harness cannot be substituted via materializers.
     with pytest.raises(HarnessPlatformError) as exc:
         assert_one_harness_admission(
@@ -173,11 +238,25 @@ def test_credential_isolation_per_row_names_only():
             present_paths=("/home/app/.codex", "/home/app/.claude"),
             present_env_keys=(),
         )
+    # Claude's user-level credential file is competing state for Codex rows.
+    with pytest.raises(HarnessPlatformError):
+        assert_credential_isolation(
+            row=codex,
+            present_paths=("/home/app/.codex", "/home/app/.claude.json"),
+            present_env_keys=(),
+        )
     with pytest.raises(HarnessPlatformError):
         assert_credential_isolation(
             row=codex,
             present_paths=("/home/app/.codex",),
             present_env_keys=("ANTHROPIC_API_KEY",),
+        )
+    # Pack-forbidden ambient selectors are rejected, not just the local set.
+    with pytest.raises(HarnessPlatformError):
+        assert_credential_isolation(
+            row=codex,
+            present_paths=("/home/app/.codex",),
+            present_env_keys=("CODEX_ACCESS_TOKEN",),
         )
     with pytest.raises(HarnessPlatformError):
         assert_credential_isolation(
@@ -204,6 +283,12 @@ def test_credential_isolation_per_row_names_only():
             present_paths=("/home/app/.claude",),
             present_env_keys=("OPENAI_API_KEY",),
         )
+    with pytest.raises(HarnessPlatformError):
+        assert_credential_isolation(
+            row=claude,
+            present_paths=("/home/app/.claude",),
+            present_env_keys=("ANTHROPIC_AUTH_TOKEN",),
+        )
     opencode = get_required_row("opencode-shared-generic-v1")
     assert_credential_isolation(
         row=opencode,
@@ -222,8 +307,32 @@ def test_credential_isolation_per_row_names_only():
     with pytest.raises(HarnessPlatformError):
         assert_credential_isolation(
             row=opencode,
+            present_paths=(
+                "/home/app/.local/share/opencode/auth.json",
+                "/home/app/.claude.json",
+            ),
+            present_env_keys=(),
+        )
+    with pytest.raises(HarnessPlatformError):
+        assert_credential_isolation(
+            row=opencode,
             present_paths=("/home/app/.local/share/opencode/auth.json",),
             present_env_keys=("OPENAI_API_KEY",),
+        )
+    # Credentialless Zen row carries no auth.json and no OAuth state.
+    zen = get_required_row("opencode-shared-generic-zen-v1")
+    assert_credential_isolation(row=zen, present_paths=(), present_env_keys=())
+    with pytest.raises(HarnessPlatformError):
+        assert_credential_isolation(
+            row=zen,
+            present_paths=("/home/app/.local/share/opencode/auth.json",),
+            present_env_keys=(),
+        )
+    with pytest.raises(HarnessPlatformError):
+        assert_credential_isolation(
+            row=zen,
+            present_paths=("/home/app/.codex",),
+            present_env_keys=(),
         )
 
 
@@ -241,6 +350,7 @@ def test_ownership_cleanup_rules():
         ownership="profile_owned",
         run_state_present_after_cleanup=False,
         enrollment_state_present_after_cleanup=True,
+        profile_attachment_detached_after_cleanup=True,
         host_state_copied_or_deleted=False,
         stale_cleanup_affected_replacement=False,
         provider_profile_released_last=True,
@@ -261,6 +371,19 @@ def test_ownership_cleanup_rules():
             ownership="profile_owned",
             run_state_present_after_cleanup=False,
             enrollment_state_present_after_cleanup=False,
+            profile_attachment_detached_after_cleanup=True,
+            host_state_copied_or_deleted=False,
+            stale_cleanup_affected_replacement=False,
+            provider_profile_released_last=True,
+            image_layers_present_after_cleanup=True,
+        )
+    # Enrollment preserved but still mounted is not detached cleanup.
+    with pytest.raises(HarnessPlatformError):
+        assert_ownership_cleanup(
+            ownership="profile_owned",
+            run_state_present_after_cleanup=False,
+            enrollment_state_present_after_cleanup=True,
+            profile_attachment_detached_after_cleanup=False,
             host_state_copied_or_deleted=False,
             stale_cleanup_affected_replacement=False,
             provider_profile_released_last=True,
@@ -347,6 +470,21 @@ def test_lifecycle_order_and_failure_isolation():
     )
     with pytest.raises(HarnessPlatformError):
         assert_lifecycle_order(("provider_lease_acquired", "plan_persisted"))
+    # Duplicate required events cannot hide early unauthorized side effects.
+    with pytest.raises(HarnessPlatformError):
+        assert_lifecycle_order(
+            (
+                "provider_lease_acquired",
+                "plan_persisted",
+                "provider_lease_acquired",
+                "host_realized",
+                "session_started",
+                "first_turn",
+                "terminal_harvest",
+                "cleanup",
+                "provider_released",
+            )
+        )
     assert_failure_isolation(
         failed_harness_id="codex-native",
         other_harness_id="claude-native",
@@ -379,6 +517,36 @@ def test_conformance_evidence_covers_exactly_required_rows():
         row_results=rows,
     )
     assert evidence["evidenceDigest"].startswith("sha256:")
+    # Architecture and row outcomes are bound into the digest.
+    altered_arch = build_conformance_evidence(
+        moonmind_commit="3304dba5c",
+        server_image_ref=_SERVER,
+        shared_host_image_ref=_IMAGE,
+        architecture="linux/arm64",
+        row_results=rows,
+    )
+    assert altered_arch["evidenceDigest"] != evidence["evidenceDigest"]
+    failed_rows = [dict(item, status="failed") for item in rows]
+    altered_outcome = build_conformance_evidence(
+        moonmind_commit="3304dba5c",
+        server_image_ref=_SERVER,
+        shared_host_image_ref=_IMAGE,
+        architecture="linux/amd64",
+        row_results=failed_rows,
+    )
+    assert altered_outcome["evidenceDigest"] != evidence["evidenceDigest"]
+    # Secret-bearing row results never become evidence.
+    with pytest.raises(HarnessPlatformError):
+        build_conformance_evidence(
+            moonmind_commit="3304dba5c",
+            server_image_ref=_SERVER,
+            shared_host_image_ref=_IMAGE,
+            architecture="linux/amd64",
+            row_results=[
+                {"rowId": rows[0]["rowId"], "apiKey": "ghp_secrettestvalue1234567890"}
+            ]
+            + rows[1:],
+        )
     with pytest.raises(HarnessPlatformError):
         build_conformance_evidence(
             moonmind_commit="3304dba5c",
