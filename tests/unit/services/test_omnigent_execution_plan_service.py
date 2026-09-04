@@ -16,8 +16,15 @@ from moonmind.omnigent.execution_support_evidence import (
     EXECUTION_SUPPORT_EVIDENCE_ISSUER,
     EXECUTION_SUPPORT_EVIDENCE_VERSION,
 )
-from moonmind.omnigent.harness_platform.catalog import create_catalog_snapshot
-from moonmind.omnigent.harness_platform.failures import HarnessPlatformError
+from moonmind.omnigent.harness_platform.catalog import (
+    TrustState,
+    classify_harness_trust,
+    create_catalog_snapshot,
+)
+from moonmind.omnigent.harness_platform.failures import (
+    HarnessPlatformError,
+    HarnessPlatformFailure,
+)
 from moonmind.omnigent.policies import compile_policy_snapshot
 from moonmind.omnigent.session_supervisor_rollback import (
     SUPERVISOR_ROLLBACK_POLICY_VERSION,
@@ -580,6 +587,11 @@ async def test_product_boundary_uses_profile_catalog_build_identity(
             for item in authority_catalog.harnesses
         ],
     )
+    freshness_trust = classify_harness_trust(
+        harnessId=harness.id,
+        implementation=harness.implementation,
+        trustState=TrustState.core_trusted,
+    )
 
     async def load_authority(**_kwargs):
         return {
@@ -590,6 +602,7 @@ async def test_product_boundary_uses_profile_catalog_build_identity(
             "integrationMode": "native-server",
             "_catalogSnapshot": authority_catalog,
             "_freshnessCatalogSnapshot": freshness_catalog,
+            "_freshnessTrustRecord": freshness_trust,
             "_harnessRecord": harness,
         }
 
@@ -650,6 +663,110 @@ async def test_product_boundary_uses_profile_catalog_build_identity(
         result.envelope.payload.harnessCatalogRef == authority_catalog.catalogRef
     )
     assert result.envelope.payload.harnessCatalogRef != freshness_catalog.catalogRef
+
+
+@pytest.mark.asyncio
+async def test_product_boundary_rejects_revoked_freshness_trust(
+    monkeypatch,
+) -> None:
+    """A matching fresh implementation cannot override its current denial."""
+
+    catalog = create_catalog_snapshot(
+        endpointRef="default",
+        omnigentVersion="0.11.0",
+        omnigentBuildDigest="sha256:" + "b" * 64,
+        sourceDigest="sha256:" + "d" * 64,
+        observedAt=datetime.now(UTC),
+        harnesses=[
+            {
+                "id": "opencode-native",
+                "aliases": [],
+                "label": "OpenCode",
+                "implementation": {
+                    "sourceKind": "core",
+                    "package": "omnigent",
+                    "version": "0.11.0",
+                    "digest": "sha256:" + "c" * 64,
+                    "pluginEntryPoint": None,
+                },
+                "runtimeRequirements": {},
+                "capabilities": {
+                    "integrationMode": "native-server",
+                    "authModel": "own-auth",
+                    "interrupt": True,
+                    "streaming": True,
+                },
+                "setupSteps": [],
+            }
+        ],
+    )
+    harness = catalog.harnesses[0]
+
+    async def load_authority(**_kwargs):
+        return {
+            "hostClassRef": "omnigent-opencode@1",
+            "implementationDigest": harness.implementation.digest,
+            "materializerRef": "opencode-auth-json@1",
+            "authModel": "own-auth",
+            "integrationMode": "native-server",
+            "_catalogSnapshot": catalog,
+            "_freshnessCatalogSnapshot": catalog,
+            "_freshnessTrustRecord": classify_harness_trust(
+                harnessId=harness.id,
+                implementation=harness.implementation,
+                trustState=TrustState.blocked,
+            ),
+            "_harnessRecord": harness,
+        }
+
+    monkeypatch.setattr(service, "_try_load_real_harness_config", load_authority)
+    with pytest.raises(HarnessPlatformError) as exc_info:
+        await _compile_opencode_plan(
+            monkeypatch,
+            artifacts=_ArtifactService(),
+            launch_policy_ref="opencode-on-demand@1",
+            plan_store=_PlanStore(object()),
+        )
+
+    assert exc_info.value.code == HarnessPlatformFailure.OMNIGENT_HARNESS_UNTRUSTED
+
+
+@pytest.mark.asyncio
+async def test_real_harness_config_fails_closed_when_freshness_read_errors(
+    monkeypatch,
+) -> None:
+    class Repository:
+        def __init__(self, _session_factory):
+            pass
+
+        async def load(self, _catalog_ref):
+            return SimpleNamespace(snapshot=object())
+
+        async def latest(self, _endpoint_ref):
+            raise RuntimeError("database unavailable")
+
+    from moonmind.omnigent.harness_platform import catalog_service
+
+    monkeypatch.setattr(catalog_service, "DbHarnessCatalogRepository", Repository)
+
+    with pytest.raises(HarnessPlatformError) as exc_info:
+        await service._try_load_real_harness_config(
+            harness_id="opencode-native",
+            agent_profile_snapshot={
+                "document": {
+                    "endpointRef": "default",
+                    "harness": {
+                        "catalogRef": "omnigent-harness-catalog:sha256:" + "1" * 64
+                    },
+                }
+            },
+            session_factory=lambda: None,
+        )
+
+    assert (
+        exc_info.value.code
+        == HarnessPlatformFailure.OMNIGENT_HARNESS_CATALOG_UNAVAILABLE
+    )
 
 
 async def _compile_opencode_plan(
