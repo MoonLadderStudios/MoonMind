@@ -104,6 +104,8 @@ The built-in policy expresses this deployment's current qualification gates as o
 
 Those six labels are the target identities the UI and API distinguish. A friendly label never becomes a new top-level runtime id: the canonical submitted identity for the first four rows stays `omnigent`, and for the last two it stays the direct provider runtime id.
 
+The `State` column is the *authored* state. A promoted row becomes a product default for an execution only when the readiness gate in section 5 also passes for that execution's exact combination.
+
 ## 5. Fail-closed readiness
 
 A `preferred`, `new_work_default`, or `canary` state is demoted to `explicit_only` with an exact reason when any required input is missing:
@@ -119,7 +121,11 @@ provider_profile_unavailable
 rollout_canary_cohort_excluded
 ```
 
-A deployment-authored rule requires support evidence by default (`requiresSupportEvidence: true`), so an authored promotion without evidence still fails closed. Every denial reason is drawn from the closed `RolloutReason` vocabulary, and the UI shows it verbatim next to only the explicitly valid alternatives.
+Every rule requires support evidence by default (`requiresSupportEvidence: true`) — the built-in rows included — so a promotion without evidence fails closed. Every denial reason is drawn from the closed `RolloutReason` vocabulary, and the UI shows it verbatim next to only the explicitly valid alternatives.
+
+The readiness inputs (`RolloutSelectionContext`) are supplied at plan compilation by `compile_execution_plan`, from the immutable objects that compilation already resolved: the deployment's declared canary cohorts, the Agent Profile snapshot, the single bound Provider Profile, the harness implementation, Host Class, launch policy, qualified model id, architecture, host mode, and the support evidence backing the plan's exact support combination. Evidence provenance is read through `resolve_support_evidence_freshness`, which consults the same tiers, in the same order, on the same matching identity that admission uses (`MOONMIND_OMNIGENT_EVIDENCE_POLICY`), so a rollout demotion never disagrees with what admission will accept. That read is an observation only; admission authority stays with `resolve_execution_evidence`, which fails closed.
+
+Readiness demotion changes the *rollout state frozen into the plan*, not whether the execution runs: a demoted row is still `explicit_only`, so recorded and explicitly-authored work keeps executing while the combination stops being a product default. The authoring catalog reports the rollback-adjusted state without a per-execution readiness context, so an operator-visible default is a policy statement and a frozen plan record is an evidence statement.
 
 ## 6. Canary cohorts
 
@@ -170,6 +176,8 @@ Control matching is by exact harness identity and path class — never by displa
   "reasonCode": "rollout_new_work_default"
 }
 ```
+
+The frozen `state` is what the readiness gate in section 5 resolved for *this* plan, not the policy's authored state: a promoted row whose support evidence is missing or lapsed freezes as `explicit_only` with `support_evidence_missing` or `support_evidence_stale`, and the same decision emits `omnigent_migration_support_evidence_denial`.
 
 The field is optional for replay compatibility with plans admitted before this contract existed, and it is dropped from the canonical payload bytes when absent, so a historical plan keeps its original digest. New admissions always populate it.
 
@@ -227,7 +235,18 @@ omnigent_migration_rollback_activation              rollback_control
 
 Every label value is drawn from a closed vocabulary; an out-of-vocabulary value collapses to `other` and a missing one to `unknown`. No user, workflow, run, session, binding, provider-session, host, runner, profile, credential, repository, or workspace identity may appear — the registry rejects those keys at registration and at record time. `harness_class` is an exact-id lookup, so a new harness collapses to `unregistered` rather than joining another class.
 
-The shared selection boundary is what records `selected_path`, `rollout_state`, `fallback_denied`, and `rollback_activation`, so every authoring surface reports the migration identically. Telemetry is never authority: a recording failure cannot change which target was selected.
+Each family has exactly one production owner, and every call site records through the recorder helpers beside `record_runtime_target_selection` so no site can derive its own `harness_class` or introduce an unbounded label:
+
+| Family | Emitted by |
+| --- | --- |
+| `selected_path`, `rollout_state`, `fallback_denied`, `rollback_activation` | the shared selection and admission boundary, on every authoring surface |
+| `support_evidence_denial` | `compile_execution_plan`, where the readiness demotion is decided |
+| `launch_readiness`, `host_latency_seconds`, `first_turn_latency_seconds`, `provider_profile_wait_seconds`, `cleanup_outcome` | the generic Omnigent host realizer's execution lifecycle |
+| `followup_availability` | the shared canonical-turn delivery wrapper, for every non-`initial` turn source |
+
+`launch_readiness` reports `ready` only for an attested ready host; a session that fails afterwards is not a launch failure. `cleanup_outcome` reports `completed_clean` or `cancelled_clean` only when this owner durably reached the cleaned state; an unreleased outcome stays `cleanup_pending` for the janitor and is reported as `leaked` or `cancelled_incomplete`.
+
+Telemetry is never authority: every emitter records inside a guard (`record_safely` at the lifecycle call sites, the selection boundary's own guard around its block), so a registry, label, or exporter failure cannot change which target was selected, whether a host launched, or how an execution settled.
 
 ## 12. Configuration
 

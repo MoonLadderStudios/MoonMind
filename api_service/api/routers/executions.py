@@ -8933,10 +8933,18 @@ async def _expand_goal_preset_for_workflow_submission(
     runtime_payload = (
         task_payload.get("runtime") if isinstance(task_payload.get("runtime"), Mapping) else {}
     )
+    # Goal-preset expansion is an authoring surface: it resolves its default
+    # through the one shared selection and admission boundary
+    # (MoonLadderStudios/MoonMind#3833 required work 4), never from
+    # ``settings.workflow.default_runtime`` directly, so an active rollback
+    # control cannot produce a different default here than on Workflow Create.
     target_runtime = (
         request_payload.get("targetRuntime")
         or runtime_payload.get("mode")
-        or normalize_runtime_id(settings.workflow.default_runtime)
+        or resolve_runtime_target_selection(
+            surface=AuthoringSurface.preset_expansion,
+            workflow_settings=settings.workflow,
+        ).runtime_id
     )
     if isinstance(target_runtime, str) and target_runtime.strip():
         context["targetRuntime"] = target_runtime.strip()

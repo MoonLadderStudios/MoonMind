@@ -33,7 +33,7 @@ import logging
 import threading
 from collections import defaultdict
 from dataclasses import dataclass
-from typing import Mapping
+from typing import Callable, Mapping
 
 logger = logging.getLogger("moonmind.omnigent.control_plane.metrics")
 
@@ -576,6 +576,106 @@ def record_runtime_target_selection(
         )
 
 
+def record_safely(recorder: Callable[..., None], /, **labels: object) -> None:
+    """Invoke one recorder without letting telemetry become execution authority.
+
+    Every migration call site records through this helper so a metric-registry
+    programming error, an exporter failure, or an unexpected label can never
+    change a launch, turn, cleanup, or admission outcome.
+    """
+
+    try:
+        recorder(**labels)
+    except Exception:  # pragma: no cover - telemetry is never authority
+        logger.warning("Omnigent metric recording failed", exc_info=True)
+
+
+def record_migration_launch_readiness(
+    *, harness_id: object, ready: bool | None
+) -> None:
+    """Record one host/harness launch readiness outcome for the migration view.
+
+    ``ready is None`` records ``unknown`` (the launch neither completed nor
+    failed observably), so an indeterminate outcome never masquerades as a
+    successful one.
+    """
+
+    increment(
+        MIGRATION_LAUNCH_READINESS,
+        harness_class=harness_class_for(harness_id),
+        readiness=("unknown" if ready is None else ("ready" if ready else "not_ready")),
+    )
+
+
+def record_support_evidence_denial(
+    *, harness_id: object, denial_reason: object
+) -> None:
+    """Record one missing, stale, or expired support-evidence denial."""
+
+    increment(
+        MIGRATION_SUPPORT_EVIDENCE_DENIAL,
+        harness_class=harness_class_for(harness_id),
+        denial_reason=denial_reason,
+    )
+
+
+def record_provider_profile_wait(
+    *, harness_id: object, wait_seconds: float
+) -> None:
+    """Record how long one execution waited for Provider Profile capacity."""
+
+    observe(
+        MIGRATION_PROVIDER_PROFILE_WAIT,
+        max(0.0, float(wait_seconds)),
+        harness_class=harness_class_for(harness_id),
+    )
+
+
+def record_host_latency(*, harness_id: object, latency_seconds: float) -> None:
+    """Record the time from host allocation to an attested ready host."""
+
+    observe(
+        MIGRATION_HOST_LATENCY,
+        max(0.0, float(latency_seconds)),
+        harness_class=harness_class_for(harness_id),
+    )
+
+
+def record_first_turn_latency(
+    *, harness_id: object, latency_seconds: float
+) -> None:
+    """Record the time the first canonical turn of a session took."""
+
+    observe(
+        MIGRATION_FIRST_TURN_LATENCY,
+        max(0.0, float(latency_seconds)),
+        harness_class=harness_class_for(harness_id),
+    )
+
+
+def record_followup_availability(
+    *, harness_id: object, followup_kind: object, available: bool
+) -> None:
+    """Record whether one follow-up turn source was accepted or refused."""
+
+    increment(
+        MIGRATION_FOLLOWUP_AVAILABILITY,
+        harness_class=harness_class_for(harness_id),
+        followup_kind=followup_kind,
+        availability=("available" if available else "unavailable"),
+    )
+
+
+def record_cleanup_outcome(*, harness_id: object, cleanup_outcome: object) -> None:
+    """Record one terminal cleanup outcome for the migration view."""
+
+    increment(
+        MIGRATION_CLEANUP_OUTCOME,
+        harness_class=harness_class_for(harness_id),
+        cleanup_outcome=cleanup_outcome,
+    )
+
+
 def record_rollback_activation(control: object) -> None:
     """Record activation of one runtime-provider rollback control."""
 
@@ -643,6 +743,14 @@ __all__ = [
     "MIGRATION_FALLBACK_DENIED",
     "MIGRATION_ROLLBACK_ACTIVATION",
     "harness_class_for",
+    "record_safely",
     "record_runtime_target_selection",
+    "record_migration_launch_readiness",
+    "record_support_evidence_denial",
+    "record_provider_profile_wait",
+    "record_host_latency",
+    "record_first_turn_latency",
+    "record_followup_availability",
+    "record_cleanup_outcome",
     "record_rollback_activation",
 ]

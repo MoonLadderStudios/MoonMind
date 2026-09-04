@@ -530,3 +530,195 @@ def test_configured_runtime_that_is_unregistered_stays_authorable():
     assert selection.available is True
     assert selection.target_id is None
     assert selection.reason_code is RolloutReason.combination_not_registered
+
+
+# --- The production surfaces themselves (required work 4) --------------------
+
+
+#: Every production module that owns an authoring surface named by the issue.
+#: A module added here must resolve its default through the shared boundary.
+_AUTHORING_SURFACE_MODULES = (
+    "api_service.api.routers.executions",
+    "api_service.api.routers.workflow_console_view_model",
+    "api_service.services.recurring_workflows_service",
+    "moonmind.workflows.executions.preset_expansion",
+    "moonmind.workflows.temporal.worker_runtime",
+)
+
+#: Names that reconstruct a runtime default outside the shared boundary.
+_FORBIDDEN_DEFAULT_SOURCES = frozenset(
+    {"resolve_default_workflow_runtime", "DEFAULT_WORKFLOW_RUNTIME"}
+)
+
+
+def _default_reconstruction_lines(module_name: str) -> list[int]:
+    """Return lines where one module builds its own runtime default."""
+
+    import ast
+    import importlib
+    import pathlib
+
+    module = importlib.import_module(module_name)
+    tree = ast.parse(
+        pathlib.Path(module.__file__).read_text(encoding="utf-8"), module.__file__
+    )
+    offenders: list[int] = []
+    for node in ast.walk(tree):
+        reads_configured_default = (
+            isinstance(node, ast.Attribute)
+            and node.attr == "default_runtime"
+            and isinstance(node.value, ast.Attribute)
+            and node.value.attr == "workflow"
+        )
+        imports_default_resolver = (
+            isinstance(node, ast.Name) and node.id in _FORBIDDEN_DEFAULT_SOURCES
+        )
+        if reads_configured_default or imports_default_resolver:
+            offenders.append(node.lineno)
+    return sorted(offenders)
+
+
+@pytest.mark.parametrize("module_name", _AUTHORING_SURFACE_MODULES)
+def test_no_authoring_surface_reconstructs_its_own_default(module_name):
+    """No surface reads the configured default outside the shared boundary.
+
+    ``settings.workflow.default_runtime`` is an input *to*
+    ``resolve_runtime_target_selection``; a surface that reads it directly
+    silently disagrees with the rollout policy whenever a rollback control is
+    active.
+    """
+
+    assert _default_reconstruction_lines(module_name) == []
+
+
+@pytest.mark.asyncio
+async def test_active_rollback_reaches_every_production_submission_surface(
+    monkeypatch,
+):
+    """One rollback control moves every surface's default at the same time.
+
+    The deployment authors a policy whose only Omnigent row is blocked and whose
+    direct compatibility row is restorable, then activates both controls. A
+    surface that reconstructed its default from the configured
+    ``default_runtime`` would still answer ``omnigent`` here.
+    """
+
+    import json
+    import os
+    from pathlib import Path
+    from types import SimpleNamespace
+    from uuid import uuid4
+
+    from api_service.api.routers.executions import (
+        _expand_goal_preset_for_workflow_submission,
+    )
+    from api_service.api.routers.workflow_console_view_model import (
+        build_runtime_config,
+    )
+    from moonmind.config.settings import settings as app_settings
+    from moonmind.omnigent.runtime_provider_rollout import (
+        RUNTIME_PROVIDER_ROLLOUT_ENV,
+    )
+    from moonmind.workflows.executions.preset_goal_scheduler import (
+        GoalPresetSchedule,
+    )
+    from moonmind.workflows.temporal.worker_runtime import _normalize_runtime_mode
+
+    monkeypatch.setenv(
+        RUNTIME_PROVIDER_ROLLOUT_ENV,
+        json.dumps(
+            {
+                "generation": 3,
+                "rules": [
+                    {
+                        "targetId": "codex.generic-omnigent",
+                        "label": "Codex via generic Omnigent",
+                        "selector": {
+                            "harness_id": "codex-native",
+                            "execution_realizer_ref": "generic-omnigent-host@1",
+                            "path_class": "generic_omnigent",
+                        },
+                        "state": "new_work_default",
+                        "generation": 1,
+                    },
+                    {
+                        "targetId": "codex.direct",
+                        "label": "Direct Codex compatibility",
+                        "selector": {
+                            "provider_runtime_id": "codex_cli",
+                            "path_class": "direct_compatibility",
+                        },
+                        "state": "direct_compatibility_only",
+                        "generation": 1,
+                        "legacyDefaultRestorable": True,
+                    },
+                ],
+            }
+        ),
+    )
+    monkeypatch.setenv(
+        RUNTIME_PROVIDER_ROLLBACK_ENV,
+        "stop_new_generic_codex_admission,restore_legacy_or_direct_default",
+    )
+    monkeypatch.delenv("MOONMIND_WORKER_RUNTIME", raising=False)
+    monkeypatch.setattr(app_settings.workflow, "default_runtime", "omnigent")
+
+    expected = resolve_runtime_target_selection(
+        surface=AuthoringSurface.workflow_create,
+        workflow_settings=app_settings.workflow,
+    ).runtime_id
+    # The rollback restored the direct compatibility default, so the configured
+    # runtime is no longer the answer and this assertion cannot be vacuous.
+    assert expected == "codex_cli"
+    assert app_settings.workflow.default_runtime == "omnigent"
+
+    captured: dict[str, object] = {}
+
+    class _CapturingCatalog:
+        def __init__(self, session):
+            self.session = session
+
+        async def expand_template(self, **kwargs):
+            captured.update(kwargs)
+            return {
+                "steps": [
+                    {"id": "step-1", "title": "Run", "instructions": "Run"}
+                ],
+                "appliedTemplate": {
+                    "slug": kwargs["slug"],
+                    "inputs": kwargs["inputs"],
+                    "stepIds": ["step-1"],
+                    "appliedAt": "2026-09-04T00:00:00+00:00",
+                },
+            }
+
+        async def sync_seed_templates(self, seed_dir: Path) -> None:
+            raise AssertionError("seed sync should not be needed")
+
+    monkeypatch.setattr(
+        "api_service.api.routers.executions.schedule_preset_from_goal",
+        lambda goal: GoalPresetSchedule(
+            goal=goal,
+            slug="goal-preset",
+            inputs={},
+            reason="test",
+            issue_key=None,
+        ),
+    )
+    monkeypatch.setattr(
+        "api_service.services.presets.catalog.PresetCatalogService",
+        _CapturingCatalog,
+    )
+
+    await _expand_goal_preset_for_workflow_submission(
+        task_payload={"goal": "Expand one goal preset"},
+        request_payload={"repository": "MoonLadderStudios/MoonMind"},
+        session=object(),
+        user=SimpleNamespace(id=uuid4(), is_superuser=False),
+    )
+
+    assert captured["context"]["targetRuntime"] == expected
+    assert _normalize_runtime_mode(None) == expected
+    dashboard_config = build_runtime_config("/workflows/new")
+    assert dashboard_config["system"]["defaultRuntime"] == expected
+    assert os.environ.get("MOONMIND_WORKER_RUNTIME") is None

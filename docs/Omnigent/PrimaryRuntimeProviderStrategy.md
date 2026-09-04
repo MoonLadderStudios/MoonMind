@@ -453,7 +453,7 @@ See [`docs/Omnigent/RuntimeProviderRollout.md`](./RuntimeProviderRollout.md) for
 - Direct and legacy paths are labeled compatibility choices and are never preselected while a generic row is promoted.
 - Continuation, remediation, checkpoint, steering, approval, and Workflow Chat turns enter the canonical Omnigent session and turn-command path.
 - Unsupported combinations stay unavailable with an exact reason rather than silently using a direct runtime.
-- Exact canary allowlists, six independent rollback controls, an operator-visible migration status view, and eleven bounded migration metric families make the migration observable and reversible.
+- Exact canary allowlists, six independent rollback controls, an operator-visible migration status view, and eleven bounded migration metric families — each emitted by one production owner across the selection boundary, plan compilation, the generic host lifecycle, and the canonical-turn wrapper — make the migration observable and reversible.
 
 Promoting an individual harness row still requires that deployment's exact support evidence: the generic Codex, Claude Code, and OpenCode rows are promoted by their own qualification gates.
 

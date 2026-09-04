@@ -68,6 +68,9 @@ from moonmind.omnigent.harness_platform.support import (
 )
 from moonmind.omnigent.runtime_provider_rollout import (
     NOT_APPLICABLE,
+    RolloutDecision,
+    RolloutReason,
+    RolloutSelectionContext,
     RuntimeProviderCombination,
     RuntimeProviderPathClass,
     RuntimeProviderRolloutPolicy,
@@ -240,6 +243,135 @@ def _build_rollout_combination(
             "pathClass": path_class,
         }
     )
+
+
+#: Rollout reasons that name support-evidence provenance rather than policy.
+_SUPPORT_EVIDENCE_REASONS: frozenset[RolloutReason] = frozenset(
+    {
+        RolloutReason.support_evidence_missing,
+        RolloutReason.support_evidence_stale,
+    }
+)
+
+
+def _rollout_provider_profile_ref(
+    credential_binding_set: CredentialBindingSet,
+) -> str:
+    """Return the one Provider Profile a canary allowlist can match.
+
+    A plan that binds several distinct Provider Profiles has no single cohort
+    identity, so it reports none and a rule that pins ``providerProfileRefs``
+    excludes it rather than matching on an arbitrary member.
+    """
+
+    refs = {
+        str(binding.providerProfileRef).strip()
+        for binding in credential_binding_set.bindings.values()
+        if str(binding.providerProfileRef).strip()
+    }
+    return next(iter(refs)) if len(refs) == 1 else ""
+
+
+def _build_rollout_selection_context(
+    *,
+    policy: RuntimeProviderRolloutPolicy,
+    profile: OmnigentAgentProfileV2,
+    trust_record: HarnessTrustRecord,
+    credential_binding_set: CredentialBindingSet,
+    host_class: HostClass,
+    launch_policy: LaunchPolicy,
+    architecture: str,
+    model_qualified_id: str | None,
+    model_config_digest: str,
+    materializer_host_mode: str,
+    agent_profile_snapshot_ref: str,
+    support_identity: SupportKeyPayload,
+) -> RolloutSelectionContext:
+    """Compile the readiness and cohort inputs this exact plan actually has.
+
+    Every value is derived from the immutable objects this compilation already
+    resolved. Support-evidence provenance is read through the same tiers and the
+    same matching identity admission uses, so a promoted row is demoted here for
+    exactly the evidence admission will refuse to accept -- missing, expired, or
+    older than the tier's maximum age -- instead of being frozen into the plan as
+    promoted and failing later without a rollout reason.
+
+    The remaining dimensions restate gates this compiler has already enforced by
+    raising. They are supplied so the frozen rollout decision names the same
+    dimension the planner owns; they are never a second enforcement of it.
+    """
+
+    from moonmind.omnigent.evidence_resolver import (
+        resolve_support_evidence_freshness,
+    )
+
+    freshness = resolve_support_evidence_freshness(support_identity)
+    required_slots = [slot.id for slot in profile.credentialSlots if not slot.optional]
+    bound_slots = credential_binding_set.bindings
+    provider_profile_available = all(
+        slot in bound_slots
+        and bool(str(bound_slots[slot].providerProfileRef).strip())
+        for slot in required_slots
+    )
+    host_mode_available = all(
+        get_materializer(binding.materializerRef).supports_host_mode(
+            materializer_host_mode
+        )
+        for binding in bound_slots.values()
+    )
+    return RolloutSelectionContext.model_validate(
+        {
+            # The deployment declares which canary cohorts it belongs to; a rule
+            # that pins ownerCohorts admits only a declared member.
+            "ownerCohorts": tuple(policy.canary_cohorts),
+            "agentProfileRef": agent_profile_snapshot_ref,
+            "providerProfileRef": _rollout_provider_profile_ref(
+                credential_binding_set
+            ),
+            "harnessImplementationRef": profile.harness.implementationRef,
+            "hostClassRef": host_class.ref,
+            "launchPolicyRef": launch_policy.ref,
+            # The cohort dimension is the qualified model id an allowlist can
+            # name; the digest is this plan's exact model configuration.
+            "model": str(model_qualified_id or ""),
+            "architecture": architecture,
+            # The launch policy's declared host mode, so a canary allowlist and
+            # a rule selector name the same value for this dimension.
+            "hostMode": launch_policy.hostMode,
+            "supportEvidenceRef": freshness.evidence_ref,
+            "supportEvidenceAgeSeconds": freshness.age_seconds,
+            "supportEvidenceExpired": freshness.expired,
+            "launchReady": (
+                is_launchable_trust(trust_record.trustState)
+                and launch_policy.allows_host_class(host_class)
+            ),
+            "modelQualified": bool(model_config_digest),
+            "architectureSupported": architecture in host_class.architectures,
+            "hostModeAvailable": host_mode_available,
+            "providerProfileAvailable": provider_profile_available,
+        }
+    )
+
+
+def _record_support_evidence_denials(
+    *, harness_id: str, decision: RolloutDecision
+) -> None:
+    """Emit the bounded support-evidence denial counter for one decision.
+
+    Recording happens where the denial is decided, so the operator migration
+    view reports the same missing or stale evidence that demoted the row.
+    """
+
+    from moonmind.omnigent.control_plane import metrics as control_plane_metrics
+
+    for reason in decision.unavailable_reasons:
+        if reason not in _SUPPORT_EVIDENCE_REASONS:
+            continue
+        control_plane_metrics.record_safely(
+            control_plane_metrics.record_support_evidence_denial,
+            harness_id=harness_id,
+            denial_reason=str(reason),
+        )
 
 
 # Trusted realizer selection - never workflow-authored, never overridable via Agent Profile settings
@@ -690,12 +822,30 @@ def compile_execution_plan(
         realizer=realizer,
         materializer_refs=materializer_refs,
     )
-    rollout_record = freeze_rollout_record(
-        resolve_rollout_decision(
+    rollout_decision = resolve_rollout_decision(
+        policy=active_rollout_policy,
+        combination=rollout_combination,
+        context=_build_rollout_selection_context(
             policy=active_rollout_policy,
-            combination=rollout_combination,
-        )
+            profile=profile,
+            trust_record=trust_record,
+            credential_binding_set=credential_binding_set,
+            host_class=selected_host_class,
+            launch_policy=selected_launch_policy,
+            architecture=support_architecture,
+            model_qualified_id=model_qualified_id,
+            model_config_digest=model_digest,
+            materializer_host_mode=host_mode_for_materializer,
+            agent_profile_snapshot_ref=(
+                agent_profile_snapshot_ref or profile.snapshot_ref()
+            ),
+            support_identity=support_payload,
+        ),
     )
+    _record_support_evidence_denials(
+        harness_id=profile.harness.id, decision=rollout_decision
+    )
+    rollout_record = freeze_rollout_record(rollout_decision)
 
     # Build plan payload
     runtime_validation_requirements = (

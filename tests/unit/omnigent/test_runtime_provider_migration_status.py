@@ -192,10 +192,61 @@ _REQUIRED_MIGRATION_METRICS = (
 )
 
 
+#: Every migration family and the recorder its production owners must use.
+#: A family with no production emitter leaves the operator migration view
+#: permanently empty for that signal, so the recorder must be referenced by
+#: production code, not only by tests.
+_MIGRATION_RECORDERS = {
+    "omnigent_migration_selected_path": "record_runtime_target_selection",
+    "omnigent_migration_rollout_state": "record_runtime_target_selection",
+    "omnigent_migration_fallback_denied": "record_runtime_target_selection",
+    "omnigent_migration_rollback_activation": "record_rollback_activation",
+    "omnigent_migration_launch_readiness": "record_migration_launch_readiness",
+    "omnigent_migration_support_evidence_denial": "record_support_evidence_denial",
+    "omnigent_migration_provider_profile_wait_seconds": (
+        "record_provider_profile_wait"
+    ),
+    "omnigent_migration_host_latency_seconds": "record_host_latency",
+    "omnigent_migration_first_turn_latency_seconds": "record_first_turn_latency",
+    "omnigent_migration_followup_availability": "record_followup_availability",
+    "omnigent_migration_cleanup_outcome": "record_cleanup_outcome",
+}
+
+
 def test_every_required_migration_metric_is_registered():
     inventory = control_plane_metrics.label_inventory()
     for name in _REQUIRED_MIGRATION_METRICS:
         assert name in inventory, name
+
+
+def test_every_required_migration_metric_has_a_production_emitter():
+    """A declared family with no production emitter is an empty operator view."""
+
+    import pathlib
+
+    assert set(_MIGRATION_RECORDERS) == set(_REQUIRED_MIGRATION_METRICS)
+    repo_root = pathlib.Path(control_plane_metrics.__file__).parents[3]
+    sources = [
+        path
+        for package in ("moonmind", "api_service")
+        for path in (repo_root / package).rglob("*.py")
+        # The registry declares the recorders; a caller must invoke one.
+        if path != pathlib.Path(control_plane_metrics.__file__)
+    ]
+    emitters: dict[str, list[str]] = {}
+    for path in sources:
+        text = path.read_text(encoding="utf-8")
+        for recorder in set(_MIGRATION_RECORDERS.values()):
+            if f"{recorder}," in text or f"{recorder}(" in text:
+                emitters.setdefault(recorder, []).append(
+                    str(path.relative_to(repo_root))
+                )
+    missing = sorted(
+        name
+        for name, recorder in _MIGRATION_RECORDERS.items()
+        if not emitters.get(recorder)
+    )
+    assert missing == [], missing
 
 
 def test_migration_metric_labels_stay_low_cardinality_and_identity_free():

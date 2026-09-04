@@ -870,10 +870,21 @@ def _rule(
     state: RolloutState,
     selector: dict[str, str],
     generation: int = 1,
-    requires_support_evidence: bool = False,
+    requires_support_evidence: bool = True,
     legacy_default_restorable: bool = False,
     description: str = "",
 ) -> RolloutRule:
+    """Build one built-in rollout row.
+
+    ``requires_support_evidence`` defaults to ``True``, matching
+    :class:`RolloutRule`, so a built-in row is promoted for new work only while
+    the deployment holds current support evidence for that exact combination.
+    The readiness context is supplied at plan compilation
+    (``compile_execution_plan``); a promoted row with missing, expired, or
+    over-age evidence is demoted to ``explicit_only`` with the exact reason
+    rather than frozen into an execution plan as a default.
+    """
+
     return RolloutRule.model_validate(
         {
             "targetId": target_id,
