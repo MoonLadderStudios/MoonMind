@@ -13,6 +13,7 @@
 - [`docs/Omnigent/OmnigentHarnessPlatformDesign.md`](./OmnigentHarnessPlatformDesign.md)
 - [`docs/Omnigent/OmnigentHostOAuth.md`](./OmnigentHostOAuth.md)
 - [`docs/Omnigent/OpenCodeHost.md`](./OpenCodeHost.md)
+- [`docs/Omnigent/SharedHostImage.md`](./SharedHostImage.md)
 - [`docs/Omnigent/CodexSupportAndCutover.md`](./CodexSupportAndCutover.md)
 - [`docs/Omnigent/ControlPlaneAggregates.md`](./ControlPlaneAggregates.md)
 - [`docs/Omnigent/ControlPlaneConcurrencyAndFencing.md`](./ControlPlaneConcurrencyAndFencing.md)
