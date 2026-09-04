@@ -344,3 +344,92 @@ async def test_disabling_zen_releases_the_default_to_the_next_ranked_profile(
         .all()
     )
     assert [row.is_default for row in remaining] == [False]
+
+
+async def test_selection_rejects_a_provider_the_slot_auth_model_forbids(
+    session, monkeypatch
+):
+    """A credential slot's accepted auth models bound Provider Profile selection.
+
+    The plan builder rebuilds the slot auth model from whichever materializer
+    the selected Provider Profile resolves to, so a slot restricted to ``none``
+    must reject an ``opencode-go`` profile whose materializer is ``own-auth``.
+    Provider ids and harness compatibility alone would let it through and launch
+    API-key credentials the immutable Agent Profile forbids.
+    """
+
+    await _seed_default_deployment(session, monkeypatch)
+    async with db_base.async_session_maker() as writer:
+        version = await writer.scalar(
+            select(OmnigentAgentProfileVersion).where(
+                OmnigentAgentProfileVersion.profile_id == OPENCODE_BUILTIN_PROFILE_ID,
+                OmnigentAgentProfileVersion.version == 1,
+            )
+        )
+        assert version is not None
+        document = dict(version.document)
+        document["credentialSlots"] = [
+            {
+                "id": "primary-model",
+                "acceptedAuthModels": ["none"],
+                "acceptedProviderIds": ["opencode-go", "opencode"],
+            }
+        ]
+        version.document = document
+        zen = await writer.get(ManagedAgentProviderProfile, "opencode-zen-free")
+        assert zen is not None
+        writer.add(
+            ManagedAgentProviderProfile(
+                profile_id="operator-opencode-go",
+                runtime_id=zen.runtime_id,
+                provider_id="opencode-go",
+                provider_label=zen.provider_label,
+                account_label="Operator OpenCode Go",
+                default_model=zen.default_model,
+                default_effort=zen.default_effort,
+                model_tiers=zen.model_tiers,
+                default_model_tier=zen.default_model_tier,
+                credential_source=zen.credential_source,
+                runtime_materialization_mode=zen.runtime_materialization_mode,
+                secret_refs={},
+                clear_env_keys=list(zen.clear_env_keys or []),
+                env_template={},
+                command_behavior=dict(zen.command_behavior or {}),
+                tags=list(zen.tags or []),
+                enabled=True,
+                is_default=False,
+                auth_state=zen.auth_state,
+                disabled_reason=None,
+            )
+        )
+        await writer.commit()
+
+    with pytest.raises(HTTPException) as caught:
+        await resolve_default_agent_profile_snapshot(
+            session,
+            provider_profile_ref="operator-opencode-go",
+            launch_policy_ref=None,
+            consumer_type="workflow",
+            consumer_id="mm:default-launch-auth-model",
+            user=SimpleNamespace(id=uuid4(), is_superuser=True),
+        )
+
+    assert caught.value.status_code == 409
+    # The incompatibility is the slot auth-model contract, not readiness: an
+    # unenforced contract would fall through to the launch-ready check instead.
+    assert "not compatible with the selected Omnigent execution target" in str(
+        caught.value.detail
+    )
+
+    # The automatic default still resolves the credentialless route the slot
+    # does accept.
+    snapshot = await resolve_default_agent_profile_snapshot(
+        session,
+        provider_profile_ref=None,
+        launch_policy_ref=None,
+        consumer_type="workflow",
+        consumer_id="mm:default-launch-auth-model-default",
+        user=SimpleNamespace(id=uuid4(), is_superuser=True),
+    )
+
+    assert snapshot["providerProfileRef"] == "opencode-zen-free"
