@@ -1672,7 +1672,10 @@ async def test_run_execution_stage_retries_typed_omnigent_turn_failure_at_child_
             plan_ref="plan-ref",
         )
     else:
-        with pytest.raises(ValueError, match="integration_error"):
+        with pytest.raises(
+            ValueError,
+            match="OMNIGENT_CURRENT_TURN_NOT_STARTED",
+        ):
             await workflow._run_execution_stage(
                 parameters={"publishMode": "none"},
                 plan_ref="plan-ref",
