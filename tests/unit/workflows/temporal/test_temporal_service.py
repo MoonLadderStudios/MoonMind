@@ -433,7 +433,7 @@ async def test_exact_rerun_rejects_plan_for_replaced_server_before_creation(
         "code": "exact_rerun_execution_plan_stale",
         "message": (
             "Exact rerun preserves the original Omnigent execution plan, but "
-            "that plan targets a server build that is no longer deployed. Use "
+            "that plan targets runtime images that are no longer deployed. Use "
             "Edit for rerun to compile fresh runtime authority."
         ),
         "nextAction": "edit_for_rerun",

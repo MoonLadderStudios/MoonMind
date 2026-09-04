@@ -14,6 +14,7 @@ import pytest
 from api_service.services.omnigent_agent_profile_selection import (
     default_launch_policy_ref,
 )
+from api_service.services.omnigent_policies import bootstrap_document
 from moonmind.omnigent.bootstrap import controller as controller_module
 from moonmind.omnigent.bootstrap.models import (
     BootstrapDesired,
@@ -24,6 +25,7 @@ from moonmind.omnigent.bootstrap.models import (
 )
 from moonmind.omnigent.bootstrap.opencode import resolve_model_by_display
 from moonmind.omnigent.harness_platform.catalog import create_catalog_snapshot
+from moonmind.omnigent.policies import compile_policy_snapshot
 
 _SERVER_IMAGE_REF = "ghcr.io/example/omnigent-server@sha256:" + "a" * 64
 _HOST_IMAGE_REF = "ghcr.io/example/omnigent-host-opencode@sha256:" + "7" * 64
@@ -203,6 +205,29 @@ def qualification_boundary(monkeypatch, tmp_path):
 
     monkeypatch.setattr(qualification_module, "run_qualification", _run_qualification)
     monkeypatch.setattr(store_module, "load_resolved_state", _resolved_state)
+
+    async def _resolve_runtime_snapshot(_service, policy_ref: str):
+        policy_id, _, version_text = policy_ref.rpartition("@")
+        return compile_policy_snapshot(
+            policy_id=policy_id,
+            version=int(version_text),
+            document=bootstrap_document(
+                host_mode="on_demand_docker",
+                execution_profile_ref="omnigent-opencode@1",
+                server_image_ref=_SERVER_IMAGE_REF,
+                host_image_ref=_HOST_IMAGE_REF,
+                harness="opencode-native",
+                agent_identities=("opencode",),
+                compatible_providers=("opencode-go", "opencode"),
+            ),
+            validation={"valid": True},
+        )
+
+    monkeypatch.setattr(
+        "api_service.services.omnigent_policies.OmnigentPolicyService."
+        "resolve_runtime_snapshot",
+        _resolve_runtime_snapshot,
+    )
     monkeypatch.setattr(
         evidence_module,
         "write_deployment_evidence",
@@ -318,6 +343,23 @@ async def test_qualification_follows_a_reordered_allow_list(
     evidence = await _qualify(qualification_boundary)
 
     assert evidence["supportIdentity"]["launchPolicyRef"] == ("opencode-on-demand@1")
+
+
+@pytest.mark.asyncio
+async def test_qualification_accepts_current_immutable_policy_version(
+    qualification_boundary,
+) -> None:
+    """Image cutover policy versions remain compilable after bootstrap."""
+
+    document = _profile_document()
+    document["allowedLaunchPolicyRefs"] = ["omnigent-on-demand@2"]
+    qualification_boundary.session.version = _version_row(document, version=29)
+
+    evidence = await _qualify(qualification_boundary)
+
+    assert evidence["supportIdentity"]["launchPolicyRef"] == (
+        "omnigent-on-demand@2"
+    )
 
 
 @pytest.mark.asyncio

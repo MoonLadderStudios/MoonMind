@@ -410,10 +410,10 @@ def _validate_plan_support_authority(plan: Any) -> None:
     ):
         raise ValueError("persisted exact-artifact evidence is incomplete")
     from moonmind.omnigent.deployment_identity import (
-        assert_plan_matches_deployed_server,
+        assert_plan_matches_deployed_runtime,
     )
 
-    assert_plan_matches_deployed_server(plan.payload)
+    assert_plan_matches_deployed_runtime(plan.payload)
 
 
 async def _load_intent_request(
