@@ -1150,7 +1150,11 @@ class MoonMindAgentRun:
         runtime_id: str,
         request: AgentExecutionRequest,
     ) -> str:
-        if workflow.patched(CANONICAL_WAITING_STATE_PATCH_ID):
+        try:
+            use_canonical = workflow.patched(CANONICAL_WAITING_STATE_PATCH_ID)
+        except Exception:
+            use_canonical = False
+        if use_canonical:
             return canonical_waiting_reason("awaiting_provider_capacity")
         intent = self._provider_slot_intent_summary(request)
         return (
@@ -1171,7 +1175,11 @@ class MoonMindAgentRun:
         queue_number = (
             queue_position if isinstance(queue_position, int) and queue_position > 0 else None
         )
-        if workflow.patched(CANONICAL_WAITING_STATE_PATCH_ID):
+        try:
+            use_canonical = workflow.patched(CANONICAL_WAITING_STATE_PATCH_ID)
+        except Exception:
+            use_canonical = False
+        if use_canonical:
             profile = manager_state.get("requested_profile")
             if isinstance(profile, Mapping):
                 if str(profile.get("cooldown_until") or "").strip():
