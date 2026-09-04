@@ -1157,6 +1157,65 @@ async def get_profile(
     )
 
 
+def _deployment_parallel_ceiling() -> int:
+    import os as _os
+
+    try:
+        value = int(str(_os.getenv("MOONMIND_MAX_PROVIDER_PROFILE_PARALLEL_RUNS") or "").strip())
+    except (TypeError, ValueError):
+        return 32
+    return max(1, min(256, value))
+
+
+def _enforce_parallel_ceiling(max_parallel_runs: int | None) -> None:
+    if max_parallel_runs is None:
+        return
+    ceiling = _deployment_parallel_ceiling()
+    if int(max_parallel_runs) > ceiling:
+        raise HTTPException(
+            status_code=422,
+            detail={
+                "code": "provider_profile_parallel_ceiling_exceeded",
+                "message": (
+                    f"max_parallel_runs {max_parallel_runs} exceeds deployment "
+                    f"safety ceiling {ceiling}."
+                ),
+            },
+        )
+
+
+async def _enforce_scope_compatibility(
+    session: AsyncSession,
+    *,
+    runtime_id: str,
+    capacity_scope_ref: str | None,
+) -> None:
+    """Prevent unrelated runtimes/providers sharing one scope.
+
+    A scope is owned by the runtime (and provider class) of the first
+    profile that references it; a second profile with a different runtime
+    cannot attach without a compatible trusted scope policy.
+    """
+    scope_ref = str(capacity_scope_ref or "").strip()
+    if not scope_ref:
+        return
+    from sqlalchemy import select as _select
+
+    from api_service.db.models import ProviderCapacityScope as _Scope
+
+    scope = await session.get(_Scope, scope_ref)
+    if scope is None:
+        return
+    if scope.runtime_id and scope.runtime_id != runtime_id:
+        raise HTTPException(
+            status_code=422,
+            detail={
+                "code": "provider_profile_scope_incompatible",
+                "message": "Capacity scope belongs to a different runtime.",
+            },
+        )
+
+
 @router.post("", response_model=ProviderProfileResponse, status_code=201)
 async def create_profile(
     body: ProviderProfileCreate,
@@ -1250,6 +1309,13 @@ async def create_profile(
         )
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+    _enforce_parallel_ceiling(values.get("max_parallel_runs"))
+    await _enforce_scope_compatibility(
+        session,
+        runtime_id=str(values.get("runtime_id") or body.runtime_id),
+        capacity_scope_ref=str(values.get("capacity_scope_ref") or ""),
+    )
 
     profile = ManagedAgentProviderProfile(
         profile_id=body.profile_id,
@@ -1818,6 +1884,15 @@ async def update_profile(
             raise HTTPException(status_code=422, detail=str(exc)) from exc
         profile.model_tiers = model_tiers
         profile.default_model_tier = default_model_tier
+    if "max_parallel_runs" in update_data or "capacity_scope_ref" in update_data:
+        _enforce_parallel_ceiling(update_data.get("max_parallel_runs", profile.max_parallel_runs))
+        await _enforce_scope_compatibility(
+            session,
+            runtime_id=profile.runtime_id,
+            capacity_scope_ref=str(
+                update_data.get("capacity_scope_ref", profile.capacity_scope_ref) or ""
+            ),
+        )
     for key, value in update_data.items():
         if key == "rate_limit_policy" and value is not None:
             value = ManagedAgentRateLimitPolicy(value)

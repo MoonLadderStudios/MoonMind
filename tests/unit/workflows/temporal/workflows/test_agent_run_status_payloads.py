@@ -376,3 +376,30 @@ def test_coerce_external_start_status_maps_succeeded_to_completed() -> None:
 
     assert status == RunStatus.completed
     assert normalized == "completed"
+
+
+def test_canonical_waiting_reason_is_bounded_and_redacted() -> None:
+    from moonmind.workflows.temporal.workflows.agent_run import (
+        CANONICAL_WAITING_REASONS,
+        canonical_waiting_reason,
+    )
+
+    assert set(CANONICAL_WAITING_REASONS) == {
+        "awaiting_provider_capacity",
+        "awaiting_provider_validation",
+        "awaiting_profile_maintenance",
+        "provider_cooldown",
+        "awaiting_host_capacity",
+        "awaiting_host_launch_permit",
+        "awaiting_execution_worker",
+        "cleanup_pending",
+    }
+    assert canonical_waiting_reason("provider_cooldown") == "provider_cooldown"
+    assert (
+        canonical_waiting_reason("awaiting_provider_capacity", queue_position=3)
+        == "awaiting_provider_capacity; queue_position=3"
+    )
+    # Unknown reasons collapse; identities never appear.
+    redacted = canonical_waiting_reason("mm:123:lease-abc")
+    assert redacted == "awaiting_provider_capacity"
+    assert "mm:" not in redacted and "lease" not in redacted
