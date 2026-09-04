@@ -676,6 +676,34 @@ The design is satisfied when:
 28. A concurrent-change `version_conflict` stops the save, refreshes the affected descriptors, shows the conflict, and requires explicit resubmission.
 29. Rendered rows keep the descriptor fields section 9 declares load-bearing, including active state, activation guidance, application requirements, and ordering.
 
+### 15.1 Conformance suite
+
+The acceptance criteria above are machine-verified by one conformance suite that
+crosses the routing, navigation, page-boundary, draft-guard, and Provider
+Profile boundaries:
+
+| File | Covers |
+|---|---|
+| `frontend/src/entrypoints/settingsRedesignConformance.test.tsx` | canonical route resolution and document titles, legacy `/settings`, `?section=`, `/secrets`, `/workers`, and retained-alias replacement redirects, dirty-draft departure after successful and failed saves, and the architecture guards for sections 12 and 14 |
+| `frontend/src/components/settings/providerProfileRedesignConformance.test.tsx` | the Provider Profile standard-creation matrix, progressive disclosure, model-tier integration, existing-profile compatibility, and the generated-contract guard described in `docs/UI/ProviderProfileCreation.md` |
+| `tests/unit/api/routers/test_dashboard_destination_registry_agreement.py` | exact agreement between the server destination registry and `frontend/src/lib/dashboardRoutes.ts`, including Configuration group membership and order |
+
+Focused local commands:
+
+```bash
+# Both frontend conformance files.
+npm run ui:test:settings-redesign
+
+# Server/frontend destination registry agreement.
+./tools/test_unit.sh --python-only tests/unit/api/routers/test_dashboard_destination_registry_agreement.py
+```
+
+The suite runs in required CI through the frontend and unit suites; it is not a
+substitute for the per-page unit tests, which remain in
+`frontend/src/entrypoints/settingsRoutes.test.tsx`,
+`frontend/src/entrypoints/settingsDraftNavigation.test.tsx`, and
+`frontend/src/entrypoints/dashboard.test.tsx`.
+
 ---
 
 ## 16. Decision Summary
