@@ -8,6 +8,7 @@ import os
 import re
 from collections.abc import Mapping
 from datetime import UTC, datetime
+from pathlib import Path
 
 from moonmind.omnigent.bootstrap.models import ResolvedOmnigentDeploymentState
 
@@ -443,25 +444,19 @@ async def resolve_omnigent_images(
 
 
 async def _image_opencode_bootstrap_ready(image_ref: str) -> bool:
-    """Verify startup prerequisites in the selected image, without credentials.
+    """Execute the release bootstrap contract against the selected image.
 
     Labels and matching Omnigent versions cannot attest the derived image's
-    contents. The entrypoint requires this cache before it can register a host.
-    Image publication additionally exercises plugin-enabled startup offline.
+    contents. Reuse the portable release probe so operator-supplied images also
+    prove the full plugin closure and server startup with networking disabled.
     """
-    from moonmind.omnigent.host_services.runtime_scripts import (
-        _OPENCODE_PLUGIN_NPM_CACHE_SEED,
+    probe = (
+        Path(__file__).resolve().parents[3]
+        / "services/omnigent/opencode-host/verify-warm-plugin-cache.sh"
     )
-
     code, _, _ = await _run(
-        [
-            "docker", "run", "--rm", "--network", "none", "--read-only",
-            "--cap-drop", "ALL", "--security-opt", "no-new-privileges",
-            "--entrypoint", "/bin/sh", image_ref, "-ec",
-            f"test -d {_OPENCODE_PLUGIN_NPM_CACHE_SEED}/_cacache "
-            "&& test -x /usr/local/bin/opencode",
-        ],
-        timeout=30,
+        ["sh", str(probe), image_ref, "60"],
+        timeout=90,
     )
     return code == 0
 
