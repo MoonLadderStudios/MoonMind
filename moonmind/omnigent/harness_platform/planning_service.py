@@ -68,6 +68,15 @@ def _digest(value: Any) -> str:
     return "sha256:" + hashlib.sha256(encoded).hexdigest()
 
 
+def _canonical_json_bytes(value: Any) -> bytes:
+    return json.dumps(
+        value,
+        sort_keys=True,
+        separators=(",", ":"),
+        ensure_ascii=False,
+    ).encode("utf-8")
+
+
 def _ref(prefix: str, value: Any) -> str:
     return f"{prefix}:sha256:{_digest(value).split(':', 1)[1]}"
 
@@ -387,6 +396,9 @@ class OmnigentExecutionPlanningService:
                 effective_launch,
                 expected_ref=policy_ref,
             )
+            host_architecture = str(
+                request.parameters.get("architecture") or "linux/amd64"
+            )
             integration_mode = harness.capabilities.integrationMode or "native-server"
             host_class = self._host_classes.select(
                 harness=harness,
@@ -396,9 +408,7 @@ class OmnigentExecutionPlanningService:
                 materializer_refs=[
                     item.materializerRef for item in binding_set.bindings.values()
                 ],
-                architecture=str(
-                    request.parameters.get("architecture") or "linux/amd64"
-                ),
+                architecture=host_architecture,
                 requested_host_mode=policy.hostMode,
                 requested_host_class_ref=self._requested_host_class_ref(request),
             )
@@ -407,12 +417,29 @@ class OmnigentExecutionPlanningService:
                 model,
                 expected_image_ref=host_class.imageRef,
             )
+            if str(effective_launch.get("hostImageRef") or "") != (
+                host_class.imageRef
+            ):
+                raise HarnessPlatformError(
+                    "effective launch host image conflicts with the selected "
+                    "Host Class",
+                    code=HarnessPlatformFailure.OMNIGENT_LAUNCH_POLICY_INCOMPATIBLE,
+                )
+            (
+                policy_artifact_ref,
+                policy_artifact_digest,
+                effective_launch_artifact_ref,
+                effective_launch_artifact_digest,
+            ) = await self._persist_exact_launch_authority(
+                request=request,
+                policy_snapshot=policy_snapshot,
+                effective_launch=effective_launch,
+            )
             workspace_payload = {
                 "profile": profile.workspace,
                 "request": request.workspace_spec,
             }
             capture_payload = dict(profile.capture)
-            policy_payload = policy.model_dump(by_alias=True, mode="json")
             return compile_execution_plan(
                 agent_profile=profile,
                 harness_catalog=catalog_result.snapshot,
@@ -436,8 +463,46 @@ class OmnigentExecutionPlanningService:
                 },
                 workspace_intent_ref=_ref("workspace-intent", workspace_payload),
                 capture_policy_ref=_ref("capture-policy", capture_payload),
-                policy_snapshot_ref=_ref("omnigent-policy", policy_payload),
+                policy_snapshot_ref=policy_artifact_ref,
+                policy_snapshot_digest=policy_artifact_digest,
+                effective_launch_snapshot_ref=effective_launch_artifact_ref,
+                effective_launch_snapshot_digest=effective_launch_artifact_digest,
+                host_image_ref=host_class.imageRef,
+                omnigent_host_build_digest=host_class.omnigentBuildDigest,
+                host_architecture=host_architecture,
             )
+
+    async def _persist_exact_launch_authority(
+        self,
+        *,
+        request: AgentExecutionRequest,
+        policy_snapshot: Mapping[str, Any],
+        effective_launch: Mapping[str, Any],
+    ) -> tuple[str, str, str, str]:
+        """Persist the exact launch inputs with digests over stored bytes."""
+
+        policy_body = _canonical_json_bytes(policy_snapshot)
+        effective_launch_body = _canonical_json_bytes(effective_launch)
+        policy_ref = await self._artifacts.write_bytes(
+            request=request,
+            name="launch-policy-snapshot.json",
+            payload=policy_body,
+            link_type="input.launch_policy_snapshot",
+            content_type="application/json",
+        )
+        effective_launch_ref = await self._artifacts.write_bytes(
+            request=request,
+            name="effective-launch-snapshot.json",
+            payload=effective_launch_body,
+            link_type="input.effective_launch_snapshot",
+            content_type="application/json",
+        )
+        return (
+            policy_ref,
+            "sha256:" + hashlib.sha256(policy_body).hexdigest(),
+            effective_launch_ref,
+            "sha256:" + hashlib.sha256(effective_launch_body).hexdigest(),
+        )
 
     @staticmethod
     def _trust_record(

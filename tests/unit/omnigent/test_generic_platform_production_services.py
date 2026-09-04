@@ -6,6 +6,7 @@ import json
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from types import SimpleNamespace
+from unittest.mock import AsyncMock
 
 import pytest
 
@@ -18,6 +19,7 @@ from moonmind.omnigent.credential_materializers import (
     CredentialRuntimeHandle,
     DockerOmnigentProviderConfigMaterializer,
     DockerOpencodeAuthJsonMaterializer,
+    credential_runtime_identity,
 )
 from moonmind.omnigent.generic_host_janitor import GenericOmnigentHostJanitor
 from moonmind.omnigent.harness_platform.agent_profile import OmnigentAgentProfileV2
@@ -42,6 +44,7 @@ from moonmind.omnigent.harness_platform.host_classes import HostClass, get_launc
 from moonmind.omnigent.harness_platform.planning_service import (
     OmnigentExecutionPlanningService,
     OmnigentPlannedHostResolver,
+    _canonical_json_bytes,
     _ref,
 )
 from moonmind.omnigent.harness_platform.stores import (
@@ -547,6 +550,22 @@ def _plan(model: str):
     )
 
 
+def _exact_plan(model: str):
+    payload = _plan(model).payload.model_dump(mode="json", by_alias=True)
+    payload.update(
+        {
+            "hostImageRef": "ghcr.io/example/opencode@sha256:" + "f" * 64,
+            "omnigentHostBuildDigest": "sha256:" + "1" * 64,
+            "hostArchitecture": "linux/amd64",
+            "policySnapshotRef": "artifact:policy",
+            "policySnapshotDigest": "sha256:" + "2" * 64,
+            "effectiveLaunchSnapshotRef": "artifact:launch",
+            "effectiveLaunchSnapshotDigest": "sha256:" + "3" * 64,
+        }
+    )
+    return create_execution_plan_envelope(payload)
+
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
     "policy_ref", ["omnigent-on-demand@1", "omnigent-on-demand@2"]
@@ -836,6 +855,53 @@ def _request() -> AgentExecutionRequest:
             "parameters": {},
         }
     )
+
+
+@pytest.mark.asyncio
+async def test_planning_persists_exact_policy_and_effective_launch_bytes() -> None:
+    writes: list[dict[str, object]] = []
+
+    class Artifacts:
+        async def write_bytes(self, **kwargs):
+            writes.append(dict(kwargs))
+            return f"artifact:{kwargs['name']}"
+
+    service = object.__new__(OmnigentExecutionPlanningService)
+    service._artifacts = Artifacts()
+    policy = {
+        "policyId": "omnigent-on-demand",
+        "policyVersion": 2,
+        "policyRef": "omnigent-on-demand@2",
+        "boundaries": {},
+        "validation": {},
+    }
+    launch = {
+        "schemaVersion": 3,
+        "launchPolicyRef": "omnigent-on-demand@2",
+        "harness": "opencode-native",
+        "hostImageRef": "ghcr.io/example/opencode@sha256:" + "f" * 64,
+    }
+
+    result = await service._persist_exact_launch_authority(
+        request=_request(),
+        policy_snapshot=policy,
+        effective_launch=launch,
+    )
+
+    assert result == (
+        "artifact:launch-policy-snapshot.json",
+        "sha256:" + hashlib.sha256(_canonical_json_bytes(policy)).hexdigest(),
+        "artifact:effective-launch-snapshot.json",
+        "sha256:" + hashlib.sha256(_canonical_json_bytes(launch)).hexdigest(),
+    )
+    assert [write["payload"] for write in writes] == [
+        _canonical_json_bytes(policy),
+        _canonical_json_bytes(launch),
+    ]
+    assert [write["link_type"] for write in writes] == [
+        "input.launch_policy_snapshot",
+        "input.effective_launch_snapshot",
+    ]
 
 
 @pytest.mark.asyncio
@@ -1604,6 +1670,10 @@ async def _generic_publication_harness(
             events.append("credentials-materialized")
             return (handle,)
 
+        async def load_cleanup_handles(self, *_args):
+            events.append("credentials-reloaded")
+            return (handle,)
+
         async def cleanup_all(self, handles):
             assert handles == (handle,)
             events.append("credentials-cleaned")
@@ -1757,6 +1827,7 @@ async def _generic_publication_harness(
         workspace_publisher=WorkspacePublisher(),
         turn_command_service=TurnCommands(),
         execution_state_notifier=execution_state_notifier,
+        deployment_validator=lambda _payload: None,
         heartbeat_interval_seconds=0.005,
         heartbeat_ttl_seconds=60,
     )
@@ -1784,7 +1855,178 @@ async def _generic_publication_harness(
         events=events,
         runtime_store=runtime_store,
         host_leases=host_leases,
+        acquired=acquired,
+        credential_handle=handle,
     )
+
+
+@pytest.mark.asyncio
+async def test_bound_host_retry_uses_attestation_not_current_deployment() -> None:
+    harness = await _generic_publication_harness(_PUSHED_PUBLICATION)
+    plan = _exact_plan("opencode-go/model")
+    evidence = {
+        "imageRef": plan.payload.hostImageRef,
+        "architecture": plan.payload.hostArchitecture,
+        "omnigentBuildDigest": plan.payload.omnigentHostBuildDigest,
+        "harnessId": plan.payload.harnessId,
+        "harnessImplementationRef": plan.payload.harnessImplementationRef,
+        "omnigentHostId": "host-1",
+    }
+
+    class Artifacts:
+        async def read_bytes(self, ref: str) -> bytes:
+            assert ref == "artifact:host-attestation"
+            return _canonical_json_bytes(evidence)
+
+        async def write_json(self, **_kwargs):
+            return "artifact:cleanup-attestation"
+
+        async def write_text(self, **_kwargs):
+            return "artifact:host-logs"
+
+    harness.realizer._artifacts = Artifacts()
+    harness.realizer._deployment_validator = lambda _payload: (_ for _ in ()).throw(
+        AssertionError("continuation consulted mutable deployment identity")
+    )
+    harness.realizer._resolve_host = AsyncMock(
+        side_effect=AssertionError("continuation re-resolved current host defaults")
+    )
+    materializer_ref = plan.payload.credentialBindings[
+        "primary-model"
+    ].materializerRef
+    provider_authority = {
+        "primary-model": {
+            **harness.acquired.runtime_binding_value(
+                credential_runtime_ref=credential_runtime_identity(
+                    harness.acquired, materializer_ref
+                )[0]
+            ),
+            "materializerRef": materializer_ref,
+        }
+    }
+    binding = await harness.runtime_store.create_initial(
+        execution_plan_ref=plan.planRef,
+        idempotency_key=harness.publish_request.idempotency_key,
+        provider_leases=provider_authority,
+    )
+    binding = await harness.runtime_store.update(
+        binding.bindingId,
+        expected_revision=binding.revision,
+        expected_fencing_generation=binding.fencingGeneration,
+        state=RuntimeBindingState.credentials_materialized,
+        updates={
+            "credentialRuntimeHandles": {
+                "primary-model": harness.credential_handle.model_dump(
+                    by_alias=True, mode="json"
+                )
+            },
+            "cleanupAuthorityRefs": [harness.credential_handle.cleanupRef],
+        },
+    )
+    host_lease = await harness.host_leases.acquire(
+        execution_plan_ref=plan.planRef,
+        runtime_binding_id=binding.bindingId,
+        host_class_ref=plan.payload.hostClassRef,
+        launch_policy_ref=plan.payload.launchPolicyRef,
+        harness_id=plan.payload.harnessId,
+        harness_implementation_ref=plan.payload.harnessImplementationRef,
+        provider_profile_refs=(harness.acquired.provider_profile_ref,),
+    )
+    binding = await harness.runtime_store.update(
+        binding.bindingId,
+        expected_revision=binding.revision,
+        expected_fencing_generation=binding.fencingGeneration,
+        state=RuntimeBindingState.host_allocating,
+        updates={
+            "hostBindingRef": host_lease.bindingRef,
+            "hostLeaseRef": host_lease.leaseRef,
+            "hostLeaseGeneration": host_lease.generation,
+        },
+    )
+    host_lease = await harness.host_leases.mark_ready(
+        host_lease.leaseRef,
+        expected_generation=host_lease.generation,
+        omnigent_host_id="host-1",
+        cleanup_handle={
+            "kind": "host",
+            "containerName": "mm-host-1",
+            "stateVolumeRef": "mm-state-1",
+            "launchGeneration": host_lease.launchGeneration,
+        },
+    )
+    await harness.runtime_store.update(
+        binding.bindingId,
+        expected_revision=binding.revision,
+        expected_fencing_generation=binding.fencingGeneration,
+        state=RuntimeBindingState.host_ready,
+        updates={
+            "omnigentHostId": "host-1",
+            "hostLeaseGeneration": host_lease.generation,
+            "attestationRefs": {
+                "hostHarnessAttestationRef": "artifact:host-attestation"
+            },
+        },
+    )
+
+    result = await harness.realizer._execute_lifecycle(
+        harness.publish_request,
+        plan,
+    )
+
+    assert result.summary == "done"
+    assert "credentials-reloaded" in harness.events
+    harness.realizer._resolve_host.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_bound_host_retry_rejects_mismatched_attestation() -> None:
+    harness = await _generic_publication_harness(_PUSHED_PUBLICATION)
+    plan = _exact_plan("opencode-go/model")
+
+    class Artifacts:
+        async def read_bytes(self, _ref: str) -> bytes:
+            return _canonical_json_bytes(
+                {
+                    "imageRef": "ghcr.io/example/opencode@sha256:" + "9" * 64,
+                    "architecture": plan.payload.hostArchitecture,
+                    "omnigentBuildDigest": plan.payload.omnigentHostBuildDigest,
+                    "harnessId": plan.payload.harnessId,
+                    "harnessImplementationRef": (
+                        plan.payload.harnessImplementationRef
+                    ),
+                    "omnigentHostId": "host-1",
+                }
+            )
+
+    harness.realizer._artifacts = Artifacts()
+    with pytest.raises(HarnessPlatformError, match="retry identity conflicts"):
+        await harness.realizer._validate_bound_host_identity(
+            plan=plan,
+            host_context={
+                "omnigentHostId": "host-1",
+                "hostHarnessAttestationRef": "artifact:host-attestation",
+            },
+        )
+
+
+@pytest.mark.asyncio
+async def test_fresh_host_launch_checks_current_deployment_before_prepare() -> None:
+    harness = await _generic_publication_harness(_PUSHED_PUBLICATION)
+
+    class StaleDeployment(ValueError):
+        pass
+
+    harness.realizer._deployment_validator = lambda _payload: (_ for _ in ()).throw(
+        StaleDeployment("stale host image")
+    )
+
+    with pytest.raises(StaleDeployment, match="stale host image"):
+        await harness.realizer._execute_lifecycle(
+            harness.publish_request,
+            _plan("opencode-go/model"),
+        )
+
+    assert "host-inputs-prepared" not in harness.events
 
 
 _PUSHED_PUBLICATION: dict[str, object] = {
