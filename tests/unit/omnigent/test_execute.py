@@ -1099,12 +1099,15 @@ def _never_started_client(
     stream_shape: str,
     streamed: dict[str, int],
     transient_active_before_close: bool = False,
+    persistent_terminal_active: bool = False,
 ) -> type:
     """Provider double that accepts the marked message and never starts the turn.
 
     ``stream_shape`` selects the SSE behaviour after acceptance: ``heartbeats``
     emits only liveness frames, ``silent`` keeps the stream open without ever
-    emitting, and ``closes`` ends the stream cleanly after one heartbeat.
+    emitting, ``closes`` ends the stream cleanly after one heartbeat, and
+    ``completed-then-heartbeats`` reproduces a terminal response id that remains
+    projected as active without any ordered work.
     """
 
     idle_without_work = _never_started_snapshot(marker)
@@ -1140,6 +1143,23 @@ def _never_started_client(
             elif stream_shape == "closes":
                 streamed["value"] += 1
                 yield {"type": "session.heartbeat", "status": "running"}
+            elif stream_shape == "completed-then-heartbeats":
+                for event_type, status in (
+                    ("response.in_progress", "in_progress"),
+                    ("response.completed", "completed"),
+                ):
+                    streamed["value"] += 1
+                    yield {
+                        "type": event_type,
+                        "response": {
+                            "id": "injection-response",
+                            "status": status,
+                        },
+                    }
+                while True:
+                    streamed["value"] += 1
+                    yield {"type": "session.heartbeat", "status": "running"}
+                    await asyncio.sleep(0.005)
             else:
                 while True:
                     streamed["value"] += 1
@@ -1154,10 +1174,9 @@ def _never_started_client(
                     "items": [{"id": "prior-item", "type": "message"}],
                 }
             self.post_dispatch_snapshot_count += 1
-            if (
-                transient_active_before_close
-                and self.post_dispatch_snapshot_count == 1
-            ):
+            if persistent_terminal_active:
+                return transient_active
+            if transient_active_before_close and self.post_dispatch_snapshot_count == 1:
                 return transient_active
             return idle_without_work
 
@@ -1166,12 +1185,25 @@ def _never_started_client(
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    ("scenario", "stream_shape", "expected_source", "transient_active"),
+    (
+        "scenario",
+        "stream_shape",
+        "expected_source",
+        "transient_active",
+        "persistent_terminal_active",
+    ),
     [
-        ("heartbeats", "heartbeats", "session_heartbeat_snapshot", False),
-        ("silent", "silent", "stream_idle_snapshot", False),
-        ("closes", "closes", None, False),
-        ("closes-after-transient-active", "closes", None, True),
+        ("heartbeats", "heartbeats", "session_heartbeat_snapshot", False, False),
+        ("silent", "silent", "stream_idle_snapshot", False, False),
+        ("closes", "closes", None, False, False),
+        ("closes-after-transient-active", "closes", None, True, False),
+        (
+            "completed-response-stays-active",
+            "completed-then-heartbeats",
+            None,
+            False,
+            True,
+        ),
     ],
 )
 async def test_run_omnigent_execution_finalizes_never_started_turn(
@@ -1181,6 +1213,7 @@ async def test_run_omnigent_execution_finalizes_never_started_turn(
     stream_shape: str,
     expected_source: str | None,
     transient_active: bool,
+    persistent_terminal_active: bool,
 ) -> None:
     """Replay mm:00166f20 through the production boundary for every stream shape.
 
@@ -1212,6 +1245,7 @@ async def test_run_omnigent_execution_finalizes_never_started_turn(
             stream_shape=stream_shape,
             streamed=streamed,
             transient_active_before_close=transient_active,
+            persistent_terminal_active=persistent_terminal_active,
         ),
     )
     monkeypatch.setattr(
@@ -1276,6 +1310,8 @@ async def test_run_omnigent_execution_finalizes_never_started_turn(
     assert store.terminal_calls[0]["terminalRefs"]
     # Operator contract: the watchdog fields are heartbeated while waiting.
     assert heartbeat_state["turnEverActive"] is transient_active
+    if persistent_terminal_active:
+        assert heartbeat_state["turnTerminalResponseIds"] == ["injection-response"]
     assert heartbeat_state["turnStartTimeoutSeconds"] == 0.05
     assert heartbeat_state["turnStartWaitSeconds"] is not None
     if expected_source is not None:
@@ -1308,6 +1344,133 @@ async def test_start_watchdog_keeps_budget_visible_while_activity_defers_it() ->
     progressed_fields = watchdog.heartbeat_fields()
     assert progressed_fields["turnStartWaitSeconds"] is None
     assert progressed_fields["turnStartTimeoutSeconds"] is None
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "event_type",
+    [
+        "response.completed",
+        "response.failed",
+        "response.error",
+        "response.incomplete",
+        "response.policy_denied",
+        "response.cancelled",
+    ],
+)
+async def test_start_watchdog_rejects_active_id_for_known_terminal_response(
+    event_type: str,
+) -> None:
+    """An exact terminal response id is stale projection, not live-work authority."""
+
+    loop = asyncio.get_running_loop()
+    watchdog = _MarkedTurnStartWatchdog(
+        loop=loop,
+        timeout_seconds=0.01,
+        started_at=loop.time() - 1.0,
+    )
+    watchdog.observe_terminal_response_event(
+        {
+            "type": event_type,
+            "response": {"id": "injection-response", "status": "completed"},
+        }
+    )
+
+    with pytest.raises(OmnigentTurnNotStartedError):
+        watchdog.observe(
+            {"status": "running", "active_response_id": "injection-response"},
+            {"boundarySource": "marker", "progress": False},
+            observation_started_at=loop.time(),
+        )
+
+    fields = watchdog.heartbeat_fields()
+    assert fields["turnCurrentlyActive"] is False
+    assert fields["turnActiveResponseKnownTerminal"] is True
+    assert fields["turnTerminalResponseIds"] == ["injection-response"]
+
+
+@pytest.mark.asyncio
+async def test_start_watchdog_restores_terminal_ids_from_durable_journal(
+    tmp_path,
+) -> None:
+    """Durable terminal events survive a crash before the next heartbeat."""
+
+    gateway = LocalOmnigentArtifactGateway(root=tmp_path)
+    request = _request()
+    raw_ref = await gateway.write_text(
+        request=request,
+        name="runtime.omnigent.sse.raw.jsonl",
+        payload=(
+            '{"type":"response.failed",'
+            '"response":{"id":"durable-terminal-response"}}\n'
+        ),
+        link_type="runtime.omnigent.sse.raw",
+        content_type="application/x-ndjson",
+    )
+    normalized_ref = await gateway.write_text(
+        request=request,
+        name="runtime.omnigent.sse.normalized.jsonl",
+        payload=(
+            '{"eventType":"response.failed",'
+            '"normalizedStatus":"failed","sequence":1}\n'
+        ),
+        link_type="runtime.omnigent.sse.normalized",
+        content_type="application/x-ndjson",
+    )
+
+    class DurableRow:
+        raw_events_ref = raw_ref
+        normalized_events_ref = normalized_ref
+
+    raw_events, _ = await _restore_active_journals(
+        artifact_gateway=gateway,
+        durable_row=DurableRow(),
+    )
+    loop = asyncio.get_running_loop()
+    watchdog = _MarkedTurnStartWatchdog(
+        loop=loop,
+        timeout_seconds=0.01,
+        started_at=loop.time() - 1.0,
+    )
+    watchdog.restore_terminal_response_events(raw_events)
+
+    with pytest.raises(OmnigentTurnNotStartedError):
+        watchdog.observe(
+            {
+                "status": "running",
+                "active_response_id": "durable-terminal-response",
+            },
+            {"boundarySource": "marker", "progress": False},
+            observation_started_at=loop.time(),
+        )
+
+    assert watchdog.heartbeat_fields()["turnTerminalResponseIds"] == [
+        "durable-terminal-response"
+    ]
+
+
+@pytest.mark.asyncio
+async def test_start_watchdog_preserves_different_live_response_authority() -> None:
+    """A terminal injection response cannot disarm a distinct live response."""
+
+    loop = asyncio.get_running_loop()
+    watchdog = _MarkedTurnStartWatchdog(
+        loop=loop,
+        timeout_seconds=0.01,
+        started_at=loop.time() - 1.0,
+    )
+    watchdog.observe_terminal_response_event(
+        {"type": "response.completed", "responseId": "injection-response"}
+    )
+    watchdog.observe(
+        {"status": "running", "active_response_id": "harness-response"},
+        {"boundarySource": "marker", "progress": False},
+        observation_started_at=loop.time(),
+    )
+
+    assert watchdog.currently_active is True
+    assert watchdog.active_response_known_terminal is False
+    assert watchdog.armed is False
 
 
 @pytest.mark.asyncio

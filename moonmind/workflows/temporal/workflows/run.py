@@ -830,6 +830,9 @@ RUN_STEP_RESILIENCE_POLICY_PATCH = "run-step-resilience-policy-v1"
 RUN_AGENT_RUNTIME_RETRY_CLASSIFICATION_PATCH = (
     "run-agent-runtime-retry-classification-v1"
 )
+RUN_EXPLICIT_STEP_RETRY_RECOMMENDATION_PATCH = (
+    "run-explicit-step-retry-recommendation-v1"
+)
 RUN_FAIL_FAST_STEP_FAILURE_SUMMARY_PATCH = "run-fail-fast-step-failure-summary-v1"
 # MM-884: stamp a stable correlation (trace) ref onto step-execution manifests
 # and emit a single incident reconstruction manifest before terminal failure so
@@ -14440,12 +14443,12 @@ class MoonMindRunWorkflow:
     ) -> bool:
         if failure_message == "system_error":
             return True
-        if failure_message != "execution_error" or tool_type != "agent_runtime":
+        if tool_type != "agent_runtime":
             return False
 
         outputs = self._get_from_result(result, "outputs")
         if not isinstance(outputs, Mapping):
-            return True
+            return failure_message == "execution_error"
 
         provider_failure = outputs.get("providerFailure")
         if not isinstance(provider_failure, Mapping):
@@ -14486,6 +14489,14 @@ class MoonMindRunWorkflow:
             turn_metadata.get("failureClass"),
             turn_metadata.get("failure_class"),
         )
+        explicit_step_retry = bool(
+            self._workflow_patch_enabled(RUN_EXPLICIT_STEP_RETRY_RECOMMENDATION_PATCH)
+            and retry_recommendation == "retry_step_execution"
+        )
+        if failure_message != "execution_error" and not explicit_step_retry:
+            return False
+        if failure_message in {"user_error", "permanent"}:
+            return False
 
         metadata = outputs.get("metadata")
         if not isinstance(metadata, Mapping):

@@ -18,6 +18,7 @@ from moonmind.workflows.temporal.workflows.run import (
     RUN_DIRECT_TOOL_REPORT_OUTPUTS_PATCH,
     RUN_DURABLE_PUBLISH_CONTEXT_MERGE_HANDOFF_PATCH,
     RUN_EMPTY_AGENT_SKILLSET_SNAPSHOT_PATCH,
+    RUN_EXPLICIT_STEP_RETRY_RECOMMENDATION_PATCH,
     RUN_EXTERNAL_PUBLISHED_BRANCH_REMEDIATION_PATCH,
     RUN_FAILED_RUN_RECOVERY_MANIFEST_PATCH,
     RUN_HANDOFF_ACCEPTED_DISPOSITION_GATE_PATCH,
@@ -40,6 +41,7 @@ from moonmind.workflows.temporal.workflows.run import (
     RUN_REMEDIATION_CONTINUE_MANAGED_SESSION_PATCH,
     RUN_REMEDIATION_STABLE_PROGRESS_IDENTITY_PATCH,
     RUN_RUNTIME_EXECUTION_CAPABILITIES_PATCH,
+    RUN_AGENT_RUNTIME_RETRY_CLASSIFICATION_PATCH,
     RUN_STEP_RETRY_OVERRIDES_PATCH,
     RUN_ALREADY_IMPLEMENTED_JIRA_COMPLETION_PATCH,
     RUN_AUTO_PUBLISH_METADATA_EVIDENCE_PATCH,
@@ -1517,6 +1519,185 @@ async def test_run_execution_stage_honors_pause_between_managed_session_steps(
     assert pause_wait_count == 1
     assert workflow._paused is False
     assert workflow._waiting_reason is None
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("explicit_retry_patch_enabled", "expected_child_count"),
+    [(True, 2), (False, 1)],
+    ids=["new-history", "previous-history"],
+)
+async def test_run_execution_stage_retries_typed_omnigent_turn_failure_at_child_boundary(
+    monkeypatch: pytest.MonkeyPatch,
+    explicit_retry_patch_enabled: bool,
+    expected_child_count: int,
+) -> None:
+    """Exercise child mapping, retry admission, and fresh Step Execution launch."""
+
+    workflow = MoonMindRunWorkflow()
+    workflow._owner_id = "owner-1"
+    workflow._repo = "org/repo"
+    workflow._integration = None
+    child_requests: list[AgentExecutionRequest] = []
+    child_workflow_ids: list[str] = []
+    manifests: list[tuple[str, int, str | None]] = []
+
+    async def fake_execute_typed_activity(
+        activity_type: str,
+        payload: Any,
+        **_kwargs: Any,
+    ) -> Any:
+        assert activity_type == "artifact.read"
+        assert getattr(payload, "artifact_ref", None) == "plan-ref"
+        return _mock_plan_payload(
+            [
+                {
+                    "id": "omnigent-turn",
+                    "tool": {"type": "agent_runtime", "name": "omnigent"},
+                    "inputs": {
+                        "instructions": "Continue the marked Omnigent turn.",
+                        "runtime": {"mode": "omnigent"},
+                    },
+                }
+            ]
+        )
+
+    async def fake_execute_child_workflow(
+        workflow_name: str,
+        request: AgentExecutionRequest,
+        **kwargs: Any,
+    ) -> AgentRunResult:
+        assert workflow_name == "MoonMind.AgentRun"
+        child_requests.append(request)
+        child_workflow_ids.append(str(kwargs["id"]))
+        if len(child_requests) == 1:
+            return AgentRunResult(
+                summary="Marked turn never started.",
+                failureClass="integration_error",
+                providerErrorCode="OMNIGENT_CURRENT_TURN_NOT_STARTED",
+                retryRecommendation="retry_step_execution",
+            )
+        return AgentRunResult(summary="Recovered on a fresh Step Execution.")
+
+    async def fake_bind_workflow_scoped_session(
+        request: AgentExecutionRequest,
+    ) -> AgentExecutionRequest:
+        return request
+
+    async def fake_record_step_execution_manifest(
+        logical_step_id: str,
+        **kwargs: Any,
+    ) -> None:
+        assert logical_step_id == "omnigent-turn"
+        manifests.append(
+            (
+                str(kwargs["phase"]),
+                workflow._step_execution_for(logical_step_id) or 0,
+                kwargs.get("terminal_disposition"),
+            )
+        )
+
+    enabled_patches = {
+        RUN_CONDITIONAL_REGISTRY_READ_PATCH,
+        RUN_AGENT_RUNTIME_RETRY_CLASSIFICATION_PATCH,
+    }
+    if explicit_retry_patch_enabled:
+        enabled_patches.add(RUN_EXPLICIT_STEP_RETRY_RECOMMENDATION_PATCH)
+
+    workflow_info = type(
+        "WorkflowInfo",
+        (),
+        {
+            "namespace": "default",
+            "workflow_id": "wf-omnigent-retry-boundary",
+            "run_id": "run-omnigent-retry-boundary",
+            "search_attributes": {},
+        },
+    )
+    monkeypatch.setattr(run_workflow_module.workflow, "info", workflow_info)
+    monkeypatch.setattr(run_workflow_module.workflow, "upsert_memo", lambda _memo: None)
+    monkeypatch.setattr(
+        run_workflow_module.workflow,
+        "upsert_search_attributes",
+        lambda _attributes: None,
+    )
+    monkeypatch.setattr(
+        run_workflow_module.workflow,
+        "now",
+        lambda: datetime.now(timezone.utc),
+    )
+    monkeypatch.setattr(
+        run_workflow_module.workflow,
+        "logger",
+        type(
+            "Logger",
+            (),
+            {"info": lambda *a, **k: None, "warning": lambda *a, **k: None},
+        ),
+    )
+    monkeypatch.setattr(
+        run_workflow_module,
+        "execute_typed_activity",
+        fake_execute_typed_activity,
+    )
+    monkeypatch.setattr(
+        run_workflow_module.workflow,
+        "execute_child_workflow",
+        fake_execute_child_workflow,
+    )
+    monkeypatch.setattr(
+        run_workflow_module.workflow,
+        "patched",
+        lambda patch_id: patch_id in enabled_patches,
+    )
+    monkeypatch.setattr(
+        run_workflow_module.workflow,
+        "wait_condition",
+        _immediate_wait_condition,
+    )
+    monkeypatch.setattr(
+        workflow,
+        "_maybe_bind_workflow_scoped_session",
+        fake_bind_workflow_scoped_session,
+    )
+    monkeypatch.setattr(
+        workflow,
+        "_record_step_execution_manifest",
+        fake_record_step_execution_manifest,
+    )
+
+    if explicit_retry_patch_enabled:
+        await workflow._run_execution_stage(
+            parameters={"publishMode": "none"},
+            plan_ref="plan-ref",
+        )
+    else:
+        with pytest.raises(
+            ValueError,
+            match="OMNIGENT_CURRENT_TURN_NOT_STARTED",
+        ):
+            await workflow._run_execution_stage(
+                parameters={"publishMode": "none"},
+                plan_ref="plan-ref",
+            )
+
+    assert len(child_requests) == expected_child_count
+    assert [
+        request.step_execution.execution_ordinal
+        for request in child_requests
+        if request.step_execution is not None
+    ] == list(range(1, expected_child_count + 1))
+    assert child_workflow_ids[0] == (
+        "wf-omnigent-retry-boundary:agent:omnigent-turn"
+    )
+    if explicit_retry_patch_enabled:
+        assert child_workflow_ids[1].endswith(":attempt2:retry1")
+        assert child_requests[0].idempotency_key != child_requests[1].idempotency_key
+        assert child_requests[1].step_execution is not None
+        assert child_requests[1].step_execution.reason == "runtime_recovered"
+        assert ("terminal", 1, "retryable") in manifests
+    else:
+        assert all(disposition != "retryable" for _, _, disposition in manifests)
 
 
 @pytest.mark.asyncio
