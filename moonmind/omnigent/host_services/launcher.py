@@ -276,12 +276,18 @@ class DockerOmnigentHostLauncher:
         }
         # The upstream Omnigent CLI treats managed-host launches as
         # (host_id, host_name) pairs: setting only one crashes identity
-        # loading. Derive a stable per-lease host id.
-        import uuid as _uuid
+        # loading. Use the pure spec identity when present; old specs
+        # without it fall back to the legacy per-lease derivation so
+        # in-flight hosts launched before the identity contract keep
+        # their addressable ID across Activity retry.
+        if getattr(spec, "expectedOmnigentHostId", None):
+            environment["OMNIGENT_HOST_ID"] = str(spec.expectedOmnigentHostId)
+        else:
+            import uuid as _uuid
 
-        environment["OMNIGENT_HOST_ID"] = str(
-            _uuid.uuid5(_uuid.NAMESPACE_URL, spec.hostLeaseRef)
-        )
+            environment["OMNIGENT_HOST_ID"] = str(
+                _uuid.uuid5(_uuid.NAMESPACE_URL, spec.hostLeaseRef)
+            )
         # The root filesystem is read-only; HOME must point at the image's
         # app home so both the Omnigent CLI (~/.omnigent backed by the state
         # volume) and harness credentials (~/.local/share/opencode/auth.json

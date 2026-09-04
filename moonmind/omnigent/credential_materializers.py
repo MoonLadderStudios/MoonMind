@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 from dataclasses import dataclass
 from typing import Any, Protocol
 
@@ -66,6 +67,19 @@ class CredentialCleanupResult(BaseModel):
 
 
 @dataclass(frozen=True)
+class ProfileCredentialHome:
+    """One enrollment-owned durable credential home (profile-owned state).
+
+    ``volume_ref`` names the Docker volume the OAuth enrollment populates and
+    owns; ``target_path`` is the exact in-image credential-home path the
+    materializer is allowed to attach it at.
+    """
+
+    volume_ref: str
+    target_path: str
+
+
+@dataclass(frozen=True)
 class CredentialMaterializationContext:
     request: AgentExecutionRequest
     acquired: AcquiredProviderLease
@@ -74,6 +88,7 @@ class CredentialMaterializationContext:
     artifact_gateway: OmnigentArtifactGateway
     model_qualified_id: str = ""
     provider_route_ref: str = ""
+    profile_credential_home: ProfileCredentialHome | None = None
 
 
 class DockerCommandBackend(Protocol):
@@ -101,6 +116,78 @@ class LocalDockerCommandBackend:
             timeout_seconds=timeout_seconds,
             output_limit_bytes=16_384,
         )
+
+
+class _DockerMaterializerBackendMixin:
+    """Shared bounded Docker command helpers for credential materializers."""
+
+    ref: str
+
+    def __init__(self, backend: DockerCommandBackend | None = None) -> None:
+        self._backend = backend or LocalDockerCommandBackend()
+
+    async def _run(
+        self,
+        argv: list[str],
+        *,
+        input_bytes: bytes | None = None,
+        failure: str,
+    ) -> bytes:
+        code, stdout, stderr = await self._backend.run(argv, input_bytes=input_bytes)
+        if code != 0:
+            detail = (stderr or stdout).decode("utf-8", errors="replace")[:512]
+            raise HarnessPlatformError(
+                f"{failure}: {detail}",
+                code=HarnessPlatformFailure.OMNIGENT_CREDENTIAL_MATERIALIZATION_FAILED,
+            )
+        return stdout
+
+    async def _resolve_writer_ref(self, ref: str) -> str:
+        # Fail closed on digest-pinned writers: the selected Host Class image
+        # is immutable launch authority, and a mutable-tag fallback would grant
+        # a different image read-write access to persistent OAuth credentials.
+        # Return the exact ref so a missing local image fails with an actionable
+        # Docker error instead of silently substituting another image.
+        code, _, _ = await self._backend.run(
+            ["docker", "image", "inspect", ref, "--format", "{{.Id}}"]
+        )
+        if code == 0:
+            return ref
+        if "@sha256:" in ref:
+            raise HarnessPlatformError(
+                f"digest-pinned writer image is not present locally: {ref}; "
+                "pull the selected Host Class image instead of substituting "
+                "a mutable tag",
+                code=HarnessPlatformFailure.OMNIGENT_CREDENTIAL_MATERIALIZATION_FAILED,
+            )
+        return ref
+
+    async def _volume_presence(self, volume: str, *, failure: str) -> bool:
+        """Return whether a volume exists, without echoing its name.
+
+        ``run_runtime_command`` redacts credential-shaped output, and a
+        credential volume name caught by that redactor would corrupt
+        comparisons. Ask Docker's trusted template evaluator for one bounded
+        token instead.
+        """
+
+        code, stdout, _stderr = await self._backend.run(
+            [
+                "docker",
+                "volume",
+                "ls",
+                "--filter",
+                f"name=^{volume}$",
+                "--format",
+                f"{{{{if eq .Name {json.dumps(volume)}}}}}present{{{{end}}}}",
+            ]
+        )
+        if code != 0:
+            raise HarnessPlatformError(
+                failure,
+                code=HarnessPlatformFailure.OMNIGENT_CLEANUP_DEFERRED,
+            )
+        return bool(stdout.decode("utf-8", errors="replace").strip())
 
 
 class CredentialMaterializerImplementation(Protocol):
@@ -137,15 +224,62 @@ def credential_runtime_identity(
     return f"credential-runtime:sha256:{digest}", digest
 
 
+#: Exact in-image credential-home targets for profile-owned OAuth materializers.
+#: Kept in one place so the descriptor, anticipated handle, and launched mount
+#: cannot drift apart.
+OAUTH_HOME_MATERIALIZER_TARGETS = {
+    "codex-oauth-home@1": "/home/app/.codex",
+    "claude-oauth-home@1": "/home/app/.claude",
+}
+
+_OAUTH_HOME_MATERIALIZER_TARGETS = OAUTH_HOME_MATERIALIZER_TARGETS
+
+
+# Safe Docker volume name (enrollment-owned credential homes reuse the same
+# contract as Compose named volumes).
+_CREDENTIAL_VOLUME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]*$")
+
+
 def anticipated_credential_handle(
     acquired: AcquiredProviderLease,
     materializer_ref: str,
+    *,
+    profile_credential_home: ProfileCredentialHome | None = None,
 ) -> CredentialRuntimeHandle:
     runtime_ref, digest = credential_runtime_identity(acquired, materializer_ref)
     attachments: list[dict[str, Any]] = []
     runtime_environment: dict[str, str] = {}
     host_owned = materializer_ref == "host-owned-auth@1"
-    if materializer_ref == "opencode-auth-json@1":
+    if materializer_ref in _OAUTH_HOME_MATERIALIZER_TARGETS:
+        if profile_credential_home is None:
+            raise HarnessPlatformError(
+                f"materializer {materializer_ref} requires an enrollment-owned "
+                "credential home on the Provider Profile",
+                code=HarnessPlatformFailure.OMNIGENT_CREDENTIAL_MATERIALIZER_UNAVAILABLE,
+            )
+        target = _OAUTH_HOME_MATERIALIZER_TARGETS[materializer_ref]
+        if profile_credential_home.target_path.rstrip("/") != target.rstrip("/"):
+            raise HarnessPlatformError(
+                "credential home target does not match the materializer layout",
+                code=HarnessPlatformFailure.OMNIGENT_CREDENTIAL_MATERIALIZER_UNAVAILABLE,
+            )
+        if not _CREDENTIAL_VOLUME_RE.fullmatch(profile_credential_home.volume_ref):
+            raise HarnessPlatformError(
+                "enrollment-owned credential home volume name is invalid",
+                code=HarnessPlatformFailure.OMNIGENT_CREDENTIAL_MATERIALIZER_UNAVAILABLE,
+            )
+        # Profile-owned OAuth homes are attached read-write so vendor token
+        # refresh persists in the enrollment-owned volume; the volume survives
+        # run cleanup (detach-only cleanup).
+        attachments.append(
+            {
+                "kind": "volume",
+                "sourceRef": profile_credential_home.volume_ref,
+                "targetPath": target,
+                "accessMode": "read-write",
+            }
+        )
+    elif materializer_ref == "opencode-auth-json@1":
         attachments.append(
             {
                 "kind": "volume",
@@ -186,59 +320,8 @@ def anticipated_credential_handle(
     )
 
 
-class DockerOpencodeAuthJsonMaterializer:
+class DockerOpencodeAuthJsonMaterializer(_DockerMaterializerBackendMixin):
     ref = "opencode-auth-json@1"
-
-    def __init__(self, backend: DockerCommandBackend | None = None) -> None:
-        self._backend = backend or LocalDockerCommandBackend()
-
-    async def _run(
-        self,
-        argv: list[str],
-        *,
-        input_bytes: bytes | None = None,
-        failure: str,
-    ) -> bytes:
-        code, stdout, stderr = await self._backend.run(argv, input_bytes=input_bytes)
-        if code != 0:
-            detail = (stderr or stdout).decode("utf-8", errors="replace")[:512]
-            raise HarnessPlatformError(
-                f"{failure}: {detail}",
-                code=HarnessPlatformFailure.OMNIGENT_CREDENTIAL_MATERIALIZATION_FAILED,
-            )
-        return stdout
-
-    async def _resolve_writer_ref(self, ref: str) -> str:
-        # Local dev fallback: if digest-pinned image is not present locally (not pushed to GHCR), try tag
-        code, _, _ = await self._backend.run(
-            ["docker", "image", "inspect", ref, "--format", "{{.Id}}"]
-        )
-        if code == 0:
-            return ref
-        if "@sha256:" in ref:
-            candidates = [
-                ref.split("@")[0] + ":1.18.11",
-                "ghcr.io/moonladderstudios/omnigent-host-opencode:1.18.11",
-            ]
-            import os
-
-            env_image = os.getenv("OMNIGENT_OPENCODE_HOST_IMAGE", "").strip()
-            if env_image:
-                env_tag = (
-                    f"{env_image}:1.18.11"
-                    if ":" not in env_image.split("/")[-1]
-                    else env_image
-                )
-                candidates.insert(0, env_tag)
-            for cand in candidates:
-                if not cand:
-                    continue
-                c, _, _ = await self._backend.run(
-                    ["docker", "image", "inspect", cand, "--format", "{{.Id}}"]
-                )
-                if c == 0:
-                    return cand
-        return ref
 
     async def materialize(
         self, context: CredentialMaterializationContext
@@ -662,6 +745,203 @@ class DockerOmnigentProviderConfigMaterializer(DockerOpencodeAuthJsonMaterialize
         )
 
 
+class DockerOauthHomeMaterializer(_DockerMaterializerBackendMixin):
+    """Attach one enrollment-owned OAuth credential home (profile-owned).
+
+    The OAuth enrollment (MoonMind Settings) populates and owns a durable
+    Docker volume; the materializer never copies or reads credential contents.
+    It attaches that volume read-write at the runtime pack's credential-home
+    target so vendor token refresh persists, fences the home with a generation
+    marker, and detaches without deleting on cleanup (#3829 profile-owned
+    semantics). Stale or newer generations are rejected; a wrong-layout target
+    is rejected before any mount.
+    """
+
+    target_path: str = ""
+
+    async def materialize(
+        self, context: CredentialMaterializationContext
+    ) -> CredentialRuntimeHandle:
+        acquired = context.acquired
+        home = context.profile_credential_home
+        if home is None or home.volume_ref == "" or home.target_path == "":
+            context.secrets.clear()
+            raise HarnessPlatformError(
+                f"materializer {self.ref} requires an enrollment-owned credential home",
+                code=HarnessPlatformFailure.OMNIGENT_CREDENTIAL_MATERIALIZER_UNAVAILABLE,
+            )
+        expected_target = OAUTH_HOME_MATERIALIZER_TARGETS[self.ref]
+        if home.target_path.rstrip("/") != expected_target.rstrip("/"):
+            context.secrets.clear()
+            raise HarnessPlatformError(
+                f"credential home target {home.target_path!r} does not match "
+                f"the {self.ref} layout",
+                code=HarnessPlatformFailure.OMNIGENT_CREDENTIAL_MATERIALIZER_UNAVAILABLE,
+            )
+        if not _CREDENTIAL_VOLUME_RE.fullmatch(home.volume_ref):
+            context.secrets.clear()
+            raise HarnessPlatformError(
+                "enrollment-owned credential home volume name is invalid",
+                code=HarnessPlatformFailure.OMNIGENT_CREDENTIAL_MATERIALIZER_UNAVAILABLE,
+            )
+        volume = home.volume_ref
+        runtime_ref, digest = credential_runtime_identity(acquired, self.ref)
+        if not await self._volume_presence(
+            volume, failure="enrollment-owned credential home is unavailable"
+        ):
+            context.secrets.clear()
+            raise HarnessPlatformError(
+                "enrollment-owned credential home volume is missing",
+                code=HarnessPlatformFailure.OMNIGENT_CREDENTIAL_MATERIALIZATION_FAILED,
+            )
+        context.secrets.clear()
+        # Stage the generation marker inside the profile-owned home. Re-staging
+        # is idempotent for the same generation and rejects a newer (rotated)
+        # generation so a stale lease can never fence a replacement home.
+        # Normalize the enrollment-owned layout to the exact-host contract
+        # (root 0700, top-level files 0600, owned 1000:1000) so helper-synced
+        # or imported volumes pass attestation without manual repair.
+        stage_script = (
+            "set -eu; "
+            "chown 1000:1000 /credential; "
+            "chmod 0700 /credential; "
+            "if [ -f /credential/.moonmind-generation ]; then "
+            "current=$(cat /credential/.moonmind-generation); "
+            'if [ "$current" -gt "$1" ]; then '
+            "echo 'credential home generation is newer than the acquired lease' >&2; "
+            "exit 79; fi; fi; "
+            'for f in /credential/*; do [ -e "$f" ] || continue; '
+            '[ -f "$f" ] || continue; '
+            'chown 1000:1000 "$f"; chmod 0600 "$f"; done; '
+            "printf '%s\\n' \"$1\" > /credential/.moonmind-generation.tmp; "
+            "chown 1000:1000 /credential/.moonmind-generation.tmp; "
+            "chmod 0600 /credential/.moonmind-generation.tmp; "
+            "mv /credential/.moonmind-generation.tmp /credential/.moonmind-generation"
+        )
+        await self._run(
+            [
+                "docker",
+                "run",
+                "--rm",
+                "-i",
+                "--user",
+                "0:0",
+                "--network",
+                "none",
+                "--read-only",
+                "--mount",
+                f"type=volume,src={volume},dst=/credential",
+                "--entrypoint",
+                "/bin/sh",
+                await self._resolve_writer_ref(context.writer_image_ref),
+                "-ceu",
+                stage_script,
+                "--",
+                str(acquired.credential_generation),
+            ],
+            failure="credential home generation staging failed",
+        )
+        attachment = {
+            "kind": "volume",
+            "sourceRef": volume,
+            "targetPath": expected_target,
+            "accessMode": "read-write",
+        }
+        evidence = {
+            "schemaVersion": "moonmind.credential-materialization-attestation.v1",
+            "credentialRuntimeRef": runtime_ref,
+            "providerProfileRef": acquired.provider_profile_ref,
+            "providerLeaseRef": acquired.provider_lease_ref,
+            "credentialGeneration": acquired.credential_generation,
+            "materializerRef": self.ref,
+            "ownership": "profile",
+            "attachment": attachment,
+            "owner": "1000:1000",
+            "directoryMode": "0700",
+            "fileMode": "0600",
+            "secretCopied": False,
+            "secretValueRecorded": False,
+        }
+        try:
+            attestation_ref = await context.artifact_gateway.write_json(
+                request=context.request,
+                name=f"credential-{digest[:16]}-attestation.json",
+                payload=evidence,
+                link_type="evidence.credential_materialization",
+            )
+        except BaseException:
+            raise
+        return CredentialRuntimeHandle.model_validate(
+            {
+                "credentialRuntimeRef": runtime_ref,
+                "providerProfileRef": acquired.provider_profile_ref,
+                "providerLeaseRef": acquired.provider_lease_ref,
+                "credentialGeneration": acquired.credential_generation,
+                "materializerRef": self.ref,
+                "attachments": [attachment],
+                "cleanupRef": f"credential-cleanup:sha256:{digest}",
+                "attestationRef": attestation_ref,
+            }
+        )
+
+    async def attest(self, handle: CredentialRuntimeHandle) -> dict[str, Any]:
+        if not handle.attachments:
+            raise HarnessPlatformError(
+                f"{self.ref} runtime has no credential home attachment",
+                code=HarnessPlatformFailure.OMNIGENT_CREDENTIAL_MATERIALIZATION_FAILED,
+            )
+        return {
+            "credentialRuntimeRef": handle.credentialRuntimeRef,
+            "credentialGeneration": handle.credentialGeneration,
+            "ownership": "profile",
+            "attestationRef": handle.attestationRef,
+        }
+
+    async def cleanup(
+        self,
+        handle: CredentialRuntimeHandle,
+        expected_generation: int,
+    ) -> CredentialCleanupResult:
+        if handle.credentialGeneration != expected_generation:
+            raise HarnessPlatformError(
+                "credential cleanup generation is fenced",
+                code=HarnessPlatformFailure.OMNIGENT_CREDENTIAL_GENERATION_FENCED,
+            )
+        volume = handle.attachments[0].sourceRef
+        present = await self._volume_presence(
+            volume, failure="credential home cleanup attestation is deferred"
+        )
+        if not present:
+            # Detach-only cleanup is idempotent: an already-detached home
+            # (for example after the enrollment was disconnected) is success.
+            return CredentialCleanupResult(
+                cleanupRef=handle.cleanupRef,
+                removed=False,
+                evidence={"profileOwned": True, "alreadyAbsent": True},
+            )
+        # Profile-owned state is preserved: never delete the enrollment volume,
+        # never wipe credential contents. The mount dies with the run's host.
+        return CredentialCleanupResult(
+            cleanupRef=handle.cleanupRef,
+            removed=False,
+            evidence={
+                "profileOwned": True,
+                "preserved": True,
+                "state": "detached",
+            },
+        )
+
+
+class DockerCodexOauthHomeMaterializer(DockerOauthHomeMaterializer):
+    ref = "codex-oauth-home@1"
+    target_path = OAUTH_HOME_MATERIALIZER_TARGETS["codex-oauth-home@1"]
+
+
+class DockerClaudeOauthHomeMaterializer(DockerOauthHomeMaterializer):
+    ref = "claude-oauth-home@1"
+    target_path = OAUTH_HOME_MATERIALIZER_TARGETS["claude-oauth-home@1"]
+
+
 class NoopCredentialMaterializer:
     def __init__(self, ref: str, *, host_owned: bool = False) -> None:
         self.ref = ref
@@ -744,6 +1024,8 @@ def build_default_credential_materializer_registry(
         [
             DockerOpencodeAuthJsonMaterializer(backend),
             DockerOmnigentProviderConfigMaterializer(backend),
+            DockerCodexOauthHomeMaterializer(backend),
+            DockerClaudeOauthHomeMaterializer(backend),
             NoopCredentialMaterializer("none@1"),
             NoopCredentialMaterializer("host-owned-auth@1", host_owned=True),
         ]
@@ -821,6 +1103,49 @@ class OmnigentCredentialProvisioningService:
                     existing.cleanup_state = cleanup_state
             await session.commit()
 
+    async def _load_profile_credential_home(
+        self, acquired: AcquiredProviderLease
+    ) -> ProfileCredentialHome:
+        """Resolve the enrollment-owned credential home for one lease.
+
+        A profile-owned materializer never resolves a secret: the durable
+        enrollment volume *is* the credential state. The lease's generation is
+        re-fenced against the profile row so a rotated enrollment cannot be
+        attached under a stale lease.
+        """
+
+        from api_service.db.models import ManagedAgentProviderProfile
+
+        async with self._session_factory() as session:
+            profile = await session.get(
+                ManagedAgentProviderProfile, acquired.provider_profile_ref
+            )
+        if profile is None:
+            raise HarnessPlatformError(
+                "Provider Profile disappeared after lease acquisition",
+                code=HarnessPlatformFailure.OMNIGENT_PROVIDER_PROFILE_INCOMPATIBLE,
+            )
+        if int(profile.credential_generation or 0) != acquired.credential_generation:
+            raise HarnessPlatformError(
+                "Provider Profile credential generation changed after lease acquisition",
+                code=HarnessPlatformFailure.OMNIGENT_CREDENTIAL_GENERATION_FENCED,
+            )
+        volume_ref = str(profile.volume_ref or "").strip()
+        if not volume_ref:
+            raise HarnessPlatformError(
+                "profile-owned OAuth materializer requires an enrolled "
+                "credential home volume on the Provider Profile",
+                code=HarnessPlatformFailure.OMNIGENT_CREDENTIAL_MATERIALIZER_UNAVAILABLE,
+            )
+        target_path = str(profile.volume_mount_path or "").strip()
+        if not target_path:
+            raise HarnessPlatformError(
+                "profile-owned OAuth materializer requires the enrolled "
+                "credential home mount path on the Provider Profile",
+                code=HarnessPlatformFailure.OMNIGENT_CREDENTIAL_MATERIALIZER_UNAVAILABLE,
+            )
+        return ProfileCredentialHome(volume_ref=volume_ref, target_path=target_path)
+
     async def materialize_all(
         self,
         *,
@@ -846,15 +1171,22 @@ class OmnigentCredentialProvisioningService:
                 cache_key = (acquired.provider_lease_ref, binding.materializerRef)
                 handle = materialized.get(cache_key)
                 if handle is None:
+                    descriptor = get_materializer(binding.materializerRef)
+                    profile_credential_home = None
+                    if descriptor.state.get("scope") == "profile":
+                        profile_credential_home = (
+                            await self._load_profile_credential_home(acquired)
+                        )
                     anticipated = anticipated_credential_handle(
-                        acquired, binding.materializerRef
+                        acquired,
+                        binding.materializerRef,
+                        profile_credential_home=profile_credential_home,
                     )
                     await self._persist_handle(
                         anticipated, cleanup_state="materializing"
                     )
                     handle_index = len(handles)
                     handles.append(anticipated)
-                    descriptor = get_materializer(binding.materializerRef)
                     secrets = await self._secrets.resolve(
                         acquired=acquired,
                         allowed_secret_roles=descriptor.requiredSecretRoles,
@@ -870,6 +1202,7 @@ class OmnigentCredentialProvisioningService:
                                 artifact_gateway=self._artifacts,
                                 model_qualified_id=plan.payload.modelConfig.qualifiedId,
                                 provider_route_ref=plan.payload.modelConfig.routeRef,
+                                profile_credential_home=profile_credential_home,
                             )
                         )
                     finally:
@@ -979,16 +1312,21 @@ class OmnigentCredentialProvisioningService:
 
 
 __all__ = [
+    "OAUTH_HOME_MATERIALIZER_TARGETS",
     "CredentialCleanupResult",
     "CredentialMaterializationContext",
     "CredentialMaterializerImplementation",
     "CredentialMaterializerImplementationRegistry",
     "CredentialRuntimeHandle",
-    "DockerOpencodeAuthJsonMaterializer",
+    "DockerClaudeOauthHomeMaterializer",
+    "DockerCodexOauthHomeMaterializer",
+    "DockerOauthHomeMaterializer",
     "DockerOmnigentProviderConfigMaterializer",
+    "DockerOpencodeAuthJsonMaterializer",
     "LocalDockerCommandBackend",
     "NoopCredentialMaterializer",
     "OmnigentCredentialProvisioningService",
+    "ProfileCredentialHome",
     "anticipated_credential_handle",
     "build_default_credential_materializer_registry",
     "credential_runtime_identity",

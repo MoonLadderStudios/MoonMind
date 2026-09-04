@@ -35,6 +35,7 @@ from moonmind.omnigent.host_ports import (
     OmnigentRuntimeEnvironmentPort,
     OmnigentSkillDeliveryPort,
     OmnigentWorkspaceMaterializationPort,
+    expected_omnigent_host_id,
     host_correlation_identity,
 )
 from moonmind.schemas.agent_runtime_models import AgentExecutionRequest
@@ -267,6 +268,9 @@ class GenericOmnigentHostRuntime:
                 "limits": launch_policy.limits,
                 "runtime": host_class.runtime,
                 "correlationName": correlation,
+                "expectedOmnigentHostId": expected_omnigent_host_id(
+                    host_lease_ref, host_lease_generation
+                ),
                 "workspaceAttachment": prepared.workspace_attachment,
                 "skillAttachment": prepared.skill_attachment,
                 "toolAttachments": list(prepared.tool_attachments),
@@ -327,6 +331,7 @@ class GenericOmnigentHostRuntime:
                         for handle in credential_handles
                     )
                 ),
+                expected_host_id=(str(spec.expectedOmnigentHostId) or None),
             )
             attestations = await self._attestor.attest(
                 request=request,

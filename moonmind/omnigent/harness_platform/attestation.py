@@ -10,7 +10,7 @@ import hashlib
 import json
 import re
 from datetime import UTC, datetime
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
@@ -18,6 +18,11 @@ from moonmind.omnigent.harness_platform.failures import (
     HarnessPlatformError,
     HarnessPlatformFailure,
 )
+
+if TYPE_CHECKING:
+    from moonmind.omnigent.harness_platform.runtime_packs import (
+        RuntimePackDescriptor,
+    )
 
 _DIGEST_RE = re.compile(r"^sha256:[0-9a-f]{64}$")
 _HOSTCLASS_RE = re.compile(r"^[a-z0-9][a-z0-9._-]*@\d+$")
@@ -32,7 +37,7 @@ class RuntimeDependency(BaseModel):
     digest: str
 
     @model_validator(mode="after")
-    def validate(self) -> "RuntimeDependency":
+    def validate(self) -> RuntimeDependency:
         if not _DIGEST_RE.fullmatch(self.digest):
             raise ValueError("digest must be sha256")
         if not self.name.strip():
@@ -68,7 +73,7 @@ class HostHarnessAttestation(BaseModel):
     attestationRef: str | None = Field(default=None, alias="attestationRef")
 
     @model_validator(mode="after")
-    def validate_refs(self) -> "HostHarnessAttestation":
+    def validate_refs(self) -> HostHarnessAttestation:
         if not self.hostId.strip():
             raise ValueError("hostId required")
         if not _HOSTCLASS_RE.fullmatch(self.hostClassRef):
@@ -197,7 +202,10 @@ def validate_exact_host_attestation(
                 f"vendor runtime {name} version mismatch",
                 code=HarnessPlatformFailure.OMNIGENT_VENDOR_RUNTIME_MISMATCH,
             )
-        if str(exp_dep.get("digest")) != actual.digest:
+        # A descriptor-driven runtime pack pins the vendor version identity;
+        # only an explicitly recorded expectation carries a digest to compare.
+        expected_digest = exp_dep.get("digest")
+        if expected_digest and str(expected_digest) != actual.digest:
             raise HarnessPlatformError(
                 f"vendor runtime {name} digest mismatch",
                 code=HarnessPlatformFailure.OMNIGENT_VENDOR_RUNTIME_MISMATCH,
@@ -237,46 +245,13 @@ def validate_exact_host_attestation(
         )
 
 
-# ---- OpenCode exact-host preflight (issue §8) ----
-
-OPENCODE_MIN_VERSION = "1.17.7"
-OPENCODE_MAX_VERSION = "1.19.0"
-OPENCODE_PINNED_VERSION = "1.18.11"
+# ---- Runtime-pack-driven exact-host preflight (issues #3827, #3831) ----
 
 
-def _parse_version_tuple(v: str) -> tuple[int, ...]:
-    parts = []
-    for chunk in re.split(r"[.+_-]", v.strip().lstrip("v")):
-        if chunk.isdigit():
-            parts.append(int(chunk))
-        else:
-            # stop at non-numeric (e.g., rc)
-            break
-    return tuple(parts)
-
-
-def is_opencode_version_supported(version: str) -> bool:
-    """Return True if version is within the pinned supported range."""
-    try:
-        iv = _parse_version_tuple(version)
-        minv = _parse_version_tuple(OPENCODE_MIN_VERSION)
-        maxv = _parse_version_tuple(OPENCODE_MAX_VERSION)
-    except Exception:
-        return False
-    return minv <= iv < maxv
-
-
-def assert_opencode_version_supported(version: str) -> None:
-    if not is_opencode_version_supported(version):
-        raise HarnessPlatformError(
-            f"opencode version {version} outside supported range {OPENCODE_MIN_VERSION}..{OPENCODE_MAX_VERSION} (exclusive upper)",
-            code=HarnessPlatformFailure.OMNIGENT_VENDOR_RUNTIME_MISMATCH,
-        )
-
-
-def validate_opencode_exact_host_preflight(
-    *,
+def validate_runtime_pack_preflight(
     attestation: HostHarnessAttestation,
+    *,
+    expectedRuntimePackRef: str,
     expectedHostClassRef: str,
     expectedImageRef: str,
     expectedOmnigentBuildDigest: str,
@@ -288,67 +263,52 @@ def validate_opencode_exact_host_preflight(
     attestationGeneration: int | None = None,
     max_age_seconds: int = 600,
     now: datetime | None = None,
-    # Additional OpenCode-specific checks
-    expect_opencode_native: bool = True,
-    expectedOpencodeVersion: str | None = OPENCODE_PINNED_VERSION,
-    requiredSkillDeliveryRef: str | None = None,
     require_restricted_egress: bool = True,
-) -> None:
-    """Exact-host OpenCode preflight per issue §8.
+    requiredSkillDeliveryRef: str | None = None,
+) -> RuntimePackDescriptor:
+    """Descriptor-driven exact-host preflight (issue #3827).
 
-    Verifies before runner/session creation:
-    - command -v opencode (via runtimeDependencies presence)
-    - opencode --version within pinned range
-    - host advertises opencode-native as configured and ready
-    - harness implementation identity matches plan
-    - host image digest matches Host Class
-    - Omnigent build matches
-    - credential mount, generation, ownership, and permissions through host evidence
-    - acquired credential generation is the one materialized
-    - resolved Skill delivery and mounted tools match plan (optional)
-    - enforced network/egress policy active
-    - selected model available (checked separately via model attestation)
+    The trusted runtime pack — not a harness-specific branch — declares:
+
+    - which vendor runtime the exact host must report (name + version),
+    - the supported vendor range (exclusive upper bound),
+    - the readiness probe the caller executes inside the exact container.
+
+    The launched container must have been selected by a Host Class that binds
+    the same pack, so the attested vendor runtime identity is compared against
+    the pack rather than against harness-specific hard-coded expectations.
     """
-    # Use dedicated opencode host class default if caller didn't specify
-    if expect_opencode_native and attestation.harnessId != "opencode-native":
+
+    from moonmind.omnigent.harness_platform.runtime_packs import (
+        get_runtime_pack,
+        is_vendor_version_supported,
+    )
+
+    pack = get_runtime_pack(expectedRuntimePackRef)
+    if attestation.harnessId not in pack.harnessIds:
         raise HarnessPlatformError(
-            f"opencode-native not advertised by exact host: {attestation.harnessId}",
+            f"runtime pack {pack.ref} does not own harness {attestation.harnessId}",
             code=HarnessPlatformFailure.OMNIGENT_HARNESS_BUILD_MISMATCH,
         )
-    # Base attestation validation (covers image, build, impl, vendor runtime, capabilities, fencing)
     caps = list(requiredCapabilities or ["interrupt"])
     if require_restricted_egress:
-        lower_caps = [str(c).lower() for c in caps]
+        lower_caps = [str(cap).lower() for cap in caps]
         if (
             "restricted-egress" not in lower_caps
             and "restrictedegress" not in lower_caps
             and "restricted_egress" not in lower_caps
         ):
             caps.append("restricted-egress")
-    # Resolve expected vendor runtimes (including digest) from HostClass for exact digest validation
-    expectedVendorRuntimes: list[dict[str, Any]] | None = None
-    try:
-        from moonmind.omnigent.harness_platform.host_classes import get_host_class
-
-        hc = get_host_class(expectedHostClassRef)
-        for entry in hc.declaredHarnessImplementations:
-            if entry.harnessId == "opencode-native":
-                expectedVendorRuntimes = [
-                    dict(dep) for dep in entry.runtimeDependencies
-                ]
-                break
-    except Exception:
-        expectedVendorRuntimes = None
+    # The pack is the vendor-runtime authority for this exact host.
+    expectedVendorRuntimes: list[dict[str, Any]] = [
+        {"name": pack.vendorRuntime.name, "version": pack.vendorRuntime.pinnedVersion}
+    ]
     validate_exact_host_attestation(
         attestation=attestation,
         expectedHostClassRef=expectedHostClassRef,
         expectedImageRef=expectedImageRef,
         expectedOmnigentBuildDigest=expectedOmnigentBuildDigest,
-        expectedHarnessId=(
-            "opencode-native"
-            if expect_opencode_native
-            else expectedImplementation.get("harnessId", attestation.harnessId)
-        ),
+        expectedHarnessId=attestation.harnessId,
         expectedImplementation=expectedImplementation,
         requiredCapabilities=caps,
         expectedArchitecture=expectedArchitecture,
@@ -359,49 +319,37 @@ def validate_opencode_exact_host_preflight(
         attestationGeneration=attestationGeneration,
         expectedVendorRuntimes=expectedVendorRuntimes,
     )
-    # Verify opencode binary present via runtimeDependencies
-    opencode_dep = next(
-        (d for d in attestation.runtimeDependencies if d.name == "opencode"), None
+    vendor = next(
+        (
+            dep
+            for dep in attestation.runtimeDependencies
+            if dep.name == pack.vendorRuntime.name
+        ),
+        None,
     )
-    if opencode_dep is None:
+    if vendor is None:
         raise HarnessPlatformError(
-            "opencode binary missing from exact host",
+            f"{pack.vendorRuntime.name} binary missing from exact host",
             code=HarnessPlatformFailure.OMNIGENT_VENDOR_RUNTIME_MISMATCH,
         )
-    # Version within pinned supported range
-    assert_opencode_version_supported(opencode_dep.version)
-    if (
-        expectedOpencodeVersion is not None
-        and opencode_dep.version != expectedOpencodeVersion
-    ):
-        # Allow compatible range but warn when pinned exact mismatch; still require supported
-        # For strict pin, require exact; here we enforce supported range above and log exact mismatch as diagnostic
-        # To satisfy issue §8, we require exact pinned or compatible; we fail only if outside range above.
-        pass
-    # Host must be configured and advertise opencode-native
-    if not attestation.configured:
+    if not is_vendor_version_supported(pack, vendor.version):
         raise HarnessPlatformError(
-            "opencode host not configured",
-            code=HarnessPlatformFailure.OMNIGENT_HOST_HARNESS_NOT_READY,
+            f"{pack.vendorRuntime.name} version {vendor.version} outside supported "
+            f"range {pack.vendorRuntime.supportedRange} (exclusive upper)",
+            code=HarnessPlatformFailure.OMNIGENT_VENDOR_RUNTIME_MISMATCH,
         )
-    # Credential-file I/O belongs to the outer trusted materializer adapter.
-    # This pure validator receives only its secret-free generation evidence.
-    # Generation fencing is already checked via attestationGeneration; additionally ensure
-    # the credential generation matches materialized handle if provided
-    # Enforce required Skill delivery ref if caller requested it
     if requiredSkillDeliveryRef is not None:
         if not requiredSkillDeliveryRef.startswith("skill-delivery:sha256:"):
             raise HarnessPlatformError(
-                f"requiredSkillDeliveryRef must be skill-delivery:sha256: digest (got {requiredSkillDeliveryRef!r})",
+                f"requiredSkillDeliveryRef must be skill-delivery:sha256: digest "
+                f"(got {requiredSkillDeliveryRef!r})",
                 code=HarnessPlatformFailure.OMNIGENT_SKILL_DELIVERY_MISMATCH,
             )
-        # Host must advertise mountedSkills when a delivery is required
         if not attestation.capabilities.get("mountedSkills"):
             raise HarnessPlatformError(
                 "required skill delivery but host does not advertise mountedSkills",
                 code=HarnessPlatformFailure.OMNIGENT_SKILL_DELIVERY_MISMATCH,
             )
-        # If host attests a delivery ref, verify it matches the required ref
         attested_ref = (
             attestation.capabilities.get("skillDeliveryRef")
             or attestation.capabilities.get("skill_delivery_ref")
@@ -413,3 +361,4 @@ def validate_opencode_exact_host_preflight(
                     "skill delivery ref mismatch",
                     code=HarnessPlatformFailure.OMNIGENT_SKILL_DELIVERY_MISMATCH,
                 )
+    return pack

@@ -2761,6 +2761,26 @@ async def _build_runtime_activities(topology) -> tuple[AsyncExitStack, list[obje
     activity fleets (llm, sandbox, etc.).
     """
     resources = AsyncExitStack()
+    activity_types = set(getattr(topology, "activity_types", []) or [])
+    uses_omnigent_transport = bool(
+        getattr(topology, "fleet", "") == AGENT_RUNTIME_FLEET
+        or any(
+            str(name).startswith("integration.omnigent") or str(name).startswith("omnigent.")
+            for name in activity_types
+        )
+    )
+    if uses_omnigent_transport:
+        # One lifecycle-managed bounded pool per worker process, shared by
+        # ordinary requests and SSE streams with headroom for registration,
+        # cleanup, readiness, catalog, validation, and operator traffic.
+        # Worker shutdown closes streams and the pool cleanly via resources.
+        from moonmind.workflows.adapters.omnigent_client import (
+            aclose_shared_pool_client,
+            init_shared_pool_client,
+        )
+
+        await init_shared_pool_client()
+        resources.push_async_callback(aclose_shared_pool_client)
     if "integration.omnigent.execute" in topology.activity_types:
         from moonmind.omnigent.settings import generic_host_enabled
 
@@ -2770,11 +2790,22 @@ async def _build_runtime_activities(topology) -> tuple[AsyncExitStack, list[obje
                 build_generic_omnigent_execution_services,
             )
 
-            # Startup is the readiness boundary: an enabled generic deployment
-            # must be complete before this worker can accept any Activity.
-            build_generic_omnigent_execution_services(
-                session_factory=async_session_maker
-            )
+            # Startup validates generic readiness without crash-looping the
+            # worker when bootstrap has not yet published resolved images.
+            # A missing digest fails per-request with actionable
+            # OMNIGENT_GENERIC_REALIZER_NOT_READY; crashing here would kill
+            # in-flight profile-bound heartbeats and turn a transient
+            # bootstrap race into activity Heartbeat timeouts (mm:5151c917).
+            try:
+                build_generic_omnigent_execution_services(
+                    session_factory=async_session_maker
+                )
+            except Exception as exc:
+                logger.warning(
+                    "Generic Omnigent host not ready at worker startup, "
+                    "continuing degraded: %s",
+                    exc,
+                )
     container_job_backend = None
     enforced_network_refs: list[str] = []
     enforced_egress_profile_refs: list[str] = []

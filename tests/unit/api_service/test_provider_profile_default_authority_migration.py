@@ -2,7 +2,7 @@
 
 MoonLadderStudios/MoonMind#3877 needs to tell an explicit operator
 ``make_default`` apart from the automatic transfer the pre-change controller
-performed when ``OPENCODE_API_KEY`` was configured. Revision 368 adds the column
+performed when ``OPENCODE_API_KEY`` was configured. Revision 370 adds the column
 that records the difference and backfills every existing row to "not operator
 selected" -- the controlled cutover that lets startup seeding reclaim the
 ``opencode`` runtime default for the credentialless Zen profile.
@@ -16,7 +16,7 @@ import sqlalchemy as sa
 from alembic.migration import MigrationContext
 from alembic.operations import Operations
 
-MIGRATION = "api_service.migrations.versions.368_provider_default_authority"
+MIGRATION = "api_service.migrations.versions.370_provider_default_authority"
 
 _PRE_CHANGE_TABLE = sa.text(
     """
@@ -32,7 +32,7 @@ _PRE_CHANGE_TABLE = sa.text(
 
 def test_migration_adds_the_operator_selection_marker(monkeypatch) -> None:
     migration = importlib.import_module(MIGRATION)
-    assert migration.down_revision == "367_remove_workflow_proposals"
+    assert migration.down_revision == "369_provider_lease_incr_contract"
 
     engine = sa.create_engine("sqlite:///:memory:")
     with engine.begin() as connection:

@@ -1122,6 +1122,7 @@ async def _auto_seed_provider_profiles() -> list[str]:
     from sqlalchemy import select
     from api_service.db.models import (
         ManagedAgentProviderProfile,
+        ProviderCapacityScope,
         ProviderCredentialSource,
         ProviderProfileAuthMethod,
         ProviderProfileAuthState,
@@ -2130,6 +2131,17 @@ async def _auto_seed_provider_profiles() -> list[str]:
                     last_validated_at=profile_def.get("last_validated_at"),
                     last_auth_method=profile_def.get("last_auth_method"),
                 )
+                _seed_scope_ref = f"provider-profile:{profile_def['profile_id']}"
+                if await session.get(ProviderCapacityScope, _seed_scope_ref) is None:
+                    session.add(
+                        ProviderCapacityScope(
+                            scope_ref=_seed_scope_ref,
+                            runtime_id=profile_def["runtime_id"],
+                            provider_class=str(profile_def.get("provider_id") or "unknown"),
+                            configured_limit=int(profile_def.get("max_parallel_runs", 1) or 1),
+                            effective_limit=int(profile_def.get("max_parallel_runs", 1) or 1),
+                        )
+                    )
                 session.add(profile)
                 runtime_id = profile_def["runtime_id"]
                 touched_runtime_ids.add(runtime_id)

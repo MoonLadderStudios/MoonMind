@@ -15,8 +15,8 @@ credentialless Zen profile on the next restart. An operator who wants another
 ``opencode`` profile to hold the default re-selects it once after the upgrade,
 and that selection is then durable.
 
-Revision ID: 368_provider_default_authority
-Revises: 367_remove_workflow_proposals
+Revision ID: 370_provider_default_authority
+Revises: 369_provider_lease_incr_contract
 """
 
 from __future__ import annotations
@@ -26,8 +26,8 @@ from typing import Sequence, Union
 import sqlalchemy as sa
 from alembic import op
 
-revision: str = "368_provider_default_authority"
-down_revision: Union[str, None] = "367_remove_workflow_proposals"
+revision: str = "370_provider_default_authority"
+down_revision: Union[str, None] = "369_provider_lease_incr_contract"
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
 
