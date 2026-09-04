@@ -3580,9 +3580,17 @@ class OmnigentOAuthHostRuntime:
         if skill_projection is not None:
             child_env["OMNIGENT_ACTIVE_SKILLS_DIR"] = str(skill_projection)
         if effective_launch is not None:
+            host_image_ref = str(effective_launch["hostImageRef"])
             child_env.update(
                 {
-                    "OMNIGENT_HOST_IMAGE_REF": str(effective_launch["hostImageRef"]),
+                    "OMNIGENT_HOST_IMAGE_REF": host_image_ref,
+                    # Static Codex/Claude rows resolve their image from the
+                    # shared ref (MoonLadderStudios/MoonMind#3834). Export the
+                    # effective-launch digest under both names so an immutable
+                    # plan keeps its launch authority instead of falling back
+                    # to an independently inherited mutable tag. The legacy
+                    # name survives only as a bounded alias.
+                    "OMNIGENT_SHARED_HOST_IMAGE_REF": host_image_ref,
                     "OMNIGENT_IMAGE_REF": str(effective_launch["serverImageRef"]),
                     "OMNIGENT_EFFECTIVE_LAUNCH_REF": str(
                         effective_launch["snapshotRef"]
