@@ -777,6 +777,70 @@ describe('MoonLadderStudios/MoonMind#3822 progressive disclosure and tier drafts
     ).toBe(true);
   });
 
+  it('focuses the collapsed control a FastAPI request-validation array targets', async () => {
+    const preset = presetFor(creationClass);
+    const capabilities = capabilitiesFor(creationClass);
+    vi.spyOn(window, 'fetch').mockImplementation(async (input, init) => {
+      const url = String(input);
+      const tier = tierCapabilitiesResponse(url);
+      if (tier) return tier;
+      if (url.startsWith('/api/v1/provider-profiles/creation-capabilities?')) {
+        return { ok: true, json: async () => capabilities } as Response;
+      }
+      if (url.startsWith('/api/v1/provider-profiles/creation-preset?')) {
+        return { ok: true, json: async () => preset } as Response;
+      }
+      if (url === '/api/v1/provider-profiles' && init?.method === 'POST') {
+        // The real `ProviderProfileCreate` boundary: `cooldown_after_429_seconds`
+        // is `Field(ge=0)`, so a negative draft raises FastAPI's standard
+        // RequestValidationError payload rather than a custom error object.
+        return {
+          ok: false,
+          status: 422,
+          statusText: 'Unprocessable Entity',
+          json: async () => ({
+            detail: [
+              {
+                type: 'greater_than_equal',
+                loc: ['body', 'cooldown_after_429_seconds'],
+                msg: 'Input should be greater than or equal to 0',
+                input: -1,
+                ctx: { ge: 0 },
+              },
+            ],
+          }),
+        } as Response;
+      }
+      throw new Error(`Unexpected fetch: ${url}`);
+    });
+
+    renderManager();
+    await startStandardCreation(creationClass, 'conformance-validation-array');
+
+    // Author the invalid value, then collapse the disclosure so the unmounted
+    // input can no longer enforce its native `min` before submission.
+    const toggle = screen.getByLabelText('Show advanced options') as HTMLInputElement;
+    fireEvent.click(toggle);
+    fireEvent.change(screen.getByLabelText('Cooldown after 429 (seconds)'), {
+      target: { value: '-1' },
+    });
+    fireEvent.click(toggle);
+    expect(toggle.checked).toBe(false);
+    expect(document.getElementById('provider-profile-advanced-region')).toBeNull();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Create provider profile' }));
+
+    await waitFor(() =>
+      expect((screen.getByLabelText('Show advanced options') as HTMLInputElement).checked).toBe(true),
+    );
+    await waitFor(() =>
+      expect(document.activeElement).toBe(screen.getByLabelText('Cooldown after 429 (seconds)')),
+    );
+    expect(
+      document.getElementById('provider-profile-advanced-region')?.contains(document.activeElement),
+    ).toBe(true);
+  });
+
   it('reveals and focuses backend-owned launch isolation when validation targets clear_env_keys', async () => {
     const preset = presetFor(creationClass);
     const capabilities = capabilitiesFor(creationClass);
