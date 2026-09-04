@@ -866,6 +866,16 @@ async def test_startup_seeds_default_task_templates(disabled_env_keys, tmp_path)
         assert batch_annotations["uiSchema"]["run_ref"]["widget"] == "select"
         assert batch_annotations["uiSchema"]["constraints"]["widget"] == "textarea"
         assert batch_annotations["uiSchema"]["run_verify"]["widget"] == "checkbox"
+        # The parent publishes nothing, but its children own the repository
+        # work, so the child publish default follows the selected run.
+        assert batch_annotations["uiSchema"]["publish_mode"]["defaultFrom"] == {
+            "field": "run_ref",
+            "map": {
+                "skill:jira-verify": "none",
+                "preset:jira-implement": "pr",
+                "preset:jira-orchestrate": "pr",
+            },
+        }
         assert batch_annotations["bindings"]["skill:jira-verify"][
             "jira_issue_key"
         ] == "{{ target.jiraIssue.key }}"

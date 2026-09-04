@@ -76,6 +76,9 @@ def test_non_opencode_materializer_does_not_inject_opencode_runtime_flags():
     _script, environment = _build(target_path="/run/mm-credentials/other")
 
     assert not any(name.startswith("OPENCODE_") for name in environment)
+    # The plugin npm cache seeding lives inside the MOONMIND_OPENCODE_RUNTIME
+    # guard, which this projection never enables.
+    assert "MOONMIND_OPENCODE_RUNTIME" not in environment
     assert set(environment["OMNIGENT_RUNNER_ENV_PASSTHROUGH"].split(",")) == {
         "MOONMIND_ACTIVE_SKILLS_DIR",
         "MOONMIND_STEP_EXECUTION_ID",
@@ -174,6 +177,41 @@ def test_opencode_projection_restores_scoped_fanout_file_selector() -> None:
     for key in runtime_environment:
         assert f"export {key}=$(cat " in script
     assert "MOONMIND_EXECUTION_FANOUT_BEARER_TOKEN=" not in script
+    syntax = subprocess.run(
+        ["/bin/sh", "-n"],
+        input=script,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    assert syntax.returncode == 0, syntax.stderr
+
+
+def test_opencode_runtime_seeds_plugin_npm_cache_before_host_start():
+    """OpenCode's first ``serve`` runs ``npm install @opencode-ai/plugin`` in a
+    fresh per-session config directory; the entrypoint must make that install
+    resolve from the image-owned cache before Omnigent starts the runner."""
+
+    script, environment = _build(target_path="", enable_opencode_runtime=True)
+
+    seed = "/opt/moonmind/opencode-npm-cache"
+    cache = "/home/app/.omnigent/moonmind/opencode-npm-cache"
+    guard = script.index(f"test -d {seed} || {{ ")
+    copy = script.index(f"rm -rf {cache}; cp -a {seed} {cache}; ")
+    npmrc = script.index(
+        "printf '%s\\n' "
+        f"'cache={cache}' 'prefer-offline=true' 'audit=false' 'fund=false' "
+        "'update-notifier=false' > /home/app/.npmrc; chmod 0600 /home/app/.npmrc; "
+    )
+    host_start = script.index('exec omnigent host --server "$1" --non-interactive')
+    assert guard < copy < npmrc < host_start
+    # A host image without the warm cache fails closed with a named contract
+    # instead of silently paying the cold registry install again.
+    assert "exit 78; }" in script[guard:copy]
+    assert "missing the warm plugin npm cache" in script[guard:copy]
+    # npm reads the runtime home's .npmrc, so no npm_config_* value has to
+    # survive Omnigent's host -> runner -> server environment filters.
+    assert not any(name.lower().startswith("npm_config") for name in environment)
     syntax = subprocess.run(
         ["/bin/sh", "-n"],
         input=script,

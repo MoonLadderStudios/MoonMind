@@ -7,6 +7,32 @@ from typing import Any
 _RUNTIME_BIN_DIR = "/home/app/.omnigent/moonmind/bin"
 _RUNTIME_CONTEXT_DIR = "/home/app/.omnigent/moonmind/runtime-context"
 
+# OpenCode installs its plugin SDK (``@opencode-ai/plugin@<opencode version>``)
+# with ``npm install`` inside each fresh per-session config directory the first
+# time ``opencode serve`` starts. The pinned host image warms exactly that
+# dependency closure into an image-owned npm cache at build time (see
+# services/omnigent/opencode-host/Dockerfile). The entrypoint copies the seed
+# into the run-owned state volume and points npm at it through the runtime
+# home's ``.npmrc``: npm reads ``$HOME/.npmrc`` and ``HOME`` is one of the few
+# variables Omnigent forwards to the OpenCode server, so no ``npm_config_*``
+# environment has to cross the host -> runner -> server hops. The launch then
+# only copies files; it never downloads from registry.npmjs.org while the first
+# user message is blocked on the native-terminal ensure.
+_OPENCODE_PLUGIN_NPM_CACHE_SEED = "/opt/moonmind/opencode-npm-cache"
+_OPENCODE_PLUGIN_NPM_CACHE = "/home/app/.omnigent/moonmind/opencode-npm-cache"
+_OPENCODE_NPMRC = "/home/app/.npmrc"
+_OPENCODE_NPMRC_LINES = (
+    f"cache={_OPENCODE_PLUGIN_NPM_CACHE}",
+    "prefer-offline=true",
+    "audit=false",
+    "fund=false",
+    "update-notifier=false",
+)
+_OPENCODE_MISSING_CACHE_MESSAGE = (
+    "opencode host image is missing the warm plugin npm cache at "
+    + _OPENCODE_PLUGIN_NPM_CACHE_SEED
+)
+
 _OPENCODE_RUNTIME_ENV = {
     # MoonMind qualifies the exact pinned image + credential + model before
     # launch. Re-fetching mutable catalog data inside every session duplicates
@@ -189,6 +215,28 @@ class OmnigentRuntimeScriptService:
             + runtime_context_dir
             + " "
             + _RUNTIME_BIN_DIR
+            + "; "
+            # Fail closed on an image that predates the warm plugin cache: the
+            # alternative is the cold registry install this seam exists to
+            # remove, and the captured host log names the missing contract.
+            "test -d "
+            + _OPENCODE_PLUGIN_NPM_CACHE_SEED
+            + " || { printf '%s\\n' '"
+            + _OPENCODE_MISSING_CACHE_MESSAGE
+            + "' >&2; exit 78; }; "
+            "rm -rf "
+            + _OPENCODE_PLUGIN_NPM_CACHE
+            + "; cp -a "
+            + _OPENCODE_PLUGIN_NPM_CACHE_SEED
+            + " "
+            + _OPENCODE_PLUGIN_NPM_CACHE
+            + "; "
+            "printf '%s\\n' "
+            + " ".join(f"'{line}'" for line in _OPENCODE_NPMRC_LINES)
+            + " > "
+            + _OPENCODE_NPMRC
+            + "; chmod 0600 "
+            + _OPENCODE_NPMRC
             + "; "
             "if [ -d "
             '"' + staging_dir + '"'

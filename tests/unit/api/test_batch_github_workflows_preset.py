@@ -199,3 +199,44 @@ async def test_batch_github_workflows_uses_repository_context(tmp_path):
         "MoonLadderStudios/MoonMind"
     )
     assert expanded["steps"][0]["skill"]["id"] == "batch-github-workflows"
+
+
+async def test_batch_github_workflows_defaults_child_publish_to_pr(tmp_path):
+    """Both run options implement code, so children publish a PR by default.
+
+    A default batch run previously queued an implementation child per issue
+    with ``publish_mode = none``, which implemented every issue and then left
+    the work unpublished.
+    """
+
+    async with _catalog_db(tmp_path) as sessions:
+        async with sessions() as session:
+            service = PresetCatalogService(session)
+            await service.sync_seed_templates(seed_dir=_seed_dir(tmp_path))
+            template = await service.get_template(
+                slug="batch-github-workflows",
+                scope="global",
+                scope_ref=None,
+            )
+
+            expanded = await service.expand_template(
+                slug="batch-github-workflows",
+                scope="global",
+                scope_ref=None,
+                inputs={
+                    "issue_range": "3142-3150",
+                    "repository": "MoonLadderStudios/MoonMind",
+                },
+            )
+
+    assert template["defaults"]["publish_mode"] == "pr"
+    assert template["defaults"]["run_ref"] == "preset:github-issue-implement"
+    step = expanded["steps"][0]
+    assert step["batchOrchestration"]["target"]["runRef"] == (
+        "preset:github-issue-implement"
+    )
+    assert step["batchOrchestration"]["publish"]["mode"] == "pr"
+    assert '--publish-mode "pr"' in step["instructions"]
+    # The parent queues children and writes summary artifacts; it never
+    # publishes repository changes itself.
+    assert expanded["publish"] == {"mode": "none"}

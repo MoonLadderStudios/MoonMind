@@ -212,6 +212,12 @@ jobs:
           docker run --rm "${image}" opencode --version
           docker run --rm "${image}" sh -c 'command -v opencode && opencode --version | grep -E "1\.(17|18)"'
 
+      - name: Verify offline OpenCode plugin cache in image
+        run: |
+          digest="${{ steps.build.outputs.digest }}"
+          image="${{ steps.meta.outputs.image_name }}@${digest}"
+          sh ./services/omnigent/opencode-host/verify-warm-plugin-cache.sh "${image}"
+
       - name: Export digest
         run: |
           mkdir -p /tmp/digests
