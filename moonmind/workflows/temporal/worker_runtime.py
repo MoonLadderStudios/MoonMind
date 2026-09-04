@@ -2761,6 +2761,26 @@ async def _build_runtime_activities(topology) -> tuple[AsyncExitStack, list[obje
     activity fleets (llm, sandbox, etc.).
     """
     resources = AsyncExitStack()
+    activity_types = set(getattr(topology, "activity_types", []) or [])
+    uses_omnigent_transport = bool(
+        getattr(topology, "fleet", "") == AGENT_RUNTIME_FLEET
+        or any(
+            str(name).startswith("integration.omnigent") or str(name).startswith("omnigent.")
+            for name in activity_types
+        )
+    )
+    if uses_omnigent_transport:
+        # One lifecycle-managed bounded pool per worker process, shared by
+        # ordinary requests and SSE streams with headroom for registration,
+        # cleanup, readiness, catalog, validation, and operator traffic.
+        # Worker shutdown closes streams and the pool cleanly via resources.
+        from moonmind.workflows.adapters.omnigent_client import (
+            aclose_shared_pool_client,
+            init_shared_pool_client,
+        )
+
+        await init_shared_pool_client()
+        resources.push_async_callback(aclose_shared_pool_client)
     if "integration.omnigent.execute" in topology.activity_types:
         from moonmind.omnigent.settings import generic_host_enabled
 
