@@ -704,12 +704,99 @@ def test_claude_generic_plan_fails_closed_until_qualified(monkeypatch):
 # ---- #3833: rollout decision frozen into immutable execution authority ----
 
 
-def test_plan_freezes_the_runtime_provider_rollout_decision(monkeypatch):
+_EVIDENCE_HOST_IMAGE_REF = (
+    "ghcr.io/moonladderstudios/omnigent-host-moonmind@sha256:" + "f" * 64
+)
+
+
+def _deployment_evidence_payload(support_identity):
+    """Build one real signed deployment qualification for a compiled plan."""
+
+    from moonmind.omnigent.bootstrap.evidence import build_deployment_evidence
+    from moonmind.omnigent.harness_platform.support import (
+        compute_support_combination_key,
+    )
+
+    return build_deployment_evidence(
+        support_identity=support_identity,
+        support_combination_key=compute_support_combination_key(support_identity),
+        host_image_ref=_EVIDENCE_HOST_IMAGE_REF,
+        policy_snapshot_digest="sha256:" + "1" * 64,
+        effective_launch_snapshot_digest="sha256:" + "2" * 64,
+        provider_profile_ref="p1",
+        credential_generation=1,
+        qualified_model_id="gpt-5",
+        effort="medium",
+        results={"readQualification": "passed"},
+        evidence_refs={"readRun": "artifact:read-run"},
+        resolved_state=None,
+    )
+
+
+def _publish_deployment_evidence(
+    tmp_path, monkeypatch, support_identity, *, age_days=0
+):
+    """Publish deployment evidence for an exact combination and select it.
+
+    ``age_days`` back-dates the document so the planner boundary can be
+    exercised against evidence that has lapsed, which is the case an operator
+    actually hits when a qualification is not refreshed.
+    """
+
+    import json
+    from datetime import timedelta
+
+    from moonmind.omnigent.bootstrap.evidence import write_deployment_evidence
+    from moonmind.omnigent.deployment_evidence import sign_deployment_evidence
+
+    monkeypatch.setenv("MOONMIND_OMNIGENT_EVIDENCE_POLICY", "deployment")
+    monkeypatch.setenv(
+        "MOONMIND_DEPLOYMENT_EVIDENCE_KEY_PATH",
+        str(tmp_path / "deployment_evidence_key"),
+    )
+    destination = tmp_path / "deployment-execution-evidence.json"
+    monkeypatch.setenv("MOONMIND_OMNIGENT_DEPLOYMENT_EVIDENCE", str(destination))
+    evidence = _deployment_evidence_payload(support_identity)
+    if not age_days:
+        write_deployment_evidence(evidence, path=destination)
+        return destination
+    shifted = {
+        key: value for key, value in evidence.items() if key != "signature"
+    }
+    generated_at = datetime.fromisoformat(shifted["generatedAt"]) - timedelta(
+        days=age_days
+    )
+    shifted["generatedAt"] = generated_at.isoformat()
+    shifted["expiresAt"] = (generated_at + timedelta(days=1)).isoformat()
+    destination.write_text(
+        json.dumps({"entries": [sign_deployment_evidence(shifted)]}),
+        encoding="utf-8",
+    )
+    return destination
+
+
+def _select_missing_deployment_evidence(tmp_path, monkeypatch):
+    """Point admission at a deployment that published no qualification."""
+
+    monkeypatch.setenv("MOONMIND_OMNIGENT_EVIDENCE_POLICY", "deployment")
+    monkeypatch.setenv(
+        "MOONMIND_OMNIGENT_DEPLOYMENT_EVIDENCE",
+        str(tmp_path / "no-deployment-execution-evidence.json"),
+    )
+
+
+def test_plan_freezes_the_runtime_provider_rollout_decision(
+    tmp_path, monkeypatch
+):
     from moonmind.omnigent.runtime_provider_rollout import (
         RUNTIME_PROVIDER_ROLLOUT_POLICY_VERSION,
     )
 
     monkeypatch.setenv(_GATE_ENV, "1")
+    _select_missing_deployment_evidence(tmp_path, monkeypatch)
+    _publish_deployment_evidence(
+        tmp_path, monkeypatch, _compile_codex_plan().payload.supportIdentity
+    )
     payload = _compile_codex_plan().payload
     record = payload.runtimeProviderRollout
     assert record is not None
@@ -736,10 +823,16 @@ def test_plan_records_the_legacy_row_before_codex_promotion(monkeypatch):
     assert payload.executionRealizerRef == "codex-profile-bound@1"
 
 
-def test_frozen_rollout_record_is_not_reinterpreted_by_a_later_policy(monkeypatch):
+def test_frozen_rollout_record_is_not_reinterpreted_by_a_later_policy(
+    tmp_path, monkeypatch
+):
     from moonmind.omnigent.harness_platform.execution_plan import compute_plan_ref
 
     monkeypatch.setenv(_GATE_ENV, "1")
+    _select_missing_deployment_evidence(tmp_path, monkeypatch)
+    _publish_deployment_evidence(
+        tmp_path, monkeypatch, _compile_codex_plan().payload.supportIdentity
+    )
     admitted = _compile_codex_plan()
     admitted_ref = compute_plan_ref(admitted.payload)
     # Rolling the deployment back cannot change the admitted plan's identity or
@@ -747,6 +840,60 @@ def test_frozen_rollout_record_is_not_reinterpreted_by_a_later_policy(monkeypatc
     monkeypatch.delenv(_GATE_ENV, raising=False)
     assert compute_plan_ref(admitted.payload) == admitted_ref
     assert admitted.payload.runtimeProviderRollout.state == "new_work_default"
+
+
+@pytest.mark.parametrize(
+    "age_days,expected_reason",
+    [(None, "support_evidence_missing"), (60, "support_evidence_stale")],
+)
+def test_support_evidence_gaps_demote_a_promoted_row_at_the_planner_boundary(
+    tmp_path, monkeypatch, age_days, expected_reason
+):
+    """A promoted row is frozen as promoted only while evidence backs it."""
+
+    from moonmind.omnigent.control_plane import metrics as control_plane_metrics
+
+    monkeypatch.setenv(_GATE_ENV, "1")
+    _select_missing_deployment_evidence(tmp_path, monkeypatch)
+    if age_days is not None:
+        _publish_deployment_evidence(
+            tmp_path,
+            monkeypatch,
+            _compile_codex_plan().payload.supportIdentity,
+            age_days=age_days,
+        )
+
+    control_plane_metrics.reset()
+    record = _compile_codex_plan().payload.runtimeProviderRollout
+
+    assert record is not None
+    # The promoted row is still the matched target; only its state is demoted.
+    assert record.targetId == "codex.generic-omnigent"
+    assert record.state == "explicit_only"
+    assert record.reasonCode == expected_reason
+    # The same decision reports the denial through the migration telemetry the
+    # operator status view reads.
+    assert [
+        (labels, count)
+        for name, labels, count in control_plane_metrics.counter_series()
+        if name == control_plane_metrics.MIGRATION_SUPPORT_EVIDENCE_DENIAL
+    ] == [({"harness_class": "codex", "denial_reason": expected_reason}, 1)]
+
+
+def test_qualified_support_evidence_keeps_a_promoted_row_promoted(
+    tmp_path, monkeypatch
+):
+    """The same boundary promotes when current evidence backs the row."""
+
+    monkeypatch.setenv(_GATE_ENV, "1")
+    _select_missing_deployment_evidence(tmp_path, monkeypatch)
+    demoted = _compile_codex_plan().payload
+    assert demoted.runtimeProviderRollout.state == "explicit_only"
+
+    _publish_deployment_evidence(tmp_path, monkeypatch, demoted.supportIdentity)
+    promoted = _compile_codex_plan().payload.runtimeProviderRollout
+    assert promoted.state == "new_work_default"
+    assert promoted.reasonCode == "rollout_new_work_default"
 
 
 def test_plan_payload_without_a_rollout_record_stays_replayable():

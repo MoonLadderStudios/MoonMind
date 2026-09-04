@@ -61,6 +61,23 @@ def _policy(env: dict[str, str] | None = None) -> RuntimeProviderRolloutPolicy:
     return default_runtime_provider_rollout_policy(env=env or {})
 
 
+def _qualified_context(**overrides) -> RolloutSelectionContext:
+    """Readiness inputs for a combination this deployment currently qualifies.
+
+    Production supplies exactly this shape from ``compile_execution_plan``: a
+    built-in row is promoted for new work only while current support evidence
+    backs its exact combination, so a test that expects a promoted state must
+    state the evidence it is promoting against.
+    """
+
+    payload = {
+        "supportEvidenceRef": "artifact:art_qualified",
+        "supportEvidenceAgeSeconds": 60.0,
+    }
+    payload.update(overrides)
+    return RolloutSelectionContext.model_validate(payload)
+
+
 # --- Exact dimensions -------------------------------------------------------
 
 
@@ -110,7 +127,11 @@ def test_resolution_never_routes_by_display_name_or_substring():
         }
     )
     assert (
-        resolve_rollout_decision(policy=renamed, combination=_combination()).state
+        resolve_rollout_decision(
+            policy=renamed,
+            combination=_combination(),
+            context=_qualified_context(),
+        ).state
         is RolloutState.new_work_default
     )
 
@@ -157,7 +178,9 @@ def test_codex_generic_is_disabled_until_the_deployment_qualifies_it():
     assert RolloutReason.rollout_disabled in denied.unavailable_reasons
 
     promoted = resolve_rollout_decision(
-        policy=_policy({_CODEX_GATE: "true"}), combination=_combination()
+        policy=_policy({_CODEX_GATE: "true"}),
+        combination=_combination(),
+        context=_qualified_context(),
     )
     assert promoted.state is RolloutState.new_work_default
     assert promoted.default_eligible is True
@@ -174,10 +197,13 @@ def test_claude_and_opencode_rows_are_independent():
             credentialMaterializerRef="claude-oauth-home@1",
             providerRuntimeId="claude_code",
         ),
+        context=_qualified_context(),
     )
     assert claude.state is RolloutState.new_work_default
     # Promoting Claude does not promote Codex.
-    codex = resolve_rollout_decision(policy=policy, combination=_combination())
+    codex = resolve_rollout_decision(
+        policy=policy, combination=_combination(), context=_qualified_context()
+    )
     assert codex.state is RolloutState.disabled
     opencode = resolve_rollout_decision(
         policy=policy,
@@ -188,6 +214,7 @@ def test_claude_and_opencode_rows_are_independent():
             credentialMaterializerRef="opencode-auth-json@1",
             providerRuntimeId="opencode",
         ),
+        context=_qualified_context(),
     )
     assert opencode.state is RolloutState.new_work_default
 
@@ -341,7 +368,7 @@ def test_canary_allowlists_are_exact_per_dimension(cohort, context, admitted):
     decision = resolve_rollout_decision(
         policy=_canary_policy(**cohort),
         combination=_combination(),
-        context=RolloutSelectionContext.model_validate(context),
+        context=_qualified_context(**context),
     )
     if admitted:
         assert decision.state is RolloutState.canary
@@ -365,7 +392,9 @@ def test_rollback_controls_are_independent_per_combination():
             RUNTIME_PROVIDER_ROLLBACK_ENV: "stop_new_generic_codex_admission",
         }
     )
-    codex = resolve_rollout_decision(policy=policy, combination=_combination())
+    codex = resolve_rollout_decision(
+        policy=policy, combination=_combination(), context=_qualified_context()
+    )
     assert codex.state is RolloutState.disabled
     assert (
         RuntimeProviderRollbackControl.stop_new_generic_codex_admission
@@ -380,6 +409,7 @@ def test_rollback_controls_are_independent_per_combination():
             credentialMaterializerRef="claude-oauth-home@1",
             providerRuntimeId="claude_code",
         ),
+        context=_qualified_context(),
     )
     assert claude.state is RolloutState.new_work_default
     assert claude.rollback_controls_applied == ()
@@ -423,7 +453,9 @@ def test_restoring_a_legacy_default_is_not_reported_as_unavailability():
             RUNTIME_PROVIDER_ROLLBACK_ENV: "restore_legacy_or_direct_default",
         }
     )
-    generic = resolve_rollout_decision(policy=policy, combination=_combination())
+    generic = resolve_rollout_decision(
+        policy=policy, combination=_combination(), context=_qualified_context()
+    )
     assert generic.state is RolloutState.explicit_only
     assert generic.explicit_selection_allowed is True
     assert generic.unavailable_reasons == ()
@@ -436,7 +468,9 @@ def test_restore_legacy_default_only_promotes_a_supported_compatibility_row():
             RUNTIME_PROVIDER_ROLLBACK_ENV: "restore_legacy_or_direct_default",
         }
     )
-    generic = resolve_rollout_decision(policy=policy, combination=_combination())
+    generic = resolve_rollout_decision(
+        policy=policy, combination=_combination(), context=_qualified_context()
+    )
     assert generic.state is RolloutState.explicit_only
     assert (
         RolloutReason.rollback_legacy_default_restored is generic.reason_code
@@ -505,7 +539,9 @@ def test_unknown_rollback_control_fails_fast():
 
 def test_frozen_record_is_compact_versioned_and_identity_free():
     decision = resolve_rollout_decision(
-        policy=_policy({_CODEX_GATE: "true"}), combination=_combination()
+        policy=_policy({_CODEX_GATE: "true"}),
+        combination=_combination(),
+        context=_qualified_context(),
     )
     record = freeze_rollout_record(decision)
     assert record == {
@@ -525,11 +561,15 @@ def test_frozen_record_is_compact_versioned_and_identity_free():
 
 def test_changing_the_live_policy_does_not_reinterpret_a_frozen_record():
     promoted = resolve_rollout_decision(
-        policy=_policy({_CODEX_GATE: "true"}), combination=_combination()
+        policy=_policy({_CODEX_GATE: "true"}),
+        combination=_combination(),
+        context=_qualified_context(),
     )
     frozen = freeze_rollout_record(promoted)
     rolled_back = resolve_rollout_decision(
-        policy=_policy({}), combination=_combination()
+        policy=_policy({}),
+        combination=_combination(),
+        context=_qualified_context(),
     )
     assert rolled_back.state is RolloutState.disabled
     # The already-frozen record is unchanged by the newer policy.

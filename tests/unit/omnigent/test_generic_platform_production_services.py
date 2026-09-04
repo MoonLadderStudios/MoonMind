@@ -2107,6 +2107,87 @@ async def test_generic_realizer_persists_authority_and_releases_provider_last() 
     assert events[len(first_execution_events) :] == []
 
 
+def _metric_keys(section: str, name: str) -> list[str]:
+    """Return the recorded aggregate keys for one metric family."""
+
+    from moonmind.omnigent.control_plane import metrics as control_plane_metrics
+
+    return [
+        key
+        for key in control_plane_metrics.snapshot()[section]
+        if key.startswith(f"{name}[")
+    ]
+
+
+@pytest.mark.asyncio
+async def test_generic_realizer_emits_migration_telemetry_from_its_lifecycle() -> None:
+    """Every migration family is emitted by the production lifecycle itself."""
+
+    from moonmind.omnigent.control_plane import metrics as control_plane_metrics
+
+    harness = await _generic_publication_harness(_PUSHED_PUBLICATION)
+    control_plane_metrics.reset()
+
+    result = await harness.realizer.execute(
+        harness.publish_request, _plan("opencode-go/model")
+    )
+
+    assert result.failure_class is None
+    counters = control_plane_metrics.snapshot()["counters"]
+    assert counters[
+        f"{control_plane_metrics.MIGRATION_LAUNCH_READINESS}"
+        "[('harness_class', 'opencode'), ('readiness', 'ready')]"
+    ] == 1
+    assert counters[
+        f"{control_plane_metrics.MIGRATION_CLEANUP_OUTCOME}"
+        "[('harness_class', 'opencode'), ('cleanup_outcome', 'completed_clean')]"
+    ] == 1
+    for family in (
+        control_plane_metrics.MIGRATION_PROVIDER_PROFILE_WAIT,
+        control_plane_metrics.MIGRATION_HOST_LATENCY,
+        control_plane_metrics.MIGRATION_FIRST_TURN_LATENCY,
+    ):
+        observed = _metric_keys("observations", family)
+        assert observed == [f"{family}[('harness_class', 'opencode')]"], family
+    # No identity may reach the label space through any of these call sites.
+    serialized = repr(control_plane_metrics.snapshot())
+    for forbidden in ("workflow-1", "idem-1", "session-1", "host-1", "p1"):
+        assert forbidden not in serialized
+
+
+@pytest.mark.asyncio
+async def test_generic_realizer_reports_a_launch_that_never_became_ready() -> None:
+    """A host that never reaches attested ready is a launch-readiness failure."""
+
+    from moonmind.omnigent.control_plane import metrics as control_plane_metrics
+
+    harness = await _generic_publication_harness(_PUSHED_PUBLICATION)
+
+    async def _unavailable_host(_plan_envelope):
+        raise RuntimeError("host class is unavailable")
+
+    harness.realizer._resolve_host = _unavailable_host
+    control_plane_metrics.reset()
+
+    with pytest.raises(RuntimeError):
+        await harness.realizer.execute(
+            harness.publish_request, _plan("opencode-go/model")
+        )
+
+    counters = control_plane_metrics.snapshot()["counters"]
+    assert counters[
+        f"{control_plane_metrics.MIGRATION_LAUNCH_READINESS}"
+        "[('harness_class', 'opencode'), ('readiness', 'not_ready')]"
+    ] == 1
+    assert not _metric_keys(
+        "observations", control_plane_metrics.MIGRATION_FIRST_TURN_LATENCY
+    )
+    # The provider capacity wait is observed even when the launch fails after it.
+    assert _metric_keys(
+        "observations", control_plane_metrics.MIGRATION_PROVIDER_PROFILE_WAIT
+    )
+
+
 @pytest.mark.asyncio
 async def test_generic_realizer_projects_provider_capacity_wait() -> None:
     projected: list[tuple[str, str, str]] = []

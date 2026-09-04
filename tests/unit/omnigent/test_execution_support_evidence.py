@@ -174,3 +174,141 @@ def test_protected_evidence_requires_exact_immutable_artifacts(
 
     with pytest.raises(ValueError):
         validate_protected_execution_support_evidence(evidence)
+
+
+# --- Readiness observation boundary (MoonLadderStudios/MoonMind#3833) --------
+
+
+def test_freshness_probe_reports_expiry_separately_from_absence(
+    tmp_path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Readiness must distinguish "never qualified" from "qualification lapsed"."""
+
+    from moonmind.omnigent.evidence_resolver import (
+        resolve_support_evidence_freshness,
+    )
+
+    plan = _plan()
+    path = tmp_path / "execution-support-evidence.json"
+    monkeypatch.setenv("MOONMIND_OMNIGENT_EXECUTION_SUPPORT_EVIDENCE", str(path))
+    monkeypatch.setenv("MOONMIND_OMNIGENT_EVIDENCE_POLICY", "protected")
+
+    # No document at all: nothing found, so a promoted row fails closed on
+    # ``support_evidence_missing`` rather than on a staleness reason.
+    absent = resolve_support_evidence_freshness(plan.supportIdentity)
+    assert absent.tier == ""
+    assert absent.evidence_ref == ""
+    assert absent.expired is False
+
+    path.write_text(json.dumps({"entries": [_evidence(plan)]}), encoding="utf-8")
+    current = resolve_support_evidence_freshness(plan.supportIdentity)
+    assert current.tier == "supported"
+    assert current.evidence_ref == "https://example.invalid/actions/runs/123"
+    assert current.expired is False
+    assert current.age_seconds is not None and current.age_seconds < 60
+
+    lapsed = datetime.now(UTC) - timedelta(days=90)
+    path.write_text(
+        json.dumps({"entries": [_evidence(plan, generated_at=lapsed)]}),
+        encoding="utf-8",
+    )
+    stale = resolve_support_evidence_freshness(plan.supportIdentity)
+    # The document is still structurally authoritative; only its validity
+    # lapsed, and the probe says so instead of reporting it as missing.
+    assert stale.tier == "supported"
+    assert stale.expired is True
+    assert stale.age_seconds > timedelta(days=89).total_seconds()
+
+
+def test_freshness_probe_never_admits_and_never_raises(
+    tmp_path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A malformed or unreadable document is an observation, not an exception."""
+
+    from moonmind.omnigent.evidence_resolver import (
+        resolve_support_evidence_freshness,
+    )
+
+    plan = _plan()
+    path = tmp_path / "execution-support-evidence.json"
+    path.write_text("{not json", encoding="utf-8")
+    monkeypatch.setenv("MOONMIND_OMNIGENT_EXECUTION_SUPPORT_EVIDENCE", str(path))
+    monkeypatch.setenv("MOONMIND_OMNIGENT_DEPLOYMENT_EVIDENCE", str(tmp_path / "none.json"))
+    monkeypatch.setenv("MOONMIND_OMNIGENT_EVIDENCE_POLICY", "either")
+
+    assert resolve_support_evidence_freshness(plan.supportIdentity).tier == ""
+
+    # Admission still fails closed on the same document.
+    with pytest.raises(ValueError):
+        load_protected_execution_support_evidence(plan)
+
+
+def test_freshness_probe_falls_through_a_lapsed_tier_like_admission(
+    tmp_path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Under ``either``, a lapsed protected document is not the final answer.
+
+    Admission falls through to the deployment tier in exactly this case, so a
+    rollout demotion here would contradict an admission that will succeed.
+    """
+
+    from moonmind.omnigent.bootstrap.evidence import (
+        build_deployment_evidence,
+        write_deployment_evidence,
+    )
+    from moonmind.omnigent.evidence_resolver import (
+        resolve_support_evidence_freshness,
+    )
+
+    plan = _plan()
+    protected_path = tmp_path / "execution-support-evidence.json"
+    protected_path.write_text(
+        json.dumps(
+            {
+                "entries": [
+                    _evidence(plan, generated_at=datetime.now(UTC) - timedelta(days=90))
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setenv(
+        "MOONMIND_OMNIGENT_EXECUTION_SUPPORT_EVIDENCE", str(protected_path)
+    )
+    monkeypatch.setenv("MOONMIND_OMNIGENT_EVIDENCE_POLICY", "either")
+    deployment_path = tmp_path / "deployment-execution-evidence.json"
+    monkeypatch.setenv(
+        "MOONMIND_OMNIGENT_DEPLOYMENT_EVIDENCE", str(deployment_path)
+    )
+    monkeypatch.setenv(
+        "MOONMIND_DEPLOYMENT_EVIDENCE_KEY_PATH",
+        str(tmp_path / "deployment_evidence_key"),
+    )
+
+    # Only the lapsed protected document exists: the lapse is reported, so the
+    # denial names staleness rather than absence.
+    lapsed = resolve_support_evidence_freshness(plan.supportIdentity)
+    assert lapsed.tier == "supported"
+    assert lapsed.expired is True
+
+    write_deployment_evidence(
+        build_deployment_evidence(
+            support_identity=plan.supportIdentity,
+            support_combination_key=plan.supportCombinationKey,
+            host_image_ref=plan.hostImageRef,
+            policy_snapshot_digest=plan.policySnapshotDigest,
+            effective_launch_snapshot_digest=plan.effectiveLaunchSnapshotDigest,
+            provider_profile_ref="provider-1",
+            credential_generation=1,
+            qualified_model_id="example/model",
+            effort="medium",
+            results={"readQualification": "passed"},
+            evidence_refs={"readRun": "artifact:read-run"},
+            resolved_state=None,
+        ),
+        path=deployment_path,
+    )
+
+    current = resolve_support_evidence_freshness(plan.supportIdentity)
+    assert current.tier == "deployment_qualified"
+    assert current.expired is False
