@@ -4745,10 +4745,34 @@ def test_create_execution_keeps_resolved_agent_profile_out_of_authored_omnigent(
         taskInputSnapshotRef="art_task_1",
         taskInputSnapshotDigest="sha256:" + "c" * 64,
     )
+    # MoonLadderStudios/MoonMind#3833: the compiled plan carries the frozen
+    # runtime-provider rollout decision, and the submission records it beside
+    # the plan binding so Workflow Detail shows the truthful selected path.
+    from moonmind.omnigent.harness_platform.execution_plan import (
+        RuntimeProviderRolloutRecord,
+    )
+
+    rollout_record = RuntimeProviderRolloutRecord.model_validate(
+        {
+            "policyVersion": "moonmind.omnigent-runtime-provider-rollout/v1",
+            "policyGeneration": 1,
+            "combinationKey": (
+                "omnigent-runtime-provider-combination:sha256:" + "d" * 64
+            ),
+            "targetId": "codex.generic-omnigent",
+            "pathClass": "generic_omnigent",
+            "state": "new_work_default",
+            "ruleGeneration": 1,
+            "reasonCode": "rollout_new_work_default",
+        }
+    )
     compiled_plan = SimpleNamespace(
         binding=plan_binding,
         artifact_refs=("art_profile_1", "art_skills_1", "art_plan_1"),
         resolved_skillset_ref="art_skills_1",
+        runtime_provider_rollout=rollout_record.model_dump(
+            mode="json", by_alias=True
+        ),
     )
     with (
         patch(
@@ -4804,6 +4828,23 @@ def test_create_execution_keeps_resolved_agent_profile_out_of_authored_omnigent(
     assert initial_parameters["omnigentExecutionPlan"] == plan_binding.model_dump(
         mode="json", by_alias=True, exclude_none=True
     )
+    # The rollout decision is a sibling key, never a new field inside the
+    # compatibility-sensitive plan binding.
+    assert "runtimeProviderTarget" not in initial_parameters[
+        "omnigentExecutionPlan"
+    ]
+    assert initial_parameters["runtimeProviderTarget"] == {
+        "policyVersion": "moonmind.omnigent-runtime-provider-rollout/v1",
+        "policyGeneration": 1,
+        "combinationKey": (
+            "omnigent-runtime-provider-combination:sha256:" + "d" * 64
+        ),
+        "targetId": "codex.generic-omnigent",
+        "pathClass": "generic_omnigent",
+        "state": "new_work_default",
+        "ruleGeneration": 1,
+        "reasonCode": "rollout_new_work_default",
+    }
     assert initial_parameters["omnigent"] == {
         "executionTargetRef": "omnigent-codex@1",
         "launchPolicyRef": "codex-on-demand@1",
@@ -12395,6 +12436,47 @@ def test_describe_execution_exposes_workflow_and_run_identity() -> None:
         assert payload["latestRunView"] is True
         assert payload["continueAsNewCause"] == "manual_rerun"
         assert payload["stepsHref"] == "/api/executions/mm:wf-1/steps"
+
+def test_describe_execution_projects_recorded_runtime_provider_target() -> None:
+    """MoonLadderStudios/MoonMind#3833: Workflow Detail shows the frozen path.
+
+    In-flight executions admitted before the contract existed simply omit the
+    recorded target, so the projection reports ``None`` rather than failing.
+    """
+
+    frozen = {
+        "policyVersion": "moonmind.omnigent-runtime-provider-rollout/v1",
+        "policyGeneration": 1,
+        "combinationKey": (
+            "omnigent-runtime-provider-combination:sha256:" + "e" * 64
+        ),
+        "targetId": "codex.generic-omnigent",
+        "pathClass": "generic_omnigent",
+        "state": "new_work_default",
+        "ruleGeneration": 3,
+        "reasonCode": "rollout_new_work_default",
+    }
+    for test_client, service in _client_with_service():
+        record = _build_execution_record()
+        record.parameters = {
+            **dict(record.parameters or {}),
+            "runtimeProviderTarget": frozen,
+        }
+        service.describe_execution.return_value = record
+
+        response = test_client.get("/api/executions/mm:wf-1")
+
+        assert response.status_code == 200
+        assert response.json()["omnigentRuntimeProviderTarget"] == frozen
+
+    for test_client, service in _client_with_service():
+        service.describe_execution.return_value = _build_execution_record()
+
+        response = test_client.get("/api/executions/mm:wf-1")
+
+        assert response.status_code == 200
+        assert response.json()["omnigentRuntimeProviderTarget"] is None
+
 
 def test_describe_execution_includes_latest_run_progress() -> None:
     app = FastAPI()

@@ -247,6 +247,10 @@ from moonmind.workflows.executions.preset_goal_scheduler import (
     workflow_is_already_authored,
 )
 from moonmind.workflows.executions.runtime_defaults import normalize_runtime_id
+from moonmind.workflows.executions.runtime_target_selection import (
+    AuthoringSurface,
+    resolve_runtime_target_selection,
+)
 from moonmind.omnigent.cutover import effective_phase, select_runtime
 from moonmind.omnigent.bridge_store import (
     BridgeChatBindingAmbiguousError,
@@ -4334,6 +4338,14 @@ def _serialize_execution(
             if plan_ref and plan_digest and plan_artifact
             else None
         )
+    # Frozen runtime-provider rollout authority (#3833). Executions admitted
+    # before this contract existed simply omit it.
+    recorded_runtime_provider_target = params.get("runtimeProviderTarget")
+    omnigent_runtime_provider_target = (
+        dict(recorded_runtime_provider_target)
+        if isinstance(recorded_runtime_provider_target, Mapping)
+        else None
+    )
     runtime_binding_ref = str(memo.get("omnigent_runtime_binding_ref") or "").strip()
     omnigent_runtime_binding = (
         {
@@ -4384,6 +4396,7 @@ def _serialize_execution(
             else None
         ),
         omnigent_runtime_binding=omnigent_runtime_binding,
+        omnigent_runtime_provider_target=omnigent_runtime_provider_target,
         target_runtime=target_runtime,
         target_skill=target_skill,
         model=param_model,
@@ -11073,17 +11086,30 @@ async def _create_execution_from_workflow_request(
         if runtime_was_authored
         else None
     )
+    submission_kind = (
+        "schedule"
+        if task_payload.get("presetSchedule") or scheduled_for_dt is not None
+        else "create"
+    )
+    # MoonLadderStudios/MoonMind#3833: the unauthored default comes from the one
+    # shared runtime-target selection boundary, which asks the versioned
+    # runtime-provider rollout policy. This surface does not reconstruct a
+    # default of its own from settings or environment variables.
+    resolved_default_runtime = resolve_runtime_target_selection(
+        surface=(
+            AuthoringSurface.schedule
+            if submission_kind == "schedule"
+            else AuthoringSurface.workflow_create
+        ),
+        workflow_settings=settings.workflow,
+    ).runtime_id
     try:
         cutover_status = effective_phase()
         cutover_selection = select_runtime(
             authored_runtime=authored_runtime,
-            configured_default=settings.workflow.default_runtime,
+            configured_default=resolved_default_runtime,
             phase=cutover_status.phase,
-            submission_kind=(
-                "schedule"
-                if task_payload.get("presetSchedule") or scheduled_for_dt is not None
-                else "create"
-            ),
+            submission_kind=submission_kind,
             release_status=cutover_status,
         )
     except ValueError as exc:
@@ -11488,6 +11514,15 @@ async def _create_execution_from_workflow_request(
         initial_parameters["resolvedSkillsetRef"] = (
             persisted_omnigent_plan.resolved_skillset_ref
         )
+        # MoonLadderStudios/MoonMind#3833: record the frozen runtime-provider
+        # rollout decision beside the plan binding so Workflow Detail and audit
+        # evidence show the truthful selected path. It is a sibling key, not a
+        # new field inside the compatibility-sensitive plan binding.
+        frozen_rollout = getattr(
+            persisted_omnigent_plan, "runtime_provider_rollout", None
+        )
+        if frozen_rollout:
+            initial_parameters["runtimeProviderTarget"] = dict(frozen_rollout)
 
     try:
         start_contract = resolve_user_workflow_start_contract(settings.temporal)
@@ -11813,11 +11848,17 @@ async def _resolve_recurring_runtime_metadata(
         or parameter_payload.get("targetRuntime")
         or runtime_payload.get("mode")
     )
+    # The recurring-schedule surface resolves its unauthored default through the
+    # same shared boundary as Workflow Create (#3833).
+    resolved_default_runtime = resolve_runtime_target_selection(
+        surface=AuthoringSurface.schedule,
+        workflow_settings=settings.workflow,
+    ).runtime_id
     try:
         cutover_status = effective_phase()
         cutover_selection = select_runtime(
             authored_runtime=authored_runtime,
-            configured_default=settings.workflow.default_runtime,
+            configured_default=resolved_default_runtime,
             phase=cutover_status.phase,
             submission_kind="schedule",
             release_status=cutover_status,

@@ -700,3 +700,117 @@ def test_claude_generic_plan_fails_closed_until_qualified(monkeypatch):
     with pytest.raises(Exception) as exc2:
         _compile_claude_plan(execution_realizer_ref="generic-omnigent-host@1")
     assert "execution realizer" in str(exc2.value).lower()
+
+# ---- #3833: rollout decision frozen into immutable execution authority ----
+
+
+def test_plan_freezes_the_runtime_provider_rollout_decision(monkeypatch):
+    from moonmind.omnigent.runtime_provider_rollout import (
+        RUNTIME_PROVIDER_ROLLOUT_POLICY_VERSION,
+    )
+
+    monkeypatch.setenv(_GATE_ENV, "1")
+    payload = _compile_codex_plan().payload
+    record = payload.runtimeProviderRollout
+    assert record is not None
+    assert record.policyVersion == RUNTIME_PROVIDER_ROLLOUT_POLICY_VERSION
+    assert record.targetId == "codex.generic-omnigent"
+    assert record.pathClass == "generic_omnigent"
+    assert record.state == "new_work_default"
+    assert record.ruleGeneration >= 1
+    assert record.combinationKey.startswith(
+        "omnigent-runtime-provider-combination:sha256:"
+    )
+    # The realizer the plan records and the rollout row it was admitted under
+    # agree, so audit evidence shows one truthful selected path.
+    assert payload.executionRealizerRef == "generic-omnigent-host@1"
+
+
+def test_plan_records_the_legacy_row_before_codex_promotion(monkeypatch):
+    monkeypatch.delenv(_GATE_ENV, raising=False)
+    payload = _compile_codex_plan().payload
+    record = payload.runtimeProviderRollout
+    assert record is not None
+    assert record.targetId == "codex.legacy-profile-bound-omnigent"
+    assert record.pathClass == "legacy_profile_bound_omnigent"
+    assert payload.executionRealizerRef == "codex-profile-bound@1"
+
+
+def test_frozen_rollout_record_is_not_reinterpreted_by_a_later_policy(monkeypatch):
+    from moonmind.omnigent.harness_platform.execution_plan import compute_plan_ref
+
+    monkeypatch.setenv(_GATE_ENV, "1")
+    admitted = _compile_codex_plan()
+    admitted_ref = compute_plan_ref(admitted.payload)
+    # Rolling the deployment back cannot change the admitted plan's identity or
+    # its recorded rollout authority.
+    monkeypatch.delenv(_GATE_ENV, raising=False)
+    assert compute_plan_ref(admitted.payload) == admitted_ref
+    assert admitted.payload.runtimeProviderRollout.state == "new_work_default"
+
+
+def test_plan_payload_without_a_rollout_record_stays_replayable():
+    """Plans admitted before #3833 keep their canonical bytes and digest."""
+
+    from moonmind.omnigent.harness_platform.execution_plan import (
+        OmnigentExecutionPlanPayload,
+        canonical_payload_bytes,
+        compute_plan_ref,
+    )
+
+    payload = _compile_codex_plan().payload
+    historical = payload.model_dump(by_alias=True, mode="json")
+    historical.pop("runtimeProviderRollout", None)
+    replayed = OmnigentExecutionPlanPayload.model_validate(historical)
+    assert replayed.runtimeProviderRollout is None
+    assert compute_plan_ref(replayed) == compute_plan_ref(historical)
+    assert b"runtimeProviderRollout" not in canonical_payload_bytes(replayed)
+
+
+def test_rollback_control_blocks_new_generic_codex_admission(monkeypatch):
+    from moonmind.omnigent.runtime_provider_rollout import (
+        RUNTIME_PROVIDER_ROLLBACK_ENV,
+    )
+
+    monkeypatch.setenv(_GATE_ENV, "1")
+    monkeypatch.setenv(
+        RUNTIME_PROVIDER_ROLLBACK_ENV, "stop_new_generic_codex_admission"
+    )
+    # Stopping generic Codex admission does not silently restore the legacy
+    # realizer: that is a separate, explicit control. New admission fails
+    # closed instead of substituting a path the operator did not restore.
+    with pytest.raises(Exception) as exc:
+        _compile_codex_plan()
+    assert "realizer" in str(exc.value).lower()
+    with pytest.raises(Exception) as explicit_exc:
+        _compile_codex_plan(execution_realizer_ref="generic-omnigent-host@1")
+    assert "execution realizer" in str(explicit_exc.value).lower()
+
+    # Restoring the explicitly supported legacy default re-admits it, and the
+    # plan records that truthful path.
+    monkeypatch.setenv(
+        RUNTIME_PROVIDER_ROLLBACK_ENV,
+        "stop_new_generic_codex_admission,restore_legacy_or_direct_default",
+    )
+    payload = _compile_codex_plan().payload
+    assert payload.executionRealizerRef == "codex-profile-bound@1"
+    assert (
+        payload.runtimeProviderRollout.targetId
+        == "codex.legacy-profile-bound-omnigent"
+    )
+
+
+def test_stop_all_new_omnigent_work_never_substitutes_another_runtime(monkeypatch):
+    from moonmind.omnigent.runtime_provider_rollout import (
+        RUNTIME_PROVIDER_ROLLBACK_ENV,
+    )
+
+    monkeypatch.setenv(_GATE_ENV, "1")
+    monkeypatch.setenv(RUNTIME_PROVIDER_ROLLBACK_ENV, "stop_all_new_omnigent_work")
+    with pytest.raises(Exception) as exc:
+        _compile_codex_plan()
+    message = str(exc.value).lower()
+    assert "realizer" in message
+    # The denial names no replacement runtime.
+    assert "codex_cli" not in message
+    assert "claude_code" not in message

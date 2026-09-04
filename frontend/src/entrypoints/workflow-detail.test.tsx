@@ -685,6 +685,17 @@ describe('Workflow Detail Entrypoint', () => {
             fencingGeneration: 1,
             state: 'session_bound',
           },
+          // MoonLadderStudios/MoonMind#3833: the frozen rollout decision.
+          omnigentRuntimeProviderTarget: {
+            targetId: 'codex.generic-omnigent',
+            pathClass: 'generic_omnigent',
+            state: 'new_work_default',
+            policyVersion: 'moonmind.omnigent-runtime-provider-rollout/v1',
+            policyGeneration: 1,
+            ruleGeneration: 2,
+            combinationKey: `omnigent-runtime-provider-combination:sha256:${'b'.repeat(64)}`,
+            reasonCode: 'rollout_new_work_default',
+          },
           actions: {},
         }),
       } as Response);
@@ -700,6 +711,17 @@ describe('Workflow Detail Entrypoint', () => {
         (_content, node) =>
           node?.tagName === 'DD' &&
           node.textContent?.includes('revision 3 · generation 1 · session bound') === true,
+      ),
+    ).toBeTruthy();
+    // The recorded selected path is shown truthfully, including its frozen
+    // rollout generation, rather than a friendly runtime name.
+    expect(
+      screen.getByText(
+        (_content, node) =>
+          node?.tagName === 'SPAN' &&
+          node.textContent?.includes(
+            'codex.generic-omnigent · new work default · rollout generation 2',
+          ) === true,
       ),
     ).toBeTruthy();
   });

@@ -412,7 +412,17 @@ async def test_generic_readiness_requires_both_feature_gates_and_real_launch_dat
     assert {reason.code for reason in disabled_target.gate_reasons} >= {
         "generic_realizer_not_ready",
         "opencode_support_not_qualified",
+        # MoonLadderStudios/MoonMind#3833: the rollout policy is the one
+        # authority for admission, and it names its own exact reason.
+        "runtime_provider_rollout_unavailable",
     }
+    assert disabled_target.rollout_target_id == "opencode.generic-omnigent"
+    assert disabled_target.rollout_state == "disabled"
+    # A target the rollout policy does not admit advertises no Provider
+    # Profiles, host classes, or models at all.
+    assert disabled_target.compatible_provider_profiles == []
+    assert disabled_target.compatible_host_classes == []
+    assert disabled_target.models == []
 
     monkeypatch.setenv("MOONMIND_OMNIGENT_GENERIC_HOST_ENABLED", "true")
     monkeypatch.setenv("MOONMIND_OMNIGENT_OPENCODE_ENABLED", "true")
@@ -423,6 +433,13 @@ async def test_generic_readiness_requires_both_feature_gates_and_real_launch_dat
     assert enabled_target.available is True
     assert enabled_target.compatible_host_classes == ["omnigent-opencode@1"]
     assert enabled_target.models == ["opencode-go/test-model"]
+    assert enabled_target.rollout_target_id == "opencode.generic-omnigent"
+    assert enabled_target.rollout_state == "new_work_default"
+    assert enabled_target.rollout_generation == 1
+    assert enabled_target.rollout_policy_version.startswith(
+        "moonmind.omnigent-runtime-provider-rollout/"
+    )
+    assert enabled_target.compatibility_path is False
 
     # The pinned host image refreshes its catalog from the provider at probe
     # time, so an observation older than the configured interval no longer

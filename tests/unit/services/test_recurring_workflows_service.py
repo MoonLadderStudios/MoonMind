@@ -1634,3 +1634,200 @@ async def test_mm3788_update_definition_accepts_a_target_owned_by_its_runtime(
         parameters = updated.target["initialParameters"]
         assert parameters["profileId"] == "claude_minimax_team"
         mock_temporal_adapter.update_schedule.assert_awaited_once()
+
+# ---- #3833: schedules pin their runtime-provider target ----
+
+
+def _schedule_plan_binding(digest_char: str) -> dict[str, object]:
+    digest = digest_char * 64
+    return {
+        "planRef": f"omnigent-execution-plan:sha256:{digest}",
+        "planDigest": f"sha256:{digest}",
+        "planArtifactRef": "artifact:plan",
+        "taskInputSnapshotRef": "artifact:task-input",
+        "taskInputSnapshotDigest": "sha256:" + "a" * 64,
+    }
+
+
+def _rollout_record(target_id: str) -> dict[str, object]:
+    return {
+        "policyVersion": "moonmind.omnigent-runtime-provider-rollout/v1",
+        "policyGeneration": 1,
+        "combinationKey": (
+            "omnigent-runtime-provider-combination:sha256:" + "b" * 64
+        ),
+        "targetId": target_id,
+        "pathClass": "generic_omnigent",
+        "state": "new_work_default",
+        "ruleGeneration": 1,
+        "reasonCode": "rollout_new_work_default",
+    }
+
+
+def _stub_compiled_plan(
+    monkeypatch: pytest.MonkeyPatch,
+    *,
+    binding: dict[str, object],
+    rollout: dict[str, object] | None,
+):
+    from api_service.services import omnigent_execution_plan_service
+    from moonmind.schemas.agent_runtime_models import OmnigentExecutionPlanBinding
+
+    compiled = SimpleNamespace(
+        binding=OmnigentExecutionPlanBinding.model_validate(binding),
+        artifact_refs=("artifact:plan",),
+        resolved_skillset_ref="artifact:skills",
+        runtime_provider_rollout=dict(rollout) if rollout is not None else None,
+    )
+    compile_mock = AsyncMock(return_value=compiled)
+    monkeypatch.setattr(
+        omnigent_execution_plan_service,
+        "compile_and_persist_execution_plan",
+        compile_mock,
+    )
+    return compile_mock
+
+
+def _pinned_schedule_service(
+    monkeypatch: pytest.MonkeyPatch,
+    *,
+    target: dict[str, object],
+):
+    session = AsyncMock(spec=AsyncSession)
+    session.get = AsyncMock(
+        return_value=SimpleNamespace(profile_id="codex_openai_oauth")
+    )
+    service = RecurringWorkflowsService(session, artifact_service=object())
+    definition = SimpleNamespace(
+        id=uuid4(),
+        owner_user_id=None,
+        target=target,
+        version=4,
+        updated_at=None,
+    )
+    return service, definition
+
+
+async def test_schedule_pins_its_runtime_provider_target_on_first_refresh(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _stub_compiled_plan(
+        monkeypatch,
+        binding=_schedule_plan_binding("2"),
+        rollout=_rollout_record("codex.generic-omnigent"),
+    )
+    initial_parameters = {
+        "targetRuntime": "omnigent",
+        "omnigentExecutionPlan": _schedule_plan_binding("1"),
+    }
+    target = {
+        "initialParameters": initial_parameters,
+        "agentProfileSnapshot": {"providerProfileRef": "codex_openai_oauth"},
+    }
+    service, definition = _pinned_schedule_service(monkeypatch, target=target)
+
+    changed = await service._refresh_omnigent_execution_plan_target(
+        definition, target=target, initial_parameters=initial_parameters
+    )
+
+    assert changed is True
+    assert definition.target["runtimeProviderTarget"]["targetId"] == (
+        "codex.generic-omnigent"
+    )
+    assert definition.target["runtimeProviderTargetUpdatePolicy"] == "pinned"
+    # Advancing the schedule's authority advances its revision.
+    assert definition.version == 5
+
+
+async def test_pinned_schedule_rejects_a_runtime_provider_target_change(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _stub_compiled_plan(
+        monkeypatch,
+        binding=_schedule_plan_binding("2"),
+        rollout=_rollout_record("codex.generic-omnigent"),
+    )
+    initial_parameters = {
+        "targetRuntime": "omnigent",
+        "omnigentExecutionPlan": _schedule_plan_binding("1"),
+    }
+    target = {
+        "initialParameters": initial_parameters,
+        "agentProfileSnapshot": {"providerProfileRef": "codex_openai_oauth"},
+        "runtimeProviderTarget": _rollout_record(
+            "codex.legacy-profile-bound-omnigent"
+        ),
+    }
+    service, definition = _pinned_schedule_service(monkeypatch, target=target)
+
+    with pytest.raises(
+        RecurringWorkflowValidationError, match="explicit schedule revision"
+    ):
+        await service._refresh_omnigent_execution_plan_target(
+            definition, target=target, initial_parameters=initial_parameters
+        )
+    # The recorded plan authority is preserved for an explicit operator revision.
+    assert initial_parameters["omnigentExecutionPlan"] == (
+        _schedule_plan_binding("1")
+    )
+    assert definition.version == 4
+
+
+async def test_follow_qualified_default_adopts_the_new_target_as_a_revision(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _stub_compiled_plan(
+        monkeypatch,
+        binding=_schedule_plan_binding("2"),
+        rollout=_rollout_record("codex.generic-omnigent"),
+    )
+    initial_parameters = {
+        "targetRuntime": "omnigent",
+        "omnigentExecutionPlan": _schedule_plan_binding("1"),
+    }
+    target = {
+        "initialParameters": initial_parameters,
+        "agentProfileSnapshot": {"providerProfileRef": "codex_openai_oauth"},
+        "runtimeProviderTarget": _rollout_record(
+            "codex.legacy-profile-bound-omnigent"
+        ),
+        "runtimeProviderTargetUpdatePolicy": "follow_qualified_default",
+    }
+    service, definition = _pinned_schedule_service(monkeypatch, target=target)
+
+    changed = await service._refresh_omnigent_execution_plan_target(
+        definition, target=target, initial_parameters=initial_parameters
+    )
+
+    assert changed is True
+    assert definition.target["runtimeProviderTarget"]["targetId"] == (
+        "codex.generic-omnigent"
+    )
+    assert definition.version == 5
+
+
+async def test_unsupported_schedule_target_update_policy_fails_fast(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _stub_compiled_plan(
+        monkeypatch,
+        binding=_schedule_plan_binding("2"),
+        rollout=_rollout_record("codex.generic-omnigent"),
+    )
+    initial_parameters = {
+        "targetRuntime": "omnigent",
+        "omnigentExecutionPlan": _schedule_plan_binding("1"),
+    }
+    target = {
+        "initialParameters": initial_parameters,
+        "agentProfileSnapshot": {"providerProfileRef": "codex_openai_oauth"},
+        "runtimeProviderTargetUpdatePolicy": "always_upgrade",
+    }
+    service, definition = _pinned_schedule_service(monkeypatch, target=target)
+
+    with pytest.raises(
+        RecurringWorkflowValidationError, match="update policy"
+    ):
+        await service._refresh_omnigent_execution_plan_target(
+            definition, target=target, initial_parameters=initial_parameters
+        )

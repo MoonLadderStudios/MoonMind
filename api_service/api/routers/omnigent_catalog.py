@@ -215,6 +215,18 @@ class GenericExecutionTargetReadiness(BaseModel):
     policies: list[str]
     models: list[str]
     gate_reasons: list[GateReason] = Field(alias="gateReasons")
+    # Versioned runtime-provider rollout authority for this exact target
+    # (MoonLadderStudios/MoonMind#3833). ``None`` means no row is registered,
+    # which leaves the path explicit rather than promoted.
+    rollout_target_id: str | None = Field(default=None, alias="rolloutTargetId")
+    rollout_state: str | None = Field(default=None, alias="rolloutState")
+    rollout_generation: int | None = Field(
+        default=None, alias="rolloutGeneration"
+    )
+    rollout_policy_version: str | None = Field(
+        default=None, alias="rolloutPolicyVersion"
+    )
+    compatibility_path: bool = Field(default=False, alias="compatibilityPath")
 
 
 class OmnigentExecutionReadiness(BaseModel):
@@ -396,6 +408,15 @@ _REASONS: dict[str, tuple[str, str]] = {
     "agent_profile_not_ready": (
         "Validate and activate this Agent Profile version.",
         "/omnigent/agents",
+    ),
+    # MoonLadderStudios/MoonMind#3833: the versioned runtime-provider rollout
+    # policy did not admit this exact combination for new work. Provider
+    # Profiles are never advertised for a target that cannot be selected.
+    "runtime_provider_rollout_unavailable": (
+        "This runtime-provider combination is not admitted for new work by the "
+        "current rollout policy. Choose an available target or promote this "
+        "combination after its support evidence passes.",
+        "/settings#omnigent",
     ),
 }
 
@@ -1548,6 +1569,12 @@ async def get_omnigent_execution_readiness(
     from moonmind.omnigent.harness_platform.materializers import (
         materializer_ref_for_provider,
     )
+    from moonmind.omnigent.runtime_provider_rollout import (
+        RuntimeProviderPathClass,
+    )
+    from moonmind.workflows.executions.runtime_target_selection import (
+        resolve_runtime_target_catalog,
+    )
 
     _require_provider_profile_permission(current_user, "provider_profiles.read")
     profiles = list(
@@ -1575,6 +1602,7 @@ async def get_omnigent_execution_readiness(
     ]
     catalogs = DbHarnessCatalogRepository(async_session_maker)
     selector = OmnigentHostClassSelector()
+    rollout_catalog = resolve_runtime_target_catalog()
     targets: list[GenericExecutionTargetReadiness] = []
     for profile_row in profiles:
         version = await session.scalar(
@@ -1603,6 +1631,21 @@ async def get_omnigent_execution_readiness(
             continue
         if profile.harness.id == "opencode-native" and not opencode_support_enabled():
             reasons.append(_reason("opencode_support_not_qualified"))
+        # One versioned rollout authority decides whether this exact harness x
+        # path-class row may be selected for new work. An unadmitted row never
+        # advertises compatible Provider Profiles, host classes, or models.
+        rollout_view = next(
+            (
+                view
+                for view in rollout_catalog
+                if view.harness_id == profile.harness.id
+                and view.path_class
+                is RuntimeProviderPathClass.generic_omnigent
+            ),
+            None,
+        )
+        if rollout_view is not None and not rollout_view.explicit_selection_allowed:
+            reasons.append(_reason("runtime_provider_rollout_unavailable"))
         catalog = await catalogs.load(profile.harness.catalogRef)
         fresh_catalog = await catalogs.latest(profile.endpointRef)
         harness = None
@@ -1728,6 +1771,12 @@ async def get_omnigent_execution_readiness(
             )
             host_classes.update(item.ref for item in selected_classes)
             models.update(observed_models)
+        if rollout_view is not None and not rollout_view.explicit_selection_allowed:
+            # Fail closed: a target the rollout policy does not admit must not
+            # offer Provider Profiles, host classes, or models at all.
+            compatible = []
+            host_classes = set()
+            models = set()
         if not compatible:
             reasons.append(
                 _reason(
@@ -1756,6 +1805,29 @@ async def get_omnigent_execution_readiness(
                 policies=list(profile.allowedLaunchPolicyRefs),
                 models=sorted(models),
                 gateReasons=reasons,
+                rolloutTargetId=(
+                    rollout_view.target_id if rollout_view is not None else None
+                ),
+                rolloutState=(
+                    str(rollout_view.rollout_state)
+                    if rollout_view is not None
+                    else None
+                ),
+                rolloutGeneration=(
+                    rollout_view.rollout_generation
+                    if rollout_view is not None
+                    else None
+                ),
+                rolloutPolicyVersion=(
+                    rollout_view.policy_version
+                    if rollout_view is not None
+                    else None
+                ),
+                compatibilityPath=bool(
+                    rollout_view.compatibility_path
+                    if rollout_view is not None
+                    else False
+                ),
             )
         )
     return OmnigentExecutionReadiness(executionTargets=targets)

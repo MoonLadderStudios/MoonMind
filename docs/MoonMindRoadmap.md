@@ -6,7 +6,7 @@
 >
 > MoonMind owns durable workflow authority, policy, credentials, workspaces, recovery, evidence, and publication. Provider-maintained runtimes, specialized tool images, connectors, and replaceable infrastructure should remain outside the core wherever practical.
 >
-> The canonical runtime-provider strategy is [`docs/Omnigent/PrimaryRuntimeProviderStrategy.md`](Omnigent/PrimaryRuntimeProviderStrategy.md). The harness mechanics are defined by [`docs/Omnigent/OmnigentHarnessPlatformDesign.md`](Omnigent/OmnigentHarnessPlatformDesign.md).
+> The canonical runtime-provider strategy is [`docs/Omnigent/PrimaryRuntimeProviderStrategy.md`](Omnigent/PrimaryRuntimeProviderStrategy.md). The harness mechanics are defined by [`docs/Omnigent/OmnigentHarnessPlatformDesign.md`](Omnigent/OmnigentHarnessPlatformDesign.md). Per-combination rollout state, default selection, canary and rollback controls, migration status, and migration telemetry are owned by [`docs/Omnigent/RuntimeProviderRollout.md`](Omnigent/RuntimeProviderRollout.md).
 >
 > **Document class:** this file is a canonical declarative document. It states the durable product destination, milestone outcomes, ownership boundaries, evidence rules, acceptance-claim identifiers, and security gates that persist across implementation waves. Dated checklists, issue-by-issue status, rollout sequencing, and PR disposition belong in [`docs/tmp/MoonMindRoadmapExecutionTracker.md`](tmp/MoonMindRoadmapExecutionTracker.md). When the tracker and this roadmap disagree, the declarative design wins.
 
