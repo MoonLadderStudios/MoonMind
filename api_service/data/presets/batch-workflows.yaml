@@ -90,6 +90,9 @@ annotations:
       publish_mode:
         type: string
         title: Publish override
+        description: Publish mode applied to every queued child workflow. Defaults to
+          the mode the selected run needs - none for read-only verification, pr for
+          the implementation presets - until an operator selects one explicitly.
         enum:
         - none
         - branch
@@ -121,6 +124,15 @@ annotations:
     publish_mode:
       widget: select
       advanced: true
+      # The child publish default follows the selected run so an implementation
+      # cohort is never queued with its work left unpublished. An explicitly
+      # submitted publish_mode always wins.
+      defaultFrom:
+        field: run_ref
+        map:
+          'skill:jira-verify': none
+          'preset:jira-implement': pr
+          'preset:jira-orchestrate': pr
   defaults:
     run_ref: skill:jira-verify
     max_workflows: '25'

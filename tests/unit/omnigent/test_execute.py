@@ -2580,6 +2580,215 @@ async def test_run_omnigent_execution_reports_httpx_transport_errors(
     assert result.metadata["externalStateRef"].startswith("artifact://omnigent/")
     assert result.metadata["checkpointKind"] == "external_state_ref"
     assert "workspaceRootRef" not in result.metadata
+    # No provider work exists yet, so a fresh step execution is safe.
+    assert result.retry_recommendation == "retry_step_execution"
+
+
+@pytest.mark.asyncio
+async def test_run_omnigent_execution_http_status_does_not_request_fresh_retry(
+    monkeypatch,
+) -> None:
+    """Non-2xx provider responses keep the existing non-retryable contract.
+
+    Only status-less transport failures reconciled as never accepted
+    recommend a fresh step execution; a typed HTTP status may carry
+    auth/billing or post-work semantics that a fresh session would discard.
+    """
+
+    from moonmind.workflows.adapters.omnigent_client import OmnigentClientError
+
+    class FakeClient:
+        def __init__(self, **_: object) -> None:
+            pass
+
+        async def list_agents(self) -> dict[str, object]:
+            raise OmnigentClientError(
+                "Omnigent HTTP 500",
+                status_code=500,
+                failure_class="integration_error",
+            )
+
+    monkeypatch.setenv("OMNIGENT_ENABLED", "true")
+    monkeypatch.setenv("OMNIGENT_SERVER_URL", "https://omnigent.test")
+    monkeypatch.setattr("moonmind.omnigent.execute.OmnigentHttpClient", FakeClient)
+
+    result = await run_omnigent_execution(
+        AgentExecutionRequest(
+            agentKind="external",
+            agentId="omnigent",
+            correlationId="corr-1",
+            idempotencyKey="idem-1",
+            parameters={
+                "omnigent": {
+                    "agent": {"agentName": "codex-native-ui"},
+                    "session": {"allowEmptyWorkspace": True},
+                    "prompt": {"text": "Do the task"},
+                },
+            },
+        )
+    )
+
+    assert result.failure_class == "integration_error"
+    assert result.provider_error_code == "500"
+    assert result.retry_recommendation is None
+
+
+def _post_timeout_client(*, with_marker: bool, marker: str) -> type:
+    """Provider double where the first-message POST times out ambiguously.
+
+    All instances share one ``post_attempted`` flag so the fresh reconcile
+    client in the failure path observes the same server state as the attempt
+    client. Before the POST, snapshots carry no marker; after the POST
+    attempt, the reconcile snapshot carries the marker only when
+    ``with_marker`` is true (server accepted) and omits it otherwise.
+    """
+
+    shared = {"post_attempted": False}
+
+    class FakeClient:
+        def __init__(self, **_: object) -> None:
+            pass
+
+        async def list_agents(self) -> dict[str, object]:
+            return {"items": [{"id": "agent-1", "name": "opencode-native-ui"}]}
+
+        async def create_session(
+            self, payload: dict[str, object]
+        ) -> dict[str, object]:
+            return {"id": "session-1"}
+
+        async def get_session(self, session_id: str) -> dict[str, object]:
+            if not shared["post_attempted"]:
+                return {
+                    "status": "idle",
+                    "items": [{"id": "prior-item", "type": "message"}],
+                }
+            if with_marker:
+                return {
+                    "status": "idle",
+                    "items": [
+                        {"id": "prior-item", "type": "message"},
+                        {
+                            "id": "marked-user",
+                            "type": "message",
+                            "data": {"text": marker},
+                        },
+                    ],
+                }
+            return {
+                "status": "idle",
+                "items": [{"id": "prior-item", "type": "message"}],
+            }
+
+        async def post_event(
+            self, session_id: str, payload: dict[str, object]
+        ) -> dict[str, object]:
+            shared["post_attempted"] = True
+            raise httpx.ReadTimeout(
+                "read timed out",
+                request=httpx.Request("POST", "https://omnigent.test"),
+            )
+
+        async def stream_events(self, session_id: str):  # type: ignore[misc]
+            if False:
+                yield {}
+            await asyncio.Event().wait()
+
+    return FakeClient
+
+
+@pytest.mark.asyncio
+async def test_post_timeout_without_remote_accept_recommends_fresh_retry(
+    monkeypatch, tmp_path
+) -> None:
+    """A POST timeout the server never accepted is safe to retry fresh."""
+
+    correlation_id = "corr-post-timeout-absent"
+    idempotency_key = "idem-post-timeout-absent"
+    marker = (
+        "MoonMind-Omnigent-Run:\n"
+        f"  correlationId: {correlation_id}\n"
+        f"  idempotencyKey: {idempotency_key}"
+    )
+
+    monkeypatch.setenv("OMNIGENT_ENABLED", "true")
+    monkeypatch.setenv("OMNIGENT_SERVER_URL", "https://omnigent.test")
+    monkeypatch.setattr(
+        "moonmind.omnigent.execute.OmnigentHttpClient",
+        _post_timeout_client(with_marker=False, marker=marker),
+    )
+
+    result = await run_omnigent_execution(
+        AgentExecutionRequest(
+            agentKind="external",
+            agentId="omnigent",
+            correlationId=correlation_id,
+            idempotencyKey=idempotency_key,
+            parameters={
+                "omnigent": {
+                    "agent": {"agentName": "opencode-native-ui"},
+                    "session": {"allowEmptyWorkspace": True},
+                    "prompt": {"text": "Do the task"},
+                },
+            },
+        ),
+        artifact_gateway=LocalOmnigentArtifactGateway(root=tmp_path),
+        run_store=_RecordingBridgeStore(),
+    )
+
+    assert result.failure_class == "integration_error"
+    assert result.provider_error_code == "omnigent_http_error"
+    assert result.retry_recommendation == "retry_step_execution"
+
+
+@pytest.mark.asyncio
+async def test_post_timeout_with_remote_accept_withholds_fresh_retry(
+    monkeypatch, tmp_path
+) -> None:
+    """A POST timeout the server accepted must not duplicate work fresh.
+
+    The remote marker proves the session began work; recommending a fresh
+    session with a new idempotency key would abandon the authoritative
+    workspace. Fail safe with no fresh retry so existing reattach/manual
+    paths preserve authority.
+    """
+
+    correlation_id = "corr-post-timeout-present"
+    idempotency_key = "idem-post-timeout-present"
+    marker = (
+        "MoonMind-Omnigent-Run:\n"
+        f"  correlationId: {correlation_id}\n"
+        f"  idempotencyKey: {idempotency_key}"
+    )
+
+    monkeypatch.setenv("OMNIGENT_ENABLED", "true")
+    monkeypatch.setenv("OMNIGENT_SERVER_URL", "https://omnigent.test")
+    monkeypatch.setattr(
+        "moonmind.omnigent.execute.OmnigentHttpClient",
+        _post_timeout_client(with_marker=True, marker=marker),
+    )
+
+    result = await run_omnigent_execution(
+        AgentExecutionRequest(
+            agentKind="external",
+            agentId="omnigent",
+            correlationId=correlation_id,
+            idempotencyKey=idempotency_key,
+            parameters={
+                "omnigent": {
+                    "agent": {"agentName": "opencode-native-ui"},
+                    "session": {"allowEmptyWorkspace": True},
+                    "prompt": {"text": "Do the task"},
+                },
+            },
+        ),
+        artifact_gateway=LocalOmnigentArtifactGateway(root=tmp_path),
+        run_store=_RecordingBridgeStore(),
+    )
+
+    assert result.failure_class == "integration_error"
+    assert result.provider_error_code == "omnigent_http_error"
+    assert result.retry_recommendation is None
 
 
 @pytest.mark.asyncio
