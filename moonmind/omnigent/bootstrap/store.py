@@ -8,7 +8,10 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
-from moonmind.omnigent.bootstrap.models import BootstrapRecord, ResolvedOmnigentDeploymentState
+from moonmind.omnigent.bootstrap.models import (
+    BootstrapRecord,
+    ResolvedOmnigentDeploymentState,
+)
 
 _DEFAULT_BOOTSTRAP_PATH = Path(
     os.getenv("MOONMIND_OMNIGENT_BOOTSTRAP_STATE_PATH", "var/omnigent-runtime-state/bootstrap.json")
@@ -89,11 +92,13 @@ def load_resolved_state() -> ResolvedOmnigentDeploymentState | None:
     server_ref = os.getenv("OMNIGENT_IMAGE_REF", "").strip()
     host_ref = os.getenv("OMNIGENT_OPENCODE_HOST_IMAGE_REF", "").strip()
     build_digest = os.getenv("OMNIGENT_BUILD_DIGEST", "").strip()
-    if server_ref or host_ref or build_digest:
+    shared_ref = os.getenv("OMNIGENT_SHARED_HOST_IMAGE_REF", "").strip()
+    if server_ref or host_ref or build_digest or shared_ref:
         try:
             return ResolvedOmnigentDeploymentState(
                 serverImageRef=server_ref or None,
                 opencodeHostImageRef=host_ref or None,
+                sharedHostImageRef=shared_ref or None,
                 omnigentBuildDigest=build_digest or None,
                 resolvedAt=datetime.now(UTC),
                 source="env",

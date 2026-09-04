@@ -73,14 +73,22 @@ def select_execution_realizer(
     harness_id: str,
     is_codex: bool = False,
 ) -> str:
-    """Select versioned execution realizer (section 6: executionRealizerRef is trusted planner only)."""
-    # Codex may use explicit codex-profile-bound@1 for preservation until cutover
-    # New harnesses use generic-omnigent-host@1
-    # This selection is deterministic planning, not runtime fallback
+    """Select versioned execution realizer (section 6: executionRealizerRef is trusted planner only).
+
+    The routing rule is capability-derived, not harness-name enumeration:
+    ``codex-native`` keeps the retained profile-bound realizer until the exact
+    shared-image Codex row passes its conformance gates (#3832). That operator
+    qualification is the one gate (``generic_codex_qualified``); there is no
+    silent fallback — an explicit generic selection before qualification fails
+    fast, and the same plan always reconciles to the same realizer. All other
+    harnesses own the generic realizer directly.
+    """
+
     if harness_id == "codex-native" and is_codex:
-        # Default to existing realizer for Codex preservation; generic requires explicit qualification
-        # For now, planner selects generic if requested via profile metadata? But spec says realizer not workflow-authored
-        # We select generic only if harness is not codex or if explicitly allowed after parity
+        from moonmind.omnigent.settings import generic_codex_qualified
+
+        if generic_codex_qualified():
+            return "generic-omnigent-host@1"
         return "codex-profile-bound@1"
     return "generic-omnigent-host@1"
 
@@ -169,6 +177,8 @@ def compile_execution_plan(
     try:
         from moonmind.omnigent.harness_platform.catalog import (
             assert_catalog_fresh as _assert_fresh,
+        )
+        from moonmind.omnigent.harness_platform.catalog import (
             assert_catalog_refresh_attests as _assert_refresh,
         )
 
@@ -337,7 +347,21 @@ def compile_execution_plan(
         and execution_realizer_ref != trusted_realizer
     ):
         # Only allow codex-profile-bound@1 for codex harness explicitly via trusted path
-        if not (
+        generic_codex_requested = (
+            profile.harness.id == "codex-native"
+            and execution_realizer_ref == "generic-omnigent-host@1"
+        )
+        if generic_codex_requested:
+            from moonmind.omnigent.settings import generic_codex_qualified
+
+            if not generic_codex_qualified():
+                raise HarnessPlatformError(
+                    "execution realizer generic-omnigent-host@1 is not qualified "
+                    "for codex-native in this deployment; explicit generic "
+                    "selection is fail-closed",
+                    code=HarnessPlatformFailure.OMNIGENT_EXECUTION_REALIZER_UNAVAILABLE,
+                )
+        elif not (
             profile.harness.id == "codex-native"
             and execution_realizer_ref == "codex-profile-bound@1"
         ):
