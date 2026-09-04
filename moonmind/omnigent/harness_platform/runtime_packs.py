@@ -241,8 +241,10 @@ def is_vendor_version_supported(pack: RuntimePackDescriptor, version: str) -> bo
 def runtime_dependencies_for_pack(pack: RuntimePackDescriptor) -> tuple[dict[str, Any], ...]:
     """Return the Host Class ``runtimeDependencies`` entries for a pack.
 
-    The digest is deferred to exact-host attestation: the descriptor pins the
-    version identity, while the launched image attests the installed runtime.
+    The descriptor pins the vendor version identity, while the launched image
+    attests the installed runtime. The planner binds the support key to the
+    exact host image digest when no per-runtime digest is recorded, so a
+    rebuilt image cannot reuse prior evidence.
     """
 
     return (
