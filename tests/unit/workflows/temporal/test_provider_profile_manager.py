@@ -2444,6 +2444,7 @@ class TestProviderProfileManagerHelpers:
             calls.append("signal")
 
         wf._sync_leases_to_db = AsyncMock(side_effect=persist)
+        wf._grant_lease_to_db = AsyncMock(return_value=True)
         wf._signal_slot_assigned = AsyncMock(side_effect=signal)
 
         with patch(
@@ -2477,6 +2478,7 @@ class TestProviderProfileManagerHelpers:
         )
         wf._pending_requests = [request]
         wf._sync_leases_to_db = AsyncMock(return_value=False)
+        wf._grant_lease_to_db = AsyncMock(return_value=True)
         wf._signal_slot_assigned = AsyncMock()
 
         with patch(
@@ -2504,6 +2506,7 @@ class TestProviderProfileManagerHelpers:
             is_default=True,
         )
         wf._sync_leases_to_db = AsyncMock(return_value=False)
+        wf._grant_lease_to_db = AsyncMock(return_value=False)
 
         with patch(
             "moonmind.workflows.temporal.workflows.provider_profile_manager.workflow"
@@ -2532,6 +2535,7 @@ class TestProviderProfileManagerHelpers:
             is_default=True,
         )
         wf._sync_leases_to_db = AsyncMock(return_value=False)
+        wf._grant_lease_to_db = AsyncMock(return_value=False)
 
         with patch(
             "moonmind.workflows.temporal.workflows.provider_profile_manager.workflow"
