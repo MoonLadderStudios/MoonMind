@@ -3659,12 +3659,64 @@ async def run_omnigent_execution(
             external_state=external_state,
             capture_policy=capture_policy,
         )
+        # A status-less transport failure with no locally observed work is only
+        # safe to retry fresh when reconciliation proves the server never
+        # accepted the first message. An ambiguous POST timeout (server
+        # accepted but the client timed out) leaves first_message_posted False
+        # with empty event lists even though the session has begun work;
+        # retrying that fresh would duplicate external actions and abandon
+        # the authoritative workspace. Reconcile the remote first-message
+        # marker before recommending a fresh step execution; fail safe to no
+        # recommendation when reconciliation is unavailable or proves accept.
+        retry_recommendation = None
+        if (
+            status_code is None
+            and not first_message_posted
+            and not raw_events
+            and not normalized_events
+        ):
+            if first_message is None or not session_id:
+                # POST never attempted (failure before message/session).
+                retry_recommendation = "retry_step_execution"
+            else:
+                try:
+                    reconcile_marker = _first_message_marker(request=request)
+                    reconcile_digest = hashlib.sha256(
+                        json.dumps(
+                            first_message,
+                            sort_keys=True,
+                            separators=(",", ":"),
+                        ).encode()
+                    ).hexdigest()
+                    # The attempt client is closed after its async-with exit;
+                    # reconcile over a fresh short-lived client instead.
+                    async with httpx.AsyncClient() as reconcile_httpx:
+                        reconcile_client = OmnigentHttpClient(
+                            base_url=resolved_server_url(),
+                            api_token=resolved_api_token(),
+                            client=reconcile_httpx,
+                            timeout_seconds=15.0,
+                            upstream_header_allowlist=resolved_proxy_forward_headers(),
+                        )
+                        reconcile_snapshot = await reconcile_client.get_session(
+                            session_id
+                        )
+                    if not _snapshot_contains_first_message_marker(
+                        reconcile_snapshot,
+                        digest=reconcile_digest,
+                        marker=reconcile_marker,
+                    ):
+                        retry_recommendation = "retry_step_execution"
+                except Exception:
+                    # Ambiguous — preserve workspace authority, no fresh retry.
+                    retry_recommendation = None
         return AgentRunResult(
             outputRefs=bundle.output_refs,
             summary=_compact_summary(exc, fallback="Omnigent integration error"),
             diagnosticsRef=bundle.diagnostics_ref,
             failureClass=failure_class,
             providerErrorCode=str(status_code or "omnigent_http_error"),
+            retryRecommendation=retry_recommendation,
             metadata={
                 "normalizedStatus": "failed",
                 "providerName": "omnigent",
