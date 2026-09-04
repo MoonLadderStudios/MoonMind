@@ -14,6 +14,10 @@ annotations:
   sourceSkill: jira-breakdown
   jiraWorkflow: breakdown-to-dependent-orchestrate
   output: dependent-jira-orchestrate-workflows
+  # Parent creates Jira issues and queues dependent Jira Orchestrate children; each
+  # child receives its own publish policy, so the parent publishes nothing.
+  workflowPublish:
+    mode: none
 inputs:
   - name: feature_request
     label: Workflow Instructions
