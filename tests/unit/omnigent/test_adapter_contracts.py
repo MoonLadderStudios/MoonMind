@@ -1179,14 +1179,14 @@ def test_deployed_adapter_satisfies_its_declared_port(port, implementation) -> N
 
 
 def test_expected_host_id_is_deterministic_and_generation_fenced() -> None:
-    import uuid
+    from uuid import NAMESPACE_URL, UUID, uuid5
 
     from moonmind.omnigent.host_ports import expected_omnigent_host_id
 
     first = expected_omnigent_host_id("lease-abc", 1)
-    previous_attempt_id = str(uuid.uuid5(uuid.NAMESPACE_URL, "lease-abc:1"))
-    assert first == uuid.UUID(previous_attempt_id).hex
-    assert len(first) == 32
+    previous_attempt_id = str(uuid5(NAMESPACE_URL, "lease-abc:1"))
+    assert first == UUID(previous_attempt_id).hex
+    assert first == UUID(first).hex
     assert first == expected_omnigent_host_id("lease-abc", 1)
     assert first != expected_omnigent_host_id("lease-abc", 2)
     assert first != expected_omnigent_host_id("lease-other", 1)
