@@ -14,6 +14,11 @@ annotations:
   sourceSkill: github-issue-breakdown
   githubWorkflow: breakdown-to-dependent-orchestrate
   output: dependent-github-issue-orchestrate-workflows
+  # Parent creates GitHub issues and queues dependent GitHub Issue Orchestrate
+  # children; each child receives the selected publish mode, so the parent
+  # publishes nothing.
+  workflowPublish:
+    mode: none
 inputs:
   - name: feature_request
     label: Workflow Instructions
