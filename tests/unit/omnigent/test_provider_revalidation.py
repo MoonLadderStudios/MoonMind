@@ -131,6 +131,8 @@ def _install_stubs(
     image_ref: str | None = CURRENT_IMAGE,
     releases: list[str] | None = None,
     acquire_error: Exception | None = None,
+    already_held: bool = False,
+    acquired: list[str] | None = None,
 ):
     """Stub the pinned image, credential lease, and runtime validation substrate."""
 
@@ -141,7 +143,11 @@ def _install_stubs(
 
     class _Guard:
         def __init__(self, profile_id: str) -> None:
-            self.lease = SimpleNamespace(lease_id=f"lease-{profile_id}")
+            # MoonLadderStudios/MoonMind#3878: the manager reports whether this
+            # exact evidence identity was already held by another maintainer.
+            self.lease = SimpleNamespace(
+                lease_id=f"lease-{profile_id}", already_held=already_held
+            )
             self._profile_id = profile_id
 
         async def release(self) -> None:
@@ -149,7 +155,9 @@ def _install_stubs(
                 releases.append(self._profile_id)
 
     async def acquire(*, runtime_id, profile_id, purpose, operation_id, metadata=None):
-        del runtime_id, purpose, operation_id, metadata
+        del runtime_id, purpose, metadata
+        if acquired is not None:
+            acquired.append(operation_id)
         if acquire_error is not None:
             raise acquire_error
         return _Guard(profile_id)
@@ -1128,3 +1136,162 @@ def test_evidence_observation_is_current_is_the_shared_admission_predicate() -> 
     assert evidence_observation_is_current(
         {"validatedAt": (now + timedelta(minutes=1)).isoformat()}, env={}, now=now
     )
+
+
+# ---------------------------------------------------------------------------
+# MoonLadderStudios/MoonMind#3878: single-flight credentialless re-validation
+# ---------------------------------------------------------------------------
+
+
+def test_evidence_identity_is_stable_for_one_refresh() -> None:
+    """Two maintainers racing the same refresh must derive the same owner."""
+
+    from moonmind.omnigent.bootstrap.provider_revalidation import (
+        model_catalog_evidence_identity,
+    )
+
+    first = model_catalog_evidence_identity(
+        profile_id="opencode-zen-free",
+        image_ref=CURRENT_IMAGE,
+        credential_generation=4,
+    )
+    second = model_catalog_evidence_identity(
+        profile_id="opencode-zen-free",
+        image_ref=CURRENT_IMAGE,
+        credential_generation=4,
+    )
+
+    assert first == second
+    assert first.startswith("opencode-model-catalog:")
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("profile_id", "another-profile"),
+        ("image_ref", PREVIOUS_IMAGE),
+        ("credential_generation", 5),
+    ],
+)
+def test_a_different_refresh_is_a_different_identity(field: str, value: object) -> None:
+    """A re-pinned image or rotated credential must never be blocked as a dupe."""
+
+    from moonmind.omnigent.bootstrap.provider_revalidation import (
+        model_catalog_evidence_identity,
+    )
+
+    base = {
+        "profile_id": "opencode-zen-free",
+        "image_ref": CURRENT_IMAGE,
+        "credential_generation": 4,
+    }
+    changed = {**base, field: value}
+
+    assert model_catalog_evidence_identity(
+        **base
+    ) != model_catalog_evidence_identity(**changed)
+
+
+@pytest.mark.asyncio
+async def test_revalidation_leases_the_evidence_identity_not_a_fresh_operation(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A random operation id would make every maintainer a distinct owner."""
+
+    from moonmind.omnigent.bootstrap.provider_revalidation import (
+        model_catalog_evidence_identity,
+    )
+
+    async def validate(profile, image_ref, _lease, _kwargs):
+        return {
+            "schemaVersion": "moonmind.provider-model-catalog-evidence.v1",
+            "models": [{"qualifiedId": profile.default_model}],
+            "imageRef": image_ref,
+            "runtimeVersions": {"opencode": "1.18.11"},
+            "materializerRef": "opencode-auth-json@1",
+            "validatedAt": datetime.now(UTC).isoformat(),
+            "credentialGeneration": profile.credential_generation,
+        }
+
+    acquired: list[str] = []
+    _install_stubs(monkeypatch, validate=validate, acquired=acquired)
+    rows = [_profile(evidence_image=PREVIOUS_IMAGE)]
+
+    await reconcile_opencode_provider_readiness(
+        session_factory=_session_factory(rows), controller=_Controller()
+    )
+
+    assert acquired == [
+        model_catalog_evidence_identity(
+            profile_id=rows[0].profile_id,
+            image_ref=CURRENT_IMAGE,
+            credential_generation=rows[0].credential_generation,
+        )
+    ]
+
+
+@pytest.mark.asyncio
+async def test_an_in_flight_refresh_stands_down_without_re_probing(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Invariant 3: the second maintainer defers instead of duplicating load."""
+
+    _install_stubs(
+        monkeypatch,
+        validate=None,  # asserts inside _ValidationService if it ever runs
+        already_held=True,
+    )
+    rows = [_profile(evidence_image=PREVIOUS_IMAGE)]
+
+    outcome = await reconcile_opencode_provider_readiness(
+        session_factory=_session_factory(rows), controller=_Controller()
+    )
+
+    assert outcome.deferred == ("opencode-go-default",)
+    assert outcome.refreshed == ()
+    # The holder's evidence is untouched; standing down published nothing.
+    assert rows[0].model_catalog_evidence_json["imageRef"] == PREVIOUS_IMAGE
+
+
+@pytest.mark.asyncio
+async def test_standing_down_never_consumes_the_revalidation_budget(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Deferring to a holder is not a provider verdict and must stay retryable."""
+
+    from moonmind.omnigent.bootstrap.provider_revalidation import (
+        MAX_REVALIDATION_ATTEMPTS,
+        REVALIDATION_FAILURE_KEY,
+        revalidation_is_exhausted,
+    )
+
+    _install_stubs(monkeypatch, validate=None, already_held=True)
+    rows = [_profile(evidence_image=PREVIOUS_IMAGE)]
+
+    for _ in range(MAX_REVALIDATION_ATTEMPTS + 1):
+        outcome = await reconcile_opencode_provider_readiness(
+            session_factory=_session_factory(rows), controller=_Controller()
+        )
+        assert outcome.deferred == ("opencode-go-default",)
+
+    assert REVALIDATION_FAILURE_KEY not in (rows[0].command_behavior or {})
+    assert not revalidation_is_exhausted(rows[0], image_refs=(CURRENT_IMAGE,))
+
+
+@pytest.mark.asyncio
+async def test_standing_down_does_not_release_the_holders_lease(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Releasing would cancel the authority of the maintainer still probing."""
+
+    releases: list[str] = []
+    _install_stubs(
+        monkeypatch, validate=None, already_held=True, releases=releases
+    )
+    rows = [_profile(evidence_image=PREVIOUS_IMAGE)]
+
+    await reconcile_opencode_provider_readiness(
+        session_factory=_session_factory(rows), controller=_Controller()
+    )
+
+    assert releases == []

@@ -228,6 +228,7 @@ async def test_tier_policy_refresh_does_not_change_profile_slot_leasing() -> Non
         "profile_id": "profile",
         "lease_id": "new-run",
         "already_held": False,
+        "lease_mode": "shared_execution",
     }
     profile = manager._profiles["profile"]
     assert profile.max_parallel_runs == 2

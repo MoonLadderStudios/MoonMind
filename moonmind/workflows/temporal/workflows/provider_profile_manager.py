@@ -33,7 +33,12 @@ with workflow.unsafe.imports_passed_through():
         validate_claude_oauth_capacity,
         validate_codex_oauth_capacity,
     )
-    from moonmind.provider_profiles.lease_client import CredentialLeasePurpose
+    from moonmind.provider_profiles.lease_client import (
+        CredentialLeaseMode,
+        CredentialLeasePurpose,
+        credential_lease_mode,
+        credential_source_is_credentialless,
+    )
 
 WORKFLOW_NAME = "MoonMind.ProviderProfileManager"
 ACTIVITY_TASK_QUEUE = "mm.activity.artifacts"
@@ -81,6 +86,18 @@ FRESH_START_DB_LEASE_RESTORE_PATCH = (
 DURABLE_LEASE_GRANT_PATCH = "provider-profile-manager-durable-lease-grant-v1"
 ACTIVITY_OWNED_LEASE_VERIFICATION_PATCH = (
     "provider-profile-manager-activity-owned-lease-verification-v1"
+)
+# MoonLadderStudios/MoonMind#3878: configured capacity is a shared execution
+# ceiling. Validation and maintenance leases stop consuming execution slots,
+# credentialless validation becomes single-flight instead of exclusive, and
+# rate limiting lowers effective admission instead of withdrawing the profile.
+PURPOSE_AWARE_CAPACITY_LEDGER_PATCH = (
+    "provider-profile-manager-purpose-aware-capacity-ledger-v1"
+)
+# Incremental durable lease operations replace the runtime-wide snapshot
+# rewrite that every grant previously performed.
+INCREMENTAL_LEASE_PERSISTENCE_PATCH = (
+    "provider-profile-manager-incremental-lease-persistence-v1"
 )
 
 # Deterministic sort sentinel for pending requests whose scheduled queue order
@@ -260,6 +277,22 @@ class ProfileSyncPayload(TypedDict):
 
 _MAX_LEASE_DURATION_SECONDS = 5400  # 1.5 hours — safety net for leaked slots
 _MAX_HANDOFF_RESERVATION_SECONDS = 30
+# A single-flight validation lease is held by a bounded provider probe, not by
+# a durable workflow. Its safety-net eviction must be short enough that a lost
+# maintainer process cannot stall refresh for an execution-length window.
+_MAX_VALIDATION_LEASE_DURATION_SECONDS = 900
+# Adaptive backpressure never edits the operator's configured ceiling. It
+# lowers the effective admission limit, halving on each rate-limit report and
+# restoring one slot per recovery interval until the ceiling is reached again.
+_ADAPTIVE_CAPACITY_RECOVERY_SECONDS = 60
+_MIN_ADAPTIVE_CAPACITY = 1
+
+_EXECUTION_PURPOSE_VALUES = frozenset(
+    {
+        CredentialLeasePurpose.EXECUTION_DIRECT.value,
+        CredentialLeasePurpose.EXECUTION_OMNIGENT.value,
+    }
+)
 
 
 @dataclass
@@ -290,19 +323,117 @@ class ProfileSlotState:
     default_model_tier: int = 1
     over_capacity_legacy_snapshot: bool = False
     authoritative_policy_confirmed: bool = False
+    capacity_scope_ref: Optional[str] = None
+    # MoonLadderStudios/MoonMind#3878 ledger fields. ``purpose_aware_capacity``
+    # keeps histories recorded before the patch on their original accounting.
+    purpose_aware_capacity: bool = False
+    adaptive_capacity_limit: Optional[int] = None
+    adaptive_capacity_updated_at: Optional[str] = None
+    exclusive_maintenance_waiters: int = 0
+
+    @property
+    def configured_capacity(self) -> int:
+        """The operator-owned ceiling. Never lowered by runtime backpressure."""
+
+        return self.max_parallel_runs
+
+    @property
+    def effective_capacity(self) -> int:
+        """The current admission limit: the ceiling, or a lower adaptive limit."""
+
+        if not self.purpose_aware_capacity or self.adaptive_capacity_limit is None:
+            return self.max_parallel_runs
+        return max(
+            _MIN_ADAPTIVE_CAPACITY,
+            min(self.max_parallel_runs, self.adaptive_capacity_limit),
+        )
+
+    def lease_purpose(self, lease_id: str) -> str:
+        """Return the recorded purpose of one lease, defaulting to direct execution."""
+
+        metadata = self.lease_metadata.get(lease_id) or {}
+        return str(
+            metadata.get("purpose") or CredentialLeasePurpose.EXECUTION_DIRECT.value
+        )
+
+    def consumes_execution_capacity(self, lease_id: str) -> bool:
+        if not self.purpose_aware_capacity:
+            return True
+        return self.lease_purpose(lease_id) in _EXECUTION_PURPOSE_VALUES
+
+    @property
+    def credentialless(self) -> bool:
+        return credential_source_is_credentialless(self.credential_source)
+
+    def lease_mode(self, lease_id: str) -> "CredentialLeaseMode":
+        """Return the ledger mode a held lease was granted under."""
+
+        try:
+            return credential_lease_mode(
+                purpose=self.lease_purpose(lease_id),
+                credentialless=self.credentialless,
+            )
+        except ValueError:
+            # An unrecognized persisted purpose is treated as the most
+            # restrictive mode so it can never silently widen admission.
+            return CredentialLeaseMode.EXCLUSIVE_MAINTENANCE
+
+    @property
+    def exclusive_maintenance_lease_count(self) -> int:
+        if not self.purpose_aware_capacity:
+            return 0
+        return sum(
+            1
+            for lease_id in self.current_leases
+            if self.lease_mode(lease_id)
+            is CredentialLeaseMode.EXCLUSIVE_MAINTENANCE
+        )
+
+    @property
+    def execution_lease_count(self) -> int:
+        return sum(
+            1
+            for lease_id in self.current_leases
+            if self.consumes_execution_capacity(lease_id)
+        )
+
+    def lease_max_duration_seconds(self, lease_id: str) -> int:
+        base = self.max_lease_duration_seconds or _MAX_LEASE_DURATION_SECONDS
+        if not self.purpose_aware_capacity:
+            return base
+        if (
+            self.lease_purpose(lease_id)
+            == CredentialLeasePurpose.CREDENTIAL_VALIDATION.value
+        ):
+            return min(base, _MAX_VALIDATION_LEASE_DURATION_SECONDS)
+        return base
 
     @property
     def available_slots(self) -> int:
         if not self.enabled or not self.launch_ready:
             return 0
-        return max(0, self.max_parallel_runs - len(self.current_leases))
+        return max(0, self.effective_capacity - self.execution_lease_count)
 
     def is_available(self) -> bool:
         if not self.enabled or not self.launch_ready or self.available_slots <= 0:
             return False
         if self.cooldown_until is not None:
             return False
+        if self.purpose_aware_capacity and (
+            self.exclusive_maintenance_waiters > 0
+            or self.exclusive_maintenance_lease_count > 0
+        ):
+            # Exclusive credential maintenance must block new consumers while
+            # it waits for existing ones to drain, and for as long as it holds
+            # the credential state.
+            return False
         return True
+
+    @property
+    def credential_consumer_leases(self) -> list[str]:
+        """Leases that read or mutate this profile's credential state."""
+
+        return list(self.current_leases)
 
     def reserve(
         self,
@@ -314,7 +445,7 @@ class ProfileSlotState:
         allow_unready: bool = False,
     ) -> bool:
         if allow_unready:
-            if len(self.current_leases) >= self.max_parallel_runs:
+            if self.execution_lease_count >= self.max_parallel_runs:
                 return False
         elif not self.is_available():
             return False
@@ -326,7 +457,45 @@ class ProfileSlotState:
             "purpose": purpose,
             "acquiredAt": now.isoformat(),
             "expiresAt": (
-                now + timedelta(seconds=self.max_lease_duration_seconds)
+                now
+                + timedelta(
+                    seconds=self.lease_max_duration_seconds(requester_workflow_id)
+                )
+            ).isoformat(),
+            **dict(metadata or {}),
+        }
+        return True
+
+    def reserve_unmetered(
+        self,
+        requester_workflow_id: str,
+        now: datetime,
+        *,
+        purpose: str,
+        metadata: dict[str, Any] | None = None,
+    ) -> bool:
+        """Record a lease that consumes no execution slot (single-flight validation).
+
+        The caller has already proven the identity is not held, so this only
+        refuses when the profile is missing its purpose-aware ledger.
+        """
+
+        if not self.purpose_aware_capacity:
+            return False
+        if requester_workflow_id in self.current_leases:
+            return False
+        self.current_leases.append(requester_workflow_id)
+        self.lease_granted_at[requester_workflow_id] = now.isoformat()
+        self.lease_metadata[requester_workflow_id] = {
+            "leaseId": requester_workflow_id,
+            "ownerId": requester_workflow_id,
+            "purpose": purpose,
+            "acquiredAt": now.isoformat(),
+            "expiresAt": (
+                now
+                + timedelta(
+                    seconds=self.lease_max_duration_seconds(requester_workflow_id)
+                )
             ).isoformat(),
             **dict(metadata or {}),
         }
@@ -339,11 +508,61 @@ class ProfileSlotState:
             self.lease_metadata.pop(requester_workflow_id, None)
             if (
                 self.authoritative_policy_confirmed
-                and len(self.current_leases) <= self.max_parallel_runs
+                and self.execution_lease_count <= self.max_parallel_runs
             ):
                 self.over_capacity_legacy_snapshot = False
             return True
         return False
+
+    def apply_rate_limit_backpressure(self, now: datetime) -> int:
+        """Halve the effective admission limit without editing the ceiling.
+
+        Returns the new effective limit. Queued work is untouched: it simply
+        waits for one of the remaining admitted slots. The caller withdraws the
+        profile entirely only when the limit is already at the floor, because
+        at that point there is no concurrency left to trade away.
+        """
+
+        current = self.effective_capacity
+        lowered = max(_MIN_ADAPTIVE_CAPACITY, current // 2)
+        self.adaptive_capacity_limit = lowered
+        self.adaptive_capacity_updated_at = now.isoformat()
+        return lowered
+
+    def rate_limit_requires_withdrawal(self) -> bool:
+        """Whether a rate-limit report must withdraw the profile entirely."""
+
+        if not self.purpose_aware_capacity:
+            return True
+        return self.effective_capacity <= _MIN_ADAPTIVE_CAPACITY
+
+    def recover_adaptive_capacity(self, now: datetime) -> bool:
+        """Restore one slot per recovery interval until the ceiling is reached."""
+
+        if self.adaptive_capacity_limit is None:
+            return False
+        updated_at = self.adaptive_capacity_updated_at
+        if updated_at is not None:
+            try:
+                updated_dt = datetime.fromisoformat(updated_at)
+                if updated_dt.tzinfo is None:
+                    updated_dt = updated_dt.replace(tzinfo=timezone.utc)
+            except (TypeError, ValueError):
+                updated_dt = None
+            if (
+                updated_dt is not None
+                and (now - updated_dt).total_seconds()
+                < _ADAPTIVE_CAPACITY_RECOVERY_SECONDS
+            ):
+                return False
+        restored = self.adaptive_capacity_limit + 1
+        if restored >= self.max_parallel_runs:
+            self.adaptive_capacity_limit = None
+            self.adaptive_capacity_updated_at = None
+            return True
+        self.adaptive_capacity_limit = restored
+        self.adaptive_capacity_updated_at = now.isoformat()
+        return True
 
     def evict_expired_leases(
         self, now: datetime, max_duration_seconds: int
@@ -352,6 +571,11 @@ class ProfileSlotState:
         evicted: list[str] = []
         for wf_id in list(self.current_leases):
             granted_str = self.lease_granted_at.get(wf_id)
+            limit = (
+                min(max_duration_seconds, self.lease_max_duration_seconds(wf_id))
+                if self.purpose_aware_capacity
+                else max_duration_seconds
+            )
             if granted_str is None:
                 # Legacy lease without timestamp — evict it as we can't verify age.
                 self.current_leases.remove(wf_id)
@@ -362,7 +586,7 @@ class ProfileSlotState:
                 granted_dt = datetime.fromisoformat(granted_str)
                 if granted_dt.tzinfo is None:
                     granted_dt = granted_dt.replace(tzinfo=timezone.utc)
-                if (now - granted_dt).total_seconds() > max_duration_seconds:
+                if (now - granted_dt).total_seconds() > limit:
                     self.current_leases.remove(wf_id)
                     self.lease_granted_at.pop(wf_id, None)
                     self.lease_metadata.pop(wf_id, None)
@@ -399,6 +623,12 @@ class ProfileSlotState:
             "model_tiers": list(self.model_tiers),
             "default_model_tier": self.default_model_tier,
             "overCapacityLegacySnapshot": self.over_capacity_legacy_snapshot,
+            "capacity_scope_ref": self.capacity_scope_ref,
+            "configured_capacity": self.configured_capacity,
+            "effective_capacity": self.effective_capacity,
+            "execution_lease_count": self.execution_lease_count,
+            "adaptive_capacity_limit": self.adaptive_capacity_limit,
+            "exclusive_maintenance_waiters": self.exclusive_maintenance_waiters,
         }
 
     @property
@@ -492,6 +722,8 @@ class MoonMindProviderProfileManagerWorkflow:
         self._profile_refresh_requested: bool = False
         self._has_db_profile_snapshot: bool = False
         self._purpose_aware_leases: bool = False
+        self._purpose_aware_capacity_ledger: bool = False
+        self._incremental_lease_persistence: bool = False
         # Cache of resolved scheduled/created ordering keyed by queue-order
         # workflow id. Workflow creation/scheduled times are immutable, so a
         # resolved entry never has to be re-queried; this keeps the
@@ -631,6 +863,20 @@ class MoonMindProviderProfileManagerWorkflow:
                 profile.cooldown_after_429_seconds,
             )
             now = workflow.now()
+            if profile.purpose_aware_capacity:
+                # Adaptive backpressure: trade concurrency before availability.
+                # The configured ceiling and the pending queue are untouched.
+                withdraw = profile.rate_limit_requires_withdrawal()
+                lowered = profile.apply_rate_limit_backpressure(now)
+                self._get_logger().warning(
+                    "Provider profile %s lowered effective admission to %d of %d "
+                    "after a rate-limit report",
+                    profile_id,
+                    lowered,
+                    profile.configured_capacity,
+                )
+                if not withdraw:
+                    return
             cooldown_until = now + timedelta(seconds=cooldown_seconds)
             profile.cooldown_until = cooldown_until.isoformat()
 
@@ -713,6 +959,7 @@ class MoonMindProviderProfileManagerWorkflow:
                     "profile_id": existing_profile_id,
                     "lease_id": requester_id,
                     "already_held": True,
+                    "lease_mode": CredentialLeaseMode.SHARED_EXECUTION.value,
                 }
 
             now = workflow.now()
@@ -730,7 +977,9 @@ class MoonMindProviderProfileManagerWorkflow:
                 metadata=lease_metadata,
             ):
                 if workflow.patched(DB_LEASE_PERSISTENCE_PATCH):
-                    persisted = await self._sync_leases_to_db()
+                    persisted = await self._persist_lease_grant(
+                        profile, requester_id
+                    )
                     if (
                         workflow.patched(DURABLE_LEASE_GRANT_PATCH)
                         and not persisted
@@ -745,6 +994,7 @@ class MoonMindProviderProfileManagerWorkflow:
                     "profile_id": profile.profile_id,
                     "lease_id": requester_id,
                     "already_held": False,
+                    "lease_mode": CredentialLeaseMode.SHARED_EXECUTION.value,
                 }
 
             try:
@@ -802,7 +1052,18 @@ class MoonMindProviderProfileManagerWorkflow:
     async def acquire_credential_maintenance_lease(
         self, payload: SlotAcquirePayload
     ) -> dict[str, Any]:
-        """Acquire exact-profile capacity while a profile is disabled or unready."""
+        """Acquire exact-profile credential authority for validation or maintenance.
+
+        The ledger mode is derived from the declared purpose and the profile's
+        durable credential contract, never from caller-supplied policy:
+
+        * ``single_flight_validation`` — a credentialless profile has no shared
+          mutable authentication state, so one holder per exact evidence
+          identity is sufficient. It consumes no execution slot and imposes no
+          capacity-one requirement (MoonLadderStudios/MoonMind#3878 invariant 3).
+        * ``exclusive_maintenance`` — blocks new consumers and waits for every
+          existing credential consumer to drain (invariant 4).
+        """
 
         requester_id = self._normalize_optional_string(
             payload.get("requester_workflow_id") or payload.get("owner_id")
@@ -833,6 +1094,9 @@ class MoonMindProviderProfileManagerWorkflow:
                 "profile_id": profile_id,
                 "lease_id": requester_id,
                 "already_held": True,
+                "lease_mode": self._credential_lease_mode(
+                    self._profiles[profile_id], purpose
+                ).value,
             }
         profile = self._profiles.get(profile_id)
         if profile is None:
@@ -843,48 +1107,154 @@ class MoonMindProviderProfileManagerWorkflow:
                 rate_limit_policy="backoff",
                 enabled=False,
                 launch_ready=False,
+                purpose_aware_capacity=self._purpose_aware_capacity_ledger,
             )
             self._profiles[profile_id] = profile
-        if profile.max_parallel_runs != 1:
+        mode = self._credential_lease_mode(profile, purpose)
+        if mode is CredentialLeaseMode.SINGLE_FLIGHT_VALIDATION:
+            return await self._acquire_single_flight_validation_lease(
+                profile=profile,
+                requester_id=requester_id,
+                purpose=purpose,
+                payload=payload,
+            )
+        if profile.max_parallel_runs != 1 and not profile.purpose_aware_capacity:
             raise exceptions.ApplicationError(
                 "credential maintenance requires exclusive profile capacity",
                 non_retryable=True,
             )
-        while not self._shutdown_requested:
-            if profile.reserve(
-                requester_id,
-                workflow.now(),
-                purpose=purpose,
-                metadata=self._safe_lease_metadata(payload),
-                allow_unready=True,
-            ):
-                if workflow.patched(DB_LEASE_PERSISTENCE_PATCH):
-                    persisted = await self._sync_leases_to_db()
-                    if (
-                        workflow.patched(DURABLE_LEASE_GRANT_PATCH)
-                        and not persisted
-                    ):
-                        profile.release(requester_id)
-                        raise exceptions.ApplicationError(
-                            "Provider profile lease persistence failed before maintenance grant",
-                            type="ProviderProfileLeasePersistenceFailed",
-                        )
-                return {
-                    "profile_id": profile_id,
-                    "lease_id": requester_id,
-                    "already_held": False,
-                }
-            try:
-                await workflow.wait_condition(
-                    lambda: (
-                        self._shutdown_requested
-                        or not profile.current_leases
-                        or requester_id in profile.current_leases
-                    ),
-                    timeout=timedelta(seconds=60),
+        return await self._acquire_exclusive_maintenance_lease(
+            profile=profile,
+            requester_id=requester_id,
+            purpose=purpose,
+            payload=payload,
+        )
+
+    def _credential_lease_mode(
+        self, profile: ProfileSlotState, purpose: str
+    ) -> "CredentialLeaseMode":
+        """Return the ledger mode for one acquisition against this profile."""
+
+        if not self._purpose_aware_capacity_ledger:
+            return (
+                CredentialLeaseMode.EXCLUSIVE_MAINTENANCE
+                if CredentialLeasePurpose(purpose).is_maintenance
+                else CredentialLeaseMode.SHARED_EXECUTION
+            )
+        return credential_lease_mode(
+            purpose=purpose,
+            credentialless=credential_source_is_credentialless(
+                profile.credential_source
+            ),
+        )
+
+    async def _acquire_single_flight_validation_lease(
+        self,
+        *,
+        profile: ProfileSlotState,
+        requester_id: str,
+        purpose: str,
+        payload: SlotAcquirePayload,
+    ) -> dict[str, Any]:
+        """Grant one credentialless validation lease per exact evidence identity.
+
+        The owner ID is derived from the evidence identity by the caller, so a
+        second concurrent maintainer computing the same identity observes
+        ``already_held`` and stands down instead of re-probing the provider.
+        """
+
+        if not profile.reserve_unmetered(
+            requester_id,
+            workflow.now(),
+            purpose=purpose,
+            metadata=self._safe_lease_metadata(payload),
+        ):
+            # The identity is already held by an in-flight validator.
+            return {
+                "profile_id": profile.profile_id,
+                "lease_id": requester_id,
+                "already_held": True,
+                "lease_mode": CredentialLeaseMode.SINGLE_FLIGHT_VALIDATION.value,
+            }
+        if workflow.patched(DB_LEASE_PERSISTENCE_PATCH):
+            persisted = await self._persist_lease_grant(profile, requester_id)
+            if workflow.patched(DURABLE_LEASE_GRANT_PATCH) and not persisted:
+                profile.release(requester_id)
+                raise exceptions.ApplicationError(
+                    "Provider profile lease persistence failed before validation grant",
+                    type="ProviderProfileLeasePersistenceFailed",
                 )
-            except TimeoutError:
-                continue
+        self._has_new_events = True
+        return {
+            "profile_id": profile.profile_id,
+            "lease_id": requester_id,
+            "already_held": False,
+            "lease_mode": CredentialLeaseMode.SINGLE_FLIGHT_VALIDATION.value,
+        }
+
+    async def _acquire_exclusive_maintenance_lease(
+        self,
+        *,
+        profile: ProfileSlotState,
+        requester_id: str,
+        purpose: str,
+        payload: SlotAcquirePayload,
+    ) -> dict[str, Any]:
+        blocks_new_consumers = profile.purpose_aware_capacity
+        if blocks_new_consumers:
+            # Admission stops before the drain wait, so a busy profile cannot
+            # starve maintenance by continuously replacing its consumers.
+            profile.exclusive_maintenance_waiters += 1
+            self._has_new_events = True
+        try:
+            while not self._shutdown_requested:
+                if not profile.credential_consumer_leases and profile.reserve(
+                    requester_id,
+                    workflow.now(),
+                    purpose=purpose,
+                    metadata=self._safe_lease_metadata(payload),
+                    allow_unready=True,
+                ):
+                    if workflow.patched(DB_LEASE_PERSISTENCE_PATCH):
+                        persisted = (
+                            await self._persist_lease_grant(profile, requester_id)
+                            if workflow.patched(INCREMENTAL_LEASE_PERSISTENCE_PATCH)
+                            else await self._sync_leases_to_db()
+                        )
+                        if (
+                            workflow.patched(DURABLE_LEASE_GRANT_PATCH)
+                            and not persisted
+                        ):
+                            profile.release(requester_id)
+                            raise exceptions.ApplicationError(
+                                "Provider profile lease persistence failed before maintenance grant",
+                                type="ProviderProfileLeasePersistenceFailed",
+                            )
+                    return {
+                        "profile_id": profile.profile_id,
+                        "lease_id": requester_id,
+                        "already_held": False,
+                        "lease_mode": (
+                            CredentialLeaseMode.EXCLUSIVE_MAINTENANCE.value
+                        ),
+                    }
+                try:
+                    await workflow.wait_condition(
+                        lambda: (
+                            self._shutdown_requested
+                            or not profile.current_leases
+                            or requester_id in profile.current_leases
+                        ),
+                        timeout=timedelta(seconds=60),
+                    )
+                except TimeoutError:
+                    continue
+        finally:
+            if blocks_new_consumers:
+                profile.exclusive_maintenance_waiters = max(
+                    0, profile.exclusive_maintenance_waiters - 1
+                )
+                self._has_new_events = True
         raise exceptions.ApplicationError(
             "provider profile manager is shutting down", non_retryable=True
         )
@@ -962,6 +1332,12 @@ class MoonMindProviderProfileManagerWorkflow:
         self._purpose_aware_leases = workflow.patched(
             PURPOSE_AWARE_CREDENTIAL_LEASE_PATCH
         )
+        self._purpose_aware_capacity_ledger = workflow.patched(
+            PURPOSE_AWARE_CAPACITY_LEDGER_PATCH
+        )
+        self._incremental_lease_persistence = workflow.patched(
+            INCREMENTAL_LEASE_PERSISTENCE_PATCH
+        )
         self._restore_state(
             input_payload,
             repair_legacy_codex_oauth=repair_legacy_codex_oauth,
@@ -1026,6 +1402,11 @@ class MoonMindProviderProfileManagerWorkflow:
 
             # Clear expired cooldowns.
             self._clear_expired_cooldowns()
+
+            # Step any adaptive backpressure back toward the configured
+            # ceiling, then offer the restored slots to waiting requests.
+            if self._recover_adaptive_capacity() > 0:
+                await self._drain_queue()
 
             # Evict leases that exceed the max duration (safety net for
             # cancelled/terminated workflows that failed to release).
@@ -1189,6 +1570,16 @@ class MoonMindProviderProfileManagerWorkflow:
                     is_legacy_codex_oauth and original_capacity != 1
                 )
                 or bool(p.get("over_capacity_legacy_snapshot", False)),
+                capacity_scope_ref=self._normalize_optional_string(
+                    p.get("capacity_scope_ref")
+                ),
+                purpose_aware_capacity=self._purpose_aware_capacity_ledger,
+                adaptive_capacity_limit=self._normalize_capacity_limit(
+                    p.get("adaptive_capacity_limit")
+                ),
+                adaptive_capacity_updated_at=self._normalize_optional_string(
+                    p.get("adaptive_capacity_updated_at")
+                ),
             )
             self._profiles[pid] = state
 
@@ -1240,11 +1631,18 @@ class MoonMindProviderProfileManagerWorkflow:
                 existing.default_model_tier = p.get(
                     "default_model_tier", existing.default_model_tier
                 )
+                existing.capacity_scope_ref = (
+                    self._normalize_optional_string(p.get("capacity_scope_ref"))
+                    or existing.capacity_scope_ref
+                )
+                existing.purpose_aware_capacity = (
+                    self._purpose_aware_capacity_ledger
+                )
                 self._apply_profile_pricing(existing, p)
                 if authoritative:
                     existing.authoritative_policy_confirmed = True
                     existing.over_capacity_legacy_snapshot = (
-                        len(existing.current_leases) > existing.max_parallel_runs
+                        existing.execution_lease_count > existing.max_parallel_runs
                     )
             else:
                 pricing = pricing_from_profile_metadata(p)
@@ -1277,6 +1675,10 @@ class MoonMindProviderProfileManagerWorkflow:
                     model_tiers=p.get("model_tiers") or [],
                     default_model_tier=p.get("default_model_tier", 1),
                     authoritative_policy_confirmed=authoritative,
+                    capacity_scope_ref=self._normalize_optional_string(
+                        p.get("capacity_scope_ref")
+                    ),
+                    purpose_aware_capacity=self._purpose_aware_capacity_ledger,
                 )
 
         # Disable profiles that were removed from DB (but don't drop leases).
@@ -1310,6 +1712,18 @@ class MoonMindProviderProfileManagerWorkflow:
     def _normalize_optional_string(value: object) -> str | None:
         normalized = str(value or "").strip()
         return normalized or None
+
+    @staticmethod
+    def _normalize_capacity_limit(value: object) -> int | None:
+        """Coerce a persisted adaptive limit, dropping anything unusable."""
+
+        if value is None or isinstance(value, bool):
+            return None
+        try:
+            limit = int(value)
+        except (TypeError, ValueError):
+            return None
+        return limit if limit >= _MIN_ADAPTIVE_CAPACITY else None
 
     @staticmethod
     def _normalize_request_priority(value: object) -> int:
@@ -2013,6 +2427,18 @@ class MoonMindProviderProfileManagerWorkflow:
                 except (ValueError, TypeError):
                     profile.cooldown_until = None
 
+    def _recover_adaptive_capacity(self) -> int:
+        """Step lowered effective limits back toward the configured ceiling."""
+
+        now = workflow.now()
+        recovered = 0
+        for profile in self._profiles.values():
+            if not profile.purpose_aware_capacity:
+                continue
+            if profile.recover_adaptive_capacity(now):
+                recovered += 1
+        return recovered
+
     def _build_continue_as_new_input(self) -> dict[str, Any]:
         """Serialize current state for continue-as-new."""
         profiles_list = []
@@ -2041,6 +2467,11 @@ class MoonMindProviderProfileManagerWorkflow:
                     "pricing_source": state.pricing_source,
                     "over_capacity_legacy_snapshot": (
                         state.over_capacity_legacy_snapshot
+                    ),
+                    "capacity_scope_ref": state.capacity_scope_ref,
+                    "adaptive_capacity_limit": state.adaptive_capacity_limit,
+                    "adaptive_capacity_updated_at": (
+                        state.adaptive_capacity_updated_at
                     ),
                 }
             )
@@ -2122,22 +2553,65 @@ class MoonMindProviderProfileManagerWorkflow:
             )
             return False
 
+    def _lease_row(self, profile: ProfileSlotState, lease_id: str) -> dict[str, Any]:
+        return {
+            "workflow_id": lease_id,
+            "profile_id": profile.profile_id,
+            "granted_at": profile.lease_granted_at.get(lease_id),
+            "profileId": profile.profile_id,
+            "runtimeId": self._runtime_id,
+            **dict(profile.lease_metadata.get(lease_id) or {}),
+        }
+
+    async def _persist_lease_grant(
+        self, profile: ProfileSlotState, lease_id: str
+    ) -> bool:
+        """Durably record one lease grant.
+
+        MoonLadderStudios/MoonMind#3878: at capacity ``N`` the previous
+        runtime-wide snapshot rewrite made every grant cost O(active leases)
+        of durable work and serialized unrelated profiles behind one another.
+        An upsert of the single granted row carries the same recovery
+        guarantee, so the incremental operation is the canonical path and the
+        snapshot rewrite remains only for histories recorded before the patch.
+        """
+
+        if not self._incremental_lease_persistence:
+            return await self._sync_leases_to_db()
+        try:
+            await workflow.execute_activity(
+                "provider_profile.sync_slot_leases",
+                {
+                    "runtime_id": self._runtime_id,
+                    "leases": [self._lease_row(profile, lease_id)],
+                    "action": "upsert",
+                },
+                task_queue=ACTIVITY_TASK_QUEUE,
+                start_to_close_timeout=timedelta(seconds=10),
+                retry_policy=RetryPolicy(
+                    initial_interval=timedelta(seconds=1),
+                    backoff_coefficient=2.0,
+                    maximum_interval=timedelta(seconds=10),
+                    maximum_attempts=3,
+                ),
+            )
+            return True
+        except Exception:
+            self._get_logger().warning(
+                "Failed to persist lease %s for profile %s; provider capacity "
+                "remains blocked",
+                lease_id,
+                profile.profile_id,
+            )
+            return False
+
     async def _sync_leases_to_db(self) -> bool:
         """Persist current lease state to the database for crash recovery."""
         try:
             leases = []
             for profile in self._profiles.values():
                 for wf_id in profile.current_leases:
-                    leases.append(
-                        {
-                            "workflow_id": wf_id,
-                            "profile_id": profile.profile_id,
-                            "granted_at": profile.lease_granted_at.get(wf_id),
-                            "profileId": profile.profile_id,
-                            "runtimeId": self._runtime_id,
-                            **dict(profile.lease_metadata.get(wf_id) or {}),
-                        }
-                    )
+                    leases.append(self._lease_row(profile, wf_id))
             await workflow.execute_activity(
                 "provider_profile.sync_slot_leases",
                 {"runtime_id": self._runtime_id, "leases": leases, "action": "save"},

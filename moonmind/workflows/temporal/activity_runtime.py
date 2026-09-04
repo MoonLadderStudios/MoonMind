@@ -1084,6 +1084,10 @@ _ACTIVITY_HANDLER_ATTRS: dict[str, tuple[str, str]] = {
     "integration.omnigent.execute": ("agent_runtime", "integration_omnigent_execute"),
     "integration.omnigent.profile_bound_execute": ("agent_runtime", "integration_omnigent_profile_bound_execute"),
     "integration.omnigent.oauth_host_janitor": ("agent_runtime", "integration_omnigent_oauth_host_janitor"),
+    "omnigent.admit_generic_host_capacity": (
+        "agent_runtime",
+        "omnigent_admit_generic_host_capacity",
+    ),
     "omnigent.evaluate_session_admission": (
         "agent_runtime",
         "omnigent_evaluate_session_admission",
@@ -6287,6 +6291,16 @@ class TemporalAgentRuntimeActivities:
         return await self._run_omnigent_session_activity(
             "omnigent_resolve_intent_activity",
             "omnigent.resolve_intent",
+            request,
+            **kwargs,
+        )
+
+    async def omnigent_admit_generic_host_capacity(
+        self, request: Any = None, /, **kwargs: Any
+    ) -> dict[str, Any]:
+        return await self._run_omnigent_session_activity(
+            "omnigent_admit_generic_host_capacity_activity",
+            "omnigent.admit_generic_host_capacity",
             request,
             **kwargs,
         )

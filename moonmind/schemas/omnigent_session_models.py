@@ -321,6 +321,19 @@ class OmnigentSessionAdmissionDecision(_OmnigentSessionModel):
     execution_realizer_ref: str | None = Field(
         None, alias="executionRealizerRef", max_length=255
     )
+    # MoonLadderStudios/MoonMind#3878: the AgentRun workflow admits Provider
+    # Profile capacity before it starts the long execution Activity, so the
+    # frozen admission decision must carry the capacity authority the plan
+    # selected. These are compact, non-secret identities only.
+    provider_profile_ref: str | None = Field(
+        None, alias="providerProfileRef", max_length=128
+    )
+    provider_runtime_id: str | None = Field(
+        None, alias="providerRuntimeId", max_length=64
+    )
+    capacity_scope_ref: str | None = Field(
+        None, alias="capacityScopeRef", max_length=255
+    )
 
 
 class OmnigentFailureAuthorityRequest(_OmnigentSessionModel):

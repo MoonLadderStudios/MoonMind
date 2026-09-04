@@ -324,7 +324,95 @@ def resolved_proxy_forward_headers(
     return frozenset(part.strip().lower() for part in raw.split(",") if part.strip())
 
 
+# MoonLadderStudios/MoonMind#3878 invariant 7: on-demand generic hosts are
+# admitted against aggregate machine capacity and a separately bounded
+# cold-launch rate, so a deployment-selected provider ceiling of 8 or 16 can
+# never translate into an unsafe number of simultaneous Docker containers or a
+# launch storm on one host.
+OMNIGENT_GENERIC_HOST_CAPACITY_ENV = "MOONMIND_OMNIGENT_GENERIC_HOST_CAPACITY"
+OMNIGENT_GENERIC_HOST_COLD_LAUNCH_BURST_ENV = (
+    "MOONMIND_OMNIGENT_GENERIC_HOST_COLD_LAUNCH_BURST"
+)
+OMNIGENT_GENERIC_HOST_COLD_LAUNCH_WINDOW_ENV = (
+    "MOONMIND_OMNIGENT_GENERIC_HOST_COLD_LAUNCH_WINDOW_SECONDS"
+)
+#: Default aggregate ceiling for concurrently allocated generic hosts. Sized to
+#: the documented local Compose path: each on-demand host is a bounded
+#: container with its own writable home and state volume.
+OMNIGENT_GENERIC_HOST_DEFAULT_CAPACITY = 8
+#: A cold host launch pulls/starts a container and waits for registration, so
+#: launches are bounded per window independently of the steady-state ceiling.
+OMNIGENT_GENERIC_HOST_DEFAULT_COLD_LAUNCH_BURST = 2
+OMNIGENT_GENERIC_HOST_DEFAULT_COLD_LAUNCH_WINDOW_SECONDS = 30
+
+
+def _positive_int_from_env(
+    value: object | None,
+    *,
+    default: int,
+    env_name: str,
+) -> int:
+    cleaned = _clean(value)
+    if not cleaned:
+        return default
+    try:
+        parsed = int(cleaned)
+    except ValueError as exc:
+        raise ValueError(
+            f"invalid {env_name} value {cleaned!r}: expected a positive integer"
+        ) from exc
+    if parsed < 1:
+        raise ValueError(
+            f"invalid {env_name} value {cleaned!r}: expected a positive integer"
+        )
+    return parsed
+
+
+def generic_host_capacity(*, env: Mapping[str, Any] | None = None) -> int:
+    """Return the aggregate ceiling on concurrently allocated generic hosts."""
+
+    source = env if env is not None else os.environ
+    return _positive_int_from_env(
+        source.get(OMNIGENT_GENERIC_HOST_CAPACITY_ENV),
+        default=OMNIGENT_GENERIC_HOST_DEFAULT_CAPACITY,
+        env_name=OMNIGENT_GENERIC_HOST_CAPACITY_ENV,
+    )
+
+
+def generic_host_cold_launch_burst(*, env: Mapping[str, Any] | None = None) -> int:
+    """Return how many generic hosts may begin a cold launch per window."""
+
+    source = env if env is not None else os.environ
+    return _positive_int_from_env(
+        source.get(OMNIGENT_GENERIC_HOST_COLD_LAUNCH_BURST_ENV),
+        default=OMNIGENT_GENERIC_HOST_DEFAULT_COLD_LAUNCH_BURST,
+        env_name=OMNIGENT_GENERIC_HOST_COLD_LAUNCH_BURST_ENV,
+    )
+
+
+def generic_host_cold_launch_window_seconds(
+    *, env: Mapping[str, Any] | None = None
+) -> int:
+    """Return the cold-launch rate window in seconds."""
+
+    source = env if env is not None else os.environ
+    return _positive_int_from_env(
+        source.get(OMNIGENT_GENERIC_HOST_COLD_LAUNCH_WINDOW_ENV),
+        default=OMNIGENT_GENERIC_HOST_DEFAULT_COLD_LAUNCH_WINDOW_SECONDS,
+        env_name=OMNIGENT_GENERIC_HOST_COLD_LAUNCH_WINDOW_ENV,
+    )
+
+
 __all__ = [
+    "OMNIGENT_GENERIC_HOST_CAPACITY_ENV",
+    "OMNIGENT_GENERIC_HOST_COLD_LAUNCH_BURST_ENV",
+    "OMNIGENT_GENERIC_HOST_COLD_LAUNCH_WINDOW_ENV",
+    "OMNIGENT_GENERIC_HOST_DEFAULT_CAPACITY",
+    "OMNIGENT_GENERIC_HOST_DEFAULT_COLD_LAUNCH_BURST",
+    "OMNIGENT_GENERIC_HOST_DEFAULT_COLD_LAUNCH_WINDOW_SECONDS",
+    "generic_host_capacity",
+    "generic_host_cold_launch_burst",
+    "generic_host_cold_launch_window_seconds",
     "OMNIGENT_RUNTIME_ACTIVE_SKILLS_DIR",
     "OMNIGENT_DISABLED_MESSAGE",
     "OmnigentRuntimeGate",

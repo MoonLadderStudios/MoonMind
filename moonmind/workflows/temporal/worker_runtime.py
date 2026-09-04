@@ -2768,6 +2768,7 @@ async def _build_runtime_activities(topology) -> tuple[AsyncExitStack, list[obje
             from api_service.db.base import async_session_maker
             from moonmind.omnigent.production import (
                 build_generic_omnigent_execution_services,
+                close_omnigent_transport_pool,
             )
 
             # Startup is the readiness boundary: an enabled generic deployment
@@ -2775,6 +2776,10 @@ async def _build_runtime_activities(topology) -> tuple[AsyncExitStack, list[obje
             build_generic_omnigent_execution_services(
                 session_factory=async_session_maker
             )
+            # The pooled Omnigent transport is opened by that build and lives
+            # for the worker process, so the worker owns its close
+            # (MoonLadderStudios/MoonMind#3878).
+            resources.push_async_callback(close_omnigent_transport_pool)
     container_job_backend = None
     enforced_network_refs: list[str] = []
     enforced_egress_profile_refs: list[str] = []
