@@ -70,10 +70,20 @@ def _provider_materializer_error(
     ``codex_cli/openai`` but is not accepted by the ``pi-native`` harness. This
     is the same capability boundary the readiness projection uses to build
     ``compatibleProviderProfiles``, not a second compatibility source.
+
+    A credential slot also pins the auth models it accepts, and the plan builder
+    rebuilds the slot auth model from whichever materializer the chosen Provider
+    Profile resolves to. Provider ids and harness compatibility alone would
+    therefore let a slot restricted to ``acceptedAuthModels: ["none"]`` select an
+    ``own-auth`` profile and launch with API-key credentials the immutable
+    profile forbids, so the slot auth-model constraint the planner enforces at
+    bind time is applied here too.
     """
 
+    from moonmind.omnigent.harness_platform.failures import HarnessPlatformFailure
     from moonmind.omnigent.harness_platform.host_classes import get_launch_policy
     from moonmind.omnigent.harness_platform.materializers import (
+        get_materializer,
         materializer_ref_for_provider,
         validate_binding_materializer,
     )
@@ -83,6 +93,35 @@ def _provider_materializer_error(
         materializer_ref = materializer_ref_for_provider(
             profile.runtime_id, profile.provider_id
         )
+        materializer_auth_models = set(
+            get_materializer(materializer_ref).acceptedAuthModels
+        )
+        provider_slots = [
+            slot
+            for slot in document.get("credentialSlots") or ()
+            if isinstance(slot, Mapping)
+            and (
+                not slot.get("acceptedProviderIds")
+                or str(profile.provider_id)
+                in {
+                    str(provider_id)
+                    for provider_id in slot.get("acceptedProviderIds") or ()
+                }
+            )
+        ]
+        if provider_slots and not any(
+            not slot.get("acceptedAuthModels")
+            or materializer_auth_models.intersection(
+                str(auth_model) for auth_model in slot.get("acceptedAuthModels") or ()
+            )
+            for slot in provider_slots
+        ):
+            raise HarnessPlatformError(
+                f"materializer {materializer_ref} auth model "
+                f"{sorted(materializer_auth_models)} is not accepted by any "
+                f"credential slot that accepts provider {profile.provider_id!r}",
+                code=HarnessPlatformFailure.OMNIGENT_PROVIDER_PROFILE_INCOMPATIBLE,
+            )
         for policy_ref in document.get("allowedLaunchPolicyRefs") or ():
             validate_binding_materializer(
                 materializer_ref=materializer_ref,

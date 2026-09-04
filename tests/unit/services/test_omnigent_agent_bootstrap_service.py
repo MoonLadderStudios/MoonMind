@@ -5,6 +5,7 @@ Also covers which MoonMind-managed profile holds ``default_for_runtime``
 """
 from __future__ import annotations
 
+from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 
 import pytest
@@ -680,3 +681,105 @@ async def test_operator_authored_default_is_never_displaced(session, monkeypatch
     opencode = await session.get(OmnigentAgentProfile, OPENCODE_BUILTIN_PROFILE_ID)
     assert opencode is not None
     assert opencode.default_for_runtime is False
+
+
+async def test_superseded_operator_selection_no_longer_pins_the_default(
+    session, monkeypatch
+):
+    """Only the newest ``made_default`` event is a live operator claim.
+
+    Audit rows are immutable, so the profile an operator selected first keeps
+    its ``made_default`` row after a later ``/default`` request moves the
+    selection. Treating that superseded row as current authority would pin the
+    default to a profile the operator already replaced, permanently, once
+    automatic reconciliation had fallen back to it.
+    """
+
+    assert await reconcile_bootstrap_agent_profile(
+        session,
+        env={},
+        inventory=_inventory("codex-native-ui"),
+    ) is True
+    await _add_ready_opencode_builtin_profile(session, monkeypatch)
+    selected_at = datetime.now(timezone.utc)
+    session.add_all(
+        [
+            OmnigentAgentProfileAuditEvent(
+                profile_id=BOOTSTRAP_PROFILE_ID,
+                action="made_default",
+                version=1,
+                actor_id=None,
+                metadata_json={},
+                created_at=selected_at - timedelta(hours=2),
+            ),
+            # The operator moved the selection to the OpenCode built-in, which
+            # supersedes the Codex bootstrap claim above.
+            OmnigentAgentProfileAuditEvent(
+                profile_id=OPENCODE_BUILTIN_PROFILE_ID,
+                action="made_default",
+                version=1,
+                actor_id=None,
+                metadata_json={},
+                created_at=selected_at - timedelta(hours=1),
+            ),
+        ]
+    )
+    # Reconciliation previously fell back to the Codex bootstrap profile while
+    # the newer selection could not launch.
+    bootstrap = await session.get(OmnigentAgentProfile, BOOTSTRAP_PROFILE_ID)
+    opencode = await session.get(OmnigentAgentProfile, OPENCODE_BUILTIN_PROFILE_ID)
+    assert bootstrap is not None and opencode is not None
+    bootstrap.default_for_runtime = True
+    opencode.default_for_runtime = False
+    await session.commit()
+
+    selected = await reconcile_managed_default_agent_profile(session, env={})
+
+    assert selected == OPENCODE_BUILTIN_PROFILE_ID
+    await session.refresh(bootstrap)
+    assert bootstrap.default_for_runtime is False
+
+
+async def test_no_launch_ready_managed_profile_clears_the_stale_default(
+    session, monkeypatch
+):
+    """A managed default must not publish launch authority it cannot honor.
+
+    ``resolve_default_agent_profile_snapshot`` only requires an active profile
+    with a version, not a ready validation, so leaving ``default_for_runtime``
+    on an unready profile lets a default submission resolve stale authority
+    instead of reporting that no default is available.
+    """
+
+    assert await reconcile_bootstrap_agent_profile(
+        session,
+        env={},
+        inventory=_inventory("codex-native-ui"),
+    ) is True
+    bootstrap = await session.get(OmnigentAgentProfile, BOOTSTRAP_PROFILE_ID)
+    assert bootstrap is not None
+    assert bootstrap.default_for_runtime is True
+    version = await session.scalar(
+        select(OmnigentAgentProfileVersion).where(
+            OmnigentAgentProfileVersion.profile_id == BOOTSTRAP_PROFILE_ID,
+            OmnigentAgentProfileVersion.version == bootstrap.active_version,
+        )
+    )
+    assert version is not None
+    version.validation_result = {"ready": False}
+    await session.commit()
+
+    selected = await reconcile_managed_default_agent_profile(session, env={})
+
+    assert selected is None
+    await session.refresh(bootstrap)
+    assert bootstrap.default_for_runtime is False
+    cleared = await session.scalar(
+        select(func.count())
+        .select_from(OmnigentAgentProfileAuditEvent)
+        .where(
+            OmnigentAgentProfileAuditEvent.profile_id == BOOTSTRAP_PROFILE_ID,
+            OmnigentAgentProfileAuditEvent.action == "managed_default_cleared",
+        )
+    )
+    assert cleared == 1

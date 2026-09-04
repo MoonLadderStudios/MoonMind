@@ -1484,6 +1484,14 @@ async def update_profile(
         or update_data.get("enabled") is True
         or import_existing_credential_volume
     )
+    # MoonLadderStudios/MoonMind#3877: the Settings toggle disables a profile by
+    # sending only ``enabled: false``. Persist that as ``user_disabled`` so the
+    # operator's intent is distinguishable from automatic disablement; startup
+    # seeding and deployment credential enrollment read that marker before they
+    # re-enable a profile or move runtime-default authority.
+    operator_disable_requested = (
+        update_data.get("enabled") is False and "disabled_reason" not in update_data
+    )
     requested_is_default = update_data.pop("is_default", None)
     target_provider_id = update_data.get("provider_id") or profile.provider_id
     capabilities = provider_profile_creation_capabilities(
@@ -1960,6 +1968,8 @@ async def update_profile(
         elif key == "last_auth_method" and value is not None:
             value = ProviderProfileAuthMethod(value)
         setattr(profile, key, value)
+    if operator_disable_requested:
+        profile.disabled_reason = ProviderProfileDisabledReason.USER_DISABLED
     try:
         model_tiers, default_model_tier = coerce_model_effort_tier_policy(
             model_tiers=profile.model_tiers,

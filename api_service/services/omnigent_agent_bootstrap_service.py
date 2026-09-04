@@ -455,18 +455,26 @@ async def _agent_profile_launch_ready(
 
 
 async def _operator_selected_default(session: AsyncSession, profile_id: str) -> bool:
-    """Return whether an operator explicitly made this profile the default."""
+    """Return whether this profile holds the current operator default selection.
 
-    return bool(
-        await session.scalar(
-            select(func.count())
-            .select_from(OmnigentAgentProfileAuditEvent)
-            .where(
-                OmnigentAgentProfileAuditEvent.profile_id == profile_id,
-                OmnigentAgentProfileAuditEvent.action == "made_default",
-            )
+    ``made_default`` audit rows are immutable evidence, so the row a profile
+    earned stays behind after a later ``/default`` request selects a different
+    profile. Only the most recent ``made_default`` event is a live operator
+    claim; every earlier one is superseded. Treating a superseded row as current
+    authority would permanently pin reconciliation to a profile the operator
+    already replaced, even once that profile stops being launch ready.
+    """
+
+    latest_selection = await session.scalar(
+        select(OmnigentAgentProfileAuditEvent.profile_id)
+        .where(OmnigentAgentProfileAuditEvent.action == "made_default")
+        .order_by(
+            OmnigentAgentProfileAuditEvent.created_at.desc(),
+            OmnigentAgentProfileAuditEvent.id.desc(),
         )
+        .limit(1)
     )
+    return latest_selection == profile_id
 
 
 async def reconcile_managed_default_agent_profile(
@@ -513,7 +521,41 @@ async def reconcile_managed_default_agent_profile(
             continue
         preferred = candidate
         break
-    if preferred is None or preferred.profile_id == current_id:
+    if preferred is None:
+        if current is None:
+            return None
+        # Every explicit authority (operator-authored profile, current operator
+        # selection, OMNIGENT_DEFAULT_AGENT_NAME) already returned above, so the
+        # remaining default is deployment-managed and no managed profile can
+        # launch. Leaving the flag set would publish stale launch authority:
+        # resolve_default_agent_profile_snapshot only requires an active profile
+        # with a version, not a ready validation/projection, so a default
+        # submission would resolve an unlaunchable profile instead of reporting
+        # that no default is available.
+        cleared_at = now or datetime.now(timezone.utc)
+        current.default_for_runtime = False
+        session.add(
+            OmnigentAgentProfileAuditEvent(
+                profile_id=current_id,
+                action="managed_default_cleared",
+                version=current.active_version,
+                actor_id=None,
+                metadata_json={
+                    "previousProfileId": current_id,
+                    "origin": "deployment_managed_default",
+                    "clearedAt": cleared_at.isoformat(),
+                    "reason": "no_launch_ready_managed_profile",
+                },
+            )
+        )
+        await session.commit()
+        logger.info(
+            "Cleared the deployment-managed default Omnigent agent profile %s "
+            "because no managed profile is launch ready",
+            current_id,
+        )
+        return None
+    if preferred.profile_id == current_id:
         return current_id
 
     observed_at = now or datetime.now(timezone.utc)
