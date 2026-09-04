@@ -134,6 +134,7 @@ from moonmind.workflows.adapters.omnigent_agent_adapter import (
     build_omnigent_selection,
     resolve_omnigent_target,
 )
+from moonmind.workflows.adapters.omnigent_client import OmnigentClientError
 from moonmind.workflows.executions.repository_contract import (
     RepositoryClientEvidence,
     RepositoryClientPolicy,
@@ -4808,18 +4809,73 @@ async def test_omnigent_injected_client_preserves_execution_timeouts() -> None:
         client = oauth_host_runtime_module.OmnigentHttpClient(
             base_url="https://omnigent.test",
             timeout_seconds=manifest["requestTimeoutSeconds"],
+            event_timeout_seconds=manifest["eventTimeoutSeconds"],
             stream_timeout_seconds=None,
             client=injected_client,
         )
+        await client.get_session(manifest["sessionId"])
         await client.post_event(manifest["sessionId"], {"type": "message"})
         assert [event async for event in client.stream_events(manifest["sessionId"])] == []
 
+    assert observed[f"/v1/sessions/{manifest['sessionId']}"] == expected[
+        "ordinaryTimeout"
+    ]
     assert observed[f"/v1/sessions/{manifest['sessionId']}/events"] == expected[
-        "requestTimeout"
+        "eventTimeout"
     ]
     assert observed[f"/v1/sessions/{manifest['sessionId']}/stream"] == expected[
         "streamTimeout"
     ]
+
+
+async def test_omnigent_native_bootstrap_has_dispatch_timeout_margin() -> None:
+    """Replay mm:4a85769c at the first-message transport boundary."""
+
+    replay_id = "omnigent-native-bootstrap-timeout-margin"
+    manifest = load_replay(replay_id, "manifest.json")
+    expected = load_replay(replay_id, "expected-outcome.json")
+    observed: dict[str, dict[str, float | None]] = {}
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        observed[request.url.path] = dict(request.extensions["timeout"])
+        return httpx.Response(202, json={"queued": True})
+
+    async with httpx.AsyncClient(
+        transport=httpx.MockTransport(handler)
+    ) as injected_client:
+        client = oauth_host_runtime_module.OmnigentHttpClient(
+            base_url="https://omnigent.test",
+            client=injected_client,
+        )
+        await client.get_session(manifest["sessionId"])
+        await client.post_event(manifest["sessionId"], {"type": "message"})
+
+    ordinary = observed[f"/v1/sessions/{manifest['sessionId']}"]
+    event = observed[f"/v1/sessions/{manifest['sessionId']}/events"]
+    assert ordinary == expected["ordinaryTimeout"]
+    assert event == expected["eventTimeout"]
+    assert event["read"] == manifest["eventTimeoutSeconds"]
+    assert event["read"] is not None
+    assert event["read"] >= (
+        manifest["nativeBootstrapAttemptSeconds"]
+        * manifest["serializedAttemptCount"]
+    )
+    assert event["read"] >= expected["minimumEventTimeoutSeconds"]
+
+    async def timeout_handler(request: httpx.Request) -> httpx.Response:
+        raise httpx.ReadTimeout("", request=request)
+
+    async with httpx.AsyncClient(
+        transport=httpx.MockTransport(timeout_handler)
+    ) as injected_client:
+        client = oauth_host_runtime_module.OmnigentHttpClient(
+            base_url="https://omnigent.test",
+            client=injected_client,
+        )
+        with pytest.raises(OmnigentClientError) as excinfo:
+            await client.post_event(manifest["sessionId"], {"type": "message"})
+
+    assert str(excinfo.value) == expected["emptyReadTimeoutMessage"]
 
 
 async def test_omnigent_stock_sse_event_catalog_is_normalized() -> None:
