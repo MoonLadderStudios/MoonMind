@@ -18586,6 +18586,39 @@ describe("Task Create MM-578 Preset expansion", () => {
 });
 
 describe("Task Create schema-driven capability inputs", () => {
+  // A batch parent whose child publish default follows the selected run: a
+  // read-only verification cohort publishes nothing, an implementation cohort
+  // publishes a PR.
+  const batchSchemaPresetContract = {
+    inputSchema: {
+      type: "object",
+      required: ["run_ref"],
+      properties: {
+        run_ref: {
+          type: "string",
+          title: "Run",
+          enum: ["skill:verify", "preset:implement"],
+        },
+        publish_mode: {
+          type: "string",
+          title: "Publish override",
+          enum: ["none", "branch", "pr"],
+        },
+      },
+    },
+    uiSchema: {
+      run_ref: { widget: "select" },
+      publish_mode: {
+        widget: "select",
+        advanced: true,
+        defaultFrom: {
+          field: "run_ref",
+          map: { "skill:verify": "none", "preset:implement": "pr" },
+        },
+      },
+    },
+    defaults: { run_ref: "skill:verify", publish_mode: "none" },
+  };
   let fetchSpy: MockInstance;
 
   function mockSchemaCapabilityFetch(input: RequestInfo | URL, init?: RequestInit): Promise<Response> {
@@ -18840,6 +18873,15 @@ describe("Task Create schema-driven capability inputs", () => {
               defaults: {},
             },
             {
+              slug: "batch-schema-preset",
+              scope: "global",
+              title: "Batch Schema Preset",
+              description: "Schema-driven batch preset.",
+              latestVersion: "1",
+              version: "1",
+              ...batchSchemaPresetContract,
+            },
+            {
               slug: "generic-schema-preset",
               scope: "global",
               title: "Generic Schema Preset",
@@ -18979,6 +19021,45 @@ describe("Task Create schema-driven capability inputs", () => {
             },
           },
           defaults: {},
+        }),
+      } as Response);
+    }
+    if (url.startsWith("/api/presets/batch-schema-preset?scope=global")) {
+      return Promise.resolve({
+        ok: true,
+        json: async () => ({
+          slug: "batch-schema-preset",
+          scope: "global",
+          title: "Batch Schema Preset",
+          description: "Schema-driven batch preset.",
+          latestVersion: "1",
+          version: "1",
+          ...batchSchemaPresetContract,
+        }),
+      } as Response);
+    }
+    if (url.startsWith("/api/presets/batch-schema-preset:expand?scope=global")) {
+      const payload = JSON.parse(String(init?.body || "{}")) as {
+        inputs?: Record<string, unknown>;
+      };
+      return Promise.resolve({
+        ok: true,
+        json: async () => ({
+          steps: [
+            {
+              id: "tpl:batch-schema-preset:1:01",
+              title: "Queue child workflows",
+              instructions: "Queue child workflows.",
+              skill: { id: "batch-workflows", inputs: payload.inputs },
+            },
+          ],
+          appliedTemplate: {
+            slug: "batch-schema-preset",
+            version: "1",
+            inputs: payload.inputs,
+          },
+          capabilities: ["git"],
+          warnings: [],
         }),
       } as Response);
     }
@@ -19225,6 +19306,98 @@ describe("Task Create schema-driven capability inputs", () => {
   });
 
 
+
+  async function selectBatchSchemaPreset(): Promise<HTMLElement> {
+    renderWithClient(<WorkflowStartPage payload={mockPayload} />);
+    const step = (await screen.findByText("Step 1")).closest(
+      "section",
+    ) as HTMLElement;
+    selectStepType(step, "Preset");
+    const presetSelect = within(step).getByLabelText(
+      "Preset Template",
+    ) as HTMLSelectElement;
+    await waitFor(() => {
+      expect(presetSelect.options.length).toBeGreaterThan(1);
+    });
+    fireEvent.change(presetSelect, {
+      target: { value: "global::::batch-schema-preset" },
+    });
+    await within(step).findByLabelText("Run");
+    return step;
+  }
+
+  function latestBatchExpandInputs(): Record<string, unknown> {
+    const call = fetchSpy.mock.calls
+      .filter(([url]) =>
+        String(url).startsWith("/api/presets/batch-schema-preset:expand"),
+      )
+      .at(-1);
+    expect(call).toBeTruthy();
+    const payload = JSON.parse(String(call?.[1]?.body || "{}")) as {
+      inputs?: Record<string, unknown>;
+    };
+    return payload.inputs || {};
+  }
+
+  it("derives a dependent input default from the selected run", async () => {
+    const step = await selectBatchSchemaPreset();
+    const publishSelect = within(step).getByLabelText(
+      "Publish override",
+    ) as HTMLSelectElement;
+    // The default run is read-only verification, so children publish nothing.
+    expect(publishSelect.value).toBe("none");
+
+    fireEvent.change(within(step).getByLabelText("Run"), {
+      target: { value: "preset:implement" },
+    });
+
+    // Switching to the implementation run must not queue children that
+    // implement each target and then leave the work unpublished.
+    await waitFor(() => {
+      expect(
+        (within(step).getByLabelText("Publish override") as HTMLSelectElement)
+          .value,
+      ).toBe("pr");
+    });
+
+    fireEvent.click(within(step).getByRole("button", { name: "Expand" }));
+    await waitFor(() => {
+      expect(latestBatchExpandInputs().publish_mode).toBe("pr");
+    });
+  });
+
+  it("never replaces a dependent default the operator changed", async () => {
+    const step = await selectBatchSchemaPreset();
+    fireEvent.change(within(step).getByLabelText("Run"), {
+      target: { value: "preset:implement" },
+    });
+    await waitFor(() => {
+      expect(
+        (within(step).getByLabelText("Publish override") as HTMLSelectElement)
+          .value,
+      ).toBe("pr");
+    });
+
+    fireEvent.change(within(step).getByLabelText("Publish override"), {
+      target: { value: "branch" },
+    });
+    fireEvent.change(within(step).getByLabelText("Run"), {
+      target: { value: "skill:verify" },
+    });
+    fireEvent.change(within(step).getByLabelText("Run"), {
+      target: { value: "preset:implement" },
+    });
+
+    expect(
+      (within(step).getByLabelText("Publish override") as HTMLSelectElement)
+        .value,
+    ).toBe("branch");
+
+    fireEvent.click(within(step).getByRole("button", { name: "Expand" }));
+    await waitFor(() => {
+      expect(latestBatchExpandInputs().publish_mode).toBe("branch");
+    });
+  });
 
   it("renders github.issue-picker from schema metadata and normalizes manual issue URL", async () => {
     renderWithClient(<WorkflowStartPage payload={mockPayload} />);

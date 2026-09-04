@@ -3938,6 +3938,45 @@ function safeCapabilityDefault(
   return structuredClone(value);
 }
 
+// A preset may declare `uiSchema.<field>.defaultFrom` when one input's default
+// has to follow another operator selection rather than a single static value.
+// The rule only supplies a default: once the operator sets the field, their
+// value lives in `values` and is never replaced.
+function dependentCapabilityDefault(
+  detail: Pick<PresetDetail, "uiSchema" | "defaults">,
+  values: Record<string, unknown>,
+  name: string,
+): unknown {
+  const defaultFrom = recordValue(
+    capabilityFieldUiSchema(detail.uiSchema, name)["defaultFrom"],
+  );
+  const field = String(defaultFrom["field"] ?? "").trim();
+  const map = recordValue(defaultFrom["map"]);
+  if (!field || Object.keys(map).length === 0) {
+    return undefined;
+  }
+  const source = capabilityInputValue(values, detail.defaults, field);
+  const mapped = map[String(source ?? "").trim()];
+  if (mapped === undefined || containsSecretLikeCapabilityValue(mapped)) {
+    return undefined;
+  }
+  return structuredClone(mapped);
+}
+
+function capabilityEffectiveDefaults(
+  detail: Pick<PresetDetail, "uiSchema" | "defaults">,
+  values: Record<string, unknown>,
+): Record<string, unknown> {
+  const effective = { ...(detail.defaults || {}) };
+  for (const name of Object.keys(recordValue(detail.uiSchema))) {
+    const derived = dependentCapabilityDefault(detail, values, name);
+    if (derived !== undefined) {
+      effective[name] = derived;
+    }
+  }
+  return effective;
+}
+
 function capabilityInputValue(
   values: Record<string, unknown>,
   defaults: Record<string, unknown> | undefined,
@@ -4050,6 +4089,7 @@ function resolveSchemaCapabilityValues(
       explicit = normalizeJiraIssuePickerValue(explicit);
     }
     const fallback =
+      dependentCapabilityDefault(detail, explicitValues, name) ??
       safeCapabilityDefault(detail.defaults, name) ??
       safeCapabilityDefault(fieldSchema, "default");
     if (explicit !== undefined) {
@@ -4396,6 +4436,9 @@ function SchemaCapabilityFields({
   if (fields.length === 0) {
     return null;
   }
+  // Dependent defaults are resolved against the current values so a field whose
+  // default follows another selection re-renders with the derived value.
+  const effectiveDefaults = capabilityEffectiveDefaults(detail, values);
   return (
     <div className="grid-2">
       {fields.map(([name, rawSchema]) => {
@@ -4403,7 +4446,7 @@ function SchemaCapabilityFields({
         const uiSchema = capabilityFieldUiSchema(detail.uiSchema, name);
         const widget = capabilityWidgetName(fieldSchema, uiSchema);
         const label = capabilityFieldLabel(name, fieldSchema);
-        const value = capabilityInputValue(values, detail.defaults, name);
+        const value = capabilityInputValue(values, effectiveDefaults, name);
         const inputId = `queue-capability-input-${name}`;
         const error = errors[name];
         const description = String(fieldSchema.description || "").trim();
@@ -4424,7 +4467,7 @@ function SchemaCapabilityFields({
                 id={inputId}
                 aria-label={label}
                 type="text"
-                value={capabilityInputTextValue(values, detail.defaults, name)}
+                value={capabilityInputTextValue(values, effectiveDefaults, name)}
                 disabled={disabled}
                 aria-invalid={Boolean(error)}
                 onChange={(event) => onChange(name, event.target.value)}
@@ -4574,7 +4617,7 @@ function SchemaCapabilityFields({
               <select
                 id={inputId}
                 aria-label={label}
-                value={capabilityInputTextValue(values, detail.defaults, name)}
+                value={capabilityInputTextValue(values, effectiveDefaults, name)}
                 disabled={disabled}
                 aria-invalid={Boolean(error)}
                 onChange={(event) => {
@@ -4605,7 +4648,7 @@ function SchemaCapabilityFields({
               <textarea
                 id={inputId}
                 aria-label={label}
-                value={capabilityInputTextValue(values, detail.defaults, name)}
+                value={capabilityInputTextValue(values, effectiveDefaults, name)}
                 disabled={disabled}
                 aria-invalid={Boolean(error)}
                 onChange={(event) =>
@@ -4658,7 +4701,7 @@ function SchemaCapabilityFields({
                   ? `${inputId}-options`
                   : undefined
               }
-              value={capabilityInputTextValue(values, detail.defaults, name)}
+              value={capabilityInputTextValue(values, effectiveDefaults, name)}
               disabled={disabled}
               aria-invalid={Boolean(error)}
               onChange={(event) =>

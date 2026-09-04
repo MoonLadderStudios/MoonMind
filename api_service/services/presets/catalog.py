@@ -1098,6 +1098,11 @@ def _apply_contextual_input_overrides(
         annotations=annotations,
         submitted=dict(submitted),
     )
+    adjusted = _apply_dependent_input_defaults(
+        annotations=annotations,
+        inputs_schema=inputs_schema,
+        submitted=adjusted,
+    )
 
     if slug in {_BATCH_WORKFLOWS_SLUG, _BATCH_GITHUB_WORKFLOWS_SLUG}:
         repository = _repository_from_context(context)
@@ -1147,6 +1152,80 @@ def _input_schema_defaults_by_name(inputs_schema: list[dict[str, Any]]) -> dict[
         for definition in inputs_schema
         if str(definition.get("name") or "").strip()
     }
+
+
+def _dependent_input_default_rules(
+    annotations: Mapping[str, Any] | None,
+) -> dict[str, tuple[str, dict[str, Any]]]:
+    """Parse ``uiSchema.<field>.defaultFrom`` rules into ``{field: (source, map)}``.
+
+    A preset uses this when one input's default has to follow another operator
+    selection instead of a single static value - for example a batch parent
+    whose child publish mode depends on the selected child capability. The rule
+    is declarative so the Create page and expansion derive the same default.
+    """
+
+    ui_schema = (annotations or {}).get("uiSchema")
+    if not isinstance(ui_schema, Mapping):
+        return {}
+    rules: dict[str, tuple[str, dict[str, Any]]] = {}
+    for raw_name, raw_field_ui in ui_schema.items():
+        if not isinstance(raw_field_ui, Mapping):
+            continue
+        default_from = raw_field_ui.get("defaultFrom")
+        if default_from is None:
+            continue
+        name = str(raw_name or "").strip()
+        if not isinstance(default_from, Mapping):
+            raise PresetValidationError(
+                f"uiSchema.{name}.defaultFrom must be an object."
+            )
+        source = str(default_from.get("field") or "").strip()
+        mapping = default_from.get("map")
+        if not source or not isinstance(mapping, Mapping) or not mapping:
+            raise PresetValidationError(
+                f"uiSchema.{name}.defaultFrom requires a source 'field' and a "
+                "non-empty 'map'."
+            )
+        if _contains_secret_like_value(mapping):
+            raise PresetValidationError(
+                f"uiSchema.{name}.defaultFrom map contains a secret-like value."
+            )
+        rules[name] = (
+            source,
+            {str(key or "").strip(): value for key, value in mapping.items()},
+        )
+    return rules
+
+
+def _apply_dependent_input_defaults(
+    *,
+    annotations: Mapping[str, Any] | None,
+    inputs_schema: list[dict[str, Any]],
+    submitted: dict[str, Any],
+) -> dict[str, Any]:
+    """Fill omitted inputs from their declared ``defaultFrom`` rule.
+
+    Only an omitted or blank value is derived, so an explicitly submitted value
+    - including one the operator changed away from the derived default - always
+    wins.
+    """
+
+    rules = _dependent_input_default_rules(annotations)
+    if not rules:
+        return submitted
+    adjusted = dict(submitted)
+    schema_defaults = _input_schema_defaults_by_name(inputs_schema)
+    for name, (source, mapping) in rules.items():
+        if adjusted.get(name) not in (None, ""):
+            continue
+        source_value = adjusted.get(source)
+        if source_value in (None, ""):
+            source_value = schema_defaults.get(source)
+        mapped = mapping.get(str(source_value or "").strip())
+        if mapped is not None:
+            adjusted[name] = mapped
+    return adjusted
 
 def _contains_secret_like_value(value: Any) -> bool:
     if isinstance(value, Mapping):
@@ -1279,6 +1358,9 @@ def _normalize_preset_annotations(annotations: Mapping[str, Any] | None) -> dict
         normalized["checkpointBranching"] = _normalize_checkpoint_branching_policy(
             checkpoint_branching
         )
+    # Reject a malformed dependent-default rule at seed time rather than letting
+    # an input silently fall back to its static default at expansion.
+    _dependent_input_default_rules(normalized)
     return normalized
 
 

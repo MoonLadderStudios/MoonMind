@@ -423,6 +423,59 @@ annotation. Workflow-level publish policy is still validated by the same publish
 and merge-automation contracts as a manually authored submission; a preset cannot
 grant publish rights that a submitted payload could not.
 
+Expansion reads `workflowPublish` from the **root** preset only. A preset that is
+included as a child keeps its own annotation for the case where an operator runs
+it directly, and that annotation never overwrites the including workflow's policy.
+
+A preset declares `mode: none` when the workflow itself publishes nothing to the
+repository:
+
+- parent orchestrators whose only repository work happens in child workflows,
+  each of which carries its own publish policy;
+- workflows whose side effects are external, such as creating tracker issues;
+- repository reads that only write local handoff artifacts for later steps.
+
+A preset that edits the repository and expects MoonMind to push and open the pull
+request declares no `workflowPublish` annotation and stays a managed `pr`
+workflow. That includes a preset whose final step creates or identifies the pull
+request early because a later trusted side effect needs its URL: the step's PR
+instructions override the generic commit-only instruction for that step, and the
+workflow remains managed.
+
+`mode: auto` is reserved for a root capability that declares agent-owned
+publication and produces execution-bound `artifacts/publish_result.json`
+evidence, such as `pr-resolver`, `fix-comments`, `fix-ci`, and
+`fix-merge-conflicts`. Declaring `auto` for any other preset would require valid
+publish evidence on every terminal path, including no-change and blocked runs,
+and would otherwise finish as `auto_publish_evidence_missing`.
+
+## Dependent Input Defaults
+
+An input's default may follow another operator selection instead of a single
+static value. A preset declares this with `uiSchema.<field>.defaultFrom`:
+
+```yaml
+uiSchema:
+  publish_mode:
+    widget: select
+    defaultFrom:
+      field: run_ref
+      map:
+        'skill:jira-verify': none
+        'preset:jira-implement': pr
+        'preset:jira-orchestrate': pr
+```
+
+The Create page and expansion derive the same value from the same rule, so an
+omitted input resolves identically whether a run is authored in the UI or
+submitted through the API. Only an omitted or blank value is derived: an
+explicitly submitted value, including one the operator changed away from the
+derived default, is never replaced. A source value with no entry in `map` falls
+back to the field's static default.
+
+A malformed `defaultFrom` is rejected when the preset is seeded rather than
+silently falling back to the static default.
+
 ## Nested Presets
 
 A preset may include child preset steps. Parent presets must explicitly map inputs into child presets.
