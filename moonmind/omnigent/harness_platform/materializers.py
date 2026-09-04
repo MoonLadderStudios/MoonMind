@@ -72,7 +72,7 @@ class CredentialMaterializer(BaseModel):
     cleanup: dict[str, Any]
 
     @model_validator(mode="after")
-    def validate_top(self) -> "CredentialMaterializer":
+    def validate_top(self) -> CredentialMaterializer:
         if not _SAFE_ID_RE.fullmatch(self.materializerId):
             raise ValueError("invalid materializerId")
         if not self.acceptedHarnessImplementations and not self.acceptedHarnessIds:
@@ -119,6 +119,13 @@ class CredentialMaterializer(BaseModel):
 # Built-in registry
 BUILTIN_MATERIALIZERS: dict[str, CredentialMaterializer] = {}
 
+# Ownership classes for profile-owned OAuth credential homes (#3829): the
+# enrollment-owned volume is attached read-write so vendor token refresh
+# persists, run cleanup only detaches it, and the durable enrollment state
+# survives every host.
+OAUTH_HOME_PROFILE_OWNED_STATE = {"scope": "profile", "mutable": True}
+OAUTH_HOME_PROFILE_OWNED_CLEANUP = {"mode": "detach-profile-owned"}
+
 _PROVIDER_MATERIALIZER_REFS: dict[tuple[str, str], str] = {
     ("opencode", "opencode-go"): "opencode-auth-json@1",
     # OpenCode's built-in Zen Contributor Free provider is credentialless.
@@ -126,6 +133,7 @@ _PROVIDER_MATERIALIZER_REFS: dict[tuple[str, str], str] = {
     # deployment key can never bleed into the free provider implicitly.
     ("opencode", "opencode"): "none@1",
     ("codex_cli", "openai"): "codex-oauth-home@1",
+    ("claude_code", "anthropic"): "claude-oauth-home@1",
     ("omnigent", "anthropic"): "omnigent-provider-config@1",
     ("omnigent", "openai"): "omnigent-provider-config@1",
 }
@@ -144,15 +152,34 @@ _register_builtin(
         "acceptedHarnessIds": ["codex-native"],
         "acceptedAuthModels": ["oauth_volume"],
         "supportedHostModes": ["on-demand", "static-connected"],
-        "requiredSecretRoles": ["oauth_token"],
-        "state": {"scope": "run", "mutable": True},
+        "requiredSecretRoles": [],
+        "state": OAUTH_HOME_PROFILE_OWNED_STATE,
         "target": {
             "kind": "oauth-home",
             "path": "/home/app/.codex",
             "permissions": "0700",
         },
         "preflight": {"kind": "login-status"},
-        "cleanup": {"mode": "remove-owned-state"},
+        "cleanup": OAUTH_HOME_PROFILE_OWNED_CLEANUP,
+    }
+)
+
+_register_builtin(
+    {
+        "materializerId": "claude-oauth-home",
+        "version": 1,
+        "acceptedHarnessIds": ["claude-native"],
+        "acceptedAuthModels": ["oauth_volume"],
+        "supportedHostModes": ["on-demand", "static-connected"],
+        "requiredSecretRoles": [],
+        "state": OAUTH_HOME_PROFILE_OWNED_STATE,
+        "target": {
+            "kind": "oauth-home",
+            "path": "/home/app/.claude",
+            "permissions": "0700",
+        },
+        "preflight": {"kind": "login-status"},
+        "cleanup": OAUTH_HOME_PROFILE_OWNED_CLEANUP,
     }
 )
 
