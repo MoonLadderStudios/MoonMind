@@ -66,44 +66,34 @@ export interface ProviderProfileLaunchIsolation {
   audit_reason_present: boolean;
 }
 
-type AuthenticationMethod = 'oauth' | 'api_key' | 'none';
+// The backend owns every creation-preset and creation-capability shape. These
+// aliases are the single frontend binding to the generated contract; a second
+// hand-maintained copy is rejected by
+// providerProfileRedesignConformance.test.tsx (#3822).
+type AuthenticationMethod = components['schemas']['ProviderProfileAuthenticationMethod'];
 
-interface CreationPresetField {
-  value: unknown;
-  source: string;
-  editable: boolean;
-  lock_reason: string;
-}
+type AuthenticationMethodCapability =
+  components['schemas']['ProviderProfileAuthenticationMethodCapability'];
 
-interface SecretRoleCapability {
-  role: string;
-  label: string;
-  required: boolean;
-  compatible_schemes: string[];
-}
+type ProviderProfileCreationCapabilities =
+  components['schemas']['ProviderProfileCreationCapabilitiesResponse'];
 
-interface AuthenticationMethodCapability {
-  id: AuthenticationMethod;
-  label: string;
-  setup_action: AuthenticationMethod;
-  launch_ready_after_setup: boolean;
-  fields: Record<string, CreationPresetField>;
-  secret_roles: SecretRoleCapability[];
-  imported_volume: {
-    supported: boolean;
-    mount_path: string | null;
-    source: string;
-    lock_reason: string;
-  };
-}
+const AUTHENTICATION_METHODS: readonly AuthenticationMethod[] = [
+  'oauth',
+  'api_key',
+  'none',
+];
 
-interface ProviderProfileCreationCapabilities {
-  version: string;
-  runtime_id: string;
-  provider_id: string;
-  supported: boolean;
-  authentication_methods: AuthenticationMethodCapability[];
-  diagnostics: string[];
+/**
+ * Narrow a server-declared authentication method id to the canonical enum.
+ * The generated capability contract types `id` as a plain string, so an
+ * unrecognized value selects nothing instead of being coerced into a
+ * credential contract the browser cannot honor.
+ */
+function asAuthenticationMethod(value: string | null | undefined): AuthenticationMethod | '' {
+  return AUTHENTICATION_METHODS.includes(value as AuthenticationMethod)
+    ? (value as AuthenticationMethod)
+    : '';
 }
 
 interface ProviderProfileTierCapabilities {
@@ -655,15 +645,78 @@ function extractErrorCode(payload: unknown): string | null {
   return null;
 }
 
+/**
+ * FastAPI request validation answers with `detail: [{ loc: ['body', <field>, ...] }]`,
+ * so read the first body-scoped location instead of treating the array as an
+ * object that carries a `field` key.
+ */
+function extractValidationDetailField(detail: readonly unknown[]): string | null {
+  for (const entry of detail) {
+    if (!entry || typeof entry !== 'object') continue;
+    const loc = (entry as Record<string, unknown>).loc;
+    if (!Array.isArray(loc)) continue;
+    const bodyIndex = loc.indexOf('body');
+    if (bodyIndex < 0) continue;
+    const field = loc[bodyIndex + 1];
+    if (typeof field === 'string') return field;
+  }
+  return null;
+}
+
+/** Canonical Provider Profile field a server validation failure targets. */
+function extractErrorField(payload: unknown): string | null {
+  if (!payload || typeof payload !== 'object') return null;
+  const record = payload as Record<string, unknown>;
+  if (typeof record.field === 'string') return record.field;
+  if (Array.isArray(record.detail)) {
+    return extractValidationDetailField(record.detail);
+  }
+  if (record.detail && typeof record.detail === 'object') {
+    const detail = record.detail as Record<string, unknown>;
+    if (typeof detail.field === 'string') return detail.field;
+    const requiredFields = detail.required_fields;
+    if (Array.isArray(requiredFields) && typeof requiredFields[0] === 'string') {
+      return requiredFields[0];
+    }
+  }
+  return null;
+}
+
 class ProviderProfileRequestError extends Error {
   constructor(
     message: string,
     readonly code: string | null,
+    readonly field: string | null = null,
   ) {
     super(message);
     this.name = 'ProviderProfileRequestError';
   }
 }
+
+/**
+ * Provider Profile fields that only exist inside the `Show advanced options`
+ * region. Server validation aimed at one of these must reveal the region and
+ * move focus to the offending control (ProviderProfileCreation.md 10.2-10.3).
+ */
+const ADVANCED_DISCLOSURE_FIELDS: ReadonlySet<string> = new Set([
+  'provider_label',
+  'credential_source',
+  'runtime_materialization_mode',
+  'secret_refs',
+  'volume_ref',
+  'volume_mount_path',
+  'cooldown_after_429_seconds',
+  'rate_limit_policy',
+  'priority',
+  'tags',
+  'command_behavior',
+  'clear_env_keys',
+]);
+
+const ADVANCED_REGION_ID = 'provider-profile-advanced-region';
+
+const FOCUSABLE_ADVANCED_CONTROL =
+  'input:not([disabled]):not([readonly]), select:not([disabled]), textarea:not([disabled]):not([readonly]), button:not([disabled])';
 
 function isFirstPartyOAuthProfile(profile: ProviderProfile): boolean {
   const authActions = commandBehaviorStringArray(profile, 'auth_actions') ?? [];
@@ -1104,6 +1157,9 @@ export function ProviderProfilesManager({
     useState<ProviderProfileCreationCapabilities | null>(null);
   const [creationCapabilitiesError, setCreationCapabilitiesError] = useState<string | null>(null);
   const [showAdvanced, setShowAdvanced] = useState(false);
+  const [advancedFocusRequest, setAdvancedFocusRequest] = useState<
+    { field: string; nonce: number } | null
+  >(null);
   const [showImportedVolume, setShowImportedVolume] = useState(false);
   const [importedVolumeRef, setImportedVolumeRef] = useState('');
   const [importedVolumeValidated, setImportedVolumeValidated] = useState(false);
@@ -1197,7 +1253,7 @@ export function ProviderProfilesManager({
     () => profiles.find((profile) => profile.profile_id === editingProfileId) ?? null,
     [editingProfileId, profiles],
   );
-  const selectedAuthenticationCapability = useMemo(
+  const selectedAuthenticationCapability = useMemo<AuthenticationMethodCapability | null>(
     () =>
       creationCapabilities?.authentication_methods.find(
         (method) => method.id === form.authenticationMethod,
@@ -1272,7 +1328,9 @@ export function ProviderProfilesManager({
             ? current
             : {
                 ...current,
-                authenticationMethod: capabilities.authentication_methods[0]?.id ?? '',
+                authenticationMethod: asAuthenticationMethod(
+                  capabilities.authentication_methods[0]?.id,
+                ),
               };
         });
         if (!capabilities.supported) {
@@ -1655,6 +1713,21 @@ export function ProviderProfilesManager({
   }, [tierBaseline, tierBaselineDefaultId, tierDrafts, defaultTierClientId]);
 
   const hasTierDraft = tierDrafts.length > 0 || isTierRepair || invalidSavedDefaultIndex !== null;
+
+  // Server validation aimed at a collapsed advanced field reveals the region
+  // and hands focus to that control. The region is keyed by the canonical
+  // backend field name, so no per-error branch is needed.
+  useEffect(() => {
+    if (!advancedFocusRequest || !showAdvanced) return;
+    const region = document.getElementById(ADVANCED_REGION_ID);
+    const container = region?.querySelector<HTMLElement>(
+      `[data-advanced-field="${advancedFocusRequest.field}"]`,
+    );
+    const control =
+      container?.querySelector<HTMLElement>(FOCUSABLE_ADVANCED_CONTROL) ?? container ?? null;
+    control?.focus();
+    setAdvancedFocusRequest(null);
+  }, [advancedFocusRequest, showAdvanced]);
 
   useSettingsDraftRegistration(
     'provider-profile',
@@ -2179,7 +2252,11 @@ export function ProviderProfilesManager({
           errorPayload,
           `Failed to ${isEditing ? 'update' : 'create'} provider profile.`,
         );
-        throw new ProviderProfileRequestError(detail, extractErrorCode(errorPayload));
+        throw new ProviderProfileRequestError(
+          detail,
+          extractErrorCode(errorPayload),
+          extractErrorField(errorPayload),
+        );
       }
       return response.json() as Promise<ProviderProfile>;
     },
@@ -2280,6 +2357,16 @@ export function ProviderProfilesManager({
     },
     onError: (error: Error) => {
       setShowAdvanced(true);
+      const targetField =
+        error instanceof ProviderProfileRequestError ? error.field : null;
+      if (targetField && ADVANCED_DISCLOSURE_FIELDS.has(targetField)) {
+        // The control is inside the region we just revealed, so the focus move
+        // has to wait for that render.
+        setAdvancedFocusRequest((current) => ({
+          field: targetField,
+          nonce: (current?.nonce ?? 0) + 1,
+        }));
+      }
       if (
         !isEditing &&
         error instanceof ProviderProfileRequestError &&
@@ -3746,7 +3833,10 @@ export function ProviderProfilesManager({
                       checked={form.authenticationMethod === method.id}
                       disabled={isEditing}
                       onChange={() => {
-                        setForm((current) => ({ ...current, authenticationMethod: method.id }));
+                        setForm((current) => ({
+                          ...current,
+                          authenticationMethod: asAuthenticationMethod(method.id),
+                        }));
                         setShowImportedVolume(false);
                         setImportedVolumeValidated(false);
                       }}
@@ -4138,7 +4228,7 @@ export function ProviderProfilesManager({
               <input
                 type="checkbox"
                 checked={showAdvanced}
-                aria-controls="provider-profile-advanced-region"
+                aria-controls={ADVANCED_REGION_ID}
                 onChange={(event) => setShowAdvanced(event.target.checked)}
               />
               Show advanced options
@@ -4156,14 +4246,14 @@ export function ProviderProfilesManager({
           </div>
 
           {showAdvanced ? (
-            <div id="provider-profile-advanced-region" className="space-y-6">
+            <div id={ADVANCED_REGION_ID} className="space-y-6">
               <fieldset className="rounded-2xl border border-slate-200 dark:border-slate-700 p-5 space-y-4">
                 <legend className="px-2 text-sm font-semibold text-slate-700 dark:text-slate-300">
                   Credential launch contract
                 </legend>
                 <div className="grid gap-4 md:grid-cols-2">
                   {manualCreationAllowed ? (
-                    <label className="flex flex-col gap-1.5 text-sm font-medium text-slate-700 dark:text-slate-300">
+                    <label data-advanced-field="credential_source" className="flex flex-col gap-1.5 text-sm font-medium text-slate-700 dark:text-slate-300">
                       <span>Credential source</span>
                       <select
                         className="w-full rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 px-3 py-2 text-sm"
@@ -4182,7 +4272,7 @@ export function ProviderProfilesManager({
                       </select>
                     </label>
                   ) : (
-                    <div className="rounded-xl border border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-900 p-4 text-sm">
+                    <div data-advanced-field="credential_source" tabIndex={-1} className="rounded-xl border border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-900 p-4 text-sm">
                     <div className="font-semibold text-slate-800 dark:text-slate-200">
                       Credential source: {String(selectedCredentialSource)}
                     </div>
@@ -4195,7 +4285,7 @@ export function ProviderProfilesManager({
                   </div>
                   )}
                   {manualCreationAllowed ? (
-                    <label className="flex flex-col gap-1.5 text-sm font-medium text-slate-700 dark:text-slate-300">
+                    <label data-advanced-field="runtime_materialization_mode" className="flex flex-col gap-1.5 text-sm font-medium text-slate-700 dark:text-slate-300">
                       <span>Materialization mode</span>
                       <select
                         className="w-full rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 px-3 py-2 text-sm"
@@ -4216,7 +4306,7 @@ export function ProviderProfilesManager({
                       </select>
                     </label>
                   ) : (
-                    <div className="rounded-xl border border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-900 p-4 text-sm">
+                    <div data-advanced-field="runtime_materialization_mode" tabIndex={-1} className="rounded-xl border border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-900 p-4 text-sm">
                     <div className="font-semibold text-slate-800 dark:text-slate-200">
                       Materialization mode: {String(selectedMaterializationMode)}
                     </div>
@@ -4235,6 +4325,7 @@ export function ProviderProfilesManager({
                 <legend className="px-2 text-sm font-semibold text-slate-700 dark:text-slate-300">
                   Role-aware SecretRef bindings
                 </legend>
+                <div data-advanced-field="secret_refs" className="space-y-4">
                 {(selectedAuthenticationCapability?.secret_roles ?? []).map((role) => {
                   const controlId = `provider-profile-secret-role-${role.role}`;
                   return (
@@ -4279,19 +4370,20 @@ export function ProviderProfilesManager({
                 {(selectedAuthenticationCapability?.secret_roles.length ?? 0) === 0 && unknownSecretRoleBindings.length === 0 ? (
                   <p className="text-sm text-slate-500 dark:text-slate-400">This authentication method declares no SecretRef roles.</p>
                 ) : null}
+                </div>
               </fieldset>
 
               <fieldset className="rounded-2xl border border-slate-200 dark:border-slate-700 p-5 space-y-4">
                 <legend className="px-2 text-sm font-semibold text-slate-700 dark:text-slate-300">
                   Credential volume metadata
                 </legend>
-                <dl className="grid gap-3 text-sm md:grid-cols-2">
+                <dl data-advanced-field="volume_ref" tabIndex={-1} className="grid gap-3 text-sm md:grid-cols-2">
                   <div className="rounded-xl bg-slate-50 dark:bg-slate-900 p-3">
                     <dt className="font-medium text-slate-700 dark:text-slate-300">Volume reference</dt>
                     <dd className="font-mono text-slate-600 dark:text-slate-400">{volumeReferenceLabel}</dd>
                   </div>
                   <div className="rounded-xl bg-slate-50 dark:bg-slate-900 p-3">
-                    <dt className="font-medium text-slate-700 dark:text-slate-300">Mount path</dt>
+                    <dt data-advanced-field="volume_mount_path" tabIndex={-1} className="font-medium text-slate-700 dark:text-slate-300">Mount path</dt>
                     <dd className="font-mono text-slate-600 dark:text-slate-400">{volumeMountPathLabel}</dd>
                   </div>
                 </dl>
@@ -4346,15 +4438,15 @@ export function ProviderProfilesManager({
               <fieldset className="rounded-2xl border border-slate-200 dark:border-slate-700 p-5 space-y-4">
                 <legend className="px-2 text-sm font-semibold text-slate-700 dark:text-slate-300">Advanced profile policy</legend>
                 <div className="grid gap-4 md:grid-cols-2">
-                  <label className="flex flex-col gap-1.5 text-sm font-medium text-slate-700 dark:text-slate-300">
+                  <label data-advanced-field="provider_label" className="flex flex-col gap-1.5 text-sm font-medium text-slate-700 dark:text-slate-300">
                     <span>Provider label override</span>
                     <input className="w-full rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 px-3 py-2 text-sm" value={form.providerLabel} onChange={(event) => setForm((current) => ({ ...current, providerLabel: event.target.value }))} />
                   </label>
-                  <label className="flex flex-col gap-1.5 text-sm font-medium text-slate-700 dark:text-slate-300">
+                  <label data-advanced-field="cooldown_after_429_seconds" className="flex flex-col gap-1.5 text-sm font-medium text-slate-700 dark:text-slate-300">
                     <span>Cooldown after 429 (seconds)</span>
                     <input type="number" min="0" className="w-full rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 px-3 py-2 text-sm" value={form.cooldownAfter429Seconds} onChange={(event) => setForm((current) => ({ ...current, cooldownAfter429Seconds: event.target.value }))} />
                   </label>
-                  <label className="flex flex-col gap-1.5 text-sm font-medium text-slate-700 dark:text-slate-300">
+                  <label data-advanced-field="rate_limit_policy" className="flex flex-col gap-1.5 text-sm font-medium text-slate-700 dark:text-slate-300">
                     <span>Rate limit policy</span>
                     <select className="w-full rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 px-3 py-2 text-sm" value={form.rateLimitPolicy} onChange={(event) => setForm((current) => ({ ...current, rateLimitPolicy: event.target.value }))}>
                       <option value="backoff">backoff</option>
@@ -4362,21 +4454,21 @@ export function ProviderProfilesManager({
                       <option value="fail_fast">fail_fast</option>
                     </select>
                   </label>
-                  <label className="flex flex-col gap-1.5 text-sm font-medium text-slate-700 dark:text-slate-300">
+                  <label data-advanced-field="priority" className="flex flex-col gap-1.5 text-sm font-medium text-slate-700 dark:text-slate-300">
                     <span>Priority</span>
                     <input type="number" min="0" className="w-full rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 px-3 py-2 text-sm" value={form.priority} onChange={(event) => setForm((current) => ({ ...current, priority: event.target.value }))} placeholder="100" />
                   </label>
-                  <label className="flex flex-col gap-1.5 text-sm font-medium text-slate-700 dark:text-slate-300">
+                  <label data-advanced-field="tags" className="flex flex-col gap-1.5 text-sm font-medium text-slate-700 dark:text-slate-300">
                     <span>Tags</span>
                     <input className="w-full rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 px-3 py-2 text-sm" value={form.tagsText} onChange={(event) => setForm((current) => ({ ...current, tagsText: event.target.value }))} placeholder="team, preferred" />
                   </label>
-                  <label className="flex flex-col gap-1.5 text-sm font-medium text-slate-700 dark:text-slate-300">
+                  <label data-advanced-field="command_behavior" className="flex flex-col gap-1.5 text-sm font-medium text-slate-700 dark:text-slate-300">
                     <span>Command behavior</span>
                     <textarea rows={4} className="w-full rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 px-3 py-2 font-mono text-sm" value={form.commandBehavior} onChange={(event) => setForm((current) => ({ ...current, commandBehavior: event.target.value }))} />
                   </label>
                 </div>
                 {manualCreationAllowed ? (
-                  <label className="flex flex-col gap-1.5 text-sm font-medium text-amber-800 dark:text-amber-300">
+                  <label data-advanced-field="clear_env_keys" className="flex flex-col gap-1.5 text-sm font-medium text-amber-800 dark:text-amber-300">
                     <span>Clear env keys — manual expert path (validated; overrides are audited)</span>
                     <textarea
                       rows={3}
@@ -4392,7 +4484,7 @@ export function ProviderProfilesManager({
                     <p className="text-xs text-amber-700 dark:text-amber-300">Warning: freeform clear_env_keys is only allowed for unsupported combinations via the manual creation path. Values are validated by the backend (known keys, valid names, bounded list, no unsafe keys); updates to supported profiles require superuser permission with an audit reason and warning acknowledgement, and are recorded with actor metadata. Bypassing backend-recommended isolation can break launches or leak credentials, so review it carefully.</p>
                   </label>
                 ) : (
-                  <div className="rounded-xl bg-slate-50 dark:bg-slate-900 p-3 text-xs text-slate-500 dark:text-slate-400">
+                  <div data-advanced-field="clear_env_keys" tabIndex={-1} className="rounded-xl bg-slate-50 dark:bg-slate-900 p-3 text-xs text-slate-500 dark:text-slate-400">
                     <div className="font-medium text-slate-700 dark:text-slate-300">Launch environment isolation — clear environment keys</div>
                     {isEditing && editingProfile?.launch_isolation ? (
                       <>

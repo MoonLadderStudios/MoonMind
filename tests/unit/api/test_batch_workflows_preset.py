@@ -143,7 +143,20 @@ async def test_batch_workflows_seed_validates_and_exposes_batch_contract(tmp_pat
                 "advanced": True,
             }
             assert ui_schema["repository"]["advanced"] is True
-            assert ui_schema["publish_mode"] == {"widget": "select", "advanced": True}
+            # The child publish default follows the selected run so an
+            # implementation cohort is never queued with unpublished work.
+            assert ui_schema["publish_mode"] == {
+                "widget": "select",
+                "advanced": True,
+                "defaultFrom": {
+                    "field": "run_ref",
+                    "map": {
+                        "skill:jira-verify": "none",
+                        "preset:jira-implement": "pr",
+                        "preset:jira-orchestrate": "pr",
+                    },
+                },
+            }
 
             # Default issue bindings for the known issue presets.
             bindings = annotations["bindings"]
@@ -322,3 +335,77 @@ async def test_batch_workflows_ignores_removed_target_preset_version_input(tmp_p
     orchestration = expanded["steps"][0]["batchOrchestration"]
     assert orchestration["target"]["runRef"] == "preset:jira-implement"
     assert "targetPreset" not in orchestration
+
+
+@pytest.mark.parametrize(
+    ("run_ref", "expected_publish_mode"),
+    [
+        ("skill:jira-verify", "none"),
+        ("preset:jira-implement", "pr"),
+        ("preset:jira-orchestrate", "pr"),
+    ],
+)
+async def test_batch_workflows_child_publish_default_follows_run_ref(
+    tmp_path,
+    run_ref,
+    expected_publish_mode,
+):
+    """An omitted publish override resolves to what the selected run needs.
+
+    The batch parent itself publishes nothing, but its children own the
+    repository work. Defaulting an implementation cohort to ``none`` would
+    implement every issue and then discard the result, so the child publish
+    default is derived from ``run_ref``.
+    """
+
+    async with _catalog_db(tmp_path) as session_maker:
+        async with session_maker() as session:
+            service = PresetCatalogService(session)
+            await service.sync_seed_templates(seed_dir=_seed_dir(tmp_path))
+
+            expanded = await service.expand_template(
+                slug="batch-workflows",
+                scope="global",
+                scope_ref=None,
+                inputs={
+                    "jira_project_key": "MM",
+                    "jira_status": "In Progress",
+                    "run_ref": run_ref,
+                },
+            )
+
+    orchestration = expanded["steps"][0]["batchOrchestration"]
+    assert orchestration["publish"]["mode"] == expected_publish_mode
+    assert expanded["appliedTemplate"]["inputs"]["publish_mode"] == (
+        expected_publish_mode
+    )
+    assert (
+        f'--publish-mode "{expected_publish_mode}"'
+        in expanded["steps"][0]["instructions"]
+    )
+    # The parent queues children and writes summary artifacts; it never
+    # publishes repository changes itself.
+    assert expanded["publish"] == {"mode": "none"}
+
+
+async def test_batch_workflows_explicit_publish_override_wins_over_run_ref(tmp_path):
+    """An explicitly submitted publish override is never replaced."""
+
+    async with _catalog_db(tmp_path) as session_maker:
+        async with session_maker() as session:
+            service = PresetCatalogService(session)
+            await service.sync_seed_templates(seed_dir=_seed_dir(tmp_path))
+
+            expanded = await service.expand_template(
+                slug="batch-workflows",
+                scope="global",
+                scope_ref=None,
+                inputs={
+                    "jira_project_key": "MM",
+                    "jira_status": "In Progress",
+                    "run_ref": "preset:jira-implement",
+                    "publish_mode": "none",
+                },
+            )
+
+    assert expanded["steps"][0]["batchOrchestration"]["publish"]["mode"] == "none"
