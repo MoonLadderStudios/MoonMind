@@ -4,19 +4,19 @@
   "source": "vendored pinned omnigent server and native workspace UI",
   "evidence": {
     "capture": "stock-ui-and-server-static-analysis",
-    "sourceCommit": "ed9369474f3ea3e28cb1871e731100be5da923e1",
+    "sourceCommit": "f04b0354fb5344c1ea8b92795ceb6760a9ad7595",
     "sourceFiles": [
       {
         "path": "omnigent/omnigent/server/routes/sessions/routes_resources.py",
-        "sha256": "4b1c24a75254f1148aa8efdebabf8bb94c137bb069c5bd0c144c886d898f5374"
+        "sha256": "76c9915e22ab4ab345220fb4bafcea67381c3071eaef3c6968cab790a184eb19"
       },
       {
         "path": "omnigent/omnigent/server/routes/sessions/routes_core.py",
-        "sha256": "be0c53116424599d0a1fdefdf04b0fc89c7891dedb19de3eaf682d5cbdb53e70"
+        "sha256": "c647ca6aac092f0ea7d29154bc1f447fe1efa323a196bf81ba6e28e3a3af3eb0"
       },
       {
         "path": "omnigent/omnigent/server/routes/terminal_attach.py",
-        "sha256": "f22703d59cfc3411b89d86d903d0f4c149d9f690c6a389e46d19dc9e11948c4b"
+        "sha256": "655e3dddfc62f53082996238ac685fc8e65a41878f3083e6f62a8d1a1bcf7b74"
       },
       {
         "path": "omnigent/omnigent/server/routes/dictation.py",
@@ -27,12 +27,16 @@
         "sha256": "c84871c429df5e76e0653d0322ad2a676f2e25df1cdc557418629dd0e168283a"
       },
       {
+        "path": "omnigent/omnigent/server/routes/imports.py",
+        "sha256": "ee575c1682a53158929bb12860df081561f673d3dcf2445b6e0705b9254b843d"
+      },
+      {
         "path": "omnigent/web/src/hooks/useTerminals.ts",
-        "sha256": "f40acde15f68c48bc290d67d5c13700838a900fa08f78819ab96f6b0a5f2ee14"
+        "sha256": "ee5601dd9aab60424182409fe79df089f335266c9942b19ecd91bf16637d8a72"
       },
       {
         "path": "omnigent/web/src/components/blocks/TerminalView.tsx",
-        "sha256": "f6c706644721f5015eff7ca33cd57be47e688513bb34bc3942200493da25de3d"
+        "sha256": "80a367b8ab8873956cd8a63417ab95293beb16af63f1749a7de14c355c5acab4"
       },
       {
         "path": "omnigent/web/src/lib/sessionUpdatesSocket.ts",
@@ -41,9 +45,17 @@
       {
         "path": "omnigent/web/src/lib/dictation.ts",
         "sha256": "752be18f9e4fd47229c7785fbdb45a303035b8946d03a012693d467188a8d3db"
+      },
+      {
+        "path": "omnigent/web/src/lib/sessionsApi.ts",
+        "sha256": "2df2ca3baa8dda7e20c6dcaac32a70b885d63a70b70860650c26d4d94ed4d2ae"
+      },
+      {
+        "path": "omnigent/web/src/shell/ImportSessionsPanel.tsx",
+        "sha256": "f78b0ac8bb1ad3d0c01a9230ef6414e66158bac2a15ef1f6e57b01eae28e62f5"
       }
     ],
-    "routeCount": 40,
+    "routeCount": 41,
     "dimensions": [
       "pathPattern",
       "methods",
@@ -55,8 +67,8 @@
       "apiBaseDiscovery"
     ]
   },
-  "contractSha256": "f5b10f18be36a0524ee5211d36e5734cf45db266771371e99423426218c9293a",
-  "moonmindFacadeDigest": "5a062011bdb0957fc005528e3070fa3209aac54f88ccdddb7653d038b0d7a54d",
+  "contractSha256": "54d09228d5a37d73830647223b1c381d41e6bf95fe0e85d236e41e174557a3f2",
+  "moonmindFacadeDigest": "2761e379eb13c6b46fc4b2b66208642e45123ca2ab6244ef66b3f20deb0d1fac",
   "routes": [
     "liveness",
     "native_server_info",
@@ -97,7 +109,8 @@
     "session_reconnect",
     "ws_session_updates",
     "terminal_attach",
-    "dictation_stream"
+    "dictation_stream",
+    "local_session_import"
   ],
   "payloadClasses": [
     "json",

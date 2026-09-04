@@ -1493,6 +1493,27 @@ class BootstrapController:
         qualified_launch_policy_ref = default_launch_policy_ref(
             snapshot["document"].get("allowedLaunchPolicyRefs")
         )
+        from api_service.services.omnigent_policies import OmnigentPolicyService
+        from moonmind.omnigent.harness_platform.host_classes import (
+            launch_policy_from_effective_launch,
+        )
+        from moonmind.omnigent.profile_bound_execution import (
+            _compile_persisted_effective_launch,
+        )
+
+        async with async_session_maker() as session:
+            policy_service = OmnigentPolicyService(session)
+            policy_snapshot = await policy_service.resolve_runtime_snapshot(
+                qualified_launch_policy_ref
+            )
+        effective_launch = _compile_persisted_effective_launch(
+            policy_snapshot,
+            provider_profile_id=provider_profile_ref,
+        )
+        planner_launch_policy = launch_policy_from_effective_launch(
+            effective_launch,
+            expected_ref=qualified_launch_policy_ref,
+        )
         # Build V2 profile as planner does
         v2_profile = _build_v2_profile(
             snapshot=snapshot,
@@ -1535,6 +1556,7 @@ class BootstrapController:
             host_class_ref=host_class.ref,
             host_class=host_class,
             launch_policy_ref=qualified_launch_policy_ref,
+            launch_policy=planner_launch_policy,
             model_qualified_id=qualified_model,
             model_effort=effort,
             model_route_ref=model_route_ref,
