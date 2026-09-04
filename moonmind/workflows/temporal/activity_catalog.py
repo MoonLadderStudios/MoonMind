@@ -1059,7 +1059,11 @@ def build_default_activity_catalog(
                 ("omnigent.ensure_provider_profile_lease", 60, 180),
                 ("omnigent.ensure_host", 300, 600),
                 ("omnigent.ensure_provider_session", 60, 180),
-                ("omnigent.submit_turn", 60, 180),
+                # The first-message transport allows 150 seconds for native
+                # terminal bootstrap plus serialized recovery. Preserve
+                # activity-level bookkeeping margin and enough total time for
+                # all three retry attempts.
+                ("omnigent.submit_turn", 180, 600),
                 ("omnigent.heartbeat_host_lease", 30, 60),
                 ("omnigent.read_event_batch", 30, 60),
                 ("omnigent.observe_snapshot", 30, 60),

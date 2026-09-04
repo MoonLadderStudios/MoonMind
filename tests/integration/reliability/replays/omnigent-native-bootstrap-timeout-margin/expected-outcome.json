@@ -1,6 +1,10 @@
 {
   "invariant": "the bounded first-message dispatch outlives two serialized native bootstrap attempts while ordinary calls remain independently bounded",
   "minimumEventTimeoutSeconds": 120.0,
+  "submitTurnActivityTimeout": {
+    "startToCloseSeconds": 180,
+    "scheduleToCloseSeconds": 600
+  },
   "ordinaryTimeout": {
     "connect": 60.0,
     "read": 60.0,

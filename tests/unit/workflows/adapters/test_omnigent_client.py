@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import json
+
 import httpx
 import pytest
 
@@ -115,9 +117,15 @@ async def test_injected_http_client_preserves_omnigent_timeout_contract() -> Non
     """An injected client must not replace Omnigent's transport timeouts."""
 
     observed_timeouts: dict[str, dict[str, float | None]] = {}
+    observed_event_timeouts: dict[str, dict[str, float | None]] = {}
 
     async def handler(request: httpx.Request) -> httpx.Response:
-        observed_timeouts[request.url.path] = dict(request.extensions["timeout"])
+        timeout = dict(request.extensions["timeout"])
+        if request.url.path.endswith("/events"):
+            payload = json.loads(request.content)
+            observed_event_timeouts[str(payload["type"])] = timeout
+        else:
+            observed_timeouts[request.url.path] = timeout
         if request.url.path.endswith("/stream"):
             return httpx.Response(
                 200,
@@ -141,6 +149,8 @@ async def test_injected_http_client_preserves_omnigent_timeout_contract() -> Non
         assert await client.post_event("sess_1", {"type": "message"}) == {
             "ok": True
         }
+        assert await client.interrupt("sess_1") == {"ok": True}
+        assert await client.stop_session("sess_1") == {"ok": True}
         assert [event async for event in client.stream_events("sess_1")] == []
 
     ordinary_timeout = observed_timeouts["/v1/sessions/sess_1"]
@@ -150,13 +160,14 @@ async def test_injected_http_client_preserves_omnigent_timeout_contract() -> Non
         "write": 47.0,
         "pool": 47.0,
     }
-    request_timeout = observed_timeouts["/v1/sessions/sess_1/events"]
-    assert request_timeout == {
+    assert observed_event_timeouts["message"] == {
         "connect": 131.0,
         "read": 131.0,
         "write": 131.0,
         "pool": 131.0,
     }
+    assert observed_event_timeouts["interrupt"] == ordinary_timeout
+    assert observed_event_timeouts["stop_session"] == ordinary_timeout
     stream_timeout = observed_timeouts["/v1/sessions/sess_1/stream"]
     assert stream_timeout == {
         "connect": 47.0,

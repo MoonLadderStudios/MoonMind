@@ -258,11 +258,15 @@ class OmnigentHttpClient:
         session_id: str,
         event: Mapping[str, Any],
     ) -> dict[str, Any]:
+        event_payload = dict(event)
+        event_type = str(event_payload.get("type") or "").strip()
         return await self._request(
             "POST",
             f"/v1/sessions/{quote(session_id, safe='')}/events",
-            json=dict(event),
-            request_timeout=self._event_timeout,
+            json=event_payload,
+            request_timeout=(
+                self._event_timeout if event_type == "message" else self._timeout
+            ),
         )
 
     async def stream_events(self, session_id: str) -> AsyncIterator[dict[str, Any]]:
