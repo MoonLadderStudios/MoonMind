@@ -907,8 +907,10 @@ class _TrackedProfile:
         command_behavior: dict | None = None,
         provider_id: str = "unknown",
         clear_env_keys: list[str] | None = None,
+        default_selected_by_operator: bool = False,
     ) -> None:
         self.profile_id = profile_id
+        self.default_selected_by_operator = default_selected_by_operator
         self.runtime_id = runtime_id
         self.provider_id = provider_id
         self.enabled = enabled

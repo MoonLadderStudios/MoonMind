@@ -3478,6 +3478,15 @@ class ManagedAgentProviderProfile(Base):
     is_default: Mapped[bool] = mapped_column(
         Boolean, nullable=False, default=False, server_default=text("false")
     )
+    # MoonLadderStudios/MoonMind#3877: ``is_default`` records which profile
+    # currently holds runtime-default authority; this flag records whether an
+    # operator chose it explicitly. Automatic reconciliation (startup seeding,
+    # deployment credential enrollment) may move an unclaimed default, but must
+    # never move one an operator selected. It is the runtime-default counterpart
+    # of ``disabled_reason == user_disabled`` for enablement.
+    default_selected_by_operator: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False, server_default=text("false")
+    )
 
     tags: Mapped[Optional[list[str]]] = mapped_column(JSON, nullable=True)
     priority: Mapped[int] = mapped_column(
