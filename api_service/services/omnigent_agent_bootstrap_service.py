@@ -6,13 +6,18 @@ an explicit, durable, active bootstrap profile. ``OMNIGENT_DEFAULT_AGENT_NAME``
 remains an optional first-start override; durable state wins after
 materialization and conflicts fail closed.
 
-This module owns two side-effect-free-by-default primitives:
+This module owns three side-effect-free-by-default primitives:
 
 * :func:`resolve_default_agent_selection` — the authority that prefers the
-  durable active default profile and records env-fallback use; and
+  durable active default profile and records env-fallback use;
 * :func:`reconcile_bootstrap_agent_profile` — synchronizes live upstream
   inventory and materializes the matching safe built-in default as an active
-  bootstrap profile when no durable agent-profile state exists.
+  bootstrap profile when no durable agent-profile state exists; and
+* :func:`reconcile_managed_default_agent_profile` — the single boundary that
+  decides which MoonMind-managed profile holds ``default_for_runtime``. The
+  built-in OpenCode profile is the deployment default whenever it is launch
+  ready (MoonLadderStudios/MoonMind#3877); this Codex bootstrap profile is the
+  fallback, and explicit operator authority is never displaced.
 
 This profile carries no credentials or host authority. Catalog readiness still
 checks the live bridge, provider OAuth profile, immutable launch policy, worker,
@@ -29,7 +34,7 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any, Mapping
 
-from sqlalchemy import func, select
+from sqlalchemy import func, select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -50,8 +55,14 @@ from api_service.services.omnigent_agent_profile_service import (
 logger = logging.getLogger(__name__)
 
 BOOTSTRAP_PROFILE_ID = "omnigent-bootstrap-default"
+OPENCODE_BUILTIN_PROFILE_ID = "omnigent-opencode-default"
 _ENV_DEFAULT_AGENT_NAME = "OMNIGENT_DEFAULT_AGENT_NAME"
 _BUILTIN_DEFAULT_AGENT_NAME = "codex-native-ui"
+
+# MoonLadderStudios/MoonMind#3877: the deployment default runtime is Omnigent
+# (OpenCode), so the built-in OpenCode profile is the preferred managed default
+# and the Codex bootstrap profile is the fallback. Ordering is the preference.
+_MANAGED_DEFAULT_PREFERENCE = (OPENCODE_BUILTIN_PROFILE_ID, BOOTSTRAP_PROFILE_ID)
 
 # Canonical Codex-via-Omnigent defaults for the materialized bootstrap version.
 # These mirror the built-in ``omnigent-codex@1`` execution path and carry no
@@ -365,34 +376,52 @@ async def seed_bootstrap_agent_profile(
     return BOOTSTRAP_PROFILE_ID
 
 
-def _inventory_text(item: Mapping[str, Any], *keys: str) -> str:
-    for key in keys:
-        value = item.get(key)
-        if isinstance(value, str) and value.strip():
-            return value.strip()
-        if isinstance(value, int) and not isinstance(value, bool):
-            return str(value)
-    return ""
+def _is_v2_document(document: Mapping[str, Any]) -> bool:
+    return document.get("schemaVersion") == "moonmind.omnigent-agent-profile.v2"
 
 
-async def default_agent_profile_ready(
+def _document_bridge_mode(document: Mapping[str, Any]) -> str | None:
+    """Return the bridge-mode contract a document actually asserts.
+
+    v2 documents bind their execution substrate through the harness catalog
+    rather than a document-level bridge mode, so asserting one would compare a
+    projection against a contract the document never declared.
+    """
+
+    if _is_v2_document(document):
+        return None
+    return str(document.get("bridgeMode") or "")
+
+
+def _document_harness_id(document: Mapping[str, Any]) -> str:
+    harness = document.get("harness")
+    if _is_v2_document(document):
+        return _clean((harness or {}).get("id") if isinstance(harness, Mapping) else "")
+    return str(harness or "")
+
+
+def _document_required_capabilities(document: Mapping[str, Any]) -> tuple[str, ...]:
+    if _is_v2_document(document):
+        requirements = document.get("requirements") or {}
+        moonmind = requirements.get("moonmind") or {}
+        return tuple(str(value) for value in (moonmind.get("required") or ()))
+    return tuple(str(value) for value in (document.get("requiredCapabilities") or ()))
+
+
+async def _agent_profile_launch_ready(
     session: AsyncSession,
+    profile: OmnigentAgentProfile | None,
     *,
     now: datetime | None = None,
 ) -> bool:
-    """Return whether the durable default and its observed identity are ready."""
+    """Return whether a profile and its observed identity are launch ready.
 
-    profile = await session.scalar(
-        select(OmnigentAgentProfile).where(
-            OmnigentAgentProfile.default_for_runtime.is_(True)
-        )
-    )
-    if (
-        profile is None
-        or profile.state != "active"
-        or profile.active_version is None
-        or not profile.default_for_runtime
-    ):
+    One predicate for both the durable default and any managed candidate for
+    that authority, so a default is never moved onto a profile whose upstream
+    identity cannot satisfy the document contract.
+    """
+
+    if profile is None or profile.state != "active" or profile.active_version is None:
         return False
     version = await _load_active_version(session, profile)
     if (
@@ -418,11 +447,169 @@ async def default_agent_profile_ready(
         projection_readiness(
             projection,
             now=now,
-            bridge_mode=str(document.get("bridgeMode") or ""),
-            harness=str(document.get("harness") or ""),
-            required_capabilities=document.get("requiredCapabilities") or (),
+            bridge_mode=_document_bridge_mode(document),
+            harness=_document_harness_id(document),
+            required_capabilities=_document_required_capabilities(document),
         )["ready"]
     )
+
+
+async def _operator_selected_default(session: AsyncSession, profile_id: str) -> bool:
+    """Return whether this profile holds the current operator default selection.
+
+    ``made_default`` audit rows are immutable evidence, so the row a profile
+    earned stays behind after a later ``/default`` request selects a different
+    profile. Only the most recent ``made_default`` event is a live operator
+    claim; every earlier one is superseded. Treating a superseded row as current
+    authority would permanently pin reconciliation to a profile the operator
+    already replaced, even once that profile stops being launch ready.
+    """
+
+    latest_selection = await session.scalar(
+        select(OmnigentAgentProfileAuditEvent.profile_id)
+        .where(OmnigentAgentProfileAuditEvent.action == "made_default")
+        .order_by(
+            OmnigentAgentProfileAuditEvent.created_at.desc(),
+            OmnigentAgentProfileAuditEvent.id.desc(),
+        )
+        .limit(1)
+    )
+    return latest_selection == profile_id
+
+
+async def reconcile_managed_default_agent_profile(
+    session: AsyncSession,
+    *,
+    env: Mapping[str, Any] | None = None,
+    now: datetime | None = None,
+) -> str | None:
+    """Hold the deployment default on the preferred MoonMind-managed profile.
+
+    MoonLadderStudios/MoonMind#3877: the default workflow runtime is Omnigent
+    (OpenCode) and its default Provider Profile is the credentialless OpenCode
+    Zen seed, so a default launch must resolve through the built-in OpenCode
+    Agent Profile whenever that profile is launch ready. The Codex bootstrap
+    default keeps authority only while the OpenCode built-in cannot launch (for
+    example when ``MOONMIND_OMNIGENT_OPENCODE_ENABLED=false``).
+
+    Explicit authority always wins: an operator-authored default profile, an
+    operator ``make_default`` selection, and an ``OMNIGENT_DEFAULT_AGENT_NAME``
+    override are all preserved. Returns the profile id that holds the default.
+    """
+
+    current = await session.scalar(
+        select(OmnigentAgentProfile).where(
+            OmnigentAgentProfile.default_for_runtime.is_(True)
+        )
+    )
+    current_id = current.profile_id if current is not None else None
+    if current_id is not None and current_id not in _MANAGED_DEFAULT_PREFERENCE:
+        # Operator-authored profiles are explicit launch authority.
+        return current_id
+    if _env_default_agent_name(env):
+        # The documented bootstrap override selects the agent identity itself.
+        return current_id
+    if current_id is not None and await _operator_selected_default(session, current_id):
+        return current_id
+
+    preferred: OmnigentAgentProfile | None = None
+    for profile_id in _MANAGED_DEFAULT_PREFERENCE:
+        candidate = await session.get(OmnigentAgentProfile, profile_id)
+        if candidate is None or not await _agent_profile_launch_ready(
+            session, candidate, now=now
+        ):
+            continue
+        preferred = candidate
+        break
+    if preferred is None:
+        if current is None:
+            return None
+        # Every explicit authority (operator-authored profile, current operator
+        # selection, OMNIGENT_DEFAULT_AGENT_NAME) already returned above, so the
+        # remaining default is deployment-managed and no managed profile can
+        # launch. Leaving the flag set would publish stale launch authority:
+        # resolve_default_agent_profile_snapshot only requires an active profile
+        # with a version, not a ready validation/projection, so a default
+        # submission would resolve an unlaunchable profile instead of reporting
+        # that no default is available.
+        cleared_at = now or datetime.now(timezone.utc)
+        current.default_for_runtime = False
+        session.add(
+            OmnigentAgentProfileAuditEvent(
+                profile_id=current_id,
+                action="managed_default_cleared",
+                version=current.active_version,
+                actor_id=None,
+                metadata_json={
+                    "previousProfileId": current_id,
+                    "origin": "deployment_managed_default",
+                    "clearedAt": cleared_at.isoformat(),
+                    "reason": "no_launch_ready_managed_profile",
+                },
+            )
+        )
+        await session.commit()
+        logger.info(
+            "Cleared the deployment-managed default Omnigent agent profile %s "
+            "because no managed profile is launch ready",
+            current_id,
+        )
+        return None
+    if preferred.profile_id == current_id:
+        return current_id
+
+    observed_at = now or datetime.now(timezone.utc)
+    await session.execute(
+        update(OmnigentAgentProfile)
+        .where(OmnigentAgentProfile.default_for_runtime.is_(True))
+        .values(default_for_runtime=False)
+    )
+    preferred.default_for_runtime = True
+    session.add(
+        OmnigentAgentProfileAuditEvent(
+            profile_id=preferred.profile_id,
+            action="managed_default_selected",
+            version=preferred.active_version,
+            actor_id=None,
+            metadata_json={
+                "previousProfileId": current_id,
+                "origin": "deployment_managed_default",
+                "selectedAt": observed_at.isoformat(),
+            },
+        )
+    )
+    await session.commit()
+    logger.info(
+        "Moved the deployment-managed default Omnigent agent profile from %s to %s",
+        current_id,
+        preferred.profile_id,
+    )
+    return preferred.profile_id
+
+
+def _inventory_text(item: Mapping[str, Any], *keys: str) -> str:
+    for key in keys:
+        value = item.get(key)
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+        if isinstance(value, int) and not isinstance(value, bool):
+            return str(value)
+    return ""
+
+
+async def default_agent_profile_ready(
+    session: AsyncSession,
+    *,
+    now: datetime | None = None,
+) -> bool:
+    """Return whether the durable default and its observed identity are ready."""
+
+    profile = await session.scalar(
+        select(OmnigentAgentProfile).where(
+            OmnigentAgentProfile.default_for_runtime.is_(True)
+        )
+    )
+    return await _agent_profile_launch_ready(session, profile, now=now)
 
 
 async def _active_bootstrap_launch_policy_ref(session: AsyncSession) -> str:
@@ -606,16 +793,25 @@ async def reconcile_bootstrap_agent_profile(
         launch_policy_ref=launch_policy_ref,
         now=observed_at,
     )
+    # The Codex bootstrap profile is only the fallback managed default. Settle
+    # managed default authority here as well as after catalog synchronization so
+    # an OpenCode built-in that is already launch ready is never displaced by a
+    # later bootstrap pass.
+    await reconcile_managed_default_agent_profile(
+        session, env=env, now=observed_at
+    )
     return await default_agent_profile_ready(session, now=observed_at)
 
 
 __all__ = [
     "BOOTSTRAP_PROFILE_ID",
+    "OPENCODE_BUILTIN_PROFILE_ID",
     "BootstrapDefaultConflictError",
     "DefaultAgentResolution",
     "build_bootstrap_document",
     "default_agent_profile_ready",
     "reconcile_bootstrap_agent_profile",
+    "reconcile_managed_default_agent_profile",
     "resolve_default_agent_selection",
     "seed_bootstrap_agent_profile",
 ]

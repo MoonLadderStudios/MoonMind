@@ -1,5 +1,12 @@
-"""Durable bootstrap default resolution + seeding (MoonLadderStudios/MoonMind#3517 §8)."""
+"""Durable bootstrap default resolution + seeding (MoonLadderStudios/MoonMind#3517 §8).
+
+Also covers which MoonMind-managed profile holds ``default_for_runtime``
+(MoonLadderStudios/MoonMind#3877).
+"""
 from __future__ import annotations
+
+from datetime import datetime, timedelta, timezone
+from types import SimpleNamespace
 
 import pytest
 import pytest_asyncio
@@ -17,20 +24,27 @@ from api_service.db.models import (
     OmnigentAgentProfile,
     OmnigentAgentProfileAuditEvent,
     OmnigentAgentProfileVersion,
+    OmnigentHarnessCatalogSnapshotRecord,
+    OmnigentHarnessTrustRecord,
     OmnigentPolicy,
     OmnigentPolicyVersion,
 )
 from api_service.services.omnigent_agent_bootstrap_service import (
     BOOTSTRAP_PROFILE_ID,
+    OPENCODE_BUILTIN_PROFILE_ID,
     BootstrapDefaultConflictError,
     build_bootstrap_document,
+    default_agent_profile_ready,
     reconcile_bootstrap_agent_profile,
+    reconcile_managed_default_agent_profile,
     resolve_default_agent_selection,
     seed_bootstrap_agent_profile,
 )
 from api_service.services.omnigent_agent_profile_service import (
     synchronize_upstream_inventory,
 )
+
+TRUST_CORE_TRUSTED = "core_trusted"
 
 pytestmark = [pytest.mark.asyncio]
 
@@ -335,3 +349,437 @@ async def test_reconcile_versions_managed_profile_after_policy_cutover(session):
     )
     assert cutover is not None
     assert cutover.version == 2
+
+
+def _opencode_catalog_authority(monkeypatch: pytest.MonkeyPatch):
+    """Publish the exact catalog authority that makes ``opencode-native`` launchable."""
+
+    from moonmind.omnigent.bootstrap import store
+    from moonmind.omnigent.harness_platform.catalog import (
+        TrustState,
+        classify_harness_trust,
+        create_catalog_snapshot,
+    )
+
+    server_ref = "registry.test/server@sha256:" + "1" * 64
+    host_ref = "registry.test/opencode@sha256:" + "6" * 64
+    monkeypatch.setenv("MOONMIND_OMNIGENT_GENERIC_HOST_ENABLED", "true")
+    monkeypatch.setenv("MOONMIND_OMNIGENT_OPENCODE_ENABLED", "true")
+    monkeypatch.setenv("OMNIGENT_IMAGE_REF", server_ref)
+    monkeypatch.setenv("OMNIGENT_OPENCODE_HOST_IMAGE_REF", host_ref)
+    monkeypatch.setattr(
+        store,
+        "load_resolved_state",
+        lambda: SimpleNamespace(
+            server_image_ref=server_ref,
+            opencode_host_image_ref=host_ref,
+            details={
+                "opencodeHostCompatibility": {
+                    "status": "ready",
+                    "failureCode": None,
+                    "serverImageRef": server_ref,
+                    "hostImageRef": host_ref,
+                }
+            },
+        ),
+    )
+    snapshot = create_catalog_snapshot(
+        endpointRef="default",
+        omnigentVersion="0.12.0",
+        omnigentBuildDigest="sha256:" + "4" * 64,
+        sourceDigest="sha256:" + "5" * 64,
+        harnesses=[
+            {
+                "id": "opencode-native",
+                "label": "OpenCode",
+                "implementation": {
+                    "sourceKind": "core",
+                    "package": "omnigent",
+                    "version": "0.12.0",
+                    "digest": "sha256:" + "3" * 64,
+                },
+                "capabilities": {"integrationMode": "native-server"},
+            }
+        ],
+    )
+    harness = snapshot.harnesses[0]
+    trust = classify_harness_trust(
+        harnessId=harness.id,
+        implementation=harness.implementation,
+        trustState=TrustState.core_trusted,
+    )
+    return snapshot, harness, trust
+
+
+async def _add_ready_opencode_builtin_profile(
+    session: AsyncSession,
+    monkeypatch: pytest.MonkeyPatch,
+    *,
+    ready: bool = True,
+) -> dict:
+    """Materialize the built-in OpenCode profile the way catalog sync does."""
+
+    snapshot, harness, trust = _opencode_catalog_authority(monkeypatch)
+    session.add(
+        OmnigentHarnessCatalogSnapshotRecord(
+            catalog_ref=snapshot.catalogRef,
+            endpoint_ref=snapshot.endpointRef,
+            omnigent_version=snapshot.omnigentVersion,
+            omnigent_build_digest=snapshot.omnigentBuildDigest,
+            observed_at=snapshot.observedAt,
+            source_digest=snapshot.sourceDigest,
+            snapshot_json=snapshot.model_dump(by_alias=True, mode="json"),
+            diagnostics_json={},
+        )
+    )
+    await session.flush()
+    session.add(
+        OmnigentHarnessTrustRecord(
+            implementation_ref=trust.implementationRef,
+            harness_id=trust.harnessId,
+            catalog_ref=snapshot.catalogRef,
+            trust_state=TRUST_CORE_TRUSTED,
+        )
+    )
+    await session.commit()
+
+    # One endpoint observation carries every advertised agent. Publishing only
+    # the OpenCode row would mark the Codex projection unavailable and make the
+    # fallback default look unready for the wrong reason.
+    await synchronize_upstream_inventory(
+        session,
+        endpoint_ref="default",
+        bridge_mode="proxy",
+        inventory=[
+            {
+                "id": "opencode-native-ui",
+                "name": "opencode-native-ui",
+                "version": "1",
+                "harness": "opencode-native",
+                "capabilities": [],
+            },
+            *_inventory("codex-native-ui"),
+        ],
+    )
+    await session.commit()
+
+    document = {
+        "schemaVersion": "moonmind.omnigent-agent-profile.v2",
+        "endpointRef": "default",
+        "source": {
+            "kind": "upstream",
+            "upstreamId": "opencode-native-ui",
+            "upstreamVersion": "1",
+            "upstreamSnapshotDigest": "sha256:" + "7" * 64,
+        },
+        "harness": {
+            "id": harness.id,
+            "catalogRef": snapshot.catalogRef,
+            "implementationRef": harness.implementation.implementation_ref(),
+        },
+        "credentialSlots": [
+            {
+                "id": "primary-model",
+                "acceptedAuthModels": ["own-auth", "none"],
+                "acceptedProviderIds": ["opencode-go", "opencode"],
+            }
+        ],
+        "allowedLaunchPolicyRefs": ["omnigent-on-demand@1", "opencode-on-demand@1"],
+    }
+    session.add_all(
+        [
+            OmnigentAgentProfile(
+                profile_id=OPENCODE_BUILTIN_PROFILE_ID,
+                display_name="OpenCode via Omnigent",
+                visibility="workspace",
+                state="active",
+                active_version=1,
+            ),
+            OmnigentAgentProfileVersion(
+                profile_id=OPENCODE_BUILTIN_PROFILE_ID,
+                version=1,
+                digest=router_digest(document),
+                document=document,
+                upstream_snapshot={"id": "opencode-native-ui"},
+                validation_result={"ready": ready},
+            ),
+        ]
+    )
+    await session.commit()
+    return document
+
+
+async def test_managed_default_moves_to_the_launch_ready_opencode_builtin(
+    session, monkeypatch
+):
+    """MoonLadderStudios/MoonMind#3877: the OpenCode built-in is the deployment default."""
+
+    assert await reconcile_bootstrap_agent_profile(
+        session,
+        env={},
+        inventory=_inventory("codex-native-ui"),
+    ) is True
+    codex = await session.get(OmnigentAgentProfile, BOOTSTRAP_PROFILE_ID)
+    assert codex is not None and codex.default_for_runtime is True
+
+    await _add_ready_opencode_builtin_profile(session, monkeypatch)
+    selected = await reconcile_managed_default_agent_profile(session, env={})
+
+    assert selected == OPENCODE_BUILTIN_PROFILE_ID
+    await session.refresh(codex)
+    opencode = await session.get(OmnigentAgentProfile, OPENCODE_BUILTIN_PROFILE_ID)
+    assert opencode is not None
+    assert opencode.default_for_runtime is True
+    assert codex.default_for_runtime is False
+    assert (
+        await session.scalar(
+            select(func.count())
+            .select_from(OmnigentAgentProfile)
+            .where(OmnigentAgentProfile.default_for_runtime.is_(True))
+        )
+        == 1
+    )
+    audit = await session.scalar(
+        select(OmnigentAgentProfileAuditEvent).where(
+            OmnigentAgentProfileAuditEvent.action == "managed_default_selected"
+        )
+    )
+    assert audit is not None
+    assert audit.profile_id == OPENCODE_BUILTIN_PROFILE_ID
+    assert audit.metadata_json["previousProfileId"] == BOOTSTRAP_PROFILE_ID
+    assert await default_agent_profile_ready(session) is True
+
+
+async def test_managed_default_reconciliation_is_idempotent(session, monkeypatch):
+    await _add_ready_opencode_builtin_profile(session, monkeypatch)
+
+    first = await reconcile_managed_default_agent_profile(session, env={})
+    second = await reconcile_managed_default_agent_profile(session, env={})
+
+    assert first == second == OPENCODE_BUILTIN_PROFILE_ID
+    assert (
+        await session.scalar(
+            select(func.count())
+            .select_from(OmnigentAgentProfileAuditEvent)
+            .where(
+                OmnigentAgentProfileAuditEvent.action == "managed_default_selected"
+            )
+        )
+        == 1
+    )
+
+
+async def test_disabled_opencode_support_keeps_the_codex_bootstrap_default(
+    session, monkeypatch
+):
+    """A kill switch is an explicit disable, so the fallback default stays."""
+
+    assert await reconcile_bootstrap_agent_profile(
+        session,
+        env={},
+        inventory=_inventory("codex-native-ui"),
+    ) is True
+    # Catalog synchronization records ``support-qualification: not ready`` in the
+    # built-in version when the OpenCode kill switch is off.
+    await _add_ready_opencode_builtin_profile(session, monkeypatch, ready=False)
+
+    selected = await reconcile_managed_default_agent_profile(session, env={})
+
+    assert selected == BOOTSTRAP_PROFILE_ID
+    opencode = await session.get(OmnigentAgentProfile, OPENCODE_BUILTIN_PROFILE_ID)
+    assert opencode is not None
+    assert opencode.default_for_runtime is False
+
+
+async def test_losing_opencode_readiness_returns_the_default_to_the_fallback(
+    session, monkeypatch
+):
+    """A managed default must never remain on a profile that cannot launch."""
+
+    assert await reconcile_bootstrap_agent_profile(
+        session,
+        env={},
+        inventory=_inventory("codex-native-ui"),
+    ) is True
+    await _add_ready_opencode_builtin_profile(session, monkeypatch)
+    assert (
+        await reconcile_managed_default_agent_profile(session, env={})
+        == OPENCODE_BUILTIN_PROFILE_ID
+    )
+
+    version = await session.scalar(
+        select(OmnigentAgentProfileVersion).where(
+            OmnigentAgentProfileVersion.profile_id == OPENCODE_BUILTIN_PROFILE_ID,
+            OmnigentAgentProfileVersion.version == 1,
+        )
+    )
+    version.validation_result = {"ready": False}
+    await session.commit()
+
+    selected = await reconcile_managed_default_agent_profile(session, env={})
+
+    assert selected == BOOTSTRAP_PROFILE_ID
+    opencode = await session.get(OmnigentAgentProfile, OPENCODE_BUILTIN_PROFILE_ID)
+    assert opencode is not None
+    assert opencode.default_for_runtime is False
+    assert await default_agent_profile_ready(session) is True
+
+
+async def test_env_agent_override_preserves_the_current_managed_default(
+    session, monkeypatch
+):
+    assert await reconcile_bootstrap_agent_profile(
+        session,
+        env={"OMNIGENT_DEFAULT_AGENT_NAME": "codex-default"},
+        inventory=_inventory("codex-default"),
+    ) is True
+    await _add_ready_opencode_builtin_profile(session, monkeypatch)
+
+    selected = await reconcile_managed_default_agent_profile(
+        session, env={"OMNIGENT_DEFAULT_AGENT_NAME": "codex-default"}
+    )
+
+    assert selected == BOOTSTRAP_PROFILE_ID
+    opencode = await session.get(OmnigentAgentProfile, OPENCODE_BUILTIN_PROFILE_ID)
+    assert opencode is not None
+    assert opencode.default_for_runtime is False
+
+
+async def test_operator_made_default_is_never_displaced(session, monkeypatch):
+    assert await reconcile_bootstrap_agent_profile(
+        session,
+        env={},
+        inventory=_inventory("codex-native-ui"),
+    ) is True
+    session.add(
+        OmnigentAgentProfileAuditEvent(
+            profile_id=BOOTSTRAP_PROFILE_ID,
+            action="made_default",
+            version=1,
+            actor_id=None,
+            metadata_json={},
+        )
+    )
+    await session.commit()
+    await _add_ready_opencode_builtin_profile(session, monkeypatch)
+
+    selected = await reconcile_managed_default_agent_profile(session, env={})
+
+    assert selected == BOOTSTRAP_PROFILE_ID
+    opencode = await session.get(OmnigentAgentProfile, OPENCODE_BUILTIN_PROFILE_ID)
+    assert opencode is not None
+    assert opencode.default_for_runtime is False
+
+
+async def test_operator_authored_default_is_never_displaced(session, monkeypatch):
+    await _add_default_profile(session)
+    await _add_ready_opencode_builtin_profile(session, monkeypatch)
+
+    selected = await reconcile_managed_default_agent_profile(session, env={})
+
+    assert selected == "codex-team"
+    opencode = await session.get(OmnigentAgentProfile, OPENCODE_BUILTIN_PROFILE_ID)
+    assert opencode is not None
+    assert opencode.default_for_runtime is False
+
+
+async def test_superseded_operator_selection_no_longer_pins_the_default(
+    session, monkeypatch
+):
+    """Only the newest ``made_default`` event is a live operator claim.
+
+    Audit rows are immutable, so the profile an operator selected first keeps
+    its ``made_default`` row after a later ``/default`` request moves the
+    selection. Treating that superseded row as current authority would pin the
+    default to a profile the operator already replaced, permanently, once
+    automatic reconciliation had fallen back to it.
+    """
+
+    assert await reconcile_bootstrap_agent_profile(
+        session,
+        env={},
+        inventory=_inventory("codex-native-ui"),
+    ) is True
+    await _add_ready_opencode_builtin_profile(session, monkeypatch)
+    selected_at = datetime.now(timezone.utc)
+    session.add_all(
+        [
+            OmnigentAgentProfileAuditEvent(
+                profile_id=BOOTSTRAP_PROFILE_ID,
+                action="made_default",
+                version=1,
+                actor_id=None,
+                metadata_json={},
+                created_at=selected_at - timedelta(hours=2),
+            ),
+            # The operator moved the selection to the OpenCode built-in, which
+            # supersedes the Codex bootstrap claim above.
+            OmnigentAgentProfileAuditEvent(
+                profile_id=OPENCODE_BUILTIN_PROFILE_ID,
+                action="made_default",
+                version=1,
+                actor_id=None,
+                metadata_json={},
+                created_at=selected_at - timedelta(hours=1),
+            ),
+        ]
+    )
+    # Reconciliation previously fell back to the Codex bootstrap profile while
+    # the newer selection could not launch.
+    bootstrap = await session.get(OmnigentAgentProfile, BOOTSTRAP_PROFILE_ID)
+    opencode = await session.get(OmnigentAgentProfile, OPENCODE_BUILTIN_PROFILE_ID)
+    assert bootstrap is not None and opencode is not None
+    bootstrap.default_for_runtime = True
+    opencode.default_for_runtime = False
+    await session.commit()
+
+    selected = await reconcile_managed_default_agent_profile(session, env={})
+
+    assert selected == OPENCODE_BUILTIN_PROFILE_ID
+    await session.refresh(bootstrap)
+    assert bootstrap.default_for_runtime is False
+
+
+async def test_no_launch_ready_managed_profile_clears_the_stale_default(
+    session, monkeypatch
+):
+    """A managed default must not publish launch authority it cannot honor.
+
+    ``resolve_default_agent_profile_snapshot`` only requires an active profile
+    with a version, not a ready validation, so leaving ``default_for_runtime``
+    on an unready profile lets a default submission resolve stale authority
+    instead of reporting that no default is available.
+    """
+
+    assert await reconcile_bootstrap_agent_profile(
+        session,
+        env={},
+        inventory=_inventory("codex-native-ui"),
+    ) is True
+    bootstrap = await session.get(OmnigentAgentProfile, BOOTSTRAP_PROFILE_ID)
+    assert bootstrap is not None
+    assert bootstrap.default_for_runtime is True
+    version = await session.scalar(
+        select(OmnigentAgentProfileVersion).where(
+            OmnigentAgentProfileVersion.profile_id == BOOTSTRAP_PROFILE_ID,
+            OmnigentAgentProfileVersion.version == bootstrap.active_version,
+        )
+    )
+    assert version is not None
+    version.validation_result = {"ready": False}
+    await session.commit()
+
+    selected = await reconcile_managed_default_agent_profile(session, env={})
+
+    assert selected is None
+    await session.refresh(bootstrap)
+    assert bootstrap.default_for_runtime is False
+    cleared = await session.scalar(
+        select(func.count())
+        .select_from(OmnigentAgentProfileAuditEvent)
+        .where(
+            OmnigentAgentProfileAuditEvent.profile_id == BOOTSTRAP_PROFILE_ID,
+            OmnigentAgentProfileAuditEvent.action == "managed_default_cleared",
+        )
+    )
+    assert cleared == 1
