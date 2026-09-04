@@ -1,0 +1,8 @@
+{
+  "incidentWorkflowId": "mm:814cd965-7882-4a93-a362-75d1f3144c1a",
+  "planRef": "omnigent-execution-plan:sha256:d830806b41bc1c20b2228f7a4af4e5c37e555d89feedc898449273476e63d3c5",
+  "serverBuildRef": "sha256:caa84ada76a34857e297f12d2a82b0cfb12ca03755df31c40d1d30bd37a3730e",
+  "planHostImageRef": "ghcr.io/moonladderstudios/omnigent-host-opencode@sha256:0910e94e45f68601398e94dfed5ca638c5028440a01981c24b83b50ccf78dec5",
+  "deployedHostImageRef": "ghcr.io/moonladderstudios/omnigent-host-opencode@sha256:ae8561787caab8f84ce7e41d778410d762c454478386d4f7a4c30584716bb1e1",
+  "failureShape": "an exact rerun preserved a host image from before the required warm OpenCode plugin cache, launched it under the current runtime contract, and timed out waiting for registration"
+}

@@ -71,6 +71,7 @@ DISPOSITION_COMPAT_REVIEW = "compatibility_review_required"
 CLASS_LIVENESS = "liveness"
 CLASS_RECONNECT = "reconnect"
 CLASS_SESSION_READ = "session_read"
+CLASS_SESSION_IMPORT = "session_import"
 CLASS_STREAM = "event_stream"
 CLASS_CONTROL = "control"
 CLASS_RESOURCE_READ = "resource_read"
@@ -250,11 +251,40 @@ def _reviewed_http(
     )
 
 
+def _compat_review_http(
+    path: str,
+    *,
+    name: str,
+    methods: tuple[str, ...],
+    operation_class: str,
+    mutation: bool = False,
+) -> NativeUiRoute:
+    """Inventory a pinned stock route without granting proxy authority."""
+
+    return NativeUiRoute(
+        name=name,
+        transport=TRANSPORT_HTTP,
+        methods=methods,
+        operation_class=operation_class,
+        disposition=DISPOSITION_COMPAT_REVIEW,
+        capability=None,
+        mutation=mutation,
+        pattern=re.compile("^" + path + "$"),
+    )
+
+
 # Network contract used by the pinned native workspace UI beyond the #3634
 # transcript facade.  The paths are taken from the vendored server route set;
 # each reviewed operation is explicitly allowlisted rather than falling through
 # to a generic proxy.
 _PINNED_HTTP_ROUTES: tuple[NativeUiRoute, ...] = (
+    _compat_review_http(
+        r"v1/imports/local",
+        name="local_session_import",
+        methods=("POST",),
+        operation_class=CLASS_SESSION_IMPORT,
+        mutation=True,
+    ),
     _reviewed_http(rf"v1/sessions/{_SESSION}/items", name="session_items", methods=("GET",), operation_class=CLASS_RESOURCE_READ, capability=CAP_VIEW_TRANSCRIPT),
     _reviewed_http(rf"v1/sessions/{_SESSION}/resources/terminals", name="terminal_view", methods=("GET",), operation_class=CLASS_TERMINAL_VIEW, capability=CAP_VIEW_TERMINAL),
     _reviewed_http(rf"v1/sessions/{_SESSION}/resources/terminals", name="terminal_create", methods=("POST",), operation_class=CLASS_TERMINAL_CREATE, capability=CAP_CREATE_TERMINAL, mutation=True),
@@ -531,6 +561,7 @@ __all__ = [
     "CLASS_RESOURCE_MUTATE",
     "CLASS_RESOURCE_READ",
     "CLASS_SESSION_READ",
+    "CLASS_SESSION_IMPORT",
     "CLASS_STREAM",
     "CLASS_SUBAGENT",
     "CLASS_TASK",

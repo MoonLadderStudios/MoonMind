@@ -705,6 +705,7 @@ def test_stock_native_mutation_cases_exactly_cover_the_pinned_inventory() -> Non
         (route.name, method)
         for route in native_ui_compat.NATIVE_UI_ROUTES
         if route.transport == native_ui_compat.TRANSPORT_HTTP
+        and route.disposition == native_ui_compat.DISPOSITION_SERVED
         and route.mutation
         and route.name not in base_operation_names
         for method in route.methods

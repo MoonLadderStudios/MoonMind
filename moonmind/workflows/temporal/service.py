@@ -2665,14 +2665,14 @@ class TemporalExecutionService:
         *,
         parameters: Mapping[str, Any],
     ) -> None:
-        """Reject an exact rerun whose endpoint authority is no longer live."""
+        """Reject an exact rerun whose runtime authority is no longer live."""
 
         raw_binding = parameters.get("omnigentExecutionPlan")
         if not isinstance(raw_binding, Mapping):
             return
         from moonmind.omnigent.deployment_identity import (
             OmnigentDeploymentIdentityConflict,
-            assert_plan_matches_deployed_server,
+            assert_plan_matches_deployed_runtime,
         )
         from moonmind.omnigent.harness_platform.stores import (
             SessionExecutionPlanStore,
@@ -2702,11 +2702,11 @@ class TemporalExecutionService:
                 code="exact_rerun_execution_plan_unavailable",
             )
         try:
-            assert_plan_matches_deployed_server(plan.payload)
+            assert_plan_matches_deployed_runtime(plan.payload)
         except OmnigentDeploymentIdentityConflict as exc:
             raise TemporalExecutionRerunPlanError(
                 "Exact rerun preserves the original Omnigent execution plan, "
-                "but that plan targets a server build that is no longer deployed. "
+                "but that plan targets runtime images that are no longer deployed. "
                 "Use Edit for rerun to compile fresh runtime authority."
             ) from exc
         except HarnessPlatformError as exc:
