@@ -474,7 +474,12 @@ derived default, is never replaced. A source value with no entry in `map` falls
 back to the field's static default.
 
 A malformed `defaultFrom` is rejected when the preset is seeded rather than
-silently falling back to the static default.
+silently falling back to the static default. Seeding also resolves the rule
+against the preset's own inputs: the target field and the source `field` must
+both exist, and every mapped value must be one the target field can hold
+(inside its `enum`/options when it declares them, otherwise matching its type).
+A typo or an out-of-range mapping would otherwise surface only as a silent
+fallback to the static default at expansion.
 
 ## Nested Presets
 

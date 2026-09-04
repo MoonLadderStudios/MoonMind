@@ -85,6 +85,19 @@ _SUPPORTED_INPUT_TYPES = frozenset(
         "jira_board",
     }
 )
+# Legacy input types map onto the JSON-schema types the capability contract
+# exposes, so a dependent-default rule can be validated against either shape.
+_LEGACY_INPUT_JSON_TYPES = {
+    "text": "string",
+    "textarea": "string",
+    "markdown": "string",
+    "enum": "string",
+    "boolean": "boolean",
+    "user": "string",
+    "team": "string",
+    "repo_path": "string",
+    "jira_board": "string",
+}
 _JIRA_BREAKDOWN_SLUG = "jira-breakdown"
 _JIRA_BREAKDOWN_ORCHESTRATE_SLUG = "jira-breakdown-orchestrate"
 _JIRA_BREAKDOWN_IMPLEMENT_SLUG = "jira-breakdown-implement"
@@ -1156,6 +1169,8 @@ def _input_schema_defaults_by_name(inputs_schema: list[dict[str, Any]]) -> dict[
 
 def _dependent_input_default_rules(
     annotations: Mapping[str, Any] | None,
+    *,
+    inputs_schema: Sequence[Mapping[str, Any]] | None = None,
 ) -> dict[str, tuple[str, dict[str, Any]]]:
     """Parse ``uiSchema.<field>.defaultFrom`` rules into ``{field: (source, map)}``.
 
@@ -1163,11 +1178,21 @@ def _dependent_input_default_rules(
     selection instead of a single static value - for example a batch parent
     whose child publish mode depends on the selected child capability. The rule
     is declarative so the Create page and expansion derive the same default.
+
+    When the caller supplies the preset's input definitions, both field names
+    and every mapped value are checked against them. A rule that names an
+    unknown field or maps a value the target field cannot hold would otherwise
+    fall back to the static default at expansion, silently restoring the very
+    behavior the rule exists to prevent.
     """
 
     ui_schema = (annotations or {}).get("uiSchema")
     if not isinstance(ui_schema, Mapping):
         return {}
+    field_specs = _dependent_default_field_specs(
+        annotations=annotations,
+        inputs_schema=inputs_schema,
+    )
     rules: dict[str, tuple[str, dict[str, Any]]] = {}
     for raw_name, raw_field_ui in ui_schema.items():
         if not isinstance(raw_field_ui, Mapping):
@@ -1191,11 +1216,139 @@ def _dependent_input_default_rules(
             raise PresetValidationError(
                 f"uiSchema.{name}.defaultFrom map contains a secret-like value."
             )
-        rules[name] = (
-            source,
-            {str(key or "").strip(): value for key, value in mapping.items()},
-        )
+        normalized_map = {
+            str(key or "").strip(): value for key, value in mapping.items()
+        }
+        if field_specs is not None:
+            _validate_dependent_default_rule(
+                name=name,
+                source=source,
+                mapping=normalized_map,
+                field_specs=field_specs,
+            )
+        rules[name] = (source, normalized_map)
     return rules
+
+
+def _dependent_default_field_specs(
+    *,
+    annotations: Mapping[str, Any] | None,
+    inputs_schema: Sequence[Mapping[str, Any]] | None,
+) -> dict[str, dict[str, Any]] | None:
+    """Return ``{field: {"type": ..., "allowed": [...] | None}}`` for validation.
+
+    Returns ``None`` when the caller supplied no input definitions, so a caller
+    that only parses the rule structure - expansion, for example - keeps working
+    unchanged. Reference validation belongs at the seed boundary, where a broken
+    preset can still be rejected before it is stored.
+    """
+
+    if inputs_schema is None:
+        return None
+    specs: dict[str, dict[str, Any]] = {}
+    for definition in inputs_schema or []:
+        if not isinstance(definition, Mapping):
+            continue
+        name = str(definition.get("name") or "").strip()
+        if not name:
+            continue
+        options = definition.get("options")
+        allowed = (
+            [str(option).strip() for option in options]
+            if isinstance(options, Sequence)
+            and not isinstance(options, (str, bytes, bytearray))
+            and options
+            else None
+        )
+        specs[name] = {
+            "type": _LEGACY_INPUT_JSON_TYPES.get(
+                str(definition.get("type") or "text").strip().lower(),
+                "string",
+            ),
+            "allowed": allowed,
+        }
+    schema_properties = (annotations or {}).get("inputSchema")
+    properties = (
+        schema_properties.get("properties")
+        if isinstance(schema_properties, Mapping)
+        else None
+    )
+    if isinstance(properties, Mapping):
+        for raw_name, raw_property in properties.items():
+            name = str(raw_name or "").strip()
+            if not name or not isinstance(raw_property, Mapping):
+                continue
+            enum_values = raw_property.get("enum")
+            allowed = (
+                [str(value).strip() for value in enum_values]
+                if isinstance(enum_values, Sequence)
+                and not isinstance(enum_values, (str, bytes, bytearray))
+                and enum_values
+                else None
+            )
+            specs[name] = {
+                "type": str(raw_property.get("type") or "string").strip().lower(),
+                "allowed": allowed,
+            }
+    return specs
+
+
+def _validate_dependent_default_rule(
+    *,
+    name: str,
+    source: str,
+    mapping: Mapping[str, Any],
+    field_specs: Mapping[str, Mapping[str, Any]],
+) -> None:
+    known = ", ".join(sorted(field_specs)) or "(none)"
+    if name not in field_specs:
+        raise PresetValidationError(
+            f"uiSchema.{name}.defaultFrom targets unknown input '{name}'. "
+            f"Known inputs: {known}"
+        )
+    if source not in field_specs:
+        raise PresetValidationError(
+            f"uiSchema.{name}.defaultFrom references unknown source field "
+            f"'{source}'. Known inputs: {known}"
+        )
+    target_spec = field_specs[name]
+    allowed = target_spec.get("allowed")
+    target_type = str(target_spec.get("type") or "string")
+    for key, value in mapping.items():
+        if allowed is not None:
+            if str(value).strip() not in allowed:
+                supported = ", ".join(allowed)
+                raise PresetValidationError(
+                    f"uiSchema.{name}.defaultFrom maps '{key}' to '{value}', "
+                    f"which is not a valid '{name}' value. Supported: "
+                    f"{supported}"
+                )
+            continue
+        if not _value_matches_input_type(value, target_type):
+            raise PresetValidationError(
+                f"uiSchema.{name}.defaultFrom maps '{key}' to a value that is "
+                f"not a valid '{target_type}' for input '{name}'."
+            )
+
+
+def _value_matches_input_type(value: Any, target_type: str) -> bool:
+    if target_type == "boolean":
+        return isinstance(value, bool)
+    if target_type in {"number", "integer"}:
+        if isinstance(value, bool):
+            return False
+        if isinstance(value, (int, float)):
+            return True
+        try:
+            float(str(value).strip())
+        except (TypeError, ValueError):
+            return False
+        return True
+    if isinstance(value, Mapping):
+        return False
+    return not (
+        isinstance(value, Sequence) and not isinstance(value, (str, bytes, bytearray))
+    )
 
 
 def _apply_dependent_input_defaults(
@@ -1324,7 +1477,11 @@ def _schema_contract_input_definitions(
         )
     return definitions
 
-def _normalize_seed_annotations(item: Mapping[str, Any]) -> dict[str, Any]:
+def _normalize_seed_annotations(
+    item: Mapping[str, Any],
+    *,
+    inputs_schema: Sequence[Mapping[str, Any]] | None = None,
+) -> dict[str, Any]:
     annotations = dict(item.get("annotations") or {})
     for source_key, target_key in (
         ("inputSchema", "inputSchema"),
@@ -1342,10 +1499,19 @@ def _normalize_seed_annotations(item: Mapping[str, Any]) -> dict[str, Any]:
         raise PresetValidationError(
             "Capability schema defaults contain a secret-like value."
         )
-    return _normalize_preset_annotations(annotations)
+    return _normalize_preset_annotations(
+        annotations,
+        inputs_schema=(
+            inputs_schema if inputs_schema is not None else item.get("inputs")
+        ),
+    )
 
 
-def _normalize_preset_annotations(annotations: Mapping[str, Any] | None) -> dict[str, Any]:
+def _normalize_preset_annotations(
+    annotations: Mapping[str, Any] | None,
+    *,
+    inputs_schema: Sequence[Mapping[str, Any]] | None = None,
+) -> dict[str, Any]:
     normalized = dict(annotations or {})
     checkpoint_branching_alias = normalized.pop("checkpoint_branching", None)
     if (
@@ -1360,7 +1526,7 @@ def _normalize_preset_annotations(annotations: Mapping[str, Any] | None) -> dict
         )
     # Reject a malformed dependent-default rule at seed time rather than letting
     # an input silently fall back to its static default at expansion.
-    _dependent_input_default_rules(normalized)
+    _dependent_input_default_rules(normalized, inputs_schema=inputs_schema)
     return normalized
 
 
@@ -1995,7 +2161,9 @@ class PresetCatalogService:
             required_capabilities=derived_capabilities,
             inputs_schema=validated_inputs,
             steps=validated_steps,
-            annotations=_normalize_preset_annotations(annotations),
+            annotations=_normalize_preset_annotations(
+                annotations, inputs_schema=validated_inputs
+            ),
             max_step_count=max(25, len(validated_steps)),
             release_status=release_status,
             seed_source=seed_source,
@@ -3131,7 +3299,9 @@ class PresetCatalogService:
             description = str(item.get("description") or "").strip() or "Seed template."
             validated_inputs = self._validate_inputs_schema(item.get("inputs") or [])
             validated_steps = self._validate_template_steps(item.get("steps") or [])
-            annotations = _normalize_seed_annotations(item)
+            annotations = _normalize_seed_annotations(
+                item, inputs_schema=validated_inputs
+            )
             derived_capabilities = _normalize_capabilities(
                 (item.get("requiredCapabilities") or [])
                 + [

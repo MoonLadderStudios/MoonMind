@@ -320,3 +320,139 @@ async def test_malformed_dependent_default_rule_is_rejected_at_seed_time(
             service = PresetCatalogService(session)
             with pytest.raises(PresetValidationError, match=expected_message):
                 await service.sync_seed_templates(seed_dir=seed_dir)
+
+
+@pytest.mark.parametrize(
+    ("ui_schema", "inputs", "expected_message"),
+    [
+        (
+            {
+                "publish_mode": {
+                    "defaultFrom": {"field": "run_reff", "map": {"a": "none"}}
+                }
+            },
+            None,
+            "unknown source field 'run_reff'",
+        ),
+        (
+            {
+                "publish_modes": {
+                    "defaultFrom": {"field": "run_ref", "map": {"a": "none"}}
+                }
+            },
+            None,
+            "unknown input 'publish_modes'",
+        ),
+        (
+            {
+                "publish_mode": {
+                    "defaultFrom": {
+                        "field": "run_ref",
+                        "map": {"skill:verify": "publish-everything"},
+                    }
+                }
+            },
+            [
+                {"name": "run_ref", "label": "Run", "type": "text"},
+                {
+                    "name": "publish_mode",
+                    "label": "Publish",
+                    "type": "enum",
+                    "options": ["none", "branch", "pr"],
+                },
+            ],
+            "not a valid 'publish_mode' value",
+        ),
+        (
+            {
+                "run_verify": {
+                    "defaultFrom": {"field": "run_ref", "map": {"skill:verify": "yes"}}
+                }
+            },
+            [
+                {"name": "run_ref", "label": "Run", "type": "text"},
+                {"name": "run_verify", "label": "Verify", "type": "boolean"},
+            ],
+            "not a valid 'boolean'",
+        ),
+    ],
+)
+async def test_dependent_default_rule_references_are_validated_at_seed_time(
+    tmp_path,
+    ui_schema,
+    inputs,
+    expected_message,
+):
+    """A typo or out-of-enum mapping cannot reach expansion as a silent default.
+
+    Expansion falls back to the static default when a rule cannot resolve, so a
+    misspelled field or an unsupported mapped value would quietly restore the
+    behavior the rule exists to prevent.
+    """
+
+    seed_dir = tmp_path / "presets"
+    seed_dir.mkdir()
+    (seed_dir / "broken.yaml").write_text(
+        yaml.safe_dump(
+            {
+                "slug": "broken-dependent-reference",
+                "title": "Broken Dependent Reference",
+                "description": "Preset with an unresolvable defaultFrom rule.",
+                "scope": "global",
+                "annotations": {"uiSchema": ui_schema},
+                "inputs": inputs
+                or [
+                    {"name": "run_ref", "label": "Run", "type": "text"},
+                    {"name": "publish_mode", "label": "Publish", "type": "text"},
+                ],
+                "steps": [
+                    {
+                        "title": "Do nothing",
+                        "instructions": "Do nothing.",
+                        "skill": {"id": "noop"},
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    async with _catalog_db(tmp_path) as sessions:
+        async with sessions() as session:
+            service = PresetCatalogService(session)
+            with pytest.raises(PresetValidationError, match=expected_message):
+                await service.sync_seed_templates(seed_dir=seed_dir)
+
+
+async def test_seeded_dependent_default_rules_resolve_against_their_schema():
+    """Every shipped rule must name real fields and map values the target holds."""
+
+    from api_service.services.presets.catalog import (
+        _dependent_default_field_specs,
+        _dependent_input_default_rules,
+        _normalize_seed_annotations,
+        load_seed_template_definitions,
+    )
+
+    checked = 0
+    for definition in load_seed_template_definitions(_PRESET_DIR):
+        annotations = _normalize_seed_annotations(definition)
+        rules = _dependent_input_default_rules(annotations)
+        if not rules:
+            continue
+        specs = _dependent_default_field_specs(
+            annotations=annotations,
+            inputs_schema=definition.get("inputs") or [],
+        )
+        assert specs, definition.get("slug")
+        for name, (source, mapping) in rules.items():
+            assert name in specs, f"{definition.get('slug')}: unknown target {name}"
+            assert source in specs, f"{definition.get('slug')}: unknown source {source}"
+            allowed = specs[name].get("allowed")
+            if allowed is not None:
+                for value in mapping.values():
+                    assert str(value).strip() in allowed, (
+                        f"{definition.get('slug')}: {name} cannot hold {value!r}"
+                    )
+            checked += 1
+    assert checked > 0
