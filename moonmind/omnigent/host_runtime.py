@@ -349,14 +349,19 @@ class GenericOmnigentHostRuntime:
             # the failure so the realizer's single publication point persists
             # it; otherwise the only runner diagnostics for a registration or
             # attestation failure would be lost with the container.
-            host_cleanup_evidence = await self._cleanup.cleanup(
-                container_name=launch["containerName"],
-                host_lease_ref=host_lease_ref,
-                host_lease_generation=host_lease_generation,
-                state_volume_ref=launch["stateVolumeRef"],
-                control_volume_ref=launch.get("controlVolumeRef"),
-            )
-            setattr(exc, "host_cleanup_evidence", host_cleanup_evidence)
+            try:
+                host_cleanup_evidence = await self._cleanup.cleanup(
+                    container_name=launch["containerName"],
+                    host_lease_ref=host_lease_ref,
+                    host_lease_generation=host_lease_generation,
+                    state_volume_ref=launch["stateVolumeRef"],
+                    control_volume_ref=launch.get("controlVolumeRef"),
+                )
+                setattr(exc, "host_cleanup_evidence", host_cleanup_evidence)
+            except Exception as cleanup_error:
+                # The durable owner retains cleanup authority. An auxiliary
+                # cleanup failure must not replace the startup failure.
+                setattr(exc, "host_cleanup_error", type(cleanup_error).__name__)
             raise
         return {
             "hostId": registration["omnigentHostId"],

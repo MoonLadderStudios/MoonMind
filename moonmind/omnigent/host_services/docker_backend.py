@@ -65,7 +65,7 @@ class DockerCommandBackend:
         result: dict[str, Any] = {"Config": {}}
         for key, fmt in probes.items():
             _code, out, _err = await self.run(
-                ["docker", "inspect", "--format", fmt, container_name],
+                ["docker", "container", "inspect", "--format", fmt, container_name],
                 failure_code=HarnessPlatformFailure.OMNIGENT_HARNESS_BUILD_MISMATCH,
             )
             text = out.strip()

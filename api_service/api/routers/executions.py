@@ -237,7 +237,6 @@ from moonmind.workflows.temporal.hard_switch_cutover import (
 from moonmind.workflows.executions.model_resolver import (
     RequestedModelTierUnavailableError,
     ResolvedModelEffort,
-    resolve_effective_model,
     resolve_model_effort,
 )
 from moonmind.workflows.executions.preset_goal_scheduler import (
@@ -7722,13 +7721,15 @@ def _resolve_runtime_model_effort(
             _model_tier_resolution_payload(resolved, profile=profile),
         )
 
-    resolved_model, model_source = resolve_effective_model(
+    resolved = resolve_model_effort(
         runtime_id=runtime_id,
         profile=profile,
         requested_model=requested_model,
+        requested_effort=requested_effort,
+        require_launch_ready=False,
         workflow_settings=settings.workflow,
     )
-    return resolved_model, model_source, requested_effort, None
+    return resolved.model, resolved.model_source, resolved.effort, None
 
 
 def _require_provider_profile_runtime(
@@ -11365,6 +11366,28 @@ async def _create_execution_from_workflow_request(
                 "omnigent.executionTargetRef must match the selected "
                 "Agent Profile executionProfileRef."
             )
+        selected_provider_profile = await session.get(
+            ManagedAgentProviderProfile,
+            str(profile_snapshot["providerProfileRef"]),
+        )
+        if selected_provider_profile is None:
+            raise _invalid_workflow_request(
+                "Selected Provider Profile disappeared before plan compilation."
+            )
+        if not explicit_agent_profile:
+            resolved_model, model_source, resolved_effort, model_tier_resolution = (
+                _resolve_runtime_model_effort(
+                    runtime_id=selected_provider_profile.runtime_id,
+                    profile=selected_provider_profile,
+                    runtime_payload=runtime_payload,
+                    requested_model=runtime_payload.get("model"),
+                )
+            )
+            initial_parameters.update(
+                model=resolved_model, effort=resolved_effort, modelSource=model_source,
+            )
+            if model_tier_resolution is not None:
+                initial_parameters["modelTierResolution"] = model_tier_resolution
         initial_parameters = compile_agent_profile_snapshot_parameters(
             initial_parameters,
             snapshot=profile_snapshot,
@@ -11394,14 +11417,6 @@ async def _create_execution_from_workflow_request(
             or effort_source in provider_authority_sources
         ):
             initial_parameters["effort"] = resolved_effort
-        selected_provider_profile = await session.get(
-            ManagedAgentProviderProfile,
-            str(profile_snapshot["providerProfileRef"]),
-        )
-        if selected_provider_profile is None:
-            raise _invalid_workflow_request(
-                "Selected Provider Profile disappeared before plan compilation."
-            )
 
     persisted_omnigent_plan = None
     prelaunch_task_input_snapshot_ref = ""
@@ -13419,6 +13434,11 @@ async def create_remediation_checkpoint_branch(
             consumer_id=branch_id,
             user=user,
         )
+    if payload.agent_profile is None and payload.provider_profile_ref:
+        agent_profile_snapshot = await resolve_default_agent_profile_snapshot(
+            session, provider_profile_ref=payload.provider_profile_ref,
+            launch_policy_ref=None, consumer_type="checkpoint", consumer_id=branch_id, user=user,
+        )
     await _prepare_checkpoint_branch_launch(
         session=session,
         record=target_record,
@@ -15057,6 +15077,11 @@ async def create_checkpoint_branch(
             consumer_type="checkpoint",
             consumer_id=branch_id,
             user=user,
+        )
+    if payload.agent_profile is None and payload.provider_profile_ref:
+        agent_profile_snapshot = await resolve_default_agent_profile_snapshot(
+            session, provider_profile_ref=payload.provider_profile_ref,
+            launch_policy_ref=None, consumer_type="checkpoint", consumer_id=branch_id, user=user,
         )
     await _prepare_checkpoint_branch_launch(
         session=session,

@@ -21,6 +21,7 @@ with workflow.unsafe.imports_passed_through():
     from moonmind.schemas.agent_runtime_models import (
         AUTO_RUNTIME_SENTINEL,
         MANAGED_PROCESS_LOST_DURING_RECONCILIATION,
+        AdmittedProviderCapacity,
         AgentExecutionRequest,
         AgentRunHandle,
         AgentRunResult,
@@ -249,6 +250,19 @@ OMNIGENT_COMPACT_WORKSPACE_CHECKPOINT_PATCH_ID = (
 OMNIGENT_EXECUTION_PLAN_ADMISSION_PATCH_ID = (
     "agent-run-omnigent-execution-plan-admission-v1"
 )
+# MoonLadderStudios/MoonMind#3878 invariant 6: Provider Profile and generic-host
+# capacity are admitted as durable workflow state before the long Omnigent
+# execution Activity starts, so queued work occupies no execution slot.
+OMNIGENT_PRE_ACTIVITY_CAPACITY_ADMISSION_PATCH_ID = (
+    "agent-run-omnigent-pre-activity-capacity-admission-v1"
+)
+# MoonLadderStudios/MoonMind#3878: a plan-bound generic Omnigent run holds
+# workflow-owned provider capacity, so its structured 429 must reach the same
+# ProviderProfileManager ledger the managed path reports to. Without this the
+# lease is released and the profile stays at full effective capacity.
+OMNIGENT_PROVIDER_COOLDOWN_REPORT_PATCH_ID = (
+    "agent-run-omnigent-provider-cooldown-report-v1"
+)
 MANAGED_STATUS_ACTIVITY_PATCH_ID = "agent-run-managed-status-activity-v1"
 MANAGED_STATUS_ROLLOUT_TOLERANCE_PATCH_ID = (
     "agent-run-managed-status-rollout-tolerance-v1"
@@ -384,6 +398,15 @@ DEFAULT_ACTIVITY_CATALOG = build_default_activity_catalog()
 # and performing bounded, non-destructive recovery.
 _SLOT_WAIT_TIMEOUT_SECONDS = 120
 _SLOT_WAIT_MAX_RECOVERY_ATTEMPTS = 3
+# Bound on how long the Omnigent plane waits for Provider Profile capacity as
+# durable workflow state before it reports an actionable readiness failure.
+# The wait itself costs no Activity slot, so this ceiling exists to keep a
+# permanently misconfigured deployment from queueing forever, not to bound a
+# healthy queue.
+_OMNIGENT_CAPACITY_WAIT_CEILING_SECONDS = 86400
+# How long the workflow sleeps between generic-host capacity re-checks when the
+# activity does not supply its own window.
+_OMNIGENT_HOST_CAPACITY_RETRY_SECONDS = 30
 _DEFAULT_NO_PROGRESS_TIMEOUT_SECONDS = 1800
 _CLAUDE_CODE_NO_PROGRESS_TIMEOUT_SECONDS = 2400
 _CLAUDE_CODE_NO_PROGRESS_GRACE_SECONDS = 900
@@ -775,6 +798,11 @@ class MoonMindAgentRun:
         self._pending_runtime_selection_update: dict[str, Any] | None = None
         self._managed_session_detached_for_runtime_selection: bool = False
         self._paused: bool = False
+        # MoonLadderStudios/MoonMind#3878: Provider Profile capacity admitted by
+        # this workflow before the Omnigent execution Activity starts. The
+        # workflow is the lease owner, so it is also the last releaser.
+        self._omnigent_capacity_runtime_id: str | None = None
+        self._omnigent_capacity_profile_id: str | None = None
 
     @staticmethod
     def _safe_callback_key(*parts: str) -> str:
@@ -1238,13 +1266,35 @@ class MoonMindAgentRun:
                 f"runtime={runtime_id}; {intent}{profile_suffix}; "
                 "missing_condition=moonmind_slot_capacity; "
                 f"slots_in_use={slots_in_use}; max_parallel_runs={max_parallel_runs}"
-                f"{queue_suffix}."
+                f"{self._effective_capacity_suffix(profile)}{queue_suffix}."
             )
 
         return (
             "Waiting in MoonMind provider profile queue; "
             f"runtime={runtime_id}; {intent}{profile_suffix}; "
             f"missing_condition=manager_queue{queue_suffix}."
+        )
+
+    @staticmethod
+    def _effective_capacity_suffix(profile: Mapping[str, Any]) -> str:
+        """Name the effective provider limit when it is below the ceiling.
+
+        MoonLadderStudios/MoonMind#3878 AC11: the reason must distinguish the
+        operator's configured ceiling from a lower effective limit applied
+        after rate limiting, without leaking provider or credential identity.
+        """
+
+        effective = profile.get("effective_capacity")
+        configured = profile.get("configured_capacity", profile.get("max_parallel_runs"))
+        if (
+            not isinstance(effective, int)
+            or not isinstance(configured, int)
+            or effective >= configured
+        ):
+            return ""
+        return (
+            f"; effective_capacity={effective}"
+            "; limiting_layer=provider_adaptive_backpressure"
         )
 
     @staticmethod
@@ -3540,6 +3590,329 @@ class MoonMindAgentRun:
             )
         return waiting_reason
 
+    async def _admit_omnigent_capacity_before_execution(
+        self,
+        *,
+        request: AgentExecutionRequest,
+        admission: Any,
+        parent_info: Any,
+    ) -> AgentExecutionRequest:
+        """Run the target admission order for the generic Omnigent plane.
+
+        MoonLadderStudios/MoonMind#3878 target flow: request Provider Profile
+        capacity, wait durably when unavailable, then reserve provisional
+        generic-host capacity — all before ``integration.omnigent.execute``
+        starts. Effective concurrency is therefore the minimum of the provider
+        ceiling, its effective limit, and available host capacity.
+
+        Returns the request carrying the admitted capacity authority, so the
+        Activity confirms the workflow-owned lease instead of queueing again.
+        """
+
+        profile_id = str(
+            getattr(admission, "provider_profile_ref", None)
+            or request.execution_profile_ref
+            or ""
+        ).strip()
+        runtime_id = str(
+            getattr(admission, "provider_runtime_id", None) or ""
+        ).strip()
+        if not profile_id or not runtime_id:
+            # An explicit plan must never execute without its named capacity
+            # authority; guessing a runtime family could route the request to
+            # the wrong capacity ledger.
+            raise ApplicationError(
+                "Omnigent execution plan admission omitted Provider Profile "
+                "capacity authority",
+                type="ProviderProfileCapacityAuthorityMissing",
+                non_retryable=True,
+            )
+        await self._admit_omnigent_provider_capacity(
+            request=request,
+            runtime_id=runtime_id,
+            profile_id=profile_id,
+            parent_info=parent_info,
+        )
+        try:
+            await self._await_omnigent_host_capacity(parent_info=parent_info)
+        except BaseException:
+            # Provider capacity acquired for an execution that never starts must
+            # go back to the queue immediately.
+            await self._release_omnigent_provider_capacity(request=request)
+            raise
+        return request.model_copy(
+            update={
+                "admitted_provider_capacity": AdmittedProviderCapacity(
+                    providerProfileRef=profile_id,
+                    providerRuntimeId=runtime_id,
+                    leaseOwnerId=workflow.info().workflow_id,
+                    capacityScopeRef=(
+                        getattr(admission, "capacity_scope_ref", None) or None
+                    ),
+                )
+            }
+        )
+
+    async def _admit_omnigent_provider_capacity(
+        self,
+        *,
+        request: AgentExecutionRequest,
+        runtime_id: str,
+        profile_id: str,
+        parent_info: Any,
+    ) -> None:
+        """Admit Provider Profile capacity before the long execution Activity.
+
+        MoonLadderStudios/MoonMind#3878 invariants 1 and 6. The manager is the
+        single capacity ledger, so this reuses its durable queue protocol
+        (``request_slot`` / ``slot_assigned``) rather than adding a second one.
+        Two properties follow:
+
+        * the wait is durable workflow state and occupies no execution
+          Activity slot or execution timeout; and
+        * this workflow is the lease owner, so ``integration.omnigent.execute``
+          observes ``already_held`` and never queues inside the Activity.
+
+        Capacity unavailability never reroutes an explicit plan: this waits for
+        the exact selected profile and nothing else (invariant 12).
+        """
+
+        manager_id = self._manager_workflow_id(runtime_id)
+        self.slot_assigned_event.clear()
+        manager_handle = await self._ensure_manager_and_signal(
+            manager_id,
+            runtime_id,
+            request_slot=False,
+        )
+        await self._sync_manager_profiles(
+            manager_id=manager_id,
+            manager_handle=manager_handle,
+            runtime_id=runtime_id,
+        )
+        await self._ensure_manager_and_signal(
+            manager_id,
+            runtime_id,
+            request_slot=True,
+            execution_profile_ref=profile_id,
+            request_priority=self._request_priority(request),
+            request_queue_metadata=self._request_queue_metadata(request),
+        )
+        self._omnigent_capacity_runtime_id = runtime_id
+        waited_seconds = 0
+        while not self.slot_assigned_event.is_set():
+            self.run_status = RunStatus.awaiting_slot
+            await self._signal_parent_child_state_changed(
+                parent_info,
+                "awaiting_slot",
+                await self._inspected_provider_slot_waiting_reason(
+                    manager_id=manager_id,
+                    runtime_id=runtime_id,
+                    request=request,
+                ),
+            )
+            if self.slot_assigned_event.is_set():
+                break
+            try:
+                await workflow.wait_condition(
+                    lambda: self.slot_assigned_event.is_set(),
+                    timeout=timedelta(seconds=_SLOT_WAIT_TIMEOUT_SECONDS),
+                )
+            except TimeoutError:
+                waited_seconds += _SLOT_WAIT_TIMEOUT_SECONDS
+                if waited_seconds >= _OMNIGENT_CAPACITY_WAIT_CEILING_SECONDS:
+                    raise ApplicationError(
+                        "Omnigent Provider Profile capacity was not admitted for "
+                        f"profile={profile_id} runtime={runtime_id} after "
+                        f"{waited_seconds}s of durable queueing",
+                        type="SlotAcquisitionTimeout",
+                        non_retryable=True,
+                    )
+                # The durable request stays queued in the manager; re-assert it
+                # only after confirming the manager is not holding it already.
+                manager_state = await self._manager_state_for_slot_wait(
+                    runtime_id=runtime_id,
+                    requester_workflow_id=workflow.info().workflow_id,
+                    execution_profile_ref=profile_id,
+                )
+                if manager_state.get("requester_pending") is True:
+                    continue
+                if self._profile_id_from_manager_lease(manager_state) == profile_id:
+                    # The grant landed while the signal was in flight.
+                    self._assigned_profile_id = profile_id
+                    self.slot_assigned_event.set()
+                    break
+                await self._ensure_manager_and_signal(
+                    manager_id,
+                    runtime_id,
+                    request_slot=True,
+                    execution_profile_ref=profile_id,
+                    request_priority=self._request_priority(request),
+                    request_queue_metadata=self._request_queue_metadata(request),
+                )
+        admitted_profile_id = str(self._assigned_profile_id or "").strip()
+        if admitted_profile_id and admitted_profile_id != profile_id:
+            # An explicit Omnigent plan must never execute against a profile the
+            # plan did not select. Release the wrong grant and fail closed.
+            await self._release_omnigent_provider_capacity(
+                profile_id=admitted_profile_id, request=request
+            )
+            raise ApplicationError(
+                "ProviderProfileManager admitted a profile the Omnigent "
+                "execution plan did not select",
+                type="ProviderProfileSelectionConflict",
+                non_retryable=True,
+            )
+        self._omnigent_capacity_profile_id = profile_id
+
+    @staticmethod
+    def _profile_id_from_manager_lease(
+        manager_state: Mapping[str, Any],
+    ) -> str | None:
+        """Return the profile this requester already holds, per the manager."""
+
+        held = manager_state.get("requester_profile_id")
+        normalized = str(held or "").strip()
+        return normalized or None
+
+    async def _release_omnigent_provider_capacity(
+        self,
+        *,
+        profile_id: str | None = None,
+        request: AgentExecutionRequest,
+    ) -> None:
+        """Release workflow-owned Omnigent provider capacity, last and once.
+
+        MoonLadderStudios/MoonMind#3878 invariant 10: the Activity has already
+        drained the provider session, host, and credential state by the time
+        this runs. Releasing twice is harmless — the manager's release is keyed
+        by requester ID — but this clears the local ownership marker so a retry
+        loop cannot release a lease it no longer owns.
+        """
+
+        released_profile_id = profile_id or self._omnigent_capacity_profile_id
+        runtime_id = self._omnigent_capacity_runtime_id
+        if not released_profile_id or not runtime_id:
+            return
+        if profile_id is None:
+            self._omnigent_capacity_profile_id = None
+        try:
+            manager_handle = workflow.get_external_workflow_handle(
+                self._manager_workflow_id(runtime_id)
+            )
+            await manager_handle.signal(
+                "release_slot",
+                self._release_slot_payload(
+                    profile_id=released_profile_id,
+                    request=request,
+                ),
+            )
+        except Exception:
+            # The manager evicts an expired lease as its own safety net, so a
+            # failed release delays capacity rather than losing it.
+            self._get_logger().warning(
+                "Failed to release Omnigent provider capacity for profile %s",
+                released_profile_id,
+                exc_info=True,
+            )
+
+    async def _report_omnigent_provider_cooldown(
+        self,
+        *,
+        cooldown_seconds: int,
+        profile_id: str | None = None,
+    ) -> bool:
+        """Report a provider rate limit against workflow-owned Omnigent capacity.
+
+        MoonLadderStudios/MoonMind#3878: the generic realizer has no independent
+        ``record_cooldown`` call, and the managed cooldown branch is gated on a
+        manager handle this path never holds. Without this report the lease is
+        released and the profile stays at its configured ceiling, so repeated
+        runs keep hitting the provider instead of lowering effective admission.
+        """
+
+        reported_profile_id = (
+            str(profile_id or self._omnigent_capacity_profile_id or "").strip()
+        )
+        runtime_id = self._omnigent_capacity_runtime_id
+        if not reported_profile_id or not runtime_id:
+            return False
+        try:
+            manager_handle = workflow.get_external_workflow_handle(
+                self._manager_workflow_id(runtime_id)
+            )
+            await manager_handle.signal(
+                "report_cooldown",
+                {
+                    "profile_id": reported_profile_id,
+                    "cooldown_seconds": max(1, int(cooldown_seconds)),
+                },
+            )
+            return True
+        except Exception:
+            # Backpressure is an optimisation over the manager's own eviction
+            # and cooldown safety nets, so a failed report must not fail the run.
+            self._get_logger().warning(
+                "Failed to report Omnigent provider cooldown for profile %s",
+                reported_profile_id,
+                exc_info=True,
+            )
+            return False
+
+    async def _await_omnigent_host_capacity(
+        self,
+        *,
+        parent_info: Any,
+        already_allocated: bool = False,
+    ) -> None:
+        """Wait durably for aggregate generic-host and cold-launch capacity.
+
+        MoonLadderStudios/MoonMind#3878 invariant 7. The admission read is a
+        short control activity; the wait is a workflow timer, so an oversubscribed
+        machine never parks a long-running execution Activity.
+        """
+
+        waited_seconds = 0
+        while True:
+            decision = await self._execute_routed_activity(
+                "omnigent.admit_generic_host_capacity",
+                {"alreadyAllocated": already_allocated},
+                cancellation_type=ActivityCancellationType.TRY_CANCEL,
+            )
+            if not isinstance(decision, Mapping):
+                # An unreadable admission payload must not silently widen
+                # admission; treat it as a blocked check and retry bounded.
+                decision = {
+                    "admitted": False,
+                    "retryAfterSeconds": _OMNIGENT_HOST_CAPACITY_RETRY_SECONDS,
+                    "waitingReason": (
+                        "Waiting for generic host capacity; "
+                        "missing_condition=host_capacity_unreadable."
+                    ),
+                }
+            if decision.get("admitted") is True:
+                return
+            retry_after = decision.get("retryAfterSeconds")
+            if not isinstance(retry_after, int) or retry_after < 1:
+                retry_after = _OMNIGENT_HOST_CAPACITY_RETRY_SECONDS
+            if waited_seconds >= _OMNIGENT_CAPACITY_WAIT_CEILING_SECONDS:
+                raise ApplicationError(
+                    "Generic Omnigent host capacity was not admitted after "
+                    f"{waited_seconds}s: {decision.get('waitingReason')}",
+                    type="HostCapacityAcquisitionTimeout",
+                    non_retryable=True,
+                )
+            self.run_status = RunStatus.awaiting_slot
+            await self._signal_parent_child_state_changed(
+                parent_info,
+                "awaiting_slot",
+                str(
+                    decision.get("waitingReason")
+                    or "Waiting for generic host capacity."
+                ),
+            )
+            await workflow.sleep(timedelta(seconds=retry_after))
+            waited_seconds += retry_after
+
     async def _reset_and_request_slot(
         self,
         manager_id: str,
@@ -5772,22 +6145,99 @@ class MoonMindAgentRun:
                                 act_name = (
                                     "integration.omnigent.profile_bound_execute"
                                 )
-                            result_payload = await self._execute_routed_activity(
-                                act_name,
-                                request,
-                                start_to_close_timeout=timedelta(
-                                    seconds=stc_seconds
-                                ),
-                                schedule_to_close_timeout=timedelta(
-                                    seconds=stc_seconds
-                                ),
-                                heartbeat_timeout=(
-                                    STREAMING_EXTERNAL_HEARTBEAT_TIMEOUT
-                                ),
-                                cancellation_type=(
-                                    ActivityCancellationType.TRY_CANCEL
-                                ),
+                            # MoonLadderStudios/MoonMind#3878 invariants 6 and 7:
+                            # admit provider and generic-host capacity as durable
+                            # workflow state before the long execution Activity,
+                            # so work above the effective limit waits with an
+                            # explicit reason and holds no execution slot.
+                            admit_capacity_before_activity = (
+                                recorded_plan_realizer
+                                == "generic-omnigent-host@1"
+                                and workflow.patched(
+                                    OMNIGENT_PRE_ACTIVITY_CAPACITY_ADMISSION_PATCH_ID
+                                )
+                                # A multi-profile plan names the Activity as its
+                                # capacity owner; acquire_all takes every profile
+                                # in deterministic order there. Pre-Activity
+                                # admission would reject it for the missing
+                                # single authority it never had.
+                                and str(
+                                    getattr(
+                                        admission,
+                                        "capacity_acquisition_owner",
+                                        "workflow",
+                                    )
+                                )
+                                != "activity"
                             )
+                            if admit_capacity_before_activity:
+                                request = (
+                                    await self._admit_omnigent_capacity_before_execution(
+                                        request=request,
+                                        admission=admission,
+                                        parent_info=parent_info,
+                                    )
+                                )
+                                # The capacity wait above is durable queueing,
+                                # not execution. Reset the clock at admission the
+                                # way the managed slot path does, or a run that
+                                # queued for hours starts its Activity with a
+                                # budget already spent and a successful result is
+                                # later overwritten with a timeout.
+                                overall_start = workflow.now()
+                                self.run_status = RunStatus.launching
+                                await self._signal_parent_child_state_changed(
+                                    parent_info,
+                                    "launching",
+                                    "Provider Profile and generic host capacity "
+                                    "admitted.",
+                                )
+                            try:
+                                result_payload = await self._execute_routed_activity(
+                                    act_name,
+                                    request,
+                                    start_to_close_timeout=timedelta(
+                                        seconds=stc_seconds
+                                    ),
+                                    schedule_to_close_timeout=timedelta(
+                                        seconds=stc_seconds
+                                    ),
+                                    heartbeat_timeout=(
+                                        STREAMING_EXTERNAL_HEARTBEAT_TIMEOUT
+                                    ),
+                                    cancellation_type=(
+                                        # The workflow owns the provider lease
+                                        # but the Activity owns host, session,
+                                        # and credential cleanup. Waiting for
+                                        # cancellation to complete keeps those
+                                        # two facts consistent: with TRY_CANCEL
+                                        # the workflow goes terminal while the
+                                        # Activity still runs, the manager's
+                                        # terminal-owner verifier reclaims the
+                                        # lease, and the next run gets a slot
+                                        # whose host is still in use. The wait
+                                        # is bounded by the Activity's
+                                        # start-to-close and heartbeat timeouts.
+                                        ActivityCancellationType.WAIT_CANCELLATION_COMPLETED
+                                        if admit_capacity_before_activity
+                                        else ActivityCancellationType.TRY_CANCEL
+                                    ),
+                                )
+                            finally:
+                                # The Activity owns host, session, credential,
+                                # and workspace cleanup, and it has completed
+                                # that cleanup by the time it returns or raises.
+                                # Provider capacity is therefore released last,
+                                # by its owner (invariant 10).
+                                #
+                                # Under cancellation the Activity is awaited to
+                                # completion, so by the time this runs the host
+                                # and session are drained and releasing the lease
+                                # cannot hand a live host to the next run.
+                                if admit_capacity_before_activity:
+                                    await self._release_omnigent_provider_capacity(
+                                        request=request
+                                    )
                             self.final_result = (
                                 AgentRunResult(**result_payload)
                                 if isinstance(result_payload, dict)
@@ -6401,6 +6851,32 @@ class MoonMindAgentRun:
                         )
                     )
                     requires_provider_cooldown = False
+
+                if (
+                    requires_provider_cooldown
+                    and request.agent_kind != "managed"
+                    and self._omnigent_capacity_profile_id
+                    and workflow.patched(
+                        OMNIGENT_PROVIDER_COOLDOWN_REPORT_PATCH_ID
+                    )
+                ):
+                    # Plan-bound generic Omnigent capacity is workflow-owned, so
+                    # this workflow is the only reporter the manager will hear.
+                    omnigent_cooldown_seconds = self._cooldown_seconds_for_profile(
+                        self._omnigent_capacity_profile_id
+                    )
+                    if (
+                        prefer_structured_failure
+                        and provider_failure_event is not None
+                    ):
+                        omnigent_cooldown_seconds = resolve_provider_cooldown_seconds(
+                            provider_failure_event,
+                            now=workflow.now(),
+                            default_seconds=omnigent_cooldown_seconds,
+                        )
+                    await self._report_omnigent_provider_cooldown(
+                        cooldown_seconds=omnigent_cooldown_seconds
+                    )
 
                 if (
                     request.agent_kind == "managed"
