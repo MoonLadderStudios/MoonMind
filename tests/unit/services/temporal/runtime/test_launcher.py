@@ -4804,8 +4804,10 @@ async def test_launch_generic_env_uses_logical_step_id_for_artifacts_dir(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("runtime_id", ["claude_code", "codex_cli"])
+@pytest.mark.parametrize("repository_shape", ["current", "in_flight", "absent"])
 async def test_direct_managed_launch_materializes_scoped_execution_fanout(
-    tmp_path, monkeypatch
+    tmp_path, monkeypatch, runtime_id, repository_shape
 ):
     """Replay mm:91c47b8e through the direct Claude launch environment."""
 
@@ -4815,7 +4817,15 @@ async def test_direct_managed_launch_materializes_scoped_execution_fanout(
     workspace = tmp_path / "workspaces" / "agent-run-1" / "repo"
     workspace.mkdir(parents=True)
     launcher = ManagedRuntimeLauncher(ManagedRunStore(tmp_path / "managed_runs"))
+    connection_ref = "repository-connection:operator-selected"
+    workspace_spec = {
+        "current": {"repositoryTarget": {"connectionRef": connection_ref}},
+        "in_flight": {"connectionRef": connection_ref},
+        "absent": {},
+    }[repository_shape]
+    launcher._repository_readiness_boundary = AsyncMock(return_value=None)
     request = _make_request(
+        workspace_spec=workspace_spec,
         parameters={"requiredCapabilities": ["execution.fanout"]},
         timeout_policy={"timeout_seconds": 300},
         step_execution={
@@ -4843,8 +4853,9 @@ async def test_direct_managed_launch_materializes_scoped_execution_fanout(
         workflow_id="mm:parent",
         request=request,
         profile=_make_profile(
-            runtime_id="claude_code",
+            runtime_id=runtime_id,
             command_template=["echo", "hello"],
+            env_overrides={"MOONMIND_REPOSITORY_CONNECTION_REF": "repository-connection:stale"},
         ),
         workspace_path=str(workspace),
     )
@@ -4858,12 +4869,16 @@ async def test_direct_managed_launch_materializes_scoped_execution_fanout(
     assert capability.agent_run_id == "agent-run-1"
     assert capability.step_id == "batch-workflows"
     assert capability.session_id == "agent-run-1"
-    assert capability.runtime_id == "claude_code"
+    assert capability.runtime_id == runtime_id
     assert capability.source_kind == "managed_process"
     assert captured_env["MOONMIND_TASK_WORKFLOW_ID"] == "mm:parent"
     assert captured_env["MOONMIND_AGENT_RUN_ID"] == "agent-run-1"
-    assert captured_env["MOONMIND_RUNTIME_ID"] == "claude_code"
+    assert captured_env["MOONMIND_RUNTIME_ID"] == runtime_id
     assert captured_env["MOONMIND_STEP_ID"] == "batch-workflows"
+    if repository_shape == "absent":
+        assert "MOONMIND_REPOSITORY_CONNECTION_REF" not in captured_env
+    else:
+        assert captured_env["MOONMIND_REPOSITORY_CONNECTION_REF"] == connection_ref
     # The capability must still be valid at the execution ceiling. It is minted
     # before the broker, workspace ownership changes, and process creation that
     # precede the supervisor starting its clock, so a lifetime of exactly the
@@ -4878,6 +4893,7 @@ def test_direct_managed_launch_removes_unrequested_ambient_fanout_authority() ->
     environment = {
         "MOONMIND_EXECUTION_FANOUT_BEARER_TOKEN": "stale-inline-token",
         "MOONMIND_EXECUTION_FANOUT_BEARER_TOKEN_FILE": "/stale/token-file",
+        "MOONMIND_REPOSITORY_CONNECTION_REF": "repository-connection:stale",
     }
 
     ManagedRuntimeLauncher._materialize_execution_fanout_environment(
@@ -4890,6 +4906,7 @@ def test_direct_managed_launch_removes_unrequested_ambient_fanout_authority() ->
 
     assert "MOONMIND_EXECUTION_FANOUT_BEARER_TOKEN" not in environment
     assert "MOONMIND_EXECUTION_FANOUT_BEARER_TOKEN_FILE" not in environment
+    assert "MOONMIND_REPOSITORY_CONNECTION_REF" not in environment
 
 
 def test_direct_managed_launch_rejects_denied_fanout_authorization() -> None:
