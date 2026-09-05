@@ -31,6 +31,18 @@ Last Updated: 2026-06-23
 
 ---
 
+## Unified Profile selection
+
+The user-facing Profile is this existing credential and capacity identity. It also
+owns model tiers and an optional `execution_configuration` reference containing
+an immutable configuration id, version and digest. New workflow and schedule
+submissions supply the Profile id; API admission resolves compatible execution
+behavior and records the immutable snapshot transactionally. Existing consumer
+snapshots remain authoritative for continuations. Profile selection never changes
+because model discovery expires or a host image changes. Disabled and disconnected
+Profiles remain visible with an actionable setup state. Credentials, trust,
+capability compatibility and actual-host model verification remain launch gates.
+
 ## 1. Summary
 
 MoonMind-managed runtimes such as Claude Code and Codex CLI do not map one-to-one to a single upstream company or a single authentication method.

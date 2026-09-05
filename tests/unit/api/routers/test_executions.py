@@ -6925,7 +6925,9 @@ def test_create_workflow_omnigent_browser_payload_persists_canonical_intent(
     test_client, service, _user = client
     service.create_execution.return_value = _build_execution_record()
     provider_profile = SimpleNamespace(
-        profile_id="codex-openai-oauth", provider_id="openai"
+        profile_id="codex-openai-oauth", provider_id="openai", runtime_id="codex_cli",
+        default_model="vendor/" + "future-model-" * 16,
+        default_effort="future-provider-effort",
     )
     db_session = SimpleNamespace(
         get=AsyncMock(side_effect=[provider_profile, None]),
@@ -7011,6 +7013,8 @@ def test_create_workflow_omnigent_browser_payload_persists_canonical_intent(
     ]
     assert initial_parameters["targetRuntime"] == "omnigent"
     assert initial_parameters["requestType"] == "task"
+    assert initial_parameters["model"] == provider_profile.default_model
+    assert initial_parameters["effort"] == provider_profile.default_effort
     assert initial_parameters["omnigent"] == {
         "executionTargetRef": "omnigent-codex@1",
         "launchPolicyRef": "codex-on-demand@1",
@@ -18195,7 +18199,12 @@ def _mm3788_client(profile: SimpleNamespace) -> Iterator[tuple[TestClient, Async
         async def scalar(self, _stmt: object) -> object | None:
             # No Omnigent Agent Profile authority is seeded, so the Omnigent
             # selection service is the one that rejects an Omnigent submission.
+            if _stmt.column_descriptions[0].get("entity") is ManagedAgentProviderProfile:
+                return profile
             return None
+
+        async def execute(self, _stmt):
+            return SimpleNamespace(all=lambda: [])
 
     app.dependency_overrides[get_async_session] = lambda: _Session()
     _override_temporal_client(app)
@@ -18316,7 +18325,7 @@ def test_mm3788_create_execution_leaves_omnigent_compatibility_to_the_selection_
     # mismatch: the submission proceeds into the Omnigent selection service,
     # which owns compatibility against the selected execution target.
     assert response.status_code == 409
-    assert response.json()["detail"] == "default Omnigent Agent Profile is unavailable"
+    assert response.json()["detail"]["code"] == "profile_execution_configuration_required"
     service.create_execution.assert_not_awaited()
 
 

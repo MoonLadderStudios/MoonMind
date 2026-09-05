@@ -103,12 +103,8 @@ def evidence_observation_is_current(
     publishes afterwards -- contributor tiers included -- would never reach
     selection, readiness, or admission on an otherwise unchanged deployment.
 
-    Every boundary that admits an OpenCode target answers this same question:
-    the bootstrap reconciler, the execution-readiness catalog, pre-session
-    planning, and smoke admission. Enforcing the interval in the reconciler
-    alone would leave the other three advertising and launching from a catalog
-    the provider has since changed -- including a model it has removed --
-    whenever a refresh has not yet succeeded.
+    This interval schedules discovery refreshes. It does not authorize or block
+    execution: the actual host verifies the selected model before session start.
     """
 
     from moonmind.omnigent.settings import opencode_model_catalog_max_age
@@ -601,15 +597,19 @@ async def _revalidate_stale_evidence(
         OpenCodeProviderRuntimeValidationService,
     )
     from moonmind.omnigent.production import build_omnigent_secret_resolver
+    from moonmind.omnigent.settings import opencode_model_catalog_max_age
     from moonmind.provider_profiles.lease_client import CredentialLeasePurpose
     from moonmind.provider_profiles.maintenance import (
         acquire_credential_maintenance_guard,
     )
 
+    interval = opencode_model_catalog_max_age()
+    refresh_lead = min(timedelta(minutes=5), interval / 10) if interval else timedelta(0)
+    refresh_at = datetime.now(UTC) + refresh_lead
     stale = [
         profile
         for profile in profiles
-        if not evidence_is_current(profile, image_ref=image_ref)
+        if not evidence_is_current(profile, image_ref=image_ref, now=refresh_at)
     ]
     if not stale:
         return ProviderReconcileOutcome(ready=True, checked=checked)
@@ -837,6 +837,13 @@ async def _persist_evidence(
             == "none@1"
         )
         readiness = dict(behavior.get("auth_readiness") or {})
+        previously_connected = profile.auth_state == ProviderProfileAuthState.CONNECTED
+        if previously_connected and not launchable:
+            # Discovery is advisory for an enrolled credential. A missing model
+            # in a refresh must not revoke credential authority or hide a Profile.
+            profile.command_behavior = behavior
+            await session.commit()
+            return launchable
         readiness.update(
             {
                 "connected": launchable,
@@ -902,14 +909,8 @@ async def _record_revalidation_failure(
             "exhausted": attempts + 1 >= MAX_REVALIDATION_ATTEMPTS,
             "lastAttemptAt": datetime.now(UTC).isoformat(),
         }
-        readiness = dict(behavior.get("auth_readiness") or {})
-        readiness.update(
-            {
-                "launch_ready": False,
-                "failure_reason": "Pinned OpenCode runtime validation failed.",
-            }
-        )
-        behavior["auth_readiness"] = readiness
+        # A failed catalog probe is not evidence that the credential is invalid.
+        # Keep the last authenticated state; the execution host validates again.
         profile.command_behavior = behavior
         await session.commit()
 
