@@ -10,6 +10,7 @@ the pure guard so the wiring at the startup boundary is proven, not assumed.
 
 from __future__ import annotations
 
+import asyncio
 import logging
 
 import pytest
@@ -78,3 +79,55 @@ def test_startup_ignores_an_unset_obsolete_variable(monkeypatch) -> None:
     monkeypatch.setattr(legacy_retirement, "OBSOLETE_CONFIGURATION", removed)
     monkeypatch.delenv(VARIABLE, raising=False)
     _startup_guard()()
+
+
+# ---------------------------------------------- every consuming process
+
+
+def test_agent_runtime_worker_startup_enforces_the_same_check(monkeypatch) -> None:
+    """The worker is separately restartable and consumes the same variables.
+
+    Installing the check only in the API lifespan means restarting or deploying
+    ``temporal-worker-agent-runtime`` without the API produces no deprecation
+    warning during the window, and after removal the worker would silently
+    accept a variable the API rejects.
+    """
+
+    from moonmind.workflows.temporal import worker_runtime
+
+    removed = (_deprecated()[0].model_copy(update={"removed": True}),)
+    monkeypatch.setattr(legacy_retirement, "OBSOLETE_CONFIGURATION", removed)
+    monkeypatch.setenv(VARIABLE, "ghcr.io/example/host@sha256:" + "a" * 64)
+
+    called: list[str] = []
+    monkeypatch.setattr(
+        worker_runtime,
+        "describe_configured_worker",
+        lambda: called.append("topology") or _unreachable_topology(),
+    )
+    with pytest.raises(ObsoleteConfigurationError, match="no longer honored"):
+        asyncio.run(worker_runtime.main_async())
+
+
+def test_agent_runtime_worker_startup_warns_during_deprecation(
+    monkeypatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    from moonmind.workflows.temporal import worker_runtime
+
+    monkeypatch.setattr(legacy_retirement, "OBSOLETE_CONFIGURATION", _deprecated())
+    monkeypatch.setenv(VARIABLE, "ghcr.io/example/host@sha256:" + "a" * 64)
+    with caplog.at_level(logging.WARNING):
+        legacy_retirement.enforce_obsolete_configuration_at_startup(
+            worker_runtime.logger
+        )
+    messages = [record.getMessage() for record in caplog.records]
+    assert any(
+        VARIABLE in message and "OMNIGENT_SHARED_HOST_IMAGE_REF" in message
+        for message in messages
+    ), messages
+
+
+def _unreachable_topology():
+    raise AssertionError(
+        "worker startup must reject obsolete configuration before topology use"
+    )

@@ -6,6 +6,7 @@ Source issues: MoonLadderStudios/MoonMind#3712, MoonLadderStudios/MoonMind#3835.
 from __future__ import annotations
 
 import importlib
+import pathlib
 from datetime import datetime, timedelta, timezone
 
 import pytest
@@ -40,6 +41,7 @@ from moonmind.omnigent.legacy_retirement import (
 from moonmind.omnigent.retirement_drain import build_drain_evidence
 from moonmind.omnigent.retirement_surfaces import discover_legacy_surfaces
 from moonmind.omnigent.session_supervisor_rollback import (
+    RollbackExerciseDecision,
     RollbackExerciseRecord,
     RollbackScope,
     evaluate_rollback_exercise,
@@ -218,6 +220,66 @@ def test_guard_fails_when_a_retained_startup_script_is_deleted() -> None:
         assert_retirement_guard(broken)
 
 
+def test_env_surface_evidence_excludes_the_inventory_itself(monkeypatch) -> None:
+    """An ``env:`` row must not prove its own surface exists.
+
+    ``legacy_retirement.py`` writes every inventoried variable into its own row,
+    so including the inventory in the environment corpus let the guard pass
+    after the real Compose and runtime handling for a retained variable had been
+    deleted.
+    """
+
+    from moonmind.omnigent import retirement_surfaces
+
+    variable = "OMNIGENT_ONLY_IN_THE_INVENTORY_IMAGE_REF"
+    monkeypatch.setattr(
+        retirement_surfaces, "COMPOSE_FILE", pathlib.Path("/nonexistent-compose.yaml")
+    )
+    retirement_surfaces.reset_surface_caches()
+    try:
+        assert retirement_surfaces.surface_exists(f"env:{variable}") is False
+    finally:
+        retirement_surfaces.reset_surface_caches()
+
+
+def test_env_surface_evidence_ignores_comments_and_docstrings(monkeypatch) -> None:
+    """Non-executable text is not a consumer of an environment identity."""
+
+    from moonmind.omnigent import retirement_surfaces
+
+    source = "\n".join(
+        (
+            '"""OMNIGENT_DOCSTRING_ONLY_REF is described here."""',
+            "# OMNIGENT_COMMENT_ONLY_REF is mentioned here.",
+            "import os",
+            'value = os.environ["OMNIGENT_REALLY_CONSUMED_REF"]',
+            "",
+        )
+    )
+    executable = retirement_surfaces._executable_python_text(source)
+    assert "OMNIGENT_DOCSTRING_ONLY_REF" not in executable
+    assert "OMNIGENT_COMMENT_ONLY_REF" not in executable
+    # An operand string is exactly how a variable is honored, so it is kept.
+    assert "OMNIGENT_REALLY_CONSUMED_REF" in executable
+
+
+def test_retained_env_surfaces_resolve_from_authoritative_consumers() -> None:
+    """Every retained ``env:`` row still has a real consumer, not a self-reference."""
+
+    from moonmind.omnigent.retirement_surfaces import surface_exists
+
+    env_refs = [
+        ref
+        for path in RETIREMENT_INVENTORY
+        if not path.removed
+        for ref in path.surfaces
+        if ref.startswith("env:")
+    ]
+    assert env_refs
+    for ref in env_refs:
+        assert surface_exists(ref), ref
+
+
 def test_guard_fails_when_removed_path_has_unmet_criteria() -> None:
     removed = (
         _record(
@@ -353,7 +415,48 @@ def test_rollback_only_admits_only_the_exact_allowlisted_generation() -> None:
         evaluate_new_admission(rollback_only, rollback_generation="gen-").reason_code
         == "rollback_generation_not_allowlisted"
     )
-    permitted = evaluate_new_admission(rollback_only, rollback_generation="gen-7")
+    # The generation is a single global string, so it is necessary but not
+    # sufficient: without a scoped exercise decision one allowlisted generation
+    # would re-admit every scope using the path.
+    assert (
+        evaluate_new_admission(rollback_only, rollback_generation="gen-7").reason_code
+        == "rollback_exercise_evidence_required"
+    )
+    unsatisfied = evaluate_new_admission(
+        rollback_only,
+        rollback_generation="gen-7",
+        rollback_exercise=RollbackExerciseDecision(
+            retirementPathId=rollback_only.path_id,
+            satisfied=False,
+            reasonCode="rollback_evidence_expired",
+        ),
+    )
+    assert unsatisfied.allowed is False
+    assert unsatisfied.reason_code == (
+        "rollback_exercise_unsatisfied:rollback_evidence_expired"
+    )
+    # Evidence recorded for a different row never re-admits this one.
+    other_row = evaluate_new_admission(
+        rollback_only,
+        rollback_generation="gen-7",
+        rollback_exercise=RollbackExerciseDecision(
+            retirementPathId="omnigent.legacy.other",
+            satisfied=True,
+            reasonCode="rollback_exercise_recorded",
+        ),
+    )
+    assert other_row.allowed is False
+    assert other_row.reason_code == "rollback_exercise_scope_mismatch"
+
+    permitted = evaluate_new_admission(
+        rollback_only,
+        rollback_generation="gen-7",
+        rollback_exercise=RollbackExerciseDecision(
+            retirementPathId=rollback_only.path_id,
+            satisfied=True,
+            reasonCode="rollback_exercise_recorded",
+        ),
+    )
     assert permitted.allowed is True
     assert permitted.reason_code == "rollback_generation_permitted"
 
@@ -733,6 +836,179 @@ def test_drain_evidence_drains_only_declared_dependency_kinds() -> None:
     evidence = build_drain_evidence(path, [undeclared, *declared], now=NOW)
     assert evidence.drained_kinds == path.active_resource_dependencies
     assert ActiveOwnerKind.PENDING_PUBLICATION not in evidence.drained_kinds
+
+
+def test_a_newer_zero_count_probe_never_overwrites_another_blocker() -> None:
+    """Every probe that observed a kind must agree it is drained.
+
+    ``collect_drain_evidence`` runs every probe for every declared kind, so a
+    kind routinely carries several observations. Reducing them to the newest one
+    let a later zero-count success discard another authority's positive count or
+    failure and mark the kind drained.
+    """
+
+    from moonmind.omnigent.retirement_drain import ActiveOwnerObservation
+
+    path = get_retirement_record("omnigent.legacy.oauth_host_janitor")
+    kinds = sorted(path.active_resource_dependencies, key=lambda k: k.value)
+    active_kind, failed_kind, stale_kind = kinds[0], kinds[1], kinds[2]
+    observations = [
+        # One authority still reports an owner; a newer zero-count success from
+        # a second probe must not clear it.
+        ActiveOwnerObservation(
+            kind=active_kind,
+            activeCount=3,
+            probeRef="host.lease.scan",
+            observedAt=NOW - timedelta(minutes=5),
+        ),
+        ActiveOwnerObservation(
+            kind=active_kind,
+            activeCount=0,
+            probeRef="janitor.queue.scan",
+            observedAt=NOW,
+        ),
+        # One probe could not be checked at all.
+        ActiveOwnerObservation(
+            kind=failed_kind,
+            activeCount=0,
+            probeRef="probe.unavailable",
+            observedAt=NOW - timedelta(minutes=5),
+            probeSucceeded=False,
+        ),
+        ActiveOwnerObservation(
+            kind=failed_kind,
+            activeCount=0,
+            probeRef="static.host.scan",
+            observedAt=NOW,
+        ),
+        # One probe's evidence is too old to prove present absence.
+        ActiveOwnerObservation(
+            kind=stale_kind,
+            activeCount=0,
+            probeRef="host.lease.scan",
+            observedAt=NOW - timedelta(days=2),
+        ),
+        ActiveOwnerObservation(
+            kind=stale_kind,
+            activeCount=0,
+            probeRef="janitor.queue.scan",
+            observedAt=NOW,
+        ),
+    ]
+    evidence = build_drain_evidence(path, observations, now=NOW)
+    assert evidence.drained_kinds == frozenset()
+    assert set(evidence.blocking_kinds) == {active_kind, failed_kind, stale_kind}
+    assert evidence.failed_kinds == (failed_kind,)
+    assert evidence.stale_kinds == (stale_kind,)
+    assert evidence.fully_drained is False
+
+
+def test_drain_requires_every_probe_to_report_zero() -> None:
+    from moonmind.omnigent.retirement_drain import ActiveOwnerObservation
+
+    path = get_retirement_record("omnigent.legacy.pi_host_image_alias")
+    observations = [
+        ActiveOwnerObservation(
+            kind=kind, activeCount=0, probeRef=ref, observedAt=NOW
+        )
+        for kind in path.active_resource_dependencies
+        for ref in ("host.scan", "lease.scan")
+    ]
+    evidence = build_drain_evidence(path, observations, now=NOW)
+    assert evidence.drained_kinds == path.active_resource_dependencies
+    assert evidence.fully_drained is True
+
+
+@pytest.mark.asyncio
+async def test_collect_drain_evidence_keeps_a_positive_count_from_any_probe() -> None:
+    """The real collector runs every probe for every kind."""
+
+    from moonmind.omnigent.retirement_drain import (
+        ActiveOwnerObservation,
+        collect_drain_evidence,
+    )
+
+    path = get_retirement_record("omnigent.legacy.pi_host_image_alias")
+
+    class _Busy:
+        async def observe(self, path, kind) -> ActiveOwnerObservation:
+            return ActiveOwnerObservation(
+                kind=kind, activeCount=1, probeRef="host.scan", observedAt=NOW
+            )
+
+    class _Idle:
+        async def observe(self, path, kind) -> ActiveOwnerObservation:
+            return ActiveOwnerObservation(
+                kind=kind, activeCount=0, probeRef="lease.scan", observedAt=NOW
+            )
+
+    evidence = await collect_drain_evidence(path, [_Busy(), _Idle()], now=NOW)
+    assert evidence.drained_kinds == frozenset()
+    assert evidence.fully_drained is False
+
+
+# ---------------------------------------------------- removed-row guard
+
+
+def test_removed_row_requires_complete_removal_evidence() -> None:
+    """Passing criteria alone must not clear a row classified ``removed``.
+
+    The guard delegates to the staged removal evaluation, so an active owner or
+    an open replay/rollback window blocks the row even when every criterion the
+    row declares is asserted as passing.
+    """
+
+    path = get_retirement_record("omnigent.legacy.oauth_host_runtime")
+    removed = path.model_copy(
+        update={
+            "retirement_class": RetirementClass.REMOVED,
+            "new_admission_source": "",
+        }
+    )
+    with pytest.raises(RetirementGuardError) as excinfo:
+        assert_retirement_guard(
+            (removed,), passed_by_path={removed.path_id: _all_criteria(path)}
+        )
+    message = str(excinfo.value)
+    assert "removal evidence is incomplete" in message
+    assert any(
+        f"active_owner:{kind.value}" in message
+        for kind in path.active_resource_dependencies
+    )
+
+
+def test_removed_row_passes_with_complete_removal_evidence() -> None:
+    path = get_retirement_record("omnigent.legacy.oauth_host_runtime")
+    removed = path.model_copy(
+        update={
+            "retirement_class": RetirementClass.REMOVED,
+            "new_admission_source": "",
+        }
+    )
+    assert_retirement_guard(
+        (removed,),
+        passed_by_path={removed.path_id: _all_criteria(path)},
+        drained_by_path={removed.path_id: path.active_resource_dependencies},
+        retention_by_path={removed.path_id: _closed_windows()},
+    )
+
+
+def test_removed_row_blocks_a_stage_earlier_than_its_earliest() -> None:
+    path = get_retirement_record("omnigent.legacy.oauth_host_runtime")
+    removed = path.model_copy(
+        update={
+            "retirement_class": RetirementClass.REMOVED,
+            "new_admission_source": "",
+        }
+    )
+    with pytest.raises(RetirementGuardError, match="stage_too_early"):
+        assert_retirement_guard(
+            (removed,),
+            passed_by_path={removed.path_id: _all_criteria(path)},
+            drained_by_path={removed.path_id: path.active_resource_dependencies},
+            retention_by_path={removed.path_id: _closed_windows()},
+            removal_stage_by_path={removed.path_id: RemovalStage.PRODUCT_SELECTORS},
+        )
 
 
 # --------------------------------------------------------------- rollback

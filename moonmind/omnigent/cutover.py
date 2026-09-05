@@ -423,7 +423,7 @@ class RuntimeSelection:
         }
 
 
-def _assert_runtime_new_admission(
+def assert_runtime_new_admission(
     runtime_id: str, *, rollback_generation: str | None = None
 ) -> None:
     """Reject a runtime whose code-owned retirement class stopped admitting.
@@ -431,6 +431,16 @@ def _assert_runtime_new_admission(
     The cutover phase is the *rollout* authority; the retirement class is the
     *retirement* authority. Both must permit a runtime before it becomes a new
     selection, and neither ever affects an already-recorded plan.
+
+    Every effective runtime must pass here, not only the workflow's top-level
+    selection: an authored per-step ``runtime.mode`` override is new admission
+    too, so API callers apply this check to each step runtime before persisting
+    the workflow.
+
+    A runtime id alone cannot name the exact rollback scope a ``rollback_only``
+    class requires, so this boundary supplies no rollback-exercise evidence and
+    a ``rollback_only`` runtime fails closed here. Plan compilation is where a
+    scoped exercise can be evaluated.
     """
 
     if not runtime_id:
@@ -477,9 +487,7 @@ def select_runtime(
         explicit = normalize_runtime_id(explicit)
         if explicit == "codex_cli" and phase >= CutoverPhase.DIRECT_LAUNCH_DISABLED:
             raise ValueError("codex_direct_launch_disabled_by_cutover_phase")
-        _assert_runtime_new_admission(
-            explicit, rollback_generation=rollback_generation
-        )
+        assert_runtime_new_admission(explicit, rollback_generation=rollback_generation)
         return RuntimeSelection(
             explicit,
             True,
@@ -506,7 +514,7 @@ def select_runtime(
     selected = "omnigent" if default == "codex_cli" and phase >= threshold else default
     # A configured default may not keep a direct runtime as a default target
     # once its retirement class stops admitting new work (#3835 required work 2).
-    _assert_runtime_new_admission(selected, rollback_generation=rollback_generation)
+    assert_runtime_new_admission(selected, rollback_generation=rollback_generation)
     return RuntimeSelection(
         selected,
         False,
@@ -905,6 +913,7 @@ __all__ = [
     "effective_phase",
     "PromotionDecision",
     "RuntimeSelection",
+    "assert_runtime_new_admission",
     "evaluate_promotion",
     "select_runtime",
 ]

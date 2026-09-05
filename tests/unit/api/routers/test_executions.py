@@ -19179,3 +19179,94 @@ def test_mm3788_selected_step_recovery_route_maps_runtime_mismatch_to_409(
     assert response.status_code == 409
     _mm3788_assert_shared_mismatch_detail(response.json()["detail"])
     mock_service.create_failed_step_recovery_execution.assert_awaited_once()
+
+
+# ---------------------------------------------------------------------------
+# MoonLadderStudios/MoonMind#3835 — a per-step runtime override is new admission
+# in its own right. The top-level ``select_runtime`` gate only covers the
+# workflow runtime, so a legacy ``steps[i].runtime.mode`` under an allowed
+# top-level runtime must not keep creating new legacy work.
+# ---------------------------------------------------------------------------
+
+
+def _mm3835_reclassify_runtime_strategy(
+    monkeypatch: pytest.MonkeyPatch, runtime_id: str
+) -> None:
+    from moonmind.omnigent import legacy_retirement
+    from moonmind.omnigent.legacy_retirement import (
+        RetirementClass,
+        retirement_record_for_surface,
+    )
+
+    surface = f"runtime-strategy:{runtime_id}"
+    record = retirement_record_for_surface(surface)
+    assert record is not None, surface
+    closed = record.model_copy(
+        update={
+            "retirement_class": RetirementClass.NEW_ADMISSION_DISABLED,
+            "new_admission_source": "",
+        }
+    )
+    monkeypatch.setitem(legacy_retirement._INVENTORY_BY_ID, closed.path_id, closed)
+    monkeypatch.setitem(legacy_retirement._INVENTORY_BY_SURFACE, surface, closed)
+
+
+@pytest.mark.asyncio
+async def test_mm3835_step_runtime_override_is_held_to_the_retirement_class(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _mm3835_reclassify_runtime_strategy(monkeypatch, "claude_code")
+    steps = _normalize_task_steps(
+        {
+            "steps": [
+                {
+                    "id": "review",
+                    "instructions": "Override to a retired runtime.",
+                    "runtime": {"mode": "claude_code"},
+                }
+            ]
+        }
+    )
+
+    with pytest.raises(HTTPException) as exc_info:
+        await _resolve_step_runtime_selections(
+            steps=steps,
+            task_runtime={"mode": "omnigent"},
+            task_target_runtime="omnigent",
+            task_profile_id=None,
+            session=None,
+        )
+
+    assert exc_info.value.status_code == 422
+    assert exc_info.value.detail["code"] == "invalid_execution_request"
+    assert "runtime_new_admission_disabled:claude_code" in (
+        exc_info.value.detail["message"]
+    )
+    assert "steps[0].runtime.mode" in exc_info.value.detail["message"]
+
+
+@pytest.mark.asyncio
+async def test_mm3835_step_runtime_override_is_allowed_while_the_class_admits() -> None:
+    """The gate stops admission only when the class says so."""
+
+    steps = _normalize_task_steps(
+        {
+            "steps": [
+                {
+                    "id": "review",
+                    "instructions": "Override to a still-admitted runtime.",
+                    "runtime": {"mode": "claude_code"},
+                }
+            ]
+        }
+    )
+
+    await _resolve_step_runtime_selections(
+        steps=steps,
+        task_runtime={"mode": "codex_cli"},
+        task_target_runtime="codex_cli",
+        task_profile_id=None,
+        session=None,
+    )
+
+    assert steps[0]["runtime"]["mode"] == "claude_code"

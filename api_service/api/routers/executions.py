@@ -246,7 +246,11 @@ from moonmind.workflows.executions.preset_goal_scheduler import (
     workflow_is_already_authored,
 )
 from moonmind.workflows.executions.runtime_defaults import normalize_runtime_id
-from moonmind.omnigent.cutover import effective_phase, select_runtime
+from moonmind.omnigent.cutover import (
+    assert_runtime_new_admission,
+    effective_phase,
+    select_runtime,
+)
 from moonmind.omnigent.bridge_store import (
     BridgeChatBindingAmbiguousError,
     BridgeProjectionAmbiguousError,
@@ -8665,6 +8669,17 @@ async def _resolve_step_runtime_selections(
                     "claude_code, codex_cloud, jules."
                 )
             canonical_step_runtime = normalized_rt
+            # A step override is new admission in its own right. The top-level
+            # ``select_runtime`` gate only covers the workflow's runtime, so
+            # without this check an allowed top-level runtime plus a legacy
+            # ``steps[i].runtime.mode`` would keep creating new legacy work
+            # after the direct strategy's retirement class stopped admitting it.
+            try:
+                assert_runtime_new_admission(canonical_step_runtime)
+            except ValueError as exc:
+                raise _invalid_workflow_request(
+                    f"payload.workflow.steps[{index}].runtime.mode: {exc}"
+                ) from exc
 
         raw_step_profile_id = str(
             runtime_payload.get("profileId")

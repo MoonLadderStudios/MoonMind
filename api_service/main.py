@@ -2431,12 +2431,16 @@ def _assert_omnigent_configuration_is_current() -> None:
     its retirement row is still in its deprecation window the operator gets an
     actionable warning naming the replacement, and after removal startup is
     rejected outright.
+
+    The API is one of several separately restartable consumers, so it invokes
+    the shared check rather than owning its own copy.
     """
 
-    from moonmind.omnigent.legacy_retirement import assert_obsolete_configuration
+    from moonmind.omnigent.legacy_retirement import (
+        enforce_obsolete_configuration_at_startup,
+    )
 
-    for warning in assert_obsolete_configuration(os.environ):
-        logger.warning("Obsolete Omnigent configuration: %s", warning)
+    enforce_obsolete_configuration_at_startup(logger, env=os.environ)
 
 
 async def startup_event():

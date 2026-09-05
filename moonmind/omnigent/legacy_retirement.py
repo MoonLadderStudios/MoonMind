@@ -27,10 +27,11 @@ architecture.
 
 from __future__ import annotations
 
+import os
 from datetime import datetime
 from enum import Enum, IntEnum
 from pathlib import Path
-from typing import Any, Mapping
+from typing import TYPE_CHECKING, Any, Mapping
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
@@ -43,6 +44,11 @@ from moonmind.omnigent.retirement_surfaces import (
 from moonmind.omnigent.workflow_chat_acceptance import (
     validate_workflow_chat_acceptance_manifest,
 )
+
+if TYPE_CHECKING:  # pragma: no cover - import cycle: rollback imports this module
+    from moonmind.omnigent.session_supervisor_rollback import (
+        RollbackExerciseDecision,
+    )
 
 RETIREMENT_CONTRACT_VERSION = "moonmind.omnigent-legacy-retirement/v2"
 
@@ -1440,6 +1446,7 @@ def assert_surface_admits_new_work(
     surface_ref: str,
     *,
     rollback_generation: str | None = None,
+    rollback_exercise: RollbackExerciseDecision | None = None,
     inventory: tuple[LegacyPathRecord, ...] | None = None,
 ) -> LegacyAdmissionDecision | None:
     """Reject new work that selects a retired surface.
@@ -1456,20 +1463,29 @@ def assert_surface_admits_new_work(
     return assert_new_admission_allowed(
         record.path_id,
         rollback_generation=rollback_generation,
+        rollback_exercise=rollback_exercise,
         inventory=inventory,
     )
 
 
 def evaluate_new_admission(
-    path: LegacyPathRecord, *, rollback_generation: str | None = None
+    path: LegacyPathRecord,
+    *,
+    rollback_generation: str | None = None,
+    rollback_exercise: RollbackExerciseDecision | None = None,
 ) -> LegacyAdmissionDecision:
     """Whether new work may be admitted through ``path``.
 
     ``rollback_only`` admits new work only under an exactly allowlisted rollback
-    generation. Every later class refuses, which is what stops new Agent
-    Profiles, schedules, presets, and alternate API clients from creating new
-    legacy work once the class advances — without touching execution,
-    cancellation, cleanup, or reads for already-recorded plans.
+    generation *and* a fresh, successful, exactly-scoped rollback exercise for
+    this row. The generation alone is a global string: without the scoped
+    exercise decision one allowlisted generation would re-admit every profile,
+    Host Class, materializer, model, launch policy, host mode, architecture, and
+    owner cohort using the path, and would stay valid after the exercise window
+    expired. Every later class refuses, which is what stops new Agent Profiles,
+    schedules, presets, and alternate API clients from creating new legacy work
+    once the class advances — without touching execution, cancellation, cleanup,
+    or reads for already-recorded plans.
     """
 
     generation = (rollback_generation or "").strip() or None
@@ -1486,6 +1502,12 @@ def evaluate_new_admission(
             reason = "rollback_generation_required"
         elif generation not in path.rollback_generations:
             reason = "rollback_generation_not_allowlisted"
+        elif rollback_exercise is None:
+            reason = "rollback_exercise_evidence_required"
+        elif rollback_exercise.retirement_path_id != path.path_id:
+            reason = "rollback_exercise_scope_mismatch"
+        elif not rollback_exercise.satisfied:
+            reason = f"rollback_exercise_unsatisfied:{rollback_exercise.reason_code}"
         else:
             return LegacyAdmissionDecision(
                 pathId=path.path_id,
@@ -1514,12 +1536,17 @@ def assert_new_admission_allowed(
     path_id: str,
     *,
     rollback_generation: str | None = None,
+    rollback_exercise: RollbackExerciseDecision | None = None,
     inventory: tuple[LegacyPathRecord, ...] | None = None,
 ) -> LegacyAdmissionDecision:
     """Fail fast when new work selects a path whose class no longer admits it."""
 
     record = get_retirement_record(path_id, inventory=inventory)
-    decision = evaluate_new_admission(record, rollback_generation=rollback_generation)
+    decision = evaluate_new_admission(
+        record,
+        rollback_generation=rollback_generation,
+        rollback_exercise=rollback_exercise,
+    )
     if not decision.allowed:
         raise LegacyAdmissionRejected(
             f"legacy path {path_id!r} no longer admits new work "
@@ -1705,29 +1732,59 @@ def assert_retirement_guard(
     inventory: tuple[LegacyPathRecord, ...] = RETIREMENT_INVENTORY,
     *,
     passed_by_path: dict[str, frozenset[RetirementCriterion]] | None = None,
+    drained_by_path: Mapping[str, frozenset[ActiveOwnerKind]] | None = None,
+    retention_by_path: Mapping[str, RetentionWindows] | None = None,
+    removal_stage_by_path: Mapping[str, RemovalStage] | None = None,
 ) -> None:
     """Enforce the retirement-guard invariants.
 
-    * A path classified ``removed`` must have every applicable criterion passing.
+    * A path classified ``removed`` must satisfy the *complete* typed removal
+      evidence: the criteria it declares, drain evidence for every active-owner
+      kind, the replay/historical-read/rollback retention windows, a recorded
+      rollback exercise when it carries a rollback dependency, and a removal
+      stage at or after its ``earliest_removal_stage``.
     * A retained path's surfaces must all still resolve.
+
+    The removed branch delegates to :func:`evaluate_removal_plan` rather than
+    asserting its own criteria subset, so a row cannot pass the guard while
+    sessions or leases remain active or a replay/rollback window is still open.
+    Every evidence mapping is fail-closed by omission: a row with no supplied
+    drain or retention evidence is evaluated against empty/open defaults and
+    therefore blocks.
 
     Raises :class:`RetirementGuardError` on violation.
     """
 
     passed_by_path = passed_by_path or {}
+    drained_by_path = drained_by_path or {}
+    retention_by_path = retention_by_path or {}
+    removal_stage_by_path = removal_stage_by_path or {}
     seen: set[str] = set()
     for path in inventory:
         if path.path_id in seen:
             raise RetirementGuardError(f"duplicate retirement row {path.path_id!r}")
         seen.add(path.path_id)
         if path.removed:
-            decision = evaluate_retirement(
-                path, passed_by_path.get(path.path_id, frozenset())
+            stage = removal_stage_by_path.get(
+                path.path_id, path.earliest_removal_stage
             )
-            if not decision.allowed:
+            report = evaluate_removal_plan(
+                RemovalPlan(stage=stage, pathIds=(path.path_id,)),
+                inventory=inventory,
+                drained_by_path=drained_by_path,
+                passed_by_path=passed_by_path,
+                retention_by_path=retention_by_path,
+            )
+            if not report.allowed:
+                blockers = tuple(
+                    blocker
+                    for eligibility in report.blocked
+                    for blocker in eligibility.blockers
+                )
                 raise RetirementGuardError(
-                    f"legacy path {path.path_id!r} is classified removed but has "
-                    f"unmet criteria: {[c.value for c in decision.unmet_criteria]}"
+                    f"legacy path {path.path_id!r} is classified removed but its "
+                    f"removal evidence is incomplete at stage "
+                    f"{stage.name.lower()}: {list(blockers)}"
                 )
             continue
         for ref in path.surfaces:
@@ -1811,6 +1868,31 @@ def assert_obsolete_configuration(
     return tuple(warnings)
 
 
+def enforce_obsolete_configuration_at_startup(
+    log: Any,
+    *,
+    env: Mapping[str, str] | None = None,
+    configuration: tuple[ObsoleteConfiguration, ...] | None = None,
+) -> tuple[str, ...]:
+    """The shared process-startup check for obsolete Omnigent configuration.
+
+    Every process that consumes these settings calls this — the API and each
+    separately restartable Temporal worker — so restarting or deploying one
+    process without the other can neither skip the deprecation warning nor
+    silently accept a variable another process rejects.
+
+    Raises :class:`ObsoleteConfigurationError` on a removed variable; returns the
+    deprecation warnings it logged.
+    """
+
+    warnings = assert_obsolete_configuration(
+        os.environ if env is None else env, configuration=configuration
+    )
+    for warning in warnings:
+        log.warning("Obsolete Omnigent configuration: %s", warning)
+    return warnings
+
+
 def assert_temporary_flags_have_retirement(
     flags: dict[str, str] = TEMPORARY_ROLLOUT_FLAGS,
 ) -> None:
@@ -1857,6 +1939,7 @@ __all__ = [
     "assert_surface_admits_new_work",
     "assert_temporary_flags_have_retirement",
     "criteria_from_native_chat_acceptance",
+    "enforce_obsolete_configuration_at_startup",
     "evaluate_new_admission",
     "evaluate_removal_eligibility",
     "evaluate_removal_plan",
