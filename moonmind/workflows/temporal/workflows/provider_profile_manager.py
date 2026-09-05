@@ -2137,8 +2137,13 @@ class MoonMindProviderProfileManagerWorkflow:
 
             # Reap release tombstones on a deterministic cadence so the lease
             # table stays bounded while the high-water mark outlives them.
-            if workflow.patched(DB_LEASE_PERSISTENCE_PATCH) and (
-                self._event_count % _LEASE_TOMBSTONE_PURGE_EVENT_INTERVAL == 0
+            # Cleanup was introduced with maintenance durability. Older
+            # histories already have DB persistence but go straight to lease
+            # verification here; inserting an activity breaks their replay.
+            if (
+                self._durable_maintenance_queue
+                and workflow.patched(DB_LEASE_PERSISTENCE_PATCH)
+                and self._event_count % _LEASE_TOMBSTONE_PURGE_EVENT_INTERVAL == 0
             ):
                 await self._purge_released_lease_rows()
 
