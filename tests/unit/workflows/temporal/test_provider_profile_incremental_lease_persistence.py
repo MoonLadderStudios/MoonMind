@@ -8,6 +8,11 @@ serialized unrelated profiles behind one another. The incremental path records
 only the granted row. These tests pin both halves of that contract: the
 workflow asks for an incremental write, and the activity honors it without
 touching any other run's row.
+
+The incremental operation itself is the ``grant`` single-row action landed by
+MoonLadderStudios/MoonMind#3883; ``_persist_lease_grant`` is the one funnel
+every grant call site uses to choose between it and the pre-patch snapshot
+rewrite.
 """
 
 from __future__ import annotations
@@ -20,7 +25,7 @@ from unittest.mock import patch
 import pytest
 
 from moonmind.workflows.temporal.workflows.provider_profile_manager import (
-    INCREMENTAL_LEASE_PERSISTENCE_PATCH,
+    PROVIDER_INCREMENTAL_LEASE_PATCH,
     MoonMindProviderProfileManagerWorkflow,
     ProfileSlotState,
 )
@@ -46,35 +51,50 @@ def _profile_with_leases(count: int) -> ProfileSlotState:
     return profile
 
 
-def _workflow(*, incremental: bool) -> MoonMindProviderProfileManagerWorkflow:
+def _workflow() -> MoonMindProviderProfileManagerWorkflow:
     wf = MoonMindProviderProfileManagerWorkflow()
     wf._runtime_id = "opencode"
-    wf._incremental_lease_persistence = incremental
     return wf
+
+
+@contextlib.contextmanager
+def _patched(incremental: bool, activity):
+    """Run with the incremental-lease patch on or off, recording activity calls."""
+
+    with patch(
+        "temporalio.workflow.patched",
+        side_effect=lambda name: (
+            incremental if name == PROVIDER_INCREMENTAL_LEASE_PATCH else False
+        ),
+    ), patch("temporalio.workflow.execute_activity", side_effect=activity):
+        yield
 
 
 @pytest.mark.asyncio
 async def test_a_grant_persists_only_the_granted_row() -> None:
     """At capacity N, a grant must not rewrite the other N-1 leases."""
 
-    wf = _workflow(incremental=True)
+    wf = _workflow()
     profile = _profile_with_leases(8)
     wf._profiles = {profile.profile_id: profile}
     calls: list[dict[str, Any]] = []
 
     async def fake_activity(_name, payload, **_kwargs):
         calls.append(payload)
-        return {"saved": len(payload["leases"])}
+        return {"granted": True, "duplicate": False}
 
-    with patch(
-        "temporalio.workflow.execute_activity", side_effect=fake_activity
-    ):
-        persisted = await wf._persist_lease_grant(profile, "agent-run-3")
+    with _patched(True, fake_activity):
+        persisted = await wf._persist_lease_grant(
+            profile,
+            "agent-run-3",
+            purpose="execution_omnigent",
+            metadata=profile.lease_metadata["agent-run-3"],
+        )
 
     assert persisted is True
     assert len(calls) == 1
-    assert calls[0]["action"] == "upsert"
-    assert [row["workflow_id"] for row in calls[0]["leases"]] == ["agent-run-3"]
+    assert calls[0]["action"] == "grant"
+    assert [row["lease_id"] for row in calls[0]["leases"]] == ["agent-run-3"]
     assert calls[0]["runtime_id"] == "opencode"
 
 
@@ -82,34 +102,38 @@ async def test_a_grant_persists_only_the_granted_row() -> None:
 async def test_the_persisted_row_carries_its_full_lease_authority() -> None:
     """An incremental row must be recoverable on its own, like a snapshot row."""
 
-    wf = _workflow(incremental=True)
+    wf = _workflow()
     profile = _profile_with_leases(2)
     wf._profiles = {profile.profile_id: profile}
     calls: list[dict[str, Any]] = []
 
     async def fake_activity(_name, payload, **_kwargs):
         calls.append(payload)
-        return {"saved": 1}
+        return {"granted": True, "duplicate": False}
 
-    with patch(
-        "temporalio.workflow.execute_activity", side_effect=fake_activity
-    ):
-        await wf._persist_lease_grant(profile, "agent-run-1")
+    with _patched(True, fake_activity):
+        await wf._persist_lease_grant(
+            profile,
+            "agent-run-1",
+            purpose="execution_omnigent",
+            metadata=profile.lease_metadata["agent-run-1"],
+        )
 
     row = calls[0]["leases"][0]
     assert row["profile_id"] == "opencode-zen-free"
-    assert row["profileId"] == "opencode-zen-free"
-    assert row["runtimeId"] == "opencode"
-    assert row["granted_at"] == NOW.isoformat()
+    assert row["lease_id"] == "agent-run-1"
+    assert row["workflow_id"] == "agent-run-1"
+    assert row["owner_id"] == "agent-run-1"
     assert row["purpose"] == "execution_omnigent"
-    assert row["leaseId"] == "agent-run-1"
+    assert row["lease_state"] == "held"
+    assert row["capacity_scope_ref"] == "provider-profile:opencode-zen-free"
 
 
 @pytest.mark.asyncio
 async def test_a_pre_patch_history_still_rewrites_the_snapshot() -> None:
     """Replay safety: a history recorded before the patch keeps its command."""
 
-    wf = _workflow(incremental=False)
+    wf = _workflow()
     profile = _profile_with_leases(3)
     wf._profiles = {profile.profile_id: profile}
     calls: list[dict[str, Any]] = []
@@ -118,9 +142,7 @@ async def test_a_pre_patch_history_still_rewrites_the_snapshot() -> None:
         calls.append(payload)
         return {"saved": len(payload["leases"])}
 
-    with patch(
-        "temporalio.workflow.execute_activity", side_effect=fake_activity
-    ):
+    with _patched(False, fake_activity):
         await wf._persist_lease_grant(profile, "agent-run-1")
 
     assert calls[0]["action"] == "save"
@@ -131,23 +153,21 @@ async def test_a_pre_patch_history_still_rewrites_the_snapshot() -> None:
 async def test_a_failed_incremental_write_reports_failure_not_success() -> None:
     """Provider capacity must stay blocked when its grant is not durable."""
 
-    wf = _workflow(incremental=True)
+    wf = _workflow()
     profile = _profile_with_leases(1)
     wf._profiles = {profile.profile_id: profile}
 
     async def fake_activity(_name, _payload, **_kwargs):
         raise RuntimeError("artifacts worker unavailable")
 
-    with patch(
-        "temporalio.workflow.execute_activity", side_effect=fake_activity
-    ):
+    with _patched(True, fake_activity):
         persisted = await wf._persist_lease_grant(profile, "agent-run-0")
 
     assert persisted is False
 
 
 def test_the_incremental_patch_id_is_versioned() -> None:
-    assert INCREMENTAL_LEASE_PERSISTENCE_PATCH.endswith("-v1")
+    assert PROVIDER_INCREMENTAL_LEASE_PATCH.endswith("-v1")
 
 
 # ---------------------------------------------------------------------------
@@ -170,6 +190,9 @@ class _Recorder:
 
             def all(self_inner):
                 return []
+
+            def first(self_inner):
+                return None
 
         return _Result()
 
@@ -216,17 +239,22 @@ async def _run_action(action: str, leases: list[dict[str, Any]]) -> _Recorder:
 
 
 @pytest.mark.asyncio
-async def test_upsert_deletes_only_the_named_rows() -> None:
+async def test_grant_deletes_nothing_and_writes_one_row() -> None:
     """A grant must not delete the rows of runs that are still executing."""
 
     recorder = await _run_action(
-        "upsert",
-        [{"workflow_id": "agent-run-3", "profile_id": "opencode-zen-free"}],
+        "grant",
+        [
+            {
+                "lease_id": "agent-run-3",
+                "workflow_id": "agent-run-3",
+                "profile_id": "opencode-zen-free",
+                "owner_id": "agent-run-3",
+            }
+        ],
     )
 
-    deletes = _delete_targets(recorder)
-    assert len(deletes) == 1
-    assert "workflow_id IN" in deletes[0]
+    assert _delete_targets(recorder) == []
     assert len(recorder.added) == 1
 
 
@@ -246,10 +274,10 @@ async def test_save_still_replaces_the_whole_runtime_snapshot() -> None:
 
 
 @pytest.mark.asyncio
-async def test_an_empty_upsert_deletes_nothing() -> None:
-    """An empty write must be a no-op, never a runtime-wide delete."""
+async def test_a_grant_without_a_lease_id_is_rejected() -> None:
+    """An unidentified grant must never be written as a row."""
 
-    recorder = await _run_action("upsert", [])
+    recorder = await _run_action("grant", [{"profile_id": "opencode-zen-free"}])
 
     assert _delete_targets(recorder) == []
     assert recorder.added == []

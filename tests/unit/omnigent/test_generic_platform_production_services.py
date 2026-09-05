@@ -64,7 +64,7 @@ from moonmind.omnigent.host_services.github_credentials import (
     OmnigentGithubCredentialService,
     github_repository_from_request,
 )
-from moonmind.omnigent.host_ports import HostLaunchSpec
+from moonmind.omnigent.host_ports import HostLaunchSpec, expected_omnigent_host_id
 from moonmind.omnigent.host_services.launcher import DockerOmnigentHostLauncher
 from moonmind.omnigent.host_services.mounted_tools import (
     OmnigentMountedToolService,
@@ -990,6 +990,15 @@ async def test_github_credential_projection_transports_secret_only_on_stdin(
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
+    "expected_host_id",
+    [
+        None,
+        expected_omnigent_host_id("host-lease:one", 1),
+        "d4ad2354-2db9-5413-9d35-92eff5f026bb",
+    ],
+    ids=["legacy-spec", "canonical-spec", "persisted-dashed-spec"],
+)
+@pytest.mark.parametrize(
     ("host_api_token", "expected_secret_payloads"),
     [
         (
@@ -1002,6 +1011,7 @@ async def test_github_credential_projection_transports_secret_only_on_stdin(
 async def test_host_volume_initializers_use_setup_authority(
     host_api_token: str,
     expected_secret_payloads: list[bytes],
+    expected_host_id: str | None,
 ) -> None:
     calls: list[tuple[list[str], dict[str, object]]] = []
 
@@ -1048,6 +1058,7 @@ async def test_host_volume_initializers_use_setup_authority(
                 "runtimeBindingId": "binding-1",
                 "hostLeaseRef": owner_ref,
                 "hostLeaseGeneration": 1,
+                "expectedOmnigentHostId": expected_host_id,
                 "hostClassRef": host_class.ref,
                 "imageRef": host_class.imageRef,
                 "serverEndpointRef": "default",
@@ -1103,6 +1114,11 @@ async def test_host_volume_initializers_use_setup_authority(
         assert argv[argv.index("--user") + 1] == "0:0"
     workload_create = next(argv for argv, _kwargs in calls if argv[:2] == ["docker", "create"])
     assert workload_create[workload_create.index("--user") + 1] == "1000:1000"
+    from uuid import NAMESPACE_URL, uuid5
+
+    launched_id = expected_host_id or str(uuid5(NAMESPACE_URL, owner_ref))
+    assert f"OMNIGENT_HOST_ID={launched_id}" in workload_create
+    assert "OMNIGENT_HOST_NAME=mm-host-test" in workload_create
     assert "scoped-fanout-token" not in json.dumps(
         [argv for argv, _kwargs in calls]
     )
@@ -2258,7 +2274,8 @@ async def test_generic_realizer_records_host_log_publication_failure() -> None:
 
 
 @pytest.mark.asyncio
-async def test_generic_realizer_publishes_host_logs_from_failed_host_realization() -> (
+@pytest.mark.parametrize("cleanup_fails", [False, True])
+async def test_generic_realizer_publishes_host_logs_from_failed_host_realization(cleanup_fails) -> (
     None
 ):
     """Logs captured when the runtime removes an unattested host are still published.
@@ -2313,6 +2330,8 @@ async def test_generic_realizer_publishes_host_logs_from_failed_host_realization
 
     async def cleanup_without_container(**_kwargs):
         harness.events.append("host-cleaned")
+        if cleanup_fails:
+            raise RuntimeError("proxy unavailable after host removal")
         return {"containerRemoved": True}
 
     realizer._host_runtime.realize = realize_fails
@@ -2329,6 +2348,9 @@ async def test_generic_realizer_publishes_host_logs_from_failed_host_realization
     assert artifacts.text_writes[0]["payload"].startswith(
         "runner: registration timed out"
     )
+    if cleanup_fails:
+        assert not any(write["name"] == "generic-host-cleanup.json" for write in artifacts.json_writes)
+        return
     host_results = next(
         write["payload"]
         for write in artifacts.json_writes
@@ -2340,7 +2362,8 @@ async def test_generic_realizer_publishes_host_logs_from_failed_host_realization
 
 
 @pytest.mark.asyncio
-async def test_generic_host_runtime_carries_cleanup_evidence_on_failed_realization() -> (
+@pytest.mark.parametrize("cleanup_fails", [False, True])
+async def test_generic_host_runtime_carries_cleanup_evidence_on_failed_realization(cleanup_fails) -> (
     None
 ):
     """The runtime's own failure cleanup keeps the host log tail on the failure."""
@@ -2384,6 +2407,8 @@ async def test_generic_host_runtime_carries_cleanup_evidence_on_failed_realizati
     class Cleanup:
         async def cleanup(self, **kwargs):
             cleanup_calls.append(dict(kwargs))
+            if cleanup_fails:
+                raise RuntimeError("cleanup unavailable")
             return {
                 "containerRemoved": True,
                 "hostLogs": "runner: registration never completed\n",
@@ -2467,6 +2492,9 @@ async def test_generic_host_runtime_carries_cleanup_evidence_on_failed_realizati
         )
 
     assert [call["container_name"] for call in cleanup_calls] == ["mm-host-realize-1"]
+    if cleanup_fails:
+        assert excinfo.value.host_cleanup_error == "RuntimeError"
+        return
     evidence = excinfo.value.host_cleanup_evidence
     assert evidence["containerRemoved"] is True
     assert evidence["hostLogs"].startswith("runner: registration never completed")

@@ -207,6 +207,18 @@ def _assert_exact_omnigent_build(
         )
 
 
+def _declared_access_is_writable(access_mode: Any) -> bool:
+    """Return whether a declared attachment accessMode requires a writable mount.
+
+    OAuth homes declare ``read-write`` (hyphen) while the generic credential
+    helper emits ``read_write`` (underscore); both mean the Docker mount must
+    be RW so vendor token refresh persists. All other credential attachments
+    are read-only.
+    """
+
+    return str(access_mode or "").strip().replace("_", "-").lower() == "read-write"
+
+
 def _attest_workspace_mount(
     mounts: list[dict[str, Any]], attachment: dict[str, Any]
 ) -> dict[str, Any]:
@@ -220,7 +232,7 @@ def _attest_workspace_mount(
         ),
         None,
     )
-    expected_writable = attachment.get("accessMode") == "read-write"
+    expected_writable = _declared_access_is_writable(attachment.get("accessMode"))
     if matched is None or bool(matched.get("RW")) != expected_writable:
         raise HarnessPlatformError(
             "workspace projection does not match the selected mutation policy",
@@ -703,9 +715,22 @@ class DockerOmnigentHostAttestor:
                     ),
                     None,
                 )
-                if matched is None or bool(matched.get("RW")):
+                # OAuth homes declare read-write so vendor token refresh persists;
+                # all other credential attachments are read-only. Compare the
+                # observed Docker RW flag against the declared accessMode instead
+                # of unconditionally rejecting writable mounts.
+                expected_writable = _declared_access_is_writable(
+                    attachment.get("accessMode")
+                )
+                if matched is None:
                     raise HarnessPlatformError(
-                        "credential volume mount is missing or writable",
+                        "credential volume mount is missing",
+                        code=HarnessPlatformFailure.OMNIGENT_CREDENTIAL_MATERIALIZATION_FAILED,
+                    )
+                if bool(matched.get("RW")) != expected_writable:
+                    raise HarnessPlatformError(
+                        "credential volume mount mode does not match "
+                        "the declared accessMode",
                         code=HarnessPlatformFailure.OMNIGENT_CREDENTIAL_MATERIALIZATION_FAILED,
                     )
                 generation = int(handle["credentialGeneration"])
@@ -746,13 +771,53 @@ class DockerOmnigentHostAttestor:
                     {
                         "credentialRuntimeRef": handle["credentialRuntimeRef"],
                         "targetPath": target,
-                        "accessMode": "read-only",
+                        "accessMode": "read-write"
+                        if expected_writable
+                        else "read-only",
                         "owner": "1000:1000",
                         "directoryMode": "0700",
                         "fileMode": "0600",
                         "generation": generation,
                     }
                 )
+        # Execute the declared OAuth login-status preflight inside the exact
+        # runner environment before advancing host authority. Volume presence
+        # and generation only prove enrollment; an expired or revoked token
+        # since validation would otherwise surface only on the first provider
+        # call. Vendor CLI output may carry credential context, so failures
+        # carry only the typed error, never raw output.
+        has_writable_oauth_mount = any(
+            _declared_access_is_writable(attachment.get("accessMode"))
+            for handle in credential_handles
+            for attachment in handle.get("attachments", [])
+        )
+        if has_writable_oauth_mount:
+            harness_id = ""
+            try:
+                harness_id = str(plan.payload.harnessId or "")
+            except Exception:
+                harness_id = ""
+            login_command: tuple[str, ...] | None = None
+            if harness_id == "codex-native":
+                login_command = ("codex", "login", "status")
+            elif harness_id == "claude-native":
+                login_command = ("claude", "auth", "status")
+            if login_command is not None:
+                login_code, _login_out, _login_err = await self._backend.run(
+                    [
+                        "docker",
+                        "exec",
+                        launch_result["containerName"],
+                        *login_command,
+                    ],
+                    failure_code=HarnessPlatformFailure.OMNIGENT_CREDENTIAL_MATERIALIZATION_FAILED,
+                    check=False,
+                )
+                if login_code != 0:
+                    raise HarnessPlatformError(
+                        "OAuth credential login status failed on the exact host",
+                        code=HarnessPlatformFailure.OMNIGENT_CREDENTIAL_MATERIALIZATION_FAILED,
+                    )
         host_id = registration["omnigentHostId"]
         try:
 

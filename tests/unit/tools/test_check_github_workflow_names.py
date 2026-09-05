@@ -31,6 +31,7 @@ def test_current_workflows_have_stable_names() -> None:
         "alembic-migration-gate.yml": "CI / Alembic Migration Gate",
         "codex-conformance-canary.yml": "Provider / Codex Conformance Canary",
         "docker-publish.yml": "Release / Build App Image",
+        "docker-publish-moonmind-host.yml": "Release / Build omnigent-host-moonmind Image",
         "docker-publish-opencode-host.yml": "Release / Build omnigent-host-opencode Image",
         "omnigent-live-conformance.yml": "Provider / Omnigent Live Conformance",
         "omnigent-embedded-acceptance.yml": "Provider / Omnigent Embedded Acceptance",

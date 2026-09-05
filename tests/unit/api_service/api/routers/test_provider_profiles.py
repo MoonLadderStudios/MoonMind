@@ -907,8 +907,10 @@ class _TrackedProfile:
         command_behavior: dict | None = None,
         provider_id: str = "unknown",
         clear_env_keys: list[str] | None = None,
+        default_selected_by_operator: bool = False,
     ) -> None:
         self.profile_id = profile_id
+        self.default_selected_by_operator = default_selected_by_operator
         self.runtime_id = runtime_id
         self.provider_id = provider_id
         self.enabled = enabled
@@ -5212,3 +5214,86 @@ async def test_3821_startup_reconciliation_normalizes_and_flags(
     assert "CUSTOM_LEGACY_KEY" in preserved.clear_env_keys
     assert repair is not None
     assert repair.clear_env_keys == ["OPENAI_API_KEY"]
+
+
+@pytest.mark.asyncio
+async def test_settings_toggle_disable_records_operator_intent(
+    client_app: AsyncClient, _module_db
+) -> None:
+    """A Settings disable must be distinguishable from automatic disablement.
+
+    The toggle sends only ``{"enabled": false}``. Startup seeding and deployment
+    credential enrollment read ``disabled_reason`` to decide whether they may
+    re-enable a profile or move runtime-default authority, so an operator
+    disable that persisted no reason would be silently reversed on restart.
+    """
+
+    _override_current_user()
+    profile_id = "mm3877-settings-toggle-disable"
+    async with db_base.async_session_maker() as session:
+        session.add(
+            ManagedAgentProviderProfile(
+                profile_id=profile_id,
+                runtime_id="opencode",
+                provider_id="opencode",
+                credential_source=ProviderCredentialSource.NONE,
+                runtime_materialization_mode=RuntimeMaterializationMode.COMPOSITE,
+                enabled=True,
+                auth_state=ProviderProfileAuthState.CONNECTED,
+                disabled_reason=None,
+            )
+        )
+        await session.commit()
+
+    async with client_app as client:
+        response = await client.patch(
+            f"/api/v1/provider-profiles/{profile_id}",
+            json={"enabled": False},
+        )
+
+    assert response.status_code == 200
+    assert response.json()["enabled"] is False
+    async with db_base.async_session_maker() as session:
+        stored = await session.get(ManagedAgentProviderProfile, profile_id)
+        assert stored is not None
+        assert stored.enabled is False
+        assert stored.disabled_reason == ProviderProfileDisabledReason.USER_DISABLED
+
+
+@pytest.mark.asyncio
+async def test_explicit_disabled_reason_wins_over_the_operator_disable_marker(
+    client_app: AsyncClient, _module_db
+) -> None:
+    """An explicitly supplied reason stays authoritative."""
+
+    _override_current_user()
+    profile_id = "mm3877-explicit-disabled-reason"
+    async with db_base.async_session_maker() as session:
+        session.add(
+            ManagedAgentProviderProfile(
+                profile_id=profile_id,
+                runtime_id="opencode",
+                provider_id="opencode",
+                credential_source=ProviderCredentialSource.NONE,
+                runtime_materialization_mode=RuntimeMaterializationMode.COMPOSITE,
+                enabled=True,
+                auth_state=ProviderProfileAuthState.CONNECTED,
+                disabled_reason=None,
+            )
+        )
+        await session.commit()
+
+    async with client_app as client:
+        response = await client.patch(
+            f"/api/v1/provider-profiles/{profile_id}",
+            json={"enabled": False, "disabled_reason": "missing_credentials"},
+        )
+
+    assert response.status_code == 200
+    async with db_base.async_session_maker() as session:
+        stored = await session.get(ManagedAgentProviderProfile, profile_id)
+        assert stored is not None
+        assert (
+            stored.disabled_reason
+            == ProviderProfileDisabledReason.MISSING_CREDENTIALS
+        )

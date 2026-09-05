@@ -94,11 +94,10 @@ ACTIVITY_OWNED_LEASE_VERIFICATION_PATCH = (
 PURPOSE_AWARE_CAPACITY_LEDGER_PATCH = (
     "provider-profile-manager-purpose-aware-capacity-ledger-v1"
 )
+PROVIDER_CAPACITY_SCOPE_PATCH = "provider-profile-manager-capacity-scope-v1"
 # Incremental durable lease operations replace the runtime-wide snapshot
 # rewrite that every grant previously performed.
-INCREMENTAL_LEASE_PERSISTENCE_PATCH = (
-    "provider-profile-manager-incremental-lease-persistence-v1"
-)
+PROVIDER_INCREMENTAL_LEASE_PATCH = "provider-profile-manager-incremental-lease-v1"
 
 # Deterministic sort sentinel for pending requests whose scheduled queue order
 # cannot be resolved (missing scheduled_for / created_at). ISO-8601 strings sort
@@ -323,7 +322,8 @@ class ProfileSlotState:
     default_model_tier: int = 1
     over_capacity_legacy_snapshot: bool = False
     authoritative_policy_confirmed: bool = False
-    capacity_scope_ref: Optional[str] = None
+    capacity_scope_ref: str = ""
+    effective_limit: int = 0
     # MoonLadderStudios/MoonMind#3878 ledger fields. ``purpose_aware_capacity``
     # keeps histories recorded before the patch on their original accounting.
     purpose_aware_capacity: bool = False
@@ -629,6 +629,7 @@ class ProfileSlotState:
             "execution_lease_count": self.execution_lease_count,
             "adaptive_capacity_limit": self.adaptive_capacity_limit,
             "exclusive_maintenance_waiters": self.exclusive_maintenance_waiters,
+            "effective_limit": self.effective_limit,
         }
 
     @property
@@ -636,6 +637,40 @@ class ProfileSlotState:
         if self.input_per_million_usd is None or self.output_per_million_usd is None:
             return None
         return self.input_per_million_usd + self.output_per_million_usd
+
+
+@dataclass
+class CapacityScopeState:
+    """In-workflow tracking of one shared provider-capacity aggregate."""
+
+    scope_ref: str
+    runtime_id: str = ""
+    provider_class: str = "unknown"
+    generation: int = 1
+    configured_limit: int = 1
+    effective_limit: int = 1
+    cooldown_until: Optional[str] = None
+    backpressure_state: str = "healthy"
+    recovery_policy_ref: str = "additive-increase-multiplicative-decrease@1"
+    healthy_since: Optional[str] = None
+    last_decrease_at: Optional[str] = None
+    last_increase_at: Optional[str] = None
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "scope_ref": self.scope_ref,
+            "runtime_id": self.runtime_id,
+            "provider_class": self.provider_class,
+            "generation": self.generation,
+            "configured_limit": self.configured_limit,
+            "effective_limit": self.effective_limit,
+            "cooldown_until": self.cooldown_until,
+            "backpressure_state": self.backpressure_state,
+            "recovery_policy_ref": self.recovery_policy_ref,
+            "healthy_since": self.healthy_since,
+            "last_decrease_at": self.last_decrease_at,
+            "last_increase_at": self.last_increase_at,
+        }
 
 
 @dataclass
@@ -713,6 +748,10 @@ class MoonMindProviderProfileManagerWorkflow:
     def __init__(self) -> None:
         self._runtime_id: Optional[str] = None
         self._profiles: dict[str, ProfileSlotState] = {}
+        self._scopes: dict[str, CapacityScopeState] = {}
+        self._seen_rate_limit_reports: list[str] = []
+        self._lease_profile_index: dict[str, str] = {}
+        self._owner_lease_index: dict[str, str] = {}
         self._pending_requests: list[PendingRequest] = []
         self._pending_requests_ordered: bool = False
         self._handoff_reservations: dict[str, HandoffReservation] = {}
@@ -723,7 +762,6 @@ class MoonMindProviderProfileManagerWorkflow:
         self._has_db_profile_snapshot: bool = False
         self._purpose_aware_leases: bool = False
         self._purpose_aware_capacity_ledger: bool = False
-        self._incremental_lease_persistence: bool = False
         # Cache of resolved scheduled/created ordering keyed by queue-order
         # workflow id. Workflow creation/scheduled times are immutable, so a
         # resolved entry never has to be re-queried; this keeps the
@@ -826,6 +864,8 @@ class MoonMindProviderProfileManagerWorkflow:
         released = False
         if profile:
             released = profile.release(requester_id)
+            if released:
+                self._unindex_lease(requester_id)
         if workflow.patched(SLOT_HANDOFF_RESERVATION_PATCH):
             self._pending_requests = [
                 req
@@ -857,7 +897,9 @@ class MoonMindProviderProfileManagerWorkflow:
         self._has_new_events = True
         profile_id = payload["profile_id"]
         profile = self._profiles.get(profile_id)
-        if profile:
+        if not profile:
+            return
+        if not workflow.patched(PROVIDER_CAPACITY_SCOPE_PATCH):
             cooldown_seconds = payload.get(
                 "cooldown_seconds",
                 profile.cooldown_after_429_seconds,
@@ -879,6 +921,39 @@ class MoonMindProviderProfileManagerWorkflow:
                     return
             cooldown_until = now + timedelta(seconds=cooldown_seconds)
             profile.cooldown_until = cooldown_until.isoformat()
+            return
+        now = workflow.now()
+        failure_class = str(payload.get("failure_class") or "rate_limit").strip()
+        if failure_class not in {"rate_limit", "429", "provider_rate_limit"}:
+            # Profile-specific credential errors must not reduce a shared scope.
+            cooldown_seconds = payload.get(
+                "cooldown_seconds", profile.cooldown_after_429_seconds
+            )
+            profile.cooldown_until = (now + timedelta(seconds=cooldown_seconds)).isoformat()
+            return
+        retry_after = payload.get("retry_after_seconds")
+        try:
+            retry_after_seconds = int(retry_after) if retry_after is not None else None
+        except (TypeError, ValueError):
+            retry_after_seconds = None
+        if retry_after_seconds is None:
+            retry_after_seconds = int(
+                payload.get("cooldown_seconds", profile.cooldown_after_429_seconds)
+            )
+        scope_ref = (
+            str(payload.get("capacity_scope_ref") or "").strip()
+            or profile.capacity_scope_ref
+            or f"provider-profile:{profile_id}"
+        )
+        report_id = payload.get("report_id") or payload.get("idempotency_key")
+        self._apply_scope_rate_limit(
+            scope_ref=scope_ref,
+            retry_after_seconds=retry_after_seconds,
+            report_id=str(report_id) if report_id else None,
+            now=now,
+        )
+        profile.effective_limit = max(1, profile.effective_limit // 2) if profile.effective_limit else max(1, profile.max_parallel_runs // 2)
+        profile.cooldown_until = (now + timedelta(seconds=max(1, min(3600, int(retry_after_seconds))))).isoformat()
 
     @workflow.signal
     def sync_profiles(self, payload: dict[str, Any]) -> None:
@@ -976,15 +1051,20 @@ class MoonMindProviderProfileManagerWorkflow:
                 purpose=purpose,
                 metadata=lease_metadata,
             ):
+                self._index_lease(profile.profile_id, requester_id, requester_id)
                 if workflow.patched(DB_LEASE_PERSISTENCE_PATCH):
                     persisted = await self._persist_lease_grant(
-                        profile, requester_id
+                        profile,
+                        requester_id,
+                        purpose=purpose,
+                        metadata=lease_metadata,
                     )
                     if (
                         workflow.patched(DURABLE_LEASE_GRANT_PATCH)
                         and not persisted
                     ):
                         profile.release(requester_id)
+                        self._unindex_lease(requester_id)
                         raise exceptions.ApplicationError(
                             "Provider profile lease persistence failed before direct grant",
                             type="ProviderProfileLeasePersistenceFailed",
@@ -1108,6 +1188,8 @@ class MoonMindProviderProfileManagerWorkflow:
                 enabled=False,
                 launch_ready=False,
                 purpose_aware_capacity=self._purpose_aware_capacity_ledger,
+                capacity_scope_ref=f"provider-profile:{profile_id}",
+                effective_limit=1,
             )
             self._profiles[profile_id] = profile
         mode = self._credential_lease_mode(profile, purpose)
@@ -1176,10 +1258,17 @@ class MoonMindProviderProfileManagerWorkflow:
                 "already_held": True,
                 "lease_mode": CredentialLeaseMode.SINGLE_FLIGHT_VALIDATION.value,
             }
+        self._index_lease(profile.profile_id, requester_id, requester_id)
         if workflow.patched(DB_LEASE_PERSISTENCE_PATCH):
-            persisted = await self._persist_lease_grant(profile, requester_id)
+            persisted = await self._persist_lease_grant(
+                profile,
+                requester_id,
+                purpose=purpose,
+                metadata=self._safe_lease_metadata(payload),
+            )
             if workflow.patched(DURABLE_LEASE_GRANT_PATCH) and not persisted:
                 profile.release(requester_id)
+                self._unindex_lease(requester_id)
                 raise exceptions.ApplicationError(
                     "Provider profile lease persistence failed before validation grant",
                     type="ProviderProfileLeasePersistenceFailed",
@@ -1208,24 +1297,39 @@ class MoonMindProviderProfileManagerWorkflow:
             self._has_new_events = True
         try:
             while not self._shutdown_requested:
-                if not profile.credential_consumer_leases and profile.reserve(
-                    requester_id,
-                    workflow.now(),
-                    purpose=purpose,
-                    metadata=self._safe_lease_metadata(payload),
-                    allow_unready=True,
+                try:
+                    scope_gate = workflow.patched(PROVIDER_CAPACITY_SCOPE_PATCH)
+                except Exception:
+                    scope_gate = False
+                scope_blocked = scope_gate and not self._profile_scope_available(
+                    profile
+                )
+                if not scope_blocked and (
+                    not profile.credential_consumer_leases
+                    and profile.reserve(
+                        requester_id,
+                        workflow.now(),
+                        purpose=purpose,
+                        metadata=self._safe_lease_metadata(payload),
+                        allow_unready=True,
+                    )
                 ):
+                    self._index_lease(
+                        profile.profile_id, requester_id, requester_id
+                    )
                     if workflow.patched(DB_LEASE_PERSISTENCE_PATCH):
-                        persisted = (
-                            await self._persist_lease_grant(profile, requester_id)
-                            if workflow.patched(INCREMENTAL_LEASE_PERSISTENCE_PATCH)
-                            else await self._sync_leases_to_db()
+                        persisted = await self._persist_lease_grant(
+                            profile,
+                            requester_id,
+                            purpose=purpose,
+                            metadata=self._safe_lease_metadata(payload),
                         )
                         if (
                             workflow.patched(DURABLE_LEASE_GRANT_PATCH)
                             and not persisted
                         ):
                             profile.release(requester_id)
+                            self._unindex_lease(requester_id)
                             raise exceptions.ApplicationError(
                                 "Provider profile lease persistence failed before maintenance grant",
                                 type="ProviderProfileLeasePersistenceFailed",
@@ -1334,9 +1438,6 @@ class MoonMindProviderProfileManagerWorkflow:
         )
         self._purpose_aware_capacity_ledger = workflow.patched(
             PURPOSE_AWARE_CAPACITY_LEDGER_PATCH
-        )
-        self._incremental_lease_persistence = workflow.patched(
-            INCREMENTAL_LEASE_PERSISTENCE_PATCH
         )
         self._restore_state(
             input_payload,
@@ -1536,14 +1637,22 @@ class MoonMindProviderProfileManagerWorkflow:
                 runtime_id=self._runtime_id,
                 infer_legacy_source=repair_legacy_codex_oauth,
             )
+            restored_max = _validated_profile_capacity(
+                p,
+                runtime_id=self._runtime_id,
+                repair_legacy=repair_legacy_codex_oauth,
+                apply_claude_exclusive_capacity=apply_claude_exclusive_capacity,
+            )
+            restored_effective = p.get("effective_limit")
+            try:
+                restored_effective = int(restored_effective)
+            except (TypeError, ValueError):
+                restored_effective = 0
+            if restored_effective <= 0:
+                restored_effective = restored_max
             state = ProfileSlotState(
                 profile_id=pid,
-                max_parallel_runs=_validated_profile_capacity(
-                    p,
-                    runtime_id=self._runtime_id,
-                    repair_legacy=repair_legacy_codex_oauth,
-                    apply_claude_exclusive_capacity=apply_claude_exclusive_capacity,
-                ),
+                max_parallel_runs=restored_max,
                 cooldown_after_429_seconds=p.get("cooldown_after_429_seconds", 900),
                 rate_limit_policy=p.get("rate_limit_policy", "backoff"),
                 enabled=p.get("enabled", True),
@@ -1570,9 +1679,11 @@ class MoonMindProviderProfileManagerWorkflow:
                     is_legacy_codex_oauth and original_capacity != 1
                 )
                 or bool(p.get("over_capacity_legacy_snapshot", False)),
-                capacity_scope_ref=self._normalize_optional_string(
-                    p.get("capacity_scope_ref")
+                capacity_scope_ref=(
+                    str(p.get("capacity_scope_ref") or "").strip()
+                    or f"provider-profile:{pid}"
                 ),
+                effective_limit=restored_effective,
                 purpose_aware_capacity=self._purpose_aware_capacity_ledger,
                 adaptive_capacity_limit=self._normalize_capacity_limit(
                     p.get("adaptive_capacity_limit")
@@ -1582,6 +1693,56 @@ class MoonMindProviderProfileManagerWorkflow:
                 ),
             )
             self._profiles[pid] = state
+
+        seen = input_payload.get("seen_rate_limit_reports", [])
+        self._seen_rate_limit_reports = (
+            [str(value) for value in seen[-500:] if str(value)]
+            if isinstance(seen, list)
+            else []
+        )
+        scopes_data = input_payload.get("scopes", [])
+        if isinstance(scopes_data, list) and scopes_data:
+            for entry in scopes_data:
+                if not isinstance(entry, dict):
+                    continue
+                scope_ref = str(entry.get("scope_ref") or "").strip()
+                if not scope_ref:
+                    continue
+                try:
+                    configured = int(entry.get("configured_limit") or 0)
+                    effective = int(entry.get("effective_limit") or 0)
+                except (TypeError, ValueError):
+                    continue
+                if configured <= 0:
+                    continue
+                self._scopes[scope_ref] = CapacityScopeState(
+                    scope_ref=scope_ref,
+                    runtime_id=str(entry.get("runtime_id") or ""),
+                    provider_class=str(entry.get("provider_class") or "unknown"),
+                    generation=int(entry.get("generation") or 1),
+                    configured_limit=configured,
+                    effective_limit=effective if effective > 0 else configured,
+                    cooldown_until=entry.get("cooldown_until"),
+                    backpressure_state=str(entry.get("backpressure_state") or "healthy"),
+                    recovery_policy_ref=str(
+                        entry.get("recovery_policy_ref")
+                        or "additive-increase-multiplicative-decrease@1"
+                    ),
+                    healthy_since=entry.get("healthy_since"),
+                    last_decrease_at=entry.get("last_decrease_at"),
+                    last_increase_at=entry.get("last_increase_at"),
+                )
+        else:
+            for profile in self._profiles.values():
+                scope_ref = profile.capacity_scope_ref or f"provider-profile:{profile.profile_id}"
+                scope = self._scopes.get(scope_ref)
+                if scope is None:
+                    self._scopes[scope_ref] = CapacityScopeState(
+                        scope_ref=scope_ref,
+                        configured_limit=profile.max_parallel_runs,
+                        effective_limit=profile.effective_limit or profile.max_parallel_runs,
+                    )
+        self._rebuild_lease_indexes()
 
     def _apply_profile_sync(
         self,
@@ -1631,13 +1792,28 @@ class MoonMindProviderProfileManagerWorkflow:
                 existing.default_model_tier = p.get(
                     "default_model_tier", existing.default_model_tier
                 )
-                existing.capacity_scope_ref = (
-                    self._normalize_optional_string(p.get("capacity_scope_ref"))
-                    or existing.capacity_scope_ref
-                )
+                new_scope = str(p.get("capacity_scope_ref") or "").strip()
+                if new_scope:
+                    existing.capacity_scope_ref = new_scope
+                elif not existing.capacity_scope_ref:
+                    existing.capacity_scope_ref = f"provider-profile:{pid}"
                 existing.purpose_aware_capacity = (
                     self._purpose_aware_capacity_ledger
                 )
+                if not existing.effective_limit:
+                    existing.effective_limit = existing.max_parallel_runs
+                existing.effective_limit = min(
+                    existing.effective_limit, existing.max_parallel_runs
+                )
+                try:
+                    scoped_sync = workflow.patched(PROVIDER_CAPACITY_SCOPE_PATCH)
+                except Exception:
+                    scoped_sync = False
+                if scoped_sync:
+                    self._ensure_scope(
+                        existing.capacity_scope_ref or f"provider-profile:{pid}",
+                        runtime_id=self._runtime_id or "",
+                    )
                 self._apply_profile_pricing(existing, p)
                 if authoritative:
                     existing.authoritative_policy_confirmed = True
@@ -1646,12 +1822,13 @@ class MoonMindProviderProfileManagerWorkflow:
                     )
             else:
                 pricing = pricing_from_profile_metadata(p)
+                synced_max = _validated_profile_capacity(
+                    p,
+                    runtime_id=self._runtime_id,
+                )
                 self._profiles[pid] = ProfileSlotState(
                     profile_id=pid,
-                    max_parallel_runs=_validated_profile_capacity(
-                        p,
-                        runtime_id=self._runtime_id,
-                    ),
+                    max_parallel_runs=synced_max,
                     cooldown_after_429_seconds=p.get("cooldown_after_429_seconds", 900),
                     rate_limit_policy=p.get("rate_limit_policy", "backoff"),
                     enabled=p.get("enabled", True),
@@ -1675,9 +1852,11 @@ class MoonMindProviderProfileManagerWorkflow:
                     model_tiers=p.get("model_tiers") or [],
                     default_model_tier=p.get("default_model_tier", 1),
                     authoritative_policy_confirmed=authoritative,
-                    capacity_scope_ref=self._normalize_optional_string(
-                        p.get("capacity_scope_ref")
+                    capacity_scope_ref=(
+                        str(p.get("capacity_scope_ref") or "").strip()
+                        or f"provider-profile:{pid}"
                     ),
+                    effective_limit=synced_max,
                     purpose_aware_capacity=self._purpose_aware_capacity_ledger,
                 )
 
@@ -1686,6 +1865,46 @@ class MoonMindProviderProfileManagerWorkflow:
             if pid not in seen:
                 self._profiles[pid].enabled = False
                 self._profiles[pid].is_default = False
+
+    def _apply_scope_sync(self, scopes_data: list[dict[str, Any]]) -> None:
+        """Merge authoritative scope configured limits without wiping adaptation.
+
+        Effective limits adapt in-workflow via AIMD; a DB reload updates the
+        configured ceiling and clamps effective down when the operator reduces
+        below current effective, but never auto-raises effective (gradual
+        recovery owns increases). Reducing below active usage blocks new
+        grants without terminating work, since admission compares usage to
+        the clamped effective.
+        """
+        for entry in scopes_data:
+            if not isinstance(entry, dict):
+                continue
+            scope_ref = str(entry.get("scope_ref") or "").strip()
+            if not scope_ref:
+                continue
+            try:
+                configured = int(entry.get("configured_limit") or 0)
+            except (TypeError, ValueError):
+                continue
+            if configured <= 0:
+                continue
+            scope = self._ensure_scope(
+                scope_ref,
+                runtime_id=str(entry.get("runtime_id") or self._runtime_id or ""),
+                provider_class=str(entry.get("provider_class") or "unknown"),
+            )
+            try:
+                generation = int(entry.get("generation") or scope.generation)
+            except (TypeError, ValueError):
+                generation = scope.generation
+            if generation > scope.generation:
+                scope.generation = generation
+            scope.runtime_id = str(entry.get("runtime_id") or scope.runtime_id)
+            scope.provider_class = str(entry.get("provider_class") or scope.provider_class)
+            scope.configured_limit = configured
+            scope.effective_limit = min(scope.effective_limit or configured, configured)
+            if scope.effective_limit >= scope.configured_limit:
+                scope.backpressure_state = "healthy"
 
     def _prune_disabled_profiles_without_leases(self) -> None:
         """Drop stale profile metadata that cannot still own runtime leases."""
@@ -1774,7 +1993,40 @@ class MoonMindProviderProfileManagerWorkflow:
                 reserved_slots += 1
         return reserved_slots
 
+    def _rebuild_lease_indexes(self) -> None:
+        self._lease_profile_index = {}
+        self._owner_lease_index = {}
+        for profile in self._profiles.values():
+            for lease_id in profile.current_leases:
+                if lease_id in self._lease_profile_index:
+                    continue
+                self._lease_profile_index[lease_id] = profile.profile_id
+                metadata = profile.lease_metadata.get(lease_id) or {}
+                owner = str(metadata.get("ownerId") or lease_id)
+                if owner not in self._owner_lease_index:
+                    self._owner_lease_index[owner] = lease_id
+
+    def _index_lease(self, profile_id: str, lease_id: str, owner_id: str | None = None) -> None:
+        if lease_id and lease_id not in self._lease_profile_index:
+            self._lease_profile_index[lease_id] = profile_id
+        owner = str(owner_id or lease_id)
+        if owner and owner not in self._owner_lease_index:
+            self._owner_lease_index[owner] = lease_id
+
+    def _unindex_lease(self, lease_id: str) -> None:
+        profile_id = self._lease_profile_index.pop(lease_id, None)
+        for owner, mapped_lease in list(self._owner_lease_index.items()):
+            if mapped_lease == lease_id:
+                del self._owner_lease_index[owner]
+        _ = profile_id
+
     def _profile_id_for_lease(self, requester_workflow_id: str) -> str | None:
+        try:
+            use_index = workflow.patched(PROVIDER_INCREMENTAL_LEASE_PATCH)
+        except Exception:
+            use_index = False
+        if use_index:
+            return self._lease_profile_index.get(requester_workflow_id)
         for profile in self._profiles.values():
             if requester_workflow_id in profile.current_leases:
                 return profile.profile_id
@@ -1882,6 +2134,7 @@ class MoonMindProviderProfileManagerWorkflow:
                         self._profiles[existing_profile_id].release(
                             req.requester_workflow_id
                         )
+                        self._unindex_lease(req.requester_workflow_id)
                         leases_changed = True
                 continue
 
@@ -1897,12 +2150,24 @@ class MoonMindProviderProfileManagerWorkflow:
                 metadata=req.lease_metadata,
             ):
                 leases_changed = True
-                if durable_grants and not await self._sync_leases_to_db():
-                    # Hold the in-memory reservation and retry persistence on
-                    # the next loop. Never signal a consumer before its lease
-                    # is durable.
-                    remaining.append(req)
-                    continue
+                self._index_lease(
+                    profile.profile_id,
+                    req.requester_workflow_id,
+                    req.requester_workflow_id,
+                )
+                if durable_grants:
+                    persisted = await self._persist_lease_grant(
+                        profile,
+                        req.requester_workflow_id,
+                        purpose=req.purpose,
+                        metadata=req.lease_metadata,
+                    )
+                    if not persisted:
+                        # Hold the in-memory reservation and retry persistence on
+                        # the next loop. Never signal a consumer before its lease
+                        # is durable.
+                        remaining.append(req)
+                        continue
                 try:
                     await self._signal_slot_assigned(
                         req.requester_workflow_id, profile.profile_id
@@ -1917,6 +2182,7 @@ class MoonMindProviderProfileManagerWorkflow:
                         remaining.append(req)
                     else:
                         profile.release(req.requester_workflow_id)
+                        self._unindex_lease(req.requester_workflow_id)
                         leases_changed = True
             else:
                 remaining.append(req)
@@ -2112,6 +2378,8 @@ class MoonMindProviderProfileManagerWorkflow:
                     selector=selector,
                     exact_profile_id=exact_profile_id,
                 ):
+                    if not self._profile_admitted_by_capacity(reserved_profile):
+                        return None
                     self._handoff_reservations.pop(normalized_group_id, None)
                     return reserved_profile
                 self._handoff_reservations.pop(normalized_group_id, None)
@@ -2124,6 +2392,10 @@ class MoonMindProviderProfileManagerWorkflow:
                 exact_profile.profile_id, normalized_group_id
             )
             if exact_profile.available_slots <= reserved_slots:
+                return None
+            if not self._profile_admitted_by_capacity(
+                exact_profile, reserved_slots=reserved_slots
+            ):
                 return None
             return (
                 exact_profile
@@ -2143,6 +2415,10 @@ class MoonMindProviderProfileManagerWorkflow:
                 profile.profile_id, normalized_group_id
             )
             if profile.available_slots <= reserved_slots:
+                continue
+            if not self._profile_admitted_by_capacity(
+                profile, reserved_slots=reserved_slots
+            ):
                 continue
             if not self._profile_matches_request(
                 profile,
@@ -2230,6 +2506,7 @@ class MoonMindProviderProfileManagerWorkflow:
             evicted = profile.evict_expired_leases(now, max_duration)
             total_evicted += len(evicted)
             for wf_id in evicted:
+                self._unindex_lease(wf_id)
                 self._get_logger().warning(
                     "Evicted stale lease for profile %s held by %s",
                     profile.profile_id,
@@ -2320,6 +2597,7 @@ class MoonMindProviderProfileManagerWorkflow:
                 status_info = workflow_statuses.get(owner_workflow_id, {})
                 if not status_info.get("running", True):
                     profile.release(wf_id)
+                    self._unindex_lease(wf_id)
                     reclaimed = True
                     self._get_logger().warning(
                         "Reclaimed slot for profile %s from terminated workflow %s (status=%s)",
@@ -2426,6 +2704,166 @@ class MoonMindProviderProfileManagerWorkflow:
                         profile.cooldown_until = None
                 except (ValueError, TypeError):
                     profile.cooldown_until = None
+        if workflow.patched(PROVIDER_CAPACITY_SCOPE_PATCH):
+            self._clear_expired_scope_cooldowns(now)
+            self._recover_scope_capacity(now)
+
+    def _ensure_scope(
+        self, scope_ref: str, *, runtime_id: str = "", provider_class: str = "unknown"
+    ) -> CapacityScopeState:
+        scope = self._scopes.get(scope_ref)
+        if scope is None:
+            derived_max = 0
+            for profile in self._profiles.values():
+                if (profile.capacity_scope_ref or f"provider-profile:{profile.profile_id}") == scope_ref:
+                    derived_max = max(derived_max, profile.max_parallel_runs)
+            configured = derived_max if derived_max > 0 else 1
+            scope = CapacityScopeState(
+                scope_ref=scope_ref,
+                runtime_id=runtime_id,
+                provider_class=provider_class,
+                configured_limit=configured,
+                effective_limit=configured,
+            )
+            self._scopes[scope_ref] = scope
+        return scope
+
+    def _scope_active_units(self, scope_ref: str) -> int:
+        return sum(
+            len(p.current_leases)
+            for p in self._profiles.values()
+            if (p.capacity_scope_ref or f"provider-profile:{p.profile_id}") == scope_ref
+        )
+
+    def _scope_is_available(self, scope: CapacityScopeState) -> bool:
+        if scope.backpressure_state == "disabled":
+            return False
+        if scope.cooldown_until is not None:
+            try:
+                cooldown_dt = datetime.fromisoformat(scope.cooldown_until)
+                if cooldown_dt.tzinfo is None:
+                    cooldown_dt = cooldown_dt.replace(tzinfo=timezone.utc)
+                if workflow.now() < cooldown_dt:
+                    return False
+            except (ValueError, TypeError):
+                # Expected: malformed cooldown never blocks admission.
+                pass
+        return self._scope_active_units(scope.scope_ref) < max(1, scope.effective_limit)
+
+    def _clear_expired_scope_cooldowns(self, now: datetime) -> None:
+        for scope in self._scopes.values():
+            if scope.cooldown_until is not None:
+                try:
+                    cooldown_dt = datetime.fromisoformat(scope.cooldown_until)
+                    if cooldown_dt.tzinfo is None:
+                        cooldown_dt = cooldown_dt.replace(tzinfo=timezone.utc)
+                    if now >= cooldown_dt:
+                        scope.cooldown_until = None
+                        if scope.backpressure_state == "cooldown":
+                            scope.backpressure_state = "probing"
+                            scope.healthy_since = now.isoformat()
+                except (ValueError, TypeError):
+                    scope.cooldown_until = None
+
+    def _recover_scope_capacity(self, now: datetime) -> None:
+        healthy_interval = timedelta(seconds=300)
+        for scope in self._scopes.values():
+            if scope.cooldown_until is not None:
+                continue
+            if scope.effective_limit >= scope.configured_limit:
+                continue
+            since_raw = scope.healthy_since or scope.last_decrease_at
+            if since_raw is None:
+                scope.healthy_since = now.isoformat()
+                continue
+            try:
+                since = datetime.fromisoformat(since_raw)
+                if since.tzinfo is None:
+                    since = since.replace(tzinfo=timezone.utc)
+            except (ValueError, TypeError):
+                scope.healthy_since = now.isoformat()
+                continue
+            if now - since >= healthy_interval:
+                scope.effective_limit = min(
+                    scope.configured_limit, scope.effective_limit + 1
+                )
+                scope.last_increase_at = now.isoformat()
+                scope.healthy_since = now.isoformat()
+                if scope.effective_limit >= scope.configured_limit:
+                    scope.backpressure_state = "healthy"
+        for profile in self._profiles.values():
+            effective = profile.effective_limit or profile.max_parallel_runs
+            if effective >= profile.max_parallel_runs:
+                continue
+            if profile.cooldown_until is not None:
+                continue
+            profile.effective_limit = min(profile.max_parallel_runs, effective + 1)
+
+    def _apply_scope_rate_limit(
+        self,
+        *,
+        scope_ref: str,
+        retry_after_seconds: int | None,
+        report_id: str | None,
+        now: datetime,
+    ) -> None:
+        if report_id:
+            if report_id in self._seen_rate_limit_reports:
+                return
+            self._seen_rate_limit_reports.append(report_id)
+            del self._seen_rate_limit_reports[:-500]
+        scope = self._ensure_scope(scope_ref)
+        scope.effective_limit = max(1, scope.effective_limit // 2)
+        scope.last_decrease_at = now.isoformat()
+        scope.healthy_since = None
+        scope.backpressure_state = (
+            "reduced" if scope.cooldown_until is None else scope.backpressure_state
+        )
+        if retry_after_seconds is not None and retry_after_seconds > 0:
+            bounded = max(1, min(3600, int(retry_after_seconds)))
+            new_until = now + timedelta(seconds=bounded)
+            if scope.cooldown_until is not None:
+                try:
+                    existing = datetime.fromisoformat(scope.cooldown_until)
+                    if existing.tzinfo is None:
+                        existing = existing.replace(tzinfo=timezone.utc)
+                    if existing >= new_until:
+                        new_until = existing
+                except (ValueError, TypeError):
+                    # Expected: malformed existing deadline never shortens the new one.
+                    pass
+            scope.cooldown_until = new_until.isoformat()
+            scope.backpressure_state = "cooldown"
+
+    def _profile_scope_ref(self, profile: ProfileSlotState) -> str:
+        return (
+            profile.capacity_scope_ref or f"provider-profile:{profile.profile_id}"
+        )
+
+    def _profile_effective_available(self, profile: ProfileSlotState) -> bool:
+        effective = profile.effective_limit or profile.max_parallel_runs
+        return len(profile.current_leases) < max(1, effective)
+
+    def _profile_scope_available(self, profile: ProfileSlotState) -> bool:
+        scope = self._ensure_scope(self._profile_scope_ref(profile))
+        return self._scope_is_available(scope)
+
+    def _profile_admitted_by_capacity(
+        self, profile: ProfileSlotState, *, reserved_slots: int = 0
+    ) -> bool:
+        try:
+            scoped = workflow.patched(PROVIDER_CAPACITY_SCOPE_PATCH)
+        except Exception:
+            return True
+        if not scoped:
+            return True
+        if not self._profile_effective_available(profile):
+            return False
+        if len(profile.current_leases) + reserved_slots >= max(
+            1, profile.effective_limit or profile.max_parallel_runs
+        ):
+            return False
+        return self._profile_scope_available(profile)
 
     def _recover_adaptive_capacity(self) -> int:
         """Step lowered effective limits back toward the configured ceiling."""
@@ -2473,6 +2911,7 @@ class MoonMindProviderProfileManagerWorkflow:
                     "adaptive_capacity_updated_at": (
                         state.adaptive_capacity_updated_at
                     ),
+                    "effective_limit": state.effective_limit,
                 }
             )
             if state.current_leases:
@@ -2519,6 +2958,8 @@ class MoonMindProviderProfileManagerWorkflow:
                 }
                 for group_id, reservation in self._handoff_reservations.items()
             },
+            "scopes": [s.to_dict() for s in self._scopes.values()],
+            "seen_rate_limit_reports": list(self._seen_rate_limit_reports[-500:]),
         }
 
     async def _load_profiles_from_db(
@@ -2541,6 +2982,8 @@ class MoonMindProviderProfileManagerWorkflow:
             )
             profiles_data = result.get("profiles", []) if result else []
             self._apply_profile_sync(profiles_data, authoritative=True)
+            if workflow.patched(PROVIDER_CAPACITY_SCOPE_PATCH):
+                self._apply_scope_sync(result.get("scopes", []) if result else [])
             if prune_removed_profiles:
                 self._prune_disabled_profiles_without_leases()
             self._has_db_profile_snapshot = True
@@ -2560,50 +3003,42 @@ class MoonMindProviderProfileManagerWorkflow:
             "granted_at": profile.lease_granted_at.get(lease_id),
             "profileId": profile.profile_id,
             "runtimeId": self._runtime_id,
+            "capacity_scope_ref": (
+                profile.capacity_scope_ref
+                or f"provider-profile:{profile.profile_id}"
+            ),
             **dict(profile.lease_metadata.get(lease_id) or {}),
         }
 
     async def _persist_lease_grant(
-        self, profile: ProfileSlotState, lease_id: str
+        self,
+        profile: ProfileSlotState,
+        lease_id: str,
+        *,
+        purpose: str = "execution_direct",
+        metadata: dict[str, Any] | None = None,
     ) -> bool:
         """Durably record one lease grant.
 
-        MoonLadderStudios/MoonMind#3878: at capacity ``N`` the previous
-        runtime-wide snapshot rewrite made every grant cost O(active leases)
-        of durable work and serialized unrelated profiles behind one another.
-        An upsert of the single granted row carries the same recovery
-        guarantee, so the incremental operation is the canonical path and the
-        snapshot rewrite remains only for histories recorded before the patch.
+        MoonLadderStudios/MoonMind#3878: at capacity ``N`` the runtime-wide
+        snapshot rewrite made every grant cost O(active leases) of durable work
+        and serialized unrelated profiles behind one another. Writing the single
+        granted row carries the same recovery guarantee, so the incremental
+        operation is the canonical path and the snapshot rewrite remains only
+        for histories recorded before the incremental patch.
+
+        Every grant funnels through here so there is exactly one place that
+        decides between the incremental row write and the snapshot rewrite.
         """
 
-        if not self._incremental_lease_persistence:
-            return await self._sync_leases_to_db()
-        try:
-            await workflow.execute_activity(
-                "provider_profile.sync_slot_leases",
-                {
-                    "runtime_id": self._runtime_id,
-                    "leases": [self._lease_row(profile, lease_id)],
-                    "action": "upsert",
-                },
-                task_queue=ACTIVITY_TASK_QUEUE,
-                start_to_close_timeout=timedelta(seconds=10),
-                retry_policy=RetryPolicy(
-                    initial_interval=timedelta(seconds=1),
-                    backoff_coefficient=2.0,
-                    maximum_interval=timedelta(seconds=10),
-                    maximum_attempts=3,
-                ),
+        if workflow.patched(PROVIDER_INCREMENTAL_LEASE_PATCH):
+            return await self._grant_lease_to_db(
+                profile=profile,
+                lease_id=lease_id,
+                purpose=purpose,
+                metadata=metadata,
             )
-            return True
-        except Exception:
-            self._get_logger().warning(
-                "Failed to persist lease %s for profile %s; provider capacity "
-                "remains blocked",
-                lease_id,
-                profile.profile_id,
-            )
-            return False
+        return await self._sync_leases_to_db()
 
     async def _sync_leases_to_db(self) -> bool:
         """Persist current lease state to the database for crash recovery."""
@@ -2634,6 +3069,31 @@ class MoonMindProviderProfileManagerWorkflow:
     async def _remove_lease_from_db(self, workflow_id: str) -> None:
         """Remove a single lease from the database."""
         try:
+            use_incremental = False
+            try:
+                use_incremental = workflow.patched(PROVIDER_INCREMENTAL_LEASE_PATCH)
+            except Exception:
+                use_incremental = False
+            if use_incremental:
+                await workflow.execute_activity(
+                    "provider_profile.sync_slot_leases",
+                    {
+                        "runtime_id": self._runtime_id,
+                        "leases": [
+                            {"lease_id": workflow_id, "fencing_generation": 1}
+                        ],
+                        "action": "release_one",
+                    },
+                    task_queue=ACTIVITY_TASK_QUEUE,
+                    start_to_close_timeout=timedelta(seconds=10),
+                    retry_policy=RetryPolicy(
+                        initial_interval=timedelta(seconds=1),
+                        backoff_coefficient=2.0,
+                        maximum_interval=timedelta(seconds=10),
+                        maximum_attempts=3,
+                    ),
+                )
+                return
             await workflow.execute_activity(
                 "provider_profile.sync_slot_leases",
                 {
@@ -2654,6 +3114,64 @@ class MoonMindProviderProfileManagerWorkflow:
             self._get_logger().warning(
                 "Failed to remove lease for %s from DB", workflow_id
             )
+
+    async def _grant_lease_to_db(
+        self,
+        *,
+        profile: ProfileSlotState,
+        lease_id: str,
+        purpose: str = "execution_direct",
+        metadata: dict[str, Any] | None = None,
+    ) -> bool:
+        """Persist one lease grant; idempotent retry returns existing lease."""
+        safe = dict(metadata or {})
+        owner_id = str(safe.get("ownerId") or safe.get("workflowId") or lease_id)
+        owner_is_workflow = safe.get("ownerIsWorkflow", True) is not False
+        try:
+            result = await workflow.execute_activity(
+                "provider_profile.sync_slot_leases",
+                {
+                    "runtime_id": self._runtime_id,
+                    "leases": [
+                        {
+                            "lease_id": lease_id,
+                            "workflow_id": str(safe.get("workflowId") or lease_id),
+                            "profile_id": profile.profile_id,
+                            "owner_id": owner_id,
+                            "owner_kind": "workflow" if owner_is_workflow else "activity",
+                            "purpose": purpose,
+                            "fencing_generation": 1,
+                            "scope_generation": 1,
+                            "capacity_scope_ref": (
+                                profile.capacity_scope_ref
+                                or f"provider-profile:{profile.profile_id}"
+                            ),
+                            "lease_state": "held",
+                            "stepExecutionId": safe.get("stepExecutionId"),
+                            "oauthSessionId": safe.get("oauthSessionId"),
+                            "idempotencyKey": safe.get("idempotencyKey"),
+                            "ownerIsWorkflow": owner_is_workflow,
+                        }
+                    ],
+                    "action": "grant",
+                },
+                task_queue=ACTIVITY_TASK_QUEUE,
+                start_to_close_timeout=timedelta(seconds=10),
+                retry_policy=RetryPolicy(
+                    initial_interval=timedelta(seconds=1),
+                    backoff_coefficient=2.0,
+                    maximum_interval=timedelta(seconds=10),
+                    maximum_attempts=3,
+                ),
+            )
+            if isinstance(result, dict) and result.get("error"):
+                return False
+            return True
+        except Exception:
+            self._get_logger().warning(
+                "Failed to persist lease grant for %s", lease_id
+            )
+            return False
 
     async def _load_leases_from_db(self) -> bool:
         """Load persisted leases from DB and reconnect to running workflows.
@@ -2753,6 +3271,11 @@ class MoonMindProviderProfileManagerWorkflow:
                             if lease.get(key) is not None
                         },
                     }
+                    self._index_lease(
+                        profile_id,
+                        wf_id,
+                        str(lease.get("ownerId") or wf_id),
+                    )
 
                 # Send slot_assigned to the workflow to reconnect
                 if is_maintenance:
@@ -2771,6 +3294,7 @@ class MoonMindProviderProfileManagerWorkflow:
                         # recorded before ambiguous reconnect failures became
                         # fail-closed.
                         profile.release(wf_id)
+                        self._unindex_lease(wf_id)
                         await self._remove_lease_from_db(wf_id)
 
             return True

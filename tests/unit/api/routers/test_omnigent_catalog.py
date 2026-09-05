@@ -1211,6 +1211,53 @@ def test_catalog_filters_profiles_not_visible_to_caller(monkeypatch):
     ]
 
 
+def test_catalog_admits_the_credentialless_opencode_zen_profile(monkeypatch):
+    """MoonLadderStudios/MoonMind#3877: eligibility is capability-derived.
+
+    OpenCode's built-in Zen Contributor Free route uses the ``none@1``
+    materializer and holds no secret reference, so filtering eligibility on
+    ``credential_source == "secret_ref"`` hid the default Provider Profile from
+    every launch surface that reads this projection.
+    """
+
+    zen = _profile(
+        profile_id="opencode-zen-free",
+        account_label="OpenCode Zen Contributor Free",
+        provider_label="OpenCode Zen",
+        provider_id="opencode",
+        runtime_id="opencode",
+        credential_source=SimpleNamespace(value="none"),
+        runtime_materialization_mode=SimpleNamespace(value="composite"),
+    )
+    app = _app(monkeypatch, session=_Session([zen]))
+
+    body = TestClient(app).get("/api/omnigent/codex-catalog-readiness").json()
+
+    assert [item["profileId"] for item in body["eligibleProviderProfiles"]] == [
+        "opencode-zen-free"
+    ]
+    assert body["eligibleProviderProfiles"][0]["runtimeId"] == "opencode"
+    assert body["ineligibleProviderProfiles"] == []
+
+
+def test_catalog_still_rejects_an_unregistered_credentialless_runtime(monkeypatch):
+    """`credential_source == "none"` is not a blanket eligibility escape hatch."""
+
+    stray = _profile(
+        profile_id="claude-credentialless",
+        provider_id="anthropic",
+        runtime_id="claude_code",
+        credential_source=SimpleNamespace(value="none"),
+        runtime_materialization_mode=SimpleNamespace(value="composite"),
+    )
+    app = _app(monkeypatch, session=_Session([stray]))
+
+    body = TestClient(app).get("/api/omnigent/codex-catalog-readiness").json()
+
+    assert body["eligibleProviderProfiles"] == []
+    assert body["ineligibleProviderProfiles"] == []
+
+
 @pytest.mark.parametrize(
     ("live_readiness", "expected"),
     [

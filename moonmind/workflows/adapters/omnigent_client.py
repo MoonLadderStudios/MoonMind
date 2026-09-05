@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 from collections.abc import AsyncIterator, Iterable, Mapping
 from typing import Any
 from urllib.parse import quote
@@ -28,6 +29,73 @@ _DEFAULT_REQUEST_TIMEOUT_SECONDS = 60.0
 # its authoritative success or structured startup failure before MoonMind
 # releases the on-demand host.
 _DEFAULT_EVENT_TIMEOUT_SECONDS = 150.0
+_MAX_SSE_LINE_BYTES = 1_000_000
+
+
+def _bounded_int(env_key: str, default: int, minimum: int, maximum: int) -> int:
+    try:
+        value = int(str(os.getenv(env_key) or "").strip())
+    except (TypeError, ValueError):
+        return default
+    return max(minimum, min(maximum, value))
+
+
+def default_omnigent_pool_limits() -> httpx.Limits:
+    """Return the bounded lifecycle-managed pool configuration.
+
+    Defaults safely exceed maximum active Omnigent execution and control
+    concurrency with headroom for registration, cleanup, readiness, catalog
+    refresh, validation, and operator control traffic. All values are
+    deployment-overridable within safe bounds via environment.
+    """
+    return httpx.Limits(
+        max_connections=_bounded_int(
+            "MOONMIND_OMNIGENT_HTTP_MAX_CONNECTIONS", 100, 10, 500
+        ),
+        max_keepalive_connections=_bounded_int(
+            "MOONMIND_OMNIGENT_HTTP_MAX_KEEPALIVE", 20, 1, 100
+        ),
+        keepalive_expiry=_bounded_int(
+            "MOONMIND_OMNIGENT_HTTP_KEEPALIVE_EXPIRY_SECONDS", 30, 5, 300
+        ),
+    )
+
+
+_SHARED_POOL_CLIENT: httpx.AsyncClient | None = None
+
+
+def shared_pool_client() -> httpx.AsyncClient | None:
+    """Return the worker-owned shared pool when initialized, else None."""
+    return _SHARED_POOL_CLIENT
+
+
+async def init_shared_pool_client(
+    *,
+    timeout_seconds: float = _DEFAULT_REQUEST_TIMEOUT_SECONDS,
+    transport: httpx.AsyncBaseTransport | None = None,
+) -> httpx.AsyncClient:
+    """Create and remember one lifecycle-managed pool per worker process."""
+    global _SHARED_POOL_CLIENT
+    if _SHARED_POOL_CLIENT is not None:
+        return _SHARED_POOL_CLIENT
+    _SHARED_POOL_CLIENT = httpx.AsyncClient(
+        timeout=httpx.Timeout(timeout_seconds),
+        limits=default_omnigent_pool_limits(),
+        transport=transport,
+    )
+    return _SHARED_POOL_CLIENT
+
+
+async def aclose_shared_pool_client() -> None:
+    """Close the worker-owned shared pool; safe to call when absent."""
+    global _SHARED_POOL_CLIENT
+    client, _SHARED_POOL_CLIENT = _SHARED_POOL_CLIENT, None
+    if client is not None:
+        try:
+            await client.aclose()
+        except Exception:
+            # Best-effort shutdown; a close failure must not fail worker teardown.
+            pass
 
 
 class OmnigentClientError(RuntimeError):
@@ -72,6 +140,7 @@ class OmnigentHttpClient:
         stream_timeout_seconds: float | None = None,
         transport: httpx.AsyncBaseTransport | None = None,
         client: httpx.AsyncClient | None = None,
+        limits: httpx.Limits | None = None,
         forward_headers: Mapping[str, Any] | None = None,
         upstream_header_allowlist: Iterable[str] | None = None,
     ) -> None:
@@ -85,6 +154,7 @@ class OmnigentHttpClient:
         )
         self._transport = transport
         self._client = client
+        self._limits = limits or default_omnigent_pool_limits()
         # Proxy mode never leaks MoonMind internal auth headers upstream unless
         # the operator explicitly allowlists them (OmnigentBridge.md §16 rule 7).
         self._forward_headers = sanitize_proxy_headers(
@@ -281,6 +351,40 @@ class OmnigentHttpClient:
                 ) as response:
                     async for event in self._iter_stream_response(response):
                         yield event
+            except httpx.PoolTimeout as exc:
+                raise OmnigentClientError(
+                    self._redact(
+                        "Omnigent transport pool exhausted; "
+                        f"increase MOONMIND_OMNIGENT_HTTP_MAX_CONNECTIONS: {exc}"
+                    ),
+                    failure_class="integration_error",
+                ) from exc
+            except httpx.HTTPError as exc:
+                raise OmnigentClientError(
+                    self._transport_error_message(exc),
+                    failure_class="integration_error",
+                ) from exc
+            return
+
+        shared = shared_pool_client() if self._transport is None else None
+        if shared is not None:
+            try:
+                async with shared.stream(
+                    "GET",
+                    f"{self._base}{path}",
+                    headers=self._headers(accept="text/event-stream"),
+                    timeout=self._stream_timeout,
+                ) as response:
+                    async for event in self._iter_stream_response(response):
+                        yield event
+            except httpx.PoolTimeout as exc:
+                raise OmnigentClientError(
+                    self._redact(
+                        "Omnigent transport pool exhausted; "
+                        f"increase MOONMIND_OMNIGENT_HTTP_MAX_CONNECTIONS: {exc}"
+                    ),
+                    failure_class="integration_error",
+                ) from exc
             except httpx.HTTPError as exc:
                 raise OmnigentClientError(
                     self._transport_error_message(exc),
@@ -290,6 +394,7 @@ class OmnigentHttpClient:
 
         async with httpx.AsyncClient(
             timeout=self._stream_timeout,
+            limits=self._limits,
             transport=self._transport,
         ) as client:
             try:
@@ -300,6 +405,14 @@ class OmnigentHttpClient:
                 ) as response:
                     async for event in self._iter_stream_response(response):
                         yield event
+            except httpx.PoolTimeout as exc:
+                raise OmnigentClientError(
+                    self._redact(
+                        "Omnigent transport pool exhausted; "
+                        f"increase MOONMIND_OMNIGENT_HTTP_MAX_CONNECTIONS: {exc}"
+                    ),
+                    failure_class="integration_error",
+                ) from exc
             except httpx.HTTPError as exc:
                 raise OmnigentClientError(
                     self._transport_error_message(exc),
@@ -316,7 +429,42 @@ class OmnigentHttpClient:
                 errors="replace",
             )
             raise self._error_from_response(response.status_code, body)
-        async for line in response.aiter_lines():
+        pending = bytearray()
+        async for chunk in response.aiter_bytes():
+            pending.extend(chunk)
+            if len(pending) > _MAX_SSE_LINE_BYTES + 1_000_000:
+                raise OmnigentClientError(
+                    "Omnigent SSE frame exceeds bounded buffer size",
+                    failure_class="integration_error",
+                )
+            while True:
+                newline = pending.find(b"\n")
+                if newline < 0:
+                    break
+                raw = bytes(pending[:newline])
+                del pending[: newline + 1]
+                if len(raw) > _MAX_SSE_LINE_BYTES:
+                    raise OmnigentClientError(
+                        "Omnigent SSE frame exceeds bounded line size",
+                        failure_class="integration_error",
+                    )
+                try:
+                    line = raw.decode("utf-8", errors="replace")
+                except Exception:
+                    continue
+                event = parse_sse_line(line)
+                if event is not None:
+                    yield event
+        if pending:
+            if len(pending) > _MAX_SSE_LINE_BYTES:
+                raise OmnigentClientError(
+                    "Omnigent SSE frame exceeds bounded line size",
+                    failure_class="integration_error",
+                )
+            try:
+                line = bytes(pending).decode("utf-8", errors="replace")
+            except Exception:
+                return
             event = parse_sse_line(line)
             if event is not None:
                 yield event
@@ -414,6 +562,39 @@ class OmnigentHttpClient:
                     timeout=timeout,
                     **kwargs,
                 )
+            except httpx.PoolTimeout as exc:
+                raise OmnigentClientError(
+                    self._redact(
+                        "Omnigent transport pool exhausted; "
+                        f"increase MOONMIND_OMNIGENT_HTTP_MAX_CONNECTIONS: {exc}"
+                    ),
+                    failure_class="integration_error",
+                ) from exc
+            except httpx.HTTPError as exc:
+                raise OmnigentClientError(
+                    self._transport_error_message(exc),
+                    failure_class="integration_error",
+                ) from exc
+            return self._parse_json_response(response)
+
+        shared = shared_pool_client() if self._transport is None else None
+        if shared is not None:
+            try:
+                response = await shared.request(
+                    method,
+                    f"{self._base}{path}",
+                    headers=self._headers(),
+                    timeout=timeout,
+                    **kwargs,
+                )
+            except httpx.PoolTimeout as exc:
+                raise OmnigentClientError(
+                    self._redact(
+                        "Omnigent transport pool exhausted; "
+                        f"increase MOONMIND_OMNIGENT_HTTP_MAX_CONNECTIONS: {exc}"
+                    ),
+                    failure_class="integration_error",
+                ) from exc
             except httpx.HTTPError as exc:
                 raise OmnigentClientError(
                     self._transport_error_message(exc),
@@ -423,6 +604,7 @@ class OmnigentHttpClient:
 
         async with httpx.AsyncClient(
             timeout=timeout,
+            limits=self._limits,
             transport=self._transport,
         ) as client:
             try:
@@ -432,6 +614,14 @@ class OmnigentHttpClient:
                     headers=self._headers(),
                     **kwargs,
                 )
+            except httpx.PoolTimeout as exc:
+                raise OmnigentClientError(
+                    self._redact(
+                        "Omnigent transport pool exhausted; "
+                        f"increase MOONMIND_OMNIGENT_HTTP_MAX_CONNECTIONS: {exc}"
+                    ),
+                    failure_class="integration_error",
+                ) from exc
             except httpx.HTTPError as exc:
                 raise OmnigentClientError(
                     self._transport_error_message(exc),
@@ -461,6 +651,40 @@ class OmnigentHttpClient:
                     headers=self._headers(),
                     timeout=self._timeout,
                 )
+            except httpx.PoolTimeout as exc:
+                raise OmnigentClientError(
+                    self._redact(
+                        "Omnigent transport pool exhausted; "
+                        f"increase MOONMIND_OMNIGENT_HTTP_MAX_CONNECTIONS: {exc}"
+                    ),
+                    failure_class="integration_error",
+                ) from exc
+            except httpx.HTTPError as exc:
+                raise OmnigentClientError(
+                    self._transport_error_message(exc),
+                    failure_class="integration_error",
+                ) from exc
+            if response.status_code < 200 or response.status_code >= 300:
+                raise self._error_from_response(response.status_code, response.text)
+            return response.content
+
+        shared = shared_pool_client() if self._transport is None else None
+        if shared is not None:
+            try:
+                response = await shared.request(
+                    method,
+                    f"{self._base}{path}",
+                    headers=self._headers(),
+                    timeout=self._timeout,
+                )
+            except httpx.PoolTimeout as exc:
+                raise OmnigentClientError(
+                    self._redact(
+                        "Omnigent transport pool exhausted; "
+                        f"increase MOONMIND_OMNIGENT_HTTP_MAX_CONNECTIONS: {exc}"
+                    ),
+                    failure_class="integration_error",
+                ) from exc
             except httpx.HTTPError as exc:
                 raise OmnigentClientError(
                     self._transport_error_message(exc),
@@ -472,6 +696,7 @@ class OmnigentHttpClient:
 
         async with httpx.AsyncClient(
             timeout=self._timeout,
+            limits=self._limits,
             transport=self._transport,
         ) as client:
             try:
@@ -480,6 +705,14 @@ class OmnigentHttpClient:
                     f"{self._base}{path}",
                     headers=self._headers(),
                 )
+            except httpx.PoolTimeout as exc:
+                raise OmnigentClientError(
+                    self._redact(
+                        "Omnigent transport pool exhausted; "
+                        f"increase MOONMIND_OMNIGENT_HTTP_MAX_CONNECTIONS: {exc}"
+                    ),
+                    failure_class="integration_error",
+                ) from exc
             except httpx.HTTPError as exc:
                 raise OmnigentClientError(
                     self._transport_error_message(exc),
@@ -557,5 +790,9 @@ def _scrub_payload_with_redactor(payload: Any, *, redactor: SecretRedactor) -> A
 __all__ = [
     "OmnigentClientError",
     "OmnigentHttpClient",
+    "aclose_shared_pool_client",
+    "default_omnigent_pool_limits",
+    "init_shared_pool_client",
     "parse_sse_line",
+    "shared_pool_client",
 ]

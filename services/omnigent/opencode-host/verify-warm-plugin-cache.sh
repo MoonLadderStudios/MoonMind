@@ -18,7 +18,9 @@ set -eu
 image=${1:?usage: verify-warm-plugin-cache.sh <image-ref> [ready-timeout-seconds]}
 ready_timeout=${2:-90}
 
-docker run --rm --network none --user 1000:1000 \
+exec docker run --rm --network none --user 1000:1000 \
+  --read-only --cap-drop ALL --security-opt no-new-privileges \
+  --tmpfs /tmp:rw,nosuid,nodev,size=512m,mode=1777 \
   --tmpfs /home/app:rw,nosuid,nodev,size=512m,uid=1000,gid=1000 \
   --env HOME=/home/app \
   --env OPENCODE_DISABLE_MODELS_FETCH=1 \

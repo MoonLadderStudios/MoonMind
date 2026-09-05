@@ -4,9 +4,10 @@ from __future__ import annotations
 
 import os
 import re
+from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import timedelta
-from typing import Any, Mapping
+from typing import Any
 
 OMNIGENT_DISABLED_MESSAGE = (
     "agentId=omnigent requires OMNIGENT_ENABLED=true with "
@@ -19,6 +20,8 @@ _FALSE_VALUES = {"0", "false", "no", "off"}
 
 OMNIGENT_GENERIC_HOST_ENABLED_ENV = "MOONMIND_OMNIGENT_GENERIC_HOST_ENABLED"
 OMNIGENT_OPENCODE_ENABLED_ENV = "MOONMIND_OMNIGENT_OPENCODE_ENABLED"
+OMNIGENT_GENERIC_CODEX_QUALIFIED_ENV = "MOONMIND_OMNIGENT_GENERIC_CODEX_QUALIFIED"
+OMNIGENT_GENERIC_CLAUDE_QUALIFIED_ENV = "MOONMIND_OMNIGENT_GENERIC_CLAUDE_QUALIFIED"
 MOONMIND_OMNIGENT_EVIDENCE_POLICY_ENV = "MOONMIND_OMNIGENT_EVIDENCE_POLICY"
 _DEPLOYMENT_EVIDENCE_POLICY_VALUES = {"deployment", "protected", "either"}
 
@@ -136,6 +139,38 @@ def opencode_support_enabled(*, env: Mapping[str, Any] | None = None) -> bool:
     source = env if env is not None else os.environ
     return _parse_bool_with_default(
         source.get(OMNIGENT_OPENCODE_ENABLED_ENV), default=True
+    )
+
+
+def generic_codex_qualified(*, env: Mapping[str, Any] | None = None) -> bool:
+    """Return whether generic Codex admission is qualified for this deployment.
+
+    The trusted planner routes ``codex-native`` to ``codex-profile-bound@1``
+    until the exact shared-image Codex row passes its conformance gates
+    (#3832). This operator flag is the explicit-only admission switch for
+    ``generic-omnigent-host@1`` Codex plans; it is fail-closed (default false)
+    and never turns an explicit generic selection into a silent fallback.
+
+    Source: MoonLadderStudios/MoonMind#3830.
+    """
+
+    source = env if env is not None else os.environ
+    return _parse_bool_with_default(
+        source.get(OMNIGENT_GENERIC_CODEX_QUALIFIED_ENV), default=False
+    )
+
+
+def generic_claude_qualified(*, env: Mapping[str, Any] | None = None) -> bool:
+    """Return whether generic Claude admission is qualified for this deployment.
+
+    Same contract as :func:`generic_codex_qualified` for ``claude-native``
+    (#3831). Default is false, so a deployment must opt in after exact
+    shared-image evidence exists.
+    """
+
+    source = env if env is not None else os.environ
+    return _parse_bool_with_default(
+        source.get(OMNIGENT_GENERIC_CLAUDE_QUALIFIED_ENV), default=False
     )
 
 
@@ -404,38 +439,42 @@ def generic_host_cold_launch_window_seconds(
 
 
 __all__ = [
+    "MOONMIND_OMNIGENT_EVIDENCE_POLICY_ENV",
+    "OMNIGENT_DISABLED_MESSAGE",
+    "OMNIGENT_GENERIC_CLAUDE_QUALIFIED_ENV",
+    "OMNIGENT_GENERIC_CODEX_QUALIFIED_ENV",
     "OMNIGENT_GENERIC_HOST_CAPACITY_ENV",
     "OMNIGENT_GENERIC_HOST_COLD_LAUNCH_BURST_ENV",
     "OMNIGENT_GENERIC_HOST_COLD_LAUNCH_WINDOW_ENV",
     "OMNIGENT_GENERIC_HOST_DEFAULT_CAPACITY",
     "OMNIGENT_GENERIC_HOST_DEFAULT_COLD_LAUNCH_BURST",
     "OMNIGENT_GENERIC_HOST_DEFAULT_COLD_LAUNCH_WINDOW_SECONDS",
-    "generic_host_capacity",
-    "generic_host_cold_launch_burst",
-    "generic_host_cold_launch_window_seconds",
+    "OMNIGENT_GENERIC_HOST_ENABLED_ENV",
+    "OMNIGENT_OPENCODE_ENABLED_ENV",
     "OMNIGENT_RUNTIME_ACTIVE_SKILLS_DIR",
-    "OMNIGENT_DISABLED_MESSAGE",
-    "OmnigentRuntimeGate",
-    "build_omnigent_gate",
-    "is_omnigent_enabled",
-    "generic_host_enabled",
-    "opencode_support_enabled",
-    "opencode_contributor_data_use_accepted",
-    "opencode_model_catalog_max_age",
-    "resolved_opencode_api_key",
     "OPENCODE_API_KEY_ENV",
     "OPENCODE_CONTRIBUTOR_DATA_USE_ENV",
     "OPENCODE_MODEL_CATALOG_DEFAULT_MAX_AGE_HOURS",
     "OPENCODE_MODEL_CATALOG_MAX_AGE_ENV",
+    "OmnigentRuntimeGate",
+    "build_omnigent_gate",
+    "generic_claude_qualified",
+    "generic_codex_qualified",
+    "generic_host_capacity",
+    "generic_host_cold_launch_burst",
+    "generic_host_cold_launch_window_seconds",
+    "generic_host_enabled",
+    "is_omnigent_enabled",
     "omnigent_evidence_policy",
-    "OMNIGENT_GENERIC_HOST_ENABLED_ENV",
-    "OMNIGENT_OPENCODE_ENABLED_ENV",
-    "MOONMIND_OMNIGENT_EVIDENCE_POLICY_ENV",
+    "opencode_contributor_data_use_accepted",
+    "opencode_model_catalog_max_age",
+    "opencode_support_enabled",
     "resolved_api_token",
     "resolved_default_agent_name",
     "resolved_host_runner_token",
     "resolved_native_ui_serving_enabled",
     "resolved_native_ui_version",
+    "resolved_opencode_api_key",
     "resolved_proxy_forward_headers",
     "resolved_server_url",
 ]

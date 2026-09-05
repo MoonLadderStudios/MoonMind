@@ -3644,6 +3644,7 @@ class TemporalArtifactActivities:
 
         from api_service.db.models import (
             ManagedAgentProviderProfile,
+            ProviderCapacityScope,
             ProviderProfileSlotLease,
         )
         from api_service.db.base import get_async_session_context
@@ -3679,6 +3680,33 @@ class TemporalArtifactActivities:
             managed_secret_statuses = await _managed_secret_statuses_for_profiles(
                 session=session,
                 rows=rows,
+            )
+            try:
+                scope_result = await session.execute(select(ProviderCapacityScope))
+                scope_rows = list(scope_result.scalars().all())
+            except Exception:
+                # Migration 368 may not have run yet; fall back to
+                # per-profile derived scopes so new workers stay up.
+                scope_rows = []
+
+        profiles = []
+        profile_statuses = []
+        scopes = []
+        for scope in scope_rows:
+            scopes.append(
+                {
+                    "scope_ref": scope.scope_ref,
+                    "runtime_id": scope.runtime_id,
+                    "provider_class": scope.provider_class,
+                    "generation": scope.generation,
+                    "configured_limit": scope.configured_limit,
+                    "effective_limit": scope.effective_limit,
+                    "cooldown_until": (
+                        scope.cooldown_until.isoformat() if scope.cooldown_until else None
+                    ),
+                    "backpressure_state": scope.backpressure_state,
+                    "recovery_policy_ref": scope.recovery_policy_ref,
+                }
             )
 
         profiles = []
@@ -3752,6 +3780,7 @@ class TemporalArtifactActivities:
                     "model_overrides": row.model_overrides or {},
                     "model_tiers": row.model_tiers or [],
                     "default_model_tier": row.default_model_tier,
+                    "capacity_scope_ref": row.capacity_scope_ref,
                     "max_parallel_runs": row.max_parallel_runs,
                     "cooldown_after_429_seconds": row.cooldown_after_429_seconds,
                     "rate_limit_policy": row.rate_limit_policy.value,
@@ -3778,7 +3807,7 @@ class TemporalArtifactActivities:
                 }
             )
 
-        return {"profiles": profiles, "profile_statuses": profile_statuses}
+        return {"profiles": profiles, "profile_statuses": profile_statuses, "scopes": scopes}
 
     async def provider_profile_ensure_manager(
         self,
@@ -4222,11 +4251,11 @@ class TemporalArtifactActivities:
             with the provided leases (list of {workflow_id, profile_id}).
             Returns {"saved": count}
 
-        **upsert action**: Durably records only the provided leases without
-            touching any other row (MoonLadderStudios/MoonMind#3878). This is
-            the incremental grant path; a runtime-wide rewrite per grant makes
+        **grant action**: Durably records one lease row without touching any
+            other row (MoonLadderStudios/MoonMind#3878). This is the
+            incremental grant path; a runtime-wide rewrite per grant makes
             durable cost scale with active concurrency.
-            Returns {"saved": count}
+            Returns {"granted": True, "duplicate": bool}
 
         **remove action**: Removes a specific lease by workflow_id.
             Returns {"removed": True}
@@ -4240,6 +4269,14 @@ class TemporalArtifactActivities:
 
         from api_service.db.models import ProviderProfileSlotLease
         from api_service.db.base import get_async_session_context
+
+        def _parse_lease_time(value: Any) -> Any:
+            if not value:
+                return None
+            try:
+                return datetime.fromisoformat(str(value))
+            except (ValueError, TypeError):
+                return None
 
         async with get_async_session_context() as session:
             if action == "load":
@@ -4270,34 +4307,16 @@ class TemporalArtifactActivities:
                 ]
                 return {"leases": leases_data}
 
-            elif action in {"save", "upsert"}:
-                if action == "save":
-                    # Snapshot semantics: delete ALL rows for this runtime, then
-                    # bulk-insert only the leases currently held in memory.
-                    # This prevents stale rows from accumulating when leases
-                    # disappear from memory (eviction, verify, release).
-                    await session.execute(
-                        delete(ProviderProfileSlotLease).where(
-                            ProviderProfileSlotLease.runtime_id == runtime_id,
-                        )
+            elif action == "save":
+                # Snapshot semantics: delete ALL rows for this runtime, then
+                # bulk-insert only the leases currently held in memory.
+                # This prevents stale rows from accumulating when leases
+                # disappear from memory (eviction, verify, release).
+                await session.execute(
+                    delete(ProviderProfileSlotLease).where(
+                        ProviderProfileSlotLease.runtime_id == runtime_id,
                     )
-                else:
-                    # Incremental semantics: replace only the named rows so a
-                    # grant never rewrites unrelated concurrent leases.
-                    incremental_ids = [
-                        str(lease.get("workflow_id"))
-                        for lease in leases or []
-                        if lease.get("workflow_id") and lease.get("profile_id")
-                    ]
-                    if incremental_ids:
-                        await session.execute(
-                            delete(ProviderProfileSlotLease).where(
-                                ProviderProfileSlotLease.runtime_id == runtime_id,
-                                ProviderProfileSlotLease.workflow_id.in_(
-                                    incremental_ids
-                                ),
-                            )
-                        )
+                )
                 saved_count = 0
                 for lease in leases or []:
                     workflow_id = lease.get("workflow_id")
@@ -4351,6 +4370,141 @@ class TemporalArtifactActivities:
                 )
                 await session.commit()
                 return {"removed": True}
+
+            elif action == "grant":
+                from sqlalchemy import select as _select
+
+                payload = (leases or [{}])[0]
+                lease_id = str(payload.get("lease_id") or payload.get("leaseId") or "").strip()
+                if not lease_id:
+                    return {"error": "grant requires lease_id"}
+                existing = (
+                    await session.execute(
+                        _select(ProviderProfileSlotLease).where(
+                            ProviderProfileSlotLease.lease_id == lease_id
+                        )
+                    )
+                ).scalars().first()
+                if existing is not None:
+                    if (
+                        str(existing.runtime_id) != str(runtime_id)
+                        or str(existing.profile_id) != str(payload.get("profile_id") or "")
+                        or str(existing.owner_id or "") != str(payload.get("owner_id") or payload.get("ownerId") or "")
+                    ):
+                        return {"error": "lease identity conflict"}
+                    return {"granted": True, "duplicate": True}
+                new_lease = ProviderProfileSlotLease(
+                    runtime_id=runtime_id,
+                    workflow_id=str(payload.get("workflow_id") or lease_id),
+                    profile_id=str(payload.get("profile_id") or ""),
+                    lease_id=lease_id,
+                    owner_id=str(payload.get("owner_id") or payload.get("ownerId") or lease_id),
+                    owner_kind=str(payload.get("owner_kind") or payload.get("ownerKind") or "workflow"),
+                    purpose=str(payload.get("purpose") or "execution_direct"),
+                    compatibility_class=str(
+                        payload.get("compatibility_class") or payload.get("purpose") or "execution_direct"
+                    ),
+                    owner_is_workflow=payload.get("ownerIsWorkflow", True) is not False,
+                    step_execution_id=payload.get("stepExecutionId"),
+                    oauth_session_id=payload.get("oauthSessionId"),
+                    idempotency_key=payload.get("idempotencyKey"),
+                    execution_plan_ref=payload.get("executionPlanRef"),
+                    capacity_scope_ref=payload.get("capacity_scope_ref"),
+                    scope_generation=int(payload.get("scope_generation") or 1),
+                    credential_generation=payload.get("credential_generation"),
+                    lease_state=str(payload.get("lease_state") or "held"),
+                    fencing_generation=int(payload.get("fencing_generation") or 1),
+                    safe_metadata_json=payload.get("safe_metadata"),
+                    expires_at=_parse_lease_time(payload.get("expiresAt")),
+                    heartbeat_at=_parse_lease_time(payload.get("heartbeatAt")),
+                )
+                session.add(new_lease)
+                await session.commit()
+                return {"granted": True, "duplicate": False}
+
+            elif action == "heartbeat":
+                from sqlalchemy import select as _select
+
+                payload = (leases or [{}])[0]
+                lease_id = str(payload.get("lease_id") or "").strip()
+                if not lease_id:
+                    return {"error": "heartbeat requires lease_id"}
+                try:
+                    expected_fence = int(payload.get("fencing_generation") or 0)
+                except (TypeError, ValueError):
+                    expected_fence = 0
+                row = (
+                    await session.execute(
+                        _select(ProviderProfileSlotLease).where(
+                            ProviderProfileSlotLease.lease_id == lease_id
+                        )
+                    )
+                ).scalars().first()
+                if row is None:
+                    return {"heartbeat": False, "stale": True}
+                if expected_fence and int(row.fencing_generation) != expected_fence:
+                    return {"heartbeat": False, "stale": True}
+                row.heartbeat_at = _parse_lease_time(payload.get("heartbeatAt")) or datetime.now(timezone.utc)
+                await session.commit()
+                return {"heartbeat": True}
+
+            elif action == "release_one":
+                from sqlalchemy import select as _select
+
+                payload = (leases or [{}])[0]
+                lease_id = str(payload.get("lease_id") or "").strip()
+                if not lease_id:
+                    return {"error": "release_one requires lease_id"}
+                try:
+                    expected_fence = int(payload.get("fencing_generation") or 0)
+                except (TypeError, ValueError):
+                    expected_fence = 0
+                row = (
+                    await session.execute(
+                        _select(ProviderProfileSlotLease).where(
+                            ProviderProfileSlotLease.lease_id == lease_id
+                        )
+                    )
+                ).scalars().first()
+                if row is None:
+                    return {"released": True, "duplicate": True}
+                if expected_fence and int(row.fencing_generation) != expected_fence:
+                    return {"released": False, "stale": True}
+                await session.execute(
+                    delete(ProviderProfileSlotLease).where(
+                        ProviderProfileSlotLease.lease_id == lease_id
+                    )
+                )
+                await session.commit()
+                return {"released": True}
+
+            elif action == "list_active":
+                from sqlalchemy import select as _select
+
+                scope_filter = None
+                if leases:
+                    scope_filter = str((leases[0] or {}).get("capacity_scope_ref") or "").strip() or None
+                stmt = _select(ProviderProfileSlotLease).where(
+                    ProviderProfileSlotLease.runtime_id == runtime_id
+                )
+                if scope_filter:
+                    stmt = stmt.where(ProviderProfileSlotLease.capacity_scope_ref == scope_filter)
+                result = await session.execute(stmt)
+                rows = result.scalars().all()
+                return {
+                    "leases": [
+                        {
+                            "lease_id": row.lease_id,
+                            "workflow_id": row.workflow_id,
+                            "profile_id": row.profile_id,
+                            "owner_id": row.owner_id,
+                            "lease_state": row.lease_state,
+                            "fencing_generation": row.fencing_generation,
+                            "capacity_scope_ref": row.capacity_scope_ref,
+                        }
+                        for row in rows
+                    ]
+                }
 
             else:
                 return {"error": f"Unknown action: {action}"}

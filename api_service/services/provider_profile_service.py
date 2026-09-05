@@ -26,8 +26,26 @@ async def normalize_runtime_default_profile(
     session: AsyncSession,
     runtime_id: str,
     preferred_profile_id: str | None = None,
+    operator_selected: bool = False,
 ) -> str | None:
-    """Ensure exactly one provider profile is marked default for a runtime."""
+    """Ensure exactly one provider profile is marked default for a runtime.
+
+    This is the single authority boundary for runtime-default ownership.
+
+    ``preferred_profile_id`` names the profile that should hold the default.
+    ``operator_selected`` says where that preference came from
+    (MoonLadderStudios/MoonMind#3877):
+
+    * ``True`` — an operator explicitly selected the profile. The selection is
+      stamped on the row as ``default_selected_by_operator`` and outranks every
+      later automatic preference.
+    * ``False`` — an automatic preference such as startup seeding. It settles an
+      unclaimed default but never takes one away from a launchable profile the
+      operator selected explicitly.
+
+    The stamp is cleared from any profile that loses the default, so at most one
+    row per runtime carries it.
+    """
 
     normalized_runtime_id = str(runtime_id or "").strip()
     if not normalized_runtime_id:
@@ -61,6 +79,10 @@ async def normalize_runtime_default_profile(
         )
     ]
     if not launchable_rows:
+        # No profile can hold the default right now. An explicit operator
+        # selection is not revoked by transient unlaunchability, so
+        # ``default_selected_by_operator`` survives and reclaims the default
+        # once the profile is launchable again.
         rows_to_clear = [row for row in rows if row.is_default]
         for row in rows_to_clear:
             row.is_default = False
@@ -75,6 +97,20 @@ async def normalize_runtime_default_profile(
             (row for row in candidates if row.profile_id == preferred_profile_id),
             None,
         )
+        if selected is not None and not operator_selected:
+            # An automatic preference must not overrule an explicit operator
+            # selection that is still launchable.
+            operator_row = next(
+                (
+                    row
+                    for row in candidates
+                    if row.default_selected_by_operator
+                    and row.profile_id != preferred_profile_id
+                ),
+                None,
+            )
+            if operator_row is not None:
+                selected = operator_row
     if selected is None:
         selected = next((row for row in candidates if row.is_default), None)
     if selected is None:
@@ -83,15 +119,26 @@ async def normalize_runtime_default_profile(
     selected_id = selected.profile_id
 
     rows_to_clear = [
-        row for row in rows if row.profile_id != selected_id and row.is_default
+        row
+        for row in rows
+        if row.profile_id != selected_id
+        and (row.is_default or row.default_selected_by_operator)
     ]
     for row in rows_to_clear:
         row.is_default = False
+        row.default_selected_by_operator = False
     if rows_to_clear:
         await session.flush()
 
-    if not selected.is_default:
+    claims_operator_selection = (
+        operator_selected
+        and selected_id == preferred_profile_id
+        and not selected.default_selected_by_operator
+    )
+    if not selected.is_default or claims_operator_selection:
         selected.is_default = True
+        if claims_operator_selection:
+            selected.default_selected_by_operator = True
         await session.flush()
 
     return selected_id

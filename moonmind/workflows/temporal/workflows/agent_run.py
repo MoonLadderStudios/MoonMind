@@ -310,6 +310,7 @@ RUNTIME_SELECTION_SESSION_REBIND_PATCH_ID = (
 AWAITING_SLOT_RUNTIME_PROFILE_EDIT_PATCH_ID = (
     "agent-run-awaiting-slot-runtime-profile-edit-v1"
 )
+CANONICAL_WAITING_STATE_PATCH_ID = "agent-run-canonical-waiting-state-v1"
 AGENT_RUN_RESILIENCY_POLICY_PATCH_ID = "agent-run-resiliency-policy-v1"
 AGENT_RUN_CLAUDE_NO_PROGRESS_POLICY_PATCH_ID = (
     "agent-run-claude-code-no-progress-policy-v2"
@@ -589,6 +590,35 @@ async def external_adapter_execution_style(agent_id: str) -> str:
     if isinstance(adapter, BaseExternalAgentAdapter):
         return adapter.provider_capability.execution_style
     return "polling"
+
+CANONICAL_WAITING_REASONS = (
+    "awaiting_provider_capacity",
+    "awaiting_provider_validation",
+    "awaiting_profile_maintenance",
+    "provider_cooldown",
+    "awaiting_host_capacity",
+    "awaiting_host_launch_permit",
+    "awaiting_execution_worker",
+    "cleanup_pending",
+)
+
+
+def canonical_waiting_reason(
+    reason: str, *, queue_position: int | None = None
+) -> str:
+    """Map internal wait state to one bounded product reason.
+
+    Emits only the canonical reason plus an optional numeric queue position.
+    No lease, host, session, credential, repository, or Docker identity ever
+    enters the parent progress payload; terminal outcome remains owned by
+    child completion and AgentRunResult.
+    """
+    normalized = str(reason or "").strip()
+    if normalized not in CANONICAL_WAITING_REASONS:
+        normalized = "awaiting_provider_capacity"
+    if isinstance(queue_position, int) and queue_position > 0:
+        return f"{normalized}; queue_position={queue_position}"
+    return normalized
 
 @workflow.defn(name="MoonMind.AgentRun")
 class MoonMindAgentRun:
@@ -1141,6 +1171,12 @@ class MoonMindAgentRun:
         runtime_id: str,
         request: AgentExecutionRequest,
     ) -> str:
+        try:
+            use_canonical = workflow.patched(CANONICAL_WAITING_STATE_PATCH_ID)
+        except Exception:
+            use_canonical = False
+        if use_canonical:
+            return canonical_waiting_reason("awaiting_provider_capacity")
         intent = self._provider_slot_intent_summary(request)
         return (
             "Waiting for provider profile slot; "
@@ -1156,6 +1192,28 @@ class MoonMindAgentRun:
     ) -> str:
         """Describe the manager-owned condition that is blocking slot assignment."""
 
+        queue_position = manager_state.get("requester_queue_position")
+        queue_number = (
+            queue_position if isinstance(queue_position, int) and queue_position > 0 else None
+        )
+        try:
+            use_canonical = workflow.patched(CANONICAL_WAITING_STATE_PATCH_ID)
+        except Exception:
+            use_canonical = False
+        if use_canonical:
+            profile = manager_state.get("requested_profile")
+            if isinstance(profile, Mapping):
+                if str(profile.get("cooldown_until") or "").strip():
+                    return canonical_waiting_reason(
+                        "provider_cooldown", queue_position=queue_number
+                    )
+                if profile.get("enabled") is False or profile.get("launch_ready") is False:
+                    return canonical_waiting_reason(
+                        "awaiting_provider_validation", queue_position=queue_number
+                    )
+            return canonical_waiting_reason(
+                "awaiting_provider_capacity", queue_position=queue_number
+            )
         intent = self._provider_slot_intent_summary(request)
         queue_position = manager_state.get("requester_queue_position")
         queue_suffix = (

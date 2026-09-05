@@ -28,9 +28,7 @@ from moonmind.omnigent.harness_platform import (
     get_opencode_host_image_ref,
 )
 from moonmind.omnigent.harness_platform.attestation import (
-    assert_opencode_version_supported,
-    is_opencode_version_supported,
-    validate_opencode_exact_host_preflight,
+    validate_runtime_pack_preflight,
 )
 from moonmind.omnigent.harness_platform.host_classes import (
     HOST_CLASSES,
@@ -42,7 +40,10 @@ from moonmind.omnigent.harness_platform.materializers import (
     OPENCODE_PROVIDER_KEY,
     materializer_ref_for_provider,
 )
-
+from moonmind.omnigent.harness_platform.runtime_packs import (
+    get_runtime_pack,
+    is_vendor_version_supported,
+)
 
 _RELEASE_WORKFLOW = Path(".github/workflows/docker-publish-opencode-host.yml")
 _SERVER_REF = "ghcr.io/omnigent-ai/omnigent-server@sha256:" + "b" * 64
@@ -222,16 +223,14 @@ def test_production_registry_has_no_synthetic_host_classes():
 
 
 def test_opencode_version_supported_range():
-    assert is_opencode_version_supported("1.17.7")
-    assert is_opencode_version_supported("1.18.11")
-    assert is_opencode_version_supported("1.18.0")
-    assert not is_opencode_version_supported("1.17.6")
-    assert not is_opencode_version_supported("1.19.0")
-    assert not is_opencode_version_supported("2.0.0")
-    assert_opencode_version_supported("1.18.11")
-    with pytest.raises(HarnessPlatformError) as exc:
-        assert_opencode_version_supported("1.19.0")
-    assert exc.value.code == HarnessPlatformFailure.OMNIGENT_VENDOR_RUNTIME_MISMATCH
+    pack = get_runtime_pack("opencode-native-pack@1")
+    assert is_vendor_version_supported(pack, "1.17.7")
+    assert is_vendor_version_supported(pack, "1.18.11")
+    assert is_vendor_version_supported(pack, "1.18.0")
+    assert not is_vendor_version_supported(pack, "1.17.6")
+    assert not is_vendor_version_supported(pack, "1.19.0")
+    assert not is_vendor_version_supported(pack, "2.0.0")
+    assert pack.vendorRuntime.pinnedVersion == OPENCODE_PINNED_VERSION
 
 
 def test_opencode_image_ref_fail_closed(monkeypatch):
@@ -343,8 +342,9 @@ def test_opencode_auth_json_bytes_structure(provider_key: str):
 def test_exact_host_preflight_success():
     att = _make_attestation()
     hc = _opencode_host_class()
-    validate_opencode_exact_host_preflight(
-        attestation=att,
+    validate_runtime_pack_preflight(
+        att,
+        expectedRuntimePackRef="opencode-native-pack@1",
         expectedHostClassRef=hc.ref,
         expectedImageRef=hc.imageRef,
         expectedOmnigentBuildDigest="sha256:" + "b" * 64,
@@ -383,8 +383,9 @@ def test_exact_host_preflight_fails_when_opencode_missing():
         }
     )
     with pytest.raises(HarnessPlatformError) as exc:
-        validate_opencode_exact_host_preflight(
-            attestation=att,
+        validate_runtime_pack_preflight(
+            att,
+            expectedRuntimePackRef="opencode-native-pack@1",
             expectedHostClassRef=hc.ref,
             expectedImageRef=hc.imageRef,
             expectedOmnigentBuildDigest="sha256:" + "b" * 64,
@@ -403,8 +404,9 @@ def test_exact_host_preflight_fails_on_version_outside_range():
     hc = _opencode_host_class()
     att = _make_attestation(version="1.19.0")
     with pytest.raises(HarnessPlatformError) as exc:
-        validate_opencode_exact_host_preflight(
-            attestation=att,
+        validate_runtime_pack_preflight(
+            att,
+            expectedRuntimePackRef="opencode-native-pack@1",
             expectedHostClassRef=hc.ref,
             expectedImageRef=hc.imageRef,
             expectedOmnigentBuildDigest="sha256:" + "b" * 64,
@@ -449,8 +451,9 @@ def test_exact_host_preflight_fails_when_harness_not_opencode():
         }
     )
     with pytest.raises(HarnessPlatformError) as exc:
-        validate_opencode_exact_host_preflight(
-            attestation=att,
+        validate_runtime_pack_preflight(
+            att,
+            expectedRuntimePackRef="opencode-native-pack@1",
             expectedHostClassRef=hc.ref,
             expectedImageRef=hc.imageRef,
             expectedOmnigentBuildDigest="sha256:" + "b" * 64,
