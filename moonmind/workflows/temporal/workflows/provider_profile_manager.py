@@ -302,6 +302,17 @@ _EXECUTION_PURPOSE_VALUES = frozenset(
     }
 )
 
+# Released lease rows are tombstoned rather than deleted so the fencing
+# high-water mark survives them. Reaping them after this horizon keeps the
+# table bounded: every release path funnels through activities with bounded
+# retries, so no duplicate of a completed release can still be redelivered
+# after this long, and reissuing a number below a reaped tombstone cannot
+# match a release that is still in flight.
+_LEASE_TOMBSTONE_RETENTION_SECONDS = 30 * 24 * 3600
+# Purge tombstones at most this often, keyed off the monotonically increasing
+# event count so the cadence is deterministic on replay.
+_LEASE_TOMBSTONE_PURGE_EVENT_INTERVAL = 60
+
 
 @dataclass
 class ProfileSlotState:
@@ -498,6 +509,29 @@ class ProfileSlotState:
             for lease_id in self.current_leases
             if self.consumes_execution_capacity(lease_id)
         )
+
+    def scope_consuming_lease_count(self) -> int:
+        """Leases that spend the shared upstream provider resource.
+
+        The scope ledger describes provider fullness and cooldown, so only
+        purposes that actually spend provider capacity may fill it.
+        Credential repair and revocation are local credential-state work: once
+        granted they must not occupy the shared scope and block execution on
+        sibling profiles. A lease with an unrecognized purpose fails closed
+        and counts against the scope.
+        """
+
+        count = 0
+        for lease_id in self.current_leases:
+            try:
+                consuming = CredentialLeasePurpose(
+                    self.lease_purpose(lease_id)
+                ).consumes_provider_capacity
+            except ValueError:
+                consuming = True
+            if consuming:
+                count += 1
+        return count
 
     def purpose_max_duration_seconds(self, purpose: str) -> int:
         """The longest one acquisition for this purpose may hold or wait."""
@@ -946,6 +980,14 @@ class MoonMindProviderProfileManagerWorkflow:
         self._rollover_requested: bool = False
         self._maintenance_queue_sequence: int = 0
         self._lease_grant_sequence: int = 0
+        # Owners with an in-memory reservation whose durable persistence has
+        # not reached a committed or rolled-back outcome yet. A Continue-As-New
+        # snapshot taken while this is non-empty would publish authority the
+        # persistence activity may never commit, so the rollover detach waits
+        # for it to drain first. Transient only: never serialized, never
+        # restored, and only ever tested for emptiness so set order cannot
+        # affect replay.
+        self._pending_grant_handoffs: set[str] = set()
         # Cache of resolved scheduled/created ordering keyed by queue-order
         # workflow id. Workflow creation/scheduled times are immutable, so a
         # resolved entry never has to be re-queried; this keeps the
@@ -1139,7 +1181,10 @@ class MoonMindProviderProfileManagerWorkflow:
 
         A release that carries no generation is honoured as-is. Releases sent
         by callers whose handle predates fenced grants must keep working, or a
-        rollout would leak capacity for every lease already in flight.
+        rollout would leak capacity for every lease already in flight. A
+        release that carries a malformed generation is ignored instead: only
+        an absent field receives legacy behavior, while a present invalid
+        value fails closed so it cannot bypass the fence.
         """
 
         if not self._durable_maintenance_queue:
@@ -1150,7 +1195,18 @@ class MoonMindProviderProfileManagerWorkflow:
         try:
             claimed = int(raw)
         except (TypeError, ValueError):
-            return False
+            # A present but malformed generation fails closed. Only an absent
+            # field receives legacy unfenced behavior; a corrupted or
+            # untrusted payload must not bypass the stale-release fence by
+            # supplying an invalid value. Ignoring the release keeps the
+            # current holder's authority intact.
+            self._get_logger().warning(
+                "Ignoring a provider profile lease release for owner %s on "
+                "profile %s; it carries a malformed grant generation",
+                requester_id,
+                profile.profile_id,
+            )
+            return True
         held = profile.lease_fencing_generation(requester_id)
         if held == 0:
             # Nothing fenced is held under this owner: either it was already
@@ -1158,6 +1214,34 @@ class MoonMindProviderProfileManagerWorkflow:
             # normal (idempotent) release path runs.
             return False
         return claimed != held
+
+    @workflow.signal
+    def withdraw_maintenance_waiter(self, payload: dict[str, Any]) -> None:
+        """Withdraw one caller's pending exclusive-maintenance request.
+
+        The client sends this when its bounded rollover-reattach budget is
+        exhausted. Every rollover deliberately preserves the request's queue
+        entry, and after the client gives up no handler remains to reattach
+        it \u2014 without an explicit withdrawal the entry would hold the queue
+        head and block every consumer behind it until the abandonment timeout.
+        Withdrawing touches only the waiter record: a held lease is never
+        released here, so a grant that won the race against the give-up keeps
+        its authority.
+        """
+        self._event_count += 1
+        self._has_new_events = True
+        owner_id = self._normalize_optional_string(
+            payload.get("requester_workflow_id") or payload.get("owner_id")
+        )
+        if not owner_id:
+            return
+        profile_id = self._normalize_optional_string(payload.get("profile_id"))
+        if profile_id is not None and profile_id in self._profiles:
+            self._profiles[profile_id].dequeue_maintenance_waiter(owner_id)
+            return
+        for profile in self._profiles.values():
+            if profile.dequeue_maintenance_waiter(owner_id):
+                return
 
     @workflow.signal
     def report_cooldown(self, payload: dict[str, Any]) -> None:
@@ -1568,14 +1652,25 @@ class MoonMindProviderProfileManagerWorkflow:
         A validation lease is still a credential consumer, so it queues behind
         exclusive credential maintenance rather than running concurrently with
         credential mutation and publishing evidence for stale state.
+
+        Validation consumes provider capacity, so the single-flight path waits
+        on the same shared-scope condition as the exclusive path: granting a
+        catalog probe while the shared scope is saturated or cooling down
+        would exceed the configured provider ceiling and add traffic during
+        rate-limit recovery.
         """
 
         profile_id = profile.profile_id
         lease_metadata = self._safe_lease_metadata(payload)
+        scope_gated = self._maintenance_consumes_scope(purpose)
 
         def _blocked() -> bool:
             current = self._profiles.get(profile_id)
-            return current is not None and current.exclusive_maintenance_active
+            if current is None:
+                return False
+            if current.exclusive_maintenance_active:
+                return True
+            return scope_gated and not self._profile_scope_available(current)
 
         while (
             not self._shutdown_requested
@@ -1629,28 +1724,35 @@ class MoonMindProviderProfileManagerWorkflow:
                 ),
             }
         self._index_lease(profile_id, requester_id, requester_id)
-        if workflow.patched(DB_LEASE_PERSISTENCE_PATCH):
-            persisted = await self._persist_lease_grant(
-                profile,
-                requester_id,
-                purpose=purpose,
-                metadata=grant_metadata,
-            )
-            if workflow.patched(DURABLE_LEASE_GRANT_PATCH) and not persisted:
-                profile.release(requester_id)
-                self._unindex_lease(requester_id)
-                raise exceptions.ApplicationError(
-                    "Provider profile lease persistence failed before validation grant",
-                    type="ProviderProfileLeasePersistenceFailed",
+        # The reservation is tentative until the grant activity commits it;
+        # see _acquire_exclusive_maintenance_lease for why rollover waits.
+        self._begin_grant_handoff(requester_id)
+        try:
+            if workflow.patched(DB_LEASE_PERSISTENCE_PATCH):
+                persisted = await self._persist_lease_grant(
+                    profile,
+                    requester_id,
+                    purpose=purpose,
+                    metadata=grant_metadata,
                 )
-        self._has_new_events = True
-        return {
-            "profile_id": profile_id,
-            "lease_id": requester_id,
-            "already_held": False,
-            "lease_mode": CredentialLeaseMode.SINGLE_FLIGHT_VALIDATION.value,
-            **self._fence_result(fencing_generation),
-        }
+                if workflow.patched(DURABLE_LEASE_GRANT_PATCH) and not persisted:
+                    profile.release(requester_id)
+                    self._unindex_lease(requester_id)
+                    raise exceptions.ApplicationError(
+                        "Provider profile lease persistence failed "
+                        "before validation grant",
+                        type="ProviderProfileLeasePersistenceFailed",
+                    )
+            self._has_new_events = True
+            return {
+                "profile_id": profile_id,
+                "lease_id": requester_id,
+                "already_held": False,
+                "lease_mode": CredentialLeaseMode.SINGLE_FLIGHT_VALIDATION.value,
+                **self._fence_result(fencing_generation),
+            }
+        finally:
+            self._end_grant_handoff(requester_id)
 
     def _maintenance_grant_blocker(
         self,
@@ -1802,34 +1904,45 @@ class MoonMindProviderProfileManagerWorkflow:
                         metadata=grant_metadata,
                         allow_unready=True,
                     ):
-                        self._index_lease(profile_id, requester_id, requester_id)
-                        if workflow.patched(DB_LEASE_PERSISTENCE_PATCH):
-                            persisted = await self._persist_lease_grant(
-                                current,
-                                requester_id,
-                                purpose=purpose,
-                                metadata=grant_metadata,
+                        # The in-memory reservation is tentative until the
+                        # grant activity commits it. Rollover must not
+                        # snapshot this lease \u2014 or detach this handler \u2014
+                        # while the handoff is unresolved.
+                        self._begin_grant_handoff(requester_id)
+                        try:
+                            self._index_lease(
+                                profile_id, requester_id, requester_id
                             )
-                            if (
-                                workflow.patched(DURABLE_LEASE_GRANT_PATCH)
-                                and not persisted
-                            ):
-                                current.release(requester_id)
-                                self._unindex_lease(requester_id)
-                                raise exceptions.ApplicationError(
-                                    "Provider profile lease persistence failed before maintenance grant",
-                                    type="ProviderProfileLeasePersistenceFailed",
+                            if workflow.patched(DB_LEASE_PERSISTENCE_PATCH):
+                                persisted = await self._persist_lease_grant(
+                                    current,
+                                    requester_id,
+                                    purpose=purpose,
+                                    metadata=grant_metadata,
                                 )
-                        granted = True
-                        return {
-                            "profile_id": profile_id,
-                            "lease_id": requester_id,
-                            "already_held": False,
-                            "lease_mode": (
-                                CredentialLeaseMode.EXCLUSIVE_MAINTENANCE.value
-                            ),
-                            **self._fence_result(fencing_generation),
-                        }
+                                if (
+                                    workflow.patched(DURABLE_LEASE_GRANT_PATCH)
+                                    and not persisted
+                                ):
+                                    current.release(requester_id)
+                                    self._unindex_lease(requester_id)
+                                    raise exceptions.ApplicationError(
+                                        "Provider profile lease persistence "
+                                        "failed before maintenance grant",
+                                        type="ProviderProfileLeasePersistenceFailed",
+                                    )
+                            granted = True
+                            return {
+                                "profile_id": profile_id,
+                                "lease_id": requester_id,
+                                "already_held": False,
+                                "lease_mode": (
+                                    CredentialLeaseMode.EXCLUSIVE_MAINTENANCE.value
+                                ),
+                                **self._fence_result(fencing_generation),
+                            }
+                        finally:
+                            self._end_grant_handoff(requester_id)
                 try:
                     await workflow.wait_condition(
                         lambda: (
@@ -2022,6 +2135,13 @@ class MoonMindProviderProfileManagerWorkflow:
             if evicted_count > 0 and workflow.patched(DB_LEASE_PERSISTENCE_PATCH):
                 await self._sync_leases_to_db()
 
+            # Reap release tombstones on a deterministic cadence so the lease
+            # table stays bounded while the high-water mark outlives them.
+            if workflow.patched(DB_LEASE_PERSISTENCE_PATCH) and (
+                self._event_count % _LEASE_TOMBSTONE_PURGE_EVENT_INTERVAL == 0
+            ):
+                await self._purge_released_lease_rows()
+
             verify_lease_holders = workflow.patched(VERIFY_LEASE_HOLDERS_PATCH)
             verify_activity_owned_leases = workflow.patched(
                 ACTIVITY_OWNED_LEASE_VERIFICATION_PATCH
@@ -2081,9 +2201,31 @@ class MoonMindProviderProfileManagerWorkflow:
         and position, and each waiting handler fails with
         ``ProviderProfileManagerRollover`` so its client reattaches by
         resubmitting the identical owner request against the new run.
+
+        A handler inside the persistence handoff \u2014 in-memory lease reserved
+        but the grant activity unresolved \u2014 is not merely waiting: its
+        outcome decides whether the snapshotted lease is real authority or a
+        phantom. The detach therefore waits for in-progress handoffs to reach
+        a definitive committed or rolled-back state before snapshotting, and
+        only then waits for the remaining handlers to finish.
         """
 
         self._rollover_requested = True
+        if self._pending_grant_handoffs:
+            try:
+                await workflow.wait_condition(
+                    lambda: not self._pending_grant_handoffs,
+                    timeout=timedelta(seconds=30),
+                )
+            except TimeoutError:
+                # Bounded: an unresponsive persistence activity must not hold
+                # the manager's history open forever. The uncommitted owners
+                # are logged so the snapshot can be audited.
+                self._get_logger().warning(
+                    "Provider profile manager rolled over with %d uncommitted "
+                    "lease grants",
+                    len(self._pending_grant_handoffs),
+                )
         try:
             await workflow.wait_condition(
                 workflow.all_handlers_finished,
@@ -2095,6 +2237,16 @@ class MoonMindProviderProfileManagerWorkflow:
             self._get_logger().warning(
                 "Provider profile manager rolled over with unfinished handlers"
             )
+
+    def _begin_grant_handoff(self, owner_id: str) -> None:
+        """Mark one in-memory grant as awaiting durable persistence."""
+
+        self._pending_grant_handoffs.add(owner_id)
+
+    def _end_grant_handoff(self, owner_id: str) -> None:
+        """Clear one grant handoff once it committed or rolled back."""
+
+        self._pending_grant_handoffs.discard(owner_id)
 
     def _restore_state(
         self,
@@ -2732,8 +2884,16 @@ class MoonMindProviderProfileManagerWorkflow:
                     remaining.append(req)
                     continue
                 try:
+                    existing_generation: int | None = None
+                    if self._durable_maintenance_queue:
+                        held_generation = self._profiles[
+                            existing_profile_id
+                        ].lease_fencing_generation(req.requester_workflow_id)
+                        existing_generation = held_generation or None
                     await self._signal_slot_assigned(
-                        req.requester_workflow_id, existing_profile_id
+                        req.requester_workflow_id,
+                        existing_profile_id,
+                        fencing_generation=existing_generation,
                     )
                 except Exception as e:
                     self._get_logger().warning(
@@ -2760,11 +2920,25 @@ class MoonMindProviderProfileManagerWorkflow:
                 execution_profile_ref=req.execution_profile_ref,
                 lease_group_id=req.lease_group_id,
             )
-            if profile and profile.reserve(
+            grant_generation: int | None = None
+            grant_metadata = req.lease_metadata
+            if profile is not None and self._durable_maintenance_queue:
+                # The signal grant path fences like the Update grant paths:
+                # the reservation, the persisted row, and the assignment all
+                # carry the same manager-owned generation, so a delayed
+                # duplicate release cannot free a replacement grant that
+                # reused this deterministic owner ID. Histories that predate
+                # fenced grants keep the exact legacy reservation and signal.
+                grant_generation = self._next_fencing_generation()
+                grant_metadata = self._grant_metadata(
+                    req.lease_metadata,
+                    fencing_generation=grant_generation,
+                )
+            if profile is not None and profile.reserve(
                 req.requester_workflow_id,
                 now,
                 purpose=req.purpose,
-                metadata=req.lease_metadata,
+                metadata=grant_metadata,
             ):
                 leases_changed = True
                 self._index_lease(
@@ -2777,7 +2951,7 @@ class MoonMindProviderProfileManagerWorkflow:
                         profile,
                         req.requester_workflow_id,
                         purpose=req.purpose,
-                        metadata=req.lease_metadata,
+                        metadata=grant_metadata,
                     )
                     if not persisted:
                         # Hold the in-memory reservation and retry persistence on
@@ -2787,7 +2961,9 @@ class MoonMindProviderProfileManagerWorkflow:
                         continue
                 try:
                     await self._signal_slot_assigned(
-                        req.requester_workflow_id, profile.profile_id
+                        req.requester_workflow_id,
+                        profile.profile_id,
+                        fencing_generation=grant_generation,
                     )
                 except Exception as e:
                     self._get_logger().warning(
@@ -3105,11 +3281,25 @@ class MoonMindProviderProfileManagerWorkflow:
         profiles.sort(key=lambda p: (p.priority, p.available_slots), reverse=True)
 
     async def _signal_slot_assigned(
-        self, requester_workflow_id: str, profile_id: str
+        self,
+        requester_workflow_id: str,
+        profile_id: str,
+        *,
+        fencing_generation: int | None = None,
     ) -> None:
-        """Send a slot_assigned signal to the requesting AgentRun workflow."""
+        """Send a slot_assigned signal to the requesting AgentRun workflow.
+
+        The grant generation travels with the assignment so the holder quotes
+        it back on release. A delayed duplicate release can then no longer
+        free a replacement grant that reused the same deterministic owner ID.
+        The generation is omitted for histories that predate fenced grants;
+        the release path honours a generation-less release as legacy.
+        """
+        payload: dict[str, Any] = {"profile_id": profile_id}
+        if fencing_generation is not None:
+            payload["fencing_generation"] = int(fencing_generation)
         handle = workflow.get_external_workflow_handle(requester_workflow_id)
-        await handle.signal("slot_assigned", {"profile_id": profile_id})
+        await handle.signal("slot_assigned", payload)
 
     def _evict_expired_leases(self) -> int:
         """Remove leases held longer than the max duration. Returns total eviction count."""
@@ -3360,7 +3550,7 @@ class MoonMindProviderProfileManagerWorkflow:
 
     def _scope_active_units(self, scope_ref: str) -> int:
         return sum(
-            len(p.current_leases)
+            p.scope_consuming_lease_count()
             for p in self._profiles.values()
             if (p.capacity_scope_ref or f"provider-profile:{p.profile_id}") == scope_ref
         )
@@ -3843,6 +4033,33 @@ class MoonMindProviderProfileManagerWorkflow:
             )
             return False
 
+    async def _purge_released_lease_rows(self) -> None:
+        """Delete release tombstones older than the redelivery horizon."""
+
+        try:
+            await workflow.execute_activity(
+                "provider_profile.sync_slot_leases",
+                {
+                    "runtime_id": self._runtime_id,
+                    "action": "purge_released",
+                    "leases": [
+                        {"older_than_seconds": _LEASE_TOMBSTONE_RETENTION_SECONDS}
+                    ],
+                },
+                task_queue=ACTIVITY_TASK_QUEUE,
+                start_to_close_timeout=timedelta(seconds=30),
+                retry_policy=RetryPolicy(
+                    initial_interval=timedelta(seconds=2),
+                    backoff_coefficient=2.0,
+                    maximum_interval=timedelta(seconds=30),
+                    maximum_attempts=3,
+                ),
+            )
+        except Exception:
+            self._get_logger().warning(
+                "Failed to purge released provider profile lease rows"
+            )
+
     async def _load_leases_from_db(self) -> bool:
         """Load persisted leases from DB and reconnect to running workflows.
 
@@ -3866,6 +4083,20 @@ class MoonMindProviderProfileManagerWorkflow:
                 ),
             )
             leases = result.get("leases", []) if result else []
+
+            # The high-water mark is stored independently of the live rows:
+            # release tombstones keep their generation, so a fresh manager
+            # that finds no live rows still resumes above every number it
+            # ever issued instead of reissuing generation 1, where a delayed
+            # retry of an earlier release could free the replacement holder.
+            try:
+                persisted_high_water = int(
+                    (result or {}).get("max_fencing_generation") or 0
+                )
+            except (TypeError, ValueError):
+                persisted_high_water = 0
+            if persisted_high_water > self._lease_grant_sequence:
+                self._lease_grant_sequence = persisted_high_water
 
             if not leases:
                 self._get_logger().info(
@@ -3975,7 +4206,15 @@ class MoonMindProviderProfileManagerWorkflow:
                 if is_maintenance:
                     continue
                 try:
-                    await self._signal_slot_assigned(wf_id, profile_id)
+                    reconnect_generation: int | None = None
+                    if self._durable_maintenance_queue:
+                        restored_generation = profile.lease_fencing_generation(
+                            wf_id
+                        )
+                        reconnect_generation = restored_generation or None
+                    await self._signal_slot_assigned(
+                        wf_id, profile_id, fencing_generation=reconnect_generation
+                    )
                     self._get_logger().info(
                         "Restored lease: %s -> profile %s", wf_id, profile_id
                     )

@@ -441,3 +441,39 @@ async def test_inspecting_a_lease_reports_the_identity_it_was_granted_for(
     assert inspected["profile_id"] == PROFILE_ID
     assert inspected["evidenceIdentity"] == identity
     assert inspected["purpose"] == CredentialLeasePurpose.CREDENTIAL_VALIDATION.value
+
+
+@pytest.mark.parametrize("capacity", CAPACITIES)
+@pytest.mark.asyncio
+async def test_the_client_withdraws_its_waiter_when_reattachment_runs_out(
+    capacity: int,
+) -> None:
+    """An exhausted caller must not leave its queue entry blocking the head.
+
+    Every rollover preserves the request's queue entry with nobody left to
+    reattach it, so the client withdraws the entry explicitly once its
+    bounded reattach budget is spent.
+    """
+
+    manager, adapter, client = _wire(capacity, credential_source="oauth_volume")
+    profile = manager._profiles[PROFILE_ID]
+    manager._rollover_requested = True
+
+    with pytest.raises(WorkflowUpdateFailedError):
+        await client.acquire_maintenance_lease(
+            runtime_id=RUNTIME_ID,
+            profile_id=PROFILE_ID,
+            owner_id="repair-a",
+            purpose=CredentialLeasePurpose.CREDENTIAL_REPAIR,
+            metadata={"workflowId": "repair-a", "ownerIsWorkflow": False},
+        )
+
+    assert len(adapter.updates) == 3
+    assert [name for _, name, _ in adapter.signals] == [
+        "withdraw_maintenance_waiter"
+    ]
+    _, _, withdrawal = adapter.signals[0]
+    assert withdrawal["profile_id"] == PROFILE_ID
+    assert withdrawal["requester_workflow_id"] == "repair-a"
+    assert profile.maintenance_queue_position("repair-a") == -1
+    assert profile.exclusive_maintenance_waiters == 0

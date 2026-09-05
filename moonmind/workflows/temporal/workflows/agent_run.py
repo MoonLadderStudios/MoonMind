@@ -538,6 +538,25 @@ def _normalize_agent_runtime_id(agent_id: str) -> str:
 
     return str(agent_id).strip().lower().replace("-", "_")
 
+
+def _coerce_fencing_generation(value: object) -> int | None:
+    """Coerce a slot-assignment fencing generation, or ``None`` when absent.
+
+    A missing generation means the grant predates fenced assignments and the
+    release stays legacy unfenced. A present but malformed generation is also
+    ``None`` here: quoting an invalid value back would be refused as stale,
+    which would leak the slot, while omitting it preserves the exact legacy
+    release the manager honours.
+    """
+
+    if value is None:
+        return None
+    try:
+        generation = int(value)  # type: ignore[arg-type]
+    except (TypeError, ValueError):
+        return None
+    return generation if generation > 0 else None
+
 def _legacy_manager_workflow_id(runtime_id: str) -> str:
     # Preserve legacy workflow IDs for in-flight histories. New executions use
     # provider-profile-manager IDs once the replay patch is active.
@@ -779,6 +798,12 @@ class MoonMindAgentRun:
         self.run_id: str | None = None
         self.agent_kind: str | None = None
         self._assigned_profile_id: str | None = None
+        # Monotonic grant generation the manager assigned with the slot. It is
+        # quoted back on release so a delayed duplicate release cannot free a
+        # replacement grant that reused this workflow's owner ID. ``None``
+        # while the grant predates fenced assignments; the release is then
+        # honoured as legacy unfenced.
+        self._assigned_slot_fencing_generation: int | None = None
         self._external_agent_id: str | None = None
         self._omnigent_session_workflow_id: str | None = None
         # Auto-answer state (Jules question auto-answer, spec 094)
@@ -3739,6 +3764,11 @@ class MoonMindAgentRun:
                 if self._profile_id_from_manager_lease(manager_state) == profile_id:
                     # The grant landed while the signal was in flight.
                     self._assigned_profile_id = profile_id
+                    self._assigned_slot_fencing_generation = (
+                        _coerce_fencing_generation(
+                            manager_state.get("requester_fencing_generation")
+                        )
+                    )
                     self.slot_assigned_event.set()
                     break
                 await self._ensure_manager_and_signal(
@@ -4072,6 +4102,18 @@ class MoonMindAgentRun:
             "requester_workflow_id": workflow.info().workflow_id,
             "profile_id": profile_id,
         }
+        if (
+            self._assigned_slot_fencing_generation is not None
+            and profile_id is not None
+            and profile_id == self._assigned_profile_id
+        ):
+            # Fence the release to the exact grant this run holds. A retry
+            # that re-sends this signal after the owner ID was granted again
+            # must not release the replacement holder. A generation is quoted
+            # only for the profile it was assigned with; anything else stays
+            # legacy unfenced so an unrelated release cannot be refused as
+            # stale.
+            payload["fencing_generation"] = self._assigned_slot_fencing_generation
         if workflow.patched(SLOT_HANDOFF_PATCH_ID):
             lease_group_id = self._lease_group_id()
             if lease_group_id:
@@ -4091,6 +4133,9 @@ class MoonMindAgentRun:
     @workflow.signal
     def slot_assigned(self, payload: dict) -> None:
         self._assigned_profile_id = payload.get("profile_id")
+        self._assigned_slot_fencing_generation = _coerce_fencing_generation(
+            payload.get("fencing_generation")
+        )
         self.slot_assigned_event.set()
 
     @workflow.update(name="Pause")
@@ -4786,6 +4831,7 @@ class MoonMindAgentRun:
                     raise
             self.slot_assigned_event.clear()
             self._assigned_profile_id = None
+            self._assigned_slot_fencing_generation = None
         else:
             manager_handle = workflow.get_external_workflow_handle(manager_id)
             profile_count = await self._sync_manager_profiles(
@@ -6757,6 +6803,7 @@ class MoonMindAgentRun:
                             self.completion_event.clear()
                             self.final_result = None
                             self._assigned_profile_id = None
+                            self._assigned_slot_fencing_generation = None
                             self.run_status = RunStatus.launching
                             continue
                     self.final_result = await self._evaluate_terminal_contract(
@@ -6795,6 +6842,7 @@ class MoonMindAgentRun:
                             self.completion_event.clear()
                             self.final_result = None
                             self._assigned_profile_id = None
+                            self._assigned_slot_fencing_generation = None
                             self.run_status = RunStatus.launching
                             continue
                     if workflow.patched(
@@ -6946,6 +6994,7 @@ class MoonMindAgentRun:
                         self.completion_event.clear()
                         self.final_result = None
                         self._assigned_profile_id = None
+                        self._assigned_slot_fencing_generation = None
                         retry_execution_profile_ref = requested_execution_profile_ref
                         if (
                             sticky_pinned_profile_on_cooldown_retry
@@ -6990,6 +7039,7 @@ class MoonMindAgentRun:
                         self.completion_event.clear()
                         self.final_result = None
                         self._assigned_profile_id = None
+                        self._assigned_slot_fencing_generation = None
                         retry_execution_profile_ref = requested_execution_profile_ref
                         if (
                             sticky_pinned_profile_on_cooldown_retry

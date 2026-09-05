@@ -142,6 +142,20 @@ def evidence_observation_is_current(
     return age <= max_age
 
 
+def _current_evidence_identity(profile: Any, *, image_ref: str) -> str | None:
+    """Return the complete versioned evidence identity for one profile.
+
+    ``None`` when the identity cannot be computed, so callers fall back to
+    the legacy image-and-generation comparison instead of treating every
+    record as fresh or every profile as exhausted.
+    """
+
+    try:
+        return evidence_identity_for_profile(profile, image_ref=image_ref)
+    except Exception:
+        return None
+
+
 def revalidation_is_exhausted(profile: Any, *, image_refs: Collection[str]) -> bool:
     """Report whether re-validation gave up on this credential and image.
 
@@ -152,9 +166,11 @@ def revalidation_is_exhausted(profile: Any, *, image_refs: Collection[str]) -> b
     probing the provider on every background pass and keeps readiness from
     promising a wait that finishes automatically.
 
-    The record is scoped to the image and credential generation it was earned
-    against, so re-pinning the host image or reconnecting the credential
-    restores the full attempt budget without a separate reset action.
+    The record is scoped to the complete versioned evidence identity it was
+    earned against \u2014 probe contract, image, credential generation,
+    materializer, provider route, and selected model \u2014 so genuinely new
+    validation work receives a fresh attempt budget. Records written before
+    the identity was stored keep the legacy image-and-generation comparison.
     """
 
     behavior = getattr(profile, "command_behavior", None) or {}
@@ -168,7 +184,20 @@ def revalidation_is_exhausted(profile: Any, *, image_refs: Collection[str]) -> b
     if generation != int(profile.credential_generation):
         # A rotated credential has not been attempted yet.
         return False
-    return str(record.get("imageRef") or "") in set(image_refs)
+    record_image = str(record.get("imageRef") or "")
+    if record_image not in set(image_refs):
+        return False
+    recorded_identity = record.get("evidenceIdentity")
+    if recorded_identity is None:
+        return True
+    current_identity = _current_evidence_identity(profile, image_ref=record_image)
+    if current_identity is None:
+        # The identity cannot be recomputed; the image and generation already
+        # matched, so preserve the recorded verdict rather than flipping it.
+        return True
+    # A changed route, materializer, model, or probe contract is different
+    # validation work and restores the full attempt budget.
+    return str(recorded_identity) == str(current_identity)
 
 
 def evidence_matches_launchable_identity(
@@ -799,6 +828,7 @@ async def _revalidate_stale_evidence(
                 session_factory=session_factory,
                 profile_id=profile_id,
                 image_ref=image_ref,
+                evidence_identity=operation_id,
             )
             continue
 
@@ -957,6 +987,7 @@ async def _record_revalidation_failure(
     session_factory: Any,
     profile_id: str,
     image_ref: str,
+    evidence_identity: str | None = None,
 ) -> None:
     """Count a failed re-validation so readiness can stop promising a retry.
 
@@ -965,6 +996,11 @@ async def _record_revalidation_failure(
     an in-flight attempt unless the outcome is recorded. Readiness reads this to
     tell "MoonMind is re-validating" apart from "this credential needs an
     operator".
+
+    The attempt budget is scoped to the complete versioned evidence identity:
+    changing the default model, the route, the materializer, or the probe
+    contract is genuinely new validation work and restarts the budget instead
+    of inheriting the old identity's exhaustion.
     """
 
     from api_service.db.models import ManagedAgentProviderProfile
@@ -975,20 +1011,38 @@ async def _record_revalidation_failure(
             return
         behavior = dict(profile.command_behavior or {})
         previous = behavior.get(REVALIDATION_FAILURE_KEY)
+        if evidence_identity is None:
+            evidence_identity = _current_evidence_identity(
+                profile, image_ref=image_ref
+            )
         attempts = 0
-        if (
-            isinstance(previous, dict)
-            and str(previous.get("imageRef") or "") == image_ref
-            and int(previous.get("credentialGeneration") or 0)
-            == int(profile.credential_generation)
-        ):
-            try:
-                attempts = int(previous.get("attempts") or 0)
-            except (TypeError, ValueError):
-                attempts = 0
+        if isinstance(previous, dict):
+            previous_identity = previous.get("evidenceIdentity")
+            if previous_identity is not None or evidence_identity is not None:
+                same_identity = (
+                    previous_identity is not None
+                    and str(previous_identity) == str(evidence_identity or "")
+                )
+            else:
+                # Records written before the identity was stored carry the
+                # attempt forward on the legacy image-and-generation key.
+                try:
+                    same_identity = (
+                        str(previous.get("imageRef") or "") == image_ref
+                        and int(previous.get("credentialGeneration") or 0)
+                        == int(profile.credential_generation)
+                    )
+                except (TypeError, ValueError):
+                    same_identity = False
+            if same_identity:
+                try:
+                    attempts = int(previous.get("attempts") or 0)
+                except (TypeError, ValueError):
+                    attempts = 0
         behavior[REVALIDATION_FAILURE_KEY] = {
             "imageRef": image_ref,
             "credentialGeneration": int(profile.credential_generation),
+            "evidenceIdentity": evidence_identity,
             "attempts": attempts + 1,
             "exhausted": attempts + 1 >= MAX_REVALIDATION_ATTEMPTS,
             "lastAttemptAt": datetime.now(UTC).isoformat(),

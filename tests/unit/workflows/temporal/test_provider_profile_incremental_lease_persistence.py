@@ -18,7 +18,7 @@ rewrite.
 from __future__ import annotations
 
 import contextlib
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any
 from unittest.mock import patch
 
@@ -281,3 +281,295 @@ async def test_a_grant_without_a_lease_id_is_rejected() -> None:
 
     assert _delete_targets(recorder) == []
     assert recorder.added == []
+
+
+class _LeaseRow:
+    """A minimal stand-in for a ProviderProfileSlotLease ORM row."""
+
+    def __init__(self, **fields: Any) -> None:
+        self.runtime_id = fields.get("runtime_id", "opencode")
+        self.workflow_id = fields.get("workflow_id", "agent-run-3")
+        self.profile_id = fields.get("profile_id", "opencode-zen-free")
+        self.lease_id = fields.get("lease_id", "agent-run-3")
+        self.owner_id = fields.get("owner_id", "agent-run-3")
+        self.purpose = fields.get("purpose", "execution_direct")
+        self.lease_state = fields.get("lease_state", "held")
+        self.fencing_generation = fields.get("fencing_generation", 1)
+        self.safe_metadata_json = fields.get("safe_metadata_json")
+        self.released_at = fields.get("released_at")
+
+
+class _LeaseTableRecorder(_Recorder):
+    """Serves lease rows from memory for grant/release/load/purge actions."""
+
+    def __init__(self, rows: list[_LeaseRow] | None = None) -> None:
+        super().__init__()
+        self.table: dict[str, _LeaseRow] = {
+            row.lease_id: row for row in (rows or [])
+        }
+        self.deleted: list[str] = []
+
+    async def execute(self, statement):  # type: ignore[override]
+        self.statements.append(statement)
+        text = str(statement)
+        recorder = self
+
+        class _Scalars:
+            def all(self) -> list[_LeaseRow]:
+                return list(recorder.table.values())
+
+            def first(self) -> _LeaseRow | None:
+                params = statement.compile().params
+                lease_id = next(
+                    (
+                        value
+                        for key, value in params.items()
+                        if key.startswith("lease_id")
+                    ),
+                    None,
+                )
+                if lease_id is not None:
+                    return recorder.table.get(str(lease_id))
+                rows = list(recorder.table.values())
+                return rows[0] if rows else None
+
+        class _Result:
+            def scalars(self) -> _Scalars:
+                return _Scalars()
+
+            def scalar(self) -> Any:
+                if "max(" in text.lower():
+                    generations = [
+                        row.fencing_generation or 0
+                        for row in recorder.table.values()
+                    ]
+                    return max(generations) if generations else None
+                return None
+
+            @property
+            def rowcount(self) -> int:
+                return len(recorder.deleted)
+
+        upper = text.lstrip().upper()
+        if upper.startswith("DELETE"):
+            params = statement.compile().params
+            horizon = next(
+                (
+                    value
+                    for value in params.values()
+                    if isinstance(value, datetime)
+                ),
+                None,
+            )
+            for lease_id, row in list(recorder.table.items()):
+                if row.lease_state != "released" or row.released_at is None:
+                    continue
+                released_at = row.released_at
+                if released_at.tzinfo is None:
+                    released_at = released_at.replace(tzinfo=timezone.utc)
+                if horizon is None or released_at < horizon:
+                    del recorder.table[lease_id]
+                    recorder.deleted.append(lease_id)
+        return _Result()
+
+    async def delete(self, row: _LeaseRow) -> None:  # type: ignore[override]
+        self.table.pop(row.lease_id, None)
+        self.deleted.append(row.lease_id)
+
+
+async def _run_table_action(
+    action: str,
+    leases: list[dict[str, Any]],
+    rows: list[_LeaseRow] | None = None,
+) -> _LeaseTableRecorder:
+    from moonmind.workflows.temporal.artifacts import TemporalArtifactActivities
+
+    recorder = _LeaseTableRecorder(rows)
+    with _patch_session(recorder):
+        recorder.result = (
+            await TemporalArtifactActivities(None).provider_profile_sync_slot_leases(
+                runtime_id="opencode", leases=leases, action=action
+            )
+        )
+    return recorder
+
+
+def _grant_payload(
+    generation: int,
+    *,
+    purpose: str = "execution_omnigent",
+    identity: str = "evidence-1",
+    lease_id: str = "agent-run-3",
+) -> dict[str, Any]:
+    return {
+        "lease_id": lease_id,
+        "workflow_id": lease_id,
+        "profile_id": "opencode-zen-free",
+        "owner_id": lease_id,
+        "purpose": purpose,
+        "fencing_generation": generation,
+        "safe_metadata": {"evidenceIdentity": identity},
+    }
+
+
+@pytest.mark.asyncio
+async def test_a_duplicate_grant_verifies_the_full_grant_identity() -> None:
+    """An idempotent retry of the same grant acks without touching the row."""
+
+    recorder = await _run_table_action(
+        "grant",
+        [_grant_payload(5)],
+        [
+            _LeaseRow(
+                fencing_generation=5,
+                safe_metadata_json={"evidenceIdentity": "evidence-1"},
+            )
+        ],
+    )
+
+    assert recorder.result == {"granted": True, "duplicate": True}
+    assert recorder.added == []
+    assert recorder.deleted == []
+
+
+@pytest.mark.asyncio
+async def test_a_stale_row_is_replaced_by_a_newer_grant() -> None:
+    """A newer generation atomically replaces a row a failed release left behind."""
+
+    recorder = await _run_table_action(
+        "grant",
+        [_grant_payload(6)],
+        [
+            _LeaseRow(
+                fencing_generation=5,
+                safe_metadata_json={"evidenceIdentity": "evidence-1"},
+            )
+        ],
+    )
+
+    assert recorder.result == {"granted": True, "duplicate": True, "replaced": True}
+    assert recorder.deleted == ["agent-run-3"]
+    assert len(recorder.added) == 1
+    assert recorder.added[0].fencing_generation == 6
+
+
+@pytest.mark.asyncio
+async def test_an_older_grant_never_downgrades_the_fence() -> None:
+    """A persisted row newer than the request fails closed, not replaced."""
+
+    recorder = await _run_table_action(
+        "grant",
+        [_grant_payload(5)],
+        [
+            _LeaseRow(
+                fencing_generation=6,
+                safe_metadata_json={"evidenceIdentity": "evidence-1"},
+            )
+        ],
+    )
+
+    assert recorder.result == {"error": "lease fencing regression"}
+    assert recorder.added == []
+    assert recorder.table["agent-run-3"].fencing_generation == 6
+
+
+@pytest.mark.asyncio
+async def test_a_release_tombstones_instead_of_deleting() -> None:
+    """The released row keeps its generation as high-water evidence."""
+
+    recorder = await _run_table_action(
+        "release_one",
+        [{"lease_id": "agent-run-3", "fencing_generation": 5}],
+        [_LeaseRow(fencing_generation=5)],
+    )
+
+    assert recorder.result == {"released": True}
+    row = recorder.table["agent-run-3"]
+    assert row.lease_state == "released"
+    assert row.released_at is not None
+
+
+@pytest.mark.asyncio
+async def test_load_excludes_tombstones_but_reports_the_high_water_mark() -> None:
+    """A fresh manager resumes above every issued generation, live or not."""
+
+    recorder = await _run_table_action(
+        "load",
+        [],
+        [
+            _LeaseRow(
+                lease_id="live",
+                fencing_generation=4,
+                safe_metadata_json={"evidenceIdentity": "evidence-1"},
+            ),
+            _LeaseRow(
+                lease_id="gone",
+                fencing_generation=9,
+                lease_state="released",
+                released_at=datetime.now(timezone.utc),
+            ),
+        ],
+    )
+
+    assert recorder.result["max_fencing_generation"] == 9
+    load_statement = recorder.statements[0]
+    assert "lease_state" in str(load_statement)
+    assert "held" in list(load_statement.compile().params.values())
+
+
+@pytest.mark.asyncio
+async def test_a_grant_never_acks_a_tombstone_as_a_live_duplicate() -> None:
+    """A released row is dead authority: re-granting resurrects the row."""
+
+    recorder = await _run_table_action(
+        "grant",
+        [_grant_payload(10)],
+        [
+            _LeaseRow(
+                fencing_generation=9,
+                lease_state="released",
+                released_at=datetime.now(timezone.utc),
+                safe_metadata_json={"evidenceIdentity": "evidence-1"},
+            )
+        ],
+    )
+
+    assert recorder.result == {"granted": True, "duplicate": True, "replaced": True}
+    assert recorder.deleted == ["agent-run-3"]
+    assert len(recorder.added) == 1
+    assert recorder.added[0].lease_state == "held"
+
+
+@pytest.mark.asyncio
+async def test_purge_reaps_only_tombstones_past_the_horizon() -> None:
+    """Bounded table growth that cannot reap a still-redeliverable release."""
+
+    now = datetime.now(timezone.utc)
+    recorder = await _run_table_action(
+        "purge_released",
+        [{"older_than_seconds": 30 * 24 * 3600}],
+        [
+            _LeaseRow(
+                lease_id="held",
+                fencing_generation=7,
+            ),
+            _LeaseRow(
+                lease_id="ancient",
+                fencing_generation=3,
+                lease_state="released",
+                released_at=now - timedelta(days=40),
+            ),
+            _LeaseRow(
+                lease_id="fresh",
+                fencing_generation=6,
+                lease_state="released",
+                released_at=now - timedelta(hours=1),
+            ),
+        ],
+    )
+
+    assert recorder.result == {"purged": 1}
+    assert sorted(recorder.table) == ["fresh", "held"]
+    purge_text = str(recorder.statements[0])
+    assert "lease_state" in purge_text
+    assert "released" in list(recorder.statements[0].compile().params.values())

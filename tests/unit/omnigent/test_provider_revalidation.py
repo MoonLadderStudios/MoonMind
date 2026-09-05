@@ -17,9 +17,12 @@ import pytest
 
 from moonmind.omnigent.bootstrap.provider_revalidation import (
     ProviderReconcileOutcome,
+    REVALIDATION_FAILURE_KEY,
+    evidence_identity_for_profile,
     evidence_is_current,
     reconcile_opencode_provider_readiness,
     reset_enrollment_attempts,
+    revalidation_is_exhausted,
 )
 
 CURRENT_IMAGE = "ghcr.io/moonmind/omnigent-host-opencode@sha256:" + "a" * 64
@@ -1522,3 +1525,83 @@ async def test_standing_down_does_not_release_the_holders_lease(
     )
 
     assert releases == []
+
+
+def test_exhaustion_is_scoped_to_the_complete_evidence_identity() -> None:
+    """A changed model, route, materializer, or contract restarts the budget."""
+
+    profile = _profile()
+    identity = evidence_identity_for_profile(profile, image_ref=CURRENT_IMAGE)
+    profile.command_behavior = {
+        REVALIDATION_FAILURE_KEY: {
+            "imageRef": CURRENT_IMAGE,
+            "credentialGeneration": profile.credential_generation,
+            "evidenceIdentity": identity,
+            "attempts": 3,
+            "exhausted": True,
+        }
+    }
+    assert revalidation_is_exhausted(profile, image_refs=(CURRENT_IMAGE,)) is True
+
+    profile.default_model = "opencode-go/some-other-model"
+    assert revalidation_is_exhausted(profile, image_refs=(CURRENT_IMAGE,)) is False
+
+
+def test_exhaustion_without_a_stored_identity_keeps_the_legacy_key() -> None:
+    """Records written before the identity still exhaust on image+generation."""
+
+    profile = _profile()
+    profile.command_behavior = {
+        REVALIDATION_FAILURE_KEY: {
+            "imageRef": CURRENT_IMAGE,
+            "credentialGeneration": profile.credential_generation,
+            "attempts": 3,
+            "exhausted": True,
+        }
+    }
+    assert revalidation_is_exhausted(profile, image_refs=(CURRENT_IMAGE,)) is True
+
+
+@pytest.mark.asyncio
+async def test_failure_budget_is_counted_per_evidence_identity() -> None:
+    from moonmind.omnigent.bootstrap.provider_revalidation import (
+        _record_revalidation_failure,
+    )
+
+    profile = _profile()
+    factory = _session_factory([profile])
+    await _record_revalidation_failure(
+        session_factory=factory,
+        profile_id=profile.profile_id,
+        image_ref=CURRENT_IMAGE,
+        evidence_identity="identity-a",
+    )
+    await _record_revalidation_failure(
+        session_factory=factory,
+        profile_id=profile.profile_id,
+        image_ref=CURRENT_IMAGE,
+        evidence_identity="identity-a",
+    )
+    await _record_revalidation_failure(
+        session_factory=factory,
+        profile_id=profile.profile_id,
+        image_ref=CURRENT_IMAGE,
+        evidence_identity="identity-a",
+    )
+    record = profile.command_behavior[REVALIDATION_FAILURE_KEY]
+    assert record["evidenceIdentity"] == "identity-a"
+    assert record["attempts"] == 3
+    assert record["exhausted"] is True
+
+    # Genuinely new validation work restarts the budget instead of inheriting
+    # the old identity's exhaustion.
+    await _record_revalidation_failure(
+        session_factory=factory,
+        profile_id=profile.profile_id,
+        image_ref=CURRENT_IMAGE,
+        evidence_identity="identity-b",
+    )
+    record = profile.command_behavior[REVALIDATION_FAILURE_KEY]
+    assert record["evidenceIdentity"] == "identity-b"
+    assert record["attempts"] == 1
+    assert record["exhausted"] is False

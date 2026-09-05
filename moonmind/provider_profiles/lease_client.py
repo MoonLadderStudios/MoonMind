@@ -8,9 +8,13 @@ activity/service boundary client; workflow code uses deterministic handles.
 from __future__ import annotations
 
 import hashlib
+import logging
 from dataclasses import dataclass
 from enum import Enum
 from typing import Any, Mapping
+
+
+logger = logging.getLogger(__name__)
 
 
 class CredentialLeasePurpose(str, Enum):
@@ -299,8 +303,50 @@ class ProviderProfileLeaseClient:
                 )
                 if attempt + 1 < _MAX_MANAGER_UPDATE_ATTEMPTS and reattach:
                     continue
+                if (
+                    update_name == "AcquireCredentialMaintenanceLease"
+                    and isinstance(cause, ApplicationError)
+                    and cause.type == MANAGER_ROLLOVER_ERROR_TYPE
+                ):
+                    # The final attempt detached on a rollover, so the
+                    # successor still preserves this request's queue entry
+                    # with nobody left to reattach it. Withdraw the entry
+                    # explicitly: otherwise it holds the queue head and blocks
+                    # every consumer behind it until the abandonment timeout.
+                    await self._withdraw_maintenance_waiter(runtime_id, payload)
                 raise
         raise AssertionError("bounded manager update retry did not terminate")
+
+    async def _withdraw_maintenance_waiter(
+        self, runtime_id: str, payload: Mapping[str, Any]
+    ) -> None:
+        """Withdraw the preserved queue entry this caller is abandoning.
+
+        Failures are logged, never raised: the caller is already failing, the
+        withdrawal touches only the waiter record (never a held lease), and
+        the manager's abandonment eviction remains the backstop.
+        """
+
+        try:
+            await self._adapter.signal_workflow(
+                await self._ensure_manager(runtime_id),
+                "withdraw_maintenance_waiter",
+                {
+                    "requester_workflow_id": (
+                        payload.get("requester_workflow_id")
+                        or payload.get("owner_id")
+                    ),
+                    "owner_id": payload.get("owner_id"),
+                    "profile_id": payload.get("execution_profile_ref"),
+                    "runtime_id": runtime_id,
+                },
+            )
+        except Exception:
+            logger.warning(
+                "Failed to withdraw abandoned maintenance waiter for runtime %s",
+                runtime_id,
+                exc_info=True,
+            )
 
     async def acquire_execution_lease(
         self,

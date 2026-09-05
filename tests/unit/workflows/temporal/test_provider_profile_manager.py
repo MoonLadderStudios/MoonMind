@@ -509,7 +509,9 @@ class TestProviderProfileManagerHelpers:
         wf._runtime_id = "codex_cli"
         assigned: list[tuple[str, str]] = []
 
-        async def fake_signal(requester_workflow_id: str, profile_id: str) -> None:
+        async def fake_signal(
+            requester_workflow_id: str, profile_id: str, **_kwargs: object
+        ) -> None:
             assigned.append((requester_workflow_id, profile_id))
 
         async def fake_execute_activity(
@@ -1253,7 +1255,9 @@ class TestProviderProfileManagerHelpers:
         ]
         assigned: list[tuple[str, str]] = []
 
-        async def fake_signal(requester_workflow_id: str, profile_id: str) -> None:
+        async def fake_signal(
+            requester_workflow_id: str, profile_id: str, **_kwargs: object
+        ) -> None:
             assigned.append((requester_workflow_id, profile_id))
 
         wf._signal_slot_assigned = fake_signal  # type: ignore[method-assign]
@@ -1290,7 +1294,9 @@ class TestProviderProfileManagerHelpers:
         ]
         assigned: list[tuple[str, str]] = []
 
-        async def fake_signal(requester_workflow_id: str, profile_id: str) -> None:
+        async def fake_signal(
+            requester_workflow_id: str, profile_id: str, **_kwargs: object
+        ) -> None:
             assigned.append((requester_workflow_id, profile_id))
 
         wf._signal_slot_assigned = fake_signal  # type: ignore[method-assign]
@@ -1408,7 +1414,9 @@ class TestProviderProfileManagerHelpers:
         ]
         assigned: list[tuple[str, str]] = []
 
-        async def fake_signal(requester_workflow_id: str, profile_id: str) -> None:
+        async def fake_signal(
+            requester_workflow_id: str, profile_id: str, **_kwargs: object
+        ) -> None:
             assigned.append((requester_workflow_id, profile_id))
 
         wf._signal_slot_assigned = fake_signal  # type: ignore[method-assign]
@@ -1448,7 +1456,9 @@ class TestProviderProfileManagerHelpers:
         ]
         assigned: list[tuple[str, str]] = []
 
-        async def fake_signal(requester_workflow_id: str, profile_id: str) -> None:
+        async def fake_signal(
+            requester_workflow_id: str, profile_id: str, **_kwargs: object
+        ) -> None:
             assigned.append((requester_workflow_id, profile_id))
 
         wf._signal_slot_assigned = fake_signal  # type: ignore[method-assign]
@@ -1553,7 +1563,9 @@ class TestProviderProfileManagerHelpers:
         ]
         assigned: list[tuple[str, str]] = []
 
-        async def fake_signal(requester_workflow_id: str, profile_id: str) -> None:
+        async def fake_signal(
+            requester_workflow_id: str, profile_id: str, **_kwargs: object
+        ) -> None:
             assigned.append((requester_workflow_id, profile_id))
 
         wf._signal_slot_assigned = fake_signal  # type: ignore[method-assign]
@@ -1588,7 +1600,9 @@ class TestProviderProfileManagerHelpers:
         ]
         assigned: list[tuple[str, str]] = []
 
-        async def fake_signal(requester_workflow_id: str, profile_id: str) -> None:
+        async def fake_signal(
+            requester_workflow_id: str, profile_id: str, **_kwargs: object
+        ) -> None:
             assigned.append((requester_workflow_id, profile_id))
 
         wf._signal_slot_assigned = fake_signal  # type: ignore[method-assign]
@@ -1621,7 +1635,9 @@ class TestProviderProfileManagerHelpers:
         ]
         assigned: list[tuple[str, str]] = []
 
-        async def fake_signal(requester_workflow_id: str, profile_id: str) -> None:
+        async def fake_signal(
+            requester_workflow_id: str, profile_id: str, **_kwargs: object
+        ) -> None:
             assigned.append((requester_workflow_id, profile_id))
 
         wf._signal_slot_assigned = fake_signal  # type: ignore[method-assign]
@@ -1678,7 +1694,9 @@ class TestProviderProfileManagerHelpers:
         ]
         assigned: list[tuple[str, str]] = []
 
-        async def fake_signal(requester_workflow_id: str, profile_id: str) -> None:
+        async def fake_signal(
+            requester_workflow_id: str, profile_id: str, **_kwargs: object
+        ) -> None:
             assigned.append((requester_workflow_id, profile_id))
 
         wf._signal_slot_assigned = fake_signal  # type: ignore[method-assign]
@@ -1949,7 +1967,9 @@ class TestProviderProfileManagerHelpers:
         ]
         assigned: list[tuple[str, str]] = []
 
-        async def fake_signal(requester_workflow_id: str, profile_id: str) -> None:
+        async def fake_signal(
+            requester_workflow_id: str, profile_id: str, **_kwargs: object
+        ) -> None:
             assigned.append((requester_workflow_id, profile_id))
 
         wf._signal_slot_assigned = fake_signal  # type: ignore[method-assign]
@@ -1995,7 +2015,9 @@ class TestProviderProfileManagerHelpers:
         ]
         assigned: list[tuple[str, str]] = []
 
-        async def fake_signal(requester_workflow_id: str, profile_id: str) -> None:
+        async def fake_signal(
+            requester_workflow_id: str, profile_id: str, **_kwargs: object
+        ) -> None:
             assigned.append((requester_workflow_id, profile_id))
 
         wf._signal_slot_assigned = fake_signal  # type: ignore[method-assign]
