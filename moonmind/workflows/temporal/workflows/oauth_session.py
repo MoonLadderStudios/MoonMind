@@ -104,6 +104,7 @@ class MoonMindOAuthSessionWorkflow:
         self._maintenance_runtime_id: str = ""
         self._maintenance_lease_id: str = ""
         self._maintenance_purpose: str = "oauth_connect"
+        self._maintenance_fencing_generation: Optional[int] = None
 
     # -- Signals ---------------------------------------------------------------
 
@@ -514,6 +515,17 @@ class MoonMindOAuthSessionWorkflow:
         self._maintenance_runtime_id = runtime_id
         self._maintenance_lease_id = str(result.get("lease_id") or owner_id)
         self._maintenance_purpose = purpose
+        # MoonLadderStudios/MoonMind#3879: quote the grant generation back on
+        # release so a replayed release cannot free a replacement holder of the
+        # same deterministic owner ID. Histories recorded before fenced grants
+        # carry no generation and keep their unfenced release.
+        raw_fence = result.get("fencing_generation")
+        try:
+            self._maintenance_fencing_generation = (
+                int(raw_fence) if raw_fence is not None else None
+            )
+        except (TypeError, ValueError):
+            self._maintenance_fencing_generation = None
 
     async def _release_maintenance_lease(self) -> None:
         if not self._maintenance_lease_acquired:
@@ -522,17 +534,19 @@ class MoonMindOAuthSessionWorkflow:
         manager = workflow.get_external_workflow_handle(
             f"provider-profile-manager:{self._maintenance_runtime_id}"
         )
-        await manager.signal(
-            "release_slot",
-            {
-                "requester_workflow_id": owner_id,
-                "owner_id": owner_id,
-                "runtime_id": self._maintenance_runtime_id,
-                "profile_id": self._maintenance_profile_id,
-                "lease_id": self._maintenance_lease_id,
-                "purpose": self._maintenance_purpose,
-            },
-        )
+        release_payload: dict[str, Any] = {
+            "requester_workflow_id": owner_id,
+            "owner_id": owner_id,
+            "runtime_id": self._maintenance_runtime_id,
+            "profile_id": self._maintenance_profile_id,
+            "lease_id": self._maintenance_lease_id,
+            "purpose": self._maintenance_purpose,
+        }
+        if self._maintenance_fencing_generation is not None:
+            release_payload["fencing_generation"] = (
+                self._maintenance_fencing_generation
+            )
+        await manager.signal("release_slot", release_payload)
         self._maintenance_lease_acquired = False
 
     async def _finish(

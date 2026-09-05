@@ -423,6 +423,14 @@ OpenCode model-catalog evidence binds:
 
 `OPENCODE_MODEL_CATALOG_MAX_AGE_HOURS` bounds observation age and defaults to `6`. A value of `0` revalidates only when image or credential identity changes.
 
+Refresh is proactive: an observation is re-probed a bounded lead time *before*
+it expires, so a healthy deployment never advertises a catalog it has already
+declared stale. `OPENCODE_MODEL_CATALOG_REFRESH_LEAD_MINUTES` owns that lead.
+Omitting it derives the lead from the interval — one tenth of the interval,
+capped at five minutes — through the same code path an explicit value takes. An
+explicit value is clamped to half the interval, because a lead at or beyond the
+interval would make every observation stale the moment it was written.
+
 Discovery needs refresh when:
 
 - the host image changes
@@ -442,6 +450,23 @@ model and credential materialization. Missing models produce an actionable failu
 without substituting a model or account.
 
 Revalidation attempts are bounded per image and credential generation. Failure to acquire the maintenance lease does not spend a provider probe attempt because no probe occurred.
+
+One refresh is single-flight on a **versioned evidence identity**: the probe
+contract version, the profile, the pinned host image digest, the credential
+generation, the materializer ref, the provider route, and the selected model.
+Two maintainers that would produce interchangeable evidence derive the same
+identity and collapse onto one probe; anything the launch boundary compares
+differently is a different identity that is always allowed to run. The identity
+is recorded on the lease itself, so a second request that reuses an owner ID
+under a different identity or purpose fails closed rather than inheriting
+authority the manager never granted. See
+`docs/Security/ProviderProfiles.md` section 11.8.
+
+A probe that completes after the state it assumed has moved on is not
+committed. Evidence is written only when it names the image the pass ran
+against, that image is still the pinned one, and the profile's credential
+generation is unchanged; otherwise the pass defers and the next one re-probes
+the current identity.
 
 ## 10. Advanced execution configuration
 

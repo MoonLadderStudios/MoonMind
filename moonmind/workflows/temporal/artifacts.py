@@ -3899,6 +3899,7 @@ class TemporalArtifactActivities:
             "owner_id": lease.owner_id,
             "purpose": lease.purpose.value,
             "already_held": lease.already_held,
+            "fencing_generation": lease.fencing_generation,
         }
 
     async def provider_profile_reset_manager(
@@ -4298,6 +4299,13 @@ class TemporalArtifactActivities:
                         "stepExecutionId": row.step_execution_id,
                         "oauthSessionId": row.oauth_session_id,
                         "idempotencyKey": row.idempotency_key,
+                        # MoonLadderStudios/MoonMind#3879: the grant generation
+                        # and the compact evidence identity are part of the
+                        # lease contract, so a manager restart restores the
+                        # authority it actually granted rather than a lease
+                        # that any stale release could free.
+                        "fencingGeneration": row.fencing_generation,
+                        "safeMetadata": row.safe_metadata_json,
                         "expiresAt": row.expires_at.isoformat()
                         if row.expires_at
                         else None,
@@ -4350,6 +4358,19 @@ class TemporalArtifactActivities:
                         step_execution_id=lease.get("stepExecutionId"),
                         oauth_session_id=lease.get("oauthSessionId"),
                         idempotency_key=lease.get("idempotencyKey"),
+                        # MoonLadderStudios/MoonMind#3879: the snapshot rewrite
+                        # must carry the grant generation and the compact
+                        # evidence identity forward. Rewriting a surviving lease
+                        # without them would silently unfence it, and any stale
+                        # release could then free its holder.
+                        fencing_generation=int(
+                            lease.get("fencingGeneration") or 1
+                        ),
+                        safe_metadata_json=(
+                            {"evidenceIdentity": str(lease["evidenceIdentity"])}
+                            if lease.get("evidenceIdentity")
+                            else None
+                        ),
                         expires_at=expires_at,
                     )
                     session.add(new_lease)

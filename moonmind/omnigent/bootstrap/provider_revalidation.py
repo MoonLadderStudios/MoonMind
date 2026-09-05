@@ -51,6 +51,12 @@ OPENCODE_DEPLOYMENT_SECRET_REF = "env://OPENCODE_API_KEY"
 REVALIDATION_FAILURE_KEY = "runtime_revalidation_failure"
 MAX_REVALIDATION_ATTEMPTS = 3
 
+# Version of what one catalog probe collects and how its result is compared.
+# It is part of the single-flight evidence identity, so changing the probe's
+# contract stops a new maintainer from standing down behind an in-flight probe
+# that answers the previous contract.
+MODEL_CATALOG_PROBE_CONTRACT_VERSION = "v2"
+
 # Observations are stamped by whichever host ran the probe, so a small forward
 # skew is ordinary clock disagreement rather than a stale catalog. Anything
 # further ahead cannot be shown to have been taken inside the interval.
@@ -293,27 +299,78 @@ def model_catalog_evidence_identity(
     profile_id: str,
     image_ref: str,
     credential_generation: Any = None,
+    materializer_ref: str = "",
+    provider_route: str = "",
+    model_route: str = "",
+    probe_contract_version: str = MODEL_CATALOG_PROBE_CONTRACT_VERSION,
 ) -> str:
     """Return the exact evidence identity one re-validation pass refreshes.
 
     MoonLadderStudios/MoonMind#3878 invariant 3: credentialless validation is
-    single-flight for one exact evidence identity. The identity is exactly what
-    :func:`evidence_matches_launchable_identity` compares — the profile, the
-    pinned host image, and the credential generation — so two maintainers that
-    would produce interchangeable evidence collapse onto one probe, while a
-    re-pinned image or a rotated credential is a different identity that is
-    always allowed to run.
+    single-flight for one exact evidence identity, so two maintainers that
+    would produce interchangeable evidence collapse onto one probe.
+
+    MoonLadderStudios/MoonMind#3879 completes the identity. Coalescing is only
+    safe when the joiner would have produced the *same* evidence, so the
+    identity must cover everything the launch boundary later compares:
+    :func:`evidence_matches_launchable_identity` checks the credential
+    generation, the pinned host image, the materializer and the selected model,
+    and the readiness route decides which provider answers. An identity missing
+    any of those would let one probe's result stand in for a question it never
+    asked. The probe contract version is included so changing what the probe
+    collects invalidates coalescing rather than silently reusing older-shaped
+    evidence, and it is spelled into the returned prefix so an identity's
+    contract is legible without recomputing it.
     """
 
+    version = (
+        str(probe_contract_version or "").strip()
+        or MODEL_CATALOG_PROBE_CONTRACT_VERSION
+    )
     material = "\x1f".join(
         (
+            version,
             str(profile_id or "").strip(),
             str(image_ref or "").strip(),
             str(credential_generation if credential_generation is not None else ""),
+            str(materializer_ref or "").strip(),
+            str(provider_route or "").strip(),
+            str(model_route or "").strip(),
         )
     )
     digest = hashlib.sha256(material.encode("utf-8")).hexdigest()[:32]
-    return f"opencode-model-catalog:{digest}"
+    return f"opencode-model-catalog:{version}:{digest}"
+
+
+def evidence_identity_for_profile(profile: Any, *, image_ref: str) -> str:
+    """Return the versioned evidence identity for one profile and pinned image.
+
+    Every input this reads is one the launch boundary compares, so a profile
+    whose route, materializer, model or credential changed is a different
+    identity and is never coalesced onto an in-flight probe for the old one.
+    """
+
+    from moonmind.omnigent.harness_platform.materializers import (
+        materializer_ref_for_provider,
+    )
+
+    try:
+        materializer_ref = materializer_ref_for_provider(
+            str(getattr(profile, "runtime_id", "") or ""),
+            str(getattr(profile, "provider_id", "") or ""),
+        )
+    except HarnessPlatformError:
+        # An unresolvable materializer is its own identity: it must not share a
+        # probe with a profile whose materializer the platform does know.
+        materializer_ref = "unresolved"
+    return model_catalog_evidence_identity(
+        profile_id=str(getattr(profile, "profile_id", "") or ""),
+        image_ref=image_ref,
+        credential_generation=getattr(profile, "credential_generation", None),
+        materializer_ref=materializer_ref,
+        provider_route=str(getattr(profile, "provider_id", "") or ""),
+        model_route=str(getattr(profile, "default_model", None) or "").strip(),
+    )
 
 
 def _enrollment_fingerprint(
@@ -597,14 +654,21 @@ async def _revalidate_stale_evidence(
         OpenCodeProviderRuntimeValidationService,
     )
     from moonmind.omnigent.production import build_omnigent_secret_resolver
-    from moonmind.omnigent.settings import opencode_model_catalog_max_age
+    from moonmind.omnigent.settings import (
+        opencode_model_catalog_max_age,
+        opencode_model_catalog_refresh_lead,
+    )
     from moonmind.provider_profiles.lease_client import CredentialLeasePurpose
     from moonmind.provider_profiles.maintenance import (
         acquire_credential_maintenance_guard,
     )
 
     interval = opencode_model_catalog_max_age()
-    refresh_lead = min(timedelta(minutes=5), interval / 10) if interval else timedelta(0)
+    # Deployment-owned lead time: refresh before the observation expires so a
+    # healthy deployment never advertises a catalog it has already declared
+    # stale. Omitting the setting derives the same bounded lead through the
+    # same call, so the default and an explicit value take one code path.
+    refresh_lead = opencode_model_catalog_refresh_lead(max_age=interval)
     refresh_at = datetime.now(UTC) + refresh_lead
     stale = [
         profile
@@ -653,11 +717,7 @@ async def _revalidate_stale_evidence(
         # maintainers racing the same refresh derive the same owner, so the
         # manager grants one of them and reports ``already_held`` to the other
         # instead of running a second provider probe.
-        operation_id = model_catalog_evidence_identity(
-            profile_id=profile_id,
-            image_ref=image_ref,
-            credential_generation=getattr(row, "credential_generation", None),
-        )
+        operation_id = evidence_identity_for_profile(row, image_ref=image_ref)
         try:
             guard = await acquire_credential_maintenance_guard(
                 runtime_id=OPENCODE_RUNTIME_ID,
@@ -667,6 +727,11 @@ async def _revalidate_stale_evidence(
                 metadata={
                     "workflowId": f"provider-revalidation:{operation_id}",
                     "ownerIsWorkflow": False,
+                    # MoonLadderStudios/MoonMind#3879: the manager stores the
+                    # identity on the lease, so a request that reuses this
+                    # owner ID for different evidence fails closed instead of
+                    # inheriting an authority it was never granted.
+                    "evidenceIdentity": operation_id,
                 },
             )
         except Exception as exc:
@@ -741,6 +806,7 @@ async def _revalidate_stale_evidence(
             session_factory=session_factory,
             profile_id=profile_id,
             evidence=evidence,
+            image_ref=image_ref,
         )
         if not committed:
             # The authority handoff did not land, so readiness and planning still
@@ -784,17 +850,35 @@ async def _persist_evidence(
     session_factory: Any,
     profile_id: str,
     evidence: dict[str, Any],
+    image_ref: str,
 ) -> bool:
     """Record refreshed evidence without touching enrolled credential identity.
 
     Returns whether this pass actually committed launchable evidence, so the
     caller never reports a profile refreshed that readiness still rejects.
+
+    A probe under sustained load can finish long after the state it was started
+    against moved on. Every identity input the probe assumed is therefore
+    re-checked here, at the commit boundary, rather than trusted from when the
+    lease was acquired.
     """
 
     from api_service.db.models import (
         ManagedAgentProviderProfile,
         ProviderProfileAuthState,
     )
+
+    observed_image = str(evidence.get("imageRef") or "")
+    if observed_image != image_ref:
+        # The probe answered for an image other than the one this pass ran, so
+        # it says nothing about the deployment's launchable identity.
+        return False
+    pinned_image = _pinned_image_ref()
+    if pinned_image is not None and pinned_image != image_ref:
+        # The deployment re-pinned its host image while the probe ran. Writing
+        # this observation would promote readiness on evidence the current
+        # launch boundary rejects; the next pass re-probes the new identity.
+        return False
 
     async with session_factory() as session:
         profile = await session.get(ManagedAgentProviderProfile, profile_id)
@@ -918,12 +1002,14 @@ async def _record_revalidation_failure(
 __all__ = [
     "MAX_OBSERVATION_CLOCK_SKEW",
     "MAX_REVALIDATION_ATTEMPTS",
+    "MODEL_CATALOG_PROBE_CONTRACT_VERSION",
     "OPENCODE_PROVIDER_ID",
     "OPENCODE_PROVIDER_IDS",
     "OPENCODE_RUNTIME_ID",
     "OPENCODE_SECRET_ROLE",
     "REVALIDATION_FAILURE_KEY",
     "ProviderReconcileOutcome",
+    "evidence_identity_for_profile",
     "evidence_is_current",
     "evidence_matches_launchable_identity",
     "evidence_observation_is_current",
