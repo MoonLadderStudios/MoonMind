@@ -1,3 +1,4 @@
+from moonmind.schemas.workflow_control_models import WorkflowControlBatch
 import uuid
 from datetime import datetime
 from typing import TYPE_CHECKING, Any, Literal, Optional
@@ -377,6 +378,7 @@ class WorkerPauseSnapshotResponse(BaseModel):
         default_factory=WorkerPauseAuditListModel, alias="audit"
     )
     signal_status: Optional[str] = Field(None, alias="signalStatus")
+    control: WorkflowControlBatch | None = None
 
 class PresetInputSchema(BaseModel):
     """Input definition used by presets."""

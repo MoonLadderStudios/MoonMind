@@ -39,7 +39,7 @@ async def test_changed_edited_full_retry_creates_fresh_execution_with_provenance
 ) -> None:
     async with _db(tmp_path) as maker:
         async with maker() as session:
-            service = TemporalExecutionService(session, client_adapter=AsyncMock())
+            service = TemporalExecutionService(session, client_adapter=AsyncMock(describe_workflow=AsyncMock(return_value=None)))
             source = await service.create_execution(
                 workflow_type="MoonMind.UserWorkflow",
                 owner_id=uuid4(),

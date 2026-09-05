@@ -7392,15 +7392,25 @@ async def test_checkpoint_branch_turn_success_remains_verification_pending() -> 
     ) == "verification_pending"
 
 
+@pytest.mark.parametrize("artifacts_fleet", [False, True])
 async def test_checkpoint_branch_turn_terminal_retry_preserves_original_payload(
     monkeypatch: pytest.MonkeyPatch,
+    artifacts_fleet: bool,
 ) -> None:
     """Replay a failure after immutable terminal evidence persistence starts."""
 
     terminal_payloads: list[dict] = []
     rejection_payloads: list[dict] = []
+    monkeypatch.setattr(
+        checkpoint_branch_turn_module.workflow,
+        "patched",
+        lambda patch: artifacts_fleet and patch == checkpoint_branch_turn_module.CHECKPOINT_BRANCH_ARTIFACT_FLEET_PATCH,
+    )
 
     async def execute_activity(name: str, payload: dict, **_kwargs: object) -> object:
+        assert _kwargs.get("task_queue") == (
+            checkpoint_branch_turn_module.ARTIFACTS_TASK_QUEUE if artifacts_fleet else None
+        )
         if name == "checkpoint_branch.turn.persist_terminal":
             terminal_payloads.append(payload)
             raise RuntimeError("injected partial terminal persistence failure")

@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from moonmind.schemas.workflow_control_models import WorkflowControlTarget
+
 from uuid import uuid4
 
 import pytest
@@ -40,13 +42,19 @@ class FakeTemporalService:
         self.resume_calls = 0
         self.metrics = {"queued": 0, "running": 0, "stale_running": 0}
 
-    async def send_quiesce_pause_signal(self) -> int:
+    async def send_quiesce_pause_signal(self, *, request_id, batch, on_progress):
         self.pause_calls += 1
-        return 3
+        batch.enumerated = True
+        batch.targets = [WorkflowControlTarget(workflowId="fixture-workflow", runId="fixture-run", updateId=request_id, state="safe_point")]
+        await on_progress(batch)
+        return batch
 
-    async def send_resume_signal(self) -> int:
+    async def send_quiesce_resume_signal(self, *, request_id, batch, on_progress):
         self.resume_calls += 1
-        return 2
+        batch.enumerated = True
+        batch.targets = [WorkflowControlTarget(workflowId="fixture-workflow", runId="fixture-run", updateId=request_id, state="resumed")]
+        await on_progress(batch)
+        return batch
 
     async def get_drain_metrics(self) -> dict[str, int]:
         return dict(self.metrics)
@@ -193,7 +201,7 @@ async def test_submit_returns_actual_subsystem_signal_status(
             actor_user_id=uuid4(),
         )
 
-    assert snapshot.signal_status == "succeeded:3"
+    assert snapshot.signal_status == "succeeded"
 
 
 @pytest.mark.asyncio
@@ -239,34 +247,37 @@ async def test_snapshot_degrades_when_temporal_metrics_are_unavailable(
 
 
 @pytest.mark.asyncio
-async def test_quiesce_and_resume_fail_fast_when_signal_handler_is_missing(
+async def test_quiesce_and_resume_retain_requested_state_when_signal_handler_is_missing(
     system_operations_session_maker,
 ) -> None:
     async with system_operations_session_maker() as session:
         service = SystemOperationsService(session, temporal_service=object())
 
-        with pytest.raises(SystemOperationUnavailableError, match="Quiesce pause"):
-            await service.submit(
-                WorkerOperationCommand(
-                    action="pause",
-                    mode="quiesce",
-                    reason="Stop claims",
-                    confirmation="Pause workers confirmed",
-                    idempotencyKey=_idempotency_key("missing-pause-handler"),
-                ),
-                actor_user_id=uuid4(),
-            )
+        snapshot = await service.submit(
+            WorkerOperationCommand(
+                action="pause",
+                mode="quiesce",
+                reason="Stop claims",
+                confirmation="Pause workers confirmed",
+                idempotencyKey=_idempotency_key("missing-pause-handler"),
+            ),
+            actor_user_id=uuid4(),
+        )
+        assert snapshot.signal_status == "requested"
+        assert snapshot.control is not None
+        assert snapshot.control.enumerated is False
 
-        with pytest.raises(SystemOperationUnavailableError, match="Resume signal"):
-            await service.submit(
-                WorkerOperationCommand(
-                    action="resume",
-                    reason="Done",
-                    idempotencyKey=_idempotency_key("missing-resume-handler"),
-                ),
-                actor_user_id=uuid4(),
-            )
-
+        snapshot = await service.submit(
+            WorkerOperationCommand(
+                action="resume",
+                reason="Done",
+                idempotencyKey=_idempotency_key("missing-resume-handler"),
+            ),
+            actor_user_id=uuid4(),
+        )
+        assert snapshot.signal_status == "requested"
+        assert snapshot.control is not None
+        assert snapshot.control.enumerated is False
 
 @pytest.mark.asyncio
 async def test_duplicate_idempotency_key_reuses_existing_operation_without_side_effects(
@@ -289,8 +300,8 @@ async def test_duplicate_idempotency_key_reuses_existing_operation_without_side_
         result = await session.execute(select(SettingsAuditEvent))
         audit_events = result.scalars().all()
 
-    assert first.signal_status == "succeeded:3"
-    assert second.signal_status == "succeeded:3"
+    assert first.signal_status == "succeeded"
+    assert second.signal_status == "succeeded"
     assert temporal.pause_calls == 1
     assert len(audit_events) == 1
 
@@ -407,3 +418,117 @@ async def test_snapshot_projects_audit_target_result_and_idempotency_key(
     assert latest.result_status == "succeeded"
     assert latest.signal_status == "succeeded"
     assert latest.idempotency_key == _idempotency_key("projected-audit")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("existing_state", [False, True])
+@pytest.mark.parametrize("conflicting", [False, True])
+async def test_concurrent_command_identity_has_one_durable_owner(
+    system_operations_session_maker, existing_state, conflicting,
+):
+    import asyncio
+    from sqlalchemy import func
+
+    if existing_state:
+        async with system_operations_session_maker() as session:
+            await SystemOperationsService(session).submit(WorkerOperationCommand(
+                action="pause", mode="drain", reason="Existing state",
+                confirmation="pause", idempotencyKey="seed-state",
+            ), actor_user_id=None)
+
+    # Hold the interleaving at a real transaction boundary. Without the authority
+    # lock, both sessions pass the lookup and allocate the same next generation.
+    class InterleavedService(SystemOperationsService):
+        async def _persist_audit(self, *args, **kwargs):
+            await asyncio.sleep(0.02)
+            return await super()._persist_audit(*args, **kwargs)
+
+    async def submit(action):
+        async with system_operations_session_maker() as session:
+            return await InterleavedService(session).submit(WorkerOperationCommand(
+                action=action, mode="drain" if action == "pause" else None,
+                reason="Concurrent command", confirmation="confirmed",
+                idempotencyKey="concurrent-identity",
+            ), actor_user_id=None)
+
+    results = await asyncio.gather(
+        submit("pause"), submit("resume" if conflicting else "pause"),
+        return_exceptions=True,
+    )
+
+    successes = [result for result in results if not isinstance(result, Exception)]
+    errors = [result for result in results if isinstance(result, Exception)]
+    assert len(successes) == (1 if conflicting else 2), results
+    if conflicting:
+        assert len(errors) == 1
+        assert isinstance(errors[0], SystemOperationValidationError)
+        assert errors[0].code == "worker_operation_idempotency_conflict"
+    else:
+        assert not errors
+    assert all(result.system.version == 1 + int(existing_state) for result in successes)
+    async with system_operations_session_maker() as session:
+        count = await session.scalar(select(func.count()).select_from(SettingsAuditEvent))
+        assert count == 1 + int(existing_state)
+        snapshot = await SystemOperationsService(session).snapshot()
+        assert snapshot.system.version == 1 + int(existing_state)
+        assert any(event.idempotency_key == "concurrent-identity" for event in snapshot.audit.latest)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("states", [None, ["failed"], ["unknown"], ["pending"], ["resumed", "failed"], ["resumed"]])
+async def test_resume_command_remains_actionable_until_every_target_confirms(
+    system_operations_session_maker, states,
+):
+    from moonmind.schemas.workflow_control_models import WorkflowControlBatch
+
+    async with system_operations_session_maker() as session:
+        service = SystemOperationsService(session)
+        command = WorkerOperationCommand(
+            action="resume", reason="Resume workflows", idempotencyKey="resume-evidence",
+        )
+        snapshot = await service.submit(command, actor_user_id=None)
+        assert snapshot.system.workers_paused is False
+        if states is not None:
+            audit = await service._audit_event_by_idempotency_key("resume-evidence")
+            batch = WorkflowControlBatch.model_validate(audit.new_value_json["control"])
+            batch.enumerated = True
+            batch.targets = [WorkflowControlTarget(
+                workflowId=f"workflow-{i}", runId=f"run-{i}", updateId=f"update-{i}", state=state,
+            ) for i, state in enumerate(states)]
+            await service._persist_control_progress(audit.id, batch)
+        snapshot = await service.snapshot()
+        resume = next(command for command in snapshot.commands if command.id == "resume-workers")
+        assert resume.available is (states != ["resumed"])
+        if states != ["resumed"]:
+            assert resume.unavailable_reason is None
+            retried = await service.submit(command.model_copy(update={
+                "idempotency_key": "resume-evidence-retry",
+            }), actor_user_id=None)
+            assert retried.control.generation == snapshot.control.generation + 1
+            assert retried.control.request_id == "resume-evidence-retry"
+
+
+@pytest.mark.asyncio
+async def test_command_refreshes_state_loaded_before_another_session_commits(
+    system_operations_session_maker,
+):
+    async with system_operations_session_maker() as session:
+        service = SystemOperationsService(session)
+        pause = WorkerOperationCommand(
+            action="pause", mode="drain", reason="Maintain admission", confirmation="pause",
+            idempotencyKey="initial-state",
+        )
+        await service.submit(pause, actor_user_id=None)
+        stale_row = await service._state_row()
+        assert stale_row.value_json["version"] == 1
+        async with system_operations_session_maker() as other_session:
+            await SystemOperationsService(other_session).submit(WorkerOperationCommand(
+                action="resume", reason="Another operator resumed", idempotencyKey="other-session",
+            ), actor_user_id=None)
+        # The existing ORM identity must be refreshed after the authority lock.
+        result = await service.submit(pause.model_copy(update={
+            "idempotency_key": "latest-state",
+        }), actor_user_id=None)
+        assert result.system.version == 3
+        assert stale_row.value_json["version"] == 3
+        assert result.system.workers_paused is True

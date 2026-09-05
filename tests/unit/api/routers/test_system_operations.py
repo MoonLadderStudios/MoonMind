@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from moonmind.schemas.workflow_control_models import WorkflowControlTarget
+
 from types import SimpleNamespace
 from typing import Iterator
 from uuid import uuid4
@@ -25,13 +27,19 @@ class FakeTemporalService:
         self.resume_calls = 0
         self.metrics = {"queued": 0, "running": 0, "stale_running": 0}
 
-    async def send_quiesce_pause_signal(self) -> int:
+    async def send_quiesce_pause_signal(self, *, request_id, batch, on_progress):
         self.pause_calls += 1
-        return 1
+        batch.enumerated = True
+        batch.targets = [WorkflowControlTarget(workflowId="fixture-workflow", runId="fixture-run", updateId=request_id, state="safe_point")]
+        await on_progress(batch)
+        return batch
 
-    async def send_resume_signal(self) -> int:
+    async def send_quiesce_resume_signal(self, *, request_id, batch, on_progress):
         self.resume_calls += 1
-        return 1
+        batch.enumerated = True
+        batch.targets = [WorkflowControlTarget(workflowId="fixture-workflow", runId="fixture-run", updateId=request_id, state="resumed")]
+        await on_progress(batch)
+        return batch
 
     async def get_drain_metrics(self) -> dict[str, int]:
         return dict(self.metrics)
@@ -137,10 +145,10 @@ def test_post_pause_and_resume_return_snapshots_and_call_subsystem(
     assert pause.status_code == 200
     assert pause.json()["system"]["workersPaused"] is True
     assert pause.json()["system"]["mode"] == "quiesce"
-    assert pause.json()["signalStatus"] == "succeeded:1"
+    assert pause.json()["signalStatus"] == "succeeded"
     assert resume.status_code == 200
     assert resume.json()["system"]["workersPaused"] is False
-    assert resume.json()["signalStatus"] == "succeeded:1"
+    assert resume.json()["signalStatus"] == "succeeded"
     assert temporal.pause_calls == 1
     assert temporal.resume_calls == 1
 
