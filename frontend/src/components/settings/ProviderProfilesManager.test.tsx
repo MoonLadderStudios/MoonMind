@@ -1137,6 +1137,9 @@ describe('ProviderProfilesManager form controls', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Edit' }));
 
     const modelSelect = await screen.findByLabelText('Tier 1 model') as HTMLSelectElement;
+    // Model discovery is non-blocking, so the select renders before the backend's
+    // allow_custom policy arrives. Wait for the authorized option, not just the select.
+    await within(modelSelect).findByRole('option', { name: 'Custom value…' });
     fireEvent.change(modelSelect, { target: { value: '__custom__' } });
     const customInput = screen.getByLabelText('Tier 1 custom model') as HTMLInputElement;
     fireEvent.change(customInput, { target: { value: 'my-custom-model' } });
