@@ -3,7 +3,7 @@
 **Document Class:** Canonical declarative  
 **Status:** Accepted target  
 **Owner:** MoonMind Dashboard / Platform  
-**Last updated:** 2026-08-07  
+**Last updated:** 2026-09-05  
 **Audience:** dashboard, backend, Omnigent integration, workflow authors
 
 **Authority:** This document owns the Workflow Detail **Chat** product surface. Omnigent owns the native session presentation and interaction model. MoonMind owns the workflow/session binding, request authorization, effective capabilities, security policy, durable evidence, and linked continuation.
@@ -111,6 +111,18 @@ The integration must provide:
 - a binding-scoped API base used by the native application,
 - bounded loading, unavailable, disconnected, and terminal states,
 - an authorized full-page escape hatch when embedding is unavailable.
+
+### 4.1 Application readiness and failure containment
+
+Binding resolution, document loading, native application readiness, and session liveness are distinct observations. An `available` binding or a successful HTML response authorizes an attempt to open chat. Neither proves that the native application rendered successfully. An iframe `load` event, a nonempty root element, and an open transport are also insufficient readiness evidence.
+
+The native application is ready when the conversation for the current authorized binding has rendered its initial transcript or a validated empty-transcript state. Read-only presentation may be ready without mutation authority. A failed or denied transcript read must not be represented as an empty successful conversation. Live transport availability is reported separately, so a readable conversation with a disconnected stream is not advertised as fully live.
+
+The embedding boundary provides a bounded application-ready or fatal-failure signal to the workflow shell. Prefer a supported upstream lifecycle hook and keep host-specific signaling in the thin integration boundary, not a second renderer. When using `postMessage`, the receiver validates the message schema, exact origin, iframe window, current binding, and current mount generation. A signal from a replaced frame or earlier retry cannot mark the current application ready or failed. The sender uses the exact target origin. Signals contain only bounded presentation state and safe reason codes, never provider identity, transcript content, credentials, or new permission grants.
+
+Startup has a finite deadline. Missing required assets, failed essential reads, startup exceptions, or an application that never becomes ready produce the visible unavailable behavior in section 11. A fatal application failure after readiness produces the same visible recovery surface rather than leaving a blank frame. Ordinary transient stream loss instead uses the disconnected state and the native reconnect behavior. Presentation timers, listeners, and frame-specific state are disposed on unmount, binding replacement, or retry.
+
+These are local presentation states, not new persisted Workflow or provider-session lifecycle states. Loading, retrying, or opening the full-page presentation must not create a session, replay a message, change credentials, or restart the workflow. The full-page action is a same-authority presentation alternative, not a workaround for shared bootstrap, capability, or transport defects.
 
 ## 5. Workflow chat binding
 
@@ -296,6 +308,18 @@ When the native UI is unavailable, the Chat route shows the stable reason, a ret
 
 For runtimes without a native Omnigent session, the route may show a read-only compatibility transcript or a clear `Chat unavailable for this runtime` state.
 
+### 11.1 Essential failures, optional features, and recovery
+
+The unavailable surface applies both before and after the native document loads. It identifies the failed stage with a stable, redacted reason, offers retry only when meaningful, and preserves authorized Workflow-level evidence and terminal continuation actions outside the failed application. It must not require the user to open the browser console to discover that chat failed.
+
+Required application assets and authorized initial transcript reads are essential to conversation readiness. A denied essential read produces an unavailable or access-denied state, not a success-shaped empty response. A live stream that cannot connect produces a disconnected or unavailable-live state while already-authorized historical content may remain readable. A denied optional terminal, browser, subagent, or resource operation disables that feature with an explanation and must not crash an otherwise readable conversation. Essential versus optional behavior follows the reviewed UI contract and effective capabilities, not a blanket rule that every 403 or 404 is harmless.
+
+Diagnostics distinguish binding access, missing or stale immutable authority, capability denial, unsupported routes, asset incompatibility, and application failure only to the extent that verified, safely disclosed evidence supports that distinction. Unknown or unauthorized bindings retain non-enumerating responses. An HTTP status alone is not a root-cause diagnosis. Missing authority remains denied until repaired at its authoritative producer. Neither browser flags nor a successful document load may grant transcript or mutation access.
+
+Retries are bounded and reuse the authorized binding. They recheck current access and do not replay provider mutations. Automatic retries stop for persistent denial or incompatibility instead of creating an endless reload loop. A read-only fallback still enforces its own authorization and cannot recover revoked content from another binding or stale user cache. Browser-visible failure details, readiness signals, and public support excerpts exclude credentials, raw provider identities, private message bodies, and unrestricted upstream URLs.
+
+Protected server-side acceptance and diagnostic artifacts retain the correlation required by [Omnigent Bridge section 20.5](../Omnigent/OmnigentBridge.md#205-native-workflow-chat-rollout-gate): `workflowId`, `chatBindingId`, `bridgeSessionId`, `providerSessionId`, and `browserTraceId`. In particular, each `facadeRequests` record must correlate to the bound `providerSessionId` under the existing acceptance validator. These non-credential identities remain behind artifact authorization and retention controls; they do not enter browser readiness messages or public issue excerpts. Credentials, authorization headers, and signed access URLs remain excluded from diagnostic evidence, and retained records pass the existing secret-scan contract. Public redaction must not remove the protected correlation needed to prove correct-session routing.
+
 ## 12. Explicit non-goals
 
 The Workflow Detail frontend does not build or maintain its own versions of:
@@ -332,3 +356,8 @@ The target is satisfied when:
 9. MoonMind continues to publish durable workflow evidence independently of the native UI.
 10. Terminal work can be inspected read-only and continued through an explicit linked-workflow action.
 11. The existing MoonMind projection remains available for diagnostics without competing with the native primary experience.
+12. Embedded and full-page readiness requires the current bound transcript or a validated empty state to render, independently of document loading and live transport availability.
+13. Startup timeout, required-asset failure, essential-read denial, and a fatal native crash after loading produce a visible bounded recovery surface rather than an indefinite blank panel.
+14. Optional denied features do not crash authorized transcript rendering, and retries never widen authority, recreate a provider session, or duplicate a send.
+15. Stale or forged frame signals cannot change the current mount's presentation state, and listeners and timers are cleaned up on replacement or unmount.
+16. Executable browser regressions cover the served adapter and compiled native application in both presentations. Passing source-string assertions, a version pin, or an iframe load alone is not rendering or deployed-support evidence.
