@@ -704,7 +704,14 @@ This document is “done” when:
 3. For `RequestRerun`, when do we use Continue-As-New vs a brand-new Workflow ID?
 4. Do we need `Pause/Resume` in v1?
 5. Should `mm_updated_at` track any state transition, progress updates, or both under a bounded policy?
-6. How much of `MoonMind.ProviderProfileManager`, `MoonMind.AgentSession`, `MoonMind.ManagedSessionReconcile`, and `MoonMind.OAuthSession` should be directly visible in product-facing surfaces vs remaining internal/operator-facing?
+Product visibility is defined by each registration's `projection_scope` in
+`workflow_registry.py`. UserWorkflow and ManifestIngest are product executions.
+Managers, sessions, agent runs and control owners are operator-only; janitors,
+workspace cleanup and session reconciliation are excluded from product lists.
+Operator evidence remains available through Temporal and the owning resource
+surfaces. Unknown types have explicit unknown classification and cannot be
+admitted or backfilled as UserWorkflow. Admission, list and detail readers use
+the same policy; adding a registration requires an explicit classification.
 
 ---
 

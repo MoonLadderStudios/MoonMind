@@ -10812,7 +10812,7 @@ export interface components {
             /** Alias */
             alias?: string | null;
             /** Scope */
-            scope?: ("personal" | "global") | null;
+            scope?: ("global" | "personal") | null;
             /** Inputmapping */
             inputMapping?: {
                 [key: string]: unknown;
@@ -14329,6 +14329,7 @@ export interface components {
             audit?: components["schemas"]["WorkerPauseAuditListModel"];
             /** Signalstatus */
             signalStatus?: string | null;
+            control?: components["schemas"]["WorkflowControlBatch"] | null;
         };
         /**
          * WorkflowChatBinding
@@ -14378,6 +14379,47 @@ export interface components {
             };
             /** Unavailablereason */
             unavailableReason?: string | null;
+        };
+        /** WorkflowControlBatch */
+        WorkflowControlBatch: {
+            /** Requestid */
+            requestId: string;
+            /**
+             * Action
+             * @enum {string}
+             */
+            action: "Pause" | "Resume";
+            /** Targets */
+            targets?: components["schemas"]["WorkflowControlTarget"][];
+            /**
+             * Enumerated
+             * @default false
+             */
+            enumerated: boolean;
+            /** Enumerationerror */
+            enumerationError?: string | null;
+            /**
+             * Generation
+             * @default 0
+             */
+            generation: number;
+        };
+        /** WorkflowControlTarget */
+        WorkflowControlTarget: {
+            /** Workflowid */
+            workflowId: string;
+            /** Runid */
+            runId: string;
+            /** Updateid */
+            updateId: string;
+            /**
+             * State
+             * @default requested
+             * @enum {string}
+             */
+            state: "requested" | "accepted" | "pending" | "safe_point" | "resumed" | "failed" | "unknown";
+            /** Reason */
+            reason?: string | null;
         };
         /**
          * WorkflowInputSnapshotDescriptorModel

@@ -353,3 +353,54 @@ def test_checkpoint_activity_routes_stay_on_allowed_fleets():
     assert "workspace.capture_checkpoint" in fleets[SANDBOX_FLEET].activity_types
     assert "step_checkpoint.create" in fleets[ARTIFACTS_FLEET].activity_types
     assert "step_checkpoint.create_v2" in fleets[ARTIFACTS_FLEET].activity_types
+
+
+def test_checkpoint_persistence_binds_real_handlers_only_on_capable_fleet():
+    from moonmind.workflows.temporal.activity_catalog import TemporalActivityCatalog
+    from moonmind.workflows.temporal.activity_runtime import build_activity_bindings
+    from moonmind.workflows.temporal.workflow_registry import checkpoint_branch_activity_handlers
+    catalog = build_default_activity_catalog()
+    handlers = checkpoint_branch_activity_handlers()
+    names = {activity._Definition.must_from_callable(handler).name for handler in handlers}
+    focused = TemporalActivityCatalog(activities=tuple(item for item in catalog.activities if item.activity_type in names), fleets=catalog.fleets)
+    bindings = build_activity_bindings(focused, fleets=[ARTIFACTS_FLEET])
+    assert {binding.handler for binding in bindings} == set(handlers)
+    assert all(binding.task_queue == ARTIFACTS_TASK_QUEUE for binding in bindings)
+    assert all(item.capability_class == "artifacts" for item in focused.activities)
+    for fleet in (LLM_FLEET, SANDBOX_FLEET, INTEGRATIONS_FLEET, AGENT_RUNTIME_FLEET):
+        assert build_activity_bindings(focused, fleets=[fleet]) == ()
+    # Previously scheduled workflow-queue tasks retain their actual handlers.
+    assert set(handlers).issubset(workflow_fleet_activity_handlers())
+
+
+def test_product_projection_policy_covers_actual_registered_classes():
+    from temporalio import workflow
+    from moonmind.workflows.temporal.workflow_registry import (
+        workflow_fleet_workflow_classes, workflow_projection_scopes,
+        workflow_projection_scope, require_product_projection, WorkflowProjectionExcluded,
+    )
+    classes = workflow_fleet_workflow_classes()
+    names = {workflow._Definition.must_from_class(cls).name for cls in classes}
+    scopes = workflow_projection_scopes()
+    assert set(scopes) == names
+    assert {name for name in names if scopes[name] == "product"} == {"MoonMind.UserWorkflow", "MoonMind.ManifestIngest"}
+    for name in names:
+        if scopes[name] == "product":
+            require_product_projection(name)
+        else:
+            with pytest.raises(WorkflowProjectionExcluded):
+                require_product_projection(name)
+    assert workflow_projection_scope("new-unregistered-workflow") == "unknown"
+    with pytest.raises(WorkflowProjectionExcluded):
+        require_product_projection("new-unregistered-workflow")
+
+
+@pytest.mark.parametrize("name", [None, "", " ", "MoonMind.FutureWorkflow"])
+def test_unknown_projection_types_fail_explicitly(name):
+    from moonmind.workflows.temporal.workflow_registry import (
+        require_product_projection, WorkflowProjectionExcluded,
+    )
+    with pytest.raises(WorkflowProjectionExcluded) as failure:
+        require_product_projection(name)
+    assert failure.value.scope == "unknown"
+    assert failure.value.code == "workflow_type_unknown"

@@ -78,6 +78,7 @@ async def test_manifest_ingest_workflow_accepts_dict_summary_result(
     workflow_info = type("WorkflowInfo", (), {"workflow_id": "mm:manifest-2"})
     monkeypatch.setattr(manifest_module.workflow, "info", workflow_info)
 
+    monkeypatch.setattr(manifest_module.workflow, "patched", lambda _patch: True)
     result = await workflow.run({"manifest_ref": "art_manifest_2"})
 
     assert result["plan_ref"] == "art_plan_2"

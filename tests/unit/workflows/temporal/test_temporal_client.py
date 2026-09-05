@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, Mock
 from types import SimpleNamespace
 
 import pytest
@@ -23,6 +23,7 @@ class _FakeWorkflowExecution:
 
     def __init__(self, workflow_id: str) -> None:
         self.id = workflow_id
+        self.run_id = "run-" + workflow_id
 
 @pytest.fixture
 def adapter() -> TemporalClientAdapter:
@@ -140,6 +141,7 @@ async def test_send_batch_pause_update_starts_all_with_canonical_pause(adapter):
     mock_handles = {}
     for ex in executions:
         handle = AsyncMock()
+        handle.get_update_handle = Mock(return_value=SimpleNamespace(result=AsyncMock(side_effect=TimeoutError)))
         mock_handles[ex.id] = handle
 
     async def _fake_list(query):
@@ -147,11 +149,12 @@ async def test_send_batch_pause_update_starts_all_with_canonical_pause(adapter):
             yield ex
 
     adapter._client.list_workflows = _fake_list
-    adapter._client.get_workflow_handle = lambda wid: mock_handles[wid]
+    adapter._client.get_workflow_handle = lambda wid, **_kwargs: mock_handles[wid]
 
     signaled = await adapter.send_batch_pause_update()
 
-    assert signaled == 3
+    assert len(signaled.targets) == 3
+    assert signaled.status == "pending"
     for handle in mock_handles.values():
         handle.start_update.assert_awaited_once()
         assert handle.start_update.await_args.args == ("Pause",)
@@ -165,17 +168,19 @@ async def test_send_batch_resume_update_starts_all_with_canonical_resume(adapter
 
     executions = [_FakeWorkflowExecution("wf-1")]
     mock_handle = AsyncMock()
+    mock_handle.get_update_handle = Mock(return_value=SimpleNamespace(result=AsyncMock(side_effect=TimeoutError)))
 
     async def _fake_list(query):
         for ex in executions:
             yield ex
 
     adapter._client.list_workflows = _fake_list
-    adapter._client.get_workflow_handle = lambda wid: mock_handle
+    adapter._client.get_workflow_handle = lambda wid, **_kwargs: mock_handle
 
     signaled = await adapter.send_batch_resume_update()
 
-    assert signaled == 1
+    assert len(signaled.targets) == 1
+    assert signaled.status == "pending"
     mock_handle.start_update.assert_awaited_once()
     assert mock_handle.start_update.await_args.args == ("Resume",)
     assert mock_handle.start_update.await_args.kwargs["wait_for_stage"] is (
@@ -192,9 +197,11 @@ async def test_send_batch_update_skips_failed_workflows(adapter):
         _FakeWorkflowExecution("wf-ok2"),
     ]
     ok_handle = AsyncMock()
+    ok_handle.get_update_handle = Mock(return_value=SimpleNamespace(result=AsyncMock(side_effect=TimeoutError)))
     fail_handle = AsyncMock()
     fail_handle.start_update = AsyncMock(side_effect=RuntimeError("gone"))
     ok2_handle = AsyncMock()
+    ok2_handle.get_update_handle = Mock(return_value=SimpleNamespace(result=AsyncMock(side_effect=TimeoutError)))
 
     handles = {"wf-ok": ok_handle, "wf-fail": fail_handle, "wf-ok2": ok2_handle}
 
@@ -203,13 +210,164 @@ async def test_send_batch_update_skips_failed_workflows(adapter):
             yield ex
 
     adapter._client.list_workflows = _fake_list
-    adapter._client.get_workflow_handle = lambda wid: handles[wid]
+    adapter._client.get_workflow_handle = lambda wid, **_kwargs: handles[wid]
 
     signaled = await adapter.send_batch_pause_update()
 
     # 2 succeeded, 1 failed
-    assert signaled == 2
+    assert [target.state for target in signaled.targets] == ["pending", "unknown", "pending"]
+    assert signaled.status == "partial"
     ok_handle.start_update.assert_awaited_once()
     assert ok_handle.start_update.await_args.args == ("Pause",)
     ok2_handle.start_update.assert_awaited_once()
     assert ok2_handle.start_update.await_args.args == ("Pause",)
+
+
+@pytest.mark.parametrize("action", ["Pause", "Resume"])
+@pytest.mark.parametrize("task_queues", [None, [], ["custom-workflow-queue"]])
+async def test_control_enumeration_requires_complete_protocol(adapter, action, task_queues):
+    """Shared queues contain operator/manifest runs without control evidence."""
+    queries = []
+
+    async def list_workflows(query):
+        queries.append(query)
+        # Model the server's WorkflowType filter on a mixed queue.
+        for workflow_type in ("MoonMind.UserWorkflow", "MoonMind.ManifestIngest", "MoonMind.ManagedSessionReconcile"):
+            if f'WorkflowType="{workflow_type}"' in query:
+                yield _FakeWorkflowExecution(workflow_type)
+
+    handle = AsyncMock()
+    handle.get_update_handle = Mock(return_value=SimpleNamespace(result=AsyncMock(return_value=None)))
+    handle.query.return_value = {
+        "runId": "run-MoonMind.UserWorkflow", "safePoint": True, "resumed": True,
+    }
+    adapter._client.list_workflows = list_workflows
+    adapter._client.get_workflow_handle = Mock(return_value=handle)
+
+    batch = await adapter._send_update_to_running_workflows(
+        update_name=action, task_queues=task_queues,
+    )
+
+    assert batch.status == "succeeded"
+    assert [target.workflow_id for target in batch.targets] == ["MoonMind.UserWorkflow"]
+    assert 'WorkflowType="MoonMind.UserWorkflow"' in queries[0]
+    if task_queues is None:
+        assert 'TaskQueue IN ("mm.workflow",' in queries[0]
+    elif not task_queues:
+        assert "TaskQueue" not in queries[0]
+    else:
+        assert 'TaskQueue IN ("custom-workflow-queue")' in queries[0]
+
+
+async def test_control_dispatch_is_bounded_parallel_and_persistence_serialized(adapter, monkeypatch):
+    import asyncio
+    from moonmind.schemas.workflow_control_models import WorkflowControlBatch, WorkflowControlTarget
+
+    monkeypatch.setattr(temporal_client_module, "_WORKFLOW_CONTROL_CONCURRENCY", 2)
+    batch = WorkflowControlBatch(
+        requestId="parallel", action="Pause", generation=4, enumerated=True,
+        targets=[WorkflowControlTarget(workflowId=f"wf-{i}", runId=f"run-{i}", updateId=f"update-{i}") for i in range(5)],
+    )
+    active = peak = committing = 0
+    persisted = []
+    handles = {}
+
+    async def progress(observed):
+        nonlocal committing
+        assert committing == 0, "An AsyncSession cannot commit concurrently"
+        committing += 1
+        await asyncio.sleep(0)
+        persisted.append(observed)
+        # Exercise the production callback's merge into the live batch while
+        # other target RPCs complete. No local observation may be overwritten.
+        for target, committed in zip(batch.targets, observed.targets):
+            target.state, target.reason = committed.state, committed.reason
+        committing -= 1
+
+    async def start(*args, **kwargs):
+        nonlocal active, peak
+        assert kwargs["args"] == [{"controlGeneration": 4}]
+        active += 1
+        peak = max(peak, active)
+        await asyncio.sleep(0)
+        active -= 1
+
+    for target in batch.targets:
+        handle = AsyncMock()
+        handle.start_update.side_effect = start
+        handle.get_update_handle = Mock(return_value=SimpleNamespace(result=AsyncMock(return_value=None)))
+        handle.query.return_value = {"runId": target.run_id, "controlGeneration": 4, "safePoint": True}
+        handles[target.workflow_id] = handle
+    adapter._client.list_workflows = Mock(side_effect=AssertionError("Persisted targets must not be re-enumerated"))
+    adapter._client.get_workflow_handle = lambda workflow_id, **kwargs: handles[workflow_id]
+
+    result = await adapter.send_batch_pause_update(batch=batch, on_progress=progress)
+
+    assert peak == 2
+    assert result.status == persisted[-1].status == "succeeded"
+    assert len(persisted) == 10
+    for index in range(len(batch.targets)):
+        states = [snapshot.targets[index].state for snapshot in persisted]
+        assert "accepted" in states
+        confirmed = states.index("safe_point")
+        assert all(state == "safe_point" for state in states[confirmed:])
+
+
+async def test_control_persistence_failure_cancels_parallel_dispatch(adapter, monkeypatch):
+    import asyncio
+    from moonmind.schemas.workflow_control_models import WorkflowControlBatch, WorkflowControlTarget
+
+    monkeypatch.setattr(temporal_client_module, "_WORKFLOW_CONTROL_CONCURRENCY", 2)
+    batch = WorkflowControlBatch(
+        requestId="commit-failure", action="Pause", enumerated=True,
+        targets=[WorkflowControlTarget(workflowId=f"wf-{i}", runId=f"run-{i}", updateId=f"update-{i}") for i in range(2)],
+    )
+    second_started = asyncio.Event()
+    second_cancelled = asyncio.Event()
+
+    async def first(*args, **kwargs):
+        await second_started.wait()
+
+    async def second(*args, **kwargs):
+        second_started.set()
+        try:
+            await asyncio.Event().wait()
+        finally:
+            second_cancelled.set()
+
+    async def progress(observed):
+        raise RuntimeError("audit commit failed")
+
+    handles = [AsyncMock(), AsyncMock()]
+    handles[0].start_update.side_effect = first
+    handles[1].start_update.side_effect = second
+    adapter._client.get_workflow_handle = lambda workflow_id, **kwargs: handles[int(workflow_id[-1])]
+
+    with pytest.raises(ExceptionGroup) as error:
+        await asyncio.wait_for(adapter.send_batch_pause_update(batch=batch, on_progress=progress), timeout=2)
+
+    assert "audit commit failed" in str(error.value.exceptions[0])
+    assert second_cancelled.is_set()
+    for handle in handles:
+        handle.query.assert_not_awaited()
+
+
+async def test_control_resumes_legacy_persisted_batch_without_generation(adapter):
+    from moonmind.schemas.workflow_control_models import WorkflowControlBatch
+
+    batch = WorkflowControlBatch.model_validate({
+        "requestId": "legacy", "action": "Resume", "enumerated": True,
+        "targets": [{"workflowId": "legacy-workflow", "runId": "old-run", "updateId": "old-update"}],
+    })
+    handle = AsyncMock()
+    handle.get_update_handle = Mock(return_value=SimpleNamespace(result=AsyncMock(return_value=None)))
+    handle.query.return_value = {"runId": "old-run", "resumed": True}
+    adapter._client.get_workflow_handle = Mock(return_value=handle)
+    adapter._client.list_workflows = Mock(side_effect=AssertionError("Existing identities are immutable"))
+
+    result = await adapter.send_batch_resume_update(batch=batch)
+
+    assert result.status == "succeeded"
+    assert handle.start_update.await_args.kwargs["args"] == []
+    assert handle.start_update.await_args.kwargs["id"] == "old-update"
+    adapter._client.get_workflow_handle.assert_called_once_with("legacy-workflow", run_id="old-run")

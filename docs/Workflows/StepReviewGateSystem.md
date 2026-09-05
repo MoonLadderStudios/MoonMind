@@ -112,6 +112,24 @@ class PlanPolicy:
 
 When `approval_policy` is absent or `enabled` is `false`, behavior is identical to today.
 
+### Reviewer execution authority
+
+The `step.review` worker binding executes `ConfiguredStepReviewer` on the LLM
+fleet. Provider, enablement, credential and default model come from the existing
+chat settings (`DEFAULT_CHAT_PROVIDER` and that provider's settings). Omitted
+`reviewer_model` and `default` resolve identically; an explicit model passes
+through unchanged. Disabled, unsupported or uncredentialed providers do not
+fall back to another provider. Credentials never come from workflow payloads.
+
+The reviewer receives the supplied bounded step evidence, with a 256 KB prompt
+budget and the requested timeout. Its response is parsed through the canonical
+step-gate contract, including recorded `PASS` compatibility. Unknown/malformed
+results, timeouts and missing reviewer authority return `NO_DETERMINATION`.
+Execution completion alone is not a review verdict. Unavailable auxiliary review
+must preserve completed outputs and cannot authorize publication or an
+unnecessary implementation retry. Artifact refs alone do not establish that the
+referenced content was reviewed.
+
 ### 4.3 Review Activity Input / Output Contracts
 
 **ReviewRequest** — input to the review activity:
@@ -334,6 +352,14 @@ The `step.review` activity:
 2. Calls the configured reviewer LLM model.
 3. Parses the LLM response into a structured `ReviewVerdict`.
 4. Returns the verdict.
+
+When reviewer execution is unavailable, the activity returns
+`NO_DETERMINATION` with zero confidence, explicit unavailability feedback, and
+`recommendedNextAction: needs_human`. A completed step's result is not proof
+that a review occurred. The gate records an inconclusive check and preserves
+the step's output and checkpoint evidence; it does not spend implementation
+retries on an unavailable reviewer or authorize publication. The worker must
+bind an actual reviewer before this activity can return review approval.
 
 **Review Prompt Template (simplified):**
 

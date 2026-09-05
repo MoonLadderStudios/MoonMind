@@ -39,7 +39,7 @@ async def test_failed_execution_direct_rerun_creates_exact_full_rerun_from_origi
 ) -> None:
     async with _db(tmp_path) as maker:
         async with maker() as session:
-            service = TemporalExecutionService(session, client_adapter=AsyncMock())
+            service = TemporalExecutionService(session, client_adapter=AsyncMock(describe_workflow=AsyncMock(return_value=None)))
             source = await service.create_execution(
                 workflow_type="MoonMind.UserWorkflow",
                 owner_id=uuid4(),

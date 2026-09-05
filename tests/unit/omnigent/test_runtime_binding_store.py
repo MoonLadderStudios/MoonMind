@@ -420,66 +420,50 @@ async def test_host_replacement_advances_fence_and_rejects_delayed_old_owner() -
 
 
 @pytest.mark.asyncio
-async def test_runtime_binding_projection_is_safe_and_monotonic(monkeypatch) -> None:
+async def test_runtime_binding_projection_is_safe_and_monotonic(monkeypatch, session_factory) -> None:
+    from uuid import uuid4
     from api_service.db import base as db_base
+    from api_service.db.models import TemporalExecutionCanonicalRecord, TemporalExecutionRecord, TemporalWorkflowType
+    from moonmind.workflows.temporal.service import TemporalExecutionService
 
-    execution_rows = {
-        "TemporalExecutionCanonicalRecord": type(
-            "Execution", (), {"memo": {}}
-        )(),
-        "TemporalExecutionRecord": type("Execution", (), {"memo": {}})(),
-    }
-
-    class FakeSession:
-        async def __aenter__(self):
-            return self
-
-        async def __aexit__(self, *_args):
-            return None
-
-        async def get(self, model, workflow_id):
-            assert workflow_id == "workflow-opencode"
-            return execution_rows[model.__name__]
-
-        async def commit(self):
-            return None
-
-    monkeypatch.setattr(db_base, "async_session_maker", lambda: FakeSession())
-    store = InMemoryRuntimeBindingStore()
-    binding = await store.create_initial(
-        execution_plan_ref="omnigent-execution-plan:sha256:" + "4" * 64,
-        execution_scope_ref="workflow-opencode",
-        provider_leases={
-            "primary-model": {
-                "providerProfileRef": "provider-opencode",
-                "providerLeaseRef": "lease-opencode",
-                "credentialGeneration": 12,
-                "credentialRuntimeRef": "credential-runtime:lease-opencode:12",
-            }
-        },
-    )
+    workflow_id = str(uuid4())
+    from moonmind.omnigent.harness_platform.stores import DbExecutionPlanStore
+    from tests.unit.omnigent.test_generic_plane_n_way_concurrency import _zen_plan
+    plan = await DbExecutionPlanStore(session_factory).persist(_zen_plan(workflow_id))
+    plan_ref = plan.planRef
+    async with session_factory() as session:
+        session.add(TemporalExecutionCanonicalRecord(
+            workflow_id=workflow_id, run_id=str(uuid4()), workflow_type=TemporalWorkflowType.USER_WORKFLOW,
+            entry="user_workflow", parameters={"targetRuntime": "codex_cli"}, memo={"localOwner": "preserved"},
+        ))
+        await session.commit()
+    monkeypatch.setattr(db_base, "async_session_maker", session_factory)
+    store = DbRuntimeBindingStore(session_factory)
+    binding = await store.create_initial(execution_plan_ref=plan_ref, execution_scope_ref=workflow_id, provider_leases={})
     state = await store.get_state(binding.runtimeBindingRef)
     assert state is not None
+    await _project_runtime_binding_to_execution(workflow_id=workflow_id, state=state)
 
-    await _project_runtime_binding_to_execution(
-        workflow_id="workflow-opencode", state=state
-    )
-    for execution in execution_rows.values():
-        assert execution.memo == {
-            "omnigent_runtime_binding_ref": binding.runtimeBindingRef,
-            "omnigent_runtime_binding_revision": 1,
-            "omnigent_runtime_binding_fencing_generation": 1,
-            "omnigent_runtime_binding_state": "credentials_acquired",
-        }
+    async with session_factory() as session:
+        canonical = await session.get(TemporalExecutionCanonicalRecord, workflow_id)
+        projection = await session.get(TemporalExecutionRecord, workflow_id)
+        semantic_time = canonical.updated_at
+        version = projection.projection_version
+        # A real API service projection write must retain the binding owner's fields.
+        await TemporalExecutionService(session)._upsert_projection_from_source(canonical)
+        await session.commit()
+        for model in (TemporalExecutionCanonicalRecord, TemporalExecutionRecord):
+            execution = await session.get(model, workflow_id, populate_existing=True)
+            assert execution.memo["omnigent_runtime_binding_ref"] == binding.runtimeBindingRef
+            assert execution.memo["omnigent_runtime_binding_revision"] == state.revision
+            assert execution.memo["localOwner"] == "preserved"
+            assert execution.parameters["targetRuntime"] == "codex_cli"
+            assert execution.updated_at == semantic_time
+        assert projection.projection_version > version
 
-    stale_state = RuntimeBindingStoreState(
-        binding=binding,
-        revision=0,
-        fencing_generation=1,
-        state="credentials_acquired",
-        execution_scope_ref="workflow-opencode",
-    )
+    newer = await store.mark_cleanup_complete(binding.runtimeBindingRef,
+        expected_revision=state.revision, expected_fencing_generation=state.fencing_generation)
+    newer_state = await store.get_state(newer.runtimeBindingRef)
+    await _project_runtime_binding_to_execution(workflow_id=workflow_id, state=newer_state)
     with pytest.raises(ValueError, match="ahead of authority"):
-        await _project_runtime_binding_to_execution(
-            workflow_id="workflow-opencode", state=stale_state
-        )
+        await _project_runtime_binding_to_execution(workflow_id=workflow_id, state=state)
