@@ -324,10 +324,11 @@ class OmnigentHostClassSelector:
                 continue
             try:
                 image_ref = _require_image_ref(self._environment, template.image_env)
-            except HarnessPlatformError:
-                reasons.append(
-                    f"{template.ref}: {template.image_env} is not digest-pinned"
-                )
+            except HarnessPlatformError as exc:
+                # Image validation also checks exact-pair compatibility and
+                # bootstrap qualification. Preserve that actionable cause;
+                # a quarantined, valid digest is not a missing image pin.
+                reasons.append(f"{template.ref}: {exc}")
                 continue
             if integration_mode not in template.integration_modes:
                 reasons.append(

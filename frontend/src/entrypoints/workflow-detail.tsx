@@ -6568,7 +6568,7 @@ function BridgeSessionLogsPanel({
         error={followUpRetrievalQuery.error}
       />
       <section className="card stack" aria-label="Omnigent runtime identity">
-        <h3>Codex via Omnigent</h3>
+        <h3>Omnigent</h3>
         <dl className="details-grid">
           {([
             ['Provider Profile', projection.providerProfileId],

@@ -10262,10 +10262,10 @@ export interface components {
             runtimeId: "omnigent";
             /**
              * Displayname
-             * @default Codex via Omnigent
+             * @default Omnigent
              * @constant
              */
-            displayName: "Codex via Omnigent";
+            displayName: "Omnigent";
             /**
              * Agentkind
              * @default external
