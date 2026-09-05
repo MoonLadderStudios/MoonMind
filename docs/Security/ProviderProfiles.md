@@ -1396,6 +1396,31 @@ schedules re-observation, while exact-host model verification remains a launch
 boundary. See `docs/Omnigent/OpenCodeHost.md` for the interval and the
 deployment-owned proactive refresh lead.
 
+#### In-flight managers keep the admission rules they started under
+
+`ProviderProfileManager` is long-lived, so it replays its own history on every
+worker restart and Continue-As-New. Everything on this page that changes *when a
+maintenance grant happens* is therefore gated on one workflow marker,
+`provider-profile-manager-maintenance-queue-durability-v1` — not just the durable
+queue, the fencing generations and the rollover detach, but the admission rules
+themselves:
+
+- queue-head serialization, so a manager that granted two concurrent maintainers
+  keeps granting them;
+- the narrowed drain set that exempts a credentialless profile, so a pre-marker
+  manager still drains every lease;
+- the per-purpose scope exemption, so a pre-marker manager still gates credential
+  repair and revocation on shared-scope availability; and
+- withdrawing a pending request when its owner releases.
+
+A grant that moved under a recorded history would emit a reservation — and, under
+DB lease persistence, a `provider_profile.sync_slot_leases` activity — where the
+history recorded a timer, failing the workflow task on non-determinism until the
+capacity ledger for that runtime is wedged. The one pre-marker behaviour that is
+*not* preserved is the busy loop this work removed: a waiter whose profile was
+empty while its scope was cooling down woke immediately and re-evaluated without
+suspending, so it recorded no commands to replay.
+
 ---
 
 ## 12. Runtime Materialization Pipeline

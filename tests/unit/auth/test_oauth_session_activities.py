@@ -28,6 +28,7 @@ from moonmind.omnigent.oauth_hosts import (
     HostPreflightFailure,
 )
 from moonmind.provider_profiles.lease_client import (
+    CredentialLease,
     CredentialLeasePurpose,
     ProviderProfileLeaseClient,
 )
@@ -144,13 +145,17 @@ async def test_maintenance_lease_activity_heartbeats_while_waiting(
 
     async def acquire_maintenance_lease(_self, **_kwargs):
         await lease_ready.wait()
-        return SimpleNamespace(
+        # The real lease contract, not a stand-in: the activity's response is
+        # this dataclass's field set, so a field added to CredentialLease has
+        # to be handled here rather than discovered in production.
+        return CredentialLease(
             profile_id="codex_openai_oauth",
             runtime_id="codex_cli",
             lease_id="oauth-session:oas-heartbeat",
             owner_id="oauth-session:oas-heartbeat",
             purpose=CredentialLeasePurpose.OAUTH_RECONNECT,
             already_held=False,
+            fencing_generation=7,
         )
 
     async def controlled_wait(tasks, *, timeout):
@@ -186,6 +191,9 @@ async def test_maintenance_lease_activity_heartbeats_while_waiting(
     )
 
     assert result["lease_id"] == "oauth-session:oas-heartbeat"
+    # The grant generation reaches the caller that has to quote it back on
+    # release, so a stale release cannot free the next holder of this owner ID.
+    assert result["fencing_generation"] == 7
     assert heartbeat_details == [{"phase": "waiting_for_maintenance_lease"}]
 
 class TestOAuthSessionWorkflowRegistration:
