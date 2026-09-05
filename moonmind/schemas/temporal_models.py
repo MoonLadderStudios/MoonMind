@@ -4105,6 +4105,12 @@ class ExecutionModel(BaseModel):
     omnigent_runtime_binding: dict[str, Any] | None = Field(
         None, alias="omnigentRuntimeBinding"
     )
+    # Frozen runtime-provider rollout authority for this execution
+    # (MoonLadderStudios/MoonMind#3833). ``None`` for executions admitted
+    # before the contract existed.
+    omnigent_runtime_provider_target: dict[str, Any] | None = Field(
+        None, alias="omnigentRuntimeProviderTarget"
+    )
     target_runtime: Optional[str] = Field(None, alias="targetRuntime")
     target_skill: Optional[str] = Field(None, alias="targetSkill")
     model: Optional[str] = Field(None, alias="model")

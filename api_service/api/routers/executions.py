@@ -246,6 +246,10 @@ from moonmind.workflows.executions.preset_goal_scheduler import (
     workflow_is_already_authored,
 )
 from moonmind.workflows.executions.runtime_defaults import normalize_runtime_id
+from moonmind.workflows.executions.runtime_target_selection import (
+    AuthoringSurface,
+    resolve_runtime_target_selection,
+)
 from moonmind.omnigent.cutover import (
     assert_runtime_new_admission,
     effective_phase,
@@ -4337,6 +4341,14 @@ def _serialize_execution(
             if plan_ref and plan_digest and plan_artifact
             else None
         )
+    # Frozen runtime-provider rollout authority (#3833). Executions admitted
+    # before this contract existed simply omit it.
+    recorded_runtime_provider_target = params.get("runtimeProviderTarget")
+    omnigent_runtime_provider_target = (
+        dict(recorded_runtime_provider_target)
+        if isinstance(recorded_runtime_provider_target, Mapping)
+        else None
+    )
     runtime_binding_ref = str(memo.get("omnigent_runtime_binding_ref") or "").strip()
     omnigent_runtime_binding = (
         {
@@ -4387,6 +4399,7 @@ def _serialize_execution(
             else None
         ),
         omnigent_runtime_binding=omnigent_runtime_binding,
+        omnigent_runtime_provider_target=omnigent_runtime_provider_target,
         target_runtime=target_runtime,
         target_skill=target_skill,
         model=param_model,
@@ -8936,10 +8949,18 @@ async def _expand_goal_preset_for_workflow_submission(
     runtime_payload = (
         task_payload.get("runtime") if isinstance(task_payload.get("runtime"), Mapping) else {}
     )
+    # Goal-preset expansion is an authoring surface: it resolves its default
+    # through the one shared selection and admission boundary
+    # (MoonLadderStudios/MoonMind#3833 required work 4), never from
+    # ``settings.workflow.default_runtime`` directly, so an active rollback
+    # control cannot produce a different default here than on Workflow Create.
     target_runtime = (
         request_payload.get("targetRuntime")
         or runtime_payload.get("mode")
-        or normalize_runtime_id(settings.workflow.default_runtime)
+        or resolve_runtime_target_selection(
+            surface=AuthoringSurface.preset_expansion,
+            workflow_settings=settings.workflow,
+        ).runtime_id
     )
     if isinstance(target_runtime, str) and target_runtime.strip():
         context["targetRuntime"] = target_runtime.strip()
@@ -11110,6 +11131,23 @@ async def _create_execution_from_workflow_request(
         if runtime_was_authored
         else None
     )
+    submission_kind = (
+        "schedule"
+        if task_payload.get("presetSchedule") or scheduled_for_dt is not None
+        else "create"
+    )
+    # MoonLadderStudios/MoonMind#3833: the unauthored default comes from the one
+    # shared runtime-target selection boundary, which asks the versioned
+    # runtime-provider rollout policy. This surface does not reconstruct a
+    # default of its own from settings or environment variables.
+    resolved_default_runtime = resolve_runtime_target_selection(
+        surface=(
+            AuthoringSurface.schedule
+            if submission_kind == "schedule"
+            else AuthoringSurface.workflow_create
+        ),
+        workflow_settings=settings.workflow,
+    ).runtime_id
     if not authored_runtime and _provider_profile is not None:
         # Profile selection is execution authority even when the advanced
         # runtime control was untouched. Use the same route as inventory; an
@@ -11131,14 +11169,11 @@ async def _create_execution_from_workflow_request(
         cutover_status = effective_phase()
         cutover_selection = select_runtime(
             authored_runtime=authored_runtime,
-            configured_default=settings.workflow.default_runtime,
+            configured_default=resolved_default_runtime,
             phase=cutover_status.phase,
-            submission_kind=(
-                "schedule"
-                if task_payload.get("presetSchedule") or scheduled_for_dt is not None
-                else "create"
-            ),
+            submission_kind=submission_kind,
             release_status=cutover_status,
+            versioned_default=True,
         )
     except ValueError as exc:
         raise _invalid_workflow_request(str(exc)) from exc
@@ -11169,6 +11204,43 @@ async def _create_execution_from_workflow_request(
             normalized_runtime_for_planner["profileSelector"] = dict(
                 runtime_payload["profileSelector"]
             )
+        # Freeze the exact requested rollout target identity (when supplied)
+        # so the recorded authority names the target, not just the runtime
+        # string (MoonLadderStudios/MoonMind#3988).
+        requested_target_id = (
+            str(
+                payload.get("requestedTargetId")
+                or payload.get("requested_target_id")
+                or runtime_payload.get("requestedTargetId")
+                or runtime_payload.get("requested_target_id")
+                or ""
+            ).strip()
+            or None
+        )
+        if requested_target_id is not None:
+            requested_selection = resolve_runtime_target_selection(
+                surface=(
+                    AuthoringSurface.schedule
+                    if submission_kind == "schedule"
+                    else AuthoringSurface.workflow_create
+                ),
+                requested_runtime=canonical_target_runtime,
+                requested_target_id=requested_target_id,
+                workflow_settings=settings.workflow,
+                record_metrics=False,
+            )
+            if (
+                requested_selection.target_id != requested_target_id
+                or normalize_runtime_id(requested_selection.runtime_id)
+                != canonical_target_runtime
+                or not requested_selection.available
+            ):
+                raise _invalid_workflow_request(
+                    f"Requested runtime target {requested_target_id!r} is not "
+                    "selectable for "
+                    f"{canonical_target_runtime!r}."
+                )
+            normalized_runtime_for_planner["targetId"] = requested_target_id
         normalized_task_for_planner["runtime"] = normalized_runtime_for_planner
 
     # Load provider profile when a profileId is supplied. For tier-aware
@@ -11542,6 +11614,15 @@ async def _create_execution_from_workflow_request(
         initial_parameters["resolvedSkillsetRef"] = (
             persisted_omnigent_plan.resolved_skillset_ref
         )
+        # MoonLadderStudios/MoonMind#3833: record the frozen runtime-provider
+        # rollout decision beside the plan binding so Workflow Detail and audit
+        # evidence show the truthful selected path. It is a sibling key, not a
+        # new field inside the compatibility-sensitive plan binding.
+        frozen_rollout = getattr(
+            persisted_omnigent_plan, "runtime_provider_rollout", None
+        )
+        if frozen_rollout:
+            initial_parameters["runtimeProviderTarget"] = dict(frozen_rollout)
 
     try:
         start_contract = resolve_user_workflow_start_contract(settings.temporal)
@@ -11867,14 +11948,21 @@ async def _resolve_recurring_runtime_metadata(
         or parameter_payload.get("targetRuntime")
         or runtime_payload.get("mode")
     )
+    # The recurring-schedule surface resolves its unauthored default through the
+    # same shared boundary as Workflow Create (#3833).
+    resolved_default_runtime = resolve_runtime_target_selection(
+        surface=AuthoringSurface.schedule,
+        workflow_settings=settings.workflow,
+    ).runtime_id
     try:
         cutover_status = effective_phase()
         cutover_selection = select_runtime(
             authored_runtime=authored_runtime,
-            configured_default=settings.workflow.default_runtime,
+            configured_default=resolved_default_runtime,
             phase=cutover_status.phase,
             submission_kind="schedule",
             release_status=cutover_status,
+            versioned_default=True,
         )
     except ValueError as exc:
         raise _invalid_workflow_request(str(exc)) from exc
