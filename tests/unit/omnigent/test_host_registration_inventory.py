@@ -17,6 +17,7 @@ import pytest
 
 from moonmind.omnigent.harness_platform.failures import HarnessPlatformError
 from moonmind.omnigent.host_services.registration import (
+    HOST_INVENTORY_COALESCE_SECONDS,
     OmnigentHostInventoryReader,
     OmnigentHostRegistrationService,
 )
@@ -212,3 +213,45 @@ async def test_cancelling_one_waiter_does_not_cancel_the_shared_read() -> None:
         await follower
     assert await leader == [_ready_host("a")]
     assert client.calls == 1
+
+
+@pytest.mark.asyncio
+async def test_a_wait_loop_never_reads_its_own_previous_poll() -> None:
+    """Registration progress must follow the endpoint, not the wall clock.
+
+    A reuse window that also answers the same wait loop's next poll makes
+    readiness depend on how long the loop slept rather than on what the
+    endpoint now reports, so a loop whose clock does not advance between polls
+    spends its whole attempt budget on one stale answer.
+    """
+
+    class _EventuallyReadyClient:
+        def __init__(self, empty_reads: int) -> None:
+            self.calls = 0
+            self._empty_reads = empty_reads
+
+        async def list_hosts(self) -> list[dict]:
+            self.calls += 1
+            if self.calls <= self._empty_reads:
+                return []
+            return [_ready_host("mine")]
+
+    client = _EventuallyReadyClient(empty_reads=3)
+    service = OmnigentHostRegistrationService(
+        client=client,
+        expected_owner="local",
+        attempts=8,
+        interval_seconds=0.0,
+    )
+
+    result = await service.wait_for_registration(
+        correlation_name="mine", harness_id="opencode-native"
+    )
+
+    assert result["omnigentHostId"] == "host-mine"
+    # Every poll re-read; the loop was never answered from its own cache.
+    assert client.calls == 4
+
+
+def test_the_default_reader_does_not_reuse_answers_across_polls() -> None:
+    assert HOST_INVENTORY_COALESCE_SECONDS == 0.0

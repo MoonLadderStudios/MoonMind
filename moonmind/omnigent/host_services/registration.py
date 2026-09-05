@@ -26,26 +26,33 @@ _HOST_REGISTRATION_BASE_DELAY_SECONDS = 0.5
 _HOST_REGISTRATION_MAX_DELAY_SECONDS = 2.0
 # MoonLadderStudios/MoonMind#3878: every waiter reads the same whole-inventory
 # listing, so at concurrency ``N`` the endpoint sees ``N`` identical requests
-# per poll. Coalescing concurrent readers behind one in-flight request, and
-# reusing that answer for a fraction of the poll interval, makes the listing
-# cost independent of ``N`` while keeping observed staleness well inside the
-# one poll cycle the wait loop already tolerates.
-HOST_INVENTORY_COALESCE_SECONDS = HOST_REGISTRATION_INTERVAL_SECONDS / 2
+# per poll. Coalescing concurrent readers behind one in-flight request makes the
+# listing cost independent of ``N``.
+#
+# The default reuse window is zero. Reusing a completed answer would also serve
+# it back to the *same* wait loop on its next poll, and a poll loop that can be
+# answered from its own previous poll makes progress a function of wall-clock
+# time rather than of what the endpoint now reports: shorten the poll interval,
+# lengthen the window, or run the loop under a harness that does not advance the
+# clock, and registration stalls until the attempt budget is spent. Callers that
+# genuinely want a reuse window pass ``ttl_seconds`` explicitly.
+HOST_INVENTORY_COALESCE_SECONDS = 0.0
 
 
 class OmnigentHostInventoryReader:
-    """Single-flight, briefly cached whole-inventory reads shared by waiters.
+    """Single-flight whole-inventory reads shared by concurrent waiters.
 
-    Two independent mechanisms collapse the request count, and both are needed:
+    Readers that arrive while a request is in flight adopt that request's
+    result, which is what makes a burst of ``N`` waiters cost one listing.
 
-    * readers that arrive while a request is in flight adopt that request's
-      result, which is what makes a burst of ``N`` waiters cost one listing; and
-    * a completed answer is reused for ``ttl_seconds``, which covers waiters
-      that arrive just after one finishes rather than during it.
+    An optional ``ttl_seconds`` additionally reuses a completed answer for
+    readers that arrive just after one finishes. It defaults to zero because a
+    registration wait loop is the only caller and must observe fresh state on
+    every poll; see ``HOST_INVENTORY_COALESCE_SECONDS``.
 
-    Neither weakens correlation: the same rows are compared, and an answer is
-    never served past its TTL. Cancelling one waiter never cancels the shared
-    request, so the remaining waiters still get their answer.
+    Neither mechanism weakens correlation: the same rows are compared, and an
+    answer is never served past its TTL. Cancelling one waiter never cancels the
+    shared request, so the remaining waiters still get their answer.
     """
 
     def __init__(self, *, ttl_seconds: float = HOST_INVENTORY_COALESCE_SECONDS) -> None:
