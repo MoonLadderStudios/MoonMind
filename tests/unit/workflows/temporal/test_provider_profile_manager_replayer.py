@@ -13,22 +13,28 @@ from temporalio.worker import Replayer, UnsandboxedWorkflowRunner, Worker
 
 from moonmind.workflows.temporal.workflows.provider_profile_manager import (
     ACTIVITY_TASK_QUEUE,
+    LEASE_TOMBSTONE_PURGE_PATCH,
     MoonMindProviderProfileManagerWorkflow,
 )
 
 
 @pytest.mark.asyncio
-async def test_pre_tombstone_purge_manager_history_replays() -> None:
-    """A continued manager must verify its held lease before its recorded timer.
+@pytest.mark.parametrize(
+    "fixture_name",
+    [
+        "provider_profile_manager_pre_tombstone_purge.json",
+        "provider_profile_manager_maintenance_before_purge.json",
+    ],
+    ids=["before-maintenance", "maintenance-without-purge"],
+)
+async def test_pre_tombstone_purge_manager_history_replays(fixture_name: str) -> None:
+    """A manager must verify its held lease before its recorded timer.
 
-    This sanitized 52-event production prefix predates maintenance durability.
-    Inserting purge_released before lease verification used to fail replay at
-    auth-profile-manager-verify-leases-v1, wedging all slot requests.
+    The sanitized production prefix predates maintenance durability. The second
+    fixture was recorded with b40da19f7, which already had that marker but no
+    cleanup activity. Both must preserve the recorded lease verification order.
     """
-    fixture = (
-        Path(__file__).with_name("fixtures")
-        / "provider_profile_manager_pre_tombstone_purge.json"
-    )
+    fixture = Path(__file__).with_name("fixtures") / fixture_name
     history = WorkflowHistory.from_json(
         "provider-profile-manager:opencode", fixture.read_text()
     )
@@ -168,16 +174,30 @@ async def test_current_manager_cleans_then_grants_and_replays(
             state = await manager.query("get_state")
             assert state["profiles"]["test-default"]["current_leases"] == [requester.id]
             assert "purge_released" in activities.actions
-            await manager.signal("shutdown")
-            assert (await manager.result())["status"] == "shutdown"
-            await requester.signal(_SlotRequester.shutdown)
-            await requester.result()
+            # result() enables global time skipping. Keep the idle requester
+            # alive until its shutdown has been processed too; otherwise waiting
+            # on the manager can advance it to the test server's run timeout.
+            with env.auto_time_skipping_disabled():
+                await manager.signal("shutdown")
+                await requester.signal(_SlotRequester.shutdown)
+                assert (await manager.result())["status"] == "shutdown"
+                await requester.result()
             history = await manager.fetch_history()
 
     # Assert the production command handoff, then replay the new history too.
     commands = []
+    patch_ids = []
     for event in history.events:
-        if event.HasField("activity_task_scheduled_event_attributes"):
+        if event.HasField("marker_recorded_event_attributes"):
+            attrs = event.marker_recorded_event_attributes
+            if attrs.marker_name == "core_patch":
+                payload = (
+                    await DataConverter.default.decode(
+                        attrs.details["patch-data"].payloads
+                    )
+                )[0]
+                patch_ids.append(payload["id"])
+        elif event.HasField("activity_task_scheduled_event_attributes"):
             attrs = event.activity_task_scheduled_event_attributes
             if attrs.activity_type.name == "provider_profile.sync_slot_leases":
                 payload = (await DataConverter.default.decode(attrs.input.payloads))[0]
@@ -188,6 +208,7 @@ async def test_current_manager_cleans_then_grants_and_replays(
             attrs = event.signal_external_workflow_execution_initiated_event_attributes
             if attrs.signal_name == "slot_assigned":
                 commands.append("slot_assigned")
+    assert LEASE_TOMBSTONE_PURGE_PATCH in patch_ids
     assert (
         commands.index("purge_released")
         < commands.index("grant")
