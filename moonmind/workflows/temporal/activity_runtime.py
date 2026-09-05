@@ -7959,13 +7959,14 @@ class TemporalAgentRuntimeActivities:
                     if isinstance(validated_refs_value, Mapping)
                     else {}
                 )
-                validated_refs.setdefault(
-                    "progressEvidenceSchemaVersion",
-                    "remediation-progress-evidence/v1",
+                # These fields attest to the evidence published here. Agent
+                # supplied placeholders or stale digests cannot own progress
+                # identity, even when they are syntactically valid hashes.
+                validated_refs["progressEvidenceSchemaVersion"] = (
+                    "remediation-progress-evidence/v1"
                 )
-                validated_refs.setdefault(
-                    "authoritativeEvidenceDigest",
-                    _unordered_json_list_digest(remaining_work),
+                validated_refs["authoritativeEvidenceDigest"] = (
+                    _unordered_json_list_digest(remaining_work)
                 )
                 gate_payload["validatedRefs"] = validated_refs
                 gate_payload.pop("validated_refs", None)

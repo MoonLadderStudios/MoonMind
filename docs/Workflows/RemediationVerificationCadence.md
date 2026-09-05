@@ -81,6 +81,16 @@ The attempt number is the retry-cycle number, not the individual gap number. A s
 10. **Optional tooling never gates the verdict.** Unavailable or misconfigured optional enrichment tooling (for example MoonMind RAG retrieval failing with `embedding_provider_not_configured`) is recorded as a `NOT RUN` environment note. `NO_DETERMINATION` is reserved for verification targets that cannot be established at all: a missing or unreadable authoritative input, unrecoverably truncated acceptance criteria, or repository evidence for visible in-scope requirements that cannot be inspected.
 11. **Every attempt preserves one authoritative candidate source.** A remediation loop should carry a workflow-owned cumulative workspace head so each attempt continues from the prior candidate checkpoint. That head is supplied by the capture/persistence boundary and, when present, remains the single authority: an attempt or verifier bound to a different head version or attempt ordinal is rejected, and the head crosses Continue-As-New with the loop state. When a runtime cannot capture that checkpoint, MoonMind may admit a checkpointless attempt only from the same repository branch and exact head SHA that the admitting verifier proved was publication-authorized, uncontaminated, and remote-verified after either a push or a verified no-change result. The remediation request is pinned to that admitted SHA; its verifier follows the resulting head of the same candidate branch, and both preserve the verified base branch separately for publication. Missing, advanced, or mismatched checkpoint and remote-branch evidence stops the attempt before dispatch; a managed runtime must never select another run's checkout or an unverified branch tip as an implicit fallback. An admitted checkpointless attempt still advances the loop out of remediation so its verifier's evidence can be evaluated.
 
+For additional-work verdicts with structured `remainingWork`, the artifact
+publisher owns the compact progress identity. It computes
+`validatedRefs.authoritativeEvidenceDigest` from the published remaining-work
+entries, independent of entry order, and stamps
+`progressEvidenceSchemaVersion=remediation-progress-evidence/v1`. Supplied values
+for these two fields are replaced, including syntactically valid stale digests;
+the verifier continues to own the gaps and verdict. Workflow history carries the
+computed digest and artifact references, while the full evidence stays in the
+artifact.
+
 ---
 
 ## 5. When immediate verification is still required

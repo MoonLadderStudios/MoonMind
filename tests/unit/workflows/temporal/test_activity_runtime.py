@@ -13,6 +13,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
+from unittest.mock import AsyncMock
 
 import pytest
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
@@ -49,6 +50,7 @@ from moonmind.workflows.skills.deployment_tools import (
     DEPLOYMENT_UPDATE_TOOL_VERSION,
 )
 from moonmind.workflows.temporal import activity_runtime as activity_runtime_module
+from moonmind.workflows.temporal.workflows import run as run_module
 from moonmind.workflows.temporal.activity_catalog import (
     AGENT_RUNTIME_FLEET,
     ARTIFACTS_FLEET,
@@ -3133,44 +3135,71 @@ async def test_remaining_work_digest_is_independent_of_entry_order() -> None:
     )
 
 
+@pytest.mark.parametrize("runtime", ["codex_cli", "claude_code", "omnigent"])
+@pytest.mark.parametrize(
+    "supplied_digest",
+    ["incident", "absent", None, "", "unknown", "sha256:" + "0" * 64],
+)
 async def test_agent_runtime_publish_artifacts_links_remediation_verification_attempt(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
+    runtime: str,
+    supplied_digest: str | None,
 ) -> None:
     async with temporal_db(tmp_path) as session_maker:
         async with session_maker() as session:
             workspace = tmp_path / "workspace"
             verify_path = workspace / "var/artifacts/moonspec-verify/final.json"
             verify_path.parent.mkdir(parents=True)
-            verify_path.write_text(
-                json.dumps(
-                    {
-                        "schemaVersion": "moonspec-verify.issue_brief.v1",
-                        "moonSpecVerdict": "ADDITIONAL_WORK_NEEDED",
-                        "recommendedNextAction": "reattempt_current_step",
-                        "recoverableInCurrentRuntime": True,
-                        "remainingWork": [
-                            {
-                                "requirement": "artifact linkage",
-                                "gapType": "implementation",
-                                "remainingWork": "link verification to attempt",
-                            }
-                        ],
-                    }
-                ),
-                encoding="utf-8",
+            fixture = json.loads(
+                (
+                    Path(__file__).resolve().parents[3]
+                    / "fixtures/reliability/remediation-progress-digest.json"
+                ).read_text(encoding="utf-8")
             )
+            payload = fixture["verifierPayload"]
+            refs = payload["validatedRefs"]
+            if supplied_digest == "absent":
+                # Historical verifier payloads omitted publisher metadata.
+                payload.pop("validatedRefs")
+            elif supplied_digest != "incident":
+                refs["authoritativeEvidenceDigest"] = supplied_digest
+                refs["progressEvidenceSchemaVersion"] = "untrusted-schema"
+            verify_path.write_text(json.dumps(payload), encoding="utf-8")
             run_store = ManagedRunStore(tmp_path / "runs")
             run_store.save(
                 ManagedRunRecord(
                     runId="verify-run-2",
-                    agentId="codex_cli",
-                    runtimeId="codex_cli",
+                    agentId=runtime,
+                    runtimeId=runtime,
                     status="completed",
                     startedAt=datetime.now(timezone.utc),
                     workspacePath=workspace.as_posix(),
                 )
             )
+            workspace_metadata = {"agentRunId": "verify-run-2"}
+            if runtime == "omnigent":
+                workspace = tmp_path / "temporal_sandbox" / "verify-workspace" / "repo"
+                sandbox_verify = workspace / "var/artifacts/moonspec-verify/final.json"
+                sandbox_verify.parent.mkdir(parents=True)
+                sandbox_verify.write_text(verify_path.read_text(), encoding="utf-8")
+                SandboxWorkspaceRecordStore(tmp_path).ensure(
+                    SandboxWorkspaceRecord(
+                        workspace_id="verify-workspace",
+                        workflow_id="parent-wf",
+                        step_execution_id="parent-wf:run:verify:execution:1",
+                        relative_path="repo",
+                    )
+                )
+                workspace_metadata = {
+                    "correlationId": "parent-wf",
+                    "idempotencyKey": "parent-wf:run:verify:execution:1:agent_execute",
+                    "workspaceLocator": {
+                        "kind": "sandbox",
+                        "workspaceId": "verify-workspace",
+                        "relativePath": "repo",
+                    },
+                }
             service = TemporalArtifactService(
                 TemporalArtifactRepository(session),
                 store=LocalTemporalArtifactStore(tmp_path / "artifacts"),
@@ -3178,6 +3207,7 @@ async def test_agent_runtime_publish_artifacts_links_remediation_verification_at
             activities = TemporalAgentRuntimeActivities(
                 artifact_service=service,
                 run_store=run_store,
+                workspace_root=tmp_path,
             )
 
             async def _skip_notify(*_args: Any, **_kwargs: Any) -> dict[str, str]:
@@ -3202,7 +3232,7 @@ async def test_agent_runtime_publish_artifacts_links_remediation_verification_at
                 AgentRunResult(
                     summary="Completed.",
                     metadata={
-                        "agentRunId": "verify-run-2",
+                        **workspace_metadata,
                         "verify_artifact_path": (
                             "var/artifacts/moonspec-verify/final.json"
                         ),
@@ -3237,7 +3267,10 @@ async def test_agent_runtime_publish_artifacts_links_remediation_verification_at
             assert evidence["progressEvidenceSchemaVersion"] == (
                 "remediation-progress-evidence/v1"
             )
-            assert evidence["authoritativeEvidenceDigest"].startswith("sha256:")
+            expected_digest = activity_runtime_module._unordered_json_list_digest(
+                payload["remainingWork"]
+            )
+            assert evidence["authoritativeEvidenceDigest"] == expected_digest
             artifact, artifact_path = await service.read_path(
                 artifact_id=verification_ref,
                 principal="system:agent_runtime",
@@ -3255,10 +3288,75 @@ async def test_agent_runtime_publish_artifacts_links_remediation_verification_at
                 "moonSpecVerifyArtifactRef"
             ] == result.metadata["sourceMoonSpecVerifyArtifactRef"]
             assert persisted_payload["remainingGaps"][0]["requirement"] == (
-                "artifact linkage"
+                payload["remainingWork"][0]["requirement"]
             )
             assert persisted_payload["moonSpecVerify"]["remainingWorkRef"] == (
                 result.metadata["sourceMoonSpecVerifyArtifactRef"]
+            )
+
+            assert persisted_payload["moonSpecVerify"]["validatedRefs"] == evidence
+
+            # Cross the production workflow gate with the published compact
+            # result, so the publisher and controller cannot drift independently.
+            monkeypatch.setattr(
+                run_module.workflow,
+                "info",
+                lambda: SimpleNamespace(workflow_id="parent-wf", run_id="run"),
+            )
+            monkeypatch.setattr(
+                run_module.workflow,
+                "patched",
+                lambda patch_id: (
+                    patch_id == run_module.RUN_REMEDIATION_STABLE_PROGRESS_IDENTITY_PATCH
+                ),
+            )
+            monkeypatch.setattr(
+                run_module.workflow,
+                "now",
+                lambda: datetime(2026, 9, 5, tzinfo=timezone.utc),
+            )
+            parent = run_module.MoonMindRunWorkflow()
+            parent._initialize_remediation_loop_controller(
+                ordered_nodes=[{
+                    "id": "controller",
+                    "inputs": {"runtime": {"mode": runtime}},
+                    "annotations": {"remediationLoop": {
+                        "loopId": "issue-implementation-remediation",
+                        "remediationTool": {
+                            "name": "remediate-issue",
+                            "inputs": {"instructions": "Remediate the verified gaps."},
+                        },
+                        "verificationTool": {
+                            "name": "moonspec-verify",
+                            "inputs": {"instructions": "Verify the candidate."},
+                        },
+                        "workspacePolicy": "continue_from_loop_head",
+                        "budgets": {"hardMaxAttempts": 6},
+                        "terminalPolicy": {
+                            "fullyImplemented": "advance",
+                            "additionalWorkNeeded": "continue_when_allowed",
+                            "blocked": "stop",
+                            "noDetermination": "retry_evidence_or_stop",
+                            "failedUnrecoverable": "stop",
+                        },
+                        "sideEffectPolicy": "workflow_owned",
+                        "publicationPolicy": "evaluate_after_terminal",
+                    }},
+                }]
+            )
+            parent._write_json_artifact = AsyncMock(return_value="artifact://decision")
+            gate_payload = result.metadata["moonSpecVerify"]
+            gate = parent._moonspec_verify_gate_result({"moonSpecVerify": gate_payload})
+            admitted = await parent._evaluate_dynamic_remediation_verification(
+                ordered_nodes=[],
+                verdict=gate.verdict,
+                gate_result_ref="artifact://" + verification_ref,
+                remaining_work_ref="artifact://" + gate.remaining_work_ref,
+                progress_signature=gate.validated_refs["authoritativeEvidenceDigest"],
+            )
+            assert admitted is True
+            assert parent._remediation_loop_state.latest_progress_signature == (
+                expected_digest
             )
 
 
