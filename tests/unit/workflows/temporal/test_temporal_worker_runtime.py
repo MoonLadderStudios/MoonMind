@@ -4392,6 +4392,7 @@ async def test_main_async_activity_fleet(
 @patch("moonmind.workflows.temporal.worker_runtime.TemporalArtifactActivities")
 @patch("moonmind.workflows.temporal.worker_runtime.TemporalArtifactService")
 @patch("moonmind.workflows.temporal.worker_runtime.TemporalArtifactRepository")
+@pytest.mark.parametrize("fleet", ["artifacts", "llm"])
 async def test_build_runtime_activities_injects_concrete_handlers(
     mock_repository_cls,
     mock_service_cls,
@@ -4404,6 +4405,7 @@ async def test_build_runtime_activities_injects_concrete_handlers(
     mock_agent_runtime_activities_cls,
     mock_build_bindings,
     mock_build_deps,
+    fleet,
 ):
     run_store = MagicMock()
     run_supervisor = MagicMock()
@@ -4431,7 +4433,7 @@ async def test_build_runtime_activities_injects_concrete_handlers(
         yield "session"
 
     topology = MagicMock()
-    topology.fleet = "artifacts"
+    topology.fleet = fleet
 
     mock_binding = MagicMock()
     mock_binding.handler = "artifact_handler"
@@ -4478,7 +4480,7 @@ async def test_build_runtime_activities_injects_concrete_handlers(
         artifact_service=ANY,
     )
     mock_build_bindings.assert_called_once_with(
-        fleet="artifacts",
+        fleet=fleet,
         artifact_activities=mock_artifact_activities_cls.return_value,
         plan_activities=mock_plan_activities_cls.return_value,
         manifest_activities=ANY,
@@ -4489,6 +4491,9 @@ async def test_build_runtime_activities_injects_concrete_handlers(
         review_activities=ANY,
         agent_skills_activities=ANY,
     )
+    from moonmind.workflows.temporal.activities.reviewer import ConfiguredStepReviewer
+    review = mock_build_bindings.call_args.kwargs["review_activities"]
+    assert isinstance(review._reviewer, ConfiguredStepReviewer) == (fleet == "llm")
     await resources.aclose()
 
 @pytest.mark.asyncio

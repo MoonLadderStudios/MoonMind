@@ -616,7 +616,10 @@ async def _run(
                                 _durable_create_checkpoint
                                 if durable_terminal
                                 else _create_checkpoint
-                            )
+                            ),
+                            _durable_mark_running if durable_terminal else _mark_running,
+                            _durable_persist_terminal if durable_terminal else _persist_terminal,
+                            _durable_persist_terminal_rejection if durable_terminal else _persist_terminal_rejection,
                         ],
                     )
                 )
@@ -1334,7 +1337,12 @@ async def test_public_root_continue_and_fork_cross_the_real_execution_owner(
                 Worker(
                     env.client,
                     task_queue=ARTIFACTS_TASK_QUEUE,
-                    activities=[create_public_checkpoint],
+                    activities=[
+                        create_public_checkpoint,
+                        mark_checkpoint_branch_turn_running,
+                        persist_checkpoint_branch_turn_terminal,
+                        persist_checkpoint_branch_turn_terminal_rejection,
+                    ],
                 )
             )
 

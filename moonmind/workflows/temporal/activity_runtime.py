@@ -14560,12 +14560,15 @@ def _bind_activity_handler(
 class TemporalReviewActivities:
     """Implementation helpers for ``step.review`` activities."""
 
+    def __init__(self, *, reviewer: Any = None) -> None:
+        self._reviewer = reviewer
+
     async def step_review(
         self,
         payload: Mapping[str, Any],
     ) -> dict[str, Any]:
         from moonmind.workflows.temporal.activities.step_review import step_review_activity
-        return await step_review_activity(payload)
+        return await step_review_activity(payload, reviewer=self._reviewer)
 
 
 def _compact_artifact_ref_text(artifact: Any) -> str:
@@ -14999,10 +15002,24 @@ def build_activity_bindings(
         "reviews": review_activities,
         "agent_skills": agent_skills_activities,
     }
+    from temporalio import activity
+    from moonmind.workflows.temporal.workflow_registry import checkpoint_branch_activity_handlers
+    direct_handlers = {
+        activity._Definition.must_from_callable(handler).name: handler
+        for handler in checkpoint_branch_activity_handlers()
+    }
     bindings: list[TemporalActivityBinding] = []
     bound_keys: set[tuple[str, str]] = set()
     for definition in catalog.activities:
         if requested_fleets and definition.fleet not in requested_fleets:
+            continue
+
+        if definition.activity_type in direct_handlers:
+            bindings.append(TemporalActivityBinding(
+                activity_type=definition.activity_type, task_queue=definition.task_queue,
+                fleet=definition.fleet, handler=direct_handlers[definition.activity_type],
+            ))
+            bound_keys.add((definition.activity_type, definition.fleet))
             continue
 
         try:

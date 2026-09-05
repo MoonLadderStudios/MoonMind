@@ -1,5 +1,9 @@
 from __future__ import annotations
 
+from moonmind.workflows.skills.approval_policy import (
+    review_gate_retry_allowed,
+)
+
 import asyncio
 import json
 from datetime import UTC, datetime
@@ -1352,7 +1356,7 @@ def test_review_gate_retry_requires_reattempt_recommendation(
     _configure_workflow_runtime(monkeypatch)
     workflow = MoonMindRunWorkflow()
 
-    assert workflow._review_gate_retry_allowed(
+    assert review_gate_retry_allowed(
         verdict=SimpleNamespace(
             verdict="ADDITIONAL_WORK_NEEDED",
             recommended_next_action="needs_human",
@@ -1364,7 +1368,7 @@ def test_review_gate_retry_requires_reattempt_recommendation(
         max_consecutive_no_progress_attempts=2,
     ) is False
 
-    assert workflow._review_gate_retry_allowed(
+    assert review_gate_retry_allowed(
         verdict=SimpleNamespace(
             verdict="ADDITIONAL_WORK_NEEDED",
             recommended_next_action="blocked",
@@ -1376,7 +1380,7 @@ def test_review_gate_retry_requires_reattempt_recommendation(
         max_consecutive_no_progress_attempts=2,
     ) is False
 
-    assert workflow._review_gate_retry_allowed(
+    assert review_gate_retry_allowed(
         verdict=SimpleNamespace(
             verdict="ADDITIONAL_WORK_NEEDED",
             recommended_next_action="reattempt_current_step",

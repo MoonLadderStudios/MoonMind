@@ -90,6 +90,7 @@ from moonmind.workflows.temporal.activity_runtime import (
     TemporalSandboxActivities,
     TemporalSkillActivities,
 )
+from moonmind.workflows.temporal.activities.reviewer import ConfiguredStepReviewer
 from moonmind.workflows.temporal.artifacts import (
     TemporalArtifactActivities,
     TemporalArtifactRepository,
@@ -126,6 +127,7 @@ from moonmind.workflows.temporal.worker_healthcheck import (
 )
 from moonmind.workflows.temporal.workers import (
     AGENT_RUNTIME_FLEET,
+    LLM_FLEET,
     DEPLOYMENT_FLEET,
     SANDBOX_FLEET,
     WORKFLOW_FLEET,
@@ -318,23 +320,6 @@ async def _create_child_run_task_input_snapshot_artifact(
     return completed.artifact_id
 
 
-def _apply_child_snapshot_ref_to_records(
-    *,
-    records: list[TemporalExecutionCanonicalRecord | TemporalExecutionRecord],
-    artifact_id: str,
-) -> None:
-    for target_record in records:
-        memo = dict(target_record.memo or {})
-        memo["task_input_snapshot_ref"] = artifact_id
-        memo["task_input_snapshot_version"] = _WORKFLOW_INPUT_SNAPSHOT_VERSION
-        memo["task_input_snapshot_source_kind"] = "create"
-        target_record.memo = memo
-        artifact_refs = list(target_record.artifact_refs or [])
-        if artifact_id not in artifact_refs:
-            artifact_refs.append(artifact_id)
-        target_record.artifact_refs = artifact_refs
-
-
 async def _persist_child_run_task_input_snapshot(
     *,
     session: AsyncSession,
@@ -386,13 +371,18 @@ async def _persist_child_run_task_input_snapshot(
         principal=principal,
     )
 
-    projection = await session.get(TemporalExecutionRecord, workflow_id)
-    records_to_update = [canonical]
-    if projection is not None:
-        records_to_update.append(projection)
-    _apply_child_snapshot_ref_to_records(
-        records=records_to_update,
-        artifact_id=artifact_id,
+    from api_service.core.sync import mutate_execution_projection
+
+    projection = await mutate_execution_projection(
+        session, workflow_id=workflow_id, owner="snapshot",
+        payload={
+            "memo": {
+                "task_input_snapshot_ref": artifact_id,
+                "task_input_snapshot_version": _WORKFLOW_INPUT_SNAPSHOT_VERSION,
+                "task_input_snapshot_source_kind": "create",
+            },
+            "artifact_refs": [artifact_id],
+        },
     )
 
     await session.commit()
@@ -3030,7 +3020,9 @@ async def _build_runtime_activities(topology) -> tuple[AsyncExitStack, list[obje
                 artifact_service=artifact_service
             ),
             agent_runtime_activities=agent_runtime_activities,
-            review_activities=TemporalReviewActivities(),
+            review_activities=TemporalReviewActivities(
+                reviewer=ConfiguredStepReviewer(settings) if topology.fleet == LLM_FLEET else None,
+            ),
             agent_skills_activities=AgentSkillsActivities(
                 artifact_service=artifact_service,
                 async_session_maker=get_async_session_context,

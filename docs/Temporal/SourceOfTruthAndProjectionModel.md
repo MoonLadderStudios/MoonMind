@@ -182,6 +182,39 @@ The service:
 - mutates `run_id` on Continue-As-New style rerun behavior
 - returns execution counts from Postgres-backed projections with `countMode="exact"`
 
+### Projection mutation ownership
+
+`api_service.core.sync.mutate_execution_projection` is the shared mutation
+boundary for Temporal reconciliation, service projection upserts, worker-created
+input snapshot refs, and Omnigent runtime-binding refs. Callers own transaction
+commit and retry. It locks canonical then projection rows and preserves semantic
+`updated_at`; `last_synced_at` measures synchronization, not lifecycle progress.
+A stale same-run running snapshot cannot reopen a terminal row.
+
+| Writer | Owned fields |
+| --- | --- |
+| Temporal reconciliation | Lifecycle identity, state, close evidence, semantic timestamps and workflow metadata |
+| Execution service | API parameters and local idempotency/finish helpers, reconciled with newer lifecycle evidence |
+| Input snapshot persistence | Immutable task input snapshot memo fields and retained artifact refs |
+| Omnigent binding persistence | Runtime binding ref, revision, fencing generation and binding state |
+
+The execution service supplies complete parameter and ordinary memo snapshots,
+so intentional deletion of recovery or waiting metadata is retained. Temporal
+and owner-specific patches preserve fields they do not own. Missing Temporal
+metadata cannot erase local fields. Artifact refs accumulate;
+snapshot identities cannot be replaced; binding revisions cannot move backwards
+or disagree on identity at the same revision. The mutation boundary repairs a
+missing projection from the canonical source and reconciles divergent rows.
+Reconciliation/backfill remains required because Temporal and Postgres do not
+share a transaction.
+
+The canonical workflow registry explicitly assigns `product`, `operator`, or
+`excluded` projection scope. `MoonMind.UserWorkflow` and `MoonMind.ManifestIngest`
+belong in product execution views. Internal supervisors, managers and control
+owners have operator scope; janitors and reconciliation loops are excluded.
+Unknown types are reported as unknown and never relabeled as UserWorkflow.
+Product admission and list/detail readers enforce the same registry policy.
+
 ### 7.3 `ExecutionModel`
 
 The `/api/executions` response model exposes:

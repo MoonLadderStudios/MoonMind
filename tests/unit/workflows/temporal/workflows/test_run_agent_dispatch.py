@@ -1,3 +1,7 @@
+
+from moonmind.workflows.skills.approval_policy import (
+    is_review_gate_active,
+)
 """Unit tests for agent dispatch helpers in MoonMind.UserWorkflow.
 
 Pure unit tests — no Temporal test server needed.
@@ -3634,7 +3638,7 @@ class TestReviewGateHelpers(unittest.TestCase):
             skip_tool_types=("repo.publish",),
         )
 
-        is_active = wf._review_gate_active(
+        is_active = is_review_gate_active(
             approval_policy=approval_policy,
             tool_type="skill",
             tool_name="repo.publish",
@@ -3649,7 +3653,7 @@ class TestReviewGateHelpers(unittest.TestCase):
             skip_tool_types=("agent_runtime",),
         )
 
-        is_active = wf._review_gate_active(
+        is_active = is_review_gate_active(
             approval_policy=approval_policy,
             tool_type="agent_runtime",
             tool_name="jules",

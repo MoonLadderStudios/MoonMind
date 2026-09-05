@@ -20,12 +20,6 @@ pytestmark = [pytest.mark.integration, pytest.mark.integration_ci]
 
 
 class FakeTemporalService:
-    async def send_quiesce_pause_signal(self) -> int:
-        return 0
-
-    async def send_resume_signal(self) -> int:
-        return 0
-
     async def get_drain_metrics(self) -> dict[str, int]:
         return {"queued": 0, "running": 0, "stale_running": 0}
 

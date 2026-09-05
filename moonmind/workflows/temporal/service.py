@@ -6,6 +6,8 @@ This module implements the workflow type catalog and lifecycle contract describe
 
 from __future__ import annotations
 
+from moonmind.workflows.temporal.workflow_registry import product_workflow_types, require_product_projection
+
 import asyncio
 import base64
 import binascii
@@ -601,13 +603,11 @@ class TemporalExecutionService:
         payload = result.scalar_one_or_none()
         return bool(isinstance(payload, Mapping) and payload.get("workersPaused"))
 
-    async def send_quiesce_pause_signal(self) -> int:
-        """Send a Quiesce pause signal to all running workflows (DOC-REQ-003, FR-007)."""
-        return await self._client_adapter.send_batch_pause_update()
+    async def send_quiesce_pause_signal(self, **kwargs):
+        return await self._client_adapter.send_batch_pause_update(**kwargs)
 
-    async def send_quiesce_resume_signal(self) -> int:
-        """Send a Quiesce resume signal to all paused workflows (DOC-REQ-003, FR-010)."""
-        return await self._client_adapter.send_batch_resume_update()
+    async def send_quiesce_resume_signal(self, **kwargs):
+        return await self._client_adapter.send_batch_resume_update(**kwargs)
 
     async def get_drain_metrics(self) -> dict[str, int]:
         """Return Temporal Visibility counts for worker-pause drain status."""
@@ -2524,6 +2524,9 @@ class TemporalExecutionService:
                 "Temporal describe failed for %s: %s", canonical_workflow_id, exc
             )
 
+        if description is not None:
+            require_product_projection(description.workflow_type)
+
         record = await self._load_source_execution(
             canonical_workflow_id,
         )
@@ -2561,17 +2564,20 @@ class TemporalExecutionService:
                 # those runs have no API-created canonical source row. Their
                 # Temporal-authoritative projection is the durable control-plane
                 # record used for ownership and parent-runtime inheritance.
+                require_product_projection(projection.workflow_type)
                 return projection
             raise TemporalExecutionNotFoundError(
                 f"Workflow execution {canonical_workflow_id} was not found"
             )
 
+        require_product_projection(record.workflow_type)
         if include_orphaned:
             projection = await self._load_projection_execution(
                 canonical_workflow_id,
                 include_orphaned=True,
             )
             if projection is not None:
+                require_product_projection(projection.workflow_type)
                 return projection
         return await self._sync_projection_best_effort(record)
 
@@ -5886,6 +5892,7 @@ class TemporalExecutionService:
                 TemporalExecutionRecord.sync_state
                 != TemporalExecutionProjectionSyncState.ORPHANED
             )
+        stmt = stmt.where(model.workflow_type.in_(product_workflow_types()))
         if workflow_type:
             stmt = stmt.where(model.workflow_type == workflow_type)
         if owner_type:
@@ -6057,32 +6064,13 @@ class TemporalExecutionService:
         *,
         synced_at: datetime | None = None,
     ) -> TemporalExecutionRecord:
-        payload = self._projection_payload_from_source(source)
-        projection = await self._load_projection_execution(
-            source.workflow_id,
-            include_orphaned=True,
-        )
-        previous_version = int(projection.projection_version or 0) if projection else 0
-        if projection is None:
-            projection = TemporalExecutionRecord(
-                **payload,
-                projection_version=1,
-                last_synced_at=synced_at or _utc_now(),
-                sync_state=TemporalExecutionProjectionSyncState.FRESH,
-                sync_error=None,
-                source_mode=TemporalExecutionProjectionSourceMode.TEMPORAL_AUTHORITATIVE,
-            )
-            self._session.add(projection)
+        from api_service.core.sync import mutate_execution_projection
 
-        self._apply_projection_payload(projection, payload)
-        projection.projection_version = max(previous_version + 1, 1)
-        projection.last_synced_at = synced_at or _utc_now()
-        projection.sync_state = TemporalExecutionProjectionSyncState.FRESH
-        projection.sync_error = None
-        projection.source_mode = (
-            TemporalExecutionProjectionSourceMode.TEMPORAL_AUTHORITATIVE
+        return await mutate_execution_projection(
+            self._session, workflow_id=source.workflow_id,
+            payload=self._projection_payload_from_source(source),
+            owner="canonical", synced_at=synced_at,
         )
-        return projection
 
     def _build_projection_fallback(
         self,
@@ -6162,13 +6150,6 @@ class TemporalExecutionService:
             "closed_at": source.closed_at,
         }
 
-    def _apply_projection_payload(
-        self,
-        projection: TemporalExecutionRecord,
-        payload: dict[str, Any],
-    ) -> None:
-        for field, value in payload.items():
-            setattr(projection, field, value)
 
 def _utc_now() -> datetime:
     return datetime.now(UTC)

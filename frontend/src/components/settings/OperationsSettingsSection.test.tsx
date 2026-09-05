@@ -563,4 +563,50 @@ describe('OperationsSettingsSection deployment update card', () => {
     });
     expect(await within(card).findByText(/deployment rollback queued/i)).toBeTruthy();
   });
+  it.each([
+    ['accepted', 'pending', 'Pause requested; confirmation pending'],
+    ['unknown', 'unknown', 'Pause partially confirmed'],
+    ['failed', 'failed', 'Pause failed'],
+    ['safe_point', 'succeeded', 'Workers quiesced'],
+  ])('renders %s control evidence without promoting acceptance', async (state, signalStatus, label) => {
+    const originalFetch = fetchSpy.getMockImplementation()!;
+    fetchSpy.mockImplementation((input, init) => {
+      if (String(input) === '/api/workers') {
+        return Promise.resolve({ ok: true, json: async () => ({
+          ...workerSnapshot,
+          system: { ...workerSnapshot.system, workersPaused: true, mode: 'quiesce' },
+          signalStatus,
+          control: { enumerated: true, targets: [{ workflowId: 'visible-target', runId: 'visible-run', state }] },
+        }) } as Response);
+      }
+      return originalFetch(input, init);
+    });
+    renderOperations();
+    expect(await screen.findByRole('heading', { name: label })).toBeTruthy();
+    expect(await screen.findByText('Control confirmations')).toBeTruthy();
+    if (state !== 'safe_point') expect(screen.queryByRole('heading', { name: 'Workers quiesced' })).toBeNull();
+  });
+
+  it('acknowledges an accepted pause without a success toast', async () => {
+    const originalFetch = fetchSpy.getMockImplementation()!;
+    fetchSpy.mockImplementation((input, init) => {
+      if (String(input) === '/api/worker-action') {
+        return Promise.resolve({ ok: true, json: async () => ({
+          ...workerSnapshot,
+          system: { ...workerSnapshot.system, workersPaused: true, mode: 'quiesce' },
+          signalStatus: 'pending',
+          control: { enumerated: true, targets: [{ workflowId: 'visible-target', runId: 'visible-run', state: 'accepted' }] },
+        }) } as Response);
+      }
+      return originalFetch(input, init);
+    });
+    renderOperations();
+    const card = await screen.findByRole('region', { name: /worker operations/i });
+    fireEvent.change(await within(card).findByLabelText('Mode'), { target: { value: 'quiesce' } });
+    fireEvent.change(within(card).getAllByLabelText(/^reason$/i)[0]!, { target: { value: 'Maintenance' } });
+    fireEvent.click(within(card).getByRole('button', { name: /pause workers/i }));
+    expect(await within(card).findByText('Pause request recorded. Check the workflow confirmations below.')).toBeTruthy();
+    expect(within(card).queryByText(/paused successfully/i)).toBeNull();
+  });
+
 });

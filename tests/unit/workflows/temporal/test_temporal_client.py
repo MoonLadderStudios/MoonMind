@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, Mock
 from types import SimpleNamespace
 
 import pytest
@@ -23,6 +23,7 @@ class _FakeWorkflowExecution:
 
     def __init__(self, workflow_id: str) -> None:
         self.id = workflow_id
+        self.run_id = "run-" + workflow_id
 
 @pytest.fixture
 def adapter() -> TemporalClientAdapter:
@@ -140,6 +141,7 @@ async def test_send_batch_pause_update_starts_all_with_canonical_pause(adapter):
     mock_handles = {}
     for ex in executions:
         handle = AsyncMock()
+        handle.get_update_handle = Mock(return_value=SimpleNamespace(result=AsyncMock(side_effect=TimeoutError)))
         mock_handles[ex.id] = handle
 
     async def _fake_list(query):
@@ -147,11 +149,12 @@ async def test_send_batch_pause_update_starts_all_with_canonical_pause(adapter):
             yield ex
 
     adapter._client.list_workflows = _fake_list
-    adapter._client.get_workflow_handle = lambda wid: mock_handles[wid]
+    adapter._client.get_workflow_handle = lambda wid, **_kwargs: mock_handles[wid]
 
     signaled = await adapter.send_batch_pause_update()
 
-    assert signaled == 3
+    assert len(signaled.targets) == 3
+    assert signaled.status == "pending"
     for handle in mock_handles.values():
         handle.start_update.assert_awaited_once()
         assert handle.start_update.await_args.args == ("Pause",)
@@ -165,17 +168,19 @@ async def test_send_batch_resume_update_starts_all_with_canonical_resume(adapter
 
     executions = [_FakeWorkflowExecution("wf-1")]
     mock_handle = AsyncMock()
+    mock_handle.get_update_handle = Mock(return_value=SimpleNamespace(result=AsyncMock(side_effect=TimeoutError)))
 
     async def _fake_list(query):
         for ex in executions:
             yield ex
 
     adapter._client.list_workflows = _fake_list
-    adapter._client.get_workflow_handle = lambda wid: mock_handle
+    adapter._client.get_workflow_handle = lambda wid, **_kwargs: mock_handle
 
     signaled = await adapter.send_batch_resume_update()
 
-    assert signaled == 1
+    assert len(signaled.targets) == 1
+    assert signaled.status == "pending"
     mock_handle.start_update.assert_awaited_once()
     assert mock_handle.start_update.await_args.args == ("Resume",)
     assert mock_handle.start_update.await_args.kwargs["wait_for_stage"] is (
@@ -192,9 +197,11 @@ async def test_send_batch_update_skips_failed_workflows(adapter):
         _FakeWorkflowExecution("wf-ok2"),
     ]
     ok_handle = AsyncMock()
+    ok_handle.get_update_handle = Mock(return_value=SimpleNamespace(result=AsyncMock(side_effect=TimeoutError)))
     fail_handle = AsyncMock()
     fail_handle.start_update = AsyncMock(side_effect=RuntimeError("gone"))
     ok2_handle = AsyncMock()
+    ok2_handle.get_update_handle = Mock(return_value=SimpleNamespace(result=AsyncMock(side_effect=TimeoutError)))
 
     handles = {"wf-ok": ok_handle, "wf-fail": fail_handle, "wf-ok2": ok2_handle}
 
@@ -203,12 +210,13 @@ async def test_send_batch_update_skips_failed_workflows(adapter):
             yield ex
 
     adapter._client.list_workflows = _fake_list
-    adapter._client.get_workflow_handle = lambda wid: handles[wid]
+    adapter._client.get_workflow_handle = lambda wid, **_kwargs: handles[wid]
 
     signaled = await adapter.send_batch_pause_update()
 
     # 2 succeeded, 1 failed
-    assert signaled == 2
+    assert [target.state for target in signaled.targets] == ["pending", "unknown", "pending"]
+    assert signaled.status == "partial"
     ok_handle.start_update.assert_awaited_once()
     assert ok_handle.start_update.await_args.args == ("Pause",)
     ok2_handle.start_update.assert_awaited_once()
