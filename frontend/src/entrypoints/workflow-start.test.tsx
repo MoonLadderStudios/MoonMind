@@ -7193,7 +7193,6 @@ describe.skip("Task Create Entrypoint", () => {
       },
     });
     expect(request.payload.requiredCapabilities).toEqual([
-      "codex_cli",
       "git",
       "gh",
     ]);
@@ -7376,7 +7375,6 @@ describe.skip("Task Create Entrypoint", () => {
       };
     };
     expect(request.payload.requiredCapabilities).toEqual([
-      "codex_cli",
       "git",
       "gh",
       "jira",
@@ -7450,8 +7448,6 @@ describe.skip("Task Create Entrypoint", () => {
       };
     };
     expect(request.payload.requiredCapabilities).toEqual([
-      "codex_cli",
-      "claude_code",
       "git",
       "gh",
     ]);
@@ -7464,6 +7460,7 @@ describe.skip("Task Create Entrypoint", () => {
       effort: "high",
     });
   });
+
 
   it("reveals per-step advanced skill options from the bottom toggle", async () => {
     renderWithClient(<WorkflowStartPage payload={mockPayload} />);
@@ -7538,7 +7535,6 @@ describe.skip("Task Create Entrypoint", () => {
       "qdrant",
     ]);
     expect(request.payload.requiredCapabilities).toEqual([
-      "codex_cli",
       "git",
       "gh",
       "docker",
@@ -7673,7 +7669,6 @@ describe.skip("Task Create Entrypoint", () => {
       name: "auto",
     });
     expect(payload.requiredCapabilities).toEqual([
-      "codex_cli",
       "git",
       "gh",
     ]);
@@ -20396,7 +20391,6 @@ describe("Task Create governed Tool authoring", () => {
     };
     expect(request.payload.repository).toBeUndefined();
     expect(request.payload.requiredCapabilities).toEqual([
-      "codex_cli",
       "gh",
       "jira",
     ]);
@@ -20462,7 +20456,6 @@ describe("Task Create governed Tool authoring", () => {
     };
     expect(request.payload.repository).toBeUndefined();
     expect(request.payload.requiredCapabilities).toEqual([
-      "codex_cli",
       "gh",
       "jira",
     ]);
@@ -20526,7 +20519,6 @@ describe("Task Create governed Tool authoring", () => {
       };
     };
     expect(request.payload.requiredCapabilities).toEqual([
-      "codex_cli",
       "git",
       "gh",
       "jira",
@@ -21988,6 +21980,71 @@ describe("Task Create runtime switch layout stability", () => {
     const request = JSON.parse(String(fetchSpy.mock.calls.find(([url]) => String(url) === "/api/executions")?.[1]?.body));
     expect(request.payload.task.runtime).toMatchObject({ mode: "claude_code", profileId: "native-claude" });
     expect(request).not.toHaveProperty("agentProfile");
+    expect(request.payload.requiredCapabilities).toEqual(["git", "gh"]);
+  });
+
+  it("uses the canonical runtime catalog ahead of legacy boot metadata", async () => {
+    const payload = {
+      ...mockPayload,
+      initialData: { dashboardConfig: {
+        ...mockDashboardConfig,
+        system: { ...mockDashboardConfig.system, supportedRuntimes: ["codex_cli", "claude_code", "jules"] },
+      } },
+    } as BootPayload;
+    renderWithClient(<WorkflowStartPage payload={payload} />);
+    const runtime = await screen.findByLabelText("Runtime");
+    expect(within(runtime).getByRole("option", { name: "Jules" })).toBeTruthy();
+    expect(within(runtime).queryByRole("option", { name: "Codex via Omnigent" })).toBeNull();
+  });
+
+  it.each(["codex", "claude"])("submits a Profile's %s runtime for API validation despite a stale boot catalog", async (runtimeId) => {
+    const fallback = fetchSpy.getMockImplementation()!;
+    fetchSpy.mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
+      if (String(input).startsWith("/api/v1/provider-profiles")) {
+        return Promise.resolve({ ok: true, json: async () => [
+          { profile_id: "selected-profile", runtime_id: runtimeId, is_default: true },
+        ] } as Response);
+      }
+      return fallback(input, init);
+    });
+    renderWithClient(<WorkflowStartPage payload={mockPayload} />);
+    await waitFor(() => expect((screen.getByLabelText("Profile") as HTMLSelectElement).value).toBe("selected-profile"));
+    await waitFor(() => expect((screen.getByLabelText("Runtime") as HTMLSelectElement).value).toBe(runtimeId));
+    fireEvent.change(screen.getByLabelText("Instructions"), { target: { value: "Preserve the selected Profile's runtime intent." } });
+    fireEvent.click(screen.getByRole("button", { name: "Start Workflow" }));
+    await waitFor(() => expect(fetchSpy).toHaveBeenCalledWith("/api/executions", expect.objectContaining({ method: "POST" })));
+    const request = JSON.parse(String(fetchSpy.mock.calls.find(([url]) => String(url) === "/api/executions")?.[1]?.body));
+    expect(request.payload.task.runtime).toMatchObject({ mode: runtimeId, profileId: "selected-profile" });
+    expect(request.payload.requiredCapabilities).toEqual(["git", "gh"]);
+  });
+
+  it.each(["omnigent", "claude_code"])("submits a %s step selection without deriving host capability claims", async (runtimeId) => {
+    renderWithClient(<WorkflowStartPage payload={mockPayload} />);
+    fireEvent.click(screen.getByLabelText("Advanced mode"));
+    fireEvent.change(await screen.findByLabelText("Instructions"), { target: { value: "Validate the step runtime at API admission." } });
+    fireEvent.change(screen.getByLabelText("Step 1 Runtime"), { target: { value: runtimeId } });
+    fireEvent.click(screen.getByRole("button", { name: "Start Workflow" }));
+    await waitFor(() => expect(fetchSpy).toHaveBeenCalledWith("/api/executions", expect.objectContaining({ method: "POST" })));
+    const request = JSON.parse(String(fetchSpy.mock.calls.find(([url]) => String(url) === "/api/executions")?.[1]?.body));
+    expect(request.payload.task.steps[0].runtime.mode).toBe(runtimeId);
+    expect(request.payload.requiredCapabilities).toEqual(["git", "gh"]);
+  });
+
+  it("surfaces authoritative capability admission errors from the API", async () => {
+    const fallback = fetchSpy.getMockImplementation()!;
+    fetchSpy.mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
+      if (String(input) === "/api/executions" && init?.method === "POST") {
+        return Promise.resolve({ ok: false, status: 409, text: async () => JSON.stringify({
+          detail: { message: "required capabilities unknown: ['custom-tool']" },
+        }) } as Response);
+      }
+      return fallback(input, init);
+    });
+    renderWithClient(<WorkflowStartPage payload={mockPayload} />);
+    fireEvent.change(await screen.findByLabelText("Instructions"), { target: { value: "Check capability admission." } });
+    fireEvent.click(screen.getByRole("button", { name: "Start Workflow" }));
+    expect(await screen.findByText(/required capabilities unknown/)).toBeTruthy();
+    expect(navigateTo).not.toHaveBeenCalled();
   });
 
   it.each([false, true])("preserves an explicit runtime override after Profile inventory refetch (Omnigent configuration: %s)", async (configured) => {
@@ -22355,11 +22412,10 @@ describe("MM-936/MM-941 capability registry and chip computation", () => {
 
   it("keeps derived capabilities non-removable with provenance", () => {
     const chips = buildCapabilityChips({
-      skill: ["git"],
+      skill: ["git", "codex_cli"],
       tool: ["gh"],
       generatedTool: ["docker"],
       preset: ["jira"],
-      runtime: ["codex_cli"],
       publish: ["gh"],
       template: ["unity"],
     });
@@ -22377,7 +22433,7 @@ describe("MM-936/MM-941 capability registry and chip computation", () => {
       "from preset",
     );
     expect(capabilityChipProvenanceLabel(requireChip(chips, "codex_cli"))).toBe(
-      "from runtime",
+      "from skill",
     );
     expect(requireChip(chips, "gh").readiness.sourceLabels).toEqual([
       "from tool",
