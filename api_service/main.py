@@ -2423,6 +2423,22 @@ def _register_settings_change_subscribers() -> None:
         )
 
 
+def _assert_omnigent_configuration_is_current() -> None:
+    """Fail fast (or warn) on obsolete Omnigent configuration.
+
+    Source issue: MoonLadderStudios/MoonMind#3835 required work section 10.
+    A legacy image/environment identity must never be silently ignored: while
+    its retirement row is still in its deprecation window the operator gets an
+    actionable warning naming the replacement, and after removal startup is
+    rejected outright.
+    """
+
+    from moonmind.omnigent.legacy_retirement import assert_obsolete_configuration
+
+    for warning in assert_obsolete_configuration(os.environ):
+        logger.warning("Obsolete Omnigent configuration: %s", warning)
+
+
 async def startup_event():
     """Defines the application's startup events."""
     logger.info("Executing application startup events...")
@@ -2433,6 +2449,7 @@ async def startup_event():
 
         app.state = State()
 
+    _assert_omnigent_configuration_is_current()
     await _initialize_oidc_provider(app)  # OIDC provider init like Keycloak discovery
     _register_settings_change_subscribers()
     try:
