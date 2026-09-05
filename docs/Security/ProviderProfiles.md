@@ -1418,8 +1418,11 @@ themselves:
 - the narrowed drain set that exempts a credentialless profile, so a pre-marker
   manager still drains every lease;
 - the per-purpose scope exemption, so a pre-marker manager still gates credential
-  repair and revocation on shared-scope availability; and
-- withdrawing a pending request when its owner releases.
+  repair and revocation on shared-scope availability;
+- withdrawing a pending request when its owner releases; and
+- scheduling periodic released-lease tombstone cleanup. DB lease persistence
+  alone does not enable this activity: older histories proceed directly to
+  lease verification at that boundary and must preserve that command order.
 
 A grant that moved under a recorded history would emit a reservation — and, under
 DB lease persistence, a `provider_profile.sync_slot_leases` activity — where the
