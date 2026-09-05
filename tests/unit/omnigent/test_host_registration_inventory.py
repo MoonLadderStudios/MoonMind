@@ -210,7 +210,7 @@ async def test_cancelling_one_waiter_does_not_cancel_the_shared_read() -> None:
     follower.cancel()
 
     with pytest.raises(asyncio.CancelledError):
-        await follower
+        _ = await follower
     assert await leader == [_ready_host("a")]
     assert client.calls == 1
 
