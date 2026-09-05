@@ -2788,8 +2788,15 @@ async def _build_runtime_activities(topology) -> tuple[AsyncExitStack, list[obje
             from api_service.db.base import async_session_maker
             from moonmind.omnigent.production import (
                 build_generic_omnigent_execution_services,
+                close_omnigent_transport_pool,
             )
 
+            # The pooled Omnigent transport is opened by the build below and
+            # lives for the worker process, so the worker owns its close
+            # (MoonLadderStudios/MoonMind#3878). Registering the idempotent
+            # close first keeps cleanup correct when the build opens the pool
+            # and then fails readiness.
+            resources.push_async_callback(close_omnigent_transport_pool)
             # Startup validates generic readiness without crash-looping the
             # worker when bootstrap has not yet published resolved images.
             # A missing digest fails per-request with actionable

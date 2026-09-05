@@ -63,7 +63,9 @@ from moonmind.omnigent.host_services import (
     OmnigentSkillDeliveryService,
     OmnigentWorkspaceMaterializer,
 )
+from moonmind.omnigent.host_capacity import GenericHostCapacityAdmission
 from moonmind.omnigent.provider_leases import OmnigentProviderLeaseCoordinator
+from moonmind.omnigent.transport import OmnigentTransportPool
 from moonmind.omnigent.realizers.codex_profile_bound import CodexProfileBoundRealizer
 from moonmind.omnigent.realizers.generic_host import GenericOmnigentHostRealizer
 from moonmind.omnigent.realizers.registry import OmnigentExecutionRealizerRegistry
@@ -93,6 +95,31 @@ class GenericOmnigentExecutionServices:
     runtime_binding_store: DbRuntimeBindingStore
     host_lease_repository: DbOmnigentHostLeaseRepository
     generic_realizer: GenericOmnigentHostRealizer
+
+
+# MoonLadderStudios/MoonMind#3878: the services graph is rebuilt per execution,
+# so the pooled transport has to live outside it or nothing would be pooled
+# across concurrent runs. The worker process owns this pool's lifecycle and
+# closes it on shutdown; nothing else may close it.
+_TRANSPORT_POOL: OmnigentTransportPool | None = None
+
+
+def omnigent_transport_pool() -> OmnigentTransportPool:
+    """Return the process-wide pooled Omnigent HTTP/SSE transport."""
+
+    global _TRANSPORT_POOL
+    if _TRANSPORT_POOL is None:
+        _TRANSPORT_POOL = OmnigentTransportPool()
+    return _TRANSPORT_POOL
+
+
+async def close_omnigent_transport_pool() -> None:
+    """Close the process-wide pooled transport. Idempotent."""
+
+    global _TRANSPORT_POOL
+    pool, _TRANSPORT_POOL = _TRANSPORT_POOL, None
+    if pool is not None:
+        await pool.aclose()
 
 
 def _production_host_class_selector() -> OmnigentHostClassSelector:
@@ -142,9 +169,13 @@ def build_generic_omnigent_execution_services(
         )
     artifacts = artifact_gateway or TemporalOmnigentArtifactGateway(session_factory)
     bridge_store = run_store or OmnigentBridgeSessionStore(session_factory)
+    transport_pool = omnigent_transport_pool()
     client = OmnigentHttpClient(
         base_url=server_url,
         api_token=resolved_api_token(),
+        # Pooled, lifecycle-managed transport instead of a fresh connection per
+        # call (MoonLadderStudios/MoonMind#3878).
+        client=transport_pool.client(),
         upstream_header_allowlist=resolved_proxy_forward_headers(),
     )
     catalogs = DbHarnessCatalogRepository(session_factory)
@@ -218,6 +249,7 @@ def build_generic_omnigent_execution_services(
             artifact_gateway=artifacts,
             run_store=bridge_store,
             session_authority_sink=session_authority_sink,
+            transport_pool=transport_pool,
         )
 
     temporal_adapter = TemporalClientAdapter()
@@ -234,7 +266,15 @@ def build_generic_omnigent_execution_services(
         )
 
     runtime_bindings = DbRuntimeBindingStore(session_factory)
-    host_leases = DbOmnigentHostLeaseRepository(session_factory)
+    # Aggregate machine capacity and cold-launch rate (#3878 invariant 7). One
+    # instance is shared: the realizer uses it for the fail-closed pre-check and
+    # the lease repository enforces it atomically with the reservation itself.
+    host_capacity_admission = GenericHostCapacityAdmission.from_environment(
+        session_factory=session_factory
+    )
+    host_leases = DbOmnigentHostLeaseRepository(
+        session_factory, capacity_admission=host_capacity_admission
+    )
     realizer = GenericOmnigentHostRealizer(
         runtime_binding_store=runtime_bindings,
         provider_lease_coordinator=OmnigentProviderLeaseCoordinator(
@@ -261,6 +301,7 @@ def build_generic_omnigent_execution_services(
         cleanup_authority=CanonicalCleanupAuthority(
             OmnigentControlPlaneStore(session_factory)
         ),
+        host_capacity_admission=host_capacity_admission,
         execution_state_notifier=notify_execution_state,
     )
     registry = OmnigentExecutionRealizerRegistry()
@@ -293,4 +334,6 @@ __all__ = [
     "GenericOmnigentExecutionServices",
     "build_generic_omnigent_execution_services",
     "build_omnigent_secret_resolver",
+    "close_omnigent_transport_pool",
+    "omnigent_transport_pool",
 ]

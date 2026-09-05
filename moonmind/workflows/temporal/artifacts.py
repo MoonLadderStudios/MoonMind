@@ -3753,6 +3753,9 @@ class TemporalArtifactActivities:
                     "profile_id": row.profile_id,
                     "profile_version": provider_profile_version(row),
                     "runtime_id": row.runtime_id,
+                    # Capacity scope is the provider-side quota identity the
+                    # manager reports as the limiting layer (#3878 AC11).
+                    "capacity_scope_ref": row.capacity_scope_ref,
                     "is_default": row.is_default,
                     "provider_id": row.provider_id,
                     "provider_label": row.provider_label,
@@ -3777,7 +3780,6 @@ class TemporalArtifactActivities:
                     "model_overrides": row.model_overrides or {},
                     "model_tiers": row.model_tiers or [],
                     "default_model_tier": row.default_model_tier,
-                    "capacity_scope_ref": row.capacity_scope_ref,
                     "max_parallel_runs": row.max_parallel_runs,
                     "cooldown_after_429_seconds": row.cooldown_after_429_seconds,
                     "rate_limit_policy": row.rate_limit_policy.value,
@@ -4079,7 +4081,29 @@ class TemporalArtifactActivities:
                     "cooldown_until": raw_profile.get("cooldown_until"),
                     "enabled": raw_profile.get("enabled"),
                     "launch_ready": raw_profile.get("launch_ready"),
+                    # MoonLadderStudios/MoonMind#3878 AC11: distinguish the
+                    # configured ceiling from the current effective limit and
+                    # name the capacity scope, without provider identity.
+                    "configured_capacity": raw_profile.get("configured_capacity"),
+                    "effective_capacity": raw_profile.get("effective_capacity"),
+                    "execution_lease_count": raw_profile.get(
+                        "execution_lease_count"
+                    ),
+                    "capacity_scope_ref": raw_profile.get("capacity_scope_ref"),
                 }
+
+        # Which profile, if any, this requester already holds a lease on. The
+        # Omnigent pre-Activity admission path reads this to recognize a grant
+        # that landed while its signal was in flight (#3878 invariant 6).
+        requester_profile_id = None
+        if requester_workflow_id and isinstance(profiles, dict):
+            for profile in profiles.values():
+                if not isinstance(profile, dict):
+                    continue
+                leases = profile.get("current_leases")
+                if isinstance(leases, list) and requester_workflow_id in leases:
+                    requester_profile_id = str(profile.get("profile_id") or "")
+                    break
 
         return {
             "running": True,
@@ -4093,6 +4117,7 @@ class TemporalArtifactActivities:
             "event_count": event_count if isinstance(event_count, int) else None,
             "requester_pending": requester_pending,
             "requester_queue_position": requester_queue_position,
+            "requester_profile_id": requester_profile_id,
             "requested_profile": requested_profile,
         }
 
@@ -4221,8 +4246,15 @@ class TemporalArtifactActivities:
         **load action**: Returns all persisted leases for the given runtime_id.
             Returns {"leases": [{"workflow_id": ..., "profile_id": ..., "granted_at": ...}, ...]}
 
-        **save action**: Upserts the provided leases (list of {workflow_id, profile_id}).
+        **save action**: Snapshot rewrite — replaces every row for the runtime
+            with the provided leases (list of {workflow_id, profile_id}).
             Returns {"saved": count}
+
+        **grant action**: Durably records one lease row without touching any
+            other row (MoonLadderStudios/MoonMind#3878). This is the
+            incremental grant path; a runtime-wide rewrite per grant makes
+            durable cost scale with active concurrency.
+            Returns {"granted": True, "duplicate": bool}
 
         **remove action**: Removes a specific lease by workflow_id.
             Returns {"removed": True}

@@ -321,6 +321,29 @@ class OmnigentSessionAdmissionDecision(_OmnigentSessionModel):
     execution_realizer_ref: str | None = Field(
         None, alias="executionRealizerRef", max_length=255
     )
+    # MoonLadderStudios/MoonMind#3878: the AgentRun workflow admits Provider
+    # Profile capacity before it starts the long execution Activity, so the
+    # frozen admission decision must carry the capacity authority the plan
+    # selected. These are compact, non-secret identities only.
+    provider_profile_ref: str | None = Field(
+        None, alias="providerProfileRef", max_length=128
+    )
+    provider_runtime_id: str | None = Field(
+        None, alias="providerRuntimeId", max_length=64
+    )
+    capacity_scope_ref: str | None = Field(
+        None, alias="capacityScopeRef", max_length=255
+    )
+    #: Who acquires Provider Profile capacity for this plan. ``workflow`` is the
+    #: pre-Activity path and requires the identities above. ``activity`` is the
+    #: deterministic multi-profile path owned by
+    #: ``OmnigentProviderLeaseCoordinator.acquire_all``, which deliberately
+    #: carries no single capacity authority; the workflow must not read that
+    #: absence as a missing authority and reject the plan. Histories recorded
+    #: before this field default to ``workflow``, preserving their behaviour.
+    capacity_acquisition_owner: Literal["workflow", "activity"] = Field(
+        "workflow", alias="capacityAcquisitionOwner"
+    )
 
 
 class OmnigentFailureAuthorityRequest(_OmnigentSessionModel):

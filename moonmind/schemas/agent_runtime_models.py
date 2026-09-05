@@ -881,6 +881,35 @@ def _contains_provider_native_observability_key(value: Any) -> bool:
         return any(_contains_provider_native_observability_key(item) for item in value)
     return False
 
+class AdmittedProviderCapacity(BaseModel):
+    """Provider Profile capacity the launching workflow already admitted.
+
+    MoonLadderStudios/MoonMind#3878 invariant 6: the AgentRun workflow queues
+    for provider capacity as durable workflow state and becomes the lease
+    owner. Carrying that ownership into the execution Activity is what makes
+    the Activity's acquisition an immediate confirmation instead of a wait, and
+    what keeps the workflow the last releaser (invariant 10).
+
+    Omitting the field is the pre-#3878 shape: the Activity acquires and
+    releases its own Activity-owned lease exactly as before.
+    """
+
+    model_config = ConfigDict(populate_by_name=True, extra="forbid", frozen=True)
+
+    provider_profile_ref: str = Field(
+        ..., alias="providerProfileRef", min_length=1, max_length=128
+    )
+    provider_runtime_id: str = Field(
+        ..., alias="providerRuntimeId", min_length=1, max_length=64
+    )
+    lease_owner_id: str = Field(
+        ..., alias="leaseOwnerId", min_length=1, max_length=255
+    )
+    capacity_scope_ref: str | None = Field(
+        None, alias="capacityScopeRef", max_length=255
+    )
+
+
 class ProfileSelector(BaseModel):
     """Dynamic routing criteria for ProviderProfileManager."""
 
@@ -1047,6 +1076,9 @@ class AgentExecutionRequest(BaseModel):
     )
     profile_selector: ProfileSelector = Field(
         default_factory=ProfileSelector, alias="profileSelector"
+    )
+    admitted_provider_capacity: AdmittedProviderCapacity | None = Field(
+        None, alias="admittedProviderCapacity"
     )
 
     @model_validator(mode="after")
@@ -2345,6 +2377,7 @@ __all__ = [
     "MoonMindOpsRuntimeOperation",
     "OmnigentHostLease",
     "OmnigentOAuthHostBinding",
+    "AdmittedProviderCapacity",
     "ProfileSelector",
     "ProviderModelEffortTier",
     "ProviderCapabilityDescriptor",
