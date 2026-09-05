@@ -13,6 +13,16 @@ Canonical for: the create and edit experience for Provider Profiles on the **Pro
 
 ---
 
+## Profile identity and advanced behavior
+
+Settings and workflow authoring use the label **Profile**. Workflow creation,
+schedules, step overrides and replacement selections use the same persisted
+Profile id. Runtime and host details are progressively disclosed. Advanced Profile
+settings may pin an immutable execution configuration; the ordinary path resolves
+compatible deployment behavior automatically. Model discovery is an advisory cache:
+cached choices and explicit custom entries remain usable during refresh, while
+the execution host validates the actual selected model before work starts.
+
 ## 1. Purpose
 
 Creating a Provider Profile should ask users for decisions they understand and are likely to change. It should not require them to review every launch-contract field before they can create a normal profile.

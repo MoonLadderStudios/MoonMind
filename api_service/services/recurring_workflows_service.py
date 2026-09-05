@@ -30,9 +30,11 @@ from api_service.services.omnigent_agent_profile_selection import (
     compile_agent_profile_snapshot_parameters,
     refresh_managed_bootstrap_snapshot,
     resolve_agent_profile_snapshot,
+    resolve_default_agent_profile_snapshot,
 )
 from api_service.services.provider_profile_runtime import (
     require_launch_target_provider_profile_runtime,
+    resolve_launch_target_profile_selection,
 )
 from moonmind.workflows.recurring.cron import (
     compute_next_occurrence,
@@ -980,23 +982,40 @@ class RecurringWorkflowsService:
         self._session.add(definition)
         await self._session.flush()
 
-        if agent_profile_selection is not None:
+        initial_parameters = dict(definition.target.get("initialParameters") or {})
+        authored_profile = resolve_launch_target_profile_selection(definition.target)
+        needs_profile_snapshot = (
+            "omnigent" in authored_profile.runtime_ids
+            and not initial_parameters.get("agentProfileSnapshot")
+            and not initial_parameters.get("omnigentExecutionPlan")
+        )
+        if agent_profile_selection is not None or needs_profile_snapshot:
             if actor is None:
                 raise RecurringWorkflowValidationError(
                     "an authenticated actor is required for agent profile selection"
                 )
-            snapshot = await resolve_agent_profile_snapshot(
-                self._session,
-                selection=agent_profile_selection,
-                consumer_type="schedule",
-                consumer_id=str(definition_id),
-                user=actor,
-            )
+            if agent_profile_selection is not None:
+                snapshot = await resolve_agent_profile_snapshot(
+                    self._session, selection=agent_profile_selection,
+                    consumer_type="schedule", consumer_id=str(definition_id), user=actor,
+                )
+            else:
+                snapshot = await resolve_default_agent_profile_snapshot(
+                    self._session,
+                    provider_profile_ref=authored_profile.profile_id,
+                    launch_policy_ref=(initial_parameters.get("omnigent") or {}).get("launchPolicyRef"),
+                    consumer_type="schedule", consumer_id=str(definition_id), user=actor,
+                )
             initial_parameters = dict(definition.target.get("initialParameters") or {})
             initial_parameters = compile_agent_profile_snapshot_parameters(
                 initial_parameters,
                 snapshot=snapshot,
             )
+            if needs_profile_snapshot and agent_profile_selection is None:
+                authored_parameters = definition.target.get("initialParameters") or {}
+                for key in ("model", "effort"):
+                    if authored_parameters.get(key) is not None:
+                        initial_parameters[key] = authored_parameters[key]
             target_runtime = str(
                 initial_parameters.get("targetRuntime") or ""
             ).strip().lower()

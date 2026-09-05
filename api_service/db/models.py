@@ -3404,6 +3404,9 @@ class ManagedAgentProviderProfile(Base):
         String(64), nullable=False, default="unknown", server_default=text("'unknown'")
     )
     provider_label: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    execution_configuration: Mapped[dict[str, Any] | None] = mapped_column(
+        JSON, nullable=True
+    )
     default_model: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
     default_effort: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
     model_tiers: Mapped[list[dict[str, Any]]] = mapped_column(

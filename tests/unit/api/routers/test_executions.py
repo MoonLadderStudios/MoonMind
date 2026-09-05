@@ -18195,7 +18195,12 @@ def _mm3788_client(profile: SimpleNamespace) -> Iterator[tuple[TestClient, Async
         async def scalar(self, _stmt: object) -> object | None:
             # No Omnigent Agent Profile authority is seeded, so the Omnigent
             # selection service is the one that rejects an Omnigent submission.
+            if _stmt.column_descriptions[0].get("entity") is ManagedAgentProviderProfile:
+                return profile
             return None
+
+        async def execute(self, _stmt):
+            return SimpleNamespace(all=lambda: [])
 
     app.dependency_overrides[get_async_session] = lambda: _Session()
     _override_temporal_client(app)
@@ -18316,7 +18321,7 @@ def test_mm3788_create_execution_leaves_omnigent_compatibility_to_the_selection_
     # mismatch: the submission proceeds into the Omnigent selection service,
     # which owns compatibility against the selected execution target.
     assert response.status_code == 409
-    assert response.json()["detail"] == "default Omnigent Agent Profile is unavailable"
+    assert response.json()["detail"]["code"] == "profile_execution_configuration_required"
     service.create_execution.assert_not_awaited()
 
 

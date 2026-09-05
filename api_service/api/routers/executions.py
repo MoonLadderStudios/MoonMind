@@ -13419,6 +13419,11 @@ async def create_remediation_checkpoint_branch(
             consumer_id=branch_id,
             user=user,
         )
+    if payload.agent_profile is None and payload.provider_profile_ref:
+        agent_profile_snapshot = await resolve_default_agent_profile_snapshot(
+            session, provider_profile_ref=payload.provider_profile_ref,
+            launch_policy_ref=None, consumer_type="checkpoint", consumer_id=branch_id, user=user,
+        )
     await _prepare_checkpoint_branch_launch(
         session=session,
         record=target_record,
@@ -15057,6 +15062,11 @@ async def create_checkpoint_branch(
             consumer_type="checkpoint",
             consumer_id=branch_id,
             user=user,
+        )
+    if payload.agent_profile is None and payload.provider_profile_ref:
+        agent_profile_snapshot = await resolve_default_agent_profile_snapshot(
+            session, provider_profile_ref=payload.provider_profile_ref,
+            launch_policy_ref=None, consumer_type="checkpoint", consumer_id=branch_id, user=user,
         )
     await _prepare_checkpoint_branch_launch(
         session=session,
