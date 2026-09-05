@@ -133,6 +133,7 @@ class _LeaseClient:
         self.already_held = already_held
         self.acquired: list[dict] = []
         self.released: list[str] = []
+        self.released_fences: list[int | None] = []
 
     async def acquire_execution_lease(self, **kwargs):
         self.acquired.append(dict(kwargs))
@@ -150,6 +151,7 @@ class _LeaseClient:
 
     async def release_lease(self, lease):
         self.released.append(lease.lease_id)
+        self.released_fences.append(lease.fencing_generation)
 
 
 def _admitted(profile_ref: str = "opencode-zen-free", owner: str = "agent-run-1"):
@@ -316,17 +318,20 @@ async def test_admitted_capacity_without_a_lease_owner_fails_closed():
     assert exc_info.value.code == "OMNIGENT_PROVIDER_LEASE_UNAVAILABLE"
 
 
-def _persisted_binding(*, owner_is_workflow: bool) -> dict:
-    return {
-        "primary-model": {
-            "providerProfileRef": "opencode-zen-free",
-            "providerLeaseRef": "provider-profile-lease:lease-1",
-            "runtimeId": "opencode",
-            "leaseOwnerId": "agent-run-1",
-            "leasePurpose": CredentialLeasePurpose.EXECUTION_OMNIGENT.value,
-            "leaseOwnerIsWorkflow": owner_is_workflow,
-        }
+def _persisted_binding(
+    *, owner_is_workflow: bool, fencing_generation: int | None = None
+) -> dict:
+    binding = {
+        "providerProfileRef": "opencode-zen-free",
+        "providerLeaseRef": "provider-profile-lease:lease-1",
+        "runtimeId": "opencode",
+        "leaseOwnerId": "agent-run-1",
+        "leasePurpose": CredentialLeasePurpose.EXECUTION_OMNIGENT.value,
+        "leaseOwnerIsWorkflow": owner_is_workflow,
     }
+    if fencing_generation is not None:
+        binding["leaseFencingGeneration"] = fencing_generation
+    return {"primary-model": binding}
 
 
 @pytest.mark.asyncio
@@ -359,6 +364,42 @@ async def test_janitor_recovery_still_reclaims_activity_owned_capacity():
     )
 
     assert client.released == ["lease-1"]
+
+
+@pytest.mark.asyncio
+async def test_janitor_recovery_releases_the_exact_grant_the_binding_owns():
+    """MoonLadderStudios/MoonMind#3879: the persisted handle carries its fence."""
+
+    client = _LeaseClient()
+    coordinator = OmnigentProviderLeaseCoordinator(
+        session_factory=_session_factory({}), lease_client=client
+    )
+
+    await coordinator.release_from_binding(
+        _persisted_binding(owner_is_workflow=False, fencing_generation=7)
+    )
+
+    assert client.released == ["lease-1"]
+    # Quoting the generation is what stops recovery from freeing whatever this
+    # deterministic owner ID happens to hold by the time the janitor runs.
+    assert client.released_fences == [7]
+
+
+@pytest.mark.asyncio
+async def test_a_binding_without_a_fence_still_frees_capacity():
+    """A handle persisted before fenced grants must stay reclaimable."""
+
+    client = _LeaseClient()
+    coordinator = OmnigentProviderLeaseCoordinator(
+        session_factory=_session_factory({}), lease_client=client
+    )
+
+    await coordinator.release_from_binding(
+        _persisted_binding(owner_is_workflow=False)
+    )
+
+    assert client.released == ["lease-1"]
+    assert client.released_fences == [None]
 
 
 @pytest.mark.asyncio
