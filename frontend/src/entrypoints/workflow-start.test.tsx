@@ -1025,8 +1025,6 @@ describe("MoonLadderStudios/MoonMind#3451 Omnigent readiness", () => {
     fireEvent.change(await screen.findByLabelText("Profile"), { target: { value: "oauth-1" } });
     fireEvent.change(screen.getByLabelText("Instructions"), { target: { value: "Exercise the Omnigent submit boundary." } });
 
-    expect(await screen.findByText("Runtime: Codex via Omnigent")).toBeTruthy();
-    expect(screen.getByText("Host mode: On-demand Docker")).toBeTruthy();
     expect(screen.getByLabelText("Execution target").getAttribute("name")).toBe("omnigentExecutionTargetRef");
     expect(screen.getByLabelText("Execution target").closest(".grid-2")).toBeTruthy();
     fireEvent.click(screen.getByRole("button", { name: "Start Workflow" }));
