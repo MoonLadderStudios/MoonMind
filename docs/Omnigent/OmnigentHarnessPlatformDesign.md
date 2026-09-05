@@ -1799,9 +1799,12 @@ vendors; approving a harness is registration data in
 identities have one owner, `control_plane/identities.py`.
 
 The existing Codex realizer is an explicit replay-visible legacy adapter. It and
-every other retained shim are listed with their #3712 retirement owner in
-`moonmind/omnigent/legacy_retirement.py`, alongside the bounded architecture
-exemptions that are still permitted.
+every other retained component are listed in
+`moonmind/omnigent/legacy_retirement.py` with their retirement owner, their
+#3835 retirement class, the active/replay/historical-read/rollback dependencies
+that must drain before removal, their earliest removal stage, and the guard test
+a removal PR must cite — alongside the bounded architecture exemptions that are
+still permitted, each of which names the retirement row that retires it.
 
 ## 34. Document authority and future promotion
 

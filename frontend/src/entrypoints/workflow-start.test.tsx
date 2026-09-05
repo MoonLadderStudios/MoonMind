@@ -572,6 +572,77 @@ const mockDashboardConfig = {
       claude_code: "low",
     },
     supportedAgentRuntimes: ["omnigent", "codex_cli", "claude_code"],
+    // Server-owned runtime-provider target catalog
+    // (MoonLadderStudios/MoonMind#3833): the promoted generic Codex row is the
+    // default for new work, the legacy profile-bound row is retired for new
+    // work, and the direct runtimes stay labeled compatibility paths.
+    runtimeTargetCatalog: {
+      policyVersion: "moonmind.omnigent-runtime-provider-rollout/v1",
+      policyGeneration: 1,
+      defaultRuntimeId: "omnigent",
+      targets: [
+        {
+          targetId: "codex.generic-omnigent",
+          label: "Codex via generic Omnigent",
+          runtimeId: "omnigent",
+          harnessId: "codex-native",
+          executionRealizerRef: "generic-omnigent-host@1",
+          pathClass: "generic_omnigent",
+          rolloutState: "new_work_default",
+          rolloutGeneration: 1,
+          policyVersion: "moonmind.omnigent-runtime-provider-rollout/v1",
+          policyGeneration: 1,
+          defaultEligible: true,
+          explicitSelectionAllowed: true,
+          compatibilityPath: false,
+        },
+        {
+          targetId: "codex.legacy-profile-bound-omnigent",
+          label: "Codex via legacy profile-bound Omnigent",
+          runtimeId: "omnigent",
+          harnessId: "codex-native",
+          executionRealizerRef: "codex-profile-bound@1",
+          pathClass: "legacy_profile_bound_omnigent",
+          rolloutState: "retired_for_new_work",
+          rolloutGeneration: 1,
+          policyVersion: "moonmind.omnigent-runtime-provider-rollout/v1",
+          policyGeneration: 1,
+          defaultEligible: false,
+          explicitSelectionAllowed: false,
+          compatibilityPath: true,
+        },
+        {
+          targetId: "codex.direct",
+          label: "Direct Codex compatibility",
+          runtimeId: "codex_cli",
+          harnessId: null,
+          executionRealizerRef: null,
+          pathClass: "direct_compatibility",
+          rolloutState: "direct_compatibility_only",
+          rolloutGeneration: 1,
+          policyVersion: "moonmind.omnigent-runtime-provider-rollout/v1",
+          policyGeneration: 1,
+          defaultEligible: false,
+          explicitSelectionAllowed: true,
+          compatibilityPath: true,
+        },
+        {
+          targetId: "claude.direct",
+          label: "Direct Claude compatibility",
+          runtimeId: "claude_code",
+          harnessId: null,
+          executionRealizerRef: null,
+          pathClass: "direct_compatibility",
+          rolloutState: "direct_compatibility_only",
+          rolloutGeneration: 1,
+          policyVersion: "moonmind.omnigent-runtime-provider-rollout/v1",
+          policyGeneration: 1,
+          defaultEligible: false,
+          explicitSelectionAllowed: true,
+          compatibilityPath: true,
+        },
+      ],
+    },
     providerProfiles: {
       list: "/api/v1/provider-profiles",
     },
@@ -876,7 +947,9 @@ describe("MoonLadderStudios/MoonMind#3451 Omnigent readiness", () => {
   it("keeps an unready runtime selectable and explicitly revalidates stale readiness", async () => {
     renderWorkflowStartPage(mockPayload);
 
-    const option = await screen.findByRole("option", { name: "Omnigent" });
+    const option = await screen.findByRole("option", {
+      name: "Codex via generic Omnigent",
+    });
     expect((option as HTMLOptionElement).disabled).toBe(false);
     fireEvent.change(screen.getByLabelText("Runtime"), {
       target: { value: "omnigent" },
@@ -1015,8 +1088,26 @@ describe("MoonLadderStudios/MoonMind#3451 Omnigent readiness", () => {
 
     renderWorkflowStartPage(omnigentPayload());
     const runtime = await screen.findByLabelText("Runtime");
-    expect(within(runtime).getByRole("option", { name: "Codex CLI" })).toBeTruthy();
-    expect(within(runtime).getByRole("option", { name: "Claude Code" })).toBeTruthy();
+    // MoonLadderStudios/MoonMind#3833: the direct runtimes are explicitly
+    // labeled compatibility paths and grouped away from the promoted target.
+    expect(
+      within(runtime).getByRole("option", {
+        name: "Direct Codex compatibility",
+      }),
+    ).toBeTruthy();
+    expect(
+      within(runtime).getByRole("option", {
+        name: "Direct Claude compatibility",
+      }),
+    ).toBeTruthy();
+    expect(
+      within(runtime).getByRole("group", { name: "Compatibility paths" }),
+    ).toBeTruthy();
+    expect(
+      within(runtime).getByRole("option", {
+        name: "Codex via generic Omnigent",
+      }),
+    ).toBeTruthy();
     expect(within(runtime).getByRole("option", { name: "Jules" })).toBeTruthy();
     runtime.focus();
     expect(document.activeElement).toBe(runtime);

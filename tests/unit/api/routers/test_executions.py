@@ -4745,10 +4745,34 @@ def test_create_execution_keeps_resolved_agent_profile_out_of_authored_omnigent(
         taskInputSnapshotRef="art_task_1",
         taskInputSnapshotDigest="sha256:" + "c" * 64,
     )
+    # MoonLadderStudios/MoonMind#3833: the compiled plan carries the frozen
+    # runtime-provider rollout decision, and the submission records it beside
+    # the plan binding so Workflow Detail shows the truthful selected path.
+    from moonmind.omnigent.harness_platform.execution_plan import (
+        RuntimeProviderRolloutRecord,
+    )
+
+    rollout_record = RuntimeProviderRolloutRecord.model_validate(
+        {
+            "policyVersion": "moonmind.omnigent-runtime-provider-rollout/v1",
+            "policyGeneration": 1,
+            "combinationKey": (
+                "omnigent-runtime-provider-combination:sha256:" + "d" * 64
+            ),
+            "targetId": "codex.generic-omnigent",
+            "pathClass": "generic_omnigent",
+            "state": "new_work_default",
+            "ruleGeneration": 1,
+            "reasonCode": "rollout_new_work_default",
+        }
+    )
     compiled_plan = SimpleNamespace(
         binding=plan_binding,
         artifact_refs=("art_profile_1", "art_skills_1", "art_plan_1"),
         resolved_skillset_ref="art_skills_1",
+        runtime_provider_rollout=rollout_record.model_dump(
+            mode="json", by_alias=True
+        ),
     )
     with (
         patch(
@@ -4804,6 +4828,23 @@ def test_create_execution_keeps_resolved_agent_profile_out_of_authored_omnigent(
     assert initial_parameters["omnigentExecutionPlan"] == plan_binding.model_dump(
         mode="json", by_alias=True, exclude_none=True
     )
+    # The rollout decision is a sibling key, never a new field inside the
+    # compatibility-sensitive plan binding.
+    assert "runtimeProviderTarget" not in initial_parameters[
+        "omnigentExecutionPlan"
+    ]
+    assert initial_parameters["runtimeProviderTarget"] == {
+        "policyVersion": "moonmind.omnigent-runtime-provider-rollout/v1",
+        "policyGeneration": 1,
+        "combinationKey": (
+            "omnigent-runtime-provider-combination:sha256:" + "d" * 64
+        ),
+        "targetId": "codex.generic-omnigent",
+        "pathClass": "generic_omnigent",
+        "state": "new_work_default",
+        "ruleGeneration": 1,
+        "reasonCode": "rollout_new_work_default",
+    }
     assert initial_parameters["omnigent"] == {
         "executionTargetRef": "omnigent-codex@1",
         "launchPolicyRef": "codex-on-demand@1",
@@ -12400,6 +12441,47 @@ def test_describe_execution_exposes_workflow_and_run_identity() -> None:
         assert payload["continueAsNewCause"] == "manual_rerun"
         assert payload["stepsHref"] == "/api/executions/mm:wf-1/steps"
 
+def test_describe_execution_projects_recorded_runtime_provider_target() -> None:
+    """MoonLadderStudios/MoonMind#3833: Workflow Detail shows the frozen path.
+
+    In-flight executions admitted before the contract existed simply omit the
+    recorded target, so the projection reports ``None`` rather than failing.
+    """
+
+    frozen = {
+        "policyVersion": "moonmind.omnigent-runtime-provider-rollout/v1",
+        "policyGeneration": 1,
+        "combinationKey": (
+            "omnigent-runtime-provider-combination:sha256:" + "e" * 64
+        ),
+        "targetId": "codex.generic-omnigent",
+        "pathClass": "generic_omnigent",
+        "state": "new_work_default",
+        "ruleGeneration": 3,
+        "reasonCode": "rollout_new_work_default",
+    }
+    for test_client, service in _client_with_service():
+        record = _build_execution_record()
+        record.parameters = {
+            **dict(record.parameters or {}),
+            "runtimeProviderTarget": frozen,
+        }
+        service.describe_execution.return_value = record
+
+        response = test_client.get("/api/executions/mm:wf-1")
+
+        assert response.status_code == 200
+        assert response.json()["omnigentRuntimeProviderTarget"] == frozen
+
+    for test_client, service in _client_with_service():
+        service.describe_execution.return_value = _build_execution_record()
+
+        response = test_client.get("/api/executions/mm:wf-1")
+
+        assert response.status_code == 200
+        assert response.json()["omnigentRuntimeProviderTarget"] is None
+
+
 def test_describe_execution_includes_latest_run_progress() -> None:
     app = FastAPI()
     app.include_router(router)
@@ -19179,3 +19261,94 @@ def test_mm3788_selected_step_recovery_route_maps_runtime_mismatch_to_409(
     assert response.status_code == 409
     _mm3788_assert_shared_mismatch_detail(response.json()["detail"])
     mock_service.create_failed_step_recovery_execution.assert_awaited_once()
+
+
+# ---------------------------------------------------------------------------
+# MoonLadderStudios/MoonMind#3835 — a per-step runtime override is new admission
+# in its own right. The top-level ``select_runtime`` gate only covers the
+# workflow runtime, so a legacy ``steps[i].runtime.mode`` under an allowed
+# top-level runtime must not keep creating new legacy work.
+# ---------------------------------------------------------------------------
+
+
+def _mm3835_reclassify_runtime_strategy(
+    monkeypatch: pytest.MonkeyPatch, runtime_id: str
+) -> None:
+    from moonmind.omnigent import legacy_retirement
+    from moonmind.omnigent.legacy_retirement import (
+        RetirementClass,
+        retirement_record_for_surface,
+    )
+
+    surface = f"runtime-strategy:{runtime_id}"
+    record = retirement_record_for_surface(surface)
+    assert record is not None, surface
+    closed = record.model_copy(
+        update={
+            "retirement_class": RetirementClass.NEW_ADMISSION_DISABLED,
+            "new_admission_source": "",
+        }
+    )
+    monkeypatch.setitem(legacy_retirement._INVENTORY_BY_ID, closed.path_id, closed)
+    monkeypatch.setitem(legacy_retirement._INVENTORY_BY_SURFACE, surface, closed)
+
+
+@pytest.mark.asyncio
+async def test_mm3835_step_runtime_override_is_held_to_the_retirement_class(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _mm3835_reclassify_runtime_strategy(monkeypatch, "claude_code")
+    steps = _normalize_task_steps(
+        {
+            "steps": [
+                {
+                    "id": "review",
+                    "instructions": "Override to a retired runtime.",
+                    "runtime": {"mode": "claude_code"},
+                }
+            ]
+        }
+    )
+
+    with pytest.raises(HTTPException) as exc_info:
+        await _resolve_step_runtime_selections(
+            steps=steps,
+            task_runtime={"mode": "omnigent"},
+            task_target_runtime="omnigent",
+            task_profile_id=None,
+            session=None,
+        )
+
+    assert exc_info.value.status_code == 422
+    assert exc_info.value.detail["code"] == "invalid_execution_request"
+    assert "runtime_new_admission_disabled:claude_code" in (
+        exc_info.value.detail["message"]
+    )
+    assert "steps[0].runtime.mode" in exc_info.value.detail["message"]
+
+
+@pytest.mark.asyncio
+async def test_mm3835_step_runtime_override_is_allowed_while_the_class_admits() -> None:
+    """The gate stops admission only when the class says so."""
+
+    steps = _normalize_task_steps(
+        {
+            "steps": [
+                {
+                    "id": "review",
+                    "instructions": "Override to a still-admitted runtime.",
+                    "runtime": {"mode": "claude_code"},
+                }
+            ]
+        }
+    )
+
+    await _resolve_step_runtime_selections(
+        steps=steps,
+        task_runtime={"mode": "codex_cli"},
+        task_target_runtime="codex_cli",
+        task_profile_id=None,
+        session=None,
+    )
+
+    assert steps[0]["runtime"]["mode"] == "claude_code"

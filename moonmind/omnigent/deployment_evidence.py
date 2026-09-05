@@ -443,6 +443,38 @@ def load_deployment_evidence_for_support_combination(
     return validate_deployment_evidence(matching[0], now=now)
 
 
+def find_deployment_evidence_entry(
+    support_identity: SupportKeyPayload,
+    *,
+    path: str | Path | None = None,
+) -> DeploymentExecutionEvidence | None:
+    """Return the recorded deployment entry qualifying one exact combination.
+
+    This is an observation probe, not admission authority. It selects on the
+    same deployment qualification key admission uses and applies the document's
+    structural authority (closed schema, secret scan, HMAC), but not its
+    freshness, so a caller reporting readiness can distinguish missing evidence
+    from expired evidence instead of collapsing both into "missing". Admission
+    still runs through :func:`load_deployment_evidence`, which fails closed.
+    """
+
+    expected = compute_deployment_qualification_key(support_identity)
+    try:
+        candidates = _load_deployment_evidence_candidates(path)
+    except ValueError:
+        return None
+    for candidate in candidates:
+        if not isinstance(candidate, Mapping):
+            continue
+        if _candidate_qualification_key(candidate) != expected:
+            continue
+        try:
+            return DeploymentExecutionEvidence.model_validate(candidate)
+        except Exception:
+            continue
+    return None
+
+
 def load_deployment_evidence(
     plan_payload: Any,
     *,
@@ -474,6 +506,7 @@ __all__ = [
     "DeploymentEvidenceSignature",
     "DeploymentExecutionEvidence",
     "assert_deployment_evidence_matches_plan",
+    "find_deployment_evidence_entry",
     "get_or_create_signing_key",
     "load_deployment_evidence",
     "load_deployment_evidence_entries",

@@ -58,6 +58,16 @@ from moonmind.workflows.temporal.schedule_errors import (
 logger = logging.getLogger(__name__)
 
 _DEFAULT_SCHEDULER_MAX_BACKFILL = 3
+
+# MoonLadderStudios/MoonMind#3833: a schedule either pins its runtime-provider
+# target version or follows the qualified default through an explicit,
+# separately versioned update policy. Changing a schedule's target advances the
+# schedule revision (``definition.version``); it never happens silently.
+SCHEDULE_TARGET_PINNED = "pinned"
+SCHEDULE_TARGET_FOLLOW_QUALIFIED_DEFAULT = "follow_qualified_default"
+_SCHEDULE_TARGET_UPDATE_POLICIES = frozenset(
+    {SCHEDULE_TARGET_PINNED, SCHEDULE_TARGET_FOLLOW_QUALIFIED_DEFAULT}
+)
 _SUPPORTED_RECURRING_WORKFLOW_TYPES = (
     "MoonMind.UserWorkflow",
     "MoonMind.ManifestIngest",
@@ -837,9 +847,52 @@ class RecurringWorkflowsService:
             raise RecurringWorkflowValidationError(
                 f"could not refresh scheduled Omnigent authority: {exc}"
             ) from exc
-        if persisted_plan.binding == current_binding:
+        # MoonLadderStudios/MoonMind#3833: a schedule pins its runtime-provider
+        # target. Advancing time-limited admission evidence must never silently
+        # move the schedule onto a different harness, realizer, or rollout row.
+        pinned_target = target.get("runtimeProviderTarget")
+        current_target_payload = getattr(
+            persisted_plan, "runtime_provider_rollout", None
+        )
+        current_target_payload = (
+            dict(current_target_payload) if current_target_payload else None
+        )
+        update_policy = str(
+            target.get("runtimeProviderTargetUpdatePolicy")
+            or SCHEDULE_TARGET_PINNED
+        ).strip()
+        if update_policy not in _SCHEDULE_TARGET_UPDATE_POLICIES:
+            raise RecurringWorkflowValidationError(
+                "unsupported scheduled runtime-provider target update policy: "
+                f"{update_policy!r}"
+            )
+        if (
+            isinstance(pinned_target, Mapping)
+            and current_target_payload is not None
+            and str(pinned_target.get("targetId") or "")
+            != str(current_target_payload.get("targetId") or "")
+        ):
+            if update_policy == SCHEDULE_TARGET_PINNED:
+                raise RecurringWorkflowValidationError(
+                    "scheduled Omnigent runtime-provider target changed from "
+                    f"{pinned_target.get('targetId')!r} to "
+                    f"{current_target_payload.get('targetId')!r}; the schedule "
+                    "pins its target, so an explicit schedule revision is "
+                    "required before the new target is used"
+                )
+            # follow_qualified_default: adopting a newly qualified target is a
+            # schedule default change, so it advances the schedule revision
+            # below alongside the new plan authority.
+
+        if (
+            persisted_plan.binding == current_binding
+            and pinned_target == current_target_payload
+        ):
             return False
 
+        if current_target_payload is not None:
+            target["runtimeProviderTarget"] = current_target_payload
+        target.setdefault("runtimeProviderTargetUpdatePolicy", update_policy)
         initial_parameters["omnigentExecutionPlan"] = (
             persisted_plan.binding.model_dump(
                 mode="json", by_alias=True, exclude_none=True
@@ -1108,6 +1161,15 @@ class RecurringWorkflowsService:
             initial_parameters["resolvedSkillsetRef"] = (
                 persisted_plan.resolved_skillset_ref
             )
+            # Seed the schedule pin from the creation result so the first
+            # refresh compares against the initially compiled target instead of
+            # None (MoonLadderStudios/MoonMind#3988).
+            created_rollout = getattr(
+                persisted_plan, "runtime_provider_rollout", None
+            )
+            created_target = (
+                dict(created_rollout) if created_rollout is not None else None
+            )
             definition.target = {
                 **definition.target,
                 "agentProfile": {
@@ -1122,6 +1184,12 @@ class RecurringWorkflowsService:
                     *persisted_plan.artifact_refs,
                 ],
             }
+            if created_target is not None:
+                definition.target = {
+                    **definition.target,
+                    "runtimeProviderTarget": created_target,
+                    "runtimeProviderTargetUpdatePolicy": SCHEDULE_TARGET_PINNED,
+                }
             await self._session.flush()
 
         workflow_type, workflow_input = self._workflow_bundle_for_target(

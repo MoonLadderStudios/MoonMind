@@ -17,9 +17,12 @@ import pytest
 
 from moonmind.omnigent.bootstrap.provider_revalidation import (
     ProviderReconcileOutcome,
+    REVALIDATION_FAILURE_KEY,
+    evidence_identity_for_profile,
     evidence_is_current,
     reconcile_opencode_provider_readiness,
     reset_enrollment_attempts,
+    revalidation_is_exhausted,
 )
 
 CURRENT_IMAGE = "ghcr.io/moonmind/omnigent-host-opencode@sha256:" + "a" * 64
@@ -91,6 +94,22 @@ def _profile(
         ),
         model_catalog_evidence_json=evidence,
     )
+
+
+def _evidence(profile, image_ref: str) -> dict:
+    """One well-formed observation for the given profile and host image."""
+
+    return {
+        "schemaVersion": "moonmind.provider-model-catalog-evidence.v1",
+        "models": [{"qualifiedId": profile.default_model}],
+        "imageRef": image_ref,
+        "runtimeVersions": {"opencode": "1.18.11"},
+        "materializerRef": (
+            "none@1" if profile.provider_id == "opencode" else "opencode-auth-json@1"
+        ),
+        "validatedAt": datetime.now(UTC).isoformat(),
+        "credentialGeneration": profile.credential_generation,
+    }
 
 
 class _Result:
@@ -1163,22 +1182,26 @@ def test_evidence_identity_is_stable_for_one_refresh() -> None:
     """Two maintainers racing the same refresh must derive the same owner."""
 
     from moonmind.omnigent.bootstrap.provider_revalidation import (
+        MODEL_CATALOG_PROBE_CONTRACT_VERSION,
         model_catalog_evidence_identity,
     )
 
-    first = model_catalog_evidence_identity(
-        profile_id="opencode-zen-free",
-        image_ref=CURRENT_IMAGE,
-        credential_generation=4,
-    )
-    second = model_catalog_evidence_identity(
-        profile_id="opencode-zen-free",
-        image_ref=CURRENT_IMAGE,
-        credential_generation=4,
-    )
+    kwargs = {
+        "profile_id": "opencode-zen-free",
+        "image_ref": CURRENT_IMAGE,
+        "credential_generation": 4,
+        "materializer_ref": "none@1",
+        "provider_route": "opencode",
+        "model_route": "opencode/muse-spark-1.2-contributor",
+    }
+
+    first = model_catalog_evidence_identity(**kwargs)
+    second = model_catalog_evidence_identity(**kwargs)
 
     assert first == second
-    assert first.startswith("opencode-model-catalog:")
+    assert first.startswith(
+        f"opencode-model-catalog:{MODEL_CATALOG_PROBE_CONTRACT_VERSION}:"
+    )
 
 
 @pytest.mark.parametrize(
@@ -1187,6 +1210,13 @@ def test_evidence_identity_is_stable_for_one_refresh() -> None:
         ("profile_id", "another-profile"),
         ("image_ref", PREVIOUS_IMAGE),
         ("credential_generation", 5),
+        # MoonLadderStudios/MoonMind#3879: the identity must cover every input
+        # the launch boundary later compares, or one probe's result would stand
+        # in for a question it never asked.
+        ("materializer_ref", "opencode-auth-json@1"),
+        ("provider_route", "opencode-go"),
+        ("model_route", "opencode/some-other-model"),
+        ("probe_contract_version", "v1"),
     ],
 )
 def test_a_different_refresh_is_a_different_identity(field: str, value: object) -> None:
@@ -1200,6 +1230,9 @@ def test_a_different_refresh_is_a_different_identity(field: str, value: object) 
         "profile_id": "opencode-zen-free",
         "image_ref": CURRENT_IMAGE,
         "credential_generation": 4,
+        "materializer_ref": "none@1",
+        "provider_route": "opencode",
+        "model_route": "opencode/muse-spark-1.2-contributor",
     }
     changed = {**base, field: value}
 
@@ -1215,7 +1248,7 @@ async def test_revalidation_leases_the_evidence_identity_not_a_fresh_operation(
     """A random operation id would make every maintainer a distinct owner."""
 
     from moonmind.omnigent.bootstrap.provider_revalidation import (
-        model_catalog_evidence_identity,
+        evidence_identity_for_profile,
     )
 
     async def validate(profile, image_ref, _lease, _kwargs):
@@ -1238,11 +1271,7 @@ async def test_revalidation_leases_the_evidence_identity_not_a_fresh_operation(
     )
 
     assert acquired == [
-        model_catalog_evidence_identity(
-            profile_id=rows[0].profile_id,
-            image_ref=CURRENT_IMAGE,
-            credential_generation=rows[0].credential_generation,
-        )
+        evidence_identity_for_profile(rows[0], image_ref=CURRENT_IMAGE)
     ]
 
 
@@ -1294,6 +1323,191 @@ async def test_standing_down_never_consumes_the_revalidation_budget(
     assert not revalidation_is_exhausted(rows[0], image_refs=(CURRENT_IMAGE,))
 
 
+# ---------------------------------------------------------------------------
+# MoonLadderStudios/MoonMind#3879: proactive refresh under sustained load
+# ---------------------------------------------------------------------------
+
+
+def test_the_refresh_lead_defaults_to_a_bounded_fraction_of_the_interval() -> None:
+    """The omitted value takes the same path as an explicit one."""
+
+    from moonmind.omnigent.settings import (
+        OPENCODE_MODEL_CATALOG_MAX_DERIVED_REFRESH_LEAD,
+        opencode_model_catalog_refresh_lead,
+    )
+
+    short = opencode_model_catalog_refresh_lead(
+        env={"OPENCODE_MODEL_CATALOG_MAX_AGE_HOURS": "0.5"}
+    )
+    long = opencode_model_catalog_refresh_lead(
+        env={"OPENCODE_MODEL_CATALOG_MAX_AGE_HOURS": "24"}
+    )
+
+    assert short == timedelta(minutes=3)
+    # The derived lead is bounded: a long interval does not start refreshing
+    # hours early and spend provider attempts on evidence that is still good.
+    assert long == OPENCODE_MODEL_CATALOG_MAX_DERIVED_REFRESH_LEAD
+
+
+def test_an_operator_owns_the_refresh_lead_and_it_stays_bounded() -> None:
+    """A slow probe or a distant provider is a deployment fact, not a constant."""
+
+    from moonmind.omnigent.settings import opencode_model_catalog_refresh_lead
+
+    widened = opencode_model_catalog_refresh_lead(
+        env={
+            "OPENCODE_MODEL_CATALOG_MAX_AGE_HOURS": "6",
+            "OPENCODE_MODEL_CATALOG_REFRESH_LEAD_MINUTES": "45",
+        }
+    )
+    absurd = opencode_model_catalog_refresh_lead(
+        env={
+            "OPENCODE_MODEL_CATALOG_MAX_AGE_HOURS": "6",
+            "OPENCODE_MODEL_CATALOG_REFRESH_LEAD_MINUTES": "600",
+        }
+    )
+    disabled_interval = opencode_model_catalog_refresh_lead(
+        env={"OPENCODE_MODEL_CATALOG_MAX_AGE_HOURS": "0"}
+    )
+
+    assert widened == timedelta(minutes=45)
+    # A lead at or beyond the interval would make every observation stale the
+    # moment it was written, so it is clamped rather than obeyed.
+    assert absurd == timedelta(hours=3)
+    # No interval means identity is the only staleness rule; nothing to lead.
+    assert disabled_interval == timedelta(0)
+
+
+def test_an_invalid_refresh_lead_fails_fast() -> None:
+    from moonmind.omnigent.settings import opencode_model_catalog_refresh_lead
+
+    with pytest.raises(ValueError):
+        opencode_model_catalog_refresh_lead(
+            env={"OPENCODE_MODEL_CATALOG_REFRESH_LEAD_MINUTES": "-1"}
+        )
+    with pytest.raises(ValueError):
+        opencode_model_catalog_refresh_lead(
+            env={"OPENCODE_MODEL_CATALOG_REFRESH_LEAD_MINUTES": "soon"}
+        )
+
+
+@pytest.mark.asyncio
+async def test_the_deployment_owned_lead_decides_when_a_refresh_starts(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Evidence inside the interval but inside the lead is refreshed early."""
+
+    probes: list[str] = []
+
+    async def validate(profile, image_ref, _lease, _kwargs):
+        probes.append(profile.profile_id)
+        return _evidence(profile, image_ref)
+
+    _install_stubs(monkeypatch, validate=validate)
+    monkeypatch.setenv("OPENCODE_MODEL_CATALOG_MAX_AGE_HOURS", "6")
+    # 5h50m old: current now, stale in ten minutes.
+    observed = (datetime.now(UTC) - timedelta(hours=5, minutes=50)).isoformat()
+
+    monkeypatch.delenv(
+        "OPENCODE_MODEL_CATALOG_REFRESH_LEAD_MINUTES", raising=False
+    )
+    default_rows = [
+        _profile(evidence_image=CURRENT_IMAGE, evidence_validated_at=observed)
+    ]
+    await reconcile_opencode_provider_readiness(
+        session_factory=_session_factory(default_rows), controller=_Controller()
+    )
+    assert probes == [], "the default 5 minute lead has not been reached yet"
+
+    monkeypatch.setenv("OPENCODE_MODEL_CATALOG_REFRESH_LEAD_MINUTES", "30")
+    widened_rows = [
+        _profile(evidence_image=CURRENT_IMAGE, evidence_validated_at=observed)
+    ]
+    outcome = await reconcile_opencode_provider_readiness(
+        session_factory=_session_factory(widened_rows), controller=_Controller()
+    )
+
+    assert probes == ["opencode-go-default"]
+    assert outcome.refreshed == ("opencode-go-default",)
+
+
+@pytest.mark.asyncio
+async def test_a_probe_that_completes_against_a_superseded_image_is_not_committed(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Under load a probe can finish after the deployment re-pinned its host."""
+
+    async def validate(profile, image_ref, _lease, _kwargs):
+        # The deployment re-pins its host image while this probe is running.
+        monkeypatch.setattr(
+            "moonmind.omnigent.harness_platform.host_classes."
+            "get_opencode_host_image_ref",
+            lambda: PREVIOUS_IMAGE,
+        )
+        return _evidence(profile, image_ref)
+
+    _install_stubs(monkeypatch, validate=validate)
+    rows = [_profile(evidence_image=None)]
+
+    outcome = await reconcile_opencode_provider_readiness(
+        session_factory=_session_factory(rows), controller=_Controller()
+    )
+
+    assert outcome.refreshed == ()
+    assert outcome.deferred == ("opencode-go-default",)
+    # Nothing was promoted on evidence the current launch boundary rejects.
+    assert rows[0].model_catalog_evidence_json is None
+
+
+@pytest.mark.asyncio
+async def test_evidence_observed_on_another_image_is_never_recorded(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The commit boundary re-checks the identity the probe answered for."""
+
+    async def validate(profile, _image_ref, _lease, _kwargs):
+        return _evidence(profile, PREVIOUS_IMAGE)
+
+    _install_stubs(monkeypatch, validate=validate)
+    rows = [_profile(evidence_image=None)]
+
+    outcome = await reconcile_opencode_provider_readiness(
+        session_factory=_session_factory(rows), controller=_Controller()
+    )
+
+    assert outcome.refreshed == ()
+    assert outcome.deferred == ("opencode-go-default",)
+    assert rows[0].model_catalog_evidence_json is None
+
+
+@pytest.mark.asyncio
+async def test_sustained_load_refreshes_once_per_interval_not_once_per_pass(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The startup maintainer re-enters this boundary every two minutes."""
+
+    probes: list[str] = []
+
+    async def validate(profile, image_ref, _lease, _kwargs):
+        probes.append(profile.profile_id)
+        return _evidence(profile, image_ref)
+
+    _install_stubs(monkeypatch, validate=validate)
+    monkeypatch.setenv("OPENCODE_MODEL_CATALOG_MAX_AGE_HOURS", "6")
+    rows = [_profile(evidence_image=PREVIOUS_IMAGE)]
+
+    for _ in range(25):
+        outcome = await reconcile_opencode_provider_readiness(
+            session_factory=_session_factory(rows), controller=_Controller()
+        )
+
+    # One probe refreshed the identity; every later pass reads the committed
+    # observation and reports ready without spending another provider attempt.
+    assert probes == ["opencode-go-default"]
+    assert outcome.ready is True
+    assert outcome.refreshed == ()
+
+
 @pytest.mark.asyncio
 async def test_standing_down_does_not_release_the_holders_lease(
     monkeypatch: pytest.MonkeyPatch,
@@ -1311,3 +1525,83 @@ async def test_standing_down_does_not_release_the_holders_lease(
     )
 
     assert releases == []
+
+
+def test_exhaustion_is_scoped_to_the_complete_evidence_identity() -> None:
+    """A changed model, route, materializer, or contract restarts the budget."""
+
+    profile = _profile()
+    identity = evidence_identity_for_profile(profile, image_ref=CURRENT_IMAGE)
+    profile.command_behavior = {
+        REVALIDATION_FAILURE_KEY: {
+            "imageRef": CURRENT_IMAGE,
+            "credentialGeneration": profile.credential_generation,
+            "evidenceIdentity": identity,
+            "attempts": 3,
+            "exhausted": True,
+        }
+    }
+    assert revalidation_is_exhausted(profile, image_refs=(CURRENT_IMAGE,)) is True
+
+    profile.default_model = "opencode-go/some-other-model"
+    assert revalidation_is_exhausted(profile, image_refs=(CURRENT_IMAGE,)) is False
+
+
+def test_exhaustion_without_a_stored_identity_keeps_the_legacy_key() -> None:
+    """Records written before the identity still exhaust on image+generation."""
+
+    profile = _profile()
+    profile.command_behavior = {
+        REVALIDATION_FAILURE_KEY: {
+            "imageRef": CURRENT_IMAGE,
+            "credentialGeneration": profile.credential_generation,
+            "attempts": 3,
+            "exhausted": True,
+        }
+    }
+    assert revalidation_is_exhausted(profile, image_refs=(CURRENT_IMAGE,)) is True
+
+
+@pytest.mark.asyncio
+async def test_failure_budget_is_counted_per_evidence_identity() -> None:
+    from moonmind.omnigent.bootstrap.provider_revalidation import (
+        _record_revalidation_failure,
+    )
+
+    profile = _profile()
+    factory = _session_factory([profile])
+    await _record_revalidation_failure(
+        session_factory=factory,
+        profile_id=profile.profile_id,
+        image_ref=CURRENT_IMAGE,
+        evidence_identity="identity-a",
+    )
+    await _record_revalidation_failure(
+        session_factory=factory,
+        profile_id=profile.profile_id,
+        image_ref=CURRENT_IMAGE,
+        evidence_identity="identity-a",
+    )
+    await _record_revalidation_failure(
+        session_factory=factory,
+        profile_id=profile.profile_id,
+        image_ref=CURRENT_IMAGE,
+        evidence_identity="identity-a",
+    )
+    record = profile.command_behavior[REVALIDATION_FAILURE_KEY]
+    assert record["evidenceIdentity"] == "identity-a"
+    assert record["attempts"] == 3
+    assert record["exhausted"] is True
+
+    # Genuinely new validation work restarts the budget instead of inheriting
+    # the old identity's exhaustion.
+    await _record_revalidation_failure(
+        session_factory=factory,
+        profile_id=profile.profile_id,
+        image_ref=CURRENT_IMAGE,
+        evidence_identity="identity-b",
+    )
+    record = profile.command_behavior[REVALIDATION_FAILURE_KEY]
+    assert record["evidenceIdentity"] == "identity-b"
+    assert record["attempts"] == 1
+    assert record["exhausted"] is False

@@ -703,6 +703,88 @@ async def test_broadening_check_reads_the_base_record_not_the_same_claim(
     assert [turn.lineage_kind for turn in turns] == [TurnSource.REMEDIATION.value]
 
 
+def _followup_counts(kind: str) -> list[tuple[str, int]]:
+    """Return the recorded follow-up availability counts for one source."""
+
+    from moonmind.omnigent.control_plane import metrics as control_plane_metrics
+
+    return sorted(
+        (labels["availability"], count)
+        for name, labels, count in control_plane_metrics.counter_series()
+        if name == control_plane_metrics.MIGRATION_FOLLOWUP_AVAILABILITY
+        and labels["harness_class"] == "codex"
+        and labels["followup_kind"] == kind
+    )
+
+
+@pytest.mark.asyncio
+async def test_an_admitted_follow_up_turn_records_its_availability(
+    turn_commands, session_factory, plan
+) -> None:
+    """The shared delivery wrapper reports an accepted follow-up source.
+
+    The instruction that establishes the session is not a follow-up, so only the
+    remediation turn is counted, and no realizer names its own source.
+    """
+
+    from moonmind.omnigent.control_plane import metrics as control_plane_metrics
+
+    realizer, _ = _realizer(turn_commands, session_factory)
+    control_plane_metrics.reset()
+    await realizer.execute(
+        _dispatch_request(
+            _run_workflow(base_step_execution_id=BASE_STEP_EXECUTION_ID),
+            _base_node(publish_mode="none"),
+            plan_ref=plan.planRef,
+        ),
+        plan,
+    )
+    assert _followup_counts("remediation") == []
+
+    await realizer.execute(
+        _dispatch_request(
+            _run_workflow(base_step_execution_id=BASE_STEP_EXECUTION_ID),
+            _remediation_node(ordinal=1, publish_mode="none"),
+            plan_ref=plan.planRef,
+        ),
+        plan,
+    )
+
+    assert _followup_counts("remediation") == [("available", 1)]
+
+
+@pytest.mark.asyncio
+async def test_a_refused_follow_up_turn_records_its_unavailability(
+    turn_commands, session_factory, plan
+) -> None:
+    """A follow-up refused before provider mutation is reported as unavailable."""
+
+    from moonmind.omnigent.control_plane import metrics as control_plane_metrics
+
+    realizer, _ = _realizer(turn_commands, session_factory)
+    await realizer.execute(
+        _dispatch_request(
+            _run_workflow(base_step_execution_id=BASE_STEP_EXECUTION_ID),
+            _base_node(publish_mode="none"),
+            plan_ref=plan.planRef,
+        ),
+        plan,
+    )
+    control_plane_metrics.reset()
+
+    with pytest.raises(RemediationAuthorityBroadenedError):
+        await realizer.execute(
+            _dispatch_request(
+                _run_workflow(base_step_execution_id=BASE_STEP_EXECUTION_ID),
+                _remediation_node(ordinal=1, publish_mode="branch"),
+                plan_ref=plan.planRef,
+            ),
+            plan,
+        )
+
+    assert _followup_counts("remediation") == [("unavailable", 1)]
+
+
 @pytest.mark.asyncio
 async def test_realizer_cannot_reach_the_lifecycle_after_cleanup_completes(
     turn_commands, session_factory, plan

@@ -83,6 +83,9 @@ from api_service.api.routers.omnigent_native_ui import (
 )
 from api_service.api.routers.omnigent_catalog import router as omnigent_catalog_router
 from api_service.api.routers.omnigent_policies import router as omnigent_policies_router
+from api_service.api.routers.omnigent_runtime_provider_migration import (
+    router as omnigent_runtime_provider_migration_router,
+)
 from api_service.api.routers.omnigent_session_timeline import (
     router as omnigent_session_timeline_router,
 )
@@ -854,6 +857,7 @@ app.include_router(
 app.include_router(native_ui_router, prefix=NATIVE_UI_MOUNT_PATH)
 app.include_router(omnigent_catalog_router)
 app.include_router(omnigent_policies_router)
+app.include_router(omnigent_runtime_provider_migration_router)
 app.include_router(omnigent_session_timeline_router)
 app.include_router(omnigent_bootstrap_router)
 app.include_router(workflow_console_router)
@@ -2423,6 +2427,26 @@ def _register_settings_change_subscribers() -> None:
         )
 
 
+def _assert_omnigent_configuration_is_current() -> None:
+    """Fail fast (or warn) on obsolete Omnigent configuration.
+
+    Source issue: MoonLadderStudios/MoonMind#3835 required work section 10.
+    A legacy image/environment identity must never be silently ignored: while
+    its retirement row is still in its deprecation window the operator gets an
+    actionable warning naming the replacement, and after removal startup is
+    rejected outright.
+
+    The API is one of several separately restartable consumers, so it invokes
+    the shared check rather than owning its own copy.
+    """
+
+    from moonmind.omnigent.legacy_retirement import (
+        enforce_obsolete_configuration_at_startup,
+    )
+
+    enforce_obsolete_configuration_at_startup(logger, env=os.environ)
+
+
 async def startup_event():
     """Defines the application's startup events."""
     logger.info("Executing application startup events...")
@@ -2433,6 +2457,7 @@ async def startup_event():
 
         app.state = State()
 
+    _assert_omnigent_configuration_is_current()
     await _initialize_oidc_provider(app)  # OIDC provider init like Keycloak discovery
     _register_settings_change_subscribers()
     try:

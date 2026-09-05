@@ -47,6 +47,9 @@ from moonmind.config.container_backend_settings import (
 )
 from moonmind.config.logging import configure_logging, default_log_fields_from_env
 from moonmind.config.settings import settings
+from moonmind.omnigent.legacy_retirement import (
+    enforce_obsolete_configuration_at_startup,
+)
 from moonmind.workflows.agent_skills.agent_skills_activities import (
     AgentSkillsActivities,
 )
@@ -54,6 +57,10 @@ from moonmind.workflows.executions.execution_contract import (
     build_authoritative_workflow_input_snapshot,
 )
 from moonmind.workflows.executions.preset_expansion import expand_preset_for_child_run
+from moonmind.workflows.executions.runtime_target_selection import (
+    AuthoringSurface,
+    resolve_runtime_target_selection,
+)
 from moonmind.workflows.executions.repository_contract import (
     repository_branch_from_value,
     repository_name_from_value,
@@ -873,10 +880,20 @@ def _derive_pr_resolver_title(
 
 
 def _normalize_runtime_mode(raw_mode: Any) -> str:
+    """Resolve a step's runtime mode through the shared selection boundary.
+
+    An omitted mode never falls back to a literal or an environment variable:
+    the versioned runtime-provider rollout policy owns the default
+    (MoonLadderStudios/MoonMind#3833).
+    """
+
     normalized = str(raw_mode or "").strip().lower()
-    if not normalized:
-        return str(settings.workflow.default_runtime or "omnigent").strip().lower()
-    return normalized
+    if normalized:
+        return normalized
+    return resolve_runtime_target_selection(
+        surface=AuthoringSurface.worker_normalization,
+        workflow_settings=settings.workflow,
+    ).runtime_id
 
 
 def _compile_repository_operation(
@@ -3080,6 +3097,13 @@ def _enforce_codex_config_for_managed_fleet(fleet: str) -> None:
 
 async def main_async() -> None:
     """Run the Temporal worker."""
+    # This worker is separately restartable and consumes the same legacy
+    # Omnigent image/environment identities as the API, so it runs the shared
+    # obsolete-configuration check itself, before any other startup work
+    # (#3835 required work section 10). Without it, deploying or restarting the
+    # worker alone would produce no deprecation warning and could later accept a
+    # variable the API rejects.
+    enforce_obsolete_configuration_at_startup(logger)
     topology = describe_configured_worker()
     _enforce_codex_config_for_managed_fleet(topology.fleet)
 
