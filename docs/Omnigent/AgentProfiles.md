@@ -30,14 +30,30 @@ Profiles never contain credentials, OAuth homes, registration secrets, Dockerfil
 
 MoonMind synchronizes the stock `/v1/agents` built-in catalog through its authenticated bridge boundary into a bounded last-known projection keyed by endpoint plus stable upstream id and version. The stock catalog's session bindability is projected as the canonical `session.start` capability. MoonMind records harness, capabilities, health, provenance, compatibility, successful-sync time, attempt time, and redacted error state. An outage retains the prior snapshot but marks it stale. Missing or incompatible agents block new launches; historical snapshots remain readable.
 
-Workflow, schedule, checkpoint-branch, and remediation authoring select one
-Profile. The existing Provider Profile identity owns account, model tiers and
+Workflow, schedule, checkpoint-branch, and remediation authoring expose
+Runtime and one Profile selection. Runtime stays visible and names a stable
+family; Omnigent is never relabeled after a preferred rollout row. The existing
+Provider Profile identity owns account, model tiers and
 capacity, and optionally pins an immutable execution configuration. Configuration
 versions remain an advanced implementation contract, not a second required
 profile selector. Automatic resolution selects the compatible deployment default
 or the sole compatible configuration; ambiguity requires an explicit choice in
-Profile settings. A pinned version remains selected after the active version
-changes. Discovery freshness never filters Profile inventory. Submission persists the profile id/version/digest, upstream snapshot, Provider Profile id, execution and policy refs, and effective model/workspace/capture/RAG values. Overrides are accepted only after policy validation.
+Profile settings. Execution configuration and rollout target are subordinate
+resolved values, never independent authoring selectors. The selected configuration's
+harness supplies the execution description. Advanced mode contains supported
+model and host-policy overrides. A pinned version remains selected after the active version
+changes. Create submits the displayed configuration's profile id/version/digest
+as `task.runtime.executionConfiguration`. The visible Runtime is submitted as
+explicit intent whether accepted as a default or selected manually. Admission
+rejects a changed resolved reference with `profile_execution_configuration_changed`
+before execution.
+Clients that omit this expectation still use the same Profile resolver. Historical
+snapshots remain authoritative for existing runs.
+
+Discovery freshness never filters Profile inventory. Submission persists the
+profile id/version/digest, upstream snapshot, Provider Profile id, execution and
+policy refs, and effective model/workspace/capture/RAG values. Overrides are
+accepted only after policy validation.
 
 ## Native Workflow Chat capability authority
 

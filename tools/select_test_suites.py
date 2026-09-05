@@ -158,6 +158,29 @@ RELIABILITY_JOURNEY_GLOBS = (
     "api_service/migrations/**/*checkpoint*",
 )
 
+# The escaped Create selection regression spans renderer and API admission.
+# Both halves consume the same request fixture and always run together.
+PROFILE_AUTHORING_EXACT = {
+    "frontend/src/entrypoints/workflow-start.tsx",
+    "frontend/src/entrypoints/workflow-start.test.tsx",
+    "api_service/api/routers/provider_profiles.py",
+    "api_service/api/routers/workflow_console_view_model.py",
+    "api_service/services/provider_profile_runtime.py",
+    "api_service/api/routers/executions.py",
+    "api_service/services/profile_execution_selection.py",
+    "api_service/services/omnigent_agent_profile_selection.py",
+    "api_service/services/omnigent_execution_plan_service.py",
+    "moonmind/workflows/executions/runtime_target_selection.py",
+    "tests/unit/api/routers/test_profile_first_authoring.py",
+    "frontend/src/runtime/fixtures/profile-first-authoring.json",
+}
+PROFILE_AUTHORING_PREFIXES = (
+    "frontend/src/runtime/",
+    "moonmind/omnigent/runtime_provider_rollout",
+    "moonmind/omnigent/harness_platform/planner",
+)
+
+
 # --- Omnigent contract-owner inventory (MoonLadderStudios/MoonMind#3710) ---
 #
 # A single, tested inventory of the paths that own the Omnigent production
@@ -529,12 +552,19 @@ def select_suites(
     )
     full_frontend = any(path in {"package.json", "package-lock.json"} for path in paths)
 
+    profile_authoring_changed = any(
+        _matches(
+            path, exact=PROFILE_AUTHORING_EXACT, prefixes=PROFILE_AUTHORING_PREFIXES
+        )
+        for path in paths
+    )
     selection = SuiteSelection(
-        unit_fast=bool(backend_paths),
+        unit_fast=bool(backend_paths) or profile_authoring_changed,
         unit_slow=any(
             _matches(path, prefixes=UNIT_SLOW_PREFIXES) for path in backend_paths
         ),
-        api_component=any(
+        api_component=profile_authoring_changed
+        or any(
             _matches(
                 path,
                 exact=API_COMPONENT_EXACT,
@@ -575,7 +605,7 @@ def select_suites(
         # deployable image runtime surface.
         exact_artifact=any(is_exact_artifact_owned(path) for path in paths),
         omnigent_conformance=any(is_omnigent_conformance_input(path) for path in paths),
-        frontend_static=static or chromium,
+        frontend_static=static or chromium or profile_authoring_changed,
         frontend_browser_chromium=chromium,
         frontend_browser_firefox=firefox,
         full_frontend=full_frontend,
