@@ -101,6 +101,7 @@ TEMPORAL_BOUNDARY_GLOBS = (
 )
 
 INTEGRATION_CI_EXACT = {
+    "api_service/core/sync.py",
     "docker-compose.test.yaml",
     "api_service/Dockerfile",
     ".env-template",
