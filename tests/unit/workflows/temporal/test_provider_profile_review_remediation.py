@@ -78,7 +78,6 @@ class _FakeWorkflow:
         self.activity_results: list[Any] = []
         self.activity_calls: list[tuple[str, Any]] = []
         self.external_handles: dict[str, _ExternalHandle] = {}
-        self.external_handles: dict[str, _ExternalHandle] = {}
 
     def now(self) -> datetime:
         return self._now
@@ -88,9 +87,6 @@ class _FakeWorkflow:
 
     def all_handlers_finished(self) -> bool:
         return self.handlers_finished()
-
-    def get_external_workflow_handle(self, workflow_id: str) -> _ExternalHandle:
-        return self.external_handles.setdefault(workflow_id, _ExternalHandle())
 
     def get_external_workflow_handle(self, workflow_id: str) -> _ExternalHandle:
         return self.external_handles.setdefault(workflow_id, _ExternalHandle())
