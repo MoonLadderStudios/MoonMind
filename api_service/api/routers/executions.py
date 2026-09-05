@@ -11241,22 +11241,6 @@ async def _create_execution_from_workflow_request(
                     f"{canonical_target_runtime!r}."
                 )
             normalized_runtime_for_planner["targetId"] = requested_target_id
-        elif submission_kind != "schedule":
-            preferred_selection = resolve_runtime_target_selection(
-                surface=AuthoringSurface.workflow_create,
-                requested_runtime=canonical_target_runtime,
-                workflow_settings=settings.workflow,
-                record_metrics=False,
-            )
-            if (
-                preferred_selection.target_id is not None
-                and preferred_selection.available
-                and normalize_runtime_id(preferred_selection.runtime_id)
-                == canonical_target_runtime
-            ):
-                normalized_runtime_for_planner["targetId"] = (
-                    preferred_selection.target_id
-                )
         normalized_task_for_planner["runtime"] = normalized_runtime_for_planner
 
     # Load provider profile when a profileId is supplied. For tier-aware

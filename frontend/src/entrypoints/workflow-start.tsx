@@ -11637,22 +11637,11 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
           ? { requiredCapabilities: mergedCapabilities }
           : {}),
         targetRuntime: normalizedRuntime,
-        // Freeze the exact rollout target identity so the submitted
-        // combination cannot collapse to the runtime string when several
-        // selectable targets share it (MoonLadderStudios/MoonMind#3988).
-        ...(preferredTargetForRuntime(runtimeTargetCatalog, normalizedRuntime)
-          ?.targetId
-          ? {
-              requestedTargetId:
-                runtimeTargetId ||
-                String(
-                  preferredTargetForRuntime(
-                    runtimeTargetCatalog,
-                    normalizedRuntime,
-                  )?.targetId || "",
-                ),
-            }
-          : {}),
+        // Carry an explicitly chosen rollout target identity so the exact
+        // target is honored and frozen instead of collapsing to the runtime
+        // string when several selectable targets share it
+        // (MoonLadderStudios/MoonMind#3988).
+        ...(runtimeTargetId ? { requestedTargetId: runtimeTargetId } : {}),
         ...(normalizedRuntime === "omnigent" && agentProfile && (pageMode.mode !== "create" || remediationDraft)
           ? {
               agentProfile: {
