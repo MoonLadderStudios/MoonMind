@@ -18280,6 +18280,67 @@ def test_mm3788_create_execution_accepts_provider_profile_owned_by_selected_runt
     assert initial_parameters["profileId"] == "claude_minimax_team"
 
 
+@pytest.mark.parametrize(
+    "runtime,provider_id,model,effort",
+    [
+        ("claude_code", "anthropic", "claude-opus-5", "xhigh"),
+        ("codex_cli", "openai", "gpt-5", "xhigh"),
+        ("jules", "google", "provider-selected-model", None),
+    ],
+)
+@pytest.mark.parametrize("selection", ["profile_inferred", "omitted", "explicit"])
+def test_profile_selected_runtime_survives_deployment_default(
+    monkeypatch, runtime, provider_id, model, effort, selection
+) -> None:
+    """Replay the UI's untouched advanced-runtime control at Temporal admission."""
+    monkeypatch.setattr(settings.workflow, "default_runtime", "omnigent")
+    profile = _mm3788_provider_profile(profile_id="subscription", runtime_id=runtime)
+    profile.provider_id = provider_id
+    body = _mm3788_task_request(target_runtime=runtime, profile_id=profile.profile_id)
+    authored = body["payload"]["workflow"]["runtime"]
+    authored.update(model=model, effort=effort)
+    if selection == "profile_inferred":
+        authored["authored"] = False
+    elif selection == "omitted":
+        del body["payload"]["targetRuntime"]
+        del authored["mode"]
+
+    for test_client, service in _mm3788_client(profile):
+        response = test_client.post("/api/executions", json=body)
+
+    assert response.status_code == 201, response.text
+    parameters = service.create_execution.await_args.kwargs["initial_parameters"]
+    assert parameters["targetRuntime"] == runtime
+    assert parameters["profileId"] == profile.profile_id
+    assert parameters["model"] == model
+    assert parameters["effort"] == effort
+    assert parameters["workflow"]["runtime"]["mode"] == runtime
+
+
+@pytest.mark.parametrize("explicit_omnigent", [False, True])
+def test_profile_runtime_inference_does_not_bypass_omnigent_authority(
+    monkeypatch, explicit_omnigent
+) -> None:
+    monkeypatch.setattr(settings.workflow, "default_runtime", "claude_code")
+    profile = _mm3788_provider_profile(
+        profile_id="subscription", runtime_id="claude_code"
+    )
+    profile.execution_configuration = {
+        "profileId": "missing", "version": 1, "digest": "sha256:" + "a" * 64,
+    }
+    body = _mm3788_task_request(
+        target_runtime="omnigent" if explicit_omnigent else "claude_code",
+        profile_id=profile.profile_id,
+    )
+    body["payload"]["workflow"]["runtime"]["authored"] = explicit_omnigent
+    for test_client, service in _mm3788_client(profile):
+        response = test_client.post("/api/executions", json=body)
+
+    assert response.status_code == 409, response.text
+    assert response.json()["detail"]["code"] == "profile_execution_configuration_required"
+    service.create_execution.assert_not_awaited()
+
+
 def test_mm3788_create_execution_rejects_legacy_runtime_alias_mismatch() -> None:
     """Canonical runtime IDs decide the comparison, not the submitted spelling."""
 
@@ -19118,3 +19179,94 @@ def test_mm3788_selected_step_recovery_route_maps_runtime_mismatch_to_409(
     assert response.status_code == 409
     _mm3788_assert_shared_mismatch_detail(response.json()["detail"])
     mock_service.create_failed_step_recovery_execution.assert_awaited_once()
+
+
+# ---------------------------------------------------------------------------
+# MoonLadderStudios/MoonMind#3835 — a per-step runtime override is new admission
+# in its own right. The top-level ``select_runtime`` gate only covers the
+# workflow runtime, so a legacy ``steps[i].runtime.mode`` under an allowed
+# top-level runtime must not keep creating new legacy work.
+# ---------------------------------------------------------------------------
+
+
+def _mm3835_reclassify_runtime_strategy(
+    monkeypatch: pytest.MonkeyPatch, runtime_id: str
+) -> None:
+    from moonmind.omnigent import legacy_retirement
+    from moonmind.omnigent.legacy_retirement import (
+        RetirementClass,
+        retirement_record_for_surface,
+    )
+
+    surface = f"runtime-strategy:{runtime_id}"
+    record = retirement_record_for_surface(surface)
+    assert record is not None, surface
+    closed = record.model_copy(
+        update={
+            "retirement_class": RetirementClass.NEW_ADMISSION_DISABLED,
+            "new_admission_source": "",
+        }
+    )
+    monkeypatch.setitem(legacy_retirement._INVENTORY_BY_ID, closed.path_id, closed)
+    monkeypatch.setitem(legacy_retirement._INVENTORY_BY_SURFACE, surface, closed)
+
+
+@pytest.mark.asyncio
+async def test_mm3835_step_runtime_override_is_held_to_the_retirement_class(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _mm3835_reclassify_runtime_strategy(monkeypatch, "claude_code")
+    steps = _normalize_task_steps(
+        {
+            "steps": [
+                {
+                    "id": "review",
+                    "instructions": "Override to a retired runtime.",
+                    "runtime": {"mode": "claude_code"},
+                }
+            ]
+        }
+    )
+
+    with pytest.raises(HTTPException) as exc_info:
+        await _resolve_step_runtime_selections(
+            steps=steps,
+            task_runtime={"mode": "omnigent"},
+            task_target_runtime="omnigent",
+            task_profile_id=None,
+            session=None,
+        )
+
+    assert exc_info.value.status_code == 422
+    assert exc_info.value.detail["code"] == "invalid_execution_request"
+    assert "runtime_new_admission_disabled:claude_code" in (
+        exc_info.value.detail["message"]
+    )
+    assert "steps[0].runtime.mode" in exc_info.value.detail["message"]
+
+
+@pytest.mark.asyncio
+async def test_mm3835_step_runtime_override_is_allowed_while_the_class_admits() -> None:
+    """The gate stops admission only when the class says so."""
+
+    steps = _normalize_task_steps(
+        {
+            "steps": [
+                {
+                    "id": "review",
+                    "instructions": "Override to a still-admitted runtime.",
+                    "runtime": {"mode": "claude_code"},
+                }
+            ]
+        }
+    )
+
+    await _resolve_step_runtime_selections(
+        steps=steps,
+        task_runtime={"mode": "codex_cli"},
+        task_target_runtime="codex_cli",
+        task_profile_id=None,
+        session=None,
+    )
+
+    assert steps[0]["runtime"]["mode"] == "claude_code"

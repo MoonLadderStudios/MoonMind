@@ -246,7 +246,11 @@ from moonmind.workflows.executions.preset_goal_scheduler import (
     workflow_is_already_authored,
 )
 from moonmind.workflows.executions.runtime_defaults import normalize_runtime_id
-from moonmind.omnigent.cutover import effective_phase, select_runtime
+from moonmind.omnigent.cutover import (
+    assert_runtime_new_admission,
+    effective_phase,
+    select_runtime,
+)
 from moonmind.omnigent.bridge_store import (
     BridgeChatBindingAmbiguousError,
     BridgeProjectionAmbiguousError,
@@ -8665,6 +8669,17 @@ async def _resolve_step_runtime_selections(
                     "claude_code, codex_cloud, jules."
                 )
             canonical_step_runtime = normalized_rt
+            # A step override is new admission in its own right. The top-level
+            # ``select_runtime`` gate only covers the workflow's runtime, so
+            # without this check an allowed top-level runtime plus a legacy
+            # ``steps[i].runtime.mode`` would keep creating new legacy work
+            # after the direct strategy's retirement class stopped admitting it.
+            try:
+                assert_runtime_new_admission(canonical_step_runtime)
+            except ValueError as exc:
+                raise _invalid_workflow_request(
+                    f"payload.workflow.steps[{index}].runtime.mode: {exc}"
+                ) from exc
 
         raw_step_profile_id = str(
             runtime_payload.get("profileId")
@@ -11067,6 +11082,27 @@ async def _create_execution_from_workflow_request(
     if derived_task_title:
         normalized_task_for_planner["title"] = derived_task_title
 
+    raw_profile_id = str(
+        runtime_payload.get("providerProfileRef")
+        or runtime_payload.get("profileId")
+        or runtime_payload.get("providerProfile")
+        or task_payload.get("providerProfileRef")
+        or task_payload.get("profileId")
+        or task_payload.get("providerProfile")
+        or payload.get("providerProfileRef")
+        or payload.get("profileId")
+        or payload.get("providerProfile")
+        or ""
+    ).strip() or None
+    _provider_profile = None
+    if raw_profile_id and session is not None:
+        _provider_profile = await _load_provider_profile_for_runtime(
+            session=session,
+            profile_id=raw_profile_id,
+            selected_runtime=None,
+            not_found_message=f"Provider profile not found: {raw_profile_id!r}.",
+        )
+
     # --- Model resolution ---
     runtime_was_authored = runtime_payload.get("authored") is not False
     authored_runtime = (
@@ -11074,6 +11110,23 @@ async def _create_execution_from_workflow_request(
         if runtime_was_authored
         else None
     )
+    if not authored_runtime and _provider_profile is not None:
+        # Profile selection is execution authority even when the advanced
+        # runtime control was untouched. Use the same route as inventory; an
+        # unready or pinned Omnigent configuration must never fall back direct.
+        from api_service.services.profile_execution_selection import (
+            load_execution_configurations,
+            profile_has_native_inventory_route,
+        )
+
+        configurations = await load_execution_configurations(
+            session, user, [_provider_profile]
+        )
+        authored_runtime = (
+            _provider_profile.runtime_id
+            if profile_has_native_inventory_route(_provider_profile, configurations)
+            else "omnigent"
+        )
     try:
         cutover_status = effective_phase()
         cutover_selection = select_runtime(
@@ -11090,18 +11143,6 @@ async def _create_execution_from_workflow_request(
     except ValueError as exc:
         raise _invalid_workflow_request(str(exc)) from exc
     raw_target_runtime = cutover_selection.runtime_id
-    raw_profile_id = str(
-        runtime_payload.get("providerProfileRef")
-        or runtime_payload.get("profileId")
-        or runtime_payload.get("providerProfile")
-        or task_payload.get("providerProfileRef")
-        or task_payload.get("profileId")
-        or task_payload.get("providerProfile")
-        or payload.get("providerProfileRef")
-        or payload.get("profileId")
-        or payload.get("providerProfile")
-        or ""
-    ).strip() or None
     # Preserve the original requested model byte-for-byte (Compatibility Policy:
     # codex.model and codex.effort inputs must not be modified).
     raw_requested_model: str | None = runtime_payload.get("model") or None
@@ -11133,13 +11174,11 @@ async def _create_execution_from_workflow_request(
     # Load provider profile when a profileId is supplied. For tier-aware
     # submissions without an exact profile, use the same runtime default profile
     # selection order as the ProviderProfileManager.
-    _provider_profile = None
-    if raw_profile_id and session is not None:
-        _provider_profile = await _load_provider_profile_for_runtime(
-            session=session,
+    if _provider_profile is not None:
+        _require_provider_profile_runtime(
+            profile=_provider_profile,
             profile_id=raw_profile_id,
             selected_runtime=canonical_target_runtime,
-            not_found_message=f"Provider profile not found: {raw_profile_id!r}.",
         )
     elif _runtime_model_tier(runtime_payload) is not None:
         _provider_profile = await _load_default_provider_profile_for_runtime(
