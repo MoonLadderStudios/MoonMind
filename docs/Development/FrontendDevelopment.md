@@ -114,6 +114,41 @@ These commands cover:
 
 Run real-browser regressions locally with `npm run ui:test:browser`; it defaults to Chromium and Firefox. To reproduce one CI matrix leg, set `MOONMIND_BROWSER_ENGINES=chromium` or `MOONMIND_BROWSER_ENGINES=firefox`. CI supplies the matching browsers from its pinned Playwright container.
 
+### Native Workflow Chat browser verification
+
+The product requirements are owned by [Workflow Chat Panel](../UI/WorkflowChatPanel.md#41-application-readiness-and-failure-containment). The [Omnigent Bridge](../Omnigent/OmnigentBridge.md#browser-transport-api-preservation) owns browser transport and scoped network compatibility. A binding response or iframe load is not proof that the conversation rendered.
+
+When changing the native bootstrap, facade, or workflow shell, extend the existing browser regression path rather than adding a second test application or relying only on HTML-string assertions:
+
+```bash
+npm run ui:test:browser
+```
+
+Execute the script emitted by `render_native_ui_document` before the pinned native consumer runs. Verify `WebSocket.CONNECTING`, `OPEN`, `CLOSING`, and `CLOSED`, native construction and instance behavior, scoped URLs, subprotocol arguments, and null/connecting/open/closing/closed watch behavior. Verify an open socket actually sends, not merely that a null socket stops throwing. Cover equivalent constructor constants and options for an adapted `EventSource`, plus reconnect, stop/start, and disposal behavior.
+
+Exercise the compiled native application through the normal FastAPI-served Workflow Detail route and authorized facade, in embedded and full-page presentations. Verify the bound transcript or a validated empty state, essential boot reads, dynamic assets, authorized send and streaming, reconnect, terminal read-only access, and historical evidence after host cleanup. Capture console exceptions and network outcomes. Deliberately denied optional controls have different expectations from failed essential reads.
+
+Inject required-asset failure, essential-read denial, a boot exception, a fatal error after readiness, and a startup that never becomes ready. Assert a visible bounded diagnostic with safe recovery. Test stale or wrong-origin frame signals, binding replacement, repeated retries, and listener/timer cleanup. Retain wrong-owner and revoked-access cases so a fallback cannot bypass authorization or display another user's cached transcript.
+
+Bind each result to the actual API/dashboard build, Omnigent source and UI bundle, compatibility profile, test scenario, and relevant image digests. Confirm that the applicable required CI selector collects the escaped-regression tests. Record exact commands and passed, failed, skipped, blocked, or unexecuted scenarios. A successful test command cannot qualify scenarios it did not collect. Hermetic browser tests with controlled dependencies are separate from protected live-provider/deployed-artifact acceptance.
+
+### Troubleshooting a blank or unavailable native chat
+
+Start with the normal Workflow Detail route and record the actual served build and bundle identities. Use `tools/verify_deployed_ui_assets.py` when dashboard asset coherence is in question. The native Omnigent bundle is a separate artifact and also needs verification. Do not hot-patch generated assets or change a version setting merely to bypass compatibility checks.
+
+| Observation | Evidence to inspect | Safe response |
+|---|---|---|
+| No binding or denied binding | Binding response status and redacted error envelope | Preserve non-enumerating access behavior. Do not guess a provider session. |
+| Document loads but the application crashes or stays blank | First application exception, readiness signal/deadline, and failed required asset or read | Reproduce the actual served adapter and consumer. Do not treat iframe `load` as success. |
+| Snapshot, transcript items, or stream returns 403 | Authorized facade error code and current capability disabled reason | Distinguish legitimate denial from missing/stale authority at its producer. Never default missing authority to allowed. |
+| Native metadata/resource route returns 404 | Exact compiled UI request and reviewed route/method/response contract | Add only the authorized scoped operation when required, or make a genuinely optional unsupported feature nonfatal. No catch-all proxy. |
+| Image, stylesheet, or dynamic chunk uses an unscoped root URL | Browser request initiator, compiled asset reference, scoped asset base, and response content type | Verify build/runtime asset-base behavior. Rewriting HTML attributes alone does not prove JavaScript/CSS asset references are scoped. |
+| Dashboard workflow-update stream returns 404 | `/api/ui/info`, actual API route registration, and dashboard polling/connection lifecycle | Investigate independently of native chat. Preserve authorized polling and bound reconnect behavior. |
+
+MoonMind's `/api/workflows/updates/stream` dashboard SSE endpoint and Omnigent's binding-scoped `/v1/sessions/updates` WebSocket are different transports with different owners. Repairing one does not establish that the other works. Separate browser-extension `contentscript.js` warnings from application stack traces before attributing a cause.
+
+Keep captured diagnostics minimal and secret-safe. Omit cookies, authorization headers, private message bodies, real binding identifiers, provider/host identities, and signed URLs from issue excerpts. Preserve detailed evidence only through authorized artifact handling. Do not publish an unsanitized HAR or infer a particular capability failure from a status code alone. Incident-specific evidence and implementation checklists belong in issues, not this guide.
+
 ## Generated API types
 
 Refresh the generated frontend API types with:
