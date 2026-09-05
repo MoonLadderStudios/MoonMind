@@ -929,6 +929,7 @@ class ManagedRuntimeLauncher:
 
         environment.pop("MOONMIND_EXECUTION_FANOUT_BEARER_TOKEN", None)
         environment.pop("MOONMIND_EXECUTION_FANOUT_BEARER_TOKEN_FILE", None)
+        environment.pop("MOONMIND_REPOSITORY_CONNECTION_REF", None)
         raw_capabilities = request.parameters.get("requiredCapabilities")
         if raw_capabilities is None:
             required_capabilities: tuple[str, ...] = ()
@@ -950,6 +951,16 @@ class ManagedRuntimeLauncher:
             required_capabilities,
             authorization,
         )
+        # Share the canonical request reader with Omnigent: portable fan-out
+        # Skills need the parent's connection authority in every runtime host.
+        # Never substitute ambient or profile-provided repository authority.
+        from moonmind.omnigent.workspace_intent import authored_connection_ref
+
+        repository_connection_ref = authored_connection_ref(request)
+        if repository_connection_ref:
+            environment["MOONMIND_REPOSITORY_CONNECTION_REF"] = (
+                repository_connection_ref
+            )
         step_execution = request.step_execution
         request_workflow_id = (
             str(step_execution.workflow_id or "").strip()
