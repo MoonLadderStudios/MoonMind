@@ -1624,7 +1624,12 @@ def test_agent_run_patch_preserves_legacy_replay_and_selects_new_supervisor() ->
     assert "OMNIGENT_SESSION_ADMISSION_PATCH_ID" in source
     assert "OMNIGENT_COMPACT_RESOLVE_INTENT_PATCH_ID" in source
     assert "OMNIGENT_COMPACT_WORKSPACE_CHECKPOINT_PATCH_ID" in source
-    assert '"omnigent.evaluate_session_admission"' in source
+    # The admission read is shared: the first admission and a re-admission
+    # after lost capacity must resolve authority through the same activity.
+    assert "_evaluate_omnigent_session_admission" in source
+    assert '"omnigent.evaluate_session_admission"' in inspect.getsource(
+        MoonMindAgentRun._evaluate_omnigent_session_admission
+    )
     assert '"MoonMind.OmnigentSession"' in source
     assert "omnigent_session_workflow_id" in source
     assert "ChildWorkflowCancellationType.ABANDON" in source
