@@ -18,6 +18,9 @@ and the fail-closed contract the guard depends on:
 * Stale evidence is not drained. An observation older than the freshness bound
   is treated the same as a missing one.
 * A probe that failed is not drained, and its failure is reported by kind.
+* Every probe that observed a kind must agree it is drained. One authority's
+  failure, staleness, or positive count is never discarded by another probe's
+  newer zero-count success.
 * Observations carry counts and operator-safe probe refs only — never provider
   session ids, host ids, credentials, or internal endpoints.
 """
@@ -134,22 +137,22 @@ def build_drain_evidence(
 ) -> DrainEvidence:
     """Aggregate probe observations into fail-closed drain evidence.
 
-    Only a declared dependency kind with a fresh, successful, zero-count
-    observation is drained. Observations for kinds the row does not declare are
-    ignored rather than widening the result.
+    A declared dependency kind is drained only when *every* observation for it
+    is fresh, successful, and zero-count. Aggregation never reduces a kind to
+    its newest observation, because a later zero-count success from one probe
+    must not discard another probe's failure or positive count. Observations for
+    kinds the row does not declare are ignored rather than widening the result.
     """
 
     generated_at = now or datetime.now(timezone.utc)
     if generated_at.tzinfo is None:
         raise DrainEvidenceError("now must be timezone-aware")
 
-    latest: dict[ActiveOwnerKind, ActiveOwnerObservation] = {}
+    by_kind: dict[ActiveOwnerKind, list[ActiveOwnerObservation]] = {}
     for observation in observations:
         if observation.kind not in path.active_resource_dependencies:
             continue
-        current = latest.get(observation.kind)
-        if current is None or observation.observed_at > current.observed_at:
-            latest[observation.kind] = observation
+        by_kind.setdefault(observation.kind, []).append(observation)
 
     drained: set[ActiveOwnerKind] = set()
     blocking: list[ActiveOwnerKind] = []
@@ -158,20 +161,30 @@ def build_drain_evidence(
     failed: list[ActiveOwnerKind] = []
 
     for kind in sorted(path.active_resource_dependencies, key=lambda k: k.value):
-        observation = latest.get(kind)
-        if observation is None:
+        for_kind = by_kind.get(kind) or []
+        if not for_kind:
             missing.append(kind)
             blocking.append(kind)
             continue
-        if not observation.probe_succeeded:
+        # Every applicable probe must agree that the kind is drained. A newer
+        # zero-count success never overwrites another authority's failure,
+        # staleness, or positive count: each is an independent blocker.
+        kind_failed = any(not obs.probe_succeeded for obs in for_kind)
+        kind_stale = any(
+            obs.probe_succeeded and generated_at - obs.observed_at > max_age
+            for obs in for_kind
+        )
+        kind_active = any(
+            obs.probe_succeeded
+            and generated_at - obs.observed_at <= max_age
+            and obs.active_count > 0
+            for obs in for_kind
+        )
+        if kind_failed:
             failed.append(kind)
-            blocking.append(kind)
-            continue
-        if generated_at - observation.observed_at > max_age:
+        if kind_stale:
             stale.append(kind)
-            blocking.append(kind)
-            continue
-        if observation.active_count > 0:
+        if kind_failed or kind_stale or kind_active:
             blocking.append(kind)
             continue
         drained.add(kind)

@@ -103,14 +103,12 @@ The third generation is the destination. The first two remain explicit compatibi
 No current path is silently reclassified as generic. Existing execution plans and Temporal histories continue to invoke the realizer and compatibility version they recorded.
 
 Every retained component of the first two generations carries a **retirement
-class** in `moonmind/omnigent/legacy_retirement.py`. Today every one of them is
-`active_product_path`, `active_execution_support`, `cleanup_only`,
-`temporal_replay_only`, `historical_read_only`, or `migration_tool` — nothing is
-`eligible_for_removal` and nothing is `removed`. The class, not a document, is
-what decides whether a component still admits new work and the earliest stage at
-which it can be deleted. See
+class** in `moonmind/omnigent/legacy_retirement.py`. That class, not a document,
+is the single authority for whether a component still admits new work and the
+earliest stage at which it can be deleted; this document deliberately records no
+snapshot of which class each row currently holds. See
 [Omnigent Module Architecture §5](OmnigentModuleArchitecture.md#5-retained-duplicate-architecture-and-its-retirement-owners)
-for the full inventory and the staging rules.
+for the inventory and the staging rules.
 
 ## 5. Governing principles
 

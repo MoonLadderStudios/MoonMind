@@ -35,6 +35,7 @@ Discovery is deliberately derived from authorities that already exist:
 
 from __future__ import annotations
 
+import ast
 import importlib
 import re
 from functools import lru_cache
@@ -49,6 +50,13 @@ OMNIGENT_SCRIPT_DIR = Path("services/omnigent/scripts")
 # below is duplicate runtime architecture that #3835 must classify.
 GENERIC_REALIZER_REF = "generic-omnigent-host@1"
 CANONICAL_IMAGE_ENV_PREFIX = "OMNIGENT_SHARED_HOST_IMAGE"
+
+# The retirement inventory and this discovery module name every legacy
+# environment identity by construction. They are evidence *about* a surface, not
+# a consumer *of* it, so they are excluded from environment existence evidence.
+_INVENTORY_SELF_REFERENCE_MODULES = frozenset(
+    {"legacy_retirement.py", "retirement_surfaces.py"}
+)
 
 SURFACE_SCHEMES = (
     "python",
@@ -270,15 +278,59 @@ def _python_symbol_exists(value: str) -> bool:
     return hasattr(module, symbol)
 
 
+_DOCSTRING_OWNERS = (ast.Module, ast.ClassDef, ast.FunctionDef, ast.AsyncFunctionDef)
+
+
+def _executable_python_text(source: str) -> str:
+    """Return the module's executable code with comments and docstrings removed.
+
+    A variable named only in a docstring or a comment is documentation, not a
+    consumer. Operand strings are kept, because ``os.environ["VAR"]`` is exactly
+    how a variable is honored. Round-tripping through the AST drops comments;
+    docstrings are removed explicitly. An unparsable module yields no evidence.
+    """
+
+    try:
+        tree = ast.parse(source)
+    except (SyntaxError, ValueError):
+        return ""
+    for node in ast.walk(tree):
+        if not isinstance(node, _DOCSTRING_OWNERS):
+            continue
+        body = getattr(node, "body", None)
+        if not body:
+            continue
+        first = body[0]
+        if isinstance(first, ast.Expr) and isinstance(first.value, ast.Constant):
+            if isinstance(first.value.value, str):
+                node.body = body[1:] or [ast.Pass()]
+    try:
+        return ast.unparse(ast.fix_missing_locations(tree))
+    except (AttributeError, ValueError, RecursionError):
+        return ""
+
+
 @lru_cache(maxsize=1)
 def _environment_reference_corpus() -> str:
-    """Text of the places a legacy environment identity may still be honored."""
+    """Text of the places a legacy environment identity may still be honored.
+
+    The corpus is built only from *authoritative consumers*: deployment
+    configuration plus executable Python that reads or forwards the variable.
+    The retirement inventory and surface discovery modules are excluded, because
+    every inventoried variable is written into their own rows — including them
+    would let the guard prove a variable "exists" from its own retirement row
+    after the real Compose and runtime handling was deleted.
+    """
 
     parts: list[str] = []
     if COMPOSE_FILE.is_file():
         parts.append(COMPOSE_FILE.read_text(encoding="utf-8"))
     for path in sorted((REPO_ROOT / "moonmind" / "omnigent").rglob("*.py")):
-        parts.append(path.read_text(encoding="utf-8", errors="ignore"))
+        if path.name in _INVENTORY_SELF_REFERENCE_MODULES:
+            continue
+        parts.append(
+            _executable_python_text(path.read_text(encoding="utf-8", errors="ignore"))
+        )
     return "\n".join(parts)
 
 

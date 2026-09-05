@@ -19,7 +19,7 @@ They also prove the two ordering rules the issue insists on:
 
 from __future__ import annotations
 
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 
 import pytest
 
@@ -42,6 +42,10 @@ from moonmind.omnigent.harness_platform.skills import ResolvedSkillSet
 from moonmind.omnigent.legacy_retirement import (
     RetirementClass,
     get_retirement_record,
+)
+from moonmind.omnigent.session_supervisor_rollback import (
+    DEFAULT_ROLLBACK_EXERCISE_MAX_AGE,
+    RollbackExerciseRecord,
 )
 
 PROFILE_BOUND_REALIZER = "codex-profile-bound@1"
@@ -256,9 +260,43 @@ def test_alternate_client_cannot_bypass_the_retirement_state(
     assert "no longer admits new work" in str(excinfo.value)
 
 
-def test_rollback_only_admits_only_the_allowlisted_generation(
-    codex_plan_inputs, monkeypatch: pytest.MonkeyPatch
-) -> None:
+# ``host_architecture`` is deliberately omitted: it belongs to the atomic
+# launch-authority set, and the rollback scope must resolve the effective
+# architecture the plan actually runs on (the Host Class default here).
+ROLLBACK_SCOPE_INPUTS: dict[str, object] = {
+    "agent_profile_snapshot_ref": "agent-profile-snapshot:rollback",
+    "rollback_owner_cohort": "internal",
+}
+
+
+def _exercise_record(**overrides: object) -> RollbackExerciseRecord:
+    """A fresh, successful exercise for exactly the compiled plan's scope."""
+
+    scope = {
+        "agentProfileRef": ROLLBACK_SCOPE_INPUTS["agent_profile_snapshot_ref"],
+        "hostClassRef": "omnigent-codex-current@1",
+        "materializerRef": "codex-oauth-home@1",
+        "executionRealizerRef": PROFILE_BOUND_REALIZER,
+        "modelQualifiedId": "gpt-5",
+        "launchPolicyRef": "codex-on-demand@1",
+        "hostMode": "on-demand",
+        "architecture": "linux/amd64",
+        "ownerCohort": ROLLBACK_SCOPE_INPUTS["rollback_owner_cohort"],
+    }
+    scope.update(overrides.pop("scope", {}))  # type: ignore[arg-type]
+    payload: dict[str, object] = {
+        "retirementPathId": PROFILE_BOUND_PATH_ID,
+        "scope": scope,
+        "exercisedAt": datetime.now(UTC),
+        "evidenceRef": "artifact://rollback-exercise",
+        "succeeded": True,
+        "futureAdmissionOnly": True,
+    }
+    payload.update(overrides)
+    return RollbackExerciseRecord.model_validate(payload)
+
+
+def _reclassify_rollback_only(monkeypatch: pytest.MonkeyPatch) -> None:
     _reclassify(
         monkeypatch,
         retirement_class=RetirementClass.ROLLBACK_ONLY,
@@ -266,16 +304,112 @@ def test_rollback_only_admits_only_the_allowlisted_generation(
         rollback_dependency=True,
         rollback_generations=frozenset({"gen-rollback-1"}),
     )
+
+
+def test_rollback_only_admits_only_the_allowlisted_generation(
+    codex_plan_inputs, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _reclassify_rollback_only(monkeypatch)
     with pytest.raises(HarnessPlatformError):
         compile_execution_plan(**codex_plan_inputs)
 
     with pytest.raises(HarnessPlatformError):
-        compile_execution_plan(**codex_plan_inputs, rollback_generation="gen-rollback")
+        compile_execution_plan(
+            **codex_plan_inputs,
+            **ROLLBACK_SCOPE_INPUTS,
+            rollback_generation="gen-rollback",
+            rollback_exercise_records=[_exercise_record()],
+        )
 
     envelope = compile_execution_plan(
-        **codex_plan_inputs, rollback_generation="gen-rollback-1"
+        **codex_plan_inputs,
+        **ROLLBACK_SCOPE_INPUTS,
+        rollback_generation="gen-rollback-1",
+        rollback_exercise_records=[_exercise_record()],
     )
     assert envelope.payload.executionRealizerRef == PROFILE_BOUND_REALIZER
+
+
+def test_rollback_only_refuses_a_generation_with_no_exercise_evidence(
+    codex_plan_inputs, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The allowlisted generation alone is a global string, not scoped evidence."""
+
+    _reclassify_rollback_only(monkeypatch)
+    with pytest.raises(HarnessPlatformError) as excinfo:
+        compile_execution_plan(
+            **codex_plan_inputs,
+            **ROLLBACK_SCOPE_INPUTS,
+            rollback_generation="gen-rollback-1",
+        )
+    assert "rollback_exercise" in str(excinfo.value)
+
+
+@pytest.mark.parametrize(
+    "dimension, value",
+    [
+        ("hostClassRef", "omnigent-codex-other@1"),
+        ("materializerRef", "codex-api-key@1"),
+        ("modelQualifiedId", "gpt-5-codex"),
+        ("launchPolicyRef", "codex-static@1"),
+        ("hostMode", "static-connected"),
+        ("architecture", "linux/arm64"),
+        ("ownerCohort", "external"),
+        ("agentProfileRef", "agent-profile-snapshot:other"),
+    ],
+)
+def test_rollback_exercise_does_not_widen_beyond_its_exact_scope(
+    codex_plan_inputs, monkeypatch: pytest.MonkeyPatch, dimension: str, value: str
+) -> None:
+    """One exercised combination never re-admits a different one."""
+
+    _reclassify_rollback_only(monkeypatch)
+    with pytest.raises(HarnessPlatformError) as excinfo:
+        compile_execution_plan(
+            **codex_plan_inputs,
+            **ROLLBACK_SCOPE_INPUTS,
+            rollback_generation="gen-rollback-1",
+            rollback_exercise_records=[_exercise_record(scope={dimension: value})],
+        )
+    assert "rollback_exercise" in str(excinfo.value)
+
+
+def test_rollback_exercise_expires_with_its_window(
+    codex_plan_inputs, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Evidence older than the exercise window no longer re-admits new work."""
+
+    _reclassify_rollback_only(monkeypatch)
+    expired = _exercise_record(
+        exercisedAt=datetime.now(UTC)
+        - (DEFAULT_ROLLBACK_EXERCISE_MAX_AGE + timedelta(minutes=1))
+    )
+    with pytest.raises(HarnessPlatformError) as excinfo:
+        compile_execution_plan(
+            **codex_plan_inputs,
+            **ROLLBACK_SCOPE_INPUTS,
+            rollback_generation="gen-rollback-1",
+            rollback_exercise_records=[expired],
+        )
+    assert "rollback_exercise" in str(excinfo.value)
+
+
+def test_rollback_only_requires_every_scope_dimension(
+    codex_plan_inputs, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A plan that cannot name its exact scope fails closed."""
+
+    _reclassify_rollback_only(monkeypatch)
+    incomplete = dict(ROLLBACK_SCOPE_INPUTS)
+    incomplete["rollback_owner_cohort"] = None
+    with pytest.raises(HarnessPlatformError) as excinfo:
+        compile_execution_plan(
+            **codex_plan_inputs,
+            **incomplete,
+            rollback_generation="gen-rollback-1",
+            rollback_exercise_records=[_exercise_record()],
+        )
+    assert "rollback_scope_incomplete" in str(excinfo.value)
 
 
 def test_disabled_admission_does_not_change_recorded_plans(
