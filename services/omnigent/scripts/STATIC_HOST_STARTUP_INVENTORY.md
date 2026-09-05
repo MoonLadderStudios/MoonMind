@@ -1,5 +1,17 @@
 # Static host startup path inventory (MoonLadderStudios/MoonMind#3834)
 
+> **Superseded as the retirement authority by MoonLadderStudios/MoonMind#3835.**
+> The startup paths below are now classified in code by
+> `RETIREMENT_INVENTORY` in `moonmind/omnigent/legacy_retirement.py`
+> (`omnigent.legacy.codex_static_host_startup`,
+> `omnigent.legacy.claude_static_host_startup`,
+> `omnigent.legacy.projection_host_startup`, and
+> `omnigent.legacy.host_image_variable_alias`), and CI fails when a
+> provider-specific startup script, Compose service, Compose profile, or legacy
+> image variable exists without a retirement class. This file is retained as a
+> historical read of the #3834 consolidation; treat the code-owned inventory as
+> authoritative for what may be removed and when.
+
 Every old static-host startup path, its current state after consolidation,
 and the condition that retires it. Legacy execution realizers and historical
 compatibility are out of scope for removal in #3834 and stay.

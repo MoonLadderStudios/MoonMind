@@ -175,13 +175,8 @@ def assert_protected_evidence_matches_plan(
         raise ValueError("protected support evidence conflicts with the execution plan")
 
 
-def load_protected_execution_support_evidence(
-    plan_payload: Any,
-    *,
-    path: str | Path | None = None,
-    now: datetime | None = None,
-) -> dict[str, Any]:
-    """Load one protected document selected by the exact plan support key."""
+def _protected_evidence_candidates(path: str | Path | None) -> list[Any]:
+    """Return the published protected entries, unvalidated."""
 
     configured = str(
         path
@@ -196,7 +191,52 @@ def load_protected_execution_support_evidence(
     if not isinstance(raw, Mapping):
         raise ValueError("protected Omnigent execution support evidence must be an object")
     entries = raw.get("entries")
-    candidates = list(entries) if isinstance(entries, list) else [raw]
+    return list(entries) if isinstance(entries, list) else [raw]
+
+
+def find_protected_evidence_entry(
+    support_combination_key: str,
+    *,
+    path: str | Path | None = None,
+) -> ProtectedExecutionSupportEvidence | None:
+    """Return the recorded protected entry for one exact support combination.
+
+    This is an observation probe, not admission authority. It applies the
+    document's structural authority (closed schema, declared issuer, recomputed
+    support key, secret scan) but not its freshness, so a caller reporting
+    readiness can distinguish missing evidence from expired evidence instead of
+    collapsing both into "missing". Admission still runs through
+    :func:`load_protected_execution_support_evidence`, which fails closed.
+    """
+
+    expected = str(support_combination_key or "").strip()
+    if not expected:
+        return None
+    try:
+        candidates = _protected_evidence_candidates(path)
+    except ValueError:
+        return None
+    for candidate in candidates:
+        if not isinstance(candidate, Mapping):
+            continue
+        if candidate.get("supportCombinationKey") != expected:
+            continue
+        try:
+            return ProtectedExecutionSupportEvidence.model_validate(candidate)
+        except Exception:
+            continue
+    return None
+
+
+def load_protected_execution_support_evidence(
+    plan_payload: Any,
+    *,
+    path: str | Path | None = None,
+    now: datetime | None = None,
+) -> dict[str, Any]:
+    """Load one protected document selected by the exact plan support key."""
+
+    candidates = _protected_evidence_candidates(path)
     matching = [
         value
         for value in candidates
@@ -219,6 +259,7 @@ __all__ = [
     "MAX_EXECUTION_SUPPORT_EVIDENCE_AGE",
     "ProtectedExecutionSupportEvidence",
     "assert_protected_evidence_matches_plan",
+    "find_protected_evidence_entry",
     "load_protected_execution_support_evidence",
     "validate_protected_execution_support_evidence",
 ]

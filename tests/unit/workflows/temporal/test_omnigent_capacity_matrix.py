@@ -173,7 +173,12 @@ def test_exclusive_maintenance_blocks_new_consumers_while_it_waits(
     profile.release(granted[0])
     assert profile.available_slots == 1
 
-    profile.exclusive_maintenance_waiters = 1
+    profile.enqueue_maintenance_waiter(
+        "rotate-credential",
+        purpose=CredentialLeasePurpose.CREDENTIAL_REPAIR.value,
+        queue_order=1,
+        queued_at=NOW.isoformat(),
+    )
 
     assert profile.is_available() is False
     assert _reserve_execution(profile, "agent-run-new") is False

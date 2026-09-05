@@ -3815,6 +3815,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/omnigent/runtime-provider-migration": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Runtime Provider Migration Status
+         * @description Return the current runtime-provider migration state per combination.
+         */
+        get: operations["get_runtime_provider_migration_status_api_omnigent_runtime_provider_migration_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/omnigent/sessions/{session_id}/timeline": {
         parameters: {
             query?: never;
@@ -8476,6 +8496,10 @@ export interface components {
             omnigentRuntimeBinding?: {
                 [key: string]: unknown;
             } | null;
+            /** Omnigentruntimeprovidertarget */
+            omnigentRuntimeProviderTarget?: {
+                [key: string]: unknown;
+            } | null;
             /** Targetruntime */
             targetRuntime?: string | null;
             /** Targetskill */
@@ -9127,6 +9151,19 @@ export interface components {
             models: string[];
             /** Gatereasons */
             gateReasons: components["schemas"]["GateReason"][];
+            /** Rollouttargetid */
+            rolloutTargetId?: string | null;
+            /** Rolloutstate */
+            rolloutState?: string | null;
+            /** Rolloutgeneration */
+            rolloutGeneration?: number | null;
+            /** Rolloutpolicyversion */
+            rolloutPolicyVersion?: string | null;
+            /**
+             * Compatibilitypath
+             * @default false
+             */
+            compatibilityPath: boolean;
         };
         /**
          * GitHubTokenProbeRequest
@@ -10061,6 +10098,62 @@ export interface components {
         ManifestUpsertRequest: {
             /** Content */
             content: string;
+        };
+        /**
+         * MigrationEvidenceView
+         * @description Non-sensitive evidence provenance for one combination.
+         */
+        MigrationEvidenceView: {
+            /** Tier */
+            tier: string;
+            /** Evidenceref */
+            evidenceRef: string;
+            /** Supportcombinationkey */
+            supportCombinationKey: string;
+            /**
+             * Generatedat
+             * Format: date-time
+             */
+            generatedAt: string;
+            /**
+             * Expiresat
+             * Format: date-time
+             */
+            expiresAt: string;
+            /** Ageseconds */
+            ageSeconds: number;
+            /** Expired */
+            expired: boolean;
+        };
+        /**
+         * MigrationOutcomeCounts
+         * @description Bounded recent-outcome counters for one harness class.
+         */
+        MigrationOutcomeCounts: {
+            /** Launchreadiness */
+            launchReadiness?: {
+                [key: string]: number;
+            };
+            /** Supportevidencedenials */
+            supportEvidenceDenials?: {
+                [key: string]: number;
+            };
+            /** Fallbackdenials */
+            fallbackDenials?: {
+                [key: string]: number;
+            };
+            /** Followupavailability */
+            followupAvailability?: {
+                [key: string]: number;
+            };
+            /** Cleanupoutcomes */
+            cleanupOutcomes?: {
+                [key: string]: number;
+            };
+            /** Selectedpaths */
+            selectedPaths?: {
+                [key: string]: number;
+            };
         };
         /** ModelDefaults */
         ModelDefaults: {
@@ -12822,6 +12915,120 @@ export interface components {
             /** Deprecationref */
             deprecationRef?: string | null;
         };
+        /**
+         * RolloutState
+         * @description Per-combination rollout state.
+         *
+         *     Ordered from least to most promoted so ranking is a property of the
+         *     vocabulary rather than a scattered comparison table.
+         * @enum {string}
+         */
+        RolloutState: "disabled" | "retired_for_new_work" | "direct_compatibility_only" | "explicit_only" | "canary" | "preferred" | "new_work_default";
+        /**
+         * RuntimeProviderMigrationRow
+         * @description One combination's operator-visible migration status.
+         */
+        RuntimeProviderMigrationRow: {
+            /** Targetid */
+            targetId: string;
+            /** Label */
+            label: string;
+            /**
+             * Description
+             * @default
+             */
+            description: string;
+            pathClass: components["schemas"]["RuntimeProviderPathClass"];
+            rolloutState: components["schemas"]["RolloutState"];
+            /** Rolloutgeneration */
+            rolloutGeneration: number;
+            /** Defaultstatus */
+            defaultStatus: string;
+            /** Compatibilitypathstatus */
+            compatibilityPathStatus: string;
+            /** Harnessid */
+            harnessId?: string | null;
+            /** Agentprofilecompatibilityclass */
+            agentProfileCompatibilityClass: string;
+            /** Hostclassref */
+            hostClassRef: string;
+            /** Runtimepackref */
+            runtimePackRef: string;
+            /** Credentialmaterializerref */
+            credentialMaterializerRef: string;
+            /** Launchpolicyref */
+            launchPolicyRef: string;
+            /** Hostmode */
+            hostMode: string;
+            /**
+             * Architectures
+             * @default []
+             */
+            architectures: string[];
+            /** Modelconfigurationclass */
+            modelConfigurationClass: string;
+            /** Executionrealizerref */
+            executionRealizerRef: string;
+            deterministicEvidence?: components["schemas"]["MigrationEvidenceView"] | null;
+            protectedEvidence?: components["schemas"]["MigrationEvidenceView"] | null;
+            /** Lastsuccessfulcanaryat */
+            lastSuccessfulCanaryAt?: string | null;
+            recentOutcomes: components["schemas"]["MigrationOutcomeCounts"];
+            /**
+             * Applicablerollbackcontrols
+             * @default []
+             */
+            applicableRollbackControls: string[];
+            /**
+             * Activerollbackcontrols
+             * @default []
+             */
+            activeRollbackControls: string[];
+            /** Rollbackavailable */
+            rollbackAvailable: boolean;
+        };
+        /**
+         * RuntimeProviderMigrationStatus
+         * @description The complete operator-visible migration view.
+         */
+        RuntimeProviderMigrationStatus: {
+            /**
+             * Schemaversion
+             * @default moonmind.omnigent-runtime-provider-migration-status.v1
+             */
+            schemaVersion: string;
+            /** Policyversion */
+            policyVersion: string;
+            /** Policygeneration */
+            policyGeneration: number;
+            /**
+             * Observedat
+             * Format: date-time
+             */
+            observedAt: string;
+            /**
+             * Activerollbackcontrols
+             * @default []
+             */
+            activeRollbackControls: string[];
+            /** Nativeinteractivechatallowed */
+            nativeInteractiveChatAllowed: boolean;
+            /** Evidencesourcesavailable */
+            evidenceSourcesAvailable?: {
+                [key: string]: boolean;
+            };
+            /**
+             * Combinations
+             * @default []
+             */
+            combinations: components["schemas"]["RuntimeProviderMigrationRow"][];
+        };
+        /**
+         * RuntimeProviderPathClass
+         * @description Which runtime architecture generation a target belongs to.
+         * @enum {string}
+         */
+        RuntimeProviderPathClass: "generic_omnigent" | "legacy_profile_bound_omnigent" | "direct_compatibility";
         /** SandboxWorkspaceLocator */
         SandboxWorkspaceLocator: {
             /**
@@ -23036,6 +23243,26 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_runtime_provider_migration_status_api_omnigent_runtime_provider_migration_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RuntimeProviderMigrationStatus"];
                 };
             };
         };

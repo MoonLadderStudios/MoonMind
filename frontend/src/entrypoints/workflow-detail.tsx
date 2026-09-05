@@ -912,6 +912,22 @@ const ExecutionDetailSchema = z
       .passthrough()
       .nullable()
       .optional(),
+    // Frozen runtime-provider rollout authority (MoonLadderStudios/MoonMind#3833).
+    // Workflow Detail shows the truthful selected path, not a friendly guess.
+    omnigentRuntimeProviderTarget: z
+      .object({
+        targetId: z.string(),
+        pathClass: z.string(),
+        state: z.string(),
+        policyVersion: z.string(),
+        policyGeneration: z.number().nullable().optional(),
+        ruleGeneration: z.number().nullable().optional(),
+        combinationKey: z.string().nullable().optional(),
+        reasonCode: z.string().nullable().optional(),
+      })
+      .passthrough()
+      .nullable()
+      .optional(),
     omnigentRuntimeBinding: z
       .object({
         runtimeBindingRef: z.string(),
@@ -10345,6 +10361,19 @@ function WorkflowDetailPageContent({ payload }: { payload: BootPayload }) {
                       {execution.omnigentExecutionPlan.planDigest}
                     </code>
                   </Fact>
+                  {execution.omnigentRuntimeProviderTarget ? (
+                    <Fact label="Selected Path">
+                      <span data-runtime-provider-target>
+                        {execution.omnigentRuntimeProviderTarget.targetId} ·{' '}
+                        {formatStatusLabel(
+                          execution.omnigentRuntimeProviderTarget.state,
+                        )}{' '}
+                        · rollout generation{' '}
+                        {execution.omnigentRuntimeProviderTarget.ruleGeneration ??
+                          '—'}
+                      </span>
+                    </Fact>
+                  ) : null}
                   {execution.omnigentRuntimeBinding ? (
                     <>
                       <Fact label="Runtime Binding">

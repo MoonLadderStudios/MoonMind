@@ -1803,10 +1803,15 @@ async def _generic_publication_harness(
     )
 
 
-@pytest.mark.asyncio
-async def test_bound_host_retry_uses_attestation_not_current_deployment() -> None:
-    harness = await _generic_publication_harness(_PUSHED_PUBLICATION)
-    plan = _exact_plan("opencode-go/model")
+async def _prime_attested_host_binding(harness, plan) -> None:
+    """Leave one durable binding on an attested, ready host.
+
+    This is the state a retry of an interrupted generic execution actually
+    finds: provider leases and credentials already immutable, a ready host
+    lease, and a published host attestation. ``_execute_lifecycle`` resumes it
+    instead of launching a second host.
+    """
+
     evidence = {
         "imageRef": plan.payload.hostImageRef,
         "architecture": plan.payload.hostArchitecture,
@@ -1828,12 +1833,6 @@ async def test_bound_host_retry_uses_attestation_not_current_deployment() -> Non
             return "artifact:host-logs"
 
     harness.realizer._artifacts = Artifacts()
-    harness.realizer._deployment_validator = lambda _payload: (_ for _ in ()).throw(
-        AssertionError("continuation consulted mutable deployment identity")
-    )
-    harness.realizer._resolve_host = AsyncMock(
-        side_effect=AssertionError("continuation re-resolved current host defaults")
-    )
     materializer_ref = plan.payload.credentialBindings[
         "primary-model"
     ].materializerRef
@@ -1911,6 +1910,19 @@ async def test_bound_host_retry_uses_attestation_not_current_deployment() -> Non
         },
     )
 
+
+@pytest.mark.asyncio
+async def test_bound_host_retry_uses_attestation_not_current_deployment() -> None:
+    harness = await _generic_publication_harness(_PUSHED_PUBLICATION)
+    plan = _exact_plan("opencode-go/model")
+    await _prime_attested_host_binding(harness, plan)
+    harness.realizer._deployment_validator = lambda _payload: (_ for _ in ()).throw(
+        AssertionError("continuation consulted mutable deployment identity")
+    )
+    harness.realizer._resolve_host = AsyncMock(
+        side_effect=AssertionError("continuation re-resolved current host defaults")
+    )
+
     result = await harness.realizer._execute_lifecycle(
         harness.publish_request,
         plan,
@@ -1919,6 +1931,46 @@ async def test_bound_host_retry_uses_attestation_not_current_deployment() -> Non
     assert result.summary == "done"
     assert "credentials-reloaded" in harness.events
     harness.realizer._resolve_host.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_failed_resume_reports_exactly_one_terminal_migration_outcome() -> None:
+    """A resumed execution reports its own outcome once, and no launch.
+
+    The attested-resume lifecycle owns the terminal cleanup outcome. When its
+    session raises, the failure travels back out through the launch lifecycle,
+    which must not add a second cleanup outcome or report a launch-readiness
+    failure for a host it never launched.
+    """
+
+    from moonmind.omnigent.control_plane import metrics as control_plane_metrics
+
+    harness = await _generic_publication_harness(_PUSHED_PUBLICATION)
+    plan = _exact_plan("opencode-go/model")
+    await _prime_attested_host_binding(harness, plan)
+
+    async def _failing_session(_request, *, session_authority_sink):
+        await session_authority_sink.session_created("session-1")
+        raise RuntimeError("resumed provider session failed")
+
+    harness.realizer._session_driver = _failing_session
+    control_plane_metrics.reset()
+
+    with pytest.raises(RuntimeError, match="resumed provider session failed"):
+        await harness.realizer._execute_lifecycle(harness.publish_request, plan)
+
+    cleanup = [
+        (labels, count)
+        for name, labels, count in control_plane_metrics.counter_series()
+        if name == control_plane_metrics.MIGRATION_CLEANUP_OUTCOME
+    ]
+    assert len(cleanup) == 1 and cleanup[0][1] == 1, cleanup
+    assert cleanup[0][0]["harness_class"] == "opencode"
+    assert not [
+        labels
+        for name, labels, _count in control_plane_metrics.counter_series()
+        if name == control_plane_metrics.MIGRATION_LAUNCH_READINESS
+    ]
 
 
 @pytest.mark.asyncio
@@ -2048,6 +2100,87 @@ async def test_generic_realizer_persists_authority_and_releases_provider_last() 
 
     assert replay.summary == "done"
     assert events[len(first_execution_events) :] == []
+
+
+def _metric_keys(section: str, name: str) -> list[str]:
+    """Return the recorded aggregate keys for one metric family."""
+
+    from moonmind.omnigent.control_plane import metrics as control_plane_metrics
+
+    return [
+        key
+        for key in control_plane_metrics.snapshot()[section]
+        if key.startswith(f"{name}[")
+    ]
+
+
+@pytest.mark.asyncio
+async def test_generic_realizer_emits_migration_telemetry_from_its_lifecycle() -> None:
+    """Every migration family is emitted by the production lifecycle itself."""
+
+    from moonmind.omnigent.control_plane import metrics as control_plane_metrics
+
+    harness = await _generic_publication_harness(_PUSHED_PUBLICATION)
+    control_plane_metrics.reset()
+
+    result = await harness.realizer.execute(
+        harness.publish_request, _plan("opencode-go/model")
+    )
+
+    assert result.failure_class is None
+    counters = control_plane_metrics.snapshot()["counters"]
+    assert counters[
+        f"{control_plane_metrics.MIGRATION_LAUNCH_READINESS}"
+        "[('harness_class', 'opencode'), ('readiness', 'ready')]"
+    ] == 1
+    assert counters[
+        f"{control_plane_metrics.MIGRATION_CLEANUP_OUTCOME}"
+        "[('harness_class', 'opencode'), ('cleanup_outcome', 'completed_clean')]"
+    ] == 1
+    for family in (
+        control_plane_metrics.MIGRATION_PROVIDER_PROFILE_WAIT,
+        control_plane_metrics.MIGRATION_HOST_LATENCY,
+        control_plane_metrics.MIGRATION_FIRST_TURN_LATENCY,
+    ):
+        observed = _metric_keys("observations", family)
+        assert observed == [f"{family}[('harness_class', 'opencode')]"], family
+    # No identity may reach the label space through any of these call sites.
+    serialized = repr(control_plane_metrics.snapshot())
+    for forbidden in ("workflow-1", "idem-1", "session-1", "host-1", "p1"):
+        assert forbidden not in serialized
+
+
+@pytest.mark.asyncio
+async def test_generic_realizer_reports_a_launch_that_never_became_ready() -> None:
+    """A host that never reaches attested ready is a launch-readiness failure."""
+
+    from moonmind.omnigent.control_plane import metrics as control_plane_metrics
+
+    harness = await _generic_publication_harness(_PUSHED_PUBLICATION)
+
+    async def _unavailable_host(_plan_envelope):
+        raise RuntimeError("host class is unavailable")
+
+    harness.realizer._resolve_host = _unavailable_host
+    control_plane_metrics.reset()
+
+    with pytest.raises(RuntimeError):
+        await harness.realizer.execute(
+            harness.publish_request, _plan("opencode-go/model")
+        )
+
+    counters = control_plane_metrics.snapshot()["counters"]
+    assert counters[
+        f"{control_plane_metrics.MIGRATION_LAUNCH_READINESS}"
+        "[('harness_class', 'opencode'), ('readiness', 'not_ready')]"
+    ] == 1
+    assert not _metric_keys(
+        "observations", control_plane_metrics.MIGRATION_FIRST_TURN_LATENCY
+    )
+    # The provider capacity wait is observed even when the launch fails after it.
+    assert _metric_keys(
+        "observations", control_plane_metrics.MIGRATION_PROVIDER_PROFILE_WAIT
+    )
 
 
 @pytest.mark.asyncio

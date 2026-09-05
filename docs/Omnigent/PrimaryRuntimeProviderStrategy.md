@@ -1,9 +1,9 @@
 # Omnigent Primary Runtime Provider Strategy
 
-**Status:** Canonical desired state  
+**Status:** Canonical desired state (stages 1-5 implemented; stage 6 retirement outstanding)  
 **Document Class:** System / Product Architecture  
 **Owners:** MoonMind Platform  
-**Last updated:** 2026-08-28  
+**Last updated:** 2026-09-04  
 **Authority:** Long-term runtime-provider direction for MoonMind
 
 ## Related documents
@@ -14,6 +14,7 @@
 - [`docs/Omnigent/OmnigentHostOAuth.md`](./OmnigentHostOAuth.md)
 - [`docs/Omnigent/OpenCodeHost.md`](./OpenCodeHost.md)
 - [`docs/Omnigent/SharedHostImage.md`](./SharedHostImage.md)
+- [`docs/Omnigent/RuntimeProviderRollout.md`](./RuntimeProviderRollout.md)
 - [`docs/Omnigent/CodexSupportAndCutover.md`](./CodexSupportAndCutover.md)
 - [`docs/Omnigent/ControlPlaneAggregates.md`](./ControlPlaneAggregates.md)
 - [`docs/Omnigent/ControlPlaneConcurrencyAndFencing.md`](./ControlPlaneConcurrencyAndFencing.md)
@@ -100,7 +101,19 @@ The repository currently contains three important generations of runtime behavio
 
 The third generation is the destination. The first two remain explicit compatibility implementations while the generic path reaches equivalent or better support.
 
-No current path is silently reclassified as generic. Existing execution plans and Temporal histories continue to invoke the realizer and compatibility version they recorded.
+Which generation a product surface offers is no longer implied by code paths or scattered boolean flags. One versioned runtime-provider rollout policy governs each exact combination independently, and every authoring and follow-up surface reads that one decision through one shared selection and admission boundary. [`docs/Omnigent/RuntimeProviderRollout.md`](./RuntimeProviderRollout.md) is the authority for the rollout states, the exact compatibility dimensions, the canary and rollback controls, the operator-visible migration status view, and the migration telemetry contract.
+
+Direct Codex, direct Claude Code, and the legacy profile-bound Codex realizer are presented as **labeled compatibility paths**, never as equal recommended defaults. A promoted generic row is the only non-compatibility default a surface preselects.
+
+No current path is silently reclassified as generic. Existing execution plans and Temporal histories continue to invoke the realizer and compatibility version they recorded, and every admitted plan freezes the rollout decision generation that admitted it.
+
+Every retained component of the first two generations carries a **retirement
+class** in `moonmind/omnigent/legacy_retirement.py`. That class, not a document,
+is the single authority for whether a component still admits new work and the
+earliest stage at which it can be deleted; this document deliberately records no
+snapshot of which class each row currently holds. See
+[Omnigent Module Architecture §5](OmnigentModuleArchitecture.md#5-retained-duplicate-architecture-and-its-retirement-owners)
+for the inventory and the staging rules.
 
 ## 5. Governing principles
 
@@ -378,17 +391,35 @@ The long-term normal Workflow Create experience is:
 
 Direct Codex and direct Claude Code may remain visible during migration when policy permits them. They must be labeled as direct compatibility paths rather than equal long-term architecture choices.
 
-Default migration is staged independently for:
+### One shared selection boundary
 
-- Workflow Create
-- presets
-- schedules
-- reruns and edits
-- Checkpoint Branches
-- remediation
-- Workflow Chat and continuation
+`moonmind/workflows/executions/runtime_target_selection.py` resolves the runtime target for every surface that chooses one:
 
-No default changes until the exact target combination has passing evidence and an operator-visible rollback path.
+- new Workflow Create
+- presets and preset expansion
+- schedules and recurring occurrences
+- edit and rerun
+- retry as a fresh execution
+- Checkpoint Branch create, continue, and fork
+- remediation authoring
+- linked continuation
+- any API or MCP submission
+- worker step normalization
+- the dashboard's runtime-target catalog projection
+
+No surface reconstructs a default from an environment variable or a hard-coded runtime map, and a source-kind difference changes policy and evidence rather than creating a second resolver.
+
+### Default promotion is per combination
+
+Default migration is staged independently per exact combination, not per product area. Each combination carries its own versioned rollout state, generation, canary allowlists, and rollback controls, so promoting Codex never promotes Claude Code or OpenCode. The set of governed surfaces still includes Workflow Create, presets, schedules, reruns and edits, Checkpoint Branches, remediation, and Workflow Chat and continuation — but a surface reads one decision instead of owning a stage of its own.
+
+No default changes until the exact target combination has passing evidence and an operator-visible rollback path. A `preferred` or `new_work_default` state is demoted to explicit-only, with an exact reason, whenever required evidence is missing, stale, or expired, or the target is not launch-ready, model-qualified, architecture-supported, host-mode-available, or Provider-Profile-available.
+
+### Preserved identity on continuation
+
+An existing execution retains its recorded plan and realizer. A rerun may reuse the recorded target or explicitly upgrade to a currently qualified target. Schedules pin a target version or follow a separately versioned default-update policy, and changing a schedule's default advances the schedule revision. A historical selection that is no longer qualified stays visible and requires an explicit replacement before new submission.
+
+See [`docs/Omnigent/RuntimeProviderRollout.md`](./RuntimeProviderRollout.md) for the exact dimensions, states, reason vocabulary, and configuration.
 
 ## 10. Migration stages
 
@@ -423,17 +454,34 @@ No default changes until the exact target combination has passing evidence and a
 
 ### Stage 5: Make Omnigent the normal default
 
-- Prefer supported Omnigent Agent Profiles in new Workflow Create authoring.
-- Migrate presets and schedules through explicit versions.
-- Route continuation, remediation, checkpoint, and Workflow Chat turns through the canonical Omnigent session owner.
-- Keep unsupported combinations unavailable rather than silently using direct runtimes.
+**Implemented.** The mechanism is in place and the promoted rows are deployment-owned:
+
+- A versioned runtime-provider rollout policy controls each exact combination, and the decision plus its generation is frozen into the immutable execution plan.
+- One shared selection and admission boundary serves Workflow Create, presets, schedules, edit, rerun, retry as a fresh execution, Checkpoint Branch, remediation, linked continuation, and API/MCP submissions.
+- Direct and legacy paths are labeled compatibility choices and are never preselected while a generic row is promoted.
+- Continuation, remediation, checkpoint, steering, approval, and Workflow Chat turns enter the canonical Omnigent session and turn-command path.
+- Unsupported combinations stay unavailable with an exact reason rather than silently using a direct runtime.
+- Exact canary allowlists, six independent rollback controls, an operator-visible migration status view, and eleven bounded migration metric families — each emitted by one production owner across the selection boundary, plan compilation, the generic host lifecycle, and the canonical-turn wrapper — make the migration observable and reversible.
+
+Promoting an individual harness row still requires that deployment's exact support evidence: the generic Codex, Claude Code, and OpenCode rows are promoted by their own qualification gates.
 
 ### Stage 6: Retire duplicate runtime architecture
 
-- Stop admitting new legacy Codex profile-bound plans after parity and rollback criteria pass.
-- Stop defaulting to direct Codex and direct Claude after their Omnigent combinations pass.
-- Consolidate duplicate Compose startup scripts and environment variables.
-- Reduce legacy modules to replay and historical-read adapters, then remove them only when retirement guards permit it.
+Retirement is code-owned and staged. The retirement class of each component
+decides what may happen to it; the class advances only when its evidence
+permits, and it never advances as a side effect of another component retiring.
+
+- Stop admitting new legacy Codex profile-bound plans after parity and rollback criteria pass. New admission is enforced at plan compilation and runtime selection from the component's retirement class, so a trusted default, an explicit client selection, a schedule, and a preset are held to the same state.
+- Stop defaulting to direct Codex and direct Claude after their Omnigent combinations pass. Direct Codex and direct Claude are separate generations with separate rows and separate decisions; neither is forced to retire because the other did.
+- Consolidate duplicate Compose startup scripts and environment variables. Legacy image and environment identities produce an actionable startup failure during their deprecation window instead of being silently ignored.
+- Reduce legacy modules to replay and historical-read adapters, then remove them only when retirement guards permit it. Removal proceeds one `RemovalStage` at a time (product selectors → new-write API paths → composition-root registrations → startup and Compose → image and environment aliases → OAuth-host orchestration → launch-only code → replay wrappers → historical readers), and each removal PR cites the inventory rows it removes and the guard tests that prove them eligible.
+
+A component becomes removal-eligible only when **all** of the following hold:
+its class no longer admits new work; every declared active owner has fresh,
+successful, zero-count drain evidence; its replay, historical-read, and rollback
+windows have closed; a fresh, exactly-scoped rollback exercise was recorded; and
+every applicable retirement criterion passes. Missing evidence never reads as
+"drained".
 
 ## 11. Required acceptance gates
 
@@ -450,7 +498,9 @@ The strategy is complete only when all applicable gates pass:
 - Codex, Claude, and OpenCode normal product journeys run through `generic-omnigent-host@1` for supported combinations.
 - Continuations and other follow-up sources use one canonical session and turn-command boundary.
 - Exact-artifact and protected-live reports identify image, harness, runtime pack, materializer, model, policy, and realizer.
-- New authoring defaults prefer Omnigent only for qualified combinations.
+- New authoring defaults prefer Omnigent only for qualified combinations, through one versioned per-combination rollout policy and one shared selection and admission boundary.
+- Every admitted plan freezes the rollout decision and generation that admitted it, so a later policy change cannot reinterpret it.
+- Operator status and bounded migration telemetry explain the current state of every combination without exposing credentials, provider-session ids, raw host paths, or image authority.
 - Explicit generic selections never silently fall back.
 - Existing histories remain replayable and historically truthful throughout migration.
 - Duplicate runtime and host code is removed only after machine-checkable retirement criteria pass.
