@@ -3376,7 +3376,7 @@ const RUNTIME_DISPLAY_LABELS: Record<string, string> = {
   claude_code: "Claude Code",
   codex_cli: "Codex CLI",
   codex_cloud: "Codex Cloud",
-  omnigent: "Codex via Omnigent",
+  omnigent: "Omnigent",
 };
 
 function formatRuntimeLabel(runtimeId: string): string {

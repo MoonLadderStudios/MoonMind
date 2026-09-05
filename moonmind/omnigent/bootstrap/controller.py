@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from moonmind.omnigent.harness_platform.harness_registry import harness_registration
+
 import logging
 import os
 from datetime import UTC, datetime
@@ -1438,6 +1440,7 @@ class BootstrapController:
                 integration_mode="native-server",
                 materializer_refs=[materializer_ref],
                 requested_host_mode="on-demand",
+                requested_host_class_ref=harness_registration(harness.id).hostClassRef,
             )
         except Exception as exc:
             raise RuntimeError(f"host class selection failed: {exc}") from exc

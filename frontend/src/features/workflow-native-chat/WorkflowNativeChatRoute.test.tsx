@@ -60,7 +60,7 @@ function renderRoute(onNavigate = vi.fn(), workflowTerminal = false) {
       routeWorkflowId="wf-1"
       search={new URLSearchParams('source=temporal')}
       workflowTitle="Ship the thing"
-      runtimeLabel="Codex via Omnigent"
+      runtimeLabel="Omnigent"
       workflowTerminal={workflowTerminal}
       pollIntervalMs={5000}
       onNavigate={onNavigate}
@@ -92,7 +92,7 @@ describe('WorkflowNativeChatRoute', () => {
     expect(screen.queryByTestId('chat-session-blocks')).toBeNull();
     // Context bar exposes bounded workflow context + actions.
     expect(screen.getByText('Ship the thing')).toBeTruthy();
-    expect(screen.getByText('Codex via Omnigent')).toBeTruthy();
+    expect(screen.getByText('Omnigent')).toBeTruthy();
     expect(screen.getByRole('link', { name: 'Back to Overview' })).toBeTruthy();
     expect(screen.getByRole('link', { name: 'View captured evidence' })).toBeTruthy();
   });

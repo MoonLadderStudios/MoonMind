@@ -64,7 +64,7 @@ claude
 opencode
 ```
 
-An explicit `OMNIGENT_OPENCODE_HOST_IMAGE_REF` or image/tag override remains authoritative for specialized deployments. It must pass the same bootstrap checks. An incompatible pin is quarantined rather than silently replaced. Existing environment files selecting the old image repository must be updated explicitly.
+An explicit `OMNIGENT_OPENCODE_HOST_IMAGE_REF` or image/tag override remains authoritative for specialized deployments. It must pass the same bootstrap checks. An incompatible pin is quarantined rather than silently replaced. Existing environment files selecting the old image repository must be updated explicitly. A rejected Host Class reports the underlying reason, including missing or placeholder digests, mismatched compatibility evidence, build/version mismatch, and a missing offline bootstrap contract. A valid digest alone does not prove launch readiness. For an obsolete image, select a qualified shared host and its matching server build, then restart the API and runtime workers so reconciliation and launch use the same image pair. A rejected Host Class reports the underlying reason, including missing or placeholder digests, mismatched compatibility evidence, build/version mismatch, and a missing offline bootstrap contract. A valid digest alone does not prove launch readiness. For an obsolete image, select a qualified shared host and its matching server build, then restart the API and runtime workers so reconciliation and launch use the same image pair.
 
 The image migration does not by itself move Codex or Claude execution to the generic realizer. Those changes require their own runtime-pack, credential-materializer, conformance, rollout, and replay-safe retirement work.
 
