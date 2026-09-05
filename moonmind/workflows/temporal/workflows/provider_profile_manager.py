@@ -2890,11 +2890,19 @@ class MoonMindProviderProfileManagerWorkflow:
                             existing_profile_id
                         ].lease_fencing_generation(req.requester_workflow_id)
                         existing_generation = held_generation or None
-                    await self._signal_slot_assigned(
-                        req.requester_workflow_id,
-                        existing_profile_id,
-                        fencing_generation=existing_generation,
-                    )
+                    # The generation travels only on fenced assignments, so
+                    # the legacy call shape \u2014 and every recorded command
+                    # it produces \u2014 is unchanged for pre-fencing histories.
+                    if existing_generation is not None:
+                        await self._signal_slot_assigned(
+                            req.requester_workflow_id,
+                            existing_profile_id,
+                            fencing_generation=existing_generation,
+                        )
+                    else:
+                        await self._signal_slot_assigned(
+                            req.requester_workflow_id, existing_profile_id
+                        )
                 except Exception as e:
                     self._get_logger().warning(
                         "Failed to signal existing slot to %s: %s",
@@ -2960,11 +2968,16 @@ class MoonMindProviderProfileManagerWorkflow:
                         remaining.append(req)
                         continue
                 try:
-                    await self._signal_slot_assigned(
-                        req.requester_workflow_id,
-                        profile.profile_id,
-                        fencing_generation=grant_generation,
-                    )
+                    if grant_generation is not None:
+                        await self._signal_slot_assigned(
+                            req.requester_workflow_id,
+                            profile.profile_id,
+                            fencing_generation=grant_generation,
+                        )
+                    else:
+                        await self._signal_slot_assigned(
+                            req.requester_workflow_id, profile.profile_id
+                        )
                 except Exception as e:
                     self._get_logger().warning(
                         "Failed to signal slot_assigned to %s (likely completed or dead): %s",
@@ -4212,9 +4225,14 @@ class MoonMindProviderProfileManagerWorkflow:
                             wf_id
                         )
                         reconnect_generation = restored_generation or None
-                    await self._signal_slot_assigned(
-                        wf_id, profile_id, fencing_generation=reconnect_generation
-                    )
+                    if reconnect_generation is not None:
+                        await self._signal_slot_assigned(
+                            wf_id,
+                            profile_id,
+                            fencing_generation=reconnect_generation,
+                        )
+                    else:
+                        await self._signal_slot_assigned(wf_id, profile_id)
                     self._get_logger().info(
                         "Restored lease: %s -> profile %s", wf_id, profile_id
                     )
