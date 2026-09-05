@@ -915,3 +915,400 @@ def test_environment_read_negative_fixtures(source: str, tmp_path) -> None:
         and node.attr in {"getenv", "environ"}
         for node in ast.walk(tree)
     )
+
+
+# ---------------------------------------------------------------------------
+# Permanent retirement guards (MoonLadderStudios/MoonMind#3835 required work 11)
+#
+# After retirement, CI must reject reintroduction of the duplicate architecture.
+# Each rule below is derived from the code-owned retirement inventory rather
+# than a hand-maintained list, so a *new* duplicate path fails these tests until
+# it is either removed or explicitly classified with a retirement class.
+# ---------------------------------------------------------------------------
+
+# The one module allowed to hold the versioned direct-vs-generic rollout
+# decision, and the one module allowed to hold the deployment runtime default.
+VERSIONED_ROLLOUT_AUTHORITY_MODULES = (
+    "moonmind/omnigent/cutover.py",
+    "moonmind/workflows/executions/runtime_defaults.py",
+)
+
+# Credential materialization handles are registered in exactly these modules.
+# A new credential path anywhere else bypasses runtime-pack and materializer
+# registration.
+CREDENTIAL_REGISTRATION_MODULES = (
+    "moonmind/omnigent/harness_platform/materializers.py",
+    "moonmind/omnigent/harness_platform/runtime_packs.py",
+    "moonmind/omnigent/credential_materializers.py",
+)
+_MATERIALIZER_REF_PATTERN = __import__("re").compile(
+    r"^[a-z0-9]+(?:-[a-z0-9]+)*-(?:oauth-home|auth-json|api-key)@\d+$"
+)
+
+# Shared-image resolution has one authority. A provider-specific resolver would
+# reintroduce per-provider image identity behind the shared image.
+SHARED_IMAGE_AUTHORITY_MODULES = (
+    "moonmind/omnigent/harness_platform/host_classes.py",
+    "moonmind/omnigent/harness_platform/static_hosts.py",
+    "moonmind/omnigent/bootstrap/image_resolution.py",
+    "moonmind/omnigent/bootstrap/store.py",
+)
+SHARED_IMAGE_ENV = "OMNIGENT_SHARED_HOST_IMAGE_REF"
+
+# Compose topology is one file plus the test-only project file.
+ALLOWED_COMPOSE_FILES = ("docker-compose.yaml", "docker-compose.test.yaml")
+
+_PROVIDER_LIFECYCLE_SUFFIXES = ("Coordinator", "Runtime", "Lifecycle", "Launcher")
+_PROVIDER_NAMES = ("Codex", "Claude", "OpenCode")
+
+
+def _inventory_surfaces() -> frozenset[str]:
+    from moonmind.omnigent.legacy_retirement import RETIREMENT_INVENTORY
+
+    return frozenset(ref for path in RETIREMENT_INVENTORY for ref in path.surfaces)
+
+
+def _provider_lifecycle_classes(tree: ast.AST) -> tuple[str, ...]:
+    """Top-level classes that own a provider-named lifecycle."""
+
+    return tuple(
+        node.name
+        for node in getattr(tree, "body", [])
+        if isinstance(node, ast.ClassDef)
+        and node.name.endswith(_PROVIDER_LIFECYCLE_SUFFIXES)
+        and any(provider in node.name for provider in _PROVIDER_NAMES)
+    )
+
+
+def _direct_default_assignments(
+    tree: ast.AST, direct_ids: frozenset[str]
+) -> tuple[str, ...]:
+    """Module-level ``*DEFAULT*`` constants bound to a direct runtime id."""
+
+    found: list[str] = []
+    for node in getattr(tree, "body", []):
+        if not isinstance(node, (ast.Assign, ast.AnnAssign)):
+            continue
+        targets = node.targets if isinstance(node, ast.Assign) else [node.target]
+        names = [t.id for t in targets if isinstance(t, ast.Name)]
+        if not any("DEFAULT" in name for name in names):
+            continue
+        value = node.value
+        if isinstance(value, ast.Constant) and value.value in direct_ids:
+            found.append(names[0])
+    return tuple(found)
+
+
+def _legacy_fallback_constants(
+    tree: ast.AST, legacy_values: frozenset[str]
+) -> tuple[str, ...]:
+    """Legacy realizer/runtime literals produced inside an exception handler."""
+
+    found: list[str] = []
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.ExceptHandler):
+            continue
+        for inner in ast.walk(node):
+            if isinstance(inner, ast.Constant) and inner.value in legacy_values:
+                found.append(str(inner.value))
+    return tuple(found)
+
+
+def test_no_new_top_level_provider_lifecycle_coordinator() -> None:
+    """A provider-named lifecycle owner must be an inventoried legacy path."""
+
+    surfaces = _inventory_surfaces()
+    offenders: list[str] = []
+    for path in sorted((REPO_ROOT / "moonmind/omnigent").rglob("*.py")):
+        relative = str(path.relative_to(REPO_ROOT))
+        module = relative.removesuffix(".py").replace("/", ".")
+        for name in _provider_lifecycle_classes(
+            ast.parse(path.read_text(encoding="utf-8"))
+        ):
+            if f"python:{module}:{name}" in surfaces:
+                continue
+            offenders.append(f"{relative}:{name}")
+    assert not offenders, (
+        "new top-level provider lifecycle coordinators must not be introduced; "
+        "the generic host owns the lifecycle and every retained provider "
+        f"coordinator carries a retirement row: {offenders}"
+    )
+
+
+def test_direct_default_selection_stays_in_versioned_rollout_authority() -> None:
+    """Only the rollout authority may name a direct runtime as a default."""
+
+    from moonmind.workflows.temporal.runtime.strategies import RUNTIME_STRATEGIES
+
+    direct_ids = frozenset(RUNTIME_STRATEGIES)
+    offenders: list[str] = []
+    for root in ("moonmind", "api_service"):
+        for path in sorted((REPO_ROOT / root).rglob("*.py")):
+            relative = str(path.relative_to(REPO_ROOT))
+            if relative in VERSIONED_ROLLOUT_AUTHORITY_MODULES:
+                continue
+            for name in _direct_default_assignments(
+                ast.parse(path.read_text(encoding="utf-8")), direct_ids
+            ):
+                offenders.append(f"{relative}:{name}")
+    assert not offenders, (
+        "a direct runtime may only become a default through the versioned "
+        f"rollout authority {VERSIONED_ROLLOUT_AUTHORITY_MODULES}: {offenders}"
+    )
+
+
+def test_no_implicit_fallback_from_generic_omnigent() -> None:
+    """A generic failure may never substitute a legacy realizer or runtime."""
+
+    from moonmind.omnigent.harness_platform.support import KNOWN_REALIZERS
+    from moonmind.omnigent.retirement_surfaces import GENERIC_REALIZER_REF
+    from moonmind.workflows.temporal.runtime.strategies import RUNTIME_STRATEGIES
+
+    legacy_values = frozenset(
+        {ref for ref in KNOWN_REALIZERS if ref != GENERIC_REALIZER_REF}
+        | set(RUNTIME_STRATEGIES)
+    )
+    offenders: list[str] = []
+    for path in sorted((REPO_ROOT / "moonmind/omnigent").rglob("*.py")):
+        relative = str(path.relative_to(REPO_ROOT))
+        for value in _legacy_fallback_constants(
+            ast.parse(path.read_text(encoding="utf-8")), legacy_values
+        ):
+            offenders.append(f"{relative}: {value}")
+    assert not offenders, (
+        "an except handler that yields a legacy realizer or direct runtime is "
+        f"an implicit fallback from generic Omnigent: {offenders}"
+    )
+
+
+def test_provider_profile_capacity_ownership_is_singular() -> None:
+    names = {
+        "acquire_provider_lease",
+        "release_provider_lease",
+        "evaluate_generic_host_capacity",
+    }
+    definitions: dict[str, list[str]] = {name: [] for name in names}
+    for root in (REPO_ROOT / "moonmind/omnigent", REPO_ROOT / "api_service"):
+        for path in sorted(root.rglob("*.py")):
+            relative = str(path.relative_to(REPO_ROOT))
+            for node in ast.walk(ast.parse(path.read_text(encoding="utf-8"))):
+                if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                    if node.name in definitions:
+                        definitions[node.name].append(relative)
+    for name, owners in definitions.items():
+        assert len(owners) <= 1, (
+            f"Provider Profile capacity function {name!r} has duplicate owners: "
+            f"{owners}"
+        )
+
+
+def _reads_environment_key(tree: ast.AST, key: str) -> bool:
+    """Whether a module resolves ``key`` from the environment.
+
+    Naming the key (as documentation, a replacement hint, or a value passed into
+    a launched host) is not resolution. Reading it to decide an image is.
+    """
+
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Subscript):
+            index = node.slice
+            if isinstance(index, ast.Constant) and index.value == key:
+                return True
+        elif isinstance(node, ast.Call):
+            func = node.func
+            attr = func.attr if isinstance(func, ast.Attribute) else None
+            name = func.id if isinstance(func, ast.Name) else None
+            if attr in {"getenv", "get"} or (name and "image_ref" in name):
+                if any(
+                    isinstance(arg, ast.Constant) and arg.value == key
+                    for arg in node.args
+                ):
+                    return True
+    return False
+
+
+def test_shared_image_resolution_is_not_provider_specific() -> None:
+    """Only the image authority may resolve the shared host image.
+
+    A provider-specific resolver would reintroduce per-provider image identity
+    behind the one shared image. A module that still resolves it because it owns
+    a retained legacy path is exempt only while it carries a retirement row, so
+    the exemption disappears with the code.
+    """
+
+    surfaces = _inventory_surfaces()
+    offenders: list[str] = []
+    for root in ("moonmind", "api_service"):
+        for path in sorted((REPO_ROOT / root).rglob("*.py")):
+            relative = str(path.relative_to(REPO_ROOT))
+            if relative in SHARED_IMAGE_AUTHORITY_MODULES:
+                continue
+            module = relative.removesuffix(".py").replace("/", ".")
+            if any(ref.startswith(f"python:{module}:") for ref in surfaces):
+                continue
+            if _reads_environment_key(
+                ast.parse(path.read_text(encoding="utf-8")), SHARED_IMAGE_ENV
+            ):
+                offenders.append(relative)
+    assert not offenders, (
+        "shared host image resolution has one authority "
+        f"{SHARED_IMAGE_AUTHORITY_MODULES}: {offenders}"
+    )
+
+
+def test_every_provider_specific_image_variable_is_inventoried() -> None:
+    """A per-provider image identity must carry a retirement class."""
+
+    from moonmind.omnigent.legacy_retirement import assert_inventory_is_complete
+    from moonmind.omnigent.retirement_surfaces import (
+        declared_image_environment_variables,
+    )
+
+    surfaces = _inventory_surfaces()
+    for variable in declared_image_environment_variables():
+        assert f"env:{variable}" in surfaces, (
+            f"per-provider image variable {variable} has no retirement row"
+        )
+    assert_inventory_is_complete()
+
+
+def test_credential_paths_stay_in_runtime_pack_and_materializer_registration() -> None:
+    """A credential handle must come from the materializer registry.
+
+    Consuming a registered materializer ref is ordinary Host Class, runtime-pack,
+    and conformance work. Naming a materializer-shaped ref that the registry
+    never registered is a new credential path outside registration.
+    """
+
+    from moonmind.omnigent.harness_platform.materializers import (
+        BUILTIN_MATERIALIZERS,
+    )
+
+    offenders: list[str] = []
+    for path in sorted((REPO_ROOT / "moonmind/omnigent").rglob("*.py")):
+        relative = str(path.relative_to(REPO_ROOT))
+        if relative in CREDENTIAL_REGISTRATION_MODULES:
+            continue
+        for literal in _string_literals(relative):
+            if (
+                _MATERIALIZER_REF_PATTERN.match(literal)
+                and literal not in BUILTIN_MATERIALIZERS
+            ):
+                offenders.append(f"{relative}: {literal}")
+    assert not offenders, (
+        "credential materialization handles are registered only in "
+        f"{CREDENTIAL_REGISTRATION_MODULES}: {offenders}"
+    )
+
+
+def test_no_hidden_legacy_compose_overlay_or_startup_script() -> None:
+    """Compose topology and provider startup scripts stay discoverable."""
+
+    from moonmind.omnigent.legacy_retirement import assert_inventory_is_complete
+
+    compose_files = sorted(
+        path.name
+        for path in REPO_ROOT.glob("docker-compose*.y*ml")
+    )
+    assert compose_files == sorted(ALLOWED_COMPOSE_FILES), (
+        "a new Compose file is hidden deployment topology; consolidate it or "
+        f"declare it: {compose_files}"
+    )
+    # Any provider-specific Compose service, profile, or startup script that is
+    # not classified with a retirement class fails here.
+    assert_inventory_is_complete()
+
+
+def test_architecture_exception_modules_are_inventoried_legacy_paths() -> None:
+    """A boundary exemption may only shelter a classified legacy component."""
+
+    from moonmind.omnigent.legacy_retirement import (
+        ARCHITECTURE_BOUNDARY_EXCEPTIONS,
+        RetirementClass,
+        get_retirement_record,
+    )
+
+    for exception in ARCHITECTURE_BOUNDARY_EXCEPTIONS:
+        record = get_retirement_record(exception.retirement_path_id)
+        assert record.retirement_class is not RetirementClass.REMOVED, (
+            f"architecture exception {exception.exception_id} is owned by a "
+            "removed retirement row; delete the exemption with the code"
+        )
+
+
+# Negative fixtures: each retirement guard must actually reject the shape it
+# forbids, so a future refactor cannot leave it vacuously passing.
+
+
+@pytest.mark.parametrize(
+    "source",
+    (
+        "class ClaudeSessionCoordinator:\n    pass\n",
+        "class OpenCodeHostLifecycle:\n    pass\n",
+        "class CodexManagedRuntime:\n    pass\n",
+    ),
+)
+def test_provider_lifecycle_coordinator_negative_fixtures(source: str) -> None:
+    assert _provider_lifecycle_classes(ast.parse(source))
+
+
+@pytest.mark.parametrize(
+    "source",
+    (
+        "DEFAULT_WORKFLOW_RUNTIME = 'codex_cli'",
+        "SOME_DEFAULT_RUNTIME = 'claude_code'",
+    ),
+)
+def test_direct_default_selection_negative_fixtures(source: str) -> None:
+    assert _direct_default_assignments(
+        ast.parse(source), frozenset({"codex_cli", "claude_code"})
+    )
+
+
+@pytest.mark.parametrize(
+    "source",
+    (
+        "try:\n    generic()\nexcept Exception:\n    realizer = 'codex-profile-bound@1'\n",
+        "try:\n    generic()\nexcept Exception:\n    return 'codex_cli'\n",
+    ),
+)
+def test_implicit_fallback_negative_fixtures(source: str) -> None:
+    assert _legacy_fallback_constants(
+        ast.parse(source),
+        frozenset({"codex-profile-bound@1", "codex_cli"}),
+    )
+
+
+def test_implicit_fallback_detector_ignores_non_handler_literals() -> None:
+    # Recording the realizer a plan already selected is not a fallback.
+    source = "recorded = 'codex-profile-bound@1'\n"
+    assert not _legacy_fallback_constants(
+        ast.parse(source), frozenset({"codex-profile-bound@1"})
+    )
+
+
+@pytest.mark.parametrize(
+    "source",
+    (
+        "IMAGE = os.getenv('OMNIGENT_SHARED_HOST_IMAGE_REF')",
+        "IMAGE = os.environ['OMNIGENT_SHARED_HOST_IMAGE_REF']",
+        "IMAGE = environment.get('OMNIGENT_SHARED_HOST_IMAGE_REF', '')",
+    ),
+)
+def test_shared_image_resolution_negative_fixtures(source: str) -> None:
+    assert _reads_environment_key(ast.parse(source), SHARED_IMAGE_ENV)
+
+
+def test_shared_image_detector_ignores_a_named_replacement_hint() -> None:
+    # Naming the canonical variable as an operator hint is not resolution.
+    source = "HINT = Obsolete(replacement='OMNIGENT_SHARED_HOST_IMAGE_REF')"
+    assert not _reads_environment_key(ast.parse(source), SHARED_IMAGE_ENV)
+
+
+def test_unregistered_materializer_ref_is_a_new_credential_path() -> None:
+    from moonmind.omnigent.harness_platform.materializers import (
+        BUILTIN_MATERIALIZERS,
+    )
+
+    assert _MATERIALIZER_REF_PATTERN.match("gemini-oauth-home@1")
+    assert "gemini-oauth-home@1" not in BUILTIN_MATERIALIZERS

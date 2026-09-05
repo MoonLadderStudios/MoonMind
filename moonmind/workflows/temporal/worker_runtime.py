@@ -47,6 +47,9 @@ from moonmind.config.container_backend_settings import (
 )
 from moonmind.config.logging import configure_logging, default_log_fields_from_env
 from moonmind.config.settings import settings
+from moonmind.omnigent.legacy_retirement import (
+    enforce_obsolete_configuration_at_startup,
+)
 from moonmind.workflows.agent_skills.agent_skills_activities import (
     AgentSkillsActivities,
 )
@@ -3094,6 +3097,13 @@ def _enforce_codex_config_for_managed_fleet(fleet: str) -> None:
 
 async def main_async() -> None:
     """Run the Temporal worker."""
+    # This worker is separately restartable and consumes the same legacy
+    # Omnigent image/environment identities as the API, so it runs the shared
+    # obsolete-configuration check itself, before any other startup work
+    # (#3835 required work section 10). Without it, deploying or restarting the
+    # worker alone would produce no deprecation warning and could later accept a
+    # variable the API rejects.
+    enforce_obsolete_configuration_at_startup(logger)
     topology = describe_configured_worker()
     _enforce_codex_config_for_managed_fleet(topology.fleet)
 
