@@ -141,10 +141,6 @@ Responsibilities:
 The version, route, authentication, lifecycle, evidence, failure, upgrade, and rollback contract is authoritative in [`EmbeddedHostAuthCompatibility.md`](EmbeddedHostAuthCompatibility.md).
 
 ```text
-unchanged host -> MoonMind embedded-compatible host/runner channel
-```
-
-```text
 MoonMind UI / API
   -> MoonMind Omnigent Bridge
       -> embedded Omnigent-compatible server surface
@@ -204,7 +200,7 @@ All session-scoped operations resolve the durable MoonMind binding and authorize
 | Message/interrupt/stop | `POST /v1/sessions/{id}/events` | Same | Effective capability, expected-state, audit, and outbound-scan enforcement. |
 | Delete | `DELETE /v1/sessions/{id}` | Same | Terminal cleanup capability and lease ownership required. |
 | Provider stream | `GET /v1/sessions/{id}/stream` | Same | Per-connect authorization; reconnect reauthorizes. |
-| Resolve elicitation | `POST /v1/sessions/{id}/elicitations/{eid}/resolve` | Same | Caller approval authority, expected elicitation, policy, audit. |
+| Resolve elicitation | `POST /v1/sessions/{id}/elicitations/{eid}/resolve` | Same | Caller approval authority, expected request state, idempotency, and durable audit required. |
 | File indexes | `GET .../changes`, `GET .../filesystem` | Same | Bound, authorized, bounded, and path-safe. |
 | File content/diff | `GET .../filesystem/{path}`, `GET .../diff/{path}` | Same | One decode/encode boundary, traversal rejection, response limit, read capability. |
 | Session files | `GET .../resources/files*` | Same | Bound, authorized, bounded, capability-gated. |
@@ -808,7 +804,6 @@ GET /v1/sessions/{id}/resources/files/{file_id}/content
 
 ```text
 output.omnigent.session_files.index.json
-output.omnigent.session_files/<file_id>/content
 output.omnigent.session_files/<file_id>/<filename>
 output.omnigent.session_files/<file_id>/metadata.json
 ```
