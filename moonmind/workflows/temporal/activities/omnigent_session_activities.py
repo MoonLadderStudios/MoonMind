@@ -450,10 +450,18 @@ async def _run_already_holds_generic_host(payload: Mapping[str, Any]) -> bool:
     if not (execution_plan_ref and idempotency_key and host_class_ref):
         # A caller that cannot name its binding has no reservation to reuse.
         return bool(payload.get("alreadyAllocated"))
+    try:
+        admission_epoch = int(payload.get("admissionEpoch") or 0)
+    except (TypeError, ValueError):
+        admission_epoch = 0
     lease_ref = generic_host_lease_ref(
+        # The reservation belongs to one admission attempt: a re-admission
+        # released the previous attempt's lease, so reading that cleaned row
+        # would report a reservation this attempt does not hold.
         runtime_binding_id=stable_binding_id(
             execution_plan_ref=execution_plan_ref,
             idempotency_key=idempotency_key,
+            admission_epoch=admission_epoch,
         ),
         host_class_ref=host_class_ref,
     )

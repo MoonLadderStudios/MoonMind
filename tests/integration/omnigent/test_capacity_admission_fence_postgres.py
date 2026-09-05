@@ -468,13 +468,16 @@ def _plan_bound_request(
     )
 
 
-def _host_binding_payload(request: AgentExecutionRequest) -> dict[str, Any]:
+def _host_binding_payload(
+    request: AgentExecutionRequest, *, admission_epoch: int = 1
+) -> dict[str, Any]:
     """The payload the AgentRun workflow sends to host pre-admission."""
 
     return MoonMindAgentRun._omnigent_host_binding_identity(
         request,
         plan_ref=MoonMindAgentRun._omnigent_execution_plan_ref(request),
         host_class_ref=HOST_CLASS_REF,
+        admission_epoch=admission_epoch,
     )
 
 
@@ -522,12 +525,15 @@ async def test_host_pre_admission_reuses_this_runs_own_reservation(
     request = _plan_bound_request()
     payload = _host_binding_payload(request)
     binding_id = stable_binding_id(
-        execution_plan_ref=PLAN_REF, idempotency_key=IDEMPOTENCY_KEY
+        execution_plan_ref=PLAN_REF,
+        idempotency_key=IDEMPOTENCY_KEY,
+        admission_epoch=1,
     )
     assert payload == {
         "executionPlanRef": PLAN_REF,
         "idempotencyKey": IDEMPOTENCY_KEY,
         "hostClassRef": HOST_CLASS_REF,
+        "admissionEpoch": 1,
     }
 
     # No ledger row yet: this run holds nothing.
@@ -547,6 +553,14 @@ async def test_host_pre_admission_reuses_this_runs_own_reservation(
         )
         is False
     )
+    # A re-admission released the reservation above with the attempt that held
+    # it, so the next attempt must not be exempted by a lease it no longer has.
+    assert (
+        await _run_already_holds_generic_host(
+            _host_binding_payload(request, admission_epoch=2)
+        )
+        is False
+    )
 
 
 @pytest.mark.asyncio
@@ -557,7 +571,9 @@ async def test_a_released_host_lease_is_not_a_reservation(
 
     request = _plan_bound_request()
     binding_id = stable_binding_id(
-        execution_plan_ref=PLAN_REF, idempotency_key=IDEMPOTENCY_KEY
+        execution_plan_ref=PLAN_REF,
+        idempotency_key=IDEMPOTENCY_KEY,
+        admission_epoch=1,
     )
     await _insert_host_lease(
         capacity_fence_session_maker,

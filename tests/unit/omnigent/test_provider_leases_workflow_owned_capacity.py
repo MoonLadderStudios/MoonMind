@@ -660,3 +660,40 @@ async def test_pre_patch_bindings_without_the_flag_stay_reclaimable():
     await coordinator.release_from_binding(binding)
 
     assert client.released == ["lease-1"]
+
+
+@pytest.mark.asyncio
+async def test_a_capacity_scope_changed_after_admission_is_lost_capacity():
+    """AC2: the binding must record the ledger that actually admitted the run.
+
+    The manager admits and accounts a queued grant under the Provider Profile's
+    current capacity scope. Copying a stale ticket scope into the durable
+    runtime binding would record a capacity authority the ledger never used, so
+    a changed scope is reported as lost admitted capacity and the run is
+    re-admitted under the scope in force.
+    """
+
+    rows = _profiles("opencode-zen-free")
+    rows["opencode-zen-free"].capacity_scope_ref = "opencode-zen:paid"
+    client = _LeaseClient(inspection=_inspection())
+    coordinator = OmnigentProviderLeaseCoordinator(
+        session_factory=_session_factory(rows), lease_client=client
+    )
+
+    with pytest.raises(HarnessPlatformError) as exc_info:
+        await _consume(coordinator, client)
+
+    assert exc_info.value.code == "OMNIGENT_PROVIDER_LEASE_UNAVAILABLE"
+    assert client.acquired == []
+
+
+@pytest.mark.asyncio
+async def test_the_admitted_scope_is_the_one_the_binding_records():
+    """An unchanged scope binds exactly what the workflow admitted against."""
+
+    client = _LeaseClient(inspection=_inspection())
+    coordinator = _coordinator(client)
+
+    acquired = await _consume(coordinator, client)
+
+    assert acquired[0].capacity_scope_ref == "provider-profile:opencode-zen-free"

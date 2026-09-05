@@ -220,6 +220,9 @@ class _RecordingRun(MoonMindAgentRun):
         self.parent_states: list[tuple[str, str]] = []
         self.host_decisions: list[dict[str, Any]] = []
         self.manager_states: list[dict[str, Any]] = []
+        #: Admission decisions the evaluate activity serves, in order. Empty
+        #: means every read returns the same authority this run started with.
+        self.admission_decisions: list[Any] = []
         self.grant_on_signal = True
 
     async def _ensure_manager_and_signal(
@@ -257,6 +260,13 @@ class _RecordingRun(MoonMindAgentRun):
             return self.host_decisions.pop(0) if self.host_decisions else {
                 "admitted": True
             }
+        if name == "omnigent.evaluate_session_admission":
+            decision = (
+                self.admission_decisions.pop(0)
+                if self.admission_decisions
+                else _admission()
+            )
+            return decision.model_dump(mode="json", by_alias=True)
         return {}
 
     def _get_logger(self):
@@ -730,11 +740,13 @@ class _ExecutingRun(_RecordingRun):
         super().__init__()
         self.results = list(results)
         self.executions: list[AgentExecutionRequest] = []
+        self.execution_options: list[dict[str, Any]] = []
         self.capacity_states: list[str] = []
 
     async def _execute_routed_activity(self, name, payload=None, **kwargs):
         if name.startswith("integration.omnigent."):
             self.executions.append(payload)
+            self.execution_options.append(dict(kwargs))
             self.capacity_states.append(self._omnigent_capacity_state)
             return self.results.pop(0)
         return await super()._execute_routed_activity(name, payload, **kwargs)
@@ -748,6 +760,7 @@ async def _run_execution(run: _ExecutingRun) -> tuple[Any, Any]:
         parent_info=None,
         stc_seconds=600,
         admit_capacity_before_activity=True,
+        execution_plan_admission=True,
     )
 
 
@@ -827,14 +840,18 @@ async def test_a_host_slot_lost_after_admission_requeues_instead_of_failing(
     assert {payload["execution_profile_ref"] for payload in requests} == {
         "opencode-zen-free"
     }
-    # Both attempts name the same stable host reservation, so the retry reuses
-    # the run's host lease rather than racing for a second one.
+    # Both attempts name the same run and request identity, so neither can be
+    # confused with another run's demand. The admission epoch separates them:
+    # the lost attempt's host reservation was released with it, so the
+    # re-admitted attempt asks about its own reservation rather than reading a
+    # cleaned row as if it still held a host.
     host_payloads = [
         payload
         for name, payload in run.activity_calls
         if name == "omnigent.admit_generic_host_capacity"
     ]
     assert len({payload["idempotencyKey"] for payload in host_payloads}) == 1
+    assert [payload["admissionEpoch"] for payload in host_payloads] == [1, 2]
     waiting_reasons = [
         reason for state, reason in run.parent_states if state == "awaiting_slot"
     ]
@@ -1127,9 +1144,11 @@ async def test_the_production_start_shape_admits_capacity(
     assert stable_binding_id(
         execution_plan_ref=host_payload["executionPlanRef"],
         idempotency_key=host_payload["idempotencyKey"],
+        admission_epoch=host_payload["admissionEpoch"],
     ) == stable_binding_id(
         execution_plan_ref=request.omnigent_execution_plan.plan_ref,
         idempotency_key=request.idempotency_key,
+        admission_epoch=capacity.admission_epoch,
     )
 
 
@@ -1381,3 +1400,177 @@ def test_a_pre_patch_history_never_admits_before_the_activity(
         )
         is False
     )
+
+
+@pytest.mark.asyncio
+async def test_a_re_admission_fences_against_the_current_generation(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """AC5: the recovery from a rotated credential must be able to succeed.
+
+    The frozen decision still names the pre-rotation generation. Re-admitting
+    against it would fence every replacement lease to a generation the profile
+    no longer has, so the run would spend its whole requeue budget re-observing
+    the same fence and fail as if the work were invalid.
+    """
+
+    _configure_workflow_runtime(monkeypatch)
+    run = _ExecutingRun(
+        [
+            _capacity_failure("OMNIGENT_CREDENTIAL_GENERATION_FENCED"),
+            {"summary": "done"},
+        ]
+    )
+    run.admission_decisions = [_admission(credential_generation=8)]
+    _capture_release_signals(monkeypatch, run)
+
+    result, _ = await _run_execution(run)
+
+    assert result == {"summary": "done"}
+    generations = [
+        item.admitted_provider_capacity.profiles[0].credential_generation
+        for item in run.executions
+    ]
+    assert generations == [7, 8]
+    # The manager's durable lease row records the same refreshed fence, so the
+    # Activity's inspection of the replacement grant matches the ticket.
+    lease_generations = [
+        payload["lease_metadata"]["credentialGeneration"]
+        for name, payload in run.signals
+        if name == "request_slot"
+    ]
+    assert lease_generations == [7, 8]
+
+
+@pytest.mark.asyncio
+async def test_a_re_admission_never_moves_the_run_to_another_realizer(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Refreshing authority is a recovery, never a silent substitution."""
+
+    _configure_workflow_runtime(monkeypatch)
+    run = _ExecutingRun(
+        [
+            _capacity_failure("OMNIGENT_HOST_CAPACITY_UNAVAILABLE"),
+            {"summary": "done"},
+        ]
+    )
+    substituted = _admission().model_copy(
+        update={"execution_realizer_ref": "codex-profile-bound@1"}
+    )
+    run.admission_decisions = [substituted]
+    _capture_release_signals(monkeypatch, run)
+
+    with pytest.raises(ApplicationError) as exc_info:
+        await _run_execution(run)
+
+    assert exc_info.value.type == "OmnigentExecutionRealizerAuthorityConflict"
+    # The refused attempt released its capacity before the run failed closed.
+    assert [name for name, _ in run.signals if name == "release_slot"] == [
+        "release_slot"
+    ]
+
+
+@pytest.mark.asyncio
+async def test_a_re_admission_never_adopts_activity_owned_capacity(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A capacity owner that changed under a live run is not a recovery."""
+
+    _configure_workflow_runtime(monkeypatch)
+    run = _ExecutingRun(
+        [
+            _capacity_failure("OMNIGENT_PROVIDER_LEASE_UNAVAILABLE"),
+            {"summary": "done"},
+        ]
+    )
+    run.admission_decisions = [
+        _admission().model_copy(update={"capacity_acquisition_owner": "activity"})
+    ]
+    _capture_release_signals(monkeypatch, run)
+
+    with pytest.raises(ApplicationError) as exc_info:
+        await _run_execution(run)
+
+    assert exc_info.value.type == "CapacityAdmissionOwnerUnsupported"
+
+
+def test_each_admission_attempt_owns_its_runtime_binding_identity() -> None:
+    """A re-admission must not resume the attempt whose host was released.
+
+    The lost attempt's aggregate is terminally ``cleaned`` with no terminal
+    result and its host lease row is already cleaned, so reusing that identity
+    could only fail as a binding conflict. Retries inside one attempt keep
+    sharing an identity; that is what makes them idempotent.
+    """
+
+    first = stable_binding_id(
+        execution_plan_ref=PLAN_REF, idempotency_key="idem-1", admission_epoch=1
+    )
+    retry_of_first = stable_binding_id(
+        execution_plan_ref=PLAN_REF, idempotency_key="idem-1", admission_epoch=1
+    )
+    second = stable_binding_id(
+        execution_plan_ref=PLAN_REF, idempotency_key="idem-1", admission_epoch=2
+    )
+
+    assert first == retry_of_first
+    assert first != second
+    # A ticket recorded before the epoch existed keeps its original identity,
+    # so in-flight runs and their persisted aggregates still resolve.
+    assert stable_binding_id(
+        execution_plan_ref=PLAN_REF, idempotency_key="idem-1"
+    ) == stable_binding_id(
+        execution_plan_ref=PLAN_REF, idempotency_key="idem-1", admission_epoch=0
+    )
+
+
+@pytest.mark.asyncio
+async def test_the_execution_handoff_bounds_worker_queue_time_not_the_budget(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Requirement 7: the hand-off allowance must bound the queue, not the run.
+
+    StartToClose never begins while an Activity waits for a free worker, so a
+    ScheduleToClose of ``budget + allowance`` alone would let a starved fleet
+    keep this Activity queued for the entire execution budget plus the
+    allowance -- up to a day -- while the workflow holds the provider lease it
+    was admitted for and the lease itself can expire before execution starts.
+    ScheduleToStart bounds exactly that queue wait.
+    """
+
+    _configure_workflow_runtime(monkeypatch)
+    run = _ExecutingRun([{"summary": "done"}])
+    _capture_release_signals(monkeypatch, run)
+
+    await _run_execution(run)
+
+    options = run.execution_options[0]
+    handoff = timedelta(seconds=agent_run_module._OMNIGENT_EXECUTION_HANDOFF_SECONDS)
+    assert options["schedule_to_start_timeout"] == handoff
+    assert options["start_to_close_timeout"] == timedelta(seconds=600)
+    assert options["schedule_to_close_timeout"] == timedelta(seconds=600) + handoff
+
+
+@pytest.mark.asyncio
+async def test_a_run_that_admits_no_capacity_keeps_its_original_deadlines(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Activity-owned queueing waits inside the Activity; bounding it would break it."""
+
+    _configure_workflow_runtime(monkeypatch)
+    run = _ExecutingRun([{"summary": "done"}])
+    _capture_release_signals(monkeypatch, run)
+
+    await run._execute_omnigent_with_admitted_capacity(
+        act_name="integration.omnigent.execute",
+        request=_omnigent_request(),
+        admission=_admission(),
+        parent_info=None,
+        stc_seconds=600,
+        admit_capacity_before_activity=False,
+    )
+
+    options = run.execution_options[0]
+    assert "schedule_to_start_timeout" not in options
+    assert options["schedule_to_close_timeout"] == timedelta(seconds=600)

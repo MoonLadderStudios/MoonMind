@@ -230,13 +230,18 @@ class OmnigentProviderLeaseCoordinator:
                     credential_generation=admitted_generation,
                 ),
             )
-            capacity_scope_ref = str(
-                getattr(admitted_profile, "capacity_scope_ref", None)
-                or f"provider-profile:{profile_ref}"
+            admitted_scope_ref = getattr(
+                admitted_profile, "capacity_scope_ref", None
             )
-            generation = await self._fenced_credential_generation(
+            generation, current_scope_ref = await self._fenced_profile_authority(
                 profile_ref=profile_ref,
                 admitted_generation=admitted_generation,
+                admitted_scope_ref=admitted_scope_ref,
+            )
+            capacity_scope_ref = str(
+                admitted_scope_ref
+                or current_scope_ref
+                or f"provider-profile:{profile_ref}"
             )
             for slot in sorted(by_profile[profile_ref]):
                 acquired.append(
@@ -328,18 +333,27 @@ class OmnigentProviderLeaseCoordinator:
                     "the lease was granted against another credential generation"
                 )
 
-    async def _fenced_credential_generation(
+    async def _fenced_profile_authority(
         self,
         *,
         profile_ref: str,
         admitted_generation: Any,
-    ) -> int:
-        """Return the generation this handoff is fenced to.
+        admitted_scope_ref: Any = None,
+    ) -> tuple[int, str | None]:
+        """Return the generation and capacity scope this handoff is fenced to.
 
-        The workflow recorded the generation it admitted against. Reading a
-        fresh one here would silently adopt a rotation that happened while the
-        run queued; comparing instead makes rotation an explicit, typed
-        re-admission (MoonLadderStudios/MoonMind#3880).
+        The workflow recorded the generation and the capacity scope it admitted
+        against. Reading a fresh one here would silently adopt a rotation that
+        happened while the run queued; comparing instead makes rotation an
+        explicit, typed re-admission (MoonLadderStudios/MoonMind#3880).
+
+        The scope is fenced for the same reason the generation is: the manager
+        admits and accounts a queued grant under the profile's current capacity
+        scope, so copying a stale ticket scope into the durable runtime binding
+        would record a capacity authority different from the ledger that
+        actually admitted the run. A changed scope is therefore reported as
+        lost admitted capacity, which returns the run to durable waiting and
+        re-admits it under the scope the ledger now uses.
         """
 
         from api_service.db.models import ManagedAgentProviderProfile
@@ -358,17 +372,34 @@ class OmnigentProviderLeaseCoordinator:
                     code=HarnessPlatformFailure.OMNIGENT_PROVIDER_PROFILE_INCOMPATIBLE,
                 )
             current_generation = int(profile.credential_generation)
+            current_scope_ref = (
+                str(profile.capacity_scope_ref)
+                if profile.capacity_scope_ref
+                else None
+            )
         if admitted_generation is None:
-            # Retained v1 tickets never recorded a generation; the sticky
-            # generation is the one observed at consumption, as before.
-            return current_generation
+            # Retained v1 tickets recorded neither a generation nor scope
+            # authority, so there is nothing to fence: the sticky generation is
+            # the one observed at consumption, as before.
+            return current_generation, current_scope_ref
+        admitted_scope = str(admitted_scope_ref or "").strip()
+        if (
+            admitted_scope
+            and current_scope_ref is not None
+            and admitted_scope != current_scope_ref
+        ):
+            raise HarnessPlatformError(
+                "Provider Profile capacity scope changed after capacity was "
+                f"admitted for {profile_ref}",
+                code=HarnessPlatformFailure.OMNIGENT_PROVIDER_LEASE_UNAVAILABLE,
+            )
         if int(admitted_generation) != current_generation:
             raise HarnessPlatformError(
                 "Provider Profile credentials rotated after capacity was "
                 f"admitted for {profile_ref}",
                 code=HarnessPlatformFailure.OMNIGENT_CREDENTIAL_GENERATION_FENCED,
             )
-        return current_generation
+        return current_generation, current_scope_ref
 
     async def _acquire_activity_owned(
         self,
