@@ -20,7 +20,8 @@ Lifecycle ordering preserved (19 steps 1-13).
 
 from __future__ import annotations
 
-from typing import Any
+from collections.abc import Sequence
+from typing import TYPE_CHECKING, Any
 
 from moonmind.omnigent.harness_platform.agent_profile import (
     OmnigentAgentProfileV2,
@@ -373,6 +374,12 @@ def _record_support_evidence_denials(
             denial_reason=str(reason),
         )
 
+if TYPE_CHECKING:  # pragma: no cover - typing-only import
+    from moonmind.omnigent.session_supervisor_rollback import (
+        RollbackExerciseDecision,
+        RollbackExerciseRecord,
+    )
+
 
 # Trusted realizer selection - never workflow-authored, never overridable via Agent Profile settings
 def select_execution_realizer(
@@ -425,6 +432,85 @@ def select_execution_realizer(
     return GENERIC_REALIZER_REF
 
 
+def _configured_legacy_rollback_generation() -> str | None:
+    """Read the operator-selected rollback generation for legacy re-admission.
+
+    Trusted planner input only: it comes from deployment settings, never from an
+    Agent Profile or workflow payload.
+    """
+
+    from moonmind.config.settings import settings
+    from moonmind.omnigent.session_supervisor_rollback import (
+        legacy_rollback_generation_from_settings,
+    )
+
+    return legacy_rollback_generation_from_settings(settings.feature_flags)
+
+
+def _rollback_exercise_decision_for_plan(
+    *,
+    retirement_path_id: str,
+    agent_profile_ref: str | None,
+    host_class_ref: str | None,
+    materializer_refs: Sequence[str],
+    execution_realizer_ref: str | None,
+    model_qualified_id: str | None,
+    launch_policy_ref: str | None,
+    host_mode: str | None,
+    architecture: str | None,
+    owner_cohort: str | None,
+    records: Sequence[RollbackExerciseRecord] | None,
+) -> RollbackExerciseDecision:
+    """Evaluate recorded rollback evidence against this plan's exact scope.
+
+    Fail-closed on every axis: a dimension this plan cannot name exactly, and a
+    missing or non-matching record, both leave the path un-exercised and
+    therefore closed to new work. ``RollbackScope`` rejects a blank dimension,
+    so a scope that cannot be built is reported as unsatisfied rather than
+    widened.
+    """
+
+    from datetime import datetime, timezone
+
+    from moonmind.omnigent.session_supervisor_rollback import (
+        RollbackExerciseDecision,
+        RollbackScope,
+        evaluate_rollback_exercise,
+    )
+
+    # Exactly one materializer may be named; a plan with several has no single
+    # exercised materializer scope.
+    unique_materializers = sorted({str(ref) for ref in materializer_refs if ref})
+    materializer_ref = (
+        unique_materializers[0] if len(unique_materializers) == 1 else None
+    )
+    try:
+        scope = RollbackScope(
+            agentProfileRef=str(agent_profile_ref or ""),
+            hostClassRef=str(host_class_ref or ""),
+            materializerRef=str(materializer_ref or ""),
+            executionRealizerRef=str(execution_realizer_ref or ""),
+            modelQualifiedId=str(model_qualified_id or ""),
+            launchPolicyRef=str(launch_policy_ref or ""),
+            hostMode=str(host_mode or ""),
+            architecture=str(architecture or ""),
+            ownerCohort=str(owner_cohort or ""),
+        )
+    except ValueError:
+        return RollbackExerciseDecision(
+            retirementPathId=retirement_path_id,
+            satisfied=False,
+            reasonCode="rollback_scope_incomplete",
+        )
+
+    return evaluate_rollback_exercise(
+        retirement_path_id=retirement_path_id,
+        scope=scope,
+        records=records or (),
+        now=datetime.now(timezone.utc),
+    )
+
+
 def compile_execution_plan(
     *,
     agent_profile: dict[str, Any] | OmnigentAgentProfileV2,
@@ -457,6 +543,9 @@ def compile_execution_plan(
     execution_authority: dict[str, Any] | None = None,
     agent_profile_snapshot_ref: str | None = None,
     rollout_policy: RuntimeProviderRolloutPolicy | None = None,
+    rollback_generation: str | None = None,
+    rollback_owner_cohort: str | None = None,
+    rollback_exercise_records: Sequence[RollbackExerciseRecord] | None = None,
 ) -> OmnigentExecutionPlanEnvelope:
     # 1. Validate agent profile (resolve snapshot)
     profile = validate_agent_profile(agent_profile)
@@ -728,6 +817,66 @@ def compile_execution_plan(
             f"execution realizer {realizer} unavailable",
             code=HarnessPlatformFailure.OMNIGENT_EXECUTION_REALIZER_UNAVAILABLE,
         ) from exc
+
+    # Retirement admission (#3835 required work 2). Plan compilation is the one
+    # new-admission boundary for every client: a trusted planner default, an
+    # explicit ``execution_realizer_ref`` from an alternate API client, a
+    # schedule, and a preset all resolve here. Once the code-owned retirement
+    # class for a realizer stops admitting new work, no new plan may select it,
+    # while already-recorded plans keep executing, cancelling, cleaning up, and
+    # reading normally. A ``rollback_only`` class re-admits new work only under
+    # the exact rollback generation the operator has explicitly selected.
+    from moonmind.omnigent.legacy_retirement import (
+        LegacyAdmissionRejected,
+        assert_new_admission_allowed,
+        retirement_record_for_surface,
+    )
+
+    retirement_row = retirement_record_for_surface(f"realizer:{realizer}")
+    if retirement_row is not None:
+        generation = rollback_generation
+        exercise_decision = None
+        if retirement_row.requires_rollback_generation:
+            if generation is None:
+                generation = _configured_legacy_rollback_generation()
+            # A rollback generation is a single global string. Re-admission also
+            # needs a fresh, successful rollback exercise recorded for *this*
+            # exact plan scope, so one allowlisted generation cannot re-admit
+            # every profile, Host Class, materializer, model, launch policy,
+            # host mode, architecture, and owner cohort using the path.
+            exercise_decision = _rollback_exercise_decision_for_plan(
+                retirement_path_id=retirement_row.path_id,
+                agent_profile_ref=agent_profile_snapshot_ref,
+                host_class_ref=host_class_ref,
+                materializer_refs=materializer_refs,
+                execution_realizer_ref=realizer,
+                model_qualified_id=model_qualified_id,
+                launch_policy_ref=launch_policy_ref,
+                host_mode=selected_launch_policy.hostMode,
+                # The architecture the plan will actually run on, resolved the
+                # same way the support key resolves it below.
+                architecture=(
+                    host_architecture
+                    or (
+                        selected_host_class.architectures[0]
+                        if selected_host_class.architectures
+                        else None
+                    )
+                ),
+                owner_cohort=rollback_owner_cohort,
+                records=rollback_exercise_records,
+            )
+        try:
+            assert_new_admission_allowed(
+                retirement_row.path_id,
+                rollback_generation=generation,
+                rollback_exercise=exercise_decision,
+            )
+        except LegacyAdmissionRejected as exc:
+            raise HarnessPlatformError(
+                str(exc),
+                code=HarnessPlatformFailure.OMNIGENT_EXECUTION_REALIZER_UNAVAILABLE,
+            ) from exc
 
     required_caps_digest = compute_required_capabilities_digest(
         list(class_decision.requiredSatisfied)

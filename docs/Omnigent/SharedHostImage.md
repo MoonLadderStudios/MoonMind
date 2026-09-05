@@ -118,4 +118,13 @@ These remain the owned child issues of the primary-runtime program and are not c
   digest remain with the provider-verification runner.
 - **Product-default migration** (#3833): versioned rollout policy, per-surface default promotion, canary/rollback controls, and migration telemetry.
 - **Compose consolidation** (#3834): converging static Codex/Claude hosts and startup scripts onto the shared image and generic startup.
-- **Retirement** (#3835): the code-owned retirement inventory and gated removal of direct and profile-bound lanes.
+- **Retirement** (#3835): the code-owned retirement inventory in
+  `moonmind/omnigent/legacy_retirement.py` classifies every retained direct,
+  profile-bound, startup, Compose, configuration, replay, and historical-read
+  component, enforces new-admission control from that class at plan
+  compilation and runtime selection, and gates staged removal behind drain,
+  replay, historical-read, rollback, and retention evidence. The
+  `omnigent-host-opencode` alias and `OMNIGENT_OPENCODE_HOST_IMAGE_REF` remain
+  active with a retirement row; they are removed at the image and environment
+  alias stage once no dependency remains. See
+  [Omnigent Module Architecture §5](OmnigentModuleArchitecture.md#5-retained-duplicate-architecture-and-its-retirement-owners).
