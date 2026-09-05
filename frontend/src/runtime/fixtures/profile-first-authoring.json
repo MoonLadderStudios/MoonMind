@@ -1,0 +1,97 @@
+{
+  "provider": {
+    "profile_id": "opencode-go",
+    "runtime_id": "opencode",
+    "provider_id": "opencode-go",
+    "account_label": "OpenCode Go",
+    "is_default": true,
+    "enabled": true,
+    "launch_ready": true,
+    "default_model": "example/model",
+    "execution_selection": {
+      "profileId": "profile-opencode-native",
+      "version": 3,
+      "digest": "sha256:9999999999999999999999999999999999999999999999999999999999999999",
+      "providerProfileRef": "opencode-go",
+      "launchPolicyRef": "omnigent-on-demand@1",
+      "defaultForRuntime": true,
+      "harnessId": "opencode-native"
+    }
+  },
+  "configuration": {
+    "profileId": "profile-opencode-native",
+    "displayName": "OpenCode configuration",
+    "state": "active",
+    "activeVersion": 3,
+    "defaultForRuntime": true,
+    "versions": [
+      {
+        "version": 3,
+        "digest": "sha256:9999999999999999999999999999999999999999999999999999999999999999",
+        "document": {
+          "schemaVersion": "moonmind.omnigent-agent-profile.v2",
+          "endpointRef": "default",
+          "source": {
+            "kind": "bundle",
+            "bundleArtifactRef": "artifact://profile-first-bundle",
+            "bundleDigest": "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+            "importReceiptRef": "omnigent-agent-import:sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "importedAgentId": "opencode-native-agent",
+            "importedAgentVersion": "1",
+            "importedContentDigest": "sha256:ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"
+          },
+          "harness": {
+            "id": "opencode-native",
+            "catalogRef": "omnigent-harness-catalog:sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+            "implementationRef": "omnigent-harness-implementation:sha256:eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"
+          },
+          "credentialSlots": [
+            {
+              "id": "primary-model",
+              "acceptedProviderIds": [
+                "opencode-go"
+              ]
+            }
+          ],
+          "allowedLaunchPolicyRefs": [
+            "omnigent-on-demand@1",
+            "opencode-on-demand@1"
+          ]
+        },
+        "validationResult": {
+          "ready": true
+        }
+      }
+    ]
+  },
+  "request": {
+    "type": "task",
+    "payload": {
+      "targetRuntime": "omnigent",
+      "publishMode": "none",
+      "task": {
+        "instructions": "Verify the selected Profile through admission.",
+        "runtime": {
+          "mode": "omnigent",
+          "profileId": "opencode-go",
+          "executionConfiguration": {
+            "profileId": "profile-opencode-native",
+            "version": 3,
+            "digest": "sha256:9999999999999999999999999999999999999999999999999999999999999999"
+          },
+          "profileSelector": {
+            "providerId": "opencode-go"
+          }
+        },
+        "publish": {
+          "mode": "none"
+        }
+      }
+    }
+  },
+  "expectedPlan": {
+    "harnessId": "opencode-native",
+    "targetId": "opencode.generic-omnigent",
+    "executionRealizerRef": "generic-omnigent-host@1"
+  }
+}

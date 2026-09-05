@@ -46,13 +46,10 @@ import {
 import { DEFAULT_REMEDIATION_ACTION_POLICY } from "../lib/workflowActions";
 import { ContextRetrievalControls } from "../components/ContextRetrievalControls";
 import {
-  formatRolloutStateLabel,
   formatRuntimeLabel as formatRuntimeTargetLabel,
-  preferredTargetForRuntime,
   resolveDefaultRuntimeId,
   runtimeOptionGroups,
   runtimeUnavailableReason,
-  selectableTargetsForRuntime,
 } from "../runtime/runtimeTargets";
 import type {
   RuntimeTargetCatalog,
@@ -566,6 +563,7 @@ interface ProviderProfile {
     profileId: string; version: number; digest: string;
     providerProfileRef: string; launchPolicyRef: string | null;
     defaultForRuntime: boolean;
+    harnessId?: string;
   } | null;
   execution_selection_error?: { message: string } | null;
   account_label?: string | null;
@@ -960,33 +958,24 @@ export function resolveDefaultProviderProfileId(
   profiles: ProviderProfile[],
   configuredDefaultRef?: string | null,
 ): string {
-  const launchableProfiles = profiles.filter(
-    (profile) =>
-      profile.enabled !== false &&
-      profile.launch_ready !== false &&
-      profile.launchReady !== false,
-  );
+  const enabledProfiles = profiles.filter((profile) => profile.enabled !== false);
   const trimmedRef = configuredDefaultRef?.trim?.() || "";
   if (trimmedRef) {
-    const configured = launchableProfiles.find(
-      (profile) => profile.profile_id === trimmedRef,
-    );
-    if (configured) {
-      return configured.profile_id;
-    }
+    // An unavailable configured account requires an explicit replacement.
+    return trimmedRef;
   }
-  const explicitDefault = launchableProfiles.find((profile) =>
+  const explicitDefault = enabledProfiles.find((profile) =>
     profile.is_default && profile.execution_selection?.defaultForRuntime,
-  ) || launchableProfiles.find((profile) => profile.is_default);
+  ) || enabledProfiles.find((profile) => profile.is_default);
   if (explicitDefault) {
     return explicitDefault.profile_id;
   }
-  const onlyProfile = launchableProfiles[0];
-  if (launchableProfiles.length === 1 && onlyProfile) {
+  const onlyProfile = enabledProfiles[0];
+  if (enabledProfiles.length === 1 && onlyProfile) {
     return onlyProfile.profile_id;
   }
   return (
-    [...launchableProfiles].sort((left, right) => {
+    [...enabledProfiles].sort((left, right) => {
       const leftPriority = Number(left.priority ?? 100);
       const rightPriority = Number(right.priority ?? 100);
       if (leftPriority !== rightPriority) {
@@ -6163,11 +6152,6 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
   );
   const [runtime, setRuntime] = useState(defaultRuntime);
   const [runtimeAuthored, setRuntimeAuthored] = useState(false);
-  // Explicit rollout target identity within the chosen runtime. Empty means
-  // the preferred target; set when several selectable targets share one
-  // runtime so the exact identity is submitted instead of collapsing to the
-  // runtime string (MoonLadderStudios/MoonMind#3988).
-  const [runtimeTargetId, setRuntimeTargetId] = useState("");
   const omnigentCatalog = dashboardConfig.system?.omnigentExecutionCatalog;
   const omnigentProfiles = omnigentCatalog?.profiles || [];
   const omnigentPolicies = omnigentCatalog?.policies || [];
@@ -6558,30 +6542,10 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
     },
   });
 
-  // The truthful selected path, plus the exact reason when no qualified target
-  // exists for the authored runtime. An unavailable runtime is never silently
-  // replaced with another one.
-  const selectedRuntimeTarget = useMemo(
-    () => preferredTargetForRuntime(runtimeTargetCatalog, runtime),
-    [runtimeTargetCatalog, runtime],
-  );
   const selectedRuntimeUnavailableReason = useMemo(
     () => runtimeUnavailableReason(runtime, runtimeTargetCatalog),
     [runtime, runtimeTargetCatalog],
   );
-  // Every selectable target sharing the chosen runtime. More than one means
-  // the runtime string alone cannot name the exact target.
-  const selectableRuntimeTargets = useMemo(
-    () => selectableTargetsForRuntime(runtimeTargetCatalog, runtime),
-    [runtimeTargetCatalog, runtime],
-  );
-  const effectiveRuntimeTargetId =
-    runtimeTargetId ||
-    selectableRuntimeTargets.find(
-      (target) => target.targetId === selectedRuntimeTarget?.targetId,
-    )?.targetId ||
-    selectedRuntimeTarget?.targetId ||
-    "";
   const selectedOmnigentExecutionProfile = omnigentProfiles.find(
     (profile) => profile.ref === omnigentExecutionTargetRef,
   );
@@ -6624,12 +6588,15 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
       return Array.isArray(value) ? value as OmnigentAgentProfileOption[] : [];
     },
   });
-  const readyAgentProfiles = (agentProfilesQuery.data || []).filter((profile) => {
-    const active = profile.versions.find((version) => version.version === profile.activeVersion);
-    return profile.state === "active" && active?.validationResult?.ready === true;
-  });
-  const selectedOmnigentAgentProfile = readyAgentProfiles.find(
-    (profile) => profile.profileId === agentProfile,
+  const selectedConfiguredProfile = providerProfilesQuery.data?.find(
+    (profile) => profile.profile_id === providerProfile,
+  );
+  const selectedConfiguration = selectedConfiguredProfile?.execution_selection;
+  const currentAgentProfileId = pageMode.mode === "create" && !remediationDraft
+    ? selectedConfiguration?.profileId || ""
+    : agentProfile;
+  const selectedOmnigentAgentProfile = (agentProfilesQuery.data || []).find(
+    (profile) => profile.profileId === currentAgentProfileId,
   );
   const authoredOmnigentAgentProfileVersion =
     remediationDraft?.agentProfile?.profileId === agentProfile
@@ -6637,7 +6604,7 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
       : pageMode.mode !== "create" &&
           temporalDraftQuery.data?.draft.agentProfile?.profileId === agentProfile
         ? temporalDraftQuery.data.draft.agentProfile.version || undefined
-        : providerProfilesQuery.data?.find((profile) => profile.profile_id === providerProfile)?.execution_selection?.version;
+        : selectedConfiguration?.version;
   const selectedOmnigentAgentProfileVersion =
     selectedOmnigentAgentProfile?.versions.find(
       (version) =>
@@ -6645,6 +6612,12 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
         (authoredOmnigentAgentProfileVersion ||
           selectedOmnigentAgentProfile.activeVersion),
     );
+  const recordedHarness = selectedOmnigentAgentProfileVersion?.document?.harness;
+  const selectedHarnessId = pageMode.mode === "create" && !remediationDraft
+    ? selectedConfiguration?.harnessId
+    : typeof recordedHarness === "string" ? recordedHarness : recordedHarness?.id;
+  const configurationDetailsUnavailable = runtime === "omnigent" && pageMode.mode === "create" && !remediationDraft &&
+    Boolean(selectedConfiguration) && !selectedOmnigentAgentProfileVersion;
   const selectedProfileIsGenericV2 =
     selectedOmnigentAgentProfileVersion?.document?.schemaVersion ===
       "moonmind.omnigent-agent-profile.v2";
@@ -6666,11 +6639,6 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
     selectedOmnigentAgentProfileVersion,
     selectedProfileIsGenericV2,
   ]);
-  useEffect(() => {
-    if (runtime !== "omnigent" || agentProfile) return;
-    const preferred = readyAgentProfiles.find((profile) => profile.defaultForRuntime) || readyAgentProfiles[0];
-    if (preferred) setAgentProfile(preferred.profileId);
-  }, [agentProfile, readyAgentProfiles, runtime]);
 
   const omnigentCatalogQuery = useQuery({
     queryKey: ["workflow-start", "omnigent-codex-catalog-readiness"],
@@ -6711,19 +6679,13 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
   });
   const selectedGenericOmnigentTarget = omnigentExecutionReadinessQuery.data?.executionTargets?.find(
     (target) =>
-      target.agentProfileRef.profileId === agentProfile &&
+      target.agentProfileRef.profileId === currentAgentProfileId &&
       (authoredOmnigentAgentProfileVersion === undefined ||
         (target.agentProfileRef.version === selectedOmnigentAgentProfileVersion?.version &&
           target.agentProfileRef.digest === selectedOmnigentAgentProfileVersion?.digest)),
   );
-  const submittedOmnigentAgentProfileVersion = selectedProfileIsGenericV2
-    ? selectedGenericOmnigentTarget?.agentProfileRef.version ||
-      selectedOmnigentAgentProfileVersion?.version
-    : authoredOmnigentAgentProfileVersion;
-  const submittedOmnigentAgentProfileDigest = selectedProfileIsGenericV2
-    ? selectedGenericOmnigentTarget?.agentProfileRef.digest ||
-      selectedOmnigentAgentProfileVersion?.digest
-    : undefined;
+  const submittedOmnigentAgentProfileVersion = authoredOmnigentAgentProfileVersion;
+  const submittedOmnigentAgentProfileDigest = selectedOmnigentAgentProfileVersion?.digest;
   // Profile inventory is independent of transient host/catalog readiness.
   const activeProviderProfiles: ProviderProfile[] = providerProfilesQuery.data || [];
 
@@ -6825,6 +6787,10 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
     ) {
       return;
     }
+    if (selectedConfiguration && !remediationDraft) {
+      setOmnigentLaunchPolicyRef(selectedConfiguration.launchPolicyRef || "");
+      return;
+    }
     if (selectedProfileIsGenericV2) {
       const preferred = selectedGenericOmnigentTarget?.policies[0];
       if (preferred && preferred !== omnigentLaunchPolicyRef) {
@@ -6859,6 +6825,8 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
     selectedGenericOmnigentTarget,
     selectedOmnigentAgentProfileVersion,
     selectedProfileIsGenericV2,
+    selectedConfiguration,
+    remediationDraft,
   ]);
 
   useEffect(() => {
@@ -8553,6 +8521,7 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
         profile.is_default && profile.provider_label
           ? profile.provider_label
           : profile.account_label || profile.profile_id,
+      runtimeId: profile.runtime_id || "",
       isDefault: Boolean(profile.is_default),
       status: profile.enabled === false ? "Disabled" : profile.launch_ready === false ? "Needs setup" : "",
     }));
@@ -8561,7 +8530,7 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
       ? selectedOmnigentAgentProfile?.displayName ||
         omnigentExecutionReadinessQuery.data?.displayName ||
         "Omnigent"
-      : formatRuntimeTargetLabel(providerProfileRuntime, runtimeTargetCatalog);
+      : formatRuntimeTargetLabel(runtime === "omnigent" ? runtime : providerProfileRuntime, runtimeTargetCatalog);
   const selectedOmnigentReadiness = (omnigentCatalogQuery.data?.executionProfiles || []).find(
     (profile) => profile.ref === omnigentExecutionTargetRef,
   );
@@ -8584,19 +8553,6 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
         }
       : undefined
     : selectedOmnigentReadiness;
-  const selectableOmnigentProfiles = selectedProfileIsGenericV2
-    ? selectedGenericOmnigentTarget?.available
-      ? [{
-          ref: selectedGenericOmnigentTarget.ref,
-          displayName: selectedOmnigentAgentProfile?.displayName || selectedGenericOmnigentTarget.ref,
-          defaultPolicyRef: selectedGenericOmnigentTarget.policies[0] || "",
-        }]
-      : []
-    : omnigentProfiles.filter((profile) =>
-        (omnigentCatalogQuery.data?.executionProfiles || []).some(
-          (readiness) => readiness.ref === profile.ref && readiness.available,
-        ),
-      );
   const { selectable: selectableOmnigentPolicies } =
     resolveOmnigentLaunchPolicyOptions(
       effectiveOmnigentReadiness?.launchPolicies || [],
@@ -8619,7 +8575,7 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
   const selectedOmnigentPolicyAvailable = selectableOmnigentPolicies.some(
     (policy) => policy.ref === omnigentLaunchPolicyRef,
   );
-  const omnigentSelectionGateReason =
+  const omnigentSelectionGateReason = !selectedOmnigentAgentProfileVersion ? null :
     effectiveOmnigentReadiness?.gateReasons?.[0]?.message ||
     (!selectedProfileIsGenericV2
       ? historicalOmnigentProviderProfile?.gateReasons?.[0]?.message ||
@@ -8633,15 +8589,30 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
           : !selectedOmnigentPolicyAvailable
             ? "Choose a compatible Omnigent host policy."
             : null);
-  const selectedConfiguredProfile = activeProviderProfiles.find((profile) => profile.profile_id === providerProfile);
-  const profileSelectionError = selectedConfiguredProfile?.execution_selection_error?.message || (
+  const selectedProfileMissing = Boolean(providerProfile) && !providerProfilesQuery.isPending && !selectedConfiguredProfile;
+  const runtimeProfileMismatch = selectedConfiguredProfile?.runtime_id && runtime !== "omnigent" &&
+    selectedConfiguredProfile.runtime_id !== runtime
+      ? "This Profile is incompatible with the selected Runtime. Choose a compatible Profile or Runtime."
+      : null;
+  const configurationSelectionError = runtime === "omnigent" && pageMode.mode === "create" &&
+    !remediationDraft && selectedConfiguredProfile && !selectedConfiguration
+      ? "Choose an execution configuration in Profile settings."
+      : null;
+  const profileSelectionError = selectedConfiguredProfile?.execution_selection_error?.message ||
+    (selectedProfileMissing ? "This Profile is unavailable. Restore it in Settings or choose a replacement." : null) ||
+    runtimeProfileMismatch || configurationSelectionError ||
+    (configurationDetailsUnavailable
+      ? agentProfilesQuery.isPending
+        ? "Loading execution configuration for this Profile."
+        : "This Profile's execution configuration could not be loaded. Refresh the form or review Profile settings."
+      : null) || (
     selectedConfiguredProfile?.enabled === false || selectedConfiguredProfile?.launch_ready === false
       ? "Connect and enable this Profile in Settings."
       : omnigentSelectionGateReason
   );
   const omnigentSelectionEligible = runtime !== "omnigent" || (
     Boolean(selectedConfiguredProfile) && selectedConfiguredProfile?.enabled !== false &&
-    selectedConfiguredProfile?.launch_ready !== false && !selectedConfiguredProfile?.execution_selection_error &&
+    selectedConfiguredProfile?.launch_ready !== false && !selectedConfiguredProfile?.execution_selection_error && !configurationSelectionError && !configurationDetailsUnavailable &&
     (selectedProfileIsGenericV2 || !(selectedEligibleOmnigentProfile?.busy && !selectedEligibleOmnigentProfile?.queueWhenBusy))
   );
 
@@ -10421,8 +10392,8 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
     setAttachmentTargetErrors({});
 
     const normalizedRuntime = runtime.trim().toLowerCase();
-    if (selectedConfiguredProfile?.execution_selection_error) {
-      setSubmitMessage(selectedConfiguredProfile.execution_selection_error.message);
+    if (selectedProfileMissing || runtimeProfileMismatch || configurationSelectionError || configurationDetailsUnavailable || selectedConfiguredProfile?.execution_selection_error) {
+      setSubmitMessage(profileSelectionError || "Profile configuration is unavailable.");
       clearSubmitBusy();
       return;
     }
@@ -11569,7 +11540,8 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
       ...(explicitTitle ? { title: explicitTitle } : {}),
       runtime: {
         mode: normalizedRuntime,
-        authored: runtimeAuthored,
+        // Accepting the visible default has the same authority as choosing it.
+        // Omitting `authored` makes the displayed mode explicit at admission.
         ...(hasSubmittedModelTier ? { modelTier: submittedModelTier } : {}),
         ...(selectedProfileSupportsModelControls &&
         (hasSubmittedModelTier || tierFallback === "strict")
@@ -11578,6 +11550,13 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
         ...(submittedModel ? { model: submittedModel } : {}),
         ...(submittedEffort ? { effort: submittedEffort } : {}),
         ...(providerProfile ? { profileId: providerProfile } : {}),
+        ...(runtime === "omnigent" && selectedConfiguration && pageMode.mode === "create" && !remediationDraft
+          ? { executionConfiguration: {
+              profileId: selectedConfiguration.profileId,
+              version: selectedConfiguration.version,
+              digest: selectedConfiguration.digest,
+            } }
+          : {}),
         ...(runtime === "omnigent" && agentProfile && (pageMode.mode !== "create" || remediationDraft)
           ? {
               agentProfile: {
@@ -11654,11 +11633,6 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
           ? { requiredCapabilities: mergedCapabilities }
           : {}),
         targetRuntime: normalizedRuntime,
-        // Carry an explicitly chosen rollout target identity so the exact
-        // target is honored and frozen instead of collapsing to the runtime
-        // string when several selectable targets share it
-        // (MoonLadderStudios/MoonMind#3988).
-        ...(runtimeTargetId ? { requestedTargetId: runtimeTargetId } : {}),
         ...(normalizedRuntime === "omnigent" && agentProfile && (pageMode.mode !== "create" || remediationDraft)
           ? {
               agentProfile: {
@@ -12084,7 +12058,7 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
     pageMode.mode !== "create" &&
     (temporalDraftQuery.isLoading || Boolean(modeLoadError));
   const isSubmitBlocked =
-    isTemporalFormBlocked || Boolean(selectedConfiguredProfile?.execution_selection_error) ||
+    isTemporalFormBlocked || Boolean(selectedProfileMissing || runtimeProfileMismatch || selectedConfiguredProfile?.execution_selection_error) ||
     (runtime === "omnigent" && !omnigentSelectionEligible);
 
   useEffect(() => {
@@ -14084,7 +14058,6 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
               onChange={(event) => {
                 setRuntime(event.target.value);
                 setRuntimeAuthored(true);
-                setRuntimeTargetId("");
               }}
             >
               {runtime && !runtimeOptions.includes(runtime) ? (
@@ -14093,6 +14066,9 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
                   (Current selection)
                 </option>
               ) : null}
+              {agentRuntimeOptionGroups.unavailable.map((option) => (
+                <option key={option.runtimeId} value={option.runtimeId} disabled>{option.label} (Unavailable)</option>
+              ))}
               {agentRuntimeOptionGroups.recommended.map((option) => (
                 <option key={option.runtimeId} value={option.runtimeId}>
                   {option.label}
@@ -14108,7 +14084,7 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
                 </optgroup>
               ) : null}
             </select>
-            {runtime === "omnigent" && (
+            {runtime === "omnigent" && selectedOmnigentAgentProfileVersion && (
               selectedProfileIsGenericV2
                 ? selectedGenericOmnigentTarget?.available === false
                 : omnigentCatalogQuery.data?.available === false
@@ -14121,54 +14097,20 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
               </span>
             ) : null}
           </label>
-          {selectableRuntimeTargets.length > 1 ? (
-            <label>
-              Target
-              <select
-                name="runtimeTargetId"
-                value={effectiveRuntimeTargetId}
-                onChange={(event) => {
-                  setRuntimeTargetId(event.target.value);
-                  setRuntimeAuthored(true);
-                }}
-              >
-                {selectableRuntimeTargets.map((target) => (
-                  <option key={target.targetId} value={target.targetId}>
-                    {target.label}
-                  </option>
-                ))}
-              </select>
-            </label>
+          {runtime === "omnigent" && selectedHarnessId && !selectedConfiguredProfile?.execution_selection_error ? (
+            <span className="small" data-runtime-execution-summary>
+              Uses {formatRuntimeTargetLabel(selectedHarnessId.replace(/-native$/, ""))} through Omnigent.
+            </span>
           ) : null}
-
-          {/* The truthful selected path and rollout state live outside the
-              label so the Runtime field's accessible name stays "Runtime". */}
-          {selectedRuntimeTarget || selectedRuntimeUnavailableReason ? (
-            <div className="stack">
-              {selectedRuntimeTarget ? (
-                <span className="small" data-runtime-target-state>
-                  {selectedRuntimeTarget.label}
-                  {" \u00b7 "}
-                  {formatRolloutStateLabel(
-                    selectedGenericOmnigentTarget?.rolloutState ||
-                      selectedRuntimeTarget.rolloutState,
-                  )}
-                  {selectedRuntimeTarget.compatibilityPath
-                    ? " \u00b7 compatibility path"
-                    : ""}
-                </span>
-              ) : null}
-              {selectedRuntimeUnavailableReason ? (
-                <span className="small" role="status" data-runtime-unavailable>
-                  {selectedRuntimeUnavailableReason}
-                </span>
-              ) : null}
-            </div>
+          {selectedRuntimeUnavailableReason ? (
+            <span className="small" role="status" data-runtime-unavailable>
+              {selectedRuntimeUnavailableReason}
+            </span>
           ) : null}
 
           </div>
 
-          {providerOptions.length > 0 ? (
+          {providerOptions.length > 0 || providerProfile ? (
             <div id="queue-provider-profile-wrap">
               <label>
                 Profile
@@ -14177,7 +14119,6 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
                   value={providerProfile}
                   onChange={(event) => {
                     setProviderProfile(event.target.value);
-                    setRuntimeAuthored(false);
                     setOmnigentLaunchPolicyAuthored(false);
                   }}
                   disabled={providerProfilesQuery.isPending}
@@ -14186,18 +14127,20 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
                     <option value="">Loading profiles…</option>
                   ) : (
                     <>
-                      {runtime === "omnigent" && providerProfile && !providerOptions.some((option) => option.id === providerProfile) ? (
+                      {providerProfile && !providerOptions.some((option) => option.id === providerProfile) ? (
                         <option value={providerProfile} disabled>
                           {historicalOmnigentProviderProfile?.label || providerProfile} (Unavailable — replacement required)
                         </option>
                       ) : null}
-                      {providerOptions.map((option) => (
-                        <option key={option.id} value={option.id}>
-                          {option.isDefault
-                            ? `${option.label} (Default)`
-                            : option.label}{option.status ? ` · ${option.status}` : ""}
-                        </option>
-                      ))}
+                      {Array.from(new Set(providerOptions.map((option) => runtime === "omnigent" ? option.runtimeId : ""))).map((group) => {
+                        const options = providerOptions.filter((option) => runtime !== "omnigent" || option.runtimeId === group).map((option) => (
+                          <option key={option.id} value={option.id}>
+                            {option.isDefault ? `${option.label} (Default)` : option.label}
+                            {option.status ? ` · ${option.status}` : ""}
+                          </option>
+                        ));
+                        return group ? <optgroup key={group} label={formatRuntimeTargetLabel(group)}>{options}</optgroup> : options;
+                      })}
                     </>
                   )}
                 </select>
@@ -14226,35 +14169,7 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
         </div>
 
         {runtime.trim().toLowerCase() === "omnigent" && (omnigentProfiles.length > 0 || Boolean(selectedGenericOmnigentTarget)) && showAdvancedStepOptions ? (
-          <div className="grid-2" aria-label="Omnigent execution target">
-            <label>
-              Execution target
-              <select
-                name="omnigentExecutionTargetRef"
-                disabled={pageMode.mode === "create" && !remediationDraft}
-                value={omnigentExecutionTargetRef}
-                onChange={(event) => {
-                  const ref = event.target.value;
-                  setOmnigentExecutionTargetRef(ref);
-                  setOmnigentLaunchPolicyAuthored(false);
-                  const profile = omnigentProfiles.find((item) => item.ref === ref);
-                  if (profile?.defaultPolicyRef) {
-                    setOmnigentLaunchPolicyRef(profile.defaultPolicyRef);
-                  }
-                }}
-              >
-                {!selectableOmnigentProfiles.some((profile) => profile.ref === omnigentExecutionTargetRef) && omnigentExecutionTargetRef ? (
-                  <option value={omnigentExecutionTargetRef} disabled>
-                    {omnigentExecutionTargetRef} (Unavailable — replacement required)
-                  </option>
-                ) : null}
-                {selectableOmnigentProfiles.map((profile) => (
-                  <option key={profile.ref} value={profile.ref}>
-                    {profile.displayName || profile.ref}
-                  </option>
-                ))}
-              </select>
-            </label>
+          <div className="grid-2" aria-label="Omnigent host policy">
             <label>
               Host policy
               <select
@@ -14281,9 +14196,9 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
           </div>
         ) : null}
 
-        {runtime !== "omnigent" && selectedConfiguredProfile?.execution_selection_error ? (
+        {runtime !== "omnigent" && (selectedProfileMissing || runtimeProfileMismatch || selectedConfiguredProfile?.execution_selection_error) ? (
           <div className="notice error small" role="alert">
-            Profile cannot be submitted: {selectedConfiguredProfile.execution_selection_error.message}
+            Profile cannot be submitted: {profileSelectionError}
           </div>
         ) : null}
         {runtime.trim().toLowerCase() === "omnigent" && !omnigentSelectionEligible && profileSelectionError ? (
