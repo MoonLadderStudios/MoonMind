@@ -102,6 +102,16 @@ The third generation is the destination. The first two remain explicit compatibi
 
 No current path is silently reclassified as generic. Existing execution plans and Temporal histories continue to invoke the realizer and compatibility version they recorded.
 
+Every retained component of the first two generations carries a **retirement
+class** in `moonmind/omnigent/legacy_retirement.py`. Today every one of them is
+`active_product_path`, `active_execution_support`, `cleanup_only`,
+`temporal_replay_only`, `historical_read_only`, or `migration_tool` — nothing is
+`eligible_for_removal` and nothing is `removed`. The class, not a document, is
+what decides whether a component still admits new work and the earliest stage at
+which it can be deleted. See
+[Omnigent Module Architecture §5](OmnigentModuleArchitecture.md#5-retained-duplicate-architecture-and-its-retirement-owners)
+for the full inventory and the staging rules.
+
 ## 5. Governing principles
 
 ### 5.1 One generic control plane
@@ -430,10 +440,21 @@ No default changes until the exact target combination has passing evidence and a
 
 ### Stage 6: Retire duplicate runtime architecture
 
-- Stop admitting new legacy Codex profile-bound plans after parity and rollback criteria pass.
-- Stop defaulting to direct Codex and direct Claude after their Omnigent combinations pass.
-- Consolidate duplicate Compose startup scripts and environment variables.
-- Reduce legacy modules to replay and historical-read adapters, then remove them only when retirement guards permit it.
+Retirement is code-owned and staged. The retirement class of each component
+decides what may happen to it; the class advances only when its evidence
+permits, and it never advances as a side effect of another component retiring.
+
+- Stop admitting new legacy Codex profile-bound plans after parity and rollback criteria pass. New admission is enforced at plan compilation and runtime selection from the component's retirement class, so a trusted default, an explicit client selection, a schedule, and a preset are held to the same state.
+- Stop defaulting to direct Codex and direct Claude after their Omnigent combinations pass. Direct Codex and direct Claude are separate generations with separate rows and separate decisions; neither is forced to retire because the other did.
+- Consolidate duplicate Compose startup scripts and environment variables. Legacy image and environment identities produce an actionable startup failure during their deprecation window instead of being silently ignored.
+- Reduce legacy modules to replay and historical-read adapters, then remove them only when retirement guards permit it. Removal proceeds one `RemovalStage` at a time (product selectors → new-write API paths → composition-root registrations → startup and Compose → image and environment aliases → OAuth-host orchestration → launch-only code → replay wrappers → historical readers), and each removal PR cites the inventory rows it removes and the guard tests that prove them eligible.
+
+A component becomes removal-eligible only when **all** of the following hold:
+its class no longer admits new work; every declared active owner has fresh,
+successful, zero-count drain evidence; its replay, historical-read, and rollback
+windows have closed; a fresh, exactly-scoped rollback exercise was recorded; and
+every applicable retirement criterion passes. Missing evidence never reads as
+"drained".
 
 ## 11. Required acceptance gates
 

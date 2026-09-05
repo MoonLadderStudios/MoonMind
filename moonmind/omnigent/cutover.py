@@ -423,6 +423,34 @@ class RuntimeSelection:
         }
 
 
+def _assert_runtime_new_admission(
+    runtime_id: str, *, rollback_generation: str | None = None
+) -> None:
+    """Reject a runtime whose code-owned retirement class stopped admitting.
+
+    The cutover phase is the *rollout* authority; the retirement class is the
+    *retirement* authority. Both must permit a runtime before it becomes a new
+    selection, and neither ever affects an already-recorded plan.
+    """
+
+    if not runtime_id:
+        return
+    from moonmind.omnigent.legacy_retirement import (
+        LegacyAdmissionRejected,
+        assert_surface_admits_new_work,
+    )
+
+    try:
+        assert_surface_admits_new_work(
+            f"runtime-strategy:{runtime_id}",
+            rollback_generation=rollback_generation,
+        )
+    except LegacyAdmissionRejected as exc:
+        raise ValueError(
+            f"runtime_new_admission_disabled:{runtime_id}:{exc.reason_code}"
+        ) from exc
+
+
 def select_runtime(
     *,
     authored_runtime: str | None,
@@ -430,6 +458,7 @@ def select_runtime(
     phase: CutoverPhase,
     submission_kind: str = "create",
     release_status: EffectivePhase | None = None,
+    rollback_generation: str | None = None,
 ) -> RuntimeSelection:
     """Apply rollout defaults without ever rewriting an explicit selection.
 
@@ -437,6 +466,10 @@ def select_runtime(
     advance at phase 3.  Explicit direct launch is rejected from phase 5.  This
     helper never performs automatic fallback: callers must persist the returned
     evidence on the run before launch.
+
+    The rollout phase and the code-owned retirement class are separate
+    authorities and both must permit a runtime before it becomes a new
+    selection (#3835). Neither ever affects an already-recorded plan.
     """
 
     explicit = str(authored_runtime or "").strip().lower()
@@ -444,6 +477,9 @@ def select_runtime(
         explicit = normalize_runtime_id(explicit)
         if explicit == "codex_cli" and phase >= CutoverPhase.DIRECT_LAUNCH_DISABLED:
             raise ValueError("codex_direct_launch_disabled_by_cutover_phase")
+        _assert_runtime_new_admission(
+            explicit, rollback_generation=rollback_generation
+        )
         return RuntimeSelection(
             explicit,
             True,
@@ -468,6 +504,9 @@ def select_runtime(
         "preset": CutoverPhase.SCHEDULE_DEFAULT,
     }.get(submission_kind, CutoverPhase.BROAD_DEFAULT)
     selected = "omnigent" if default == "codex_cli" and phase >= threshold else default
+    # A configured default may not keep a direct runtime as a default target
+    # once its retirement class stops admitting new work (#3835 required work 2).
+    _assert_runtime_new_admission(selected, rollback_generation=rollback_generation)
     return RuntimeSelection(
         selected,
         False,

@@ -114,6 +114,21 @@ def select_execution_realizer(
     return "generic-omnigent-host@1"
 
 
+def _configured_legacy_rollback_generation() -> str | None:
+    """Read the operator-selected rollback generation for legacy re-admission.
+
+    Trusted planner input only: it comes from deployment settings, never from an
+    Agent Profile or workflow payload.
+    """
+
+    from moonmind.config.settings import settings
+    from moonmind.omnigent.session_supervisor_rollback import (
+        legacy_rollback_generation_from_settings,
+    )
+
+    return legacy_rollback_generation_from_settings(settings.feature_flags)
+
+
 def compile_execution_plan(
     *,
     agent_profile: dict[str, Any] | OmnigentAgentProfileV2,
@@ -145,6 +160,7 @@ def compile_execution_plan(
     execution_realizer_ref: str | None = None,
     execution_authority: dict[str, Any] | None = None,
     agent_profile_snapshot_ref: str | None = None,
+    rollback_generation: str | None = None,
 ) -> OmnigentExecutionPlanEnvelope:
     # 1. Validate agent profile (resolve snapshot)
     profile = validate_agent_profile(agent_profile)
@@ -426,6 +442,35 @@ def compile_execution_plan(
             f"execution realizer {realizer} unavailable",
             code=HarnessPlatformFailure.OMNIGENT_EXECUTION_REALIZER_UNAVAILABLE,
         ) from exc
+
+    # Retirement admission (#3835 required work 2). Plan compilation is the one
+    # new-admission boundary for every client: a trusted planner default, an
+    # explicit ``execution_realizer_ref`` from an alternate API client, a
+    # schedule, and a preset all resolve here. Once the code-owned retirement
+    # class for a realizer stops admitting new work, no new plan may select it,
+    # while already-recorded plans keep executing, cancelling, cleaning up, and
+    # reading normally. A ``rollback_only`` class re-admits new work only under
+    # the exact rollback generation the operator has explicitly selected.
+    from moonmind.omnigent.legacy_retirement import (
+        LegacyAdmissionRejected,
+        assert_new_admission_allowed,
+        retirement_record_for_surface,
+    )
+
+    retirement_row = retirement_record_for_surface(f"realizer:{realizer}")
+    if retirement_row is not None:
+        generation = rollback_generation
+        if generation is None and retirement_row.requires_rollback_generation:
+            generation = _configured_legacy_rollback_generation()
+        try:
+            assert_new_admission_allowed(
+                retirement_row.path_id, rollback_generation=generation
+            )
+        except LegacyAdmissionRejected as exc:
+            raise HarnessPlatformError(
+                str(exc),
+                code=HarnessPlatformFailure.OMNIGENT_EXECUTION_REALIZER_UNAVAILABLE,
+            ) from exc
 
     required_caps_digest = compute_required_capabilities_digest(
         list(class_decision.requiredSatisfied)
