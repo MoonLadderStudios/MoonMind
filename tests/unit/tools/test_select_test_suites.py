@@ -513,6 +513,20 @@ def test_conformance_runner_inputs_select_deterministic_conformance_only() -> No
             assert outputs["exact_artifact"] == "false", path
 
 
+def test_first_run_contract_change_selects_required_hermetic_journey() -> None:
+    """First-run CLI changes must run the required hermetic journey (#3926/#3938)."""
+
+    for path in (
+        "moonmind/run_cli.py",
+        "moonmind/cli.py",
+        "tests/unit/test_run_cli.py",
+        "tests/integration/api/test_first_run_default_journey.py",
+    ):
+        outputs = _outputs([path])
+        assert outputs["unit_fast"] == "true", path
+        assert outputs["integration_ci"] == "true", path
+
+
 def test_conformance_input_inventory_matches_the_runner() -> None:
     from tools import run_omnigent_conformance as runner
 

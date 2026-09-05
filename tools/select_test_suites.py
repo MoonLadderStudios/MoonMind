@@ -107,6 +107,13 @@ INTEGRATION_CI_EXACT = {
     "tools/test_integration.sh",
     "pyproject.toml",
     "uv.lock",
+    # First-run default journey (#3926/#3938): a change to the public-contract
+    # CLI or its unit suite must also run the required hermetic
+    # production-boundary journey (submit -> terminal -> captured evidence).
+    "moonmind/run_cli.py",
+    "moonmind/cli.py",
+    "tests/unit/test_run_cli.py",
+    "tests/integration/api/test_first_run_default_journey.py",
 }
 
 INTEGRATION_CI_PREFIXES = (
