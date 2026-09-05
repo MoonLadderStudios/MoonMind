@@ -23,10 +23,16 @@ import asyncio
 from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 from typing import Any
+from unittest.mock import patch
 
 import pytest
 from temporalio.exceptions import ApplicationError
 
+from moonmind.omnigent.harness_platform.execution_plan import (
+    compute_model_config_digest,
+    create_execution_plan_envelope,
+)
+from moonmind.omnigent.runtime_bindings import stable_binding_id
 from moonmind.schemas.agent_runtime_models import (
     ADMITTED_PROVIDER_CAPACITY_SCHEMA_V2,
     AgentExecutionRequest,
@@ -35,8 +41,16 @@ from moonmind.schemas.agent_runtime_models import (
 from moonmind.schemas.omnigent_session_models import (
     OmnigentSessionAdmissionDecision,
 )
+from moonmind.workflows.temporal.activities.omnigent_session_activities import (
+    _plan_capacity_authority,
+)
 from moonmind.workflows.temporal.workflows import agent_run as agent_run_module
-from moonmind.workflows.temporal.workflows.agent_run import MoonMindAgentRun
+from moonmind.workflows.temporal.workflows.agent_run import (
+    OMNIGENT_MULTI_PROFILE_ADMISSION_REJECTION_PATCH_ID,
+    OMNIGENT_PRE_ACTIVITY_CAPACITY_ADMISSION_PATCH_ID,
+    MoonMindAgentRun,
+)
+from moonmind.workflows.temporal.workflows.run import MoonMindRunWorkflow
 
 
 
@@ -97,21 +111,55 @@ def _capture_release_signals(
 
 
 PLAN_REF = "omnigent-execution-plan:sha256:" + "1" * 64
+OTHER_PLAN_REF = "omnigent-execution-plan:sha256:" + "3" * 64
 
 
-def _omnigent_request(**parameters: Any) -> AgentExecutionRequest:
+def _plan_binding(plan_ref: str = PLAN_REF) -> dict[str, Any]:
+    """The execution-plan binding the production start path actually authors."""
+
+    digest = "sha256:" + plan_ref.rsplit(":", 1)[-1]
+    return {
+        "planRef": plan_ref,
+        "planDigest": digest,
+        "planArtifactRef": "artifact:omnigent-execution-plan",
+        "taskInputSnapshotRef": "artifact:omnigent-task-input",
+        "taskInputSnapshotDigest": "sha256:" + "2" * 64,
+    }
+
+
+def _omnigent_request(
+    *,
+    plan_binding: str | None = None,
+    plan_ref_parameter: str | None = PLAN_REF,
+    **parameters: Any,
+) -> AgentExecutionRequest:
+    """Build a request in either committed-plan shape.
+
+    ``plan_binding`` is the authority the plan-bound generic-host lane is
+    selected by and the only one the API and scheduler start paths author.
+    ``plan_ref_parameter`` is the optional workflow-authored parameter that
+    ``MoonMindRunWorkflow`` writes only when the caller supplied a
+    workflow-level ``executionPlanRef``. Both shapes reach this admission code,
+    so both are exercised.
+    """
+
+    binding = _plan_binding(plan_binding) if plan_binding else None
+    payload: dict[str, Any] = {"publishMode": "none"}
+    if plan_ref_parameter:
+        payload["executionPlanRef"] = plan_ref_parameter
+    if binding is not None:
+        # run.py keeps the authored binding in ``parameters`` as well.
+        payload["omnigentExecutionPlan"] = dict(binding)
+    payload.update(parameters)
     return AgentExecutionRequest(
-        agentKind="managed",
+        agentKind="external" if binding is not None else "managed",
         agentId="omnigent",
         executionProfileRef="opencode-zen-free",
+        omnigentExecutionPlan=binding,
         correlationId="corr-1",
         idempotencyKey="idem-1",
         instructionRef="artifact:instructions",
-        parameters={
-            "publishMode": "none",
-            "executionPlanRef": PLAN_REF,
-            **parameters,
-        },
+        parameters=payload,
         workspaceSpec={},
     )
 
@@ -306,6 +354,12 @@ async def test_a_multi_profile_plan_is_rejected_before_any_capacity_is_taken(
     profiles cannot be expressed without a second capacity ledger. Saying so
     before execution is the supported behaviour; silently falling back to
     Activity-side queueing is not.
+
+    This is the defense-in-depth guard inside the admission helper. The branch
+    a production multi-profile plan actually takes is the workflow gate — see
+    ``test_a_new_activity_owned_plan_is_rejected_before_execution`` — because
+    ``_plan_capacity_authority`` classifies such a plan as Activity-owned and
+    returns no profile refs at all.
     """
 
     _configure_workflow_runtime(monkeypatch)
@@ -979,3 +1033,351 @@ async def test_the_wait_the_run_is_actually_in_is_reported(
     assert any("Waiting for provider capacity." == reason for reason in reasons)
     assert any("generic_host_capacity" in reason for reason in reasons)
     assert any("waiting for an execution worker" in reason for reason in reasons)
+
+
+# ---------------------------------------------------------------------------
+# The committed plan reference the whole hand-off is fenced on
+# (MoonLadderStudios/MoonMind#3880 remaining work 1 and 2).
+# ---------------------------------------------------------------------------
+
+
+def _production_started_omnigent_request() -> AgentExecutionRequest:
+    """Build the request the production start path actually produces.
+
+    The API (``api_service/api/routers/executions.py``) and the scheduler
+    (``api_service/services/recurring_workflows_service.py``) author only
+    ``omnigentExecutionPlan``. ``MoonMindRunWorkflow`` — the real builder used
+    here — writes ``parameters['executionPlanRef']`` only when the caller also
+    supplied a workflow-level ``executionPlanRef``, so the default run reaches
+    admission with the binding and no parameter.
+    """
+
+    info = SimpleNamespace(
+        namespace="default",
+        workflow_id="mm:omnigent-plan-bound",
+        run_id="run-1",
+        parent=None,
+    )
+    with (
+        patch(
+            "moonmind.workflows.temporal.workflows.run.workflow.info",
+            return_value=info,
+        ),
+        patch(
+            "moonmind.workflows.temporal.workflows.run.workflow.patched",
+            return_value=True,
+        ),
+    ):
+        return MoonMindRunWorkflow()._build_agent_execution_request(
+            node_inputs={
+                "runtime": {
+                    "mode": "omnigent",
+                    "executionProfileRef": "opencode-zen-free",
+                }
+            },
+            node_id="omnigent",
+            tool_name="auto",
+            workflow_parameters={"omnigentExecutionPlan": _plan_binding()},
+        )
+
+
+@pytest.mark.asyncio
+async def test_the_production_start_shape_admits_capacity(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """AC1: the default plan-bound run must actually admit capacity.
+
+    The plan-bound generic-host lane is selected by
+    ``request.omnigent_execution_plan``, so the committed plan reference the
+    ticket, the manager fence and the host reservation are all keyed on has to
+    come from that same authority. Reading the optional
+    ``parameters['executionPlanRef']`` alone left this shape with no plan
+    authority and failed admission before any capacity was requested.
+    """
+
+    _configure_workflow_runtime(monkeypatch)
+    run = _RecordingRun()
+    request = _production_started_omnigent_request()
+
+    # The shape under test: binding present, parameter absent.
+    assert request.omnigent_execution_plan is not None
+    assert request.parameters.get("executionPlanRef") is None
+
+    admitted = await run._admit_omnigent_capacity_before_execution(
+        request=request, admission=_admission(), parent_info=None
+    )
+
+    capacity = admitted.admitted_provider_capacity
+    assert capacity is not None
+    assert capacity.execution_plan_ref == PLAN_REF
+    # The manager records the same fence the Activity inspects.
+    request_slot = next(
+        payload for name, payload in run.signals if name == "request_slot"
+    )
+    assert request_slot["lease_metadata"]["executionPlanRef"] == PLAN_REF
+    # The pre-admission reservation resolves to the runtime binding the
+    # realizer derives from the plan it loads for this binding.
+    host_payload = next(
+        payload
+        for name, payload in run.activity_calls
+        if name == "omnigent.admit_generic_host_capacity"
+    )
+    assert host_payload["executionPlanRef"] == PLAN_REF
+    assert host_payload["idempotencyKey"] == request.idempotency_key
+    assert stable_binding_id(
+        execution_plan_ref=host_payload["executionPlanRef"],
+        idempotency_key=host_payload["idempotencyKey"],
+    ) == stable_binding_id(
+        execution_plan_ref=request.omnigent_execution_plan.plan_ref,
+        idempotency_key=request.idempotency_key,
+    )
+
+
+@pytest.mark.asyncio
+async def test_both_committed_plan_shapes_resolve_the_same_authority(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A workflow-authored executionPlanRef stays a supported input."""
+
+    _configure_workflow_runtime(monkeypatch)
+
+    for request in (
+        _omnigent_request(),  # parameter only
+        _omnigent_request(plan_binding=PLAN_REF, plan_ref_parameter=None),
+        _omnigent_request(plan_binding=PLAN_REF),  # both, in agreement
+    ):
+        run = _RecordingRun()
+        admitted = await run._admit_omnigent_capacity_before_execution(
+            request=request, admission=_admission(), parent_info=None
+        )
+        assert admitted.admitted_provider_capacity.execution_plan_ref == PLAN_REF
+
+
+@pytest.mark.asyncio
+async def test_two_disagreeing_plan_authorities_fail_closed(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Picking either one would fence the Activity against an unadmitted plan."""
+
+    _configure_workflow_runtime(monkeypatch)
+    run = _RecordingRun()
+
+    with pytest.raises(ApplicationError) as exc_info:
+        await run._admit_omnigent_capacity_before_execution(
+            request=_omnigent_request(
+                plan_binding=PLAN_REF, plan_ref_parameter=OTHER_PLAN_REF
+            ),
+            admission=_admission(),
+            parent_info=None,
+        )
+
+    assert exc_info.value.type == "OmnigentExecutionPlanAuthorityConflict"
+    assert exc_info.value.non_retryable is True
+    assert run.signals == []
+    assert run.activity_calls == []
+
+
+# ---------------------------------------------------------------------------
+# Multi-profile plans: rejected before execution for new runs, retained
+# histories keep their classified Activity acquisition
+# (MoonLadderStudios/MoonMind#3880 remaining work 3 and 4).
+# ---------------------------------------------------------------------------
+
+
+def _plan_selecting(*profile_refs: str) -> Any:
+    """A real generic-host plan envelope selecting the given Provider Profiles."""
+
+    model = "opencode-go/model"
+    return create_execution_plan_envelope(
+        {
+            "endpointRef": "default",
+            "agentProfileSnapshotRef": "omnigent-agent-profile:sha256:" + "1" * 64,
+            "harnessCatalogRef": "omnigent-harness-catalog:sha256:" + "2" * 64,
+            "harnessId": "opencode-native",
+            "harnessImplementationRef": (
+                "omnigent-harness-implementation:sha256:" + "3" * 64
+            ),
+            "agentSource": {
+                "kind": "upstream",
+                "upstreamId": "opencode-native-ui",
+                "upstreamVersion": "1",
+                "upstreamSnapshotDigest": "sha256:" + "4" * 64,
+            },
+            "credentialBindingSetRef": (
+                "omnigent-credential-bindings:primary@1#sha256:" + "5" * 64
+            ),
+            "credentialBindings": {
+                f"slot-{index}": {
+                    "providerProfileRef": profile_ref,
+                    "materializerRef": "none@1",
+                }
+                for index, profile_ref in enumerate(profile_refs)
+            },
+            "hostClassRef": "omnigent-opencode@1",
+            "launchPolicyRef": "omnigent-on-demand@1",
+            "executionRealizerRef": "generic-omnigent-host@1",
+            "model": {
+                "qualifiedId": model,
+                "effort": None,
+                "routeRef": "opencode-go",
+                "normalizedOptions": {},
+                "modelConfigDigest": compute_model_config_digest(
+                    qualifiedId=model,
+                    effort=None,
+                    routeRef="opencode-go",
+                    normalizedOptions={},
+                ),
+            },
+            "resolvedSkills": {
+                "resolvedSkillSetRef": "artifact:skills",
+                "resolvedSkillSetDigest": "sha256:" + "6" * 64,
+                "skillDeliveryRef": "skill-delivery:sha256:" + "7" * 64,
+            },
+            "classAdmissionDecision": {
+                "allowed": True,
+                "requiredSatisfied": [],
+                "preferredSatisfied": [],
+                "preferredMissing": [],
+                "reasons": [],
+            },
+            "runtimeValidationRequirements": ["live-model-option"],
+            "workspaceIntentRef": "workspace-intent:sha256:" + "8" * 64,
+            "workspaceMutation": "read_only",
+            "capturePolicyRef": None,
+            "capturePolicy": {"stream": False, "evidence": False},
+            "policySnapshotRef": "omnigent-policy:sha256:" + "9" * 64,
+            "supportCombinationKey": (
+                "omnigent-support-combination:sha256:" + "0" * 64
+            ),
+        }
+    )
+
+
+@pytest.mark.asyncio
+async def test_a_multi_profile_plan_names_the_activity_as_capacity_owner() -> None:
+    """The production admission Activity classifies the plan, not the test.
+
+    ``_plan_capacity_authority`` returns this before touching the database, so
+    the value the workflow gate reacts to is the real one.
+    """
+
+    authority = await _plan_capacity_authority(
+        _plan_selecting("opencode-zen-free", "second-profile"),
+        execution_profile_ref="opencode-zen-free",
+    )
+
+    assert authority == {"capacityAcquisitionOwner": "activity"}
+
+
+def _owner_gate_admission(capacity_acquisition_owner: str) -> Any:
+    """The frozen admission decision the workflow gate actually reads."""
+
+    return OmnigentSessionAdmissionDecision.model_validate(
+        {
+            "admitted": True,
+            "reasonCode": "enabled",
+            "admissionMode": "enabled",
+            "executionRealizerRef": "generic-omnigent-host@1",
+            "capacityAcquisitionOwner": capacity_acquisition_owner,
+        }
+    )
+
+
+def test_a_new_activity_owned_plan_is_rejected_before_execution(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """AC4: rejected before any slot, host or execution Activity is committed."""
+
+    _configure_workflow_runtime(monkeypatch)
+    run = _RecordingRun()
+
+    with pytest.raises(ApplicationError) as exc_info:
+        run._omnigent_admits_capacity_before_activity(
+            recorded_plan_realizer="generic-omnigent-host@1",
+            admission=_owner_gate_admission("activity"),
+        )
+
+    assert exc_info.value.type == "CapacityAdmissionOwnerUnsupported"
+    assert exc_info.value.non_retryable is True
+    assert run.signals == []
+    assert run.activity_calls == []
+
+
+def test_a_retained_history_keeps_its_activity_owned_acquisition(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """AC8 / Impl 7: replay must reach the ActivityTaskScheduled it recorded.
+
+    Under MoonLadderStudios/MoonMind#3878 the capacity owner was one term of
+    the same boolean as the pre-Activity admission marker, so a multi-profile
+    run recorded that marker and then scheduled its Activity-owned execution.
+    Raising on replay would be non-deterministic against that history, so the
+    rejection carries its own marker, which such a history never recorded.
+    """
+
+    _configure_workflow_runtime(monkeypatch)
+    monkeypatch.setattr(
+        agent_run_module.workflow,
+        "patched",
+        lambda patch_id: (
+            patch_id != OMNIGENT_MULTI_PROFILE_ADMISSION_REJECTION_PATCH_ID
+        ),
+    )
+    run = _RecordingRun()
+
+    assert (
+        run._omnigent_admits_capacity_before_activity(
+            recorded_plan_realizer="generic-omnigent-host@1",
+            admission=_owner_gate_admission("activity"),
+        )
+        is False
+    )
+
+
+def test_a_workflow_owned_plan_admits_before_the_execution_activity(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The supported single-profile lane still takes pre-Activity admission."""
+
+    _configure_workflow_runtime(monkeypatch)
+    run = _RecordingRun()
+
+    assert (
+        run._omnigent_admits_capacity_before_activity(
+            recorded_plan_realizer="generic-omnigent-host@1",
+            admission=_owner_gate_admission("workflow"),
+        )
+        is True
+    )
+    # Another realizer never enters this path at all.
+    assert (
+        run._omnigent_admits_capacity_before_activity(
+            recorded_plan_realizer="codex-profile-bound@1",
+            admission=_owner_gate_admission("workflow"),
+        )
+        is False
+    )
+
+
+def test_a_pre_patch_history_never_admits_before_the_activity(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A history recorded before pre-Activity admission keeps its recorded lane."""
+
+    _configure_workflow_runtime(monkeypatch)
+    monkeypatch.setattr(
+        agent_run_module.workflow,
+        "patched",
+        lambda patch_id: (
+            patch_id != OMNIGENT_PRE_ACTIVITY_CAPACITY_ADMISSION_PATCH_ID
+        ),
+    )
+    run = _RecordingRun()
+
+    assert (
+        run._omnigent_admits_capacity_before_activity(
+            recorded_plan_realizer="generic-omnigent-host@1",
+            admission=_owner_gate_admission("workflow"),
+        )
+        is False
+    )
