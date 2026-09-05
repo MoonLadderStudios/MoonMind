@@ -18280,19 +18280,25 @@ def test_mm3788_create_execution_accepts_provider_profile_owned_by_selected_runt
     assert initial_parameters["profileId"] == "claude_minimax_team"
 
 
-@pytest.mark.parametrize("runtime", ["claude_code", "codex_cli"])
+@pytest.mark.parametrize(
+    "runtime,provider_id,model,effort",
+    [
+        ("claude_code", "anthropic", "claude-opus-5", "xhigh"),
+        ("codex_cli", "openai", "gpt-5", "xhigh"),
+        ("jules", "google", "provider-selected-model", None),
+    ],
+)
 @pytest.mark.parametrize("selection", ["profile_inferred", "omitted", "explicit"])
 def test_profile_selected_runtime_survives_deployment_default(
-    monkeypatch, runtime, selection
+    monkeypatch, runtime, provider_id, model, effort, selection
 ) -> None:
     """Replay the UI's untouched advanced-runtime control at Temporal admission."""
     monkeypatch.setattr(settings.workflow, "default_runtime", "omnigent")
     profile = _mm3788_provider_profile(profile_id="subscription", runtime_id=runtime)
-    profile.provider_id = "anthropic" if runtime == "claude_code" else "openai"
+    profile.provider_id = provider_id
     body = _mm3788_task_request(target_runtime=runtime, profile_id=profile.profile_id)
     authored = body["payload"]["workflow"]["runtime"]
-    model = "claude-opus-5" if runtime == "claude_code" else "gpt-5"
-    authored.update(model=model, effort="xhigh")
+    authored.update(model=model, effort=effort)
     if selection == "profile_inferred":
         authored["authored"] = False
     elif selection == "omitted":
@@ -18307,7 +18313,7 @@ def test_profile_selected_runtime_survives_deployment_default(
     assert parameters["targetRuntime"] == runtime
     assert parameters["profileId"] == profile.profile_id
     assert parameters["model"] == model
-    assert parameters["effort"] == "xhigh"
+    assert parameters["effort"] == effort
     assert parameters["workflow"]["runtime"]["mode"] == runtime
 
 
