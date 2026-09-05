@@ -57,7 +57,10 @@ We need repeatable, auditable, **declarative** pipelines for bringing text/code 
   backed by `moonmind/rag/qdrant_client.py`
 * API: retrieval capability endpoints in
   `api_service/api/routers/retrieval_capabilities.py`
-* Orchestration substrate: `moonmind/workflows/temporal/manifest_ingest.py` (Temporal workflow + Activities)
+* Orchestration: `moonmind/workflows/temporal/workflows/manifest_ingest.py`
+  (the registered Temporal workflow); `moonmind/workflows/temporal/manifest_ingest.py`
+  owns compilation/projection helpers and `activity_runtime.py` owns manifest
+  I/O Activities
 * Manifest contract: `moonmind/workflows/agent_queue/manifest_contract.py` (validation, normalization, secret leak detection)
 * Schema models: `moonmind/schemas/manifest_ingest_models.py`, `moonmind/schemas/manifest_models.py`
 

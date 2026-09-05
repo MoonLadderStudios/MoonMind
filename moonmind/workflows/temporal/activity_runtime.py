@@ -2707,6 +2707,12 @@ class TemporalManifestActivities:
         nodes: Sequence[Mapping[str, Any]] | None = None,
         execution_ref: ExecutionRef | dict[str, Any] | None = None,
     ) -> tuple[ArtifactRef, ArtifactRef]:
+        # A completed manifest.compile Activity serializes ArtifactRef as an
+        # object. Preserve that recorded invocation shape at the Activity owner.
+        if isinstance(plan_ref, Mapping):
+            plan_ref = ArtifactRef(**dict(plan_ref)).artifact_id
+        elif isinstance(plan_ref, ArtifactRef):
+            plan_ref = plan_ref.artifact_id
         resolved_nodes = await self._resolve_manifest_nodes(
             principal=principal,
             plan_ref=plan_ref,

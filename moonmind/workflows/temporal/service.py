@@ -2326,7 +2326,7 @@ class TemporalExecutionService:
                 input_args = {
                     "workflow_type": "MoonMind.ManifestIngest",
                     "manifest_ref": manifest_artifact_ref,
-                    "action": params.get("action", "apply"),
+                    "action": params.get("action", "run"),
                     "options": params.get("options", {}),
                 }
 

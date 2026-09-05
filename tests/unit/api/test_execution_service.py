@@ -1,3 +1,5 @@
+from datetime import UTC, datetime
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -51,6 +53,15 @@ async def test_describe_execution_syncs_from_temporal(
         entry="run",
     )
     mock_session.get.return_value = record
+    mock_client_adapter.describe_workflow.return_value = SimpleNamespace(
+        id=record.workflow_id,
+        run_id=record.run_id,
+        workflow_type=TemporalWorkflowType.USER_WORKFLOW.value,
+        status=1,
+        start_time=datetime(2026, 9, 5, tzinfo=UTC),
+        close_time=None,
+        search_attributes={"mm_owner_type": ["user"], "mm_state": ["initializing"]},
+    )
 
     # We mock _load_source_execution since describe_execution calls it
     service._load_source_execution = AsyncMock(return_value=record)

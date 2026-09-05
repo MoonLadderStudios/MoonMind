@@ -1,0 +1,220 @@
+{
+  "events": [
+    {
+      "eventId": "1",
+      "eventTime": "2026-09-05T22:08:51.072Z",
+      "eventType": "EVENT_TYPE_WORKFLOW_EXECUTION_STARTED",
+      "workflowExecutionStartedEventAttributes": {
+        "workflowType": {
+          "name": "MoonMind.ManifestIngest"
+        },
+        "taskQueue": {
+          "name": "manifest-before-a971700c-1164-4c3e-9fc2-a59b357a67ff"
+        },
+        "input": {
+          "payloads": [
+            {
+              "metadata": {
+                "encoding": "anNvbi9wbGFpbg=="
+              },
+              "data": "eyJtYW5pZmVzdF9yZWYiOiJhcnRfMDFNMVNTVzBZWko3MFY3QkpLOFA4VFdBRjMifQ=="
+            }
+          ]
+        },
+        "workflowExecutionTimeout": "315360000s",
+        "workflowRunTimeout": "315360000s",
+        "workflowTaskTimeout": "10s",
+        "originalExecutionRunId": "8fdbae93-e716-4421-b416-a6ff12261c3c",
+        "identity": "1@7439ea18687d",
+        "firstExecutionRunId": "8fdbae93-e716-4421-b416-a6ff12261c3c",
+        "attempt": 1,
+        "firstWorkflowTaskBackoff": "0s",
+        "priority": {}
+      }
+    },
+    {
+      "eventId": "2",
+      "eventTime": "2026-09-05T22:08:51.072Z",
+      "eventType": "EVENT_TYPE_WORKFLOW_TASK_SCHEDULED",
+      "workflowTaskScheduledEventAttributes": {
+        "taskQueue": {
+          "name": "manifest-before-a971700c-1164-4c3e-9fc2-a59b357a67ff"
+        },
+        "startToCloseTimeout": "10s",
+        "attempt": 1
+      }
+    },
+    {
+      "eventId": "3",
+      "eventTime": "2026-09-05T22:08:51.073Z",
+      "eventType": "EVENT_TYPE_WORKFLOW_TASK_STARTED",
+      "workflowTaskStartedEventAttributes": {
+        "scheduledEventId": "2",
+        "identity": "1@7439ea18687d",
+        "historySizeBytes": "385"
+      }
+    },
+    {
+      "eventId": "4",
+      "eventTime": "2026-09-05T22:08:51.084Z",
+      "eventType": "EVENT_TYPE_WORKFLOW_TASK_COMPLETED",
+      "workflowTaskCompletedEventAttributes": {
+        "scheduledEventId": "2",
+        "identity": "1@7439ea18687d",
+        "binaryChecksum": "fccaa754bd7d124301c2d8c0e395a725",
+        "sdkMetadata": {
+          "coreUsedFlags": [
+            2,
+            1,
+            3
+          ],
+          "sdkName": "temporal-python",
+          "sdkVersion": "1.32.0"
+        },
+        "meteringMetadata": {}
+      }
+    },
+    {
+      "eventId": "5",
+      "eventTime": "2026-09-05T22:08:51.084Z",
+      "eventType": "EVENT_TYPE_ACTIVITY_TASK_SCHEDULED",
+      "activityTaskScheduledEventAttributes": {
+        "activityId": "1",
+        "activityType": {
+          "name": "manifest.compile"
+        },
+        "taskQueue": {
+          "name": "mm.activity.artifacts",
+          "kind": "TASK_QUEUE_KIND_NORMAL"
+        },
+        "header": {},
+        "input": {
+          "payloads": [
+            {
+              "metadata": {
+                "encoding": "anNvbi9wbGFpbg=="
+              },
+              "data": "eyJhY3Rpb24iOiJhcHBseSIsImV4ZWN1dGlvbl9wb2xpY3kiOnt9LCJtYW5pZmVzdF9yZWYiOiJhcnRfMDFNMVNTVzBZWko3MFY3QkpLOFA4VFdBRjMiLCJvcHRpb25zIjp7fSwicHJpbmNpcGFsIjoic3lzdGVtIiwicmVxdWVzdGVkX2J5Ijp7ImlkIjoidGVtcG9yYWwiLCJ0eXBlIjoic3lzdGVtIn19"
+            }
+          ]
+        },
+        "scheduleToCloseTimeout": "600s",
+        "scheduleToStartTimeout": "600s",
+        "startToCloseTimeout": "300s",
+        "heartbeatTimeout": "0s",
+        "workflowTaskCompletedEventId": "3",
+        "retryPolicy": {
+          "initialInterval": "5s",
+          "backoffCoefficient": 2.0,
+          "maximumInterval": "60s",
+          "maximumAttempts": 5
+        },
+        "priority": {}
+      }
+    },
+    {
+      "eventId": "6",
+      "eventTime": "2026-09-05T22:10:06.116Z",
+      "eventType": "EVENT_TYPE_ACTIVITY_TASK_STARTED",
+      "activityTaskStartedEventAttributes": {
+        "scheduledEventId": "5",
+        "identity": "1@7439ea18687d",
+        "attempt": 5
+      }
+    },
+    {
+      "eventId": "7",
+      "eventTime": "2026-09-05T22:10:06.121Z",
+      "eventType": "EVENT_TYPE_ACTIVITY_TASK_FAILED",
+      "activityTaskFailedEventAttributes": {
+        "failure": {
+          "message": "manifest.action must be one of: plan, run",
+          "stackTrace": "  File \"/usr/local/lib/python3.12/site-packages/temporalio/worker/_activity.py\", line 351, in _handle_start_activity_task\n    result = await self._execute_activity(\n             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n\n  File \"/usr/local/lib/python3.12/site-packages/temporalio/worker/_activity.py\", line 681, in _execute_activity\n    return await impl.execute_activity(input)\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n\n  File \"/usr/local/lib/python3.12/site-packages/temporalio/worker/_activity.py\", line 889, in execute_activity\n    return await input.fn(*input.args)\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^^\n\n  File \"/workspace/tests/helpers/temporal_artifact_workers.py\", line 72, in handler\n    return await bound(payload)\n           ^^^^^^^^^^^^^^^^^^^^\n\n  File \"/workspace/moonmind/workflows/temporal/activity_runtime.py\", line 14503, in _wrapper\n    return await func(self, **request)\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^^\n\n  File \"/workspace/moonmind/workflows/temporal/activity_runtime.py\", line 2674, in manifest_compile\n    plan = compile_manifest_plan(\n           ^^^^^^^^^^^^^^^^^^^^^^\n\n  File \"/workspace/moonmind/workflows/temporal/manifest_ingest.py\", line 358, in compile_manifest_plan\n    raise ManifestIngestValidationError(str(exc)) from exc\n",
+          "cause": {
+            "message": "manifest.action must be one of: plan, run",
+            "stackTrace": "  File \"/workspace/moonmind/workflows/temporal/manifest_ingest.py\", line 344, in compile_manifest_plan\n    normalized = normalize_manifest_job_payload(\n                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n\n  File \"/workspace/moonmind/workflows/executions/manifest_contract.py\", line 138, in normalize_manifest_job_payload\n    raise ManifestContractError(f\"manifest.action must be one of: {supported}\")\n",
+            "applicationFailureInfo": {
+              "type": "ManifestContractError"
+            }
+          },
+          "applicationFailureInfo": {
+            "type": "ManifestIngestValidationError"
+          }
+        },
+        "scheduledEventId": "5",
+        "startedEventId": "6",
+        "identity": "1@7439ea18687d",
+        "retryState": "RETRY_STATE_MAXIMUM_ATTEMPTS_REACHED"
+      }
+    },
+    {
+      "eventId": "8",
+      "eventTime": "2026-09-05T22:10:06.121Z",
+      "eventType": "EVENT_TYPE_WORKFLOW_TASK_SCHEDULED",
+      "workflowTaskScheduledEventAttributes": {
+        "taskQueue": {
+          "name": "manifest-before-a971700c-1164-4c3e-9fc2-a59b357a67ff"
+        },
+        "startToCloseTimeout": "10s",
+        "attempt": 1
+      }
+    },
+    {
+      "eventId": "9",
+      "eventTime": "2026-09-05T22:10:06.121Z",
+      "eventType": "EVENT_TYPE_WORKFLOW_TASK_STARTED",
+      "workflowTaskStartedEventAttributes": {
+        "scheduledEventId": "8",
+        "identity": "1@7439ea18687d",
+        "historySizeBytes": "2822"
+      }
+    },
+    {
+      "eventId": "10",
+      "eventTime": "2026-09-05T22:10:06.124Z",
+      "eventType": "EVENT_TYPE_WORKFLOW_TASK_COMPLETED",
+      "workflowTaskCompletedEventAttributes": {
+        "scheduledEventId": "8",
+        "identity": "1@7439ea18687d",
+        "binaryChecksum": "fccaa754bd7d124301c2d8c0e395a725",
+        "sdkMetadata": {},
+        "meteringMetadata": {}
+      }
+    },
+    {
+      "eventId": "11",
+      "eventTime": "2026-09-05T22:10:06.124Z",
+      "eventType": "EVENT_TYPE_WORKFLOW_EXECUTION_FAILED",
+      "workflowExecutionFailedEventAttributes": {
+        "failure": {
+          "message": "Activity task failed",
+          "cause": {
+            "message": "manifest.action must be one of: plan, run",
+            "stackTrace": "  File \"/usr/local/lib/python3.12/site-packages/temporalio/worker/_activity.py\", line 351, in _handle_start_activity_task\n    result = await self._execute_activity(\n             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n\n  File \"/usr/local/lib/python3.12/site-packages/temporalio/worker/_activity.py\", line 681, in _execute_activity\n    return await impl.execute_activity(input)\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n\n  File \"/usr/local/lib/python3.12/site-packages/temporalio/worker/_activity.py\", line 889, in execute_activity\n    return await input.fn(*input.args)\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^^\n\n  File \"/workspace/tests/helpers/temporal_artifact_workers.py\", line 72, in handler\n    return await bound(payload)\n           ^^^^^^^^^^^^^^^^^^^^\n\n  File \"/workspace/moonmind/workflows/temporal/activity_runtime.py\", line 14503, in _wrapper\n    return await func(self, **request)\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^^\n\n  File \"/workspace/moonmind/workflows/temporal/activity_runtime.py\", line 2674, in manifest_compile\n    plan = compile_manifest_plan(\n           ^^^^^^^^^^^^^^^^^^^^^^\n\n  File \"/workspace/moonmind/workflows/temporal/manifest_ingest.py\", line 358, in compile_manifest_plan\n    raise ManifestIngestValidationError(str(exc)) from exc\n",
+            "cause": {
+              "message": "manifest.action must be one of: plan, run",
+              "stackTrace": "  File \"/workspace/moonmind/workflows/temporal/manifest_ingest.py\", line 344, in compile_manifest_plan\n    normalized = normalize_manifest_job_payload(\n                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n\n  File \"/workspace/moonmind/workflows/executions/manifest_contract.py\", line 138, in normalize_manifest_job_payload\n    raise ManifestContractError(f\"manifest.action must be one of: {supported}\")\n",
+              "applicationFailureInfo": {
+                "type": "ManifestContractError"
+              }
+            },
+            "applicationFailureInfo": {
+              "type": "ManifestIngestValidationError"
+            }
+          },
+          "activityFailureInfo": {
+            "scheduledEventId": "5",
+            "startedEventId": "6",
+            "identity": "1@7439ea18687d",
+            "activityType": {
+              "name": "manifest.compile"
+            },
+            "activityId": "1",
+            "retryState": "RETRY_STATE_MAXIMUM_ATTEMPTS_REACHED"
+          }
+        },
+        "workflowTaskCompletedEventId": "9"
+      }
+    }
+  ]
+}
