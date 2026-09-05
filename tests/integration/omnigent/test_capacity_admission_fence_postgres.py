@@ -158,12 +158,22 @@ class _RestartedManager(MoonMindProviderProfileManagerWorkflow):
 
     def __init__(self) -> None:
         super().__init__()
-        self.reconnected: list[tuple[str, str]] = []
+        self.reconnected: list[tuple[str, str, int | None]] = []
 
-    async def _signal_slot_assigned(self, workflow_id: str, profile_id: str) -> None:
+    async def _signal_slot_assigned(
+        self,
+        requester_workflow_id: str,
+        profile_id: str,
+        *,
+        fencing_generation: int | None = None,
+    ) -> None:
         # The orphaned-workflow reconnect is a Temporal side effect; the fence
-        # this test is about is the restored lease metadata.
-        self.reconnected.append((workflow_id, profile_id))
+        # this test is about is the restored lease metadata. The signature
+        # mirrors the manager's own so a fenced assignment reaches this double
+        # exactly as it reaches the real signal.
+        self.reconnected.append(
+            (requester_workflow_id, profile_id, fencing_generation)
+        )
 
 
 async def _restore_manager(monkeypatch: pytest.MonkeyPatch) -> _RestartedManager:
@@ -244,7 +254,9 @@ async def test_the_lease_fence_survives_a_manager_restart(
     assert granted == {"granted": True, "duplicate": False}
 
     manager = await _restore_manager(monkeypatch)
-    assert manager.reconnected == [(OWNER_ID, PROFILE_REF)]
+    # The restored owner and profile are what this test is about; the grant
+    # generation the manager quotes is asserted by its own fencing tests.
+    assert [item[:2] for item in manager.reconnected] == [(OWNER_ID, PROFILE_REF)]
 
     inspection = manager.inspect_credential_lease(
         {"lease_id": OWNER_ID, "owner_id": OWNER_ID}
