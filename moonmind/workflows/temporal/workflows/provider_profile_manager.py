@@ -1098,7 +1098,11 @@ class MoonMindProviderProfileManagerWorkflow:
                 self._unindex_lease(requester_id)
             # A release also withdraws any pending maintenance request from the
             # same owner, so a caller that gave up cannot hold the queue head.
-            profile.dequeue_maintenance_waiter(requester_id)
+            # Pre-marker histories never withdrew a waiter here, and doing so
+            # would reopen admission — and schedule grants — at a history
+            # position that recorded none.
+            if self._durable_maintenance_queue:
+                profile.dequeue_maintenance_waiter(requester_id)
         if workflow.patched(SLOT_HANDOFF_RESERVATION_PATCH):
             self._pending_requests = [
                 req
@@ -1681,10 +1685,20 @@ class MoonMindProviderProfileManagerWorkflow:
                 if profile.current_leases
                 else None
             )
-        head = profile.maintenance_queue_head
-        if head is not None and head.get("ownerId") != requester_id:
-            return "queued_behind_earlier_maintenance"
-        if profile.credential_consumer_leases:
+        if self._durable_maintenance_queue:
+            head = profile.maintenance_queue_head
+            if head is not None and head.get("ownerId") != requester_id:
+                return "queued_behind_earlier_maintenance"
+            draining = profile.credential_consumer_leases
+        else:
+            # A history recorded before the durable queue admitted every
+            # grantable waiter at once and drained every lease, credentialless
+            # or not. Serializing on the queue head or exempting a
+            # credentialless profile from the drain would make the same
+            # history position emit a grant where it recorded a timer, so
+            # pre-marker runs keep the admission rule they were started under.
+            draining = list(profile.current_leases)
+        if draining:
             return "draining_credential_consumers"
         if scope_gated and not self._profile_scope_available(profile):
             return "scope_unavailable"
@@ -1701,6 +1715,10 @@ class MoonMindProviderProfileManagerWorkflow:
         Credential repair and revocation do not spend it, so a saturated or
         cooling-down scope must never be what stops a broken credential from
         being fixed or revoked.
+
+        That exemption is an admission-semantics change, so it is gated on the
+        same marker as the durable queue: a history recorded before it gated
+        every maintenance purpose on scope, and must keep doing so on replay.
         """
 
         try:
@@ -1709,6 +1727,8 @@ class MoonMindProviderProfileManagerWorkflow:
             return False
         if not scoped:
             return False
+        if not self._durable_maintenance_queue:
+            return True
         try:
             return CredentialLeasePurpose(purpose).consumes_provider_capacity
         except ValueError:

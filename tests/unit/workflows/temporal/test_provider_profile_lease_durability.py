@@ -1052,3 +1052,344 @@ async def test_a_failed_pending_grant_is_not_mistaken_for_completion(
         "evidenceIdentity": "opencode-model-catalog:v2:deadbeef"
     }
     assert granted_row["fencing_generation"] == 1
+
+
+# ---------------------------------------------------------------------------
+# Replay / in-flight compatibility: pre-marker histories keep their rules
+# ---------------------------------------------------------------------------
+#
+# ``MAINTENANCE_QUEUE_DURABILITY_PATCH`` gates the durable queue, the fenced
+# grants and the rollover detach. It must gate the *admission* changes too. A
+# ProviderProfileManager that already recorded the purpose-aware ledger and the
+# capacity-scope markers is long-lived: it replays its own history on every
+# worker restart. If the grant conditions move underneath that history, the
+# same position emits a grant (and, under DB lease persistence, a
+# ScheduleActivityTask) where the history recorded a timer, and the workflow
+# task fails on non-determinism forever.
+#
+# These tests pin the pre-marker decision against ``main``'s behaviour so a
+# future edit to the admission path cannot silently move it again.
+
+
+def _pre_marker_manager() -> MoonMindProviderProfileManagerWorkflow:
+    """A manager replaying a history recorded before the durability marker."""
+
+    wf = MoonMindProviderProfileManagerWorkflow()
+    wf._runtime_id = "opencode"
+    wf._purpose_aware_capacity_ledger = True
+    wf._durable_maintenance_queue = False
+    return wf
+
+
+@pytest.mark.parametrize("capacity", CAPACITIES)
+@pytest.mark.asyncio
+async def test_a_pre_marker_history_still_gates_repair_on_scope(
+    capacity: int,
+) -> None:
+    """Exempting repair from scope is a new rule, not a retroactive one."""
+
+    wf = _pre_marker_manager()
+    profile = _install(wf, _profile(capacity))
+    _install_full_scope(wf, profile)
+    fake = _FakeWorkflow(patched=(PROVIDER_CAPACITY_SCOPE_PATCH,))
+
+    with mock_patch(MANAGER_MODULE, fake):
+        assert (
+            wf._maintenance_consumes_scope(
+                CredentialLeasePurpose.CREDENTIAL_REPAIR.value
+            )
+            is True
+        )
+        task = asyncio.ensure_future(
+            wf.acquire_credential_maintenance_lease(
+                _maintenance_payload(
+                    "repair-a",
+                    purpose=CredentialLeasePurpose.CREDENTIAL_REPAIR.value,
+                )
+            )
+        )
+        await _settle()
+
+        # Same decision main made: the cooling scope blocks the grant, and the
+        # waiter parks on its timer instead of reserving.
+        assert (
+            wf._maintenance_grant_blocker(
+                profile_id=PROFILE_ID,
+                requester_id="repair-a",
+                scope_gated=True,
+            )
+            == "scope_unavailable"
+        )
+        assert task.done() is False
+        assert profile.current_leases == []
+        assert fake.wait_calls == 1
+
+        await _cancel(task)
+
+    # The patched-on half is test_a_full_scope_never_blocks_credential_repair_
+    # or_revocation: with the marker established, repair stops asking.
+    patched = _manager()
+    _install(patched, _profile(capacity))
+    with mock_patch(MANAGER_MODULE, fake):
+        assert (
+            patched._maintenance_consumes_scope(
+                CredentialLeasePurpose.CREDENTIAL_REPAIR.value
+            )
+            is False
+        )
+
+
+@pytest.mark.parametrize("capacity", CAPACITIES)
+@pytest.mark.asyncio
+async def test_a_pre_marker_history_does_not_serialize_on_the_queue_head(
+    capacity: int,
+) -> None:
+    """Queue-head ordering must not retroactively block a recorded grant."""
+
+    payload = _maintenance_payload("repair-b")
+
+    def _restore_head(
+        manager: MoonMindProviderProfileManagerWorkflow,
+        profile: ProfileSlotState,
+    ) -> None:
+        """Put an earlier request at the head through the real restore path."""
+
+        profile.exclusive_maintenance_queue = manager._restore_maintenance_queue(
+            [
+                {
+                    "ownerId": "repair-head",
+                    "purpose": CredentialLeasePurpose.CREDENTIAL_REPAIR.value,
+                    "queueOrder": 1,
+                    "queuedAt": NOW.isoformat(),
+                }
+            ]
+        )
+
+    # Pre-marker: an earlier waiter is a count, not a turn. main granted every
+    # maintainer whose drain set was empty, so this one is granted too.
+    wf = _pre_marker_manager()
+    profile = _install(wf, _profile(capacity))
+    _restore_head(wf, profile)
+    fake = _FakeWorkflow()
+
+    with mock_patch(MANAGER_MODULE, fake):
+        granted = await wf.acquire_credential_maintenance_lease(dict(payload))
+
+    assert granted["already_held"] is False
+    assert granted["lease_mode"] == "exclusive_maintenance"
+    assert fake.wait_calls == 0
+    # No generation is handed to a caller whose ledger never stored one.
+    assert "lease_fencing_generation" not in granted
+
+    # Marker established: the head owns the turn and the second request waits.
+    patched = _manager()
+    queued = _install(patched, _profile(capacity))
+    _restore_head(patched, queued)
+    patched_fake = _FakeWorkflow()
+
+    with mock_patch(MANAGER_MODULE, patched_fake):
+        task = asyncio.ensure_future(
+            patched.acquire_credential_maintenance_lease(dict(payload))
+        )
+        await _settle()
+
+        assert (
+            patched._maintenance_grant_blocker(
+                profile_id=PROFILE_ID,
+                requester_id="repair-b",
+                scope_gated=False,
+            )
+            == "queued_behind_earlier_maintenance"
+        )
+        assert task.done() is False
+        assert queued.current_leases == []
+
+        await _cancel(task)
+
+
+@pytest.mark.parametrize("capacity", CAPACITIES)
+@pytest.mark.asyncio
+async def test_two_live_waiters_keep_their_history_s_ordering_rule(
+    capacity: int,
+) -> None:
+    """Two concurrent maintainers, parked on the same condition, order differently.
+
+    Both are ``oauth_connect``, which spends the upstream resource, so a
+    cooling capacity scope parks both under either rule. What differs is *why*
+    the second one is parked: a pre-marker history has no turn to wait for, so
+    it is still parked on the scope; with the marker established it is parked
+    behind the head of the queue.
+    """
+
+    async def _park_two(
+        wf: MoonMindProviderProfileManagerWorkflow,
+    ) -> tuple[ProfileSlotState, _FakeWorkflow, list[asyncio.Task]]:
+        profile = _install(wf, _profile(capacity))
+        _install_full_scope(wf, profile)
+        fake = _FakeWorkflow(patched=(PROVIDER_CAPACITY_SCOPE_PATCH,))
+        tasks: list[asyncio.Task] = []
+        with mock_patch(MANAGER_MODULE, fake):
+            for owner in ("connect-a", "connect-b"):
+                tasks.append(
+                    asyncio.ensure_future(
+                        wf.acquire_credential_maintenance_lease(
+                            _maintenance_payload(
+                                owner,
+                                purpose=(
+                                    CredentialLeasePurpose.OAUTH_CONNECT.value
+                                ),
+                            )
+                        )
+                    )
+                )
+                await _settle()
+        return profile, fake, tasks
+
+    pre_marker = _pre_marker_manager()
+    pre_profile, pre_fake, pre_tasks = await _park_two(pre_marker)
+
+    with mock_patch(MANAGER_MODULE, pre_fake):
+        assert pre_profile.exclusive_maintenance_waiters == 2
+        assert [
+            pre_marker._maintenance_grant_blocker(
+                profile_id=PROFILE_ID, requester_id=owner, scope_gated=True
+            )
+            for owner in ("connect-a", "connect-b")
+        ] == ["scope_unavailable", "scope_unavailable"]
+        assert all(task.done() is False for task in pre_tasks)
+        for task in pre_tasks:
+            await _cancel(task)
+
+    patched = _manager()
+    patched_profile, patched_fake, patched_tasks = await _park_two(patched)
+
+    with mock_patch(MANAGER_MODULE, patched_fake):
+        assert patched_profile.maintenance_queue_position("connect-a") == 0
+        assert patched_profile.maintenance_queue_position("connect-b") == 1
+        assert [
+            patched._maintenance_grant_blocker(
+                profile_id=PROFILE_ID, requester_id=owner, scope_gated=True
+            )
+            for owner in ("connect-a", "connect-b")
+        ] == ["scope_unavailable", "queued_behind_earlier_maintenance"]
+        assert all(task.done() is False for task in patched_tasks)
+        for task in patched_tasks:
+            await _cancel(task)
+
+
+@pytest.mark.parametrize("capacity", CAPACITIES)
+@pytest.mark.asyncio
+async def test_a_pre_marker_history_drains_a_credentialless_profile(
+    capacity: int,
+) -> None:
+    """The narrowed drain set is a new rule too.
+
+    ``credential_repair`` against a ``credential_source == "none"`` profile is
+    the exact combination where the drain set changed. It is the unit-level
+    probe of that branch rather than a production journey: production reaches
+    a credentialless profile through ``credential_validation``, which is
+    classified ``single_flight_validation``.
+    """
+
+    def _hold_a_probe(profile: ProfileSlotState) -> None:
+        """The lease a credentialless profile actually carries."""
+
+        assert (
+            profile.reserve_unmetered(
+                "probe-a",
+                NOW,
+                purpose=CredentialLeasePurpose.CREDENTIAL_VALIDATION.value,
+            )
+            is True
+        )
+
+    wf = _pre_marker_manager()
+    profile = _install(wf, _profile(capacity, credential_source="none"))
+    _hold_a_probe(profile)
+    fake = _FakeWorkflow()
+
+    with mock_patch(MANAGER_MODULE, fake):
+        task = asyncio.ensure_future(
+            wf.acquire_credential_maintenance_lease(_maintenance_payload("repair-a"))
+        )
+        await _settle()
+
+        # main drained every lease, so the in-flight probe still blocks.
+        assert (
+            wf._maintenance_grant_blocker(
+                profile_id=PROFILE_ID,
+                requester_id="repair-a",
+                scope_gated=False,
+            )
+            == "draining_credential_consumers"
+        )
+        assert task.done() is False
+
+        # The probe finishes, and only then is the grant recorded.
+        profile.release("probe-a")
+        fake.wake()
+        granted = await task
+
+    assert granted["already_held"] is False
+    assert profile.current_leases == ["repair-a"]
+
+    # Marker established: a credentialless profile holds no credential, so the
+    # probe is not a consumer credential maintenance has to wait for.
+    patched = _manager()
+    credentialless = _install(patched, _profile(capacity, credential_source="none"))
+    _hold_a_probe(credentialless)
+    patched_fake = _FakeWorkflow()
+
+    with mock_patch(MANAGER_MODULE, patched_fake):
+        immediate = await patched.acquire_credential_maintenance_lease(
+            _maintenance_payload("repair-a")
+        )
+
+    assert immediate["already_held"] is False
+    assert patched_fake.wait_calls == 0
+
+
+@pytest.mark.parametrize("capacity", CAPACITIES)
+@pytest.mark.asyncio
+async def test_a_pre_marker_release_does_not_withdraw_a_queued_maintainer(
+    capacity: int,
+) -> None:
+    """Releasing a waiter's owner ID must not reopen admission on old history."""
+
+    release = {
+        "profile_id": PROFILE_ID,
+        "requester_workflow_id": "repair-a",
+    }
+
+    wf = _pre_marker_manager()
+    profile = _install(wf, _profile(capacity))
+    profile.enqueue_maintenance_waiter(
+        "repair-a",
+        purpose=CredentialLeasePurpose.CREDENTIAL_REPAIR.value,
+        queue_order=1,
+        queued_at=NOW.isoformat(),
+    )
+    fake = _FakeWorkflow()
+
+    with mock_patch(MANAGER_MODULE, fake):
+        await wf.release_slot(dict(release))
+
+    # main's waiter count survived a release, so admission stays closed and no
+    # pending execution is drained at this history position.
+    assert profile.exclusive_maintenance_waiters == 1
+    assert profile.is_available() is False
+
+    patched = _manager()
+    queued = _install(patched, _profile(capacity))
+    queued.enqueue_maintenance_waiter(
+        "repair-a",
+        purpose=CredentialLeasePurpose.CREDENTIAL_REPAIR.value,
+        queue_order=1,
+        queued_at=NOW.isoformat(),
+    )
+
+    with mock_patch(MANAGER_MODULE, _FakeWorkflow()):
+        await patched.release_slot(dict(release))
+
+    assert queued.exclusive_maintenance_queue == []
+    assert queued.is_available() is True
