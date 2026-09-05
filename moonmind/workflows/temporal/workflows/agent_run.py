@@ -3662,6 +3662,96 @@ class MoonMindAgentRun:
             )
         return waiting_reason
 
+    async def _evaluate_omnigent_session_admission(
+        self,
+        request: AgentExecutionRequest,
+        *,
+        include_execution_plan_ref: bool,
+    ) -> Any:
+        """Read the current Omnigent admission authority for this request.
+
+        The activity is a bounded read of the committed plan and the Provider
+        Profile row it selected; it grants nothing. Both the first admission
+        and a deliberate re-admission resolve their authority here so neither
+        can fence a lease against identities the other never observed.
+        """
+
+        owner_workflow_id, step_execution_id = self._omnigent_owner_identities(
+            request
+        )
+        admission_payload = await self._execute_routed_activity(
+            "omnigent.evaluate_session_admission",
+            OmnigentSessionAdmissionRequest(
+                workflowId=owner_workflow_id,
+                stepExecutionId=step_execution_id,
+                agentRunId=workflow.info().workflow_id,
+                executionProfileRef=request.execution_profile_ref,
+                omnigentExecutionPlan=request.omnigent_execution_plan,
+                executionPlanRef=(
+                    str(
+                        (request.parameters or {}).get("executionPlanRef") or ""
+                    ).strip()
+                    or None
+                    if include_execution_plan_ref
+                    else None
+                ),
+            ).model_dump(mode="json", by_alias=True),
+            cancellation_type=ActivityCancellationType.TRY_CANCEL,
+        )
+        return (
+            admission_payload
+            if isinstance(admission_payload, OmnigentSessionAdmissionDecision)
+            else OmnigentSessionAdmissionDecision.model_validate(
+                admission_payload
+            )
+        )
+
+    async def _refreshed_omnigent_capacity_authority(
+        self,
+        *,
+        request: AgentExecutionRequest,
+        admission: Any,
+        include_execution_plan_ref: bool,
+    ) -> Any:
+        """Return the authority the next admission must fence against.
+
+        MoonLadderStudios/MoonMind#3880 AC5. A requeue happens precisely
+        because the admitted capacity is no longer usable, and a credential
+        rotation is one of the typed reasons. The frozen decision still names
+        the pre-rotation generation, so re-admitting against it would fence
+        every replacement lease to a generation the profile no longer has and
+        spend the whole requeue budget re-observing the same fence. Reading the
+        current authority once per re-admission is what makes the advertised
+        recovery able to succeed.
+
+        The read never widens authority: a plan whose realizer or capacity
+        owner changed under a live run is a substitution, not a recovery, and
+        fails closed instead of silently executing somewhere else.
+        """
+
+        refreshed = await self._evaluate_omnigent_session_admission(
+            request, include_execution_plan_ref=include_execution_plan_ref
+        )
+        if refreshed.execution_realizer_ref != getattr(
+            admission, "execution_realizer_ref", None
+        ):
+            raise ApplicationError(
+                "Omnigent execution realizer authority changed while the run "
+                "waited to be re-admitted",
+                type="OmnigentExecutionRealizerAuthorityConflict",
+                non_retryable=True,
+            )
+        if str(
+            getattr(refreshed, "capacity_acquisition_owner", "workflow")
+        ) != str(getattr(admission, "capacity_acquisition_owner", "workflow")):
+            raise ApplicationError(
+                "Omnigent capacity acquisition authority changed while the run "
+                "waited to be re-admitted",
+                type="CapacityAdmissionOwnerUnsupported",
+                non_retryable=True,
+            )
+        return refreshed
+
     async def _admit_omnigent_capacity_before_execution(
         self,
         *,
@@ -3714,6 +3804,7 @@ class MoonMindAgentRun:
                     request,
                     plan_ref=plan_ref,
                     host_class_ref=getattr(admission, "host_class_ref", None),
+                    admission_epoch=self._omnigent_admission_epoch,
                 ),
             )
         except BaseException:
@@ -3799,13 +3890,16 @@ class MoonMindAgentRun:
         *,
         plan_ref: str,
         host_class_ref: str | None,
+        admission_epoch: int = 0,
     ) -> dict[str, Any]:
         """Name this run's stable generic-host reservation.
 
         MoonLadderStudios/MoonMind#3880 requirement 5: pre-admission and
         allocation must resolve the same host lease identity, so the workflow
         hands the activity the plan, request and host class the allocation will
-        use rather than a bare precheck flag.
+        use rather than a bare precheck flag. The admission epoch travels with
+        them because a re-admission is a new attempt whose predecessor's host
+        lease was already released.
         """
 
         normalized_host_class = str(host_class_ref or "").strip()
@@ -3815,6 +3909,7 @@ class MoonMindAgentRun:
             "executionPlanRef": plan_ref,
             "idempotencyKey": request.idempotency_key,
             "hostClassRef": normalized_host_class,
+            "admissionEpoch": int(admission_epoch),
         }
 
     @staticmethod
@@ -4068,6 +4163,7 @@ class MoonMindAgentRun:
         parent_info: Any,
         stc_seconds: int,
         admit_capacity_before_activity: bool,
+        execution_plan_admission: bool = False,
     ) -> tuple[Any, Any]:
         """Run the generic Omnigent execution under one capacity authority.
 
@@ -4111,6 +4207,20 @@ class MoonMindAgentRun:
                 # Activity may control a live host, this workflow must not
                 # release the capacity that host runs on.
                 self._omnigent_capacity_state = "consumed"
+            handoff_bound: dict[str, Any] = {}
+            if admit_capacity_before_activity:
+                # The hand-off allowance is a queue bound, not extra execution
+                # budget. ScheduleToClose alone cannot enforce it: an execution
+                # queue with no free worker never starts StartToClose, so the
+                # Activity would sit queued for the whole execution budget plus
+                # the allowance while this workflow keeps holding the provider
+                # lease it was admitted for. ScheduleToStart bounds exactly the
+                # queue wait, so a starved fleet surfaces as a hand-off timeout
+                # instead of a lease held for hours behind a worker that never
+                # arrived.
+                handoff_bound["schedule_to_start_timeout"] = timedelta(
+                    seconds=_OMNIGENT_EXECUTION_HANDOFF_SECONDS
+                )
             try:
                 result_payload = await self._execute_routed_activity(
                     act_name,
@@ -4123,6 +4233,7 @@ class MoonMindAgentRun:
                             else stc_seconds
                         )
                     ),
+                    **handoff_bound,
                     heartbeat_timeout=STREAMING_EXTERNAL_HEARTBEAT_TIMEOUT,
                     cancellation_type=(
                         # The workflow owns the provider lease but the Activity
@@ -4164,6 +4275,13 @@ class MoonMindAgentRun:
             capacity_requeue_attempts += 1
             request = request.model_copy(
                 update={"admitted_provider_capacity": None}
+            )
+            # The next ticket must fence against the authority that exists now,
+            # not the one this attempt was already refused for.
+            admission = await self._refreshed_omnigent_capacity_authority(
+                request=request,
+                admission=admission,
+                include_execution_plan_ref=execution_plan_admission,
             )
             self.run_status = RunStatus.awaiting_slot
             await self._signal_parent_child_state_changed(
@@ -6410,45 +6528,12 @@ class MoonMindAgentRun:
                                 or plan_bound_session
                             )
                         ):
-                            owner_workflow_id, step_execution_id = (
-                                self._omnigent_owner_identities(request)
-                            )
-                            admission_payload = await self._execute_routed_activity(
-                                "omnigent.evaluate_session_admission",
-                                OmnigentSessionAdmissionRequest(
-                                    workflowId=owner_workflow_id,
-                                    stepExecutionId=step_execution_id,
-                                    agentRunId=workflow.info().workflow_id,
-                                    executionProfileRef=(
-                                        request.execution_profile_ref
-                                    ),
-                                    omnigentExecutionPlan=(
-                                        request.omnigent_execution_plan
-                                    ),
-                                    executionPlanRef=(
-                                        str(
-                                            (request.parameters or {}).get(
-                                                "executionPlanRef"
-                                            )
-                                            or ""
-                                        ).strip()
-                                        or None
-                                        if use_omnigent_execution_plan_admission
-                                        else None
-                                    ),
-                                ).model_dump(mode="json", by_alias=True),
-                                cancellation_type=(
-                                    ActivityCancellationType.TRY_CANCEL
-                                ),
-                            )
                             admission = (
-                                admission_payload
-                                if isinstance(
-                                    admission_payload,
-                                    OmnigentSessionAdmissionDecision,
-                                )
-                                else OmnigentSessionAdmissionDecision.model_validate(
-                                    admission_payload
+                                await self._evaluate_omnigent_session_admission(
+                                    request,
+                                    include_execution_plan_ref=(
+                                        use_omnigent_execution_plan_admission
+                                    ),
                                 )
                             )
                             session_admitted = admission.admitted
@@ -6634,6 +6719,9 @@ class MoonMindAgentRun:
                                 stc_seconds=stc_seconds,
                                 admit_capacity_before_activity=(
                                     admit_capacity_before_activity
+                                ),
+                                execution_plan_admission=(
+                                    use_omnigent_execution_plan_admission
                                 ),
                             )
                             if admitted_at is not None:

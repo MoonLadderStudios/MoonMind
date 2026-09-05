@@ -193,8 +193,35 @@ def _snapshot_ref(payload: dict[str, Any]) -> str:
     )
 
 
-def stable_binding_id(*, execution_plan_ref: str, idempotency_key: str) -> str:
-    encoded = f"{execution_plan_ref}\0{idempotency_key}".encode("utf-8")
+def stable_binding_id(
+    *,
+    execution_plan_ref: str,
+    idempotency_key: str,
+    admission_epoch: int | None = None,
+) -> str:
+    """Return the stable identity of one admitted execution attempt.
+
+    Plan and request identity alone make every Activity retry of the same
+    attempt idempotent, which is what the fenced lifecycle needs.
+
+    MoonLadderStudios/MoonMind#3880 AC5 adds the admission epoch: a deliberate
+    re-admission after lost capacity is a new attempt, not a retry of the one
+    whose host, credentials and provider lease were already released. Reusing
+    the released attempt's identity would hand the next attempt an aggregate
+    that is terminally ``cleaned`` with no terminal result, and a host-lease
+    row that is already cleaned, so the advertised recovery could only fail as
+    a binding conflict. Each admission epoch therefore owns its own attempt
+    aggregate while retries within an epoch keep sharing one.
+
+    Epoch ``0`` (and ``None``) is the pre-#3880 ticket shape, which never
+    re-admits; it keeps the original identity so in-flight runs and their
+    persisted aggregates resolve unchanged.
+    """
+
+    parts = [execution_plan_ref, idempotency_key]
+    if admission_epoch:
+        parts.append(str(int(admission_epoch)))
+    encoded = "\0".join(parts).encode("utf-8")
     return "omnigent-runtime-binding:sha256:" + hashlib.sha256(encoded).hexdigest()
 
 
@@ -228,12 +255,14 @@ def create_stable_runtime_binding(
     execution_plan_ref: str,
     idempotency_key: str,
     provider_leases: dict[str, dict[str, Any]],
+    admission_epoch: int | None = None,
 ) -> StableRuntimeBinding:
     return _binding(
         {
             "bindingId": stable_binding_id(
                 execution_plan_ref=execution_plan_ref,
                 idempotency_key=idempotency_key,
+                admission_epoch=admission_epoch,
             ),
             "executionPlanRef": execution_plan_ref,
             "revision": 1,
@@ -313,6 +342,7 @@ class StableRuntimeBindingStore(Protocol):
         execution_plan_ref: str,
         idempotency_key: str,
         provider_leases: dict[str, dict[str, Any]],
+        admission_epoch: int | None = None,
     ) -> "StableRuntimeBinding": ...
 
     async def update(
@@ -344,11 +374,13 @@ class InMemoryStableRuntimeBindingStore:
         execution_plan_ref: str,
         idempotency_key: str,
         provider_leases: dict[str, dict[str, Any]],
+        admission_epoch: int | None = None,
     ) -> StableRuntimeBinding:
         binding = create_stable_runtime_binding(
             execution_plan_ref=execution_plan_ref,
             idempotency_key=idempotency_key,
             provider_leases=provider_leases,
+            admission_epoch=admission_epoch,
         )
         existing = self._bindings.get(binding.bindingId)
         if existing is not None:
@@ -458,6 +490,7 @@ class DbRuntimeBindingStore:
         execution_plan_ref: str,
         idempotency_key: str,
         provider_leases: dict[str, dict[str, Any]],
+        admission_epoch: int | None = None,
     ) -> StableRuntimeBinding:
         from api_service.db.models import OmnigentRuntimeBindingRecord
 
@@ -465,6 +498,7 @@ class DbRuntimeBindingStore:
             execution_plan_ref=execution_plan_ref,
             idempotency_key=idempotency_key,
             provider_leases=provider_leases,
+            admission_epoch=admission_epoch,
         )
         existing = await self.get(binding.bindingId)
         if existing is not None:
