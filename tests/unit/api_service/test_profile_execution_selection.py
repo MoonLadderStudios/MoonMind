@@ -67,7 +67,9 @@ def test_authentication_contract_cannot_cross_zen_and_go():
     )
 
 
-@pytest.mark.parametrize("validation_result", [None, {}, {"ready": False}, {"ready": 1}])
+@pytest.mark.parametrize(
+    "validation_result", [None, {}, {"ready": False}, {"ready": 1}]
+)
 def test_unvalidated_configuration_cannot_be_selected(validation_result):
     candidate = configuration()
     candidate[1].validation_result = validation_result
@@ -85,7 +87,9 @@ def test_configuration_without_validation_result_cannot_be_selected():
     assert error.value.status_code == 409
 
 
-@pytest.mark.parametrize("runtime", ["codex", "codex_cli", "claude", "claude_code", "jules"])
+@pytest.mark.parametrize(
+    "runtime", ["codex", "codex_cli", "claude", "claude_code", "jules"]
+)
 def test_direct_runtime_inventory_does_not_require_omnigent_configuration(runtime):
     native = provider(runtime_id=runtime)
     assert profile_has_native_inventory_route(native, [configuration()]) is True
@@ -99,7 +103,9 @@ def test_unsupported_direct_runtime_keeps_configuration_requirement(runtime):
     assert profile_has_native_inventory_route(provider(runtime_id=runtime), []) is False
 
 
-@pytest.mark.parametrize("validation_result", [None, {}, {"ready": False}, {"ready": True}])
+@pytest.mark.parametrize(
+    "validation_result", [None, {}, {"ready": False}, {"ready": True}]
+)
 def test_compatible_configuration_prevents_native_route(validation_result):
     native = provider(runtime_id="codex_cli")
     candidate = configuration()
@@ -112,7 +118,9 @@ def test_explicit_configuration_pin_prevents_native_route_when_missing():
     native = provider(
         runtime_id="codex_cli",
         execution_configuration={
-            "profileId": "missing", "version": 1, "digest": "sha256:" + "a" * 64,
+            "profileId": "missing",
+            "version": 1,
+            "digest": "sha256:" + "a" * 64,
         },
     )
     assert profile_has_native_inventory_route(native, []) is False
@@ -224,3 +232,48 @@ def test_pinned_configuration_survives_active_version_advancement():
         ]
         == 2
     )
+
+
+@pytest.mark.parametrize("reverse", [False, True])
+def test_multiple_compatible_defaults_require_profile_settings(reverse):
+    candidates = [
+        configuration("first", default=True),
+        configuration("second", default=True),
+    ]
+    if reverse:
+        candidates.reverse()
+    with pytest.raises(HTTPException) as error:
+        select_execution_configuration(provider(), candidates)
+    assert error.value.status_code == 409
+    assert "Profile settings" in error.value.detail["message"]
+
+
+@pytest.mark.parametrize(
+    "expected",
+    [None, {"profileId": "behavior", "version": 1, "digest": "sha256:" + "a" * 64}],
+)
+def test_configuration_expectation_supports_old_requests_and_exact_identity(expected):
+    from api_service.services.profile_execution_selection import (
+        validate_execution_configuration_expectation,
+    )
+
+    resolved = select_execution_configuration(provider(), [configuration()])
+    validate_execution_configuration_expectation(expected, resolved)
+
+
+@pytest.mark.parametrize("changed", ["profileId", "version", "digest"])
+def test_configuration_expectation_rejects_changed_identity(changed):
+    from api_service.services.profile_execution_selection import (
+        validate_execution_configuration_expectation,
+    )
+
+    resolved = select_execution_configuration(provider(), [configuration()])
+    expected = {key: resolved[key] for key in ("profileId", "version", "digest")}
+    expected[changed] = {
+        "profileId": "other",
+        "version": 2,
+        "digest": "sha256:" + "b" * 64,
+    }[changed]
+    with pytest.raises(HTTPException) as error:
+        validate_execution_configuration_expectation(expected, resolved)
+    assert error.value.status_code == 409

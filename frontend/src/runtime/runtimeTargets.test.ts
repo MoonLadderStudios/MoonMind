@@ -4,7 +4,6 @@ import {
   DEFAULT_RUNTIME_ID_FALLBACK,
   formatRolloutStateLabel,
   formatRuntimeLabel,
-  preferredTargetForRuntime,
   resolveDefaultRuntimeId,
   runtimeOptionGroups,
   runtimeUnavailableReason,
@@ -98,29 +97,6 @@ describe('resolveDefaultRuntimeId', () => {
   });
 });
 
-describe('preferredTargetForRuntime', () => {
-  it('selects the promoted generic Omnigent target over compatibility rows', () => {
-    const selected = preferredTargetForRuntime(promotedCatalog, 'omnigent');
-    expect(selected?.targetId).toBe('codex.generic-omnigent');
-    expect(selected?.compatibilityPath).toBe(false);
-  });
-
-  it('never offers a target the rollout policy disabled', () => {
-    const disabledOnly: RuntimeTargetCatalog = {
-      targets: [
-        target({
-          targetId: 'claude.generic-omnigent',
-          runtimeId: 'omnigent',
-          rolloutState: 'disabled',
-          defaultEligible: false,
-          explicitSelectionAllowed: false,
-        }),
-      ],
-    };
-    expect(preferredTargetForRuntime(disabledOnly, 'omnigent')).toBeNull();
-  });
-});
-
 describe('runtimeOptionGroups', () => {
   it('labels direct paths as compatibility options rather than equal defaults', () => {
     const groups = runtimeOptionGroups(
@@ -177,11 +153,10 @@ describe('formatRuntimeLabel', () => {
     );
   });
 
-  it('uses the promoted target label when several targets share a runtime', () => {
-    // `omnigent` owns the promoted generic Codex row plus a retired legacy row
-    // and a disabled Claude row, so the label is the truthful selected path.
+  it('keeps the runtime family label when several targets share a runtime', () => {
+    // Migration state cannot rename an entire runtime family.
     expect(formatRuntimeLabel('omnigent', promotedCatalog)).toBe(
-      'Codex via generic Omnigent',
+      'Omnigent',
     );
   });
 
@@ -226,7 +201,7 @@ describe('runtimeUnavailableReason', () => {
     const reason = runtimeUnavailableReason('omnigent', rolledBack);
     expect(reason).toContain('No qualified target is available');
     expect(reason).toContain('Unavailable');
-    expect(reason).toContain('Choose an explicitly available target instead.');
+    expect(reason).toContain('Review runtime availability and the Profile configuration in Settings.');
   });
 
   it('returns null while a selectable target exists', () => {
@@ -246,3 +221,15 @@ describe('formatRolloutStateLabel', () => {
     expect(formatRolloutStateLabel(null)).toBe('');
   });
 });
+
+ it('does not classify Omnigent as compatibility when legacy Codex sorts first', () => {
+   const catalog = { targets: [
+     target({ targetId: 'codex.legacy-profile-bound-omnigent', pathClass: 'legacy_profile_bound_omnigent', compatibilityPath: true }),
+     target({ targetId: 'opencode.generic-omnigent', harnessId: 'opencode-native' }),
+   ] };
+   for (const targets of [catalog.targets, [...catalog.targets].reverse()]) {
+     const groups = runtimeOptionGroups(['omnigent'], { targets });
+     expect(groups.recommended[0]?.label).toBe('Omnigent');
+     expect(groups.compatibility).toEqual([]);
+   }
+ });
