@@ -1,0 +1,202 @@
+slug: github-issue-search-and-implement
+title: GitHub Issue Search and Implement
+description: Search GitHub issues for the best match (or the first unblocked issue
+  when the search is blank), then implement it following the GitHub Issue Implement
+  workflow, creating a pull request and updating the issue.
+scope: global
+tags:
+- github
+- implementation
+- pull-request
+- search
+requiredCapabilities:
+- git
+- gh
+annotations:
+  implementsPreset: github-issue-implement
+  issueProvider: github
+  output: pull-request
+  githubIssueUpdate:
+    inProgress:
+      comment: true
+      labelsToAdd:
+      - 'status: in-progress'
+      labelsToRemove:
+      - 'status: todo'
+    codeReview:
+      commentPullRequestUrl: true
+      labelsToAdd:
+      - 'status: code-review'
+      labelsToRemove:
+      - 'status: in-progress'
+    done:
+      closeIssue: true
+      labelsToAdd:
+      - 'status: done'
+      labelsToRemove:
+      - 'status: code-review'
+  inputSchema:
+    type: object
+    required: []
+    properties:
+      issue_search:
+        type: string
+        title: GitHub issue search
+        description: Free-text search used as '<search> is:issue state:open'. Leave
+          blank to fall back to scanning open issues for the first one without blocking
+          dependencies.
+      repository:
+        type: string
+        title: Repository
+        description: GitHub owner/repository to search; defaults to the workflow repository
+          when empty.
+      constraints:
+        type: string
+        title: Constraints
+      run_verify:
+        type: boolean
+        title: Run verification
+        description: Run the MoonSpec verification and remediation gate before pull request creation and GitHub issue handoff.
+        default: true
+  uiSchema:
+    issue_search:
+      widget: text
+      searchPlaceholder: Search GitHub issues
+    repository:
+      widget: text
+      advanced: true
+  defaults:
+    run_verify: true
+inputs:
+- name: issue_search
+  label: GitHub Issue Search
+  type: text
+  required: false
+  default: ''
+- name: repository
+  label: Repository
+  type: text
+  required: false
+  default: ''
+- name: constraints
+  label: Constraints
+  type: textarea
+  required: false
+  default: ''
+- name: run_verify
+  label: Run Verification
+  type: boolean
+  required: false
+  default: true
+steps:
+- title: Search GitHub issues and resolve target issue
+  type: skill
+  instructions: |-
+    Resolve one target GitHub issue and persist it to artifacts/github-issue-search-result.json with keys repository, number, url, and title.
+
+    Repository scope: "{{ inputs.repository }}". When empty, use the repository from workflow context.
+
+    When the search input below is non-empty, search GitHub issues with the query "<search> is:issue state:open" using the authenticated GitHub tooling (for example `gh search issues "<search> is:issue state:open --repo <repository>"`), then take the best match as the target issue:
+
+    {{ inputs.issue_search }}
+
+    When the search input is blank, use fallback behavior: list open issues in the repository (for example `gh issue list --state open --repo <repository>`) and examine them one by one through the deterministic trusted GitHub blocker preflight (explicit blocking labels or a known blocker section in the issue body counts as blocker evidence). Keep looking until you find the first issue that has no blocking dependencies, and use that issue as the target.
+
+    If no matching (or no unblocked) issue can be resolved from trusted GitHub data, stop without implementing and report the empty search evidence. Do not invent an issue number. Record the resolved repository, issue number, URL, title, and whether fallback scanning was used in the step result.
+  skill:
+    id: auto
+    args: {}
+    requiredCapabilities:
+    - git
+    - gh
+- title: Load GitHub issue brief for resolved issue
+  type: skill
+  instructions: |-
+    Read artifacts/github-issue-search-result.json from the previous step to get the resolved repository and issue number. Do not use any other issue.
+
+    Fetch that GitHub issue through the deterministic trusted GitHub tool surface and build the canonical implementation input from the issue title, body, labels, state, URL, and any acceptance criteria in the issue body. Preserve the repository and issue number in the brief so downstream implementation artifacts and the pull request can reference it.
+
+    Persist the brief to artifacts/github-issue-implement-brief.json following the GitHub Issue Implement preset (github-issue-implement) brief shape, and record the resolved issue reference in the step result.
+  skill:
+    id: auto
+    args:
+      brief_artifact_path: artifacts/github-issue-implement-brief.json
+    requiredCapabilities:
+    - git
+    - gh
+- title: Assess resolved issue implementation state
+  repositoryOperation: read
+  type: skill
+  instructions: |-
+    Read artifacts/github-issue-search-result.json for the resolved issue reference and artifacts/github-issue-implement-brief.json for the brief. Note the binding constraints for this run (empty means none):
+
+    {{ inputs.constraints }}
+
+    Following the GitHub Issue Implement preset (github-issue-implement) assessment stage, assess whether the resolved issue is already implemented against the current repository checkout without editing code or mutating GitHub. Classify into exactly one verdict: FULLY_IMPLEMENTED, PARTIALLY_IMPLEMENTED, NOT_IMPLEMENTED, or BLOCKED.
+
+    Record the verdict and met/partially-met/unmet requirements in the step result AND in artifacts/github-issue-implement-assessment.json with keys issue_provider (github), issue_ref, issue_url, verdict, branch, base_ref, mode, summary, and requirements. This verdict is the controlling input for every later step.
+  skill:
+    id: auto
+    args:
+      brief_artifact_path: artifacts/github-issue-implement-brief.json
+      assessment_artifact_path: artifacts/github-issue-implement-assessment.json
+    requiredCapabilities:
+    - git
+- title: Check resolved GitHub issue blockers before implementation
+  type: skill
+  instructions: |-
+    Read artifacts/github-issue-search-result.json and artifacts/github-issue-implement-assessment.json (or the recorded verdict from the assess step) before deciding how to apply blocker results.
+
+    Check the resolved GitHub issue through the deterministic trusted GitHub blocker preflight before any new implementation work starts, following the GitHub Issue Implement preset (github-issue-implement) blocker stage. Treat explicit blocking labels or a known blocker section in the issue body as blocker evidence.
+
+    If the recorded verdict is FULLY_IMPLEMENTED, report blocker findings for the record but do not stop finalization. Otherwise, if unresolved blockers are detected or blocker evidence cannot be evaluated from trusted GitHub data, stop implementation and report the blocker details.
+  skill:
+    id: auto
+    args: {}
+    requiredCapabilities:
+    - git
+    - gh
+- title: Mark resolved GitHub issue In Progress
+  type: skill
+  instructions: |-
+    Read artifacts/github-issue-search-result.json and artifacts/github-issue-implement-assessment.json (or the previous step's recorded verdict) before doing anything.
+
+    If the recorded verdict is FULLY_IMPLEMENTED, skip the In Progress update because the issue is already implemented. If the recorded verdict is BLOCKED, stop without changing GitHub. Otherwise mark the resolved GitHub issue as In Progress using the configured GitHub issue update strategy (comment plus status: in-progress label handling per the preset githubIssueUpdate policy).
+  skill:
+    id: auto
+    args: {}
+    requiredCapabilities:
+    - git
+    - gh
+- title: Implement resolved issue and open pull request
+  type: skill
+  instructions: |-
+    Read artifacts/github-issue-search-result.json, artifacts/github-issue-implement-brief.json, and artifacts/github-issue-implement-assessment.json. Binding constraints for this run (empty means none):
+
+    {{ inputs.constraints }}
+
+    Following the GitHub Issue Implement preset (github-issue-implement) work-PR stage for the resolved issue: if the verdict is FULLY_IMPLEMENTED, make no code changes and ensure artifacts/github-issue-implement-pr.json explains the no-change outcome. If BLOCKED, stop without changes. Otherwise complete the missing work, run the focused tests required by the issue, and {% if inputs.run_verify %}run the MoonSpec verification and remediation gate (up to 6 remediation attempts) before pull request creation{% else %}skip the MoonSpec verification gate because verification was disabled for this run{% endif %}.
+
+    Commit intentional changes only (no raw credentials), push the non-protected work branch, and create a non-draft pull request whose title and body reference the resolved issue, verification outcome, tests run, and remaining risks. Record the confirmed pull_request_url in the step result and in artifacts/github-issue-implement-pr.json with keys issue_provider, issue_ref, repository, issue_number, and pull_request_url.
+  skill:
+    id: auto
+    args:
+      brief_artifact_path: artifacts/github-issue-implement-brief.json
+      assessment_artifact_path: artifacts/github-issue-implement-assessment.json
+      pr_artifact_path: artifacts/github-issue-implement-pr.json
+      verify_artifact_path: artifacts/github-issue-implement-verify.json
+    requiredCapabilities:
+    - git
+    - gh
+- title: Finalize resolved GitHub issue status
+  type: skill
+  instructions: |-
+    Read artifacts/github-issue-search-result.json and artifacts/github-issue-implement-assessment.json (or the recorded verdict from the assess step) before changing GitHub.
+
+    If the recorded verdict is BLOCKED, stop without changing GitHub and report the blocking evidence. If the recorded verdict is FULLY_IMPLEMENTED, apply the configured Done strategy. Otherwise {% if inputs.run_verify %}read artifacts/github-issue-implement-verify.json and require the latest controlling verifier result to report FULLY_IMPLEMENTED before any Code Review update{% else %}confirm implementation is complete and the focused tests required by the issue have passed; verification was disabled for this run so do not require artifacts/github-issue-implement-verify.json{% endif %}. Then read artifacts/github-issue-implement-pr.json, verify it contains a pull_request_url for the resolved issue, and apply the configured Code Review strategy with the pull request URL. {% if inputs.run_verify %}If the verifier artifact is missing, terminal, or still reports ADDITIONAL_WORK_NEEDED after remediation is exhausted, stop without changing GitHub.{% else %}If the pull request artifact is missing or lacks a confirmed pull_request_url, stop without changing GitHub.{% endif %} Do not assume a single organization's workflow; use the configured label/comment/close strategy exposed by the trusted GitHub update tool.
+  skill:
+    id: auto
+    args: {}
+    requiredCapabilities:
+    - git
+    - gh
