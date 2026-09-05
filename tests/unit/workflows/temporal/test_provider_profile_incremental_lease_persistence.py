@@ -297,6 +297,8 @@ class _LeaseRow:
         self.step_execution_id = fields.get("step_execution_id")
         self.oauth_session_id = fields.get("oauth_session_id")
         self.idempotency_key = fields.get("idempotency_key")
+        self.execution_plan_ref = fields.get("execution_plan_ref")
+        self.credential_generation = fields.get("credential_generation")
         self.lease_state = fields.get("lease_state", "held")
         self.fencing_generation = fields.get("fencing_generation", 1)
         self.safe_metadata_json = fields.get("safe_metadata_json")

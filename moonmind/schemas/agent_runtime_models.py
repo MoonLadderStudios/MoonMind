@@ -881,17 +881,19 @@ def _contains_provider_native_observability_key(value: Any) -> bool:
         return any(_contains_provider_native_observability_key(item) for item in value)
     return False
 
-class AdmittedProviderCapacity(BaseModel):
-    """Provider Profile capacity the launching workflow already admitted.
 
-    MoonLadderStudios/MoonMind#3878 invariant 6: the AgentRun workflow queues
-    for provider capacity as durable workflow state and becomes the lease
-    owner. Carrying that ownership into the execution Activity is what makes
-    the Activity's acquisition an immediate confirmation instead of a wait, and
-    what keeps the workflow the last releaser (invariant 10).
+ADMITTED_PROVIDER_CAPACITY_SCHEMA_V1 = "admitted-provider-capacity/v1"
+ADMITTED_PROVIDER_CAPACITY_SCHEMA_V2 = "admitted-provider-capacity/v2"
 
-    Omitting the field is the pre-#3878 shape: the Activity acquires and
-    releases its own Activity-owned lease exactly as before.
+
+class AdmittedProviderProfileCapacity(BaseModel):
+    """One Provider Profile slot the launching workflow already holds.
+
+    MoonLadderStudios/MoonMind#3880: the execution Activity must be able to
+    *inspect* this exact grant rather than acquire one. That requires the
+    profile, its capacity ledger (runtime family and scope) and the credential
+    generation the workflow admitted against, so a rotation that happened while
+    the run queued is detected before any secret is resolved.
     """
 
     model_config = ConfigDict(populate_by_name=True, extra="forbid", frozen=True)
@@ -902,13 +904,159 @@ class AdmittedProviderCapacity(BaseModel):
     provider_runtime_id: str = Field(
         ..., alias="providerRuntimeId", min_length=1, max_length=64
     )
-    lease_owner_id: str = Field(
-        ..., alias="leaseOwnerId", min_length=1, max_length=255
-    )
     capacity_scope_ref: str | None = Field(
         None, alias="capacityScopeRef", max_length=255
     )
+    #: The Provider Profile credential generation observed at admission.
+    #: ``None`` only for retained ``v1`` histories, which never recorded it.
+    credential_generation: int | None = Field(
+        None, alias="credentialGeneration", ge=0
+    )
 
+
+class AdmittedProviderCapacity(BaseModel):
+    """Provider Profile capacity the launching workflow already admitted.
+
+    MoonLadderStudios/MoonMind#3878 invariant 6: the AgentRun workflow queues
+    for provider capacity as durable workflow state and becomes the lease
+    owner. MoonLadderStudios/MoonMind#3880 completes that handoff: the ticket
+    binds the exact committed plan, the child run, step and request identity,
+    and every selected profile with its scope and credential generation, so the
+    Activity can positively establish the admitted identity by inspection
+    alone. It can therefore never grant new capacity, never wait for a
+    replacement, and never release a lease it does not own (invariant 10).
+
+    Every bound identity is one the ProviderProfileManager persists on the
+    durable lease row, so the fence survives a manager restart rather than
+    turning a live, correctly admitted run into an unusable ticket.
+
+    Omitting the field is the pre-#3878 shape: the Activity acquires and
+    releases its own Activity-owned lease exactly as before.
+
+    ``v1`` payloads are activity inputs already recorded in workflow history by
+    the #3878 shape. Temporal redelivers the original input on retry, so they
+    are normalized here into the one canonical structure instead of being
+    rejected. They carry no plan, fence, or generation authority, so the
+    consuming coordinator can only check the identities they actually recorded.
+    """
+
+    model_config = ConfigDict(populate_by_name=True, extra="forbid", frozen=True)
+
+    schema_version: Literal[
+        ADMITTED_PROVIDER_CAPACITY_SCHEMA_V1,
+        ADMITTED_PROVIDER_CAPACITY_SCHEMA_V2,
+    ] = Field(ADMITTED_PROVIDER_CAPACITY_SCHEMA_V2, alias="schemaVersion")
+    #: The manager-visible owner of every lease below. One owner across grant,
+    #: scheduling, consumption and cleanup (#3880 remaining implementation 3).
+    lease_owner_id: str = Field(
+        ..., alias="leaseOwnerId", min_length=1, max_length=255
+    )
+    profiles: tuple[AdmittedProviderProfileCapacity, ...] = Field(
+        ..., alias="profiles", min_length=1, max_length=16
+    )
+    #: The exact committed execution plan this capacity was admitted for.
+    execution_plan_ref: str | None = Field(
+        None, alias="executionPlanRef", max_length=255
+    )
+    agent_run_workflow_id: str | None = Field(
+        None, alias="agentRunWorkflowId", max_length=255
+    )
+    agent_run_run_id: str | None = Field(
+        None, alias="agentRunRunId", max_length=255
+    )
+    step_execution_id: str | None = Field(
+        None, alias="stepExecutionId", max_length=255
+    )
+    #: Immutable request identity the manager recorded with the grant. Together
+    #: with the owner and plan refs this is the durable lease fence: it survives
+    #: a manager restart because it is persisted on the lease row.
+    idempotency_key: str | None = Field(
+        None, alias="idempotencyKey", max_length=255
+    )
+    #: Monotonic per-run admission counter. A deliberate re-admission bumps it,
+    #: so operators and diagnostics can order attempts at one authority.
+    admission_epoch: int = Field(0, alias="admissionEpoch", ge=0)
+
+    @model_validator(mode="before")
+    @classmethod
+    def _normalize_recorded_shapes(cls, value: Any) -> Any:
+        """Lift a retained ``v1`` flat ticket into the canonical structure."""
+
+        if not isinstance(value, Mapping):
+            return value
+        if "profiles" in value or "profile_list" in value:
+            return value
+        profile_ref = value.get("providerProfileRef", value.get(
+            "provider_profile_ref"
+        ))
+        runtime_id = value.get("providerRuntimeId", value.get(
+            "provider_runtime_id"
+        ))
+        if profile_ref is None and runtime_id is None:
+            return value
+        normalized = {
+            key: item
+            for key, item in value.items()
+            if key
+            not in {
+                "providerProfileRef",
+                "provider_profile_ref",
+                "providerRuntimeId",
+                "provider_runtime_id",
+                "capacityScopeRef",
+                "capacity_scope_ref",
+            }
+        }
+        normalized["schemaVersion"] = ADMITTED_PROVIDER_CAPACITY_SCHEMA_V1
+        normalized["profiles"] = [
+            {
+                "providerProfileRef": profile_ref,
+                "providerRuntimeId": runtime_id,
+                "capacityScopeRef": value.get(
+                    "capacityScopeRef", value.get("capacity_scope_ref")
+                ),
+            }
+        ]
+        return normalized
+
+    @model_validator(mode="after")
+    def _validate_capacity_authority(self) -> "AdmittedProviderCapacity":
+        refs = [item.provider_profile_ref for item in self.profiles]
+        if len(set(refs)) != len(refs):
+            raise ValueError(
+                "admitted provider capacity lists a Provider Profile twice"
+            )
+        if refs != sorted(refs):
+            raise ValueError(
+                "admitted provider capacity must be in deterministic "
+                "Provider Profile order"
+            )
+        if self.schema_version == ADMITTED_PROVIDER_CAPACITY_SCHEMA_V2:
+            if not str(self.execution_plan_ref or "").strip():
+                raise ValueError(
+                    "admitted provider capacity must bind its execution plan"
+                )
+            if not str(self.step_execution_id or "").strip():
+                raise ValueError(
+                    "admitted provider capacity must bind its step execution"
+                )
+            if not str(self.idempotency_key or "").strip():
+                raise ValueError(
+                    "admitted provider capacity must bind its request identity"
+                )
+        return self
+
+    @property
+    def profile_refs(self) -> tuple[str, ...]:
+        return tuple(item.provider_profile_ref for item in self.profiles)
+
+    def profile(self, provider_profile_ref: str) -> (
+        AdmittedProviderProfileCapacity | None
+    ):
+        for item in self.profiles:
+            if item.provider_profile_ref == provider_profile_ref:
+                return item
+        return None
 
 class ProfileSelector(BaseModel):
     """Dynamic routing criteria for ProviderProfileManager."""
@@ -2377,7 +2525,10 @@ __all__ = [
     "MoonMindOpsRuntimeOperation",
     "OmnigentHostLease",
     "OmnigentOAuthHostBinding",
+    "ADMITTED_PROVIDER_CAPACITY_SCHEMA_V1",
+    "ADMITTED_PROVIDER_CAPACITY_SCHEMA_V2",
     "AdmittedProviderCapacity",
+    "AdmittedProviderProfileCapacity",
     "ProfileSelector",
     "ProviderModelEffortTier",
     "ProviderCapabilityDescriptor",
