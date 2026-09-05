@@ -12,8 +12,9 @@ from moonmind.workflows.executions.preset_goal_scheduler import (
     schedule_preset_from_goal,
     workflow_is_already_authored,
 )
-from moonmind.workflows.executions.runtime_defaults import (
-    resolve_default_workflow_runtime,
+from moonmind.workflows.executions.runtime_target_selection import (
+    AuthoringSurface,
+    resolve_runtime_target_selection,
 )
 
 
@@ -144,10 +145,16 @@ async def expand_preset_for_child_run(
     if isinstance(branch, str) and branch.strip():
         template_context["branch"] = branch.strip()
     runtime_payload = _coerce_mapping(task_payload.get("runtime"))
+    # Preset expansion uses the same shared selection and admission boundary as
+    # Workflow Create (MoonLadderStudios/MoonMind#3833); it never reconstructs a
+    # separate default from settings or environment variables.
     target_runtime = (
         parameters.get("targetRuntime")
         or runtime_payload.get("mode")
-        or resolve_default_workflow_runtime(settings.workflow)
+        or resolve_runtime_target_selection(
+            surface=AuthoringSurface.preset_expansion,
+            workflow_settings=settings.workflow,
+        ).runtime_id
     )
     if isinstance(target_runtime, str) and target_runtime.strip():
         template_context["targetRuntime"] = target_runtime.strip()

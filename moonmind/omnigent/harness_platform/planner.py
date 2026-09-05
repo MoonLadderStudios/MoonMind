@@ -67,6 +67,312 @@ from moonmind.omnigent.harness_platform.support import (
     compute_required_capabilities_digest,
     compute_support_combination_key,
 )
+from moonmind.omnigent.runtime_provider_rollout import (
+    NOT_APPLICABLE,
+    RolloutDecision,
+    RolloutReason,
+    RolloutSelectionContext,
+    RuntimeProviderCombination,
+    RuntimeProviderPathClass,
+    RuntimeProviderRolloutPolicy,
+    effective_rule_state,
+    freeze_rollout_record,
+    load_runtime_provider_rollout_policy,
+    resolve_rollout_decision,
+    state_admits_execution,
+    state_admits_new_authoring,
+)
+
+
+GENERIC_REALIZER_REF = "generic-omnigent-host@1"
+LEGACY_CODEX_REALIZER_REF = "codex-profile-bound@1"
+
+
+def _rollout_admits_execution(
+    *,
+    policy: RuntimeProviderRolloutPolicy,
+    harness_id: str,
+    path_class: RuntimeProviderPathClass,
+) -> bool:
+    """Return whether the rollout policy admits execution on this exact row.
+
+    ``retired_for_new_work`` still admits execution so recorded authority stays
+    replayable and rerunnable; only ``disabled`` blocks compilation. An
+    *unregistered* harness row resolves to ``explicit_only`` (a missing support
+    row leaves the path explicit, never promoted), so a newly registered harness
+    stays launchable without a rollout edit while promotion remains policy-owned.
+    """
+
+    rules = policy.rules_for(harness_id=harness_id, path_class=path_class)
+    if not rules:
+        return True
+    return any(
+        state_admits_execution(effective_rule_state(rule, policy)[0])
+        for rule in rules
+    )
+
+
+def _rollout_admits_new_authoring(
+    *,
+    policy: RuntimeProviderRolloutPolicy,
+    harness_id: str,
+    path_class: RuntimeProviderPathClass,
+) -> bool:
+    """Return whether a *new* trusted selection may choose this exact row."""
+
+    rules = policy.rules_for(harness_id=harness_id, path_class=path_class)
+    if not rules:
+        return True
+    return any(
+        state_admits_new_authoring(effective_rule_state(rule, policy)[0])
+        for rule in rules
+    )
+
+
+def _realizer_path_class(
+    *, harness_id: str, execution_realizer_ref: str
+) -> RuntimeProviderPathClass | None:
+    """Return the path class an explicit realizer belongs to for a harness."""
+
+    if execution_realizer_ref == GENERIC_REALIZER_REF:
+        return RuntimeProviderPathClass.generic_omnigent
+    if (
+        execution_realizer_ref == LEGACY_CODEX_REALIZER_REF
+        and harness_id == "codex-native"
+    ):
+        return RuntimeProviderPathClass.legacy_profile_bound_omnigent
+    return None
+
+
+def _primary_materializer_ref(
+    *, harness_id: str, materializer_refs: list[str]
+) -> str:
+    """Return the exact credential materializer identity for a combination.
+
+    The harness product registration names the materializer that owns the
+    harness credential. When a plan binds several slots, the identity is the
+    deterministic joined set so two different binding shapes never collapse to
+    the same exact combination.
+    """
+
+    refs = sorted({str(ref) for ref in materializer_refs if str(ref).strip()})
+    if not refs:
+        return NOT_APPLICABLE
+    try:
+        from moonmind.omnigent.harness_platform.harness_registry import (
+            harness_registration,
+        )
+
+        primary = harness_registration(harness_id).materializerRef
+    except Exception:
+        primary = ""
+    if primary and primary in refs:
+        return primary
+    return "+".join(refs)
+
+
+def _provider_runtime_id_for_materializer(materializer_ref: str) -> str:
+    """Return the unambiguous provider runtime id for a materializer.
+
+    Ambiguous or unregistered materializers record :data:`NOT_APPLICABLE`
+    rather than guessing, so a combination key never encodes an invented
+    provider identity.
+    """
+
+    try:
+        from moonmind.omnigent.harness_platform.materializers import (
+            _PROVIDER_MATERIALIZER_REFS,
+        )
+    except Exception:  # pragma: no cover - defensive
+        return NOT_APPLICABLE
+    runtimes = {
+        runtime_id
+        for (runtime_id, _provider_id), ref in _PROVIDER_MATERIALIZER_REFS.items()
+        if ref == materializer_ref
+    }
+    if len(runtimes) != 1:
+        return NOT_APPLICABLE
+    return next(iter(runtimes))
+
+
+def _build_rollout_combination(
+    *,
+    profile: OmnigentAgentProfileV2,
+    credential_binding_set: CredentialBindingSet,
+    host_class: HostClass,
+    launch_policy: LaunchPolicy,
+    architecture: str,
+    model_config_digest: str,
+    realizer: str,
+    materializer_refs: list[str],
+) -> RuntimeProviderCombination:
+    """Compile the exact runtime-provider combination this plan realizes."""
+
+    try:
+        from moonmind.omnigent.harness_platform.runtime_packs import (
+            pack_ref_for_harness,
+        )
+
+        runtime_pack_ref = pack_ref_for_harness(profile.harness.id)
+    except Exception:
+        runtime_pack_ref = NOT_APPLICABLE
+    materializer_ref = _primary_materializer_ref(
+        harness_id=profile.harness.id, materializer_refs=materializer_refs
+    )
+    path_class = (
+        RuntimeProviderPathClass.legacy_profile_bound_omnigent
+        if realizer == LEGACY_CODEX_REALIZER_REF
+        else RuntimeProviderPathClass.generic_omnigent
+    )
+    return RuntimeProviderCombination.model_validate(
+        {
+            "harnessId": profile.harness.id,
+            "harnessImplementationRef": profile.harness.implementationRef,
+            "agentProfileCompatibilityClass": profile.schemaVersion,
+            "providerRuntimeId": _provider_runtime_id_for_materializer(
+                materializer_ref
+            ),
+            "providerClass": credential_binding_set.bindingSetId,
+            "hostClassRef": host_class.ref,
+            "runtimePackRef": runtime_pack_ref,
+            "credentialMaterializerRef": materializer_ref,
+            "launchPolicyRef": launch_policy.ref,
+            "hostMode": launch_policy.hostMode,
+            "architecture": architecture,
+            "modelConfigurationClass": model_config_digest,
+            "executionRealizerRef": realizer,
+            "pathClass": path_class,
+        }
+    )
+
+
+#: Rollout reasons that name support-evidence provenance rather than policy.
+_SUPPORT_EVIDENCE_REASONS: frozenset[RolloutReason] = frozenset(
+    {
+        RolloutReason.support_evidence_missing,
+        RolloutReason.support_evidence_stale,
+    }
+)
+
+
+def _rollout_provider_profile_ref(
+    credential_binding_set: CredentialBindingSet,
+) -> str:
+    """Return the one Provider Profile a canary allowlist can match.
+
+    A plan that binds several distinct Provider Profiles has no single cohort
+    identity, so it reports none and a rule that pins ``providerProfileRefs``
+    excludes it rather than matching on an arbitrary member.
+    """
+
+    refs = {
+        str(binding.providerProfileRef).strip()
+        for binding in credential_binding_set.bindings.values()
+        if str(binding.providerProfileRef).strip()
+    }
+    return next(iter(refs)) if len(refs) == 1 else ""
+
+
+def _build_rollout_selection_context(
+    *,
+    policy: RuntimeProviderRolloutPolicy,
+    profile: OmnigentAgentProfileV2,
+    trust_record: HarnessTrustRecord,
+    credential_binding_set: CredentialBindingSet,
+    host_class: HostClass,
+    launch_policy: LaunchPolicy,
+    architecture: str,
+    model_qualified_id: str | None,
+    model_config_digest: str,
+    materializer_host_mode: str,
+    agent_profile_snapshot_ref: str,
+    support_identity: SupportKeyPayload,
+) -> RolloutSelectionContext:
+    """Compile the readiness and cohort inputs this exact plan actually has.
+
+    Every value is derived from the immutable objects this compilation already
+    resolved. Support-evidence provenance is read through the same tiers and the
+    same matching identity admission uses, so a promoted row is demoted here for
+    exactly the evidence admission will refuse to accept -- missing, expired, or
+    older than the tier's maximum age -- instead of being frozen into the plan as
+    promoted and failing later without a rollout reason.
+
+    The remaining dimensions restate gates this compiler has already enforced by
+    raising. They are supplied so the frozen rollout decision names the same
+    dimension the planner owns; they are never a second enforcement of it.
+    """
+
+    from moonmind.omnigent.evidence_resolver import (
+        resolve_support_evidence_freshness,
+    )
+
+    freshness = resolve_support_evidence_freshness(support_identity)
+    required_slots = [slot.id for slot in profile.credentialSlots if not slot.optional]
+    bound_slots = credential_binding_set.bindings
+    provider_profile_available = all(
+        slot in bound_slots
+        and bool(str(bound_slots[slot].providerProfileRef).strip())
+        for slot in required_slots
+    )
+    host_mode_available = all(
+        get_materializer(binding.materializerRef).supports_host_mode(
+            materializer_host_mode
+        )
+        for binding in bound_slots.values()
+    )
+    return RolloutSelectionContext.model_validate(
+        {
+            # The deployment declares which canary cohorts it belongs to; a rule
+            # that pins ownerCohorts admits only a declared member.
+            "ownerCohorts": tuple(policy.canary_cohorts),
+            "agentProfileRef": agent_profile_snapshot_ref,
+            "providerProfileRef": _rollout_provider_profile_ref(
+                credential_binding_set
+            ),
+            "harnessImplementationRef": profile.harness.implementationRef,
+            "hostClassRef": host_class.ref,
+            "launchPolicyRef": launch_policy.ref,
+            # The cohort dimension is the qualified model id an allowlist can
+            # name; the digest is this plan's exact model configuration.
+            "model": str(model_qualified_id or ""),
+            "architecture": architecture,
+            # The launch policy's declared host mode, so a canary allowlist and
+            # a rule selector name the same value for this dimension.
+            "hostMode": launch_policy.hostMode,
+            "supportEvidenceRef": freshness.evidence_ref,
+            "supportEvidenceAgeSeconds": freshness.age_seconds,
+            "supportEvidenceExpired": freshness.expired,
+            "launchReady": (
+                is_launchable_trust(trust_record.trustState)
+                and launch_policy.allows_host_class(host_class)
+            ),
+            "modelQualified": bool(model_config_digest),
+            "architectureSupported": architecture in host_class.architectures,
+            "hostModeAvailable": host_mode_available,
+            "providerProfileAvailable": provider_profile_available,
+        }
+    )
+
+
+def _record_support_evidence_denials(
+    *, harness_id: str, decision: RolloutDecision
+) -> None:
+    """Emit the bounded support-evidence denial counter for one decision.
+
+    Recording happens where the denial is decided, so the operator migration
+    view reports the same missing or stale evidence that demoted the row.
+    """
+
+    from moonmind.omnigent.control_plane import metrics as control_plane_metrics
+
+    for reason in decision.unavailable_reasons:
+        if reason not in _SUPPORT_EVIDENCE_REASONS:
+            continue
+        control_plane_metrics.record_safely(
+            control_plane_metrics.record_support_evidence_denial,
+            harness_id=harness_id,
+            denial_reason=str(reason),
+        )
 
 if TYPE_CHECKING:  # pragma: no cover - typing-only import
     from moonmind.omnigent.session_supervisor_rollback import (
@@ -75,50 +381,104 @@ if TYPE_CHECKING:  # pragma: no cover - typing-only import
     )
 
 
+def _effective_default_prefers_legacy(
+    *, policy: RuntimeProviderRolloutPolicy,
+) -> bool:
+    """Return whether the effective default row for codex-native is legacy.
+
+    Compares the highest effective (post-rollback) state rank of the generic
+    row against the legacy profile-bound row. A restored legacy default
+    outranks a demoted generic row so new plans honor the rollback policy.
+    """
+
+    rank = {
+        "disabled": 0,
+        "retired_for_new_work": 1,
+        "direct_compatibility_only": 2,
+        "explicit_only": 3,
+        "canary": 4,
+        "preferred": 5,
+        "new_work_default": 6,
+    }
+
+    def _best_state(harness_id: str, path_class: RuntimeProviderPathClass) -> int:
+        best = -1
+        for rule in policy.rules_for(harness_id=harness_id, path_class=path_class):
+            state = effective_rule_state(rule, policy)[0]
+            best = max(best, rank.get(str(state), -1))
+        return best
+
+    generic_best = _best_state(
+        "codex-native", RuntimeProviderPathClass.generic_omnigent
+    )
+    legacy_best = _best_state(
+        "codex-native", RuntimeProviderPathClass.legacy_profile_bound_omnigent
+    )
+    return legacy_best >= rank["new_work_default"] and legacy_best > generic_best
+
+
 # Trusted realizer selection - never workflow-authored, never overridable via Agent Profile settings
 def select_execution_realizer(
     *,
     harness_id: str,
     is_codex: bool = False,
+    rollout_policy: RuntimeProviderRolloutPolicy | None = None,
 ) -> str:
     """Select versioned execution realizer (section 6: executionRealizerRef is trusted planner only).
 
-    The routing rule is capability-derived, not harness-name enumeration:
-    ``codex-native`` keeps the retained profile-bound realizer until the exact
-    shared-image Codex row passes its conformance gates (#3832). That operator
-    qualification is the one gate (``generic_codex_qualified``); there is no
-    silent fallback — an explicit generic selection before qualification fails
-    fast, and the same plan always reconciles to the same realizer.
-    ``claude-native`` follows the same fail-closed contract (#3831): the
-    generic realizer is returned only after ``generic_claude_qualified`` opts
-    in; otherwise planning fails fast instead of advertising an unqualified
-    combination. All other harnesses own the generic realizer directly.
+    The routing rule is capability-derived, not harness-name enumeration. The
+    one authority is the versioned runtime-provider rollout policy
+    (MoonLadderStudios/MoonMind#3833): each exact harness x path-class row
+    carries its own rollout state, so ``codex-native`` keeps the retained
+    profile-bound realizer while its generic row is ``disabled`` and moves to
+    ``generic-omnigent-host@1`` once that row is promoted. There is no silent
+    fallback — a row with no admissible realizer fails fast, and the same plan
+    always reconciles to the same realizer.
     """
 
+    policy = rollout_policy or load_runtime_provider_rollout_policy()
+    generic_admitted = _rollout_admits_new_authoring(
+        policy=policy,
+        harness_id=harness_id,
+        path_class=RuntimeProviderPathClass.generic_omnigent,
+    )
     if harness_id == "codex-native" and is_codex:
-        from moonmind.omnigent.settings import generic_codex_qualified
-
-        if generic_codex_qualified():
-            return "generic-omnigent-host@1"
-        return "codex-profile-bound@1"
-    if harness_id == "claude-native":
-        from moonmind.omnigent.harness_platform.failures import (
-            HarnessPlatformError as _HarnessPlatformError,
+        # Honor the effective default row: a rollback control may restore the
+        # legacy row to new_work_default while demoting generic to
+        # explicit_only, in which case new plans must use the legacy path
+        # (MoonLadderStudios/MoonMind#3988).
+        if _effective_default_prefers_legacy(policy=policy):
+            if _rollout_admits_new_authoring(
+                policy=policy,
+                harness_id=harness_id,
+                path_class=(
+                    RuntimeProviderPathClass.legacy_profile_bound_omnigent
+                ),
+            ):
+                return LEGACY_CODEX_REALIZER_REF
+        if generic_admitted:
+            return GENERIC_REALIZER_REF
+        if _rollout_admits_new_authoring(
+            policy=policy,
+            harness_id=harness_id,
+            path_class=(
+                RuntimeProviderPathClass.legacy_profile_bound_omnigent
+            ),
+        ):
+            return LEGACY_CODEX_REALIZER_REF
+        raise HarnessPlatformError(
+            "no execution realizer is admitted for codex-native in this "
+            "deployment; runtime-provider rollout is fail-closed",
+            code=HarnessPlatformFailure.OMNIGENT_EXECUTION_REALIZER_UNAVAILABLE,
         )
-        from moonmind.omnigent.harness_platform.failures import (
-            HarnessPlatformFailure as _HarnessPlatformFailure,
-        )
-        from moonmind.omnigent.settings import generic_claude_qualified
-
-        if generic_claude_qualified():
-            return "generic-omnigent-host@1"
-        raise _HarnessPlatformError(
-            "execution realizer generic-omnigent-host@1 is not qualified "
-            "for claude-native in this deployment; explicit generic "
+    if not generic_admitted:
+        raise HarnessPlatformError(
+            f"execution realizer {GENERIC_REALIZER_REF} is not qualified "
+            f"for {harness_id} in this deployment; explicit generic "
             "selection is fail-closed",
-            code=_HarnessPlatformFailure.OMNIGENT_EXECUTION_REALIZER_UNAVAILABLE,
+            code=HarnessPlatformFailure.OMNIGENT_EXECUTION_REALIZER_UNAVAILABLE,
         )
-    return "generic-omnigent-host@1"
+    return GENERIC_REALIZER_REF
 
 
 def _configured_legacy_rollback_generation() -> str | None:
@@ -231,6 +591,7 @@ def compile_execution_plan(
     execution_realizer_ref: str | None = None,
     execution_authority: dict[str, Any] | None = None,
     agent_profile_snapshot_ref: str | None = None,
+    rollout_policy: RuntimeProviderRolloutPolicy | None = None,
     rollback_generation: str | None = None,
     rollback_owner_cohort: str | None = None,
     rollback_exercise_records: Sequence[RollbackExerciseRecord] | None = None,
@@ -455,49 +816,39 @@ def compile_execution_plan(
     # Realizer is trusted planner selection, never workflow-authored; ignore caller override
     # For tests that explicitly request a realizer for codex preservation, allow only if compatible
     # Otherwise select via trusted policy
+    active_rollout_policy = (
+        rollout_policy or load_runtime_provider_rollout_policy()
+    )
     trusted_realizer = select_execution_realizer(
         harness_id=profile.harness.id,
         is_codex=(profile.harness.id == "codex-native"),
+        rollout_policy=active_rollout_policy,
     )
     if (
         execution_realizer_ref is not None
         and execution_realizer_ref != trusted_realizer
     ):
-        # Only allow codex-profile-bound@1 for codex harness explicitly via trusted path
-        generic_codex_requested = (
-            profile.harness.id == "codex-native"
-            and execution_realizer_ref == "generic-omnigent-host@1"
+        # An explicit realizer is admissible only when the rollout policy admits
+        # that exact harness x path-class row. Denial fails closed; it never
+        # substitutes the trusted selection for the requested one.
+        requested_path_class = _realizer_path_class(
+            harness_id=profile.harness.id,
+            execution_realizer_ref=execution_realizer_ref,
         )
-        generic_claude_requested = (
-            profile.harness.id == "claude-native"
-            and execution_realizer_ref == "generic-omnigent-host@1"
-        )
-        if generic_codex_requested:
-            from moonmind.omnigent.settings import generic_codex_qualified
-
-            if not generic_codex_qualified():
-                raise HarnessPlatformError(
-                    "execution realizer generic-omnigent-host@1 is not qualified "
-                    "for codex-native in this deployment; explicit generic "
-                    "selection is fail-closed",
-                    code=HarnessPlatformFailure.OMNIGENT_EXECUTION_REALIZER_UNAVAILABLE,
-                )
-        elif generic_claude_requested:
-            from moonmind.omnigent.settings import generic_claude_qualified
-
-            if not generic_claude_qualified():
-                raise HarnessPlatformError(
-                    "execution realizer generic-omnigent-host@1 is not qualified "
-                    "for claude-native in this deployment; explicit generic "
-                    "selection is fail-closed",
-                    code=HarnessPlatformFailure.OMNIGENT_EXECUTION_REALIZER_UNAVAILABLE,
-                )
-        elif not (
-            profile.harness.id == "codex-native"
-            and execution_realizer_ref == "codex-profile-bound@1"
-        ):
+        if requested_path_class is None:
             raise HarnessPlatformError(
                 f"execution realizer {execution_realizer_ref} not selectable for harness {profile.harness.id}",
+                code=HarnessPlatformFailure.OMNIGENT_EXECUTION_REALIZER_UNAVAILABLE,
+            )
+        if not _rollout_admits_execution(
+            policy=active_rollout_policy,
+            harness_id=profile.harness.id,
+            path_class=requested_path_class,
+        ):
+            raise HarnessPlatformError(
+                f"execution realizer {execution_realizer_ref} is not qualified "
+                f"for {profile.harness.id} in this deployment; explicit generic "
+                "selection is fail-closed",
                 code=HarnessPlatformFailure.OMNIGENT_EXECUTION_REALIZER_UNAVAILABLE,
             )
         realizer = execution_realizer_ref
@@ -657,6 +1008,43 @@ def compile_execution_plan(
     )
     support_key = compute_support_combination_key(support_payload)
 
+    # Freeze the versioned runtime-provider rollout decision into the plan.
+    # Changing the live policy afterwards can never reinterpret this execution.
+    rollout_combination = _build_rollout_combination(
+        profile=profile,
+        credential_binding_set=credential_binding_set,
+        host_class=selected_host_class,
+        launch_policy=selected_launch_policy,
+        architecture=support_architecture,
+        model_config_digest=model_digest,
+        realizer=realizer,
+        materializer_refs=materializer_refs,
+    )
+    rollout_decision = resolve_rollout_decision(
+        policy=active_rollout_policy,
+        combination=rollout_combination,
+        context=_build_rollout_selection_context(
+            policy=active_rollout_policy,
+            profile=profile,
+            trust_record=trust_record,
+            credential_binding_set=credential_binding_set,
+            host_class=selected_host_class,
+            launch_policy=selected_launch_policy,
+            architecture=support_architecture,
+            model_qualified_id=model_qualified_id,
+            model_config_digest=model_digest,
+            materializer_host_mode=host_mode_for_materializer,
+            agent_profile_snapshot_ref=(
+                agent_profile_snapshot_ref or profile.snapshot_ref()
+            ),
+            support_identity=support_payload,
+        ),
+    )
+    _record_support_evidence_denials(
+        harness_id=profile.harness.id, decision=rollout_decision
+    )
+    rollout_record = freeze_rollout_record(rollout_decision)
+
     # Build plan payload
     runtime_validation_requirements = (
         "exact-harness-implementation",
@@ -748,6 +1136,7 @@ def compile_execution_plan(
             "supportIdentity": support_payload.model_dump(
                 by_alias=True, mode="json"
             ),
+            "runtimeProviderRollout": rollout_record,
         }
     )
 

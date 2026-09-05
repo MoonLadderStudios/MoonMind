@@ -35,8 +35,10 @@ from .repository_contract import (
     derive_repository_capabilities,
     decode_legacy_repository_history_v1,
 )
-
-DEFAULT_WORKFLOW_RUNTIME = "omnigent"
+# One canonical default. The runtime-provider rollout policy owns which target
+# that runtime resolves to (MoonLadderStudios/MoonMind#3833); no surface may
+# reconstruct a separate default from a literal or an environment variable.
+from .runtime_defaults import DEFAULT_WORKFLOW_RUNTIME
 SUPPORTED_RUNTIME_MODES = {
     "codex",
     "codex_cli",
