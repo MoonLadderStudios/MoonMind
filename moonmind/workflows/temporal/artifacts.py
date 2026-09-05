@@ -4331,6 +4331,11 @@ class TemporalArtifactActivities:
                         "stepExecutionId": row.step_execution_id,
                         "oauthSessionId": row.oauth_session_id,
                         "idempotencyKey": row.idempotency_key,
+                        # MoonLadderStudios/MoonMind#3880: the admitted-capacity
+                        # fence must survive a manager restart, so the durable
+                        # row returns it with the rest of the lease identity.
+                        "executionPlanRef": row.execution_plan_ref,
+                        "credentialGeneration": row.credential_generation,
                         # MoonLadderStudios/MoonMind#3879: the grant generation
                         # and the compact evidence identity are part of the
                         # lease contract, so a manager restart restores the
@@ -4393,6 +4398,8 @@ class TemporalArtifactActivities:
                         step_execution_id=lease.get("stepExecutionId"),
                         oauth_session_id=lease.get("oauthSessionId"),
                         idempotency_key=lease.get("idempotencyKey"),
+                        execution_plan_ref=lease.get("executionPlanRef"),
+                        credential_generation=lease.get("credentialGeneration"),
                         # MoonLadderStudios/MoonMind#3879: the snapshot rewrite
                         # must carry the grant generation and the compact
                         # evidence identity forward. Rewriting a surviving lease

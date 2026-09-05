@@ -662,6 +662,47 @@ Raising or lowering the configured ceiling is an operator action and is always s
 
 Work above the effective limit waits as durable workflow state with an explicit reason. It does not occupy a long-running execution Activity slot, silently fall back to another runtime, profile, model, or Host Class, or launch a host the machine cannot carry.
 
+#### Admission sequence
+
+Provider capacity and host capacity are admitted in one documented order, by the launching AgentRun workflow, before the long execution Activity is scheduled:
+
+1. **Request provider capacity.** The workflow queues with the ProviderProfileManager for the exact Provider Profile the committed plan selected, and waits as durable workflow state. The workflow — not the Activity — is the lease owner.
+
+   The committed plan reference the whole hand-off is fenced on is read from the request's execution-plan binding — the same authority that selects this lane and that the Activity loads its plan from. An optional workflow-authored `executionPlanRef` parameter may also be present; when both are, they must name the same plan, and a disagreement is a plan-substitution conflict that fails closed rather than picking one.
+2. **Admit host capacity.** With provider capacity held, the workflow polls a short control Activity that evaluates the aggregate host ceiling and the cold-launch rate against the durable host-lease ledger, and it waits on a workflow timer between polls. The poll names the run's stable host-lease identity (execution plan, request idempotency key, Host Class), so whether this run already holds a reservation is read from the ledger rather than from a caller-supplied flag.
+3. **Release on failure.** If host capacity cannot be admitted, provider capacity is released immediately. Provisional ownership is bounded: a run never occupies a provider lease indefinitely while waiting for a machine.
+4. **Execute.** The Activity receives a compact, secret-free admitted-capacity ticket and *consumes* it by inspection. It never calls an acquiring client, so it can neither grant new capacity nor wait for a replacement inside the execution slot.
+5. **Release last.** Provider capacity is released by its owner after the Activity's host, session, credential, and workspace cleanup has completed.
+
+Three waits are bounded and reported separately, because they mean different things to an operator: the provider queue wait and the host wait are durable workflow state outside any Activity, and the hand-off from "admitted" to "an execution worker started this" gets its own allowance so worker-queue time is never charged to the run's execution budget. The hand-off is bounded as queue time, by ScheduleToStart: a start-to-close deadline never begins while an Activity waits for a free worker, so a total deadline alone would let a starved execution lane keep an admitted run queued for its whole execution budget while it holds the provider lease it was admitted for. A fleet with no worker for the run therefore surfaces as a bounded hand-off timeout instead of a lease held for hours.
+
+#### Admitted-capacity ticket
+
+The ticket binds the whole authority the Activity must positively establish: the committed execution plan, the AgentRun workflow and run ids, the step execution and request identity, the selected Provider Profiles with their capacity scopes, the credential generation observed at admission, and a monotonic admission epoch. It carries identities only; credentials are resolved in Activities.
+
+The ProviderProfileManager records the same plan, step, request and credential-generation identity on the durable lease row, so the fence survives a manager restart. Consumption fails closed — before any host or credential side effect — when the inspection is empty or malformed, reports no active lease, or names another profile, owner, plan, step or request, or when the lease has expired, the credential generation has rotated, or the Provider Profile's capacity scope has changed since admission. A changed scope matters for the same reason a rotated generation does: the manager admits and accounts a queued grant under the scope in force, so binding the ticket's stale scope would record a capacity authority different from the ledger that admitted the run. Absence of evidence is never acceptance.
+
+A failure of this kind is recoverable, not terminal: the run returns to durable waiting under the same owner and is re-admitted with a bumped epoch, bounded by a small number of attempts. Nothing leaks, because provider capacity is already released when the failure is observed, and no duplicate host is created, because the host lease is keyed by the run's stable runtime binding.
+
+Re-admission re-reads the admission authority before it builds the next ticket. The frozen decision names the generation and scope this attempt was already refused for, so re-admitting against it could only re-observe the same fence until the attempt budget was gone. Refreshing is a recovery, never a substitution: a plan whose execution realizer or capacity-acquisition owner changed while the run waited fails closed instead of executing somewhere else.
+
+The admission epoch is part of the attempt's identity. Retries of one admitted attempt share a runtime binding and its host reservation, which is what makes them idempotent; a deliberate re-admission is a new attempt, because the previous attempt's host, credentials and provider lease were already released and its aggregate is terminally cleaned. Reusing that identity would leave the recovery no state to advance and could only end as a binding conflict.
+
+#### Multi-profile plans
+
+The ProviderProfileManager ledger holds at most one lease per requester workflow, so a workflow-owned all-required admission across several Provider Profiles cannot be expressed without a second capacity ledger. An execution plan that selects more than one Provider Profile is therefore **rejected before execution** on this path, with an actionable typed error. It is never silently routed back to Activity-side queueing. Histories recorded before pre-Activity admission keep their classified Activity acquisition: the rejection carries its own workflow patch marker, so a retained history replays onto the Activity-owned execution it already scheduled while every new run is rejected before execution.
+
+#### Worker lanes
+
+The agent-runtime fleet polls two task queues from one worker process, each with its own activity budget:
+
+| Lane | Task queue | What runs there |
+| --- | --- | --- |
+| **Execution** | `TEMPORAL_ACTIVITY_AGENT_RUNTIME_TASK_QUEUE` | Long turn execution and the Activities that drive a live turn. |
+| **Control, liveness and cleanup** | `TEMPORAL_ACTIVITY_AGENT_RUNTIME_CONTROL_TASK_QUEUE` | Capacity admission, cancellation, host-lease heartbeats, session stop, host stop, lease release, and host reclamation. |
+
+Saturating the execution lane at the deployment's configured concurrency therefore cannot starve cancellation, liveness, or the cleanup that releases the capacity queued runs are waiting for. Configuring both lanes to the same queue removes that guarantee and is rejected when the activity catalog is built. The lanes are queues, not services: they add no always-on container.
+
 #### Lease purposes
 
 Not every lease consumes an execution slot:

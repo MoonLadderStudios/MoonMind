@@ -65,6 +65,21 @@ def _cleanup_outcome_label(*, cancelled: bool, released: bool) -> str:
     return "completed_clean" if released else "leaked"
 
 
+def _admission_epoch(request: AgentExecutionRequest) -> int:
+    """Return the admission attempt this request was dispatched for.
+
+    A re-admission after lost capacity releases the previous attempt's host,
+    credentials and provider lease, so it must not resume that attempt's
+    terminally cleaned aggregate. The workflow already stamps its monotonic
+    epoch on the capacity ticket; the attempt identity is derived from it here
+    so the pre-admission read and the allocation name the same one.
+    """
+
+    return int(
+        getattr(request.admitted_provider_capacity, "admission_epoch", 0) or 0
+    )
+
+
 def _carry_host_logs(host_evidence: Any, prior_host_evidence: Any) -> Any:
     """Fold a host log tail captured by an earlier removal into this evidence.
 
@@ -190,6 +205,7 @@ class GenericOmnigentHostRealizer:
             stable_binding_id(
                 execution_plan_ref=plan.planRef,
                 idempotency_key=request.idempotency_key,
+                admission_epoch=_admission_epoch(request),
             )
         )
         if completed is not None and completed.state is RuntimeBindingState.cleaned:
@@ -217,6 +233,7 @@ class GenericOmnigentHostRealizer:
             stable_binding_id(
                 execution_plan_ref=plan.planRef,
                 idempotency_key=request.idempotency_key,
+                admission_epoch=_admission_epoch(request),
             )
         )
         if prior is not None and prior.state is RuntimeBindingState.cleaned:
@@ -296,6 +313,7 @@ class GenericOmnigentHostRealizer:
                 execution_plan_ref=plan.planRef,
                 idempotency_key=request.idempotency_key,
                 provider_leases=provider_authority,
+                admission_epoch=_admission_epoch(request),
             )
             if binding.state is RuntimeBindingState.cleaned:
                 # A completed binding is immutable. A duplicate execution must

@@ -1,16 +1,21 @@
-"""The execution Activity confirms workflow-admitted capacity; it never queues.
+"""The execution Activity consumes workflow-admitted capacity; it never queues.
 
-Source issue: MoonLadderStudios/MoonMind#3878 (invariants 6, 10, 11, 12).
+Source issues: MoonLadderStudios/MoonMind#3878 (invariants 6, 10, 11, 12) and
+MoonLadderStudios/MoonMind#3880 (remaining implementation 1-3, AC2).
 
 Once the AgentRun workflow owns the Provider Profile lease, the Activity's job
-changes from *acquire and release* to *confirm and leave alone*. Two failure
-modes are worth failing loudly on: an Activity that accepts a fresh grant while
-believing it is confirming one (the ledger then double-counts), and an Activity
-or janitor that releases capacity a live workflow still owns.
+changes from *acquire and release* to *inspect and leave alone*. The dangerous
+shape is an Activity that reaches for an acquiring client at all: an expired or
+missing admission would then wait for, or be granted, capacity nobody admitted,
+the ledger would double-count, and two releasers would exist. So the admitted
+path here never calls ``acquire_execution_lease``, and every inspection must
+positively establish the complete admitted identity — absence is never
+acceptance.
 """
 
 from __future__ import annotations
 
+from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
 
 import pytest
@@ -25,6 +30,7 @@ from moonmind.provider_profiles.lease_client import (
     CredentialLease,
     CredentialLeasePurpose,
 )
+from moonmind.schemas.agent_runtime_models import AdmittedProviderCapacity
 
 
 class _Session:
@@ -128,11 +134,51 @@ def _plan(*profile_refs: str):
     )
 
 
+def _plan_ref(*profile_refs: str) -> str:
+    return _plan(*profile_refs).planRef
+
+
+def _inspection(
+    *,
+    profile_ref: str = "opencode-zen-free",
+    owner: str = "agent-run-1",
+    plan_ref: str | None = None,
+    step_execution_id: str = "step-1",
+    idempotency_key: str = "idem-1",
+    expires_in_seconds: int = 900,
+    **overrides,
+) -> dict:
+    """The manager's ledger view of a live, workflow-owned admitted lease."""
+
+    payload = {
+        "active": True,
+        "lease_id": owner,
+        "profile_id": profile_ref,
+        "leaseId": owner,
+        "ownerId": owner,
+        "ownerIsWorkflow": True,
+        "purpose": CredentialLeasePurpose.EXECUTION_OMNIGENT.value,
+        "executionPlanRef": plan_ref if plan_ref is not None else _plan_ref(
+            profile_ref
+        ),
+        "stepExecutionId": step_execution_id,
+        "idempotencyKey": idempotency_key,
+        "credentialGeneration": 3,
+        "expiresAt": (
+            datetime.now(UTC) + timedelta(seconds=expires_in_seconds)
+        ).isoformat(),
+    }
+    payload.update(overrides)
+    return payload
+
+
 class _LeaseClient:
-    def __init__(self, *, already_held: bool = True) -> None:
+    def __init__(self, *, already_held: bool = True, inspection=None) -> None:
         self.already_held = already_held
         self.acquired: list[dict] = []
         self.released: list[str] = []
+        self.inspected: list[CredentialLease] = []
+        self._inspection = inspection
         self.released_fences: list[int | None] = []
 
     async def acquire_execution_lease(self, **kwargs):
@@ -147,59 +193,98 @@ class _LeaseClient:
         )
 
     async def inspect_lease(self, lease):
-        return {"active": True}
+        self.inspected.append(lease)
+        if self._inspection is None:
+            return {"active": True}
+        if callable(self._inspection):
+            return self._inspection(lease)
+        return self._inspection
 
     async def release_lease(self, lease):
         self.released.append(lease.lease_id)
         self.released_fences.append(lease.fencing_generation)
 
 
-def _admitted(profile_ref: str = "opencode-zen-free", owner: str = "agent-run-1"):
-    return SimpleNamespace(provider_profile_ref=profile_ref, lease_owner_id=owner)
+def _admitted(
+    *profile_refs: str,
+    owner: str = "agent-run-1",
+    plan_ref: str | None = None,
+    step_execution_id: str | None = "step-1",
+    idempotency_key: str | None = "idem-1",
+    credential_generation: int | None = 3,
+) -> AdmittedProviderCapacity:
+    """A real v2 ticket, exactly as the AgentRun workflow builds it."""
+
+    refs = profile_refs or ("opencode-zen-free",)
+    return AdmittedProviderCapacity.model_validate(
+        {
+            "leaseOwnerId": owner,
+            "profiles": [
+                {
+                    "providerProfileRef": ref,
+                    "providerRuntimeId": "opencode",
+                    "capacityScopeRef": f"provider-profile:{ref}",
+                    "credentialGeneration": credential_generation,
+                }
+                for ref in sorted(refs)
+            ],
+            "executionPlanRef": (
+                plan_ref if plan_ref is not None else _plan_ref(*refs)
+            ),
+            "stepExecutionId": step_execution_id,
+            "idempotencyKey": idempotency_key,
+            "admissionEpoch": 1,
+        }
+    )
 
 
-@pytest.mark.asyncio
-async def test_workflow_admitted_capacity_is_confirmed_under_the_workflow_owner():
-    """The manager already tracks the workflow as owner; reuse that identity."""
-
-    client = _LeaseClient()
-    coordinator = OmnigentProviderLeaseCoordinator(
-        session_factory=_session_factory(_profiles("opencode-zen-free")),
+def _coordinator(client, *profile_refs: str) -> OmnigentProviderLeaseCoordinator:
+    return OmnigentProviderLeaseCoordinator(
+        session_factory=_session_factory(
+            _profiles(*(profile_refs or ("opencode-zen-free",)))
+        ),
         lease_client=client,
     )
 
-    acquired = await coordinator.acquire_all(
-        plan=_plan("opencode-zen-free"),
+
+async def _consume(coordinator, client, *profile_refs: str, admitted=None):
+    refs = profile_refs or ("opencode-zen-free",)
+    return await coordinator.acquire_all(
+        plan=_plan(*refs),
         workflow_id="workflow-1",
         step_execution_id="step-1",
         idempotency_key="idem-1",
-        admitted_capacity=_admitted(),
+        admitted_capacity=admitted if admitted is not None else _admitted(*refs),
     )
+
+
+@pytest.mark.asyncio
+async def test_admitted_capacity_is_consumed_without_any_acquisition():
+    """Invariant 6 / #3880: inspection is the whole handoff — nothing is acquired."""
+
+    client = _LeaseClient(inspection=_inspection())
+    coordinator = _coordinator(client)
+
+    acquired = await _consume(coordinator, client)
 
     assert len(acquired) == 1
     assert acquired[0].owned_by_workflow is True
-    assert client.acquired[0]["owner_id"] == "agent-run-1"
-    assert client.acquired[0]["owner_is_workflow"] is True
-    assert client.acquired[0]["metadata"]["workflowId"] == "agent-run-1"
+    assert acquired[0].credential_generation == 3
+    assert acquired[0].lease.owner_id == "agent-run-1"
     assert acquired[0].lease.purpose is CredentialLeasePurpose.EXECUTION_OMNIGENT
+    # The acquiring client is never reached, so an expired or missing admission
+    # can never be silently replaced by a fresh grant or a wait.
+    assert client.acquired == []
+    assert [lease.lease_id for lease in client.inspected] == ["agent-run-1"]
 
 
 @pytest.mark.asyncio
 async def test_activity_never_releases_a_workflow_owned_lease():
     """Invariant 10: provider capacity is released last, by its owner."""
 
-    client = _LeaseClient()
-    coordinator = OmnigentProviderLeaseCoordinator(
-        session_factory=_session_factory(_profiles("opencode-zen-free")),
-        lease_client=client,
-    )
-    acquired = await coordinator.acquire_all(
-        plan=_plan("opencode-zen-free"),
-        workflow_id="workflow-1",
-        step_execution_id="step-1",
-        idempotency_key="idem-1",
-        admitted_capacity=_admitted(),
-    )
+    client = _LeaseClient(inspection=_inspection())
+    coordinator = _coordinator(client)
+    acquired = await _consume(coordinator, client)
 
     await coordinator.release_all(acquired)
 
@@ -210,11 +295,8 @@ async def test_activity_never_releases_a_workflow_owned_lease():
 async def test_activity_owned_lease_is_still_released_by_the_activity():
     """The pre-#3878 shape is unchanged when no capacity is admitted."""
 
-    client = _LeaseClient(already_held=False)
-    coordinator = OmnigentProviderLeaseCoordinator(
-        session_factory=_session_factory(_profiles("opencode-zen-free")),
-        lease_client=client,
-    )
+    client = _LeaseClient(already_held=False, inspection={"active": True})
+    coordinator = _coordinator(client)
     acquired = await coordinator.acquire_all(
         plan=_plan("opencode-zen-free"),
         workflow_id="workflow-1",
@@ -231,37 +313,139 @@ async def test_activity_owned_lease_is_still_released_by_the_activity():
     assert client.released == ["lease-opencode-zen-free"]
 
 
+@pytest.mark.parametrize(
+    "inspection, why",
+    [
+        ({}, "an empty payload"),
+        ("not-a-mapping", "a malformed payload"),
+        ({"lease_id": "agent-run-1"}, "no active flag at all"),
+        ({"active": False, "lease_id": "agent-run-1"}, "a revoked lease"),
+        ({"active": "yes"}, "a non-boolean active flag"),
+    ],
+)
 @pytest.mark.asyncio
-async def test_a_fresh_grant_where_a_held_lease_was_promised_fails_closed():
-    """Accepting it would double-count the ledger and leave two releasers."""
+async def test_incomplete_lease_inspection_fails_closed(inspection, why):
+    """AC2: absence of evidence is never evidence of an admitted lease."""
 
-    client = _LeaseClient(already_held=False)
+    client = _LeaseClient(inspection=inspection)
+    coordinator = _coordinator(client)
+
+    with pytest.raises(HarnessPlatformError) as exc_info:
+        await _consume(coordinator, client)
+
+    assert exc_info.value.code == "OMNIGENT_PROVIDER_LEASE_UNAVAILABLE", why
+    # Failing closed must not fall back to acquiring the capacity instead.
+    assert client.acquired == []
+
+
+@pytest.mark.parametrize(
+    "overrides",
+    [
+        {"profile_id": "some-other-profile"},
+        {"ownerId": "agent-run-9"},
+        {"ownerIsWorkflow": False},
+        {"expiresAt": None},
+        {"expiresAt": "not-a-timestamp"},
+        {"stepExecutionId": "step-9"},
+        {"idempotencyKey": "idem-9"},
+        {"executionPlanRef": "omnigent-execution-plan:sha256:" + "f" * 64},
+    ],
+)
+@pytest.mark.asyncio
+async def test_a_lease_that_is_not_this_admission_fails_closed(overrides):
+    """Revoked, expired, wrong-owner and wrong-plan handles all fail closed."""
+
+    client = _LeaseClient(inspection=_inspection(**overrides))
+    coordinator = _coordinator(client)
+
+    with pytest.raises(HarnessPlatformError) as exc_info:
+        await _consume(coordinator, client)
+
+    assert exc_info.value.code == "OMNIGENT_PROVIDER_LEASE_UNAVAILABLE"
+    assert client.acquired == []
+
+
+@pytest.mark.asyncio
+async def test_an_expired_admitted_lease_fails_closed():
+    """A ticket that outlived its grant must not be consumed."""
+
+    client = _LeaseClient(inspection=_inspection(expires_in_seconds=-1))
+    coordinator = _coordinator(client)
+
+    with pytest.raises(HarnessPlatformError) as exc_info:
+        await _consume(coordinator, client)
+
+    assert "expired" in str(exc_info.value)
+    assert client.acquired == []
+
+
+@pytest.mark.asyncio
+async def test_credentials_rotated_during_the_wait_fail_before_any_side_effect():
+    """#3880: the generation is fenced at the handoff, not re-read after it.
+
+    The run was admitted at generation 3 and the manager recorded that. The
+    profile has since rotated to 4. Re-reading the generation here would
+    silently adopt the rotation; comparing makes it an explicit, typed
+    re-admission that the workflow owner performs.
+    """
+
+    rows = _profiles("opencode-zen-free")
+    rows["opencode-zen-free"].credential_generation = 4
+    client = _LeaseClient(inspection=_inspection())
     coordinator = OmnigentProviderLeaseCoordinator(
-        session_factory=_session_factory(_profiles("opencode-zen-free")),
-        lease_client=client,
+        session_factory=_session_factory(rows), lease_client=client
     )
 
     with pytest.raises(HarnessPlatformError) as exc_info:
-        await coordinator.acquire_all(
-            plan=_plan("opencode-zen-free"),
-            workflow_id="workflow-1",
-            step_execution_id="step-1",
-            idempotency_key="idem-1",
-            admitted_capacity=_admitted(),
+        await _consume(coordinator, client)
+
+    assert exc_info.value.code == "OMNIGENT_CREDENTIAL_GENERATION_FENCED"
+    assert client.acquired == []
+
+
+@pytest.mark.asyncio
+async def test_a_ticket_that_disagrees_with_its_own_grant_fails_closed():
+    """The manager recorded which generation it granted against; they must agree."""
+
+    client = _LeaseClient(inspection=_inspection(credentialGeneration=3))
+    coordinator = _coordinator(client)
+
+    with pytest.raises(HarnessPlatformError) as exc_info:
+        await _consume(
+            coordinator, client, admitted=_admitted(credential_generation=2)
         )
 
     assert exc_info.value.code == "OMNIGENT_PROVIDER_LEASE_UNAVAILABLE"
+    assert "credential generation" in str(exc_info.value)
+    assert client.acquired == []
+
+
+@pytest.mark.asyncio
+async def test_a_ticket_for_another_execution_plan_fails_closed():
+    """The admitted capacity is bound to the exact committed plan."""
+
+    client = _LeaseClient(inspection=_inspection())
+    coordinator = _coordinator(client)
+
+    with pytest.raises(HarnessPlatformError) as exc_info:
+        await _consume(
+            coordinator,
+            client,
+            admitted=_admitted(
+                plan_ref="omnigent-execution-plan:sha256:" + "a" * 64
+            ),
+        )
+
+    assert exc_info.value.code == "OMNIGENT_EXECUTION_PLAN_CONFLICT"
+    assert client.inspected == []
 
 
 @pytest.mark.asyncio
 async def test_admitted_capacity_for_a_different_profile_fails_closed():
-    """Invariant 12: the Activity must not acquire unadmitted capacity."""
+    """Invariant 12: the Activity must not bind unadmitted capacity."""
 
-    client = _LeaseClient()
-    coordinator = OmnigentProviderLeaseCoordinator(
-        session_factory=_session_factory(_profiles("opencode-zen-free")),
-        lease_client=client,
-    )
+    client = _LeaseClient(inspection=_inspection())
+    coordinator = _coordinator(client)
 
     with pytest.raises(HarnessPlatformError) as exc_info:
         await coordinator.acquire_all(
@@ -269,22 +453,20 @@ async def test_admitted_capacity_for_a_different_profile_fails_closed():
             workflow_id="workflow-1",
             step_execution_id="step-1",
             idempotency_key="idem-1",
-            admitted_capacity=_admitted(profile_ref="some-other-profile"),
+            admitted_capacity=_admitted("some-other-profile"),
         )
 
     assert exc_info.value.code == "OMNIGENT_PROVIDER_PROFILE_INCOMPATIBLE"
     assert client.acquired == []
+    assert client.inspected == []
 
 
 @pytest.mark.asyncio
 async def test_multi_profile_plan_rejects_single_admitted_capacity():
     """One admitted profile cannot stand in for a plan that selected several."""
 
-    client = _LeaseClient()
-    coordinator = OmnigentProviderLeaseCoordinator(
-        session_factory=_session_factory(_profiles("profile-a", "profile-b")),
-        lease_client=client,
-    )
+    client = _LeaseClient(inspection=_inspection())
+    coordinator = _coordinator(client, "profile-a", "profile-b")
 
     with pytest.raises(HarnessPlatformError) as exc_info:
         await coordinator.acquire_all(
@@ -292,7 +474,7 @@ async def test_multi_profile_plan_rejects_single_admitted_capacity():
             workflow_id="workflow-1",
             step_execution_id="step-1",
             idempotency_key="idem-1",
-            admitted_capacity=_admitted(profile_ref="profile-a"),
+            admitted_capacity=_admitted("profile-a"),
         )
 
     assert exc_info.value.code == "OMNIGENT_PROVIDER_PROFILE_INCOMPATIBLE"
@@ -300,22 +482,84 @@ async def test_multi_profile_plan_rejects_single_admitted_capacity():
 
 @pytest.mark.asyncio
 async def test_admitted_capacity_without_a_lease_owner_fails_closed():
-    client = _LeaseClient()
-    coordinator = OmnigentProviderLeaseCoordinator(
-        session_factory=_session_factory(_profiles("opencode-zen-free")),
-        lease_client=client,
-    )
+    client = _LeaseClient(inspection=_inspection())
+    coordinator = _coordinator(client)
 
     with pytest.raises(HarnessPlatformError) as exc_info:
-        await coordinator.acquire_all(
-            plan=_plan("opencode-zen-free"),
-            workflow_id="workflow-1",
-            step_execution_id="step-1",
-            idempotency_key="idem-1",
-            admitted_capacity=_admitted(owner=""),
+        await _consume(
+            coordinator,
+            client,
+            admitted=SimpleNamespace(lease_owner_id="", profiles=()),
         )
 
     assert exc_info.value.code == "OMNIGENT_PROVIDER_LEASE_UNAVAILABLE"
+
+
+@pytest.mark.asyncio
+async def test_a_retained_v1_ticket_is_still_consumed_by_inspection():
+    """Retained histories replay: the v1 shape bound no plan, step or generation.
+
+    Temporal redelivers the original Activity input on retry, so a ticket
+    recorded before #3880 must still work. It carries less authority, so only
+    the identities it actually recorded are checked — but it is still consumed
+    by inspection, never by acquisition.
+    """
+
+    v1 = AdmittedProviderCapacity.model_validate(
+        {
+            "providerProfileRef": "opencode-zen-free",
+            "providerRuntimeId": "opencode",
+            "leaseOwnerId": "agent-run-1",
+            "capacityScopeRef": "opencode-zen:contributor-free",
+        }
+    )
+    client = _LeaseClient(
+        inspection=_inspection(
+            executionPlanRef=None, stepExecutionId=None, idempotencyKey=None
+        )
+    )
+    coordinator = _coordinator(client)
+
+    acquired = await _consume(coordinator, client, admitted=v1)
+
+    assert acquired[0].owned_by_workflow is True
+    assert acquired[0].capacity_scope_ref == "opencode-zen:contributor-free"
+    # The generation was never recorded, so the value observed here is sticky.
+    assert acquired[0].credential_generation == 3
+    assert client.acquired == []
+
+
+@pytest.mark.asyncio
+async def test_a_disabled_profile_fails_before_any_credential_resolution():
+    """Consumption still refuses a profile that is no longer launch ready."""
+
+    rows = _profiles("opencode-zen-free")
+    rows["opencode-zen-free"].enabled = False
+    client = _LeaseClient(inspection=_inspection())
+    coordinator = OmnigentProviderLeaseCoordinator(
+        session_factory=_session_factory(rows), lease_client=client
+    )
+
+    with pytest.raises(HarnessPlatformError) as exc_info:
+        await _consume(coordinator, client)
+
+    assert exc_info.value.code == "OMNIGENT_PROVIDER_PROFILE_INCOMPATIBLE"
+
+
+@pytest.mark.asyncio
+async def test_a_retried_activity_attempt_reuses_the_same_stable_lease():
+    """Requirement 3: retry reuses the binding; it never creates a second one."""
+
+    client = _LeaseClient(inspection=_inspection())
+    coordinator = _coordinator(client)
+    admitted = _admitted()
+
+    first = await _consume(coordinator, client, admitted=admitted)
+    second = await _consume(coordinator, client, admitted=admitted)
+
+    assert first[0].provider_lease_ref == second[0].provider_lease_ref
+    assert first[0].lease.owner_id == second[0].lease.owner_id
+    assert client.acquired == []
 
 
 def _persisted_binding(
@@ -416,3 +660,40 @@ async def test_pre_patch_bindings_without_the_flag_stay_reclaimable():
     await coordinator.release_from_binding(binding)
 
     assert client.released == ["lease-1"]
+
+
+@pytest.mark.asyncio
+async def test_a_capacity_scope_changed_after_admission_is_lost_capacity():
+    """AC2: the binding must record the ledger that actually admitted the run.
+
+    The manager admits and accounts a queued grant under the Provider Profile's
+    current capacity scope. Copying a stale ticket scope into the durable
+    runtime binding would record a capacity authority the ledger never used, so
+    a changed scope is reported as lost admitted capacity and the run is
+    re-admitted under the scope in force.
+    """
+
+    rows = _profiles("opencode-zen-free")
+    rows["opencode-zen-free"].capacity_scope_ref = "opencode-zen:paid"
+    client = _LeaseClient(inspection=_inspection())
+    coordinator = OmnigentProviderLeaseCoordinator(
+        session_factory=_session_factory(rows), lease_client=client
+    )
+
+    with pytest.raises(HarnessPlatformError) as exc_info:
+        await _consume(coordinator, client)
+
+    assert exc_info.value.code == "OMNIGENT_PROVIDER_LEASE_UNAVAILABLE"
+    assert client.acquired == []
+
+
+@pytest.mark.asyncio
+async def test_the_admitted_scope_is_the_one_the_binding_records():
+    """An unchanged scope binds exactly what the workflow admitted against."""
+
+    client = _LeaseClient(inspection=_inspection())
+    coordinator = _coordinator(client)
+
+    acquired = await _consume(coordinator, client)
+
+    assert acquired[0].capacity_scope_ref == "provider-profile:opencode-zen-free"

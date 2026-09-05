@@ -58,7 +58,10 @@ from moonmind.schemas.agent_runtime_models import (
 )
 
 #: The deployment-selectable ceilings the generic plane must stay correct for.
-CONCURRENCY_LEVELS = [1, 2, 4, 8]
+#: MoonLadderStudios/MoonMind#3880 AC7 requires the chosen 8 and 16 execution
+#: rows: nothing between the deployment setting and the ledger may impose a
+#: lower, undocumented cap.
+CONCURRENCY_LEVELS = [1, 2, 4, 8, 16]
 
 ZEN_PROFILE = "opencode-zen-free"
 ZEN_MODEL = "opencode/muse-spark-1.2-contributor-free"
@@ -202,10 +205,20 @@ class _LedgerAdmission(GenericHostCapacityAdmission):
 def _request(run: str, *, workflow_owned: bool) -> AgentExecutionRequest:
     admitted = (
         {
-            "providerProfileRef": ZEN_PROFILE,
-            "providerRuntimeId": "opencode",
             "leaseOwnerId": f"agent-run-{run}",
-            "capacityScopeRef": "opencode-zen:contributor-free",
+            "profiles": [
+                {
+                    "providerProfileRef": ZEN_PROFILE,
+                    "providerRuntimeId": "opencode",
+                    "capacityScopeRef": "opencode-zen:contributor-free",
+                    "credentialGeneration": 4,
+                }
+            ],
+            "executionPlanRef": _zen_plan(run).planRef,
+            "agentRunWorkflowId": f"agent-run-{run}",
+            "stepExecutionId": f"step-{run}",
+            "idempotencyKey": f"idem-{run}",
+            "admissionEpoch": 1,
         }
         if workflow_owned
         else None
@@ -525,7 +538,16 @@ async def test_each_run_forwards_its_own_admitted_capacity(concurrency: int) -> 
         f"agent-run-{index}" for index in range(concurrency)
     )
     assert all(
-        item.provider_profile_ref == ZEN_PROFILE for item in machine.admitted_capacity
+        item.profile_refs == (ZEN_PROFILE,) for item in machine.admitted_capacity
+    )
+    # Each ticket binds its own plan and request identity, so no run can consume
+    # another's grant (MoonLadderStudios/MoonMind#3880 requirement 1).
+    assert len({item.execution_plan_ref for item in machine.admitted_capacity}) == (
+        concurrency
+    )
+    assert all(
+        item.profiles[0].credential_generation == 4
+        for item in machine.admitted_capacity
     )
 
 

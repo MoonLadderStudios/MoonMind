@@ -1026,6 +1026,12 @@ class MoonMindProviderProfileManagerWorkflow:
             "oauthSessionId",
             "idempotencyKey",
             "ownerIsWorkflow",
+            # MoonLadderStudios/MoonMind#3880: the plan and credential
+            # generation a workflow admitted against are the durable fence the
+            # execution Activity inspects instead of acquiring. Both are
+            # compact, non-secret identities with their own persisted columns.
+            "executionPlanRef",
+            "credentialGeneration",
             # Compact versioned identity of the work this lease authorizes.
             # Non-secret by contract: it is a digest, never raw credential or
             # provider material.
@@ -3983,7 +3989,13 @@ class MoonMindProviderProfileManagerWorkflow:
         metadata: dict[str, Any] | None = None,
     ) -> bool:
         """Persist one lease grant; idempotent retry returns existing lease."""
-        safe = dict(metadata or {})
+        # The reserved lease already carries its expiry and fence identity;
+        # merging it here is what makes the durable row replay-complete
+        # (MoonLadderStudios/MoonMind#3880).
+        safe = {
+            **(profile.lease_metadata.get(lease_id) or {}),
+            **(metadata or {}),
+        }
         owner_id = str(safe.get("ownerId") or safe.get("workflowId") or lease_id)
         owner_is_workflow = safe.get("ownerIsWorkflow", True) is not False
         try:
@@ -4014,6 +4026,11 @@ class MoonMindProviderProfileManagerWorkflow:
                             "stepExecutionId": safe.get("stepExecutionId"),
                             "oauthSessionId": safe.get("oauthSessionId"),
                             "idempotencyKey": safe.get("idempotencyKey"),
+                            "executionPlanRef": safe.get("executionPlanRef"),
+                            "credential_generation": safe.get(
+                                "credentialGeneration"
+                            ),
+                            "expiresAt": safe.get("expiresAt"),
                             "ownerIsWorkflow": owner_is_workflow,
                             # The compact versioned identity this lease
                             # authorizes, so a manager restart restores the
@@ -4187,6 +4204,13 @@ class MoonMindProviderProfileManagerWorkflow:
                                 "oauthSessionId",
                                 "idempotencyKey",
                                 "ownerIsWorkflow",
+                                # Restoring the fence is what lets a run that
+                                # survived a manager restart consume its
+                                # admitted capacity by inspection alone
+                                # (MoonLadderStudios/MoonMind#3880).
+                                "executionPlanRef",
+                                "credentialGeneration",
+                                "expiresAt",
                             )
                             if lease.get(key) is not None
                         },
