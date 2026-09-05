@@ -20,6 +20,7 @@ from temporalio.common import (
 )
 
 import moonmind.workflows.temporal.manifest_ingest as manifest_ingest_module
+import moonmind.workflows.temporal.workflows.manifest_ingest as manifest_workflow_module
 from api_service.db.models import Base, MoonMindWorkflowState, TemporalWorkflowType
 from moonmind.workflows.temporal import (
     LocalTemporalArtifactStore,
@@ -36,7 +37,7 @@ DEFAULT_MANIFEST_MAX_CONCURRENCY = (
     manifest_ingest_module.DEFAULT_MANIFEST_MAX_CONCURRENCY
 )
 ManifestIngestValidationError = manifest_ingest_module.ManifestIngestValidationError
-ManifestIngestWorkflow = manifest_ingest_module.ManifestIngestWorkflow
+from moonmind.workflows.temporal.workflows.manifest_ingest import MoonMindManifestIngestWorkflow
 _apply_manifest_node_update = manifest_ingest_module._apply_manifest_node_update
 _resolve_workflow_requested_by = manifest_ingest_module._resolve_workflow_requested_by
 _runtime_manifest_nodes = manifest_ingest_module._runtime_manifest_nodes
@@ -44,6 +45,12 @@ apply_manifest_update = manifest_ingest_module.apply_manifest_update
 build_manifest_status_snapshot = manifest_ingest_module.build_manifest_status_snapshot
 initialize_manifest_projection = manifest_ingest_module.initialize_manifest_projection
 list_manifest_nodes = manifest_ingest_module.list_manifest_nodes
+
+
+@pytest.fixture(autouse=True)
+def retained_manifest_commands(monkeypatch):
+    # The mocked Activity expectations below describe the persisted old commands.
+    monkeypatch.setattr(manifest_workflow_module.workflow, "patched", lambda _patch_id: False)
 
 MANIFEST_YAML = """
 version: "v0"
@@ -381,7 +388,7 @@ def test_manifest_workflow_run_uses_owner_principal_and_child_owner_id(
     scheduled_start = datetime(2026, 6, 22, 9, 30, tzinfo=UTC)
 
     monkeypatch.setattr(
-        manifest_ingest_module.workflow,
+        manifest_workflow_module.workflow,
         "info",
         lambda: SimpleNamespace(
             workflow_id="mm:manifest-1",
@@ -400,12 +407,12 @@ def test_manifest_workflow_run_uses_owner_principal_and_child_owner_id(
         ),
     )
     monkeypatch.setattr(
-        manifest_ingest_module.workflow,
+        manifest_workflow_module.workflow,
         "patched",
-        lambda _patch_id: True,
+        lambda patch_id: patch_id == manifest_workflow_module.MANIFEST_RECURRING_SCHEDULED_START_PATCH,
     )
     monkeypatch.setattr(
-        manifest_ingest_module.workflow,
+        manifest_workflow_module.workflow,
         "upsert_search_attributes",
         lambda pairs: search_attribute_upserts.append(list(pairs)),
     )
@@ -442,22 +449,22 @@ def test_manifest_workflow_run_uses_owner_principal_and_child_owner_id(
         return None
 
     monkeypatch.setattr(
-        manifest_ingest_module.workflow,
+        manifest_workflow_module.workflow,
         "execute_activity",
         fake_execute_activity,
     )
     monkeypatch.setattr(
-        manifest_ingest_module.workflow,
+        manifest_workflow_module.workflow,
         "execute_child_workflow",
         fake_execute_child_workflow,
     )
     monkeypatch.setattr(
-        manifest_ingest_module.workflow,
+        manifest_workflow_module.workflow,
         "wait_condition",
         fake_wait_condition,
     )
 
-    workflow_instance = ManifestIngestWorkflow()
+    workflow_instance = MoonMindManifestIngestWorkflow()
     result = asyncio.run(
         workflow_instance.run(
             {
@@ -511,7 +518,7 @@ def test_manifest_workflow_cancel_nodes_cancels_running_tasks(
             self.canceled = True
 
     monkeypatch.setattr(
-        manifest_ingest_module.workflow,
+        manifest_workflow_module.workflow,
         "info",
         lambda: SimpleNamespace(
             workflow_id="mm:manifest-1",
@@ -520,7 +527,7 @@ def test_manifest_workflow_cancel_nodes_cancels_running_tasks(
         ),
     )
 
-    workflow_instance = ManifestIngestWorkflow()
+    workflow_instance = MoonMindManifestIngestWorkflow()
     workflow_instance._nodes = {
         "node-a": {"nodeId": "node-a", "state": "pending"},
         "node-b": {"nodeId": "node-b", "state": "running"},
@@ -780,7 +787,7 @@ def test_manifest_workflow_fail_fast_cancels_remaining_nodes(
 ) -> None:
     """T013 DOC-REQ-009: fail_fast cancels pending/ready nodes on first failure."""
     monkeypatch.setattr(
-        manifest_ingest_module.workflow,
+        manifest_workflow_module.workflow,
         "info",
         lambda: SimpleNamespace(
             workflow_id="mm:manifest-ff",
@@ -829,22 +836,22 @@ def test_manifest_workflow_fail_fast_cancels_remaining_nodes(
         return None
 
     monkeypatch.setattr(
-        manifest_ingest_module.workflow,
+        manifest_workflow_module.workflow,
         "execute_activity",
         fake_execute_activity,
     )
     monkeypatch.setattr(
-        manifest_ingest_module.workflow,
+        manifest_workflow_module.workflow,
         "execute_child_workflow",
         fake_execute_child_workflow,
     )
     monkeypatch.setattr(
-        manifest_ingest_module.workflow,
+        manifest_workflow_module.workflow,
         "wait_condition",
         fake_wait_condition,
     )
 
-    workflow_instance = ManifestIngestWorkflow()
+    workflow_instance = MoonMindManifestIngestWorkflow()
     result = asyncio.run(
         workflow_instance.run(
             {
@@ -869,7 +876,7 @@ def test_manifest_workflow_dependency_ordering_blocks_dependents(
 ) -> None:
     """T015 DOC-REQ-009: Nodes with unmet dependencies do not start."""
     monkeypatch.setattr(
-        manifest_ingest_module.workflow,
+        manifest_workflow_module.workflow,
         "info",
         lambda: SimpleNamespace(
             workflow_id="mm:manifest-dep",
@@ -922,22 +929,22 @@ def test_manifest_workflow_dependency_ordering_blocks_dependents(
         return None
 
     monkeypatch.setattr(
-        manifest_ingest_module.workflow,
+        manifest_workflow_module.workflow,
         "execute_activity",
         fake_execute_activity,
     )
     monkeypatch.setattr(
-        manifest_ingest_module.workflow,
+        manifest_workflow_module.workflow,
         "execute_child_workflow",
         fake_execute_child_workflow,
     )
     monkeypatch.setattr(
-        manifest_ingest_module.workflow,
+        manifest_workflow_module.workflow,
         "wait_condition",
         fake_wait_condition,
     )
 
-    workflow_instance = ManifestIngestWorkflow()
+    workflow_instance = MoonMindManifestIngestWorkflow()
     result = asyncio.run(
         workflow_instance.run(
             {
@@ -955,7 +962,7 @@ def test_best_effort_continues_after_failures(
 ) -> None:
     """T022 DOC-REQ-009: best_effort absorbs child failures and continues independent nodes."""
     monkeypatch.setattr(
-        manifest_ingest_module.workflow,
+        manifest_workflow_module.workflow,
         "info",
         lambda: SimpleNamespace(
             workflow_id="mm:manifest-be",
@@ -1004,22 +1011,22 @@ def test_best_effort_continues_after_failures(
         return None
 
     monkeypatch.setattr(
-        manifest_ingest_module.workflow,
+        manifest_workflow_module.workflow,
         "execute_activity",
         fake_execute_activity,
     )
     monkeypatch.setattr(
-        manifest_ingest_module.workflow,
+        manifest_workflow_module.workflow,
         "execute_child_workflow",
         fake_execute_child_workflow,
     )
     monkeypatch.setattr(
-        manifest_ingest_module.workflow,
+        manifest_workflow_module.workflow,
         "wait_condition",
         fake_wait_condition,
     )
 
-    workflow_instance = ManifestIngestWorkflow()
+    workflow_instance = MoonMindManifestIngestWorkflow()
     result = asyncio.run(
         workflow_instance.run(
             {
@@ -1055,7 +1062,7 @@ def test_set_concurrency_rejects_out_of_bounds(
 ) -> None:
     """T023 DOC-REQ-009: SetConcurrency rejects values outside 1-500."""
     monkeypatch.setattr(
-        manifest_ingest_module.workflow,
+        manifest_workflow_module.workflow,
         "info",
         lambda: SimpleNamespace(
             workflow_id="mm:manifest-sc",
@@ -1064,7 +1071,7 @@ def test_set_concurrency_rejects_out_of_bounds(
         ),
     )
 
-    workflow_instance = ManifestIngestWorkflow()
+    workflow_instance = MoonMindManifestIngestWorkflow()
 
     # Too high
     response = asyncio.run(workflow_instance.set_concurrency({"maxConcurrency": 501}))
@@ -1113,7 +1120,7 @@ def test_authorization_lineage_propagated_to_child(
     child_calls: list[dict[str, object]] = []
 
     monkeypatch.setattr(
-        manifest_ingest_module.workflow,
+        manifest_workflow_module.workflow,
         "info",
         lambda: SimpleNamespace(
             workflow_id="mm:manifest-auth",
@@ -1152,22 +1159,22 @@ def test_authorization_lineage_propagated_to_child(
         return None
 
     monkeypatch.setattr(
-        manifest_ingest_module.workflow,
+        manifest_workflow_module.workflow,
         "execute_activity",
         fake_execute_activity,
     )
     monkeypatch.setattr(
-        manifest_ingest_module.workflow,
+        manifest_workflow_module.workflow,
         "execute_child_workflow",
         fake_execute_child_workflow,
     )
     monkeypatch.setattr(
-        manifest_ingest_module.workflow,
+        manifest_workflow_module.workflow,
         "wait_condition",
         fake_wait_condition,
     )
 
-    workflow_instance = ManifestIngestWorkflow()
+    workflow_instance = MoonMindManifestIngestWorkflow()
     result = asyncio.run(
         workflow_instance.run(
             {

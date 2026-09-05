@@ -2688,3 +2688,63 @@ async def test_terminal_handoff_promotes_omnigent_refs_before_recording(
         assert all(ref.startswith("artifact://art_") for ref in retained)
         assert all("artifact://omnigent/" not in ref for ref in retained)
     await engine.dispose()
+
+
+@pytest.mark.parametrize("terminal", ["canceled", "rejected"])
+async def test_pre_cutover_pending_persistence_invocations_keep_real_handlers(
+    tmp_path,
+    monkeypatch,
+    terminal,
+):
+    """Old workflow-queue payloads still cross the retained persistence owners."""
+    import json
+    from pathlib import Path
+    from temporalio.client import WorkflowHistory
+    from temporalio.converter import DataConverter
+    from temporalio.testing import ActivityEnvironment
+    from moonmind.workflows.temporal.workflow_registry import (
+        workflow_fleet_activity_handlers,
+    )
+
+    engine, sessions, _refs = await _terminal_activity_database(tmp_path, monkeypatch)
+    fixture = (
+        Path(__file__).resolve().parents[3]
+        / "fixtures/temporal/checkpoint_before_artifacts_fleet"
+        / f"{terminal}.json"
+    )
+    history = WorkflowHistory.from_json(
+        f"old-{terminal}", json.loads(fixture.read_text())
+    )
+    handlers = {
+        activity._Definition.must_from_callable(handler).name: handler
+        for handler in workflow_fleet_activity_handlers()
+    }
+    try:
+        async with sessions() as session:
+            turn = await session.get(WorkflowCheckpointBranchTurn, "turn-1")
+            expected_agent = turn.runtime_agent_run_id
+        for event in history.events:
+            if not event.HasField("activity_task_scheduled_event_attributes"):
+                continue
+            command = event.activity_task_scheduled_event_attributes
+            name = command.activity_type.name
+            if name not in handlers or not name.startswith("checkpoint_branch.turn."):
+                continue
+            if terminal == "rejected" and name.endswith("persist_terminal"):
+                continue  # Invalid evidence is tested by the production rejection owner.
+            (payload,) = await DataConverter.default.decode(command.input.payloads)
+            if name.endswith("mark_running"):
+                # Replay payload values are scenario data. Resolve the current
+                # durable row identity through the production branch service.
+                payload["agentRunWorkflowId"] = expected_agent
+            result = await ActivityEnvironment().run(handlers[name], payload)
+            if name.endswith("persist_terminal_rejection"):
+                assert result["status"] == "blocked"
+            elif name.endswith("persist_terminal"):
+                assert result["status"] == "canceled"
+        async with sessions() as session:
+            turn = await session.get(WorkflowCheckpointBranchTurn, "turn-1")
+            assert turn.status == ("canceled" if terminal == "canceled" else "blocked")
+            assert turn.completed_at is not None
+    finally:
+        await engine.dispose()
