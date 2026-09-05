@@ -7035,10 +7035,14 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
     setSteps(reconstructedSteps);
     // Context retrieval authoring is only visible in Advanced mode, so a source
     // run that already authored it reveals the controls instead of resubmitting
-    // an invisible retrieval policy.
+    // an invisible retrieval policy. Inherited Omnigent execution targeting is
+    // likewise Advanced-gated, so reveal Advanced mode when the draft carries
+    // an explicit execution target or host-policy override.
     setShowAdvancedStepOptions(
       hasAdvancedStepOptionValues(reconstructedSteps) ||
-        hasAuthoredContextRetrieval(reconstructedContextRetrieval),
+        hasAuthoredContextRetrieval(reconstructedContextRetrieval) ||
+        Boolean(draft.omnigentExecutionTargetRef) ||
+        Boolean(draft.omnigentLaunchPolicyRef),
     );
     setNextStepNumber(reconstructedSteps.length + 1);
     setPersistedObjectiveAttachments(
@@ -7102,10 +7106,14 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
     }
     if (draft.executionProfileRef) {
       setOmnigentExecutionTargetRef(draft.executionProfileRef);
+      // Inherited execution targeting renders only in Advanced mode, so reveal
+      // the controls instead of resubmitting an invisible override.
+      setShowAdvancedStepOptions(true);
     }
     if (draft.launchPolicyRef) {
       setOmnigentLaunchPolicyRef(draft.launchPolicyRef);
       setOmnigentLaunchPolicyAuthored(true);
+      setShowAdvancedStepOptions(true);
     }
     if (draft.contextRetrieval) {
       setContextRetrieval(draft.contextRetrieval);
@@ -10419,6 +10427,15 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
       return;
     }
     let submittedOmnigentLaunchPolicyRef = omnigentLaunchPolicyRef;
+    // Host-policy authoring lives behind Advanced mode. While the controls are
+    // hidden the submission carries the unauthored default so a stale value the
+    // operator can no longer see is never validated or submitted as an
+    // explicit override.
+    const effectiveOmnigentLaunchPolicyAuthored =
+      showAdvancedStepOptions && omnigentLaunchPolicyAuthored;
+    if (!showAdvancedStepOptions) {
+      submittedOmnigentLaunchPolicyRef = "";
+    }
     const effectiveOmnigentAgentProfileVersion =
       submittedOmnigentAgentProfileVersion;
     const effectiveOmnigentAgentProfileDigest = submittedOmnigentAgentProfileDigest;
@@ -10477,7 +10494,7 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
         !refreshedCompatiblePolicies.some(
           (policy) => policy.ref === submittedOmnigentLaunchPolicyRef,
         ) &&
-        !omnigentLaunchPolicyAuthored
+        !effectiveOmnigentLaunchPolicyAuthored
       ) {
         if (refreshedPreferredPolicy) {
           submittedOmnigentLaunchPolicyRef = refreshedPreferredPolicy.ref;
@@ -11669,7 +11686,7 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
                   : {}),
               },
             }
-          : normalizedRuntime === "omnigent" && omnigentLaunchPolicyAuthored
+          : normalizedRuntime === "omnigent" && showAdvancedStepOptions && omnigentLaunchPolicyAuthored
             ? { omnigent: { launchPolicyRef: submittedOmnigentLaunchPolicyRef } }
             : {}),
         publishMode: effectivePublishMode,
@@ -14059,7 +14076,7 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
           aria-label="Execution context"
         >
         <div className={providerOptions.length > 0 ? "grid-2" : "stack"}>
-          <details><summary>Advanced runtime</summary><label>
+          <div className="stack"><label>
             Runtime
             <select
               name="runtime"
@@ -14149,7 +14166,7 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
             </div>
           ) : null}
 
-          </details>
+          </div>
 
           {providerOptions.length > 0 ? (
             <div id="queue-provider-profile-wrap">
@@ -14208,8 +14225,8 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
           )}
         </div>
 
-        {runtime.trim().toLowerCase() === "omnigent" && (omnigentProfiles.length > 0 || Boolean(selectedGenericOmnigentTarget)) ? (
-          <details><summary>Advanced execution</summary><div className="grid-2" aria-label="Omnigent execution target">
+        {runtime.trim().toLowerCase() === "omnigent" && (omnigentProfiles.length > 0 || Boolean(selectedGenericOmnigentTarget)) && showAdvancedStepOptions ? (
+          <div className="grid-2" aria-label="Omnigent execution target">
             <label>
               Execution target
               <select
@@ -14261,7 +14278,7 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
                 ))}
               </select>
             </label>
-          </div></details>
+          </div>
         ) : null}
 
         {runtime !== "omnigent" && selectedConfiguredProfile?.execution_selection_error ? (
@@ -14417,8 +14434,17 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
                   // the retained state matches the unauthored policy that is
                   // actually submitted. Re-enabling the toggle then cannot
                   // silently restore a retrieval policy the operator can no
-                  // longer see.
+                  // longer see. A hidden host-policy override would be equally
+                  // invisible yet still submitted, so clear its authored flag
+                  // and restore the default selection.
                   setContextRetrieval(defaultContextRetrievalAuthoring());
+                  setOmnigentLaunchPolicyAuthored(false);
+                  const defaultPolicyRef =
+                    selectableOmnigentPolicies.find((policy) => policy.isDefault)?.ref ||
+                    selectableOmnigentPolicies[0]?.ref;
+                  if (defaultPolicyRef) {
+                    setOmnigentLaunchPolicyRef(defaultPolicyRef);
+                  }
                 }
                 updateDashboardPreferences({
                   createExpertMode: advancedEnabled,
