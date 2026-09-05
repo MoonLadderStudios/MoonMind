@@ -3,7 +3,7 @@
 Status: Proposed design  
 Document Class: System / Feature Design View
 Owners: MoonMind Platform  
-Last updated: 2026-08-14
+Last updated: 2026-09-05
 
 **Implementation tracking:** rollout notes, spikes, and temporary handoffs belong under `docs/tmp/` or gitignored local-only artifacts, not as mutable checklists in this canonical design document.
 
@@ -141,6 +141,10 @@ Responsibilities:
 The version, route, authentication, lifecycle, evidence, failure, upgrade, and rollback contract is authoritative in [`EmbeddedHostAuthCompatibility.md`](EmbeddedHostAuthCompatibility.md).
 
 ```text
+unchanged host -> MoonMind embedded-compatible host/runner channel
+```
+
+```text
 MoonMind UI / API
   -> MoonMind Omnigent Bridge
       -> embedded Omnigent-compatible server surface
@@ -200,7 +204,7 @@ All session-scoped operations resolve the durable MoonMind binding and authorize
 | Message/interrupt/stop | `POST /v1/sessions/{id}/events` | Same | Effective capability, expected-state, audit, and outbound-scan enforcement. |
 | Delete | `DELETE /v1/sessions/{id}` | Same | Terminal cleanup capability and lease ownership required. |
 | Provider stream | `GET /v1/sessions/{id}/stream` | Same | Per-connect authorization; reconnect reauthorizes. |
-| Resolve elicitation | `POST /v1/sessions/{id}/elicitations/{eid}/resolve` | Same | Caller approval authority, expected request state, idempotency, and durable audit required. |
+| Resolve elicitation | `POST /v1/sessions/{id}/elicitations/{eid}/resolve` | Same | Caller approval authority, expected elicitation, policy, audit. |
 | File indexes | `GET .../changes`, `GET .../filesystem` | Same | Bound, authorized, bounded, and path-safe. |
 | File content/diff | `GET .../filesystem/{path}`, `GET .../diff/{path}` | Same | One decode/encode boundary, traversal rejection, response limit, read capability. |
 | Session files | `GET .../resources/files*` | Same | Bound, authorized, bounded, capability-gated. |
@@ -241,6 +245,28 @@ The native UI is more than an HTTP transcript: it opens WebSockets and drives te
 - **compatibility_review_required** — a reserved quarantine disposition for a recognized route whose rewrite has not yet been reviewed. The pinned `omnigent.server.v1` HTTP, SSE, global-session-update WebSocket, terminal-attach WebSocket, and dictation WebSocket routes are reviewed and served. A future recognized-but-unreviewed transport is authenticated and binding-validated before upgrade, then fails closed with an explicit compatibility diagnostic. A successful earlier HTTP bootstrap never authorizes a later WebSocket.
 
 Terminal create/attach/input/resize/close and browser-pane control require capabilities the facade never grants, so a nonowner or read-only viewer is denied before any transport opens; terminal viewing/execution-log inspection is a distinct read capability. Unknown or changed transports fail closed with a non-enumerating diagnostic rather than being generically proxied, and a terminal/revoked binding cannot open a new live transport.
+
+#### Browser transport API preservation
+
+A host adapter that rebases native browser requests must preserve the browser API contract used by the pinned application, not just produce the correct URL. An adapted `WebSocket` preserves constructor arguments, subprotocol handling, native instance/prototype behavior, event delivery, and the static ready-state constants `CONNECTING = 0`, `OPEN = 1`, `CLOSING = 2`, and `CLOSED = 3`. An adapted `EventSource` likewise preserves its constructor options, instance behavior, and `CONNECTING`, `OPEN`, and `CLOSED` constants. Copying only an instance prototype is not sufficient constructor compatibility.
+
+Transport verification executes the served adapter with its real native consumer. A null or non-open socket cannot send, while an authorized open socket must send normally. Avoid hiding a failed guard by suppressing exceptions while leaving valid sends broken. URL rebasing remains idempotent and binding-scoped across fetch, XHR, SSE, and WebSocket use. Prefer a supported upstream embedding seam when it removes the need for a wrapper without changing the authority boundary.
+
+#### Scoped bootstrap and compiled assets
+
+The reviewed compatibility surface includes the exact compiled application's startup requests and response shapes, not only routes declared in source or exercised after a session is already open. Each boot metadata, session, transcript, environment, child-session, and optional workspace request has an explicit scoped operation or an explicit unsupported disposition. The existing compatibility map is the single inventory owner. A new route is never admitted merely because a newer standalone UI requests it.
+
+Boot metadata exposes only the selected binding's authorized presentation information. Global-looking catalogs and update watch sets must be reduced to authorized binding-local projections, with identity virtualization and per-frame validation where needed. They must not enumerate unrelated harnesses, sessions, hosts, or provider authority. Child-session relationships and resource identifiers require their own reviewed scoping. Unknown routes and unreviewed payload variants remain denied. Optional features may be disabled through the supported native host/capability interface, but a missing required transcript route cannot be disguised as a successful empty response.
+
+Asset compatibility covers HTML references, JavaScript-imported images, CSS URLs, module preloads, and lazy-loaded chunks in both presentations. These resolve through the authorized scoped asset surface with the expected content type. An HTML attribute rewrite or base tag alone does not establish that references inside unchanged JavaScript or CSS are scoped. Use supported build/runtime asset-base behavior or a bounded reviewed asset mapping, not an unrestricted root proxy or arbitrary rewriting of application source. Hashed assets and the document must belong to one coherent qualified bundle.
+
+#### Readiness and denial evidence
+
+The workflow shell's application-readiness and failure behavior is owned by [Workflow Chat Panel sections 4.1 and 11.1](../UI/WorkflowChatPanel.md#41-application-readiness-and-failure-containment). Serving authorization, compatibility eligibility, successful document delivery, rendered conversation readiness, and live transport health are separate facts. None grants authority at a later request boundary.
+
+For an authorized binding, failures expose bounded stable reason codes that distinguish verified capability denial, missing/stale immutable authority, unsupported operations, and required-asset or application failure where safe. Unknown or unauthorized bindings retain non-enumerating responses. Detailed diagnostics remain behind their existing authorization boundary. The bridge never repairs a 403 by trusting browser flags, granting missing authority by default, or substituting a raw provider session id. A denied optional feature must not prevent an otherwise authorized transcript from rendering.
+
+Qualification binds the actual API/dashboard build, native UI/server artifacts, facade contract, and relevant host/runtime support identity to executable browser evidence. A configured version string, immutable image reference, route inventory, or successful HTML request alone does not prove successful native rendering. The protected acceptance and evidence-freshness rules in sections 16 and 20 remain authoritative.
 
 ### 4.3 Host/runner channel
 
@@ -782,6 +808,7 @@ GET /v1/sessions/{id}/resources/files/{file_id}/content
 
 ```text
 output.omnigent.session_files.index.json
+output.omnigent.session_files/<file_id>/content
 output.omnigent.session_files/<file_id>/<filename>
 output.omnigent.session_files/<file_id>/metadata.json
 ```
@@ -928,11 +955,11 @@ Terminal captured evidence and linked continuation are Workflow-scoped, owner-au
 
 MoonMind serves the provider-maintained native Omnigent web application through its own origin at the binding-scoped route `GET /omnigent-ui/workflow-chat/{chatBindingId}[?embedded=1]` (and its SPA sub-paths). It reverse-proxies the stock UI assets from the upstream server, serves the SPA document with an injected browser-safe bootstrap, and never copies the native React source or lets the browser connect directly to the upstream server. Before the stock application renders, the host boundary temporarily presents its expected `/c/{chatBindingId}` route and rebases root-relative HTTP, SSE, and WebSocket traffic onto the binding-scoped facade; after the router mounts, the displayed URL returns to the authorized, reloadable scoped route without changing the mounted virtual location. Stock boot probes receive bounded local server/user/project projections, while the session catalog contains exactly the one virtualized bound session and its paginated transcript route. After provider cleanup, those reads use the captured final session snapshot as read-only evidence. The same scoped surface backs both the embedded Workflow Detail view and the full-page **Open in Omnigent** view; the full-page view drops only the `embedded` presentation flag and uses the same binding, facade, credentials, and policy.
 
-The served document injects `window.__MOONMIND_OMNIGENT_CHAT__`, a browser-safe bootstrap carrying only: the opaque `chatBindingId`; scoped API and WebSocket bases (`/api/workflow-chat-bindings/{chatBindingId}/omnigent`); the presentation mode (`embedded`/`full_page`); read-only state; the filtered effective capability manifest with disabled reasons; safe display labels; and a stable compatibility version. The WebSocket stream uses the same binding-scoped session-stream path as SSE and repeats binding authorization while connected. The bootstrap never carries a raw provider session id, upstream URL, host/runner id, credential, profile ref, launch policy, or workspace authority. Root-absolute asset URLs are rewritten onto the scoped route and a `connect-src 'self'` policy keeps every asset, API, SSE, and WebSocket request on the MoonMind origin; `worker-src 'none'` prevents the upstream application from installing a service worker outside that scoped lifecycle.
+The served document injects `window.__MOONMIND_OMNIGENT_CHAT__`, a browser-safe bootstrap carrying only: the opaque `chatBindingId`; scoped API and WebSocket bases (`/api/workflow-chat-bindings/{chatBindingId}/omnigent`); the presentation mode (`embedded`/`full_page`); read-only state; the filtered effective capability manifest with disabled reasons; safe display labels; and a stable compatibility version. The WebSocket stream uses the same binding-scoped session-stream path as SSE and repeats binding authorization while connected. The bootstrap never carries a raw provider session id, upstream URL, host/runner id, credential, profile ref, launch policy, or workspace authority. Asset resolution follows section 4.2, including references inside compiled JavaScript and CSS. The `connect-src 'self'` policy confines fetch, XHR, SSE, and WebSocket connections to the MoonMind origin. It does not by itself scope same-origin paths or govern image, script, and stylesheet loading, which require the explicit scoped asset contract. `worker-src 'none'` prevents the upstream application from installing a service worker outside that scoped lifecycle.
 
 Security policy for the served responses is explicit: embedded documents allow `frame-ancestors 'self'` (`X-Frame-Options: SAMEORIGIN`); the full-page view refuses framing (`frame-ancestors 'none'` / `DENY`). Documents carry the caller's bootstrap and are never cached (`Cache-Control: no-store` + `Vary: Cookie`), so one binding's bootstrap or private session state cannot leak to another caller; hashed assets carry no binding data and are privately cacheable. Upstream redirects are re-based inside the scoped route and never expose upstream topology.
 
-Serving is gated on a known-compatible native UI/server version. An unknown or unsupported version fails with a stable, actionable `omnigent_native_chat_unavailable` state rather than partially bypassing the scoped facade. Operator configuration is namespaced and safe-by-default: `OMNIGENT_NATIVE_UI_ENABLED` (default enabled) toggles serving, and the compatibility version resolves from one authority — an explicit `OMNIGENT_NATIVE_UI_VERSION` pin, otherwise verified immutable image evidence. When the deployment's declared server image (`OMNIGENT_IMAGE_REF`) names a sha256 digest, the reported version is the single upstream source pin MoonMind is verified against; a mutable tag such as `:latest` reports no version and fails closed. Because that is the same immutable image reference the execution catalog and launch policies already require, a deployment that can launch Omnigent also serves native Workflow Chat without a separate override. Readiness reports native-UI serving, the compatibility version, the scoped HTTP/SSE routes, and credential separation under `compatibilityDiagnostics.nativeUi`.
+Serving is gated on a known-compatible native UI/server version. An unknown or unsupported version fails with a stable, actionable `omnigent_native_chat_unavailable` state rather than partially bypassing the scoped facade. Operator configuration is namespaced and safe-by-default: `OMNIGENT_NATIVE_UI_ENABLED` (default enabled) toggles serving, and the compatibility version resolves from one authority — an explicit `OMNIGENT_NATIVE_UI_VERSION` pin, otherwise verified immutable image evidence. When the deployment's declared server image (`OMNIGENT_IMAGE_REF`) names a sha256 digest, the reported version is the single upstream source pin MoonMind is verified against; a mutable tag such as `:latest` reports no version and fails closed. The same immutable image authority is reused rather than requiring a separate routine correctness override. Launch readiness or a configured image digest alone does not establish native UI bundle compatibility, authorized transcript access, or rendered application readiness. Those require the exact-artifact and browser evidence defined in section 4.2 and the acceptance gates below. Readiness reports native-UI serving, the compatibility version, the scoped HTTP/SSE routes, and credential separation under `compatibilityDiagnostics.nativeUi`.
 
 ---
 
@@ -992,6 +1019,9 @@ No configuration may turn a direct upstream browser URL into an authority bypass
 | Caller unauthorized | `403` / audit | Do not reveal whether an alternate provider session exists. |
 | Session or endpoint substitution | `403` or `409` / audit | Fail closed before upstream. |
 | Capability or immutable-policy denial | typed policy rejection | Upstream support does not override policy. |
+| Native application boot timeout or fatal render failure | visible native-chat-unavailable presentation | Preserve safe retry and independently authorized evidence. This is not Workflow terminal authority. |
+| Essential transcript read denied | visible access/unavailable state | Do not fabricate an empty transcript or bypass capability authority. |
+| Optional native feature denied or unsupported | feature-local unavailable state | Preserve otherwise authorized conversation rendering. |
 | High-security scan blocked | typed security rejection | Redacted category/location only. |
 | Scan/parser unavailable in high-security mode | typed fail-closed rejection | No provider send occurs. |
 | Upstream unavailable before create | `integration_error` | Retry according to transport policy. |
@@ -1059,6 +1089,8 @@ A successful implementation satisfies:
 13. Failed launch paths create visible diagnostics and a fallback timeline.
 14. Provider-native refs do not replace MoonMind artifact refs.
 15. Terminal native Chat is read-only and linked continuation is an explicit Workflow action.
+16. The served browser adapter preserves native transport constants and behavior, and exact compiled boot requests and dynamic assets remain within their reviewed scoped contracts.
+17. Native readiness and post-load failure behavior meet the Workflow Chat Panel contract. Rendering and live/deployed support are established by executable evidence, not document delivery or a configured version alone.
 
 ---
 
@@ -1078,7 +1110,8 @@ A successful implementation satisfies:
 - first-message state transitions and reconciliation,
 - event normalization and redaction,
 - artifact ref validation,
-- diagnostic projection resolution.
+- diagnostic projection resolution,
+- executable served-adapter tests for native constructor constants, instance behavior, valid sends, and idempotent scoped URL rebasing.
 
 ### 20.2 Fake Omnigent server tests
 
@@ -1094,7 +1127,11 @@ Prove that:
 - full-page Open in Omnigent retains the scoped boundary,
 - an unauthorized user or altered binding cannot read or control another session,
 - terminal Chat is read-only,
-- diagnostic fallback does not expose a second composer.
+- diagnostic fallback does not expose a second composer,
+- the actual injected adapter and compiled native consumer handle null/non-open/open sockets, reconnect, and stop/start correctly,
+- embedded and full-page startup loads required scoped assets and reads before reporting the bound conversation ready,
+- required-read denial, missing required assets, readiness timeout, and fatal post-load errors produce visible safe recovery while optional denied features remain nonfatal,
+- stale or forged readiness signals, replacement bindings, and retries cannot leak listeners, revive an old frame, duplicate mutations, or bypass authorization.
 
 ### 20.4 Stock host smoke tests
 
