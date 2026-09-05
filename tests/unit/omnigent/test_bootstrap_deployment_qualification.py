@@ -256,8 +256,9 @@ async def _qualify(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("shared_image", [False, True])
 async def test_qualification_attests_the_launch_policy_admission_selects(
-    qualification_boundary,
+    qualification_boundary, monkeypatch, shared_image,
 ) -> None:
     """Qualification derives the launch policy from the Agent Profile.
 
@@ -265,7 +266,10 @@ async def test_qualification_attests_the_launch_policy_admission_selects(
     ever compiles, and every OpenCode launch then fails evidence admission.
     """
 
+    if shared_image:
+        monkeypatch.setenv("OMNIGENT_SHARED_HOST_IMAGE_REF", _HOST_IMAGE_REF)
     evidence = await _qualify(qualification_boundary)
+    assert evidence["supportIdentity"]["hostClassRef"] == "omnigent-opencode@1"
 
     expected = default_launch_policy_ref(_ALLOWED_LAUNCH_POLICIES)
     assert expected == "omnigent-on-demand@1"

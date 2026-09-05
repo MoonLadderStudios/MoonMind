@@ -757,3 +757,89 @@ async def test_publication_never_clears_an_operator_pinned_ref(
     import os
 
     assert os.environ["OMNIGENT_PI_HOST_IMAGE_REF"] == pinned_pi
+
+
+@pytest.mark.parametrize("explicit_pin", [False, True])
+@pytest.mark.parametrize(
+    "failure_code",
+    [
+        "omnigent_host_bootstrap_contract_missing",
+        "omnigent_server_host_build_mismatch",
+        "omnigent_server_host_version_mismatch",
+        "omnigent_server_host_version_probe_failed",
+    ],
+)
+def test_host_selection_preserves_quarantine_reason(
+    monkeypatch, explicit_pin, failure_code
+):
+    """Replay Create's escaped misleading digest error through selection."""
+    from types import SimpleNamespace
+
+    from moonmind.omnigent.bootstrap import store
+    from moonmind.omnigent.harness_platform.host_classes import (
+        OmnigentHostClassSelector,
+    )
+    from moonmind.omnigent.harness_platform.failures import (
+        HarnessPlatformError,
+        HarnessPlatformFailure,
+    )
+
+    state = _state(
+        details={
+            "opencodeHostCompatibility": {
+                "status": "blocked",
+                "failureCode": failure_code,
+                "serverImageRef": SERVER_REF,
+                "hostImageRef": HOST_REF,
+            }
+        }
+    )
+    monkeypatch.setattr(store, "load_resolved_state", lambda: state)
+    environment = {"OMNIGENT_OPENCODE_HOST_IMAGE_REF": HOST_REF} if explicit_pin else {}
+    with pytest.raises(HarnessPlatformError) as caught:
+        OmnigentHostClassSelector(environment=environment).select(
+            harness=SimpleNamespace(id="opencode-native"),
+            omnigent_version="0.12.0",
+            omnigent_build_digest=BUILD_DIGEST,
+            integration_mode="native-server",
+            materializer_refs=["opencode-auth-json@1"],
+            requested_host_class_ref="omnigent-opencode@1",
+        )
+    assert caught.value.code == HarnessPlatformFailure.OMNIGENT_HOST_CLASS_UNAVAILABLE
+    assert failure_code in str(caught.value)
+    assert "quarantined" in str(caught.value)
+    assert "not digest-pinned" not in str(caught.value)
+
+
+@pytest.mark.parametrize(
+    "image_ref, expected",
+    [
+        ("", "must be set to a digest-pinned image ref"),
+        ("ghcr.io/example/host:latest", "must be set to a digest-pinned image ref"),
+        ("ghcr.io/example/host@sha256:" + "0" * 64, "digest must not be a placeholder"),
+        (HOST_REF, "compatibility evidence does not match"),
+    ],
+)
+def test_host_selection_preserves_adjacent_image_failures(
+    monkeypatch, image_ref, expected
+):
+    from types import SimpleNamespace
+
+    from moonmind.omnigent.bootstrap import store
+    from moonmind.omnigent.harness_platform.host_classes import (
+        OmnigentHostClassSelector,
+    )
+    from moonmind.omnigent.harness_platform.failures import HarnessPlatformError
+
+    monkeypatch.setattr(store, "load_resolved_state", lambda: None)
+    with pytest.raises(HarnessPlatformError, match=expected):
+        OmnigentHostClassSelector(
+            environment={"OMNIGENT_OPENCODE_HOST_IMAGE_REF": image_ref}
+        ).select(
+            harness=SimpleNamespace(id="opencode-native"),
+            omnigent_version="0.12.0",
+            omnigent_build_digest=BUILD_DIGEST,
+            integration_mode="native-server",
+            materializer_refs=["opencode-auth-json@1"],
+            requested_host_class_ref="omnigent-opencode@1",
+        )

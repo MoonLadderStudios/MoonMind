@@ -12,6 +12,8 @@ The Create page lets a user describe work, choose how MoonMind should execute it
 
 The page should support simple one-step workflows while also scaling to advanced workflows that use skills, scripts, managed agents, external agents, presets, Jira issue context, dependencies, publishing, and merge automation.
 
+The runtime selector labels the generic runtime **Omnigent**. The selected Agent Profile identifies its harness; the runtime label does not imply Codex when the profile uses OpenCode or another supported harness.
+
 ## Design Principles
 
 - The Create page is a composition surface, not a catalog of hard-coded workflows.
@@ -426,7 +428,7 @@ The visible **Remediation Draft** section separates:
 - **Pinned target identity (immutable):** target Workflow, exact run, original
   outcome, and selected failed Step Execution/checkpoint evidence.
 - **Editable repair intent:** instructions, repository, starting and isolated
-  work branches, publish mode, Codex via Omnigent runtime, Agent Profile,
+  work branches, publish mode, Omnigent runtime, Agent Profile,
   Provider Profile, execution target and launch policy, model, effort, retrieval
   controls, remediation mode/authority, and the action, evidence, approval,
   lock, verification, and Checkpoint Branch policies.
