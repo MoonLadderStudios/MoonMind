@@ -165,7 +165,7 @@ describe('MoonLadderStudios/MoonMind#3818 Settings draft departure contract', ()
 
     const profileId = await screen.findByLabelText(/Profile ID/) as HTMLInputElement;
     fireEvent.change(profileId, { target: { value: 'draft-profile' } });
-    fireEvent.change(screen.getByLabelText('Provider Profile runtime filter'), {
+    fireEvent.change(screen.getByLabelText('Profile runtime filter'), {
       target: { value: 'codex_cli' },
     });
     expect(screen.getByRole('dialog', { name: 'Unsaved changes' })).toBeTruthy();
@@ -310,7 +310,7 @@ describe('MoonLadderStudios/MoonMind#3818 Settings draft departure contract', ()
     await waitFor(() => expect(window.location.pathname).toBe('/settings/user-workspace'));
   });
 
-  it('restores the Provider Profile runtime filter across Back and Forward navigation', async () => {
+  it('restores the Profile runtime filter across Back and Forward navigation', async () => {
     window.history.replaceState({}, '', '/settings/providers-secrets');
     renderWithClient(
       <BrowserRouter>
@@ -327,7 +327,7 @@ describe('MoonLadderStudios/MoonMind#3818 Settings draft departure contract', ()
       </BrowserRouter>,
     );
 
-    const filter = await screen.findByLabelText('Provider Profile runtime filter') as HTMLSelectElement;
+    const filter = await screen.findByLabelText('Profile runtime filter') as HTMLSelectElement;
     fireEvent.change(filter, { target: { value: 'codex_cli' } });
     await waitFor(() => expect(window.location.search).toBe('?runtime=codex_cli'));
     fireEvent.change(filter, { target: { value: 'claude_code' } });

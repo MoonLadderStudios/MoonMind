@@ -138,6 +138,8 @@ async def test_create_definition_compiles_agent_profile_snapshot_separately(
     mock_temporal_adapter,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    provider_model = "vendor/" + "future-model-" * 16
+    provider_effort = "future-provider-effort"
     snapshot = {
         "schemaVersion": "moonmind.omnigent-agent-profile-snapshot.v1",
         "profileId": "omnigent-bootstrap-default",
@@ -197,6 +199,8 @@ async def test_create_definition_compiles_agent_profile_snapshot_separately(
                 profile_id="codex-openai-oauth",
                 runtime_id="codex_cli",
                 provider_id="openai",
+                default_model=provider_model,
+                default_effort=provider_effort,
             )
         )
         await session.flush()
@@ -251,6 +255,9 @@ async def test_create_definition_compiles_agent_profile_snapshot_separately(
     if not explicit_configuration:
         assert default_resolver.await_args.kwargs["provider_profile_ref"] == "codex-openai-oauth"
         resolver.assert_not_awaited()
+        assert initial_parameters["model"] == provider_model
+        assert initial_parameters["effort"] == provider_effort
+        assert compile_plan.await_args.kwargs["initial_parameters"]["model"] == provider_model
     scheduled_parameters = mock_temporal_adapter.create_schedule.await_args.kwargs[
         "workflow_input"
     ]["initial_parameters"]

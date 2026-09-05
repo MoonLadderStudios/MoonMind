@@ -1,8 +1,8 @@
 """Resolve a Profile's subordinate execution configuration at API boundaries.
 
 Inventory and selection never depend on model discovery or temporary runtime
-health. The existing immutable configuration and credential authorities are
-validated when a consumer snapshot is committed and on the actual host.
+health. Executable selections require a ready immutable configuration; credential
+authorities are validated when a consumer snapshot is committed and on the host.
 """
 
 from __future__ import annotations
@@ -53,6 +53,30 @@ def configuration_accepts_profile(document: Mapping[str, Any], provider: Any) ->
     )
 
 
+def profile_has_native_inventory_route(
+    provider: Any,
+    configurations: list[tuple[Any, Any]],
+) -> bool:
+    """Identify direct-runtime inventory without bypassing configured authority.
+
+    An unvalidated compatible configuration still owns the Profile's route. This
+    projection must not reinterpret that configuration's failure as permission
+    to execute through a different runtime.
+    """
+    from moonmind.workflows.executions.execution_contract import (
+        SUPPORTED_EXECUTION_RUNTIMES,
+    )
+
+    return (
+        not getattr(provider, "execution_configuration", None)
+        and provider.runtime_id in SUPPORTED_EXECUTION_RUNTIMES
+        and not any(
+            configuration_accepts_profile(version.document, provider)
+            for _, version in configurations
+        )
+    )
+
+
 async def load_execution_configurations(
     session: Any,
     user: Any,
@@ -91,11 +115,14 @@ def select_execution_configuration(
     configurations: list[tuple[Any, Any]],
 ) -> dict[str, Any]:
     authored = getattr(provider, "execution_configuration", None)
-    candidates = [
+    compatible_configurations = [
         (row, version)
         for row, version in configurations
-        if configuration_accepts_profile(version.document, provider)
+        if isinstance(getattr(version, "validation_result", None), Mapping)
+        and version.validation_result.get("ready") is True
+        and configuration_accepts_profile(version.document, provider)
     ]
+    candidates = compatible_configurations
     if authored:
         candidates = [
             (row, version)
@@ -123,7 +150,7 @@ def select_execution_configuration(
                 "message": (
                     "Choose an execution configuration in Profile settings."
                     if candidates
-                    else "This Profile's execution configuration is unavailable or incompatible."
+                    else "This Profile's execution configuration is unavailable, unvalidated, or incompatible."
                 ),
                 "profileId": provider.profile_id,
             },
@@ -144,8 +171,7 @@ def select_execution_configuration(
         "defaultForRuntime": any(
             candidate.default_for_runtime
             and candidate_version.version == candidate.active_version
-            and configuration_accepts_profile(candidate_version.document, provider)
-            for candidate, candidate_version in configurations
+            for candidate, candidate_version in compatible_configurations
         ),
     }
 

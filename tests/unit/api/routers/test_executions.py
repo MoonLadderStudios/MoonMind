@@ -6925,7 +6925,9 @@ def test_create_workflow_omnigent_browser_payload_persists_canonical_intent(
     test_client, service, _user = client
     service.create_execution.return_value = _build_execution_record()
     provider_profile = SimpleNamespace(
-        profile_id="codex-openai-oauth", provider_id="openai"
+        profile_id="codex-openai-oauth", provider_id="openai", runtime_id="codex_cli",
+        default_model="vendor/" + "future-model-" * 16,
+        default_effort="future-provider-effort",
     )
     db_session = SimpleNamespace(
         get=AsyncMock(side_effect=[provider_profile, None]),
@@ -7011,6 +7013,8 @@ def test_create_workflow_omnigent_browser_payload_persists_canonical_intent(
     ]
     assert initial_parameters["targetRuntime"] == "omnigent"
     assert initial_parameters["requestType"] == "task"
+    assert initial_parameters["model"] == provider_profile.default_model
+    assert initial_parameters["effort"] == provider_profile.default_effort
     assert initial_parameters["omnigent"] == {
         "executionTargetRef": "omnigent-codex@1",
         "launchPolicyRef": "codex-on-demand@1",

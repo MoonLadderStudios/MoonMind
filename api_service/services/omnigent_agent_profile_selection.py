@@ -638,23 +638,18 @@ async def resolve_default_agent_profile_snapshot(
         if provider is None:
             raise HTTPException(404, "Profile not found")
         selection = await profile_execution_selection(session, provider, user)
-        from moonmind.workflows.executions.model_resolver import resolve_model_effort
-
-        resolved_model = resolve_model_effort(
-            runtime_id=provider.runtime_id, profile=provider, require_launch_ready=False,
-        )
         configurations = await session.scalar(
             select(OmnigentAgentProfileVersion).where(
                 OmnigentAgentProfileVersion.profile_id == selection["profileId"],
                 OmnigentAgentProfileVersion.version == selection["version"],
             )
         )
-        model_key = (
-            "qualifiedId" if configurations.document.get("schemaVersion")
-            == "moonmind.omnigent-agent-profile.v2" else "model"
-        )
+        # Profile model authority belongs to execution parameters. Clear legacy
+        # configuration defaults without sending provider values through the
+        # legacy model schema (whose validation is intentionally narrower).
         selection["overrides"] = {"model": {
-            model_key: resolved_model.model, "effort": resolved_model.effort,
+            key: None for key in ("model", "qualifiedId", "effort")
+            if key in (configurations.document.get("model") or {})
         }}
         if launch_policy_ref:
             selection["launchPolicyRef"] = launch_policy_ref

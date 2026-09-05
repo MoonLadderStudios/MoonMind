@@ -1037,10 +1037,13 @@ async def list_profiles(
     if include_execution:
         from api_service.services.profile_execution_selection import (
             load_execution_configurations,
+            profile_has_native_inventory_route,
             select_execution_configuration,
         )
         configurations = await load_execution_configurations(session, current_user, visible_rows)
         for row, payload in zip(visible_rows, payloads):
+            if profile_has_native_inventory_route(row, configurations):
+                continue
             try:
                 payload["execution_selection"] = select_execution_configuration(row, configurations)
             except HTTPException as exc:
@@ -1478,7 +1481,17 @@ async def update_profile(
     _require_profile_management(profile, current_user)
 
     update_data = body.model_dump(exclude_unset=True)
-    if update_data.get("execution_configuration"):
+    execution_configuration = update_data.get(
+        "execution_configuration", profile.execution_configuration
+    )
+    execution_contract_supplied = bool(
+        {"provider_id", "credential_source", "runtime_materialization_mode"}
+        .intersection(update_data)
+        or update_data.get("import_existing_credential_volume")
+    )
+    if execution_configuration and (
+        "execution_configuration" in update_data or execution_contract_supplied
+    ):
         from types import SimpleNamespace
 
         from api_service.services.profile_execution_selection import (
@@ -1489,9 +1502,19 @@ async def update_profile(
             profile_id=profile.profile_id,
             runtime_id=profile.runtime_id,
             provider_id=update_data.get("provider_id") or profile.provider_id,
-            credential_source=update_data.get("credential_source", profile.credential_source),
-            runtime_materialization_mode=update_data.get("runtime_materialization_mode", profile.runtime_materialization_mode),
-            execution_configuration=update_data["execution_configuration"],
+            credential_source=(
+                ProviderCredentialSource.OAUTH_VOLUME
+                if update_data.get("import_existing_credential_volume")
+                else update_data.get("credential_source", profile.credential_source)
+            ),
+            runtime_materialization_mode=(
+                RuntimeMaterializationMode.OAUTH_HOME
+                if update_data.get("import_existing_credential_volume")
+                else update_data.get(
+                    "runtime_materialization_mode", profile.runtime_materialization_mode
+                )
+            ),
+            execution_configuration=execution_configuration,
         )
         await profile_execution_selection(session, prospective, current_user)
     import_existing_credential_volume = bool(
