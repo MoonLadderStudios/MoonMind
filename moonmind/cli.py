@@ -14,6 +14,15 @@ from moonmind.container_job_cli import (
     run_container_job,
     run_python_tests,
 )
+from moonmind.run_cli import (
+    RunApiClient,
+    RunCliError,
+    build_workflow_submit_payload,
+    resolve_api_base_url,
+    resolve_bearer_token,
+    summarize_execution,
+    summarize_readiness,
+)
 from moonmind.manifest import manifest_cli
 from moonmind.rag import cli as rag_cli
 from moonmind.rag.guardrails import GuardrailError, ensure_rag_ready
@@ -278,6 +287,257 @@ def manifest_evaluate(
 
 def main() -> None:
     app()
+
+
+# ----- public-contract first-run commands (MoonLadderStudios/MoonMind#3926) -----
+
+
+@app.command(
+    "run",
+    help=(
+        "Submit a bounded workflow through the same POST /api/executions contract "
+        "as the dashboard. Omitted --provider-profile resolves to the server "
+        "default (credentialless route); failures are actionable and never "
+        "switch credentials silently."
+    ),
+)
+def first_run(
+    prompt: str = typer.Option(
+        ...,
+        "--prompt",
+        "--instructions",
+        help="Bounded task instructions for the first-run workflow.",
+    ),
+    title: Optional[str] = typer.Option(
+        None, "--title", help="Optional workflow title (server derives one if omitted)."
+    ),
+    provider_profile: str = typer.Option(
+        "auto",
+        "--provider-profile",
+        help="Provider profile ref, or 'auto'/'default' for the server default.",
+    ),
+    request_id: Optional[str] = typer.Option(
+        None,
+        "--request-id",
+        help="Stable caller request id for idempotent retries.",
+    ),
+    base_url: Optional[str] = typer.Option(
+        None, "--base-url", help="API base URL (default MOONMIND_URL or localhost:7000)."
+    ),
+    token: Optional[str] = typer.Option(
+        None, "--token", help="API bearer token (default MOONMIND_API_TOKEN)."
+    ),
+    timeout_seconds: float = typer.Option(30.0, "--timeout", min=1.0, max=300.0),
+    wait: bool = typer.Option(
+        False,
+        "--wait",
+        help="Poll UI-equivalent status until a terminal state.",
+    ),
+    wait_timeout_seconds: float = typer.Option(
+        600.0, "--wait-timeout", min=1.0, max=86400.0
+    ),
+    json_output: bool = typer.Option(
+        False, "--json", help="Print the raw execution JSON document."
+    ),
+) -> None:
+    import json as _json
+
+    from moonmind.run_cli import wait_for_terminal
+
+    try:
+        payload, effective_key = build_workflow_submit_payload(
+            instructions=prompt,
+            title=title,
+            provider_profile_ref=provider_profile,
+            idempotency_key=request_id,
+        )
+        client = RunApiClient(
+            base_url=resolve_api_base_url(base_url),
+            bearer_token=resolve_bearer_token(token),
+            timeout_seconds=timeout_seconds,
+        )
+        try:
+            execution = client.submit_workflow(payload)
+            if wait:
+                workflow_id = str(
+                    execution.get("workflowId")
+                    or execution.get("workflow_id")
+                    or execution.get("id")
+                    or ""
+                )
+                if workflow_id:
+                    execution = wait_for_terminal(
+                        client,
+                        workflow_id,
+                        timeout_seconds=wait_timeout_seconds,
+                    )
+        finally:
+            client.close()
+    except RunCliError as exc:
+        typer.secho(f"Error: {exc}", fg=typer.colors.RED, err=True)
+        raise typer.Exit(code=1) from exc
+    if json_output:
+        typer.echo(_json.dumps(execution, indent=2))
+    else:
+        typer.echo(summarize_execution(execution))
+        typer.echo(
+            "Inspect evidence with: "
+            f"moonmind logs {execution.get('workflowId', execution.get('workflow_id', execution.get('id', '')))} "
+            f"(idempotencyKey={effective_key})"
+        )
+
+
+@app.command(
+    "status",
+    help=(
+        "Show workflow status through the same GET /api/executions/{id} contract "
+        "as the dashboard."
+    ),
+)
+def first_run_status(
+    workflow_id: str = typer.Argument(..., help="Workflow id to describe."),
+    base_url: Optional[str] = typer.Option(
+        None, "--base-url", help="API base URL (default MOONMIND_URL or localhost:7000)."
+    ),
+    token: Optional[str] = typer.Option(
+        None, "--token", help="API bearer token (default MOONMIND_API_TOKEN)."
+    ),
+    timeout_seconds: float = typer.Option(30.0, "--timeout", min=1.0, max=300.0),
+    json_output: bool = typer.Option(
+        False, "--json", help="Print the raw execution JSON document."
+    ),
+) -> None:
+    import json as _json
+
+    try:
+        client = RunApiClient(
+            base_url=resolve_api_base_url(base_url),
+            bearer_token=resolve_bearer_token(token),
+            timeout_seconds=timeout_seconds,
+        )
+        try:
+            execution = client.describe_execution(workflow_id)
+        finally:
+            client.close()
+    except RunCliError as exc:
+        typer.secho(f"Error: {exc}", fg=typer.colors.RED, err=True)
+        raise typer.Exit(code=1) from exc
+    if json_output:
+        typer.echo(_json.dumps(execution, indent=2))
+    else:
+        typer.echo(summarize_execution(execution))
+
+
+@app.command(
+    "logs",
+    help=(
+        "List captured terminal evidence through the same "
+        "GET /api/executions/{id}/captured-evidence contract as the dashboard."
+    ),
+)
+def first_run_logs(
+    workflow_id: str = typer.Argument(..., help="Workflow id to inspect."),
+    base_url: Optional[str] = typer.Option(
+        None, "--base-url", help="API base URL (default MOONMIND_URL or localhost:7000)."
+    ),
+    token: Optional[str] = typer.Option(
+        None, "--token", help="API bearer token (default MOONMIND_API_TOKEN)."
+    ),
+    timeout_seconds: float = typer.Option(30.0, "--timeout", min=1.0, max=300.0),
+    json_output: bool = typer.Option(
+        False, "--json", help="Print the raw captured-evidence JSON document."
+    ),
+) -> None:
+    import json as _json
+    from urllib.parse import quote as _quote
+
+    try:
+        client = RunApiClient(
+            base_url=resolve_api_base_url(base_url),
+            bearer_token=resolve_bearer_token(token),
+            timeout_seconds=timeout_seconds,
+        )
+        try:
+            evidence = client.get_captured_evidence(workflow_id)
+        finally:
+            client.close()
+    except RunCliError as exc:
+        typer.secho(f"Error: {exc}", fg=typer.colors.RED, err=True)
+        raise typer.Exit(code=1) from exc
+    if json_output:
+        typer.echo(_json.dumps(evidence, indent=2))
+        return
+    items = evidence.get("items") if isinstance(evidence, dict) else None
+    available = evidence.get("available") if isinstance(evidence, dict) else None
+    typer.echo(
+        f"captured evidence for workflow {workflow_id}: "
+        f"available={bool(available)} items={len(items) if isinstance(items, list) else 0}"
+    )
+    if isinstance(items, list):
+        for item in items:
+            if not isinstance(item, dict):
+                continue
+            ref = str(item.get("ref", item.get("artifactRef", "")) or "")
+            label = str(item.get("label", "") or "")
+            download = (
+                f"/api/executions/{_quote(workflow_id, safe='')}"
+                f"/captured-evidence/download?ref={_quote(ref, safe='')}"
+                if ref
+                else ""
+            )
+            detail = f" {label}" if label else ""
+            typer.echo(f"- {ref}{detail} ({download})" if download else f"- {ref}{detail}")
+    summary = evidence.get("summary") if isinstance(evidence, dict) else None
+    if isinstance(summary, str) and summary.strip():
+        typer.echo(summary.strip())
+
+
+@app.command(
+    "readiness",
+    help=(
+        "Show Omnigent bootstrap readiness through the same "
+        "GET /api/omnigent/bootstrap/readiness contract as the dashboard."
+    ),
+)
+def first_run_readiness(
+    base_url: Optional[str] = typer.Option(
+        None, "--base-url", help="API base URL (default MOONMIND_URL or localhost:7000)."
+    ),
+    token: Optional[str] = typer.Option(
+        None, "--token", help="API bearer token (default MOONMIND_API_TOKEN)."
+    ),
+    timeout_seconds: float = typer.Option(30.0, "--timeout", min=1.0, max=300.0),
+    json_output: bool = typer.Option(
+        False, "--json", help="Print the raw readiness JSON document."
+    ),
+) -> None:
+    import json as _json
+
+    try:
+        client = RunApiClient(
+            base_url=resolve_api_base_url(base_url),
+            bearer_token=resolve_bearer_token(token),
+            timeout_seconds=timeout_seconds,
+        )
+        try:
+            readiness = client.get_readiness()
+        finally:
+            client.close()
+    except RunCliError as exc:
+        typer.secho(f"Error: {exc}", fg=typer.colors.RED, err=True)
+        raise typer.Exit(code=1) from exc
+    if json_output:
+        typer.echo(_json.dumps(readiness, indent=2))
+        return
+    typer.echo(summarize_readiness(readiness))
+    if str(readiness.get("readiness", "")) != "ready":
+        typer.secho(
+            "Not ready: resolve the blocking readiness entry before submitting. "
+            "The CLI does not switch credentials, runtimes, or models silently.",
+            fg=typer.colors.YELLOW,
+            err=True,
+        )
+
 
 if __name__ == "__main__":  # pragma: no cover
     main()

@@ -31,11 +31,11 @@ See the canonical [Omnigent Primary Runtime Provider Strategy](docs/Omnigent/Pri
 4. `cd MoonMind && git submodule update --init --recursive`. This initializes submodules such as Omnigent.
 5. Run `docker compose up -d` to start the service
 6. Open [http://localhost:7000](http://localhost:7000). For combined MoonMind plus Omnigent validation, see [Combined Stack Validation and Rollback](docs/Omnigent/CombinedStackValidationAndRollback.md).
-7. In Settings:
-    - Add a GitHub personal access token
-    - Add an API key or use OAuth to authenticate a Provider Profile
-    - Configure any other secrets or settings needed for the first workflow
-8. Click Create and submit a workflow. Select only a runtime target whose readiness entry is available. Default migration to Omnigent occurs independently for each qualified combination.
+7. Submit the default first workflow with no `.env`, GitHub token, or provider key:
+    - In the dashboard, click Create and submit a workflow while leaving the profile selection on its default/`auto` value. The server resolves the default credentialless route (no harness/profile vocabulary needed). Select only a runtime target whose readiness entry is available.
+    - Or use the equivalent CLI, which posts the same `POST /api/executions` contract as the UI: `moonmind readiness`, then `moonmind run --prompt "Summarize repository status" [--wait]`, then `moonmind status <workflow-id>` (`GET /api/executions/{id}?source=temporal`) and `moonmind logs <workflow-id>` (`GET /api/executions/{id}/captured-evidence`) for the terminal result and inspectable evidence.
+    - A GitHub personal access token is only needed for GitHub-integrated repositories or publishing; a provider API key or OAuth is only needed when you explicitly select a non-default Provider Profile. When the credentialless route is unavailable the run fails with an actionable readiness/admission error instead of switching credentials silently.
+8. Default migration to Omnigent occurs independently for each qualified combination.
 
 `.env` is optional for normal local startup. Use `.env-template` only when you want to override defaults or preconfigure advanced settings before launch.
 
