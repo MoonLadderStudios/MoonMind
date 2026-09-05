@@ -3780,7 +3780,6 @@ class TemporalArtifactActivities:
                     "model_overrides": row.model_overrides or {},
                     "model_tiers": row.model_tiers or [],
                     "default_model_tier": row.default_model_tier,
-                    "capacity_scope_ref": row.capacity_scope_ref,
                     "max_parallel_runs": row.max_parallel_runs,
                     "cooldown_after_429_seconds": row.cooldown_after_429_seconds,
                     "rate_limit_policy": row.rate_limit_policy.value,
