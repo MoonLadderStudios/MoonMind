@@ -293,9 +293,15 @@ class _LeaseRow:
         self.lease_id = fields.get("lease_id", "agent-run-3")
         self.owner_id = fields.get("owner_id", "agent-run-3")
         self.purpose = fields.get("purpose", "execution_direct")
+        self.owner_is_workflow = fields.get("owner_is_workflow", True)
+        self.step_execution_id = fields.get("step_execution_id")
+        self.oauth_session_id = fields.get("oauth_session_id")
+        self.idempotency_key = fields.get("idempotency_key")
         self.lease_state = fields.get("lease_state", "held")
         self.fencing_generation = fields.get("fencing_generation", 1)
         self.safe_metadata_json = fields.get("safe_metadata_json")
+        self.expires_at = fields.get("expires_at")
+        self.granted_at = fields.get("granted_at")
         self.released_at = fields.get("released_at")
 
 
@@ -421,6 +427,7 @@ async def test_a_duplicate_grant_verifies_the_full_grant_identity() -> None:
         [_grant_payload(5)],
         [
             _LeaseRow(
+                purpose="execution_omnigent",
                 fencing_generation=5,
                 safe_metadata_json={"evidenceIdentity": "evidence-1"},
             )

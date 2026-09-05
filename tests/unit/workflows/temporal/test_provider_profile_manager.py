@@ -2464,7 +2464,7 @@ class TestProviderProfileManagerHelpers:
             calls.append("persist")
             return True
 
-        async def signal(_workflow_id: str, _profile_id: str) -> None:
+        async def signal(_workflow_id: str, _profile_id: str, **_kwargs: object) -> None:
             calls.append("signal")
 
         wf._sync_leases_to_db = AsyncMock(side_effect=persist)
@@ -3376,6 +3376,9 @@ async def test_provider_profile_manager_state_returns_compact_running_snapshot(
         "requester_queue_position": 1,
         # The requester is queued, not leased, so it holds no profile.
         "requester_profile_id": None,
+        # The requester holds no lease, so no fencing generation travels
+        # with a future assignment yet.
+        "requester_fencing_generation": None,
         "requested_profile": {
             "profile_id": "p1",
             "max_parallel_runs": 1,
