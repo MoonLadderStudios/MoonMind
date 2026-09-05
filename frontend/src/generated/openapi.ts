@@ -10812,7 +10812,7 @@ export interface components {
             /** Alias */
             alias?: string | null;
             /** Scope */
-            scope?: ("personal" | "global") | null;
+            scope?: ("global" | "personal") | null;
             /** Inputmapping */
             inputMapping?: {
                 [key: string]: unknown;

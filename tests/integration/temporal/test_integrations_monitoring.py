@@ -44,7 +44,7 @@ async def test_callback_first_completion_uses_single_terminal_path(
                 integration_poll_initial_seconds=5,
                 integration_poll_max_seconds=30,
                 integration_poll_jitter_ratio=0.0,
-                client_adapter=AsyncMock(),
+                client_adapter=AsyncMock(describe_workflow=AsyncMock(return_value=None)),
             )
             created = await service.create_execution(
                 workflow_type="MoonMind.UserWorkflow",
@@ -102,7 +102,7 @@ async def test_polling_fallback_and_continue_as_new_preserve_monitoring_identity
                 integration_poll_max_seconds=20,
                 integration_poll_jitter_ratio=0.0,
                 run_continue_as_new_wait_cycle_threshold=2,
-                client_adapter=AsyncMock(),
+                client_adapter=AsyncMock(describe_workflow=AsyncMock(return_value=None)),
             )
             created = await service.create_execution(
                 workflow_type="MoonMind.UserWorkflow",
@@ -166,7 +166,7 @@ async def test_duplicate_reordered_and_invalid_callbacks_are_safe(
     monkeypatch.setattr(settings.temporal, "temporal_authoritative_read_enabled", False)
     async with _db(tmp_path) as maker:
         async with maker() as session:
-            service = TemporalExecutionService(session, client_adapter=AsyncMock())
+            service = TemporalExecutionService(session, client_adapter=AsyncMock(describe_workflow=AsyncMock(return_value=None)))
             created = await service.create_execution(
                 workflow_type="MoonMind.UserWorkflow",
                 owner_id=uuid4(),
@@ -258,7 +258,7 @@ async def test_failure_and_cancel_paths_keep_jules_normalization_compact(
     monkeypatch.setattr(settings.temporal, "temporal_authoritative_read_enabled", False)
     async with _db(tmp_path) as maker:
         async with maker() as session:
-            service = TemporalExecutionService(session, client_adapter=AsyncMock())
+            service = TemporalExecutionService(session, client_adapter=AsyncMock(describe_workflow=AsyncMock(return_value=None)))
             created = await service.create_execution(
                 workflow_type="MoonMind.UserWorkflow",
                 owner_id=uuid4(),
