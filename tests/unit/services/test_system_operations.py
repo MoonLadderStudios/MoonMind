@@ -418,3 +418,117 @@ async def test_snapshot_projects_audit_target_result_and_idempotency_key(
     assert latest.result_status == "succeeded"
     assert latest.signal_status == "succeeded"
     assert latest.idempotency_key == _idempotency_key("projected-audit")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("existing_state", [False, True])
+@pytest.mark.parametrize("conflicting", [False, True])
+async def test_concurrent_command_identity_has_one_durable_owner(
+    system_operations_session_maker, existing_state, conflicting,
+):
+    import asyncio
+    from sqlalchemy import func
+
+    if existing_state:
+        async with system_operations_session_maker() as session:
+            await SystemOperationsService(session).submit(WorkerOperationCommand(
+                action="pause", mode="drain", reason="Existing state",
+                confirmation="pause", idempotencyKey="seed-state",
+            ), actor_user_id=None)
+
+    # Hold the interleaving at a real transaction boundary. Without the authority
+    # lock, both sessions pass the lookup and allocate the same next generation.
+    class InterleavedService(SystemOperationsService):
+        async def _persist_audit(self, *args, **kwargs):
+            await asyncio.sleep(0.02)
+            return await super()._persist_audit(*args, **kwargs)
+
+    async def submit(action):
+        async with system_operations_session_maker() as session:
+            return await InterleavedService(session).submit(WorkerOperationCommand(
+                action=action, mode="drain" if action == "pause" else None,
+                reason="Concurrent command", confirmation="confirmed",
+                idempotencyKey="concurrent-identity",
+            ), actor_user_id=None)
+
+    results = await asyncio.gather(
+        submit("pause"), submit("resume" if conflicting else "pause"),
+        return_exceptions=True,
+    )
+
+    successes = [result for result in results if not isinstance(result, Exception)]
+    errors = [result for result in results if isinstance(result, Exception)]
+    assert len(successes) == (1 if conflicting else 2), results
+    if conflicting:
+        assert len(errors) == 1
+        assert isinstance(errors[0], SystemOperationValidationError)
+        assert errors[0].code == "worker_operation_idempotency_conflict"
+    else:
+        assert not errors
+    assert all(result.system.version == 1 + int(existing_state) for result in successes)
+    async with system_operations_session_maker() as session:
+        count = await session.scalar(select(func.count()).select_from(SettingsAuditEvent))
+        assert count == 1 + int(existing_state)
+        snapshot = await SystemOperationsService(session).snapshot()
+        assert snapshot.system.version == 1 + int(existing_state)
+        assert any(event.idempotency_key == "concurrent-identity" for event in snapshot.audit.latest)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("states", [None, ["failed"], ["unknown"], ["pending"], ["resumed", "failed"], ["resumed"]])
+async def test_resume_command_remains_actionable_until_every_target_confirms(
+    system_operations_session_maker, states,
+):
+    from moonmind.schemas.workflow_control_models import WorkflowControlBatch
+
+    async with system_operations_session_maker() as session:
+        service = SystemOperationsService(session)
+        command = WorkerOperationCommand(
+            action="resume", reason="Resume workflows", idempotencyKey="resume-evidence",
+        )
+        snapshot = await service.submit(command, actor_user_id=None)
+        assert snapshot.system.workers_paused is False
+        if states is not None:
+            audit = await service._audit_event_by_idempotency_key("resume-evidence")
+            batch = WorkflowControlBatch.model_validate(audit.new_value_json["control"])
+            batch.enumerated = True
+            batch.targets = [WorkflowControlTarget(
+                workflowId=f"workflow-{i}", runId=f"run-{i}", updateId=f"update-{i}", state=state,
+            ) for i, state in enumerate(states)]
+            await service._persist_control_progress(audit.id, batch)
+        snapshot = await service.snapshot()
+        resume = next(command for command in snapshot.commands if command.id == "resume-workers")
+        assert resume.available is (states != ["resumed"])
+        if states != ["resumed"]:
+            assert resume.unavailable_reason is None
+            retried = await service.submit(command.model_copy(update={
+                "idempotency_key": "resume-evidence-retry",
+            }), actor_user_id=None)
+            assert retried.control.generation == snapshot.control.generation + 1
+            assert retried.control.request_id == "resume-evidence-retry"
+
+
+@pytest.mark.asyncio
+async def test_command_refreshes_state_loaded_before_another_session_commits(
+    system_operations_session_maker,
+):
+    async with system_operations_session_maker() as session:
+        service = SystemOperationsService(session)
+        pause = WorkerOperationCommand(
+            action="pause", mode="drain", reason="Maintain admission", confirmation="pause",
+            idempotencyKey="initial-state",
+        )
+        await service.submit(pause, actor_user_id=None)
+        stale_row = await service._state_row()
+        assert stale_row.value_json["version"] == 1
+        async with system_operations_session_maker() as other_session:
+            await SystemOperationsService(other_session).submit(WorkerOperationCommand(
+                action="resume", reason="Another operator resumed", idempotencyKey="other-session",
+            ), actor_user_id=None)
+        # The existing ORM identity must be refreshed after the authority lock.
+        result = await service.submit(pause.model_copy(update={
+            "idempotency_key": "latest-state",
+        }), actor_user_id=None)
+        assert result.system.version == 3
+        assert stale_row.value_json["version"] == 3
+        assert result.system.workers_paused is True

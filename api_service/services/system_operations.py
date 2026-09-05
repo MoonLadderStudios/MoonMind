@@ -8,7 +8,8 @@ from typing import Any, Mapping
 from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field
-from sqlalchemy import desc, select
+from sqlalchemy import desc, select, update
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from api_service.api.schemas import (
@@ -108,7 +109,7 @@ class SystemOperationsService:
         return WorkerPauseSnapshotResponse(
             system=QueueSystemMetadataModel.from_service_metadata(state),
             metrics=metrics,
-            commands=self._command_descriptors(state),
+            commands=self._command_descriptors(state, control),
             audit=WorkerPauseAuditListModel(latest=audit),
             signalStatus=failure_reason or (control.status if control else signal_status or (audit[0].signal_status if audit else None)),
             control=control,
@@ -123,6 +124,9 @@ class SystemOperationsService:
         normalized = self._validate_command(command)
         actor_uuid = self._uuid_or_none(actor_user_id)
         idempotency_key = self._idempotency_key(normalized)
+        # Own the state authority before checking identity or allocating the
+        # generation. This also serializes the first request when no row exists.
+        current = await self._lock_state_row()
         existing_audit = await self._audit_event_by_idempotency_key(idempotency_key)
         if existing_audit is not None:
             payload = (
@@ -137,11 +141,13 @@ class SystemOperationsService:
                     "Worker operation idempotency key was already used for a "
                     "different command.",
                 )
-            return await self.snapshot(
-                signal_status=str(payload.get("signalStatus") or "succeeded")
-            )
+            signal_status = str(payload.get("signalStatus") or "succeeded")
+            await self._session.commit()
+            return await self.snapshot(signal_status=signal_status)
 
-        state = await self._persist_state(normalized, actor_user_id=actor_uuid)
+        state = await self._persist_state(
+            normalized, current=current, actor_user_id=actor_uuid,
+        )
         await self._persist_audit(
             normalized, actor_user_id=actor_uuid,
             status="succeeded" if normalized.mode == "drain" else "requested",
@@ -293,9 +299,9 @@ class SystemOperationsService:
         command: WorkerOperationCommand,
         *,
         actor_user_id: UUID | str | None,
+        current: SettingsOverride,
     ) -> _QueueSystemMetadata:
         now = self._timestamp()
-        current = await self._state_row(lock=True)
         current_payload = (
             dict(current.value_json)
             if current is not None and isinstance(current.value_json, dict)
@@ -313,24 +319,11 @@ class SystemOperationsService:
             "requestedAt": now.isoformat(),
             "updatedAt": now.isoformat(),
         }
-        if current is None:
-            self._session.add(
-                SettingsOverride(
-                    scope="workspace",
-                    workspace_id=_DEFAULT_SUBJECT_ID,
-                    user_id=_DEFAULT_SUBJECT_ID,
-                    key=_WORKER_STATE_KEY,
-                    value_json=payload,
-                    schema_version=1,
-                    value_version=next_version,
-                    created_by=actor_uuid,
-                    updated_by=actor_uuid,
-                )
-            )
-        else:
-            current.value_json = payload
-            current.value_version = next_version
-            current.updated_by = actor_uuid
+        if current.value_version == 0:
+            current.created_by = actor_uuid
+        current.value_json = payload
+        current.value_version = next_version
+        current.updated_by = actor_uuid
         return self._metadata_from_payload(payload)
 
     async def _persist_audit(
@@ -430,6 +423,41 @@ class SystemOperationsService:
             metricsSource="temporal",
         )
 
+    async def _lock_state_row(self) -> SettingsOverride:
+        """Serialize command identity, including creation of its authority row."""
+        # A no-op write acquires the row lock in Postgres and the writer lock in
+        # SQLite, where SELECT FOR UPDATE does not serialize concurrent writers.
+        await self._session.execute(
+            update(SettingsOverride).where(
+                SettingsOverride.scope == "workspace",
+                SettingsOverride.workspace_id == _DEFAULT_SUBJECT_ID,
+                SettingsOverride.user_id == _DEFAULT_SUBJECT_ID,
+                SettingsOverride.key == _WORKER_STATE_KEY,
+            ).values(
+                value_version=SettingsOverride.value_version,
+                updated_at=SettingsOverride.updated_at,
+            )
+        )
+        current = await self._state_row(lock=True)
+        if current is not None:
+            return current
+        try:
+            async with self._session.begin_nested():
+                current = SettingsOverride(
+                    scope="workspace", workspace_id=_DEFAULT_SUBJECT_ID,
+                    user_id=_DEFAULT_SUBJECT_ID, key=_WORKER_STATE_KEY,
+                    value_json={}, schema_version=1, value_version=0,
+                )
+                self._session.add(current)
+                await self._session.flush()
+        except IntegrityError:
+            # A concurrent first command won the existing unique state key.
+            # The savepoint keeps this transaction usable to lock its row.
+            current = await self._state_row(lock=True)
+            if current is None:
+                raise
+        return current
+
     async def _state_row(self, *, lock: bool = False) -> SettingsOverride | None:
         statement = select(SettingsOverride).where(
             SettingsOverride.scope == "workspace",
@@ -478,8 +506,11 @@ class SystemOperationsService:
         return events
 
     def _command_descriptors(
-        self, state: _QueueSystemMetadata
+        self, state: _QueueSystemMetadata, control: WorkflowControlBatch | None = None,
     ) -> list[OperationCommandDescriptorModel]:
+        resume_available = state.workers_paused or (
+            control is not None and control.action == "Resume" and control.status != "succeeded"
+        )
         return [
             OperationCommandDescriptorModel(
                 id="pause-workers",
@@ -501,9 +532,9 @@ class SystemOperationsService:
                 impact="Reopens submission admission and requests workflow resumption.",
                 requiresConfirmation=False,
                 requiredPermission="operations.invoke",
-                available=state.workers_paused,
+                available=resume_available,
                 unavailableReason=(
-                    None if state.workers_paused else "Submission admission is already open."
+                    None if resume_available else "Submission admission is already open."
                 ),
                 rollbackAction=None,
             ),

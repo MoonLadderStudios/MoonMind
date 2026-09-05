@@ -13,7 +13,9 @@ stop worker processes or prove that an active agent has stopped.
 
 Drain mode changes admission state. Infrastructure owners separately perform
 worker graceful shutdown when maintenance requires Activity claims to stop.
-Quiesce mode also requests `Pause` Updates on running MoonMind workflow runs.
+Quiesce mode also requests `Pause` Updates on running `MoonMind.UserWorkflow`
+runs, which implement the generation-aware Update and `control_state` protocol.
+Shared-queue operator and manifest workflows are excluded from enumeration.
 Resume requests `Resume` Updates. Targets are pinned to the actual workflow ID
 and run ID returned by Temporal Visibility; the request has one stable Update ID
 per target and action.
@@ -23,12 +25,17 @@ per target and action.
 `SystemOperationsService` commits intent before making Temporal calls. The audit
 stores enumeration completion and each target's `requested`, `accepted`,
 `pending`, `safe_point`, `resumed`, `failed`, or `unknown` evidence. Each observed
-transition is committed before proceeding. Concurrent observers lock the audit
+transition is committed before that target proceeds. Up to ten targets reconcile
+concurrently; progress callbacks serialize state changes and commits on the
+service session. A persistence failure cancels and joins the remaining dispatch
+workers before committed evidence is reloaded. Concurrent observers lock the audit
 row and merge observations without overwriting confirmed target outcomes. A
 failed audit write reloads committed evidence before any result is displayed. A new service instance can continue
 that request on a snapshot read or an idempotent resubmission. The current
 request is selected by its persisted request ID, independently of timestamp
-resolution. Duplicate keys with different commands are rejected.
+resolution. The state authority serializes idempotency checks, generation allocation,
+and audit insertion, including simultaneous first commands. Duplicate keys with
+different commands are rejected.
 
 Update acceptance only establishes `accepted`. Completion is followed by a
 `control_state` query of the same run. `MoonMind.UserWorkflow` confirms a pause
@@ -53,7 +60,9 @@ control reconciliation. `POST /api/system/worker-pause` accepts `action`, `reaso
 The dashboard displays **Workers quiesced** only when enumeration finished and
 every target confirmed `safe_point`. Pending and partial confirmations remain
 visible, with per-target state available in an expandable list. Resume admission
-and confirmed resumed workflows are separate evidence. Drain metrics report
+and confirmed resumed workflows are separate evidence. Resume remains available
+until every target confirms resumption, so failed or partial batches can be retried
+with a fresh request and generation. Drain metrics report
 unavailable when Temporal counts cannot be obtained.
 
 These endpoints enforce `operations.read` and `operations.invoke` permissions.

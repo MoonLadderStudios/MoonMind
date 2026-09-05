@@ -44,6 +44,7 @@ WORKFLOW_NAME = "MoonMind.ManifestIngest"
 DEFAULT_ACTIVITY_CATALOG = build_default_activity_catalog()
 MANIFEST_RECURRING_SCHEDULED_START_PATCH = "manifest-recurring-scheduled-start-v1"
 MANIFEST_CATALOG_ACTIVITIES_PATCH = "manifest-catalog-activities-v1"
+MANIFEST_TERMINAL_EVIDENCE_PATCH = "manifest-terminal-evidence-v1"
 
 
 @workflow.defn(name="MoonMind.ManifestIngest")
@@ -367,6 +368,7 @@ class MoonMindManifestIngestWorkflow:
 
         # 2. Execute nodes logic
         failure_policy = self._execution_policy.get("failurePolicy", "fail_fast")
+        terminal_evidence = workflow.patched(MANIFEST_TERMINAL_EVIDENCE_PATCH)
 
         self._running_tasks = {}
 
@@ -399,9 +401,22 @@ class MoonMindManifestIngestWorkflow:
                 }
 
                 child_id = f"{self._workflow_id}:{self._run_id}:{node_id}"
-                node["child_workflow_id"] = child_id
+                if terminal_evidence:
+                    # Use the model's canonical keys: compiled nodes already carry
+                    # these aliases, which take precedence over snake-case inputs.
+                    node["childWorkflowId"] = child_id
+                    node["childRunId"] = None
+                    node["resultArtifactRef"] = None
+                    node.pop("error", None)
+                else:
+                    node["child_workflow_id"] = child_id
 
-                child_result = await workflow.execute_child_workflow(
+                start_child = (
+                    workflow.start_child_workflow
+                    if terminal_evidence
+                    else workflow.execute_child_workflow
+                )
+                child_result = await start_child(
                     "MoonMind.UserWorkflow",
                     args=[
                         {
@@ -437,8 +452,26 @@ class MoonMindManifestIngestWorkflow:
                         else {}
                     ),
                 )
+                if terminal_evidence:
+                    child_handle = child_result
+                    node["childRunId"] = child_handle.first_execution_run_id
+                    child_result = await child_handle
+                    outcome = child_result.get("executionOutcome") or {}
+                    result_ref = outcome.get("resultRef")
+                    if not isinstance(result_ref, str) or not result_ref.strip():
+                        result_ref = next(
+                            (
+                                ref
+                                for ref in outcome.get("outputRefs", []) or []
+                                if isinstance(ref, str) and ref.strip()
+                            ),
+                            None,
+                        )
+                    node["resultArtifactRef"] = result_ref
+                else:
+                    # Persisted histories used this old output shape.
+                    node["result_artifact_ref"] = child_result.get("output_artifact_ref")
                 node["state"] = "completed"
-                node["result_artifact_ref"] = child_result.get("output_artifact_ref")
             except asyncio.CancelledError as exc:
                 node["state"] = "canceled"
                 node["error"] = str(exc) or "cancelled"
@@ -542,9 +575,21 @@ class MoonMindManifestIngestWorkflow:
                 if isinstance(self._run_index_ref, dict):
                     self._run_index_ref = self._run_index_ref["artifact_id"]
 
+        if terminal_evidence and any(n["state"] != "completed" for n in nodes_list):
+            self._status = "failed"
+            # Persist summary/index evidence before failing the authoritative
+            # Temporal execution, including cancellation and blocked dependencies.
+            raise exceptions.ApplicationError(
+                "Manifest ingest ended with incomplete nodes",
+                {"summaryRef": self._summary_ref, "runIndexRef": self._run_index_ref},
+                type="ManifestNodesIncomplete",
+                non_retryable=True,
+            )
+
         final_status = "completed"
         if any(n["state"] == "failed" for n in nodes_list):
             final_status = "failed"
+        self._status = final_status
 
         return {
             "status": final_status,

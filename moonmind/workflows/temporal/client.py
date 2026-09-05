@@ -68,6 +68,7 @@ OMNIGENT_OAUTH_HOST_JANITOR_SCHEDULE_ID = "omnigent-oauth-host-janitor"
 OMNIGENT_OAUTH_HOST_JANITOR_WORKFLOW_ID_BASE = "omnigent-oauth-host-janitor-run"
 ALLOW_LIVE_TEMPORAL_IN_TESTS_ENV = "MOONMIND_ALLOW_LIVE_TEMPORAL_IN_TESTS"
 _WORKFLOW_UPDATE_ACCEPTED_TIMEOUT = timedelta(seconds=10)
+_WORKFLOW_CONTROL_CONCURRENCY = 10
 _SINGLE_VALUE_KEYWORD_LIST_SEARCH_ATTRIBUTES = frozenset(
     {
         "mm_target_runtime",
@@ -560,12 +561,24 @@ class TemporalClientAdapter:
         result = batch or WorkflowControlBatch(requestId=request_id or str(uuid4()), action=update_name)
         if result.action != update_name or (request_id and result.request_id != request_id):
             raise ValueError("control request identity mismatch")
-        async def persist():
-            if on_progress is not None:
-                await on_progress(result.model_copy(deep=True))
+        # The callback commonly owns one AsyncSession. Serialize commits while
+        # independent targets make bounded parallel progress through Temporal.
+        persistence_lock = asyncio.Lock()
+
+        async def persist(target=None, state=None, reason=None):
+            async with persistence_lock:
+                if target is not None:
+                    target.state, target.reason = state, reason
+                if on_progress is not None:
+                    await on_progress(result.model_copy(deep=True))
         if not result.enumerated:
             queues = _MOONMIND_TASK_QUEUES if task_queues is None else task_queues
-            query = 'ExecutionStatus="Running"'
+            # Queue membership alone does not imply the Pause/Resume/query
+            # protocol. Operator and manifest workflows share these queues.
+            query = (
+                'ExecutionStatus="Running"'
+                f' AND WorkflowType="{RENAMED_USER_WORKFLOW_TYPE}"'
+            )
             if queues:
                 query += ' AND TaskQueue IN (' + ', '.join(f'"{queue}"' for queue in queues) + ')'
             targets = []
@@ -582,13 +595,12 @@ class TemporalClientAdapter:
             result.targets = targets
             result.enumerated = True
             await persist()
-        for target in result.targets:
+        async def reconcile(target):
             if target.state in {"safe_point", "resumed", "failed"}:
-                continue
+                return
             if not target.run_id:
-                target.state, target.reason = "unknown", "run_identity_unavailable"
-                await persist()
-                continue
+                await persist(target, "unknown", "run_identity_unavailable")
+                return
             handle = client.get_workflow_handle(target.workflow_id, run_id=target.run_id)
             if target.state in {"requested", "unknown"}:
                 try:
@@ -599,38 +611,46 @@ class TemporalClientAdapter:
                         wait_for_stage=WorkflowUpdateStage.ACCEPTED,
                         rpc_timeout=_WORKFLOW_UPDATE_ACCEPTED_TIMEOUT,
                     )
-                    target.state, target.reason = "accepted", None
-                    await persist()
                 except Exception:
-                    target.state, target.reason = "unknown", "update_acceptance_unavailable"
-                    await persist()
-                    continue
+                    await persist(target, "unknown", "update_acceptance_unavailable")
+                    return
+                await persist(target, "accepted", None)
+            from temporalio.client import WorkflowUpdateFailedError
             try:
-                from temporalio.client import WorkflowUpdateFailedError
-                try:
-                    await handle.get_update_handle(target.update_id).result(rpc_timeout=timedelta(seconds=1))
-                except WorkflowUpdateFailedError:
-                    target.state, target.reason = "failed", "update_failed"
-                    await persist()
-                    continue
-                except Exception:
-                    target.state, target.reason = "pending", "update_completion_pending"
-                    await persist()
-                    continue
+                await handle.get_update_handle(target.update_id).result(rpc_timeout=timedelta(seconds=1))
+            except WorkflowUpdateFailedError:
+                await persist(target, "failed", "update_failed")
+                return
+            except Exception:
+                await persist(target, "pending", "update_completion_pending")
+                return
+            try:
                 observed = await handle.query("control_state", rpc_timeout=_WORKFLOW_UPDATE_ACCEPTED_TIMEOUT)
                 if not isinstance(observed, dict) or observed.get("runId") != target.run_id:
-                    target.state, target.reason = "unknown", "control_evidence_unavailable"
+                    state, reason = "unknown", "control_evidence_unavailable"
                 elif result.generation and observed.get("controlGeneration") != result.generation:
-                    target.state, target.reason = "unknown", "control_generation_superseded"
+                    state, reason = "unknown", "control_generation_superseded"
                 elif update_name == "Pause" and observed.get("safePoint") is True:
-                    target.state, target.reason = "safe_point", None
+                    state, reason = "safe_point", None
                 elif update_name == "Resume" and observed.get("resumed") is True:
-                    target.state, target.reason = "resumed", None
+                    state, reason = "resumed", None
                 else:
-                    target.state, target.reason = "pending", "safe_point_pending"
+                    state, reason = "pending", "safe_point_pending"
             except Exception:
-                target.state, target.reason = "unknown", "control_query_unavailable"
-            await persist()
+                state, reason = "unknown", "control_query_unavailable"
+            await persist(target, state, reason)
+
+        targets = iter(result.targets)
+
+        async def worker():
+            for target in targets:
+                await reconcile(target)
+
+        # Fixed workers bound task/RPC count as well as concurrency. TaskGroup
+        # cancels and joins every worker if durable progress cannot be committed.
+        async with asyncio.TaskGroup() as group:
+            for _ in range(min(_WORKFLOW_CONTROL_CONCURRENCY, len(result.targets))):
+                group.create_task(worker())
         return result
 
     # --- Temporal Schedule CRUD ---
