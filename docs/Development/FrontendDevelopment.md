@@ -118,11 +118,23 @@ Run real-browser regressions locally with `npm run ui:test:browser`; it defaults
 
 The product requirements are owned by [Workflow Chat Panel](../UI/WorkflowChatPanel.md#41-application-readiness-and-failure-containment). The [Omnigent Bridge](../Omnigent/OmnigentBridge.md#browser-transport-api-preservation) owns browser transport and scoped network compatibility. A binding response or iframe load is not proof that the conversation rendered.
 
-When changing the native bootstrap, facade, or workflow shell, extend the existing browser regression path rather than adding a second test application or relying only on HTML-string assertions:
+`npm run ui:test:browser` collects only `frontend/src/browser/**/*.browser.test.{ts,tsx}` through Vitest/Vite. Neither that command nor the `frontend-browser` CI job starts FastAPI or an Omnigent server. It covers isolated browser regressions; passing it does not exercise the served native document, compiled Omnigent application, or authorized facade.
+
+The existing served-stack acceptance entrypoint is the protected `workflow_chat` mode in [Provider / Omnigent Live Conformance](../../.github/workflows/omnigent-live-conformance.yml). On its provisioned provider-verification runner, the equivalent command is:
 
 ```bash
-npm run ui:test:browser
+python3 tools/run_omnigent_live_conformance.py \
+  --mode workflow_chat \
+  --server-image "${OMNIGENT_CONFORMANCE_SERVER_IMAGE:?qualified server digest required}" \
+  --host-image "${OMNIGENT_CONFORMANCE_HOST_IMAGE:?qualified host digest required}" \
+  --opencode-host-image "${OMNIGENT_CONFORMANCE_OPENCODE_HOST_IMAGE:?qualified OpenCode host digest required}" \
+  --source-commit "$(git rev-parse HEAD)" \
+  --output-dir artifacts/omnigent-conformance/live/workflow_chat
 ```
+
+This requires the protected workflow's dependencies, Chromium, authenticated browser state, dashboard URL, provider configuration, enrolled profile, and provisioned live-action adapter. Each image input is a full immutable digest reference. [Conformance and Live Smoke](../Omnigent/ConformanceAndLiveSmoke.md) owns the complete environment and acceptance requirements. This protected path uses Chromium; the Vitest Chromium/Firefox matrix does not establish Firefox coverage of the served stack.
+
+When changing the native bootstrap, facade, or workflow shell, put the following scenarios in a harness that serves the real FastAPI routes, emitted adapter, and pinned compiled native bundle. Required CI regression fixtures use controlled local dependencies; protected live acceptance uses the provisioned stack above. Extend the controlling harness and its collection rules for any missing scenario. Neither an existing acceptance report nor HTML-string assertions qualify a scenario that was not executed.
 
 Execute the script emitted by `render_native_ui_document` before the pinned native consumer runs. Verify `WebSocket.CONNECTING`, `OPEN`, `CLOSING`, and `CLOSED`, native construction and instance behavior, scoped URLs, subprotocol arguments, and null/connecting/open/closing/closed watch behavior. Verify an open socket actually sends, not merely that a null socket stops throwing. Cover equivalent constructor constants and options for an adapted `EventSource`, plus reconnect, stop/start, and disposal behavior.
 
