@@ -468,6 +468,13 @@ requests with `runtimeInheritance="caller"`, rejects schedule and direct-create
 shapes, records the authoritative `parentWorkflowId`, and limits describe calls
 to children of that parent. Restricted Omnigent egress additionally requires
 the fan-out marker and bearer on the exact create and child-describe paths.
+
+Fan-out launch context also carries `MOONMIND_REPOSITORY_CONNECTION_REF` when
+the parent request declares repository connection authority. Direct managed
+processes and Omnigent hosts derive this value from the canonical workspace
+request, including supported in-flight payload shapes. Ambient or Provider
+Profile environment values cannot substitute a different connection. Portable
+Skills use that exported reference when constructing child repository targets.
 Profile-bound Omnigent hosts expose the bearer through a lease-owned read-only
 file and pass only its non-secret selector into runner and login-shell
 environments. Hosts without the requirement receive neither the bearer nor the
