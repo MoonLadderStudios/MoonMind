@@ -8994,7 +8994,7 @@ describe('Workflow Detail Entrypoint', () => {
       // the demoted diagnostic surface. Wait on durable event content before asserting.
       expect((await screen.findAllByText('Previously approved by operator.')).length).toBeGreaterThan(0);
       const identity = screen.getByRole('region', { name: 'Omnigent runtime identity' });
-      expect(identity.textContent).toContain('Codex via Omnigent');
+      expect(identity.textContent).toContain('Omnigent');
       expect(identity.textContent).toContain('codex-profile');
       expect(identity.textContent).toContain('omnigent-launch:sha256:safe-ref');
       const compatibility = screen.getByRole('region', { name: 'Omnigent compatibility diagnostics' });

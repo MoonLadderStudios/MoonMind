@@ -697,7 +697,7 @@ describe("MoonLadderStudios/MoonMind#3451 Omnigent readiness", () => {
           json: async () => ({
             schemaVersion: "moonmind.omnigent-codex-readiness.v2",
             runtimeId: "omnigent",
-            displayName: "Codex via Omnigent",
+            displayName: "Omnigent",
             available: false,
             eligibleProviderProfiles: [],
             gateReasons: [{
@@ -742,7 +742,7 @@ describe("MoonLadderStudios/MoonMind#3451 Omnigent readiness", () => {
   const readyOmnigentCatalog = {
     schemaVersion: "moonmind.omnigent-codex-readiness.v2",
     runtimeId: "omnigent",
-    displayName: "Codex via Omnigent",
+    displayName: "Omnigent",
     agentKind: "external",
     agentId: "omnigent",
     harness: "codex-native",
@@ -939,7 +939,7 @@ describe("MoonLadderStudios/MoonMind#3451 Omnigent readiness", () => {
     await waitFor(() => {
       expect(screen.queryAllByText(/endpoint is starting/)).toHaveLength(0);
       expect(
-        screen.queryByText(/Codex via Omnigent cannot be submitted/),
+        screen.queryByText(/Omnigent cannot be submitted/),
       ).toBeNull();
     });
   });
@@ -1028,7 +1028,7 @@ describe("MoonLadderStudios/MoonMind#3451 Omnigent readiness", () => {
           json: async () => ({
             schemaVersion: "moonmind.omnigent-codex-readiness.v2",
             runtimeId: "omnigent",
-            displayName: "Codex via Omnigent",
+            displayName: "Omnigent",
             available: true,
             defaultExecutionProfileRef: "omnigent-codex-default",
             executionProfiles: [{
@@ -22083,7 +22083,7 @@ describe("Task Create runtime switch layout stability", () => {
     renderWithClient(<WorkflowStartPage payload={payload} />);
     const runtime = await screen.findByLabelText("Runtime");
     expect(within(runtime).getByRole("option", { name: "Jules" })).toBeTruthy();
-    expect(within(runtime).queryByRole("option", { name: "Codex via Omnigent" })).toBeNull();
+    expect(within(runtime).queryByRole("option", { name: "Omnigent" })).toBeNull();
   });
 
   it.each(["codex", "claude"])("submits a Profile's %s runtime for API validation despite a stale boot catalog", async (runtimeId) => {

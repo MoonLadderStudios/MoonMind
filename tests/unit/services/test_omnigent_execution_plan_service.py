@@ -1260,3 +1260,28 @@ async def test_untrusted_evidence_values_are_redacted_from_admission_errors(
     assert "launchPolicyRef differs" in message
     assert untrusted_value not in message
     assert "/api/omnigent/bootstrap/opencode/retry" not in message
+
+
+@pytest.mark.asyncio
+async def test_create_plan_reports_bootstrap_quarantine_instead_of_invalid_digest(monkeypatch):
+    """A pinned pre-cache image must expose its real rejection at Create."""
+    from moonmind.omnigent.bootstrap import store
+    from moonmind.omnigent.harness_platform.failures import HarnessPlatformError
+
+    host_ref = "ghcr.io/example/omnigent-host@sha256:" + "7" * 64
+    state = SimpleNamespace(
+        server_image_ref=_SERVER_IMAGE_REF,
+        opencode_host_image_ref=host_ref,
+        details={"opencodeHostCompatibility": {
+            "status": "blocked",
+            "failureCode": "omnigent_host_bootstrap_contract_missing",
+            "serverImageRef": _SERVER_IMAGE_REF,
+            "hostImageRef": host_ref,
+        }},
+    )
+    monkeypatch.setattr(store, "load_resolved_state", lambda: state)
+    with pytest.raises(HarnessPlatformError, match="omnigent_host_bootstrap_contract_missing"):
+        await _compile_opencode_plan(
+            monkeypatch, artifacts=_ArtifactService(),
+            launch_policy_ref="opencode-on-demand@1", plan_store=_PlanStore(object()),
+        )
