@@ -2080,9 +2080,14 @@ describe('Workflow Detail Entrypoint', () => {
       return Promise.resolve({ ok: true, json: async () => mockExecution } as Response);
     });
 
+    // The same inventory endpoint populates workflow and branch selection.
+    const existingFetch = fetchSpy.getMockImplementation()!;
+    fetchSpy.mockImplementation((input, init) => String(input).includes('/v1/provider-profiles')
+      ? Promise.resolve({ ok: true, json: async () => [{ profile_id: 'profile-oauth-2', account_label: 'Team Profile' }] } as Response)
+      : existingFetch(input, init));
     renderWithClient(<WorkflowDetailPage payload={actionsPayload} />);
-
-    fireEvent.change(await screen.findByLabelText('Provider profile'), { target: { value: 'profile-oauth-2' } });
+    await screen.findByRole('option', { name: 'Team Profile' });
+    fireEvent.change(await screen.findByLabelText('Profile'), { target: { value: 'profile-oauth-2' } });
     fireEvent.change(screen.getByLabelText('Execution profile / launch policy'), { target: { value: 'omnigent-isolated' } });
     fireEvent.change(screen.getByLabelText('Model'), { target: { value: 'gpt-5.6-sol' } });
     fireEvent.change(screen.getByLabelText('Effort'), { target: { value: 'high' } });

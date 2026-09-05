@@ -69,7 +69,7 @@ describe('Settings Entrypoint', () => {
   });
 });
 
-describe('MoonLadderStudios/MoonMind#3788 Settings Provider Profile runtime filter', () => {
+describe('MoonLadderStudios/MoonMind#3788 Settings Profile runtime filter', () => {
   const codexProfile = {
     profile_id: 'codex_minimax_team',
     runtime_id: 'codex_cli',
@@ -134,7 +134,7 @@ describe('MoonLadderStudios/MoonMind#3788 Settings Provider Profile runtime filt
 
   function runtimeFilterControl(): HTMLSelectElement {
     return screen.getByLabelText(
-      'Provider Profile runtime filter',
+      'Profile runtime filter',
     ) as HTMLSelectElement;
   }
 
@@ -146,7 +146,7 @@ describe('MoonLadderStudios/MoonMind#3788 Settings Provider Profile runtime filt
   // assertions are scoped to the Provider Profiles table.
   function providerProfilesTable(): HTMLElement {
     const section = screen
-      .getByRole('heading', { name: 'Provider Profiles' })
+      .getByRole('heading', { name: 'Profiles' })
       .closest('section');
     expect(section).not.toBeNull();
     return within(section as HTMLElement).getByRole('table');
@@ -155,7 +155,7 @@ describe('MoonLadderStudios/MoonMind#3788 Settings Provider Profile runtime filt
   it('fetches the complete Provider Profile collection and defaults to All runtimes', async () => {
     renderProvidersPage(payloadWithRuntimes);
 
-    await screen.findByRole('heading', { name: 'Provider Profiles' });
+    await screen.findByRole('heading', { name: 'Profiles' });
 
     // Settings is the administrative view, so it never scopes the request by
     // runtime the way an execution surface does.
@@ -173,7 +173,7 @@ describe('MoonLadderStudios/MoonMind#3788 Settings Provider Profile runtime filt
   it('offers one option per available runtime using canonical IDs and formatted labels', async () => {
     renderProvidersPage(payloadWithRuntimes);
 
-    await screen.findByRole('heading', { name: 'Provider Profiles' });
+    await screen.findByRole('heading', { name: 'Profiles' });
 
     const control = runtimeFilterControl();
     const options = within(control)
@@ -195,7 +195,7 @@ describe('MoonLadderStudios/MoonMind#3788 Settings Provider Profile runtime filt
   it('shows only matching rows while the global health summary keeps every loaded profile', async () => {
     renderProvidersPage(payloadWithRuntimes);
 
-    await screen.findByRole('heading', { name: 'Provider Profiles' });
+    await screen.findByRole('heading', { name: 'Profiles' });
 
     const healthSummary = screen.getByLabelText('Configuration health summary');
     expect(within(healthSummary).getByText('2')).toBeTruthy();
@@ -222,7 +222,7 @@ describe('MoonLadderStudios/MoonMind#3788 Settings Provider Profile runtime filt
   it('prefills the create form runtime from the active filter without touching an existing runtime', async () => {
     renderProvidersPage(payloadWithRuntimes);
 
-    await screen.findByRole('heading', { name: 'Provider Profiles' });
+    await screen.findByRole('heading', { name: 'Profiles' });
 
     const runtimeIdInput = () => screen.getByLabelText(/Runtime ID/) as HTMLInputElement;
     expect(runtimeIdInput().value).toBe('');
@@ -242,7 +242,7 @@ describe('MoonLadderStudios/MoonMind#3788 Settings Provider Profile runtime filt
   it('names the active runtime in the empty state instead of the global message', async () => {
     renderProvidersPage(payloadWithRuntimes);
 
-    await screen.findByRole('heading', { name: 'Provider Profiles' });
+    await screen.findByRole('heading', { name: 'Profiles' });
     expect(screen.queryByText('No provider profiles configured yet.')).toBeNull();
 
     selectRuntimeFilter('codex_cloud');
@@ -256,7 +256,7 @@ describe('MoonLadderStudios/MoonMind#3788 Settings Provider Profile runtime filt
   it('keeps runtime_id immutable while editing an existing profile', async () => {
     renderProvidersPage(payloadWithRuntimes);
 
-    await screen.findByRole('heading', { name: 'Provider Profiles' });
+    await screen.findByRole('heading', { name: 'Profiles' });
 
     selectRuntimeFilter('claude_code');
     fireEvent.click(screen.getByRole('button', { name: 'Edit' }));

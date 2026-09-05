@@ -1,3 +1,48 @@
+# Shared static Omnigent host template (MoonLadderStudios/MoonMind#3834).
+#
+# One source of truth for the common static Codex/Claude host configuration.
+# Both `omnigent-host-codex` and `omnigent-host-claude` keep their explicit
+# service names and `omnigent-host-codex` / `omnigent-host-claude` profiles,
+# but share: the digest-pinned `omnigent-host-moonmind` image, uid/gid, home,
+# workdir, read-only root, tmpfs, capabilities, no-new-privileges, resource
+# limits, restart behavior, Omnigent endpoint, workspace/Skill/tool/state
+# boundaries, egress network, and the generic health shape. Runtime differences
+# are limited to the trusted pack/materializer selection
+# (`MOONMIND_OMNIGENT_RUNTIME_PACK_REF` /
+# `MOONMIND_OMNIGENT_CREDENTIAL_MATERIALIZER_REF`) plus that runtime's own
+# credential attachment and generation marker.
+#
+# The values below are intentionally duplicated explicitly in each service so
+# `docker compose config` keeps showing the final operator-visible contract.
+# `tests/unit/omnigent/test_static_host_consolidation.py` fails if any service
+# drifts from this anchor. Do not introduce templating that hides the contract.
+#
+# Rollback: set OMNIGENT_SHARED_HOST_IMAGE_REF to the prior pinned digest, or
+# revert this file; the thin `start-*-oauth-host.sh` / `check-*-oauth-host.sh`
+# wrappers keep their old container paths during migration. The legacy
+# OMNIGENT_HOST_IMAGE_REF variable is honored only as a bounded alias by
+# `moonmind.omnigent.harness_platform.static_hosts.resolve_static_host_image_ref`
+# when OMNIGENT_SHARED_HOST_IMAGE_REF is unset; legacy mutable
+# OMNIGENT_HOST_IMAGE / OMNIGENT_HOST_IMAGE_TAG construction is not honored
+# for static hosts.
+x-omnigent-static-host:
+  image: ${OMNIGENT_SHARED_HOST_IMAGE_REF:-${OMNIGENT_SHARED_HOST_IMAGE:-ghcr.io/moonladderstudios/omnigent-host-moonmind}:${OMNIGENT_SHARED_HOST_IMAGE_TAG:-1.18.11}}
+  user: "1000:1000"
+  working_dir: /home/app
+  read_only: true
+  tmpfs:
+    - /tmp:rw,noexec,nosuid,size=${OMNIGENT_HOST_TMPFS_LIMIT:-256m}
+  cap_drop:
+    - ALL
+  security_opt:
+    - no-new-privileges:true
+  cpus: ${OMNIGENT_HOST_CPU_LIMIT:-2}
+  mem_limit: ${OMNIGENT_HOST_MEMORY_LIMIT:-4096m}
+  pids_limit: ${OMNIGENT_HOST_PIDS_LIMIT:-256}
+  stop_grace_period: ${OMNIGENT_HOST_STOP_GRACE_SECONDS:-20}s
+  restart: unless-stopped
+  entrypoint: ["/opt/moonmind/start-omnigent-host.sh"]
+
 services:
   keycloak:
     profiles: ["keycloak"]
@@ -82,13 +127,25 @@ services:
       - OMNIGENT_HOST_IMAGE=${OMNIGENT_HOST_IMAGE:-ghcr.io/omnigent-ai/omnigent-host}
       - OMNIGENT_HOST_IMAGE_TAG=${OMNIGENT_HOST_IMAGE_TAG:-latest}
       - OMNIGENT_OPENCODE_HOST_IMAGE_REF=${OMNIGENT_OPENCODE_HOST_IMAGE_REF:-}
-      - OMNIGENT_OPENCODE_HOST_IMAGE=${OMNIGENT_OPENCODE_HOST_IMAGE:-ghcr.io/moonladderstudios/omnigent-host-opencode}
+      - OMNIGENT_OPENCODE_HOST_IMAGE=${OMNIGENT_OPENCODE_HOST_IMAGE:-ghcr.io/moonladderstudios/omnigent-host-moonmind}
       - OMNIGENT_OPENCODE_HOST_IMAGE_TAG=${OMNIGENT_OPENCODE_HOST_IMAGE_TAG:-1.18.11}
       - OMNIGENT_PI_HOST_IMAGE_REF=${OMNIGENT_PI_HOST_IMAGE_REF:-}
       - OMNIGENT_SHARED_HOST_IMAGE_REF=${OMNIGENT_SHARED_HOST_IMAGE_REF:-}
       - OMNIGENT_SHARED_HOST_IMAGE=${OMNIGENT_SHARED_HOST_IMAGE:-ghcr.io/moonladderstudios/omnigent-host-moonmind}
       - OMNIGENT_SHARED_HOST_IMAGE_TAG=${OMNIGENT_SHARED_HOST_IMAGE_TAG:-1.18.11}
       - MOONMIND_OMNIGENT_GENERIC_HOST_ENABLED=${MOONMIND_OMNIGENT_GENERIC_HOST_ENABLED:-true}
+      # MoonLadderStudios/MoonMind#3878 invariant 7: on-demand generic hosts
+      # are admitted against aggregate machine capacity and a separately
+      # bounded cold-launch rate, so a higher provider ceiling can never
+      # translate into an unsafe number of simultaneous containers.
+      - MOONMIND_OMNIGENT_GENERIC_HOST_CAPACITY=${MOONMIND_OMNIGENT_GENERIC_HOST_CAPACITY:-8}
+      - MOONMIND_OMNIGENT_GENERIC_HOST_COLD_LAUNCH_BURST=${MOONMIND_OMNIGENT_GENERIC_HOST_COLD_LAUNCH_BURST:-2}
+      - MOONMIND_OMNIGENT_GENERIC_HOST_COLD_LAUNCH_WINDOW_SECONDS=${MOONMIND_OMNIGENT_GENERIC_HOST_COLD_LAUNCH_WINDOW_SECONDS:-30}
+      # The pooled Omnigent HTTP client is sized for that host ceiling: each
+      # concurrent run holds one long-lived SSE stream plus a few control calls.
+      - MOONMIND_OMNIGENT_HTTP_MAX_CONNECTIONS=${MOONMIND_OMNIGENT_HTTP_MAX_CONNECTIONS:-64}
+      - MOONMIND_OMNIGENT_HTTP_MAX_KEEPALIVE_CONNECTIONS=${MOONMIND_OMNIGENT_HTTP_MAX_KEEPALIVE_CONNECTIONS:-32}
+      - MOONMIND_OMNIGENT_HTTP_KEEPALIVE_EXPIRY_SECONDS=${MOONMIND_OMNIGENT_HTTP_KEEPALIVE_EXPIRY_SECONDS:-30}
       - MOONMIND_OMNIGENT_OPENCODE_ENABLED=${MOONMIND_OMNIGENT_OPENCODE_ENABLED:-true}
       - MOONMIND_OMNIGENT_GENERIC_CODEX_QUALIFIED=${MOONMIND_OMNIGENT_GENERIC_CODEX_QUALIFIED:-false}
       - MOONMIND_OMNIGENT_GENERIC_CLAUDE_QUALIFIED=${MOONMIND_OMNIGENT_GENERIC_CLAUDE_QUALIFIED:-false}
@@ -647,7 +704,12 @@ services:
       - TEMPORAL_WORKER_FLEET=agent_runtime
       - TEMPORAL_ACTIVITY_AGENT_RUNTIME_TASK_QUEUE=${TEMPORAL_ACTIVITY_AGENT_RUNTIME_TASK_QUEUE:-mm.activity.agent_runtime}
       - TEMPORAL_ACTIVITY_AGENT_RUNTIME_CONTROL_TASK_QUEUE=${TEMPORAL_ACTIVITY_AGENT_RUNTIME_CONTROL_TASK_QUEUE:-mm.activity.agent_runtime.control}
-      - TEMPORAL_AGENT_RUNTIME_WORKER_CONCURRENCY=${TEMPORAL_AGENT_RUNTIME_WORKER_CONCURRENCY:-4}
+      # MoonLadderStudios/MoonMind#3878: this compose default previously
+      # pinned four concurrent Activities, an undocumented deployment
+      # ceiling below the code default. Effective Omnigent concurrency must
+      # be the minimum of the governed provider, host, and worker limits —
+      # never a hidden compose value — so this now tracks the code default.
+      - TEMPORAL_AGENT_RUNTIME_WORKER_CONCURRENCY=${TEMPORAL_AGENT_RUNTIME_WORKER_CONCURRENCY:-16}
       - MOONMIND_URL=${MOONMIND_URL:-http://api:8000}
       - MOONMIND_OAUTH_RUNNER_IMAGE=${MOONMIND_OAUTH_RUNNER_IMAGE:-${MOONMIND_IMAGE:-ghcr.io/moonladderstudios/moonmind:latest}}
       - CODEX_VOLUME_PATH=${CODEX_VOLUME_PATH:-/home/app/.codex}
@@ -683,13 +745,25 @@ services:
       - OMNIGENT_IMAGE_REF=${OMNIGENT_IMAGE_REF:-}
       - OMNIGENT_BUILD_DIGEST=${OMNIGENT_BUILD_DIGEST:-}
       - OMNIGENT_OPENCODE_HOST_IMAGE_REF=${OMNIGENT_OPENCODE_HOST_IMAGE_REF:-}
-      - OMNIGENT_OPENCODE_HOST_IMAGE=${OMNIGENT_OPENCODE_HOST_IMAGE:-ghcr.io/moonladderstudios/omnigent-host-opencode}
+      - OMNIGENT_OPENCODE_HOST_IMAGE=${OMNIGENT_OPENCODE_HOST_IMAGE:-ghcr.io/moonladderstudios/omnigent-host-moonmind}
       - OMNIGENT_OPENCODE_HOST_IMAGE_TAG=${OMNIGENT_OPENCODE_HOST_IMAGE_TAG:-1.18.11}
       - OMNIGENT_PI_HOST_IMAGE_REF=${OMNIGENT_PI_HOST_IMAGE_REF:-}
       - OMNIGENT_SHARED_HOST_IMAGE_REF=${OMNIGENT_SHARED_HOST_IMAGE_REF:-}
       - OMNIGENT_SHARED_HOST_IMAGE=${OMNIGENT_SHARED_HOST_IMAGE:-ghcr.io/moonladderstudios/omnigent-host-moonmind}
       - OMNIGENT_SHARED_HOST_IMAGE_TAG=${OMNIGENT_SHARED_HOST_IMAGE_TAG:-1.18.11}
       - MOONMIND_OMNIGENT_GENERIC_HOST_ENABLED=${MOONMIND_OMNIGENT_GENERIC_HOST_ENABLED:-true}
+      # MoonLadderStudios/MoonMind#3878 invariant 7: on-demand generic hosts
+      # are admitted against aggregate machine capacity and a separately
+      # bounded cold-launch rate, so a higher provider ceiling can never
+      # translate into an unsafe number of simultaneous containers.
+      - MOONMIND_OMNIGENT_GENERIC_HOST_CAPACITY=${MOONMIND_OMNIGENT_GENERIC_HOST_CAPACITY:-8}
+      - MOONMIND_OMNIGENT_GENERIC_HOST_COLD_LAUNCH_BURST=${MOONMIND_OMNIGENT_GENERIC_HOST_COLD_LAUNCH_BURST:-2}
+      - MOONMIND_OMNIGENT_GENERIC_HOST_COLD_LAUNCH_WINDOW_SECONDS=${MOONMIND_OMNIGENT_GENERIC_HOST_COLD_LAUNCH_WINDOW_SECONDS:-30}
+      # The pooled Omnigent HTTP client is sized for that host ceiling: each
+      # concurrent run holds one long-lived SSE stream plus a few control calls.
+      - MOONMIND_OMNIGENT_HTTP_MAX_CONNECTIONS=${MOONMIND_OMNIGENT_HTTP_MAX_CONNECTIONS:-64}
+      - MOONMIND_OMNIGENT_HTTP_MAX_KEEPALIVE_CONNECTIONS=${MOONMIND_OMNIGENT_HTTP_MAX_KEEPALIVE_CONNECTIONS:-32}
+      - MOONMIND_OMNIGENT_HTTP_KEEPALIVE_EXPIRY_SECONDS=${MOONMIND_OMNIGENT_HTTP_KEEPALIVE_EXPIRY_SECONDS:-30}
       - MOONMIND_OMNIGENT_OPENCODE_ENABLED=${MOONMIND_OMNIGENT_OPENCODE_ENABLED:-true}
       - MOONMIND_OMNIGENT_GENERIC_CODEX_QUALIFIED=${MOONMIND_OMNIGENT_GENERIC_CODEX_QUALIFIED:-false}
       - MOONMIND_OMNIGENT_GENERIC_CLAUDE_QUALIFIED=${MOONMIND_OMNIGENT_GENERIC_CLAUDE_QUALIFIED:-false}
@@ -957,7 +1031,7 @@ services:
       - OMNIGENT_IMAGE_TAG=${OMNIGENT_IMAGE_TAG:-latest}
       - OMNIGENT_IMAGE_REF=${OMNIGENT_IMAGE_REF:-}
       - OMNIGENT_BUILD_DIGEST=${OMNIGENT_BUILD_DIGEST:-}
-      - OMNIGENT_OPENCODE_HOST_IMAGE=${OMNIGENT_OPENCODE_HOST_IMAGE:-ghcr.io/moonladderstudios/omnigent-host-opencode}
+      - OMNIGENT_OPENCODE_HOST_IMAGE=${OMNIGENT_OPENCODE_HOST_IMAGE:-ghcr.io/moonladderstudios/omnigent-host-moonmind}
       - OMNIGENT_OPENCODE_HOST_IMAGE_TAG=${OMNIGENT_OPENCODE_HOST_IMAGE_TAG:-1.18.11}
       - OMNIGENT_OPENCODE_HOST_IMAGE_REF=${OMNIGENT_OPENCODE_HOST_IMAGE_REF:-}
       - OMNIGENT_SHARED_HOST_IMAGE_REF=${OMNIGENT_SHARED_HOST_IMAGE_REF:-}
@@ -1027,7 +1101,9 @@ services:
 
   omnigent-host-claude:
     profiles: ["omnigent-host-claude"]
-    image: ${OMNIGENT_HOST_IMAGE_REF:-${OMNIGENT_HOST_IMAGE:-ghcr.io/omnigent-ai/omnigent-host}:${OMNIGENT_HOST_IMAGE_TAG:-latest}}
+    # Shared host image (MoonLadderStudios/MoonMind#3834): must stay identical
+    # to `x-omnigent-static-host` image and to `omnigent-host-codex` image.
+    image: ${OMNIGENT_SHARED_HOST_IMAGE_REF:-${OMNIGENT_SHARED_HOST_IMAGE:-ghcr.io/moonladderstudios/omnigent-host-moonmind}:${OMNIGENT_SHARED_HOST_IMAGE_TAG:-1.18.11}}
     hostname: omnigent-host-claude
     user: "1000:1000"
     working_dir: /home/app
@@ -1046,7 +1122,7 @@ services:
       moonmind.egress.profile: ${OMNIGENT_EGRESS_PROFILE_REF:-unattested}
       moonmind.egress.profile_digest: ${OMNIGENT_EGRESS_PROFILE_DIGEST:-unattested}
       moonmind.egress.applied_rule_digest: ${OMNIGENT_EGRESS_APPLIED_RULE_DIGEST:-unattested}
-    entrypoint: ["/opt/moonmind/start-claude-oauth-host.sh"]
+    entrypoint: ["/opt/moonmind/start-omnigent-host.sh"]
     environment:
       HTTP_PROXY: http://omnigent-egress-proxy:3129
       HTTPS_PROXY: http://omnigent-egress-proxy:3129
@@ -1059,17 +1135,15 @@ services:
       MOONMIND_ACTIVE_SKILLS_DIR: /opt/moonmind-skills
       OMNIGENT_SERVER_URL: http://omnigent:8000
       HOME: /home/app
+      # Runtime-specific selection (MoonLadderStudios/MoonMind#3834): the only
+      # pack/materializer difference between the static rows. The generic
+      # entrypoint resolves all other behavior through these trusted refs.
+      MOONMIND_OMNIGENT_RUNTIME_PACK_REF: claude-native-pack@1
+      MOONMIND_OMNIGENT_CREDENTIAL_MATERIALIZER_REF: claude-oauth-home@1
       CLAUDE_HOME: /home/app/.claude
       CLAUDE_VOLUME_PATH: /home/app/.claude
       CLAUDE_CONFIG_DIR: /home/app/.claude
       CLAUDE_CREDENTIAL_GENERATION: ${CLAUDE_CREDENTIAL_GENERATION:-1}
-      ANTHROPIC_API_KEY: ""
-      ANTHROPIC_AUTH_TOKEN: ""
-      CLAUDE_API_KEY: ""
-      CLAUDE_CODE_OAUTH_TOKEN: ""
-      OPENAI_API_KEY: ""
-      GEMINI_API_KEY: ""
-      GOOGLE_API_KEY: ""
     volumes:
       - omnigent-host-claude-home:/home/app
       - omnigent-host-claude-state:/home/app/.omnigent
@@ -1091,10 +1165,13 @@ services:
       sandbox-egress-proxy:
         condition: service_healthy
     healthcheck:
+      # Generic static-host health contract (MoonLadderStudios/MoonMind#3834):
+      # identical shape for both rows; pack-specific probing happens inside
+      # check-omnigent-host.sh via MOONMIND_OMNIGENT_RUNTIME_PACK_REF.
       test:
         [
           "CMD-SHELL",
-          "/opt/moonmind/check-claude-oauth-host.sh && /opt/moonmind/check-runner-projections.sh",
+          "/opt/moonmind/check-omnigent-host.sh && /opt/moonmind/check-runner-projections.sh",
         ]
       interval: 10s
       timeout: 5s
@@ -1105,7 +1182,7 @@ services:
     restart: unless-stopped
   omnigent-host-claude-init:
     profiles: ["omnigent-host-claude"]
-    image: ${OMNIGENT_HOST_IMAGE_REF:-${OMNIGENT_HOST_IMAGE:-ghcr.io/omnigent-ai/omnigent-host}:${OMNIGENT_HOST_IMAGE_TAG:-latest}}
+    image: ${OMNIGENT_SHARED_HOST_IMAGE_REF:-${OMNIGENT_SHARED_HOST_IMAGE:-ghcr.io/moonladderstudios/omnigent-host-moonmind}:${OMNIGENT_SHARED_HOST_IMAGE_TAG:-1.18.11}}
     user: "0:0"
     network_mode: none
     cap_drop:
@@ -1135,7 +1212,7 @@ services:
 
   omnigent-host-codex-init:
     profiles: ["omnigent-host-codex"]
-    image: ${OMNIGENT_HOST_IMAGE_REF:-${OMNIGENT_HOST_IMAGE:-ghcr.io/omnigent-ai/omnigent-host}:${OMNIGENT_HOST_IMAGE_TAG:-latest}}
+    image: ${OMNIGENT_SHARED_HOST_IMAGE_REF:-${OMNIGENT_SHARED_HOST_IMAGE:-ghcr.io/moonladderstudios/omnigent-host-moonmind}:${OMNIGENT_SHARED_HOST_IMAGE_TAG:-1.18.11}}
     user: "0:0"
     network_mode: none
     cap_drop:
@@ -1165,7 +1242,9 @@ services:
 
   omnigent-host-codex:
     profiles: ["omnigent-host-codex"]
-    image: ${OMNIGENT_HOST_IMAGE_REF:-${OMNIGENT_HOST_IMAGE:-ghcr.io/omnigent-ai/omnigent-host}:${OMNIGENT_HOST_IMAGE_TAG:-latest}}
+    # Shared host image (MoonLadderStudios/MoonMind#3834): must stay identical
+    # to `x-omnigent-static-host` image and to `omnigent-host-claude` image.
+    image: ${OMNIGENT_SHARED_HOST_IMAGE_REF:-${OMNIGENT_SHARED_HOST_IMAGE:-ghcr.io/moonladderstudios/omnigent-host-moonmind}:${OMNIGENT_SHARED_HOST_IMAGE_TAG:-1.18.11}}
     hostname: omnigent-host-codex
     user: "1000:1000"
     working_dir: /home/app
@@ -1189,8 +1268,7 @@ services:
       moonmind.egress.profile: ${OMNIGENT_EGRESS_PROFILE_REF:-unattested}
       moonmind.egress.profile_digest: ${OMNIGENT_EGRESS_PROFILE_DIGEST:-unattested}
       moonmind.egress.applied_rule_digest: ${OMNIGENT_EGRESS_APPLIED_RULE_DIGEST:-unattested}
-    entrypoint: ["/usr/bin/env", "-u", "OPENAI_API_KEY", "-u", "CODEX_ACCESS_TOKEN", "-u", "OPENAI_BASE_URL", "-u", "MINIMAX_API_KEY", "-u", "ANTHROPIC_API_KEY", "-u", "ANTHROPIC_AUTH_TOKEN", "-u", "CLAUDE_API_KEY", "-u", "CLAUDE_CODE_OAUTH_TOKEN", "-u", "GEMINI_API_KEY", "-u", "GOOGLE_API_KEY"]
-    command: ["/opt/moonmind/start-codex-oauth-host.sh"]
+    entrypoint: ["/opt/moonmind/start-omnigent-host.sh"]
     environment:
       HTTP_PROXY: http://omnigent-egress-proxy:3129
       HTTPS_PROXY: http://omnigent-egress-proxy:3129
@@ -1202,6 +1280,11 @@ services:
       PATH: /opt/moonmind-tools/bin:${OMNIGENT_HOST_BASE_PATH:-/opt/venv/bin:/usr/local/bin:/usr/local/sbin:/usr/bin:/usr/sbin:/bin:/sbin}
       MOONMIND_ACTIVE_SKILLS_DIR: /opt/moonmind-skills
       HOME: /home/app
+      # Runtime-specific selection (MoonLadderStudios/MoonMind#3834): the only
+      # pack/materializer difference between the static rows. The generic
+      # entrypoint resolves all other behavior through these trusted refs.
+      MOONMIND_OMNIGENT_RUNTIME_PACK_REF: codex-native-pack@1
+      MOONMIND_OMNIGENT_CREDENTIAL_MATERIALIZER_REF: codex-oauth-home@1
       CODEX_HOME: /home/app/.codex
       CODEX_CONFIG_HOME: /home/app/.codex
       CODEX_CONFIG_PATH: /home/app/.codex/config.toml
@@ -1235,11 +1318,18 @@ services:
       - omnigent-egress-network
     restart: unless-stopped
     healthcheck:
-      test: ["CMD", "/opt/moonmind/check-codex-oauth-host.sh"]
+      # Generic static-host health contract (MoonLadderStudios/MoonMind#3834):
+      # identical shape for both rows; pack-specific probing happens inside
+      # check-omnigent-host.sh via MOONMIND_OMNIGENT_RUNTIME_PACK_REF.
+      test:
+        [
+          "CMD-SHELL",
+          "/opt/moonmind/check-omnigent-host.sh && /opt/moonmind/check-runner-projections.sh",
+        ]
       interval: 10s
       timeout: 5s
-      retries: 3
-      start_period: 10s
+      retries: 12
+      start_period: 30s
 
   init-db:
     image: ${MOONMIND_IMAGE:-ghcr.io/moonladderstudios/moonmind:latest}

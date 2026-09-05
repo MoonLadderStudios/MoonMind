@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { QueryClient, useMutation } from '@tanstack/react-query';
+import { QueryClient, useMutation, useQuery } from '@tanstack/react-query';
 
 import type { components } from '../../generated/openapi';
 import { formatRuntimeLabel, formatStatusLabel } from '../../utils/formatters';
@@ -19,6 +19,7 @@ type ProviderProfileCreationPreset =
   components['schemas']['ProviderProfileCreationPresetResponse'];
 
 export interface ProviderProfile {
+  execution_configuration?: { profileId: string; version: number; digest: string } | null;
   profile_id: string;
   runtime_id: string;
   provider_id: string;
@@ -176,6 +177,7 @@ interface ProviderProfilesManagerProps {
 }
 
 interface ProviderProfileFormState {
+  executionConfiguration?: string;
   profileId: string;
   runtimeId: string;
   providerId: string;
@@ -201,6 +203,7 @@ interface ProviderProfileFormState {
 }
 
 interface ProviderProfileSavePayload {
+  execution_configuration?: { profileId: string; version: number; digest: string } | null;
   profile_id: string;
   runtime_id?: string;
   provider_id?: string;
@@ -346,6 +349,7 @@ export function defaultFormState(runtimeId = ''): ProviderProfileFormState {
 
 export function toFormState(profile: ProviderProfile): ProviderProfileFormState {
   return {
+    executionConfiguration: JSON.stringify(profile.execution_configuration || null),
     profileId: profile.profile_id,
     runtimeId: profile.runtime_id,
     providerId: profile.provider_id,
@@ -996,6 +1000,7 @@ function buildSavePayload(
       Number(baseline.cooldownAfter429Seconds),
     );
     setChanged('rate_limit_policy', form.rateLimitPolicy, baseline.rateLimitPolicy);
+    setChanged('execution_configuration', JSON.parse(form.executionConfiguration || 'null'), JSON.parse(baseline.executionConfiguration || 'null'));
     setChanged('enabled', form.enabled, baseline.enabled);
     setChanged('is_default', form.isDefault, baseline.isDefault);
     setChanged(
@@ -1020,6 +1025,7 @@ function buildSavePayload(
     return payload;
   }
 
+  if (form.executionConfiguration) payload.execution_configuration = JSON.parse(form.executionConfiguration);
   payload.runtime_id = form.runtimeId.trim();
   payload.provider_id = form.providerId.trim();
   payload.provider_label = form.providerLabel.trim() || null;
@@ -1157,6 +1163,16 @@ export function ProviderProfilesManager({
     useState<ProviderProfileCreationCapabilities | null>(null);
   const [creationCapabilitiesError, setCreationCapabilitiesError] = useState<string | null>(null);
   const [showAdvanced, setShowAdvanced] = useState(false);
+  const executionConfigurations = useQuery({
+    queryKey: ['settings', 'profile-execution-configurations'],
+    enabled: showAdvanced,
+    queryFn: async (): Promise<Array<{profileId: string; displayName: string; activeVersion: number; versions: Array<{version: number; digest: string}>}>> => {
+      const response = await fetch('/api/omnigent/agent-profiles', { credentials: 'same-origin' });
+      if (!response.ok) throw new Error('Execution configurations could not be loaded.');
+      const value = await response.json();
+      return Array.isArray(value) ? value : [];
+    },
+  });
   const [advancedFocusRequest, setAdvancedFocusRequest] = useState<
     { field: string; nonce: number } | null
   >(null);
@@ -1192,7 +1208,7 @@ export function ProviderProfilesManager({
         );
       }
       queryClient.invalidateQueries({ queryKey: PROVIDER_PROFILE_QUERY_KEY });
-      onNotice({ level: 'ok', text: `Provider profile "${profileId}" is now the runtime default.` });
+      onNotice({ level: 'ok', text: `Profile "${profileId}" is now the runtime default.` });
     } catch (error) {
       onNotice({
         level: 'error',
@@ -2270,8 +2286,8 @@ export function ProviderProfilesManager({
       onNotice({
         level: 'ok',
         text: isEditing
-          ? `Provider profile "${editingProfileId}" updated.`
-          : `Provider profile "${submittedForm.profileId.trim()}" created.`,
+          ? `Profile "${editingProfileId}" updated.`
+          : `Profile "${submittedForm.profileId.trim()}" created.`,
       });
       setEditingProfileId(null);
       const nextForm = defaultFormState(createFormRuntimeSeed);
@@ -2412,7 +2428,7 @@ export function ProviderProfilesManager({
       }
     },
     onSuccess: (_data, profileId) => {
-      onNotice({ level: 'ok', text: `Provider profile "${profileId}" deleted.` });
+      onNotice({ level: 'ok', text: `Profile "${profileId}" deleted.` });
       if (editingProfileId === profileId) {
         setEditingProfileId(null);
         const nextForm = defaultFormState(createFormRuntimeSeed);
@@ -2457,7 +2473,7 @@ export function ProviderProfilesManager({
     onSuccess: (_data, variables) => {
       onNotice({
         level: 'ok',
-        text: `Provider profile "${variables.profileId}" ${
+        text: `Profile "${variables.profileId}" ${
           variables.enabled ? 'enabled' : 'disabled'
         }.`,
       });
@@ -2770,7 +2786,7 @@ export function ProviderProfilesManager({
     <section className="rounded-3xl border border-mm-border/80 bg-transparent p-6 shadow-sm">
       <div className="flex flex-col gap-3 border-b border-slate-200 dark:border-slate-800 pb-4 md:flex-row md:items-end md:justify-between">
         <div className="space-y-2">
-          <h3 className="text-lg font-semibold text-slate-900 dark:text-white">Provider Profiles</h3>
+          <h3 className="text-lg font-semibold text-slate-900 dark:text-white">Profiles</h3>
           <p className="max-w-3xl text-sm text-slate-600 dark:text-slate-400">
             Manage your configured provider profiles. Select a profile below to edit, or scroll down to create a new one.
           </p>
@@ -2783,7 +2799,7 @@ export function ProviderProfilesManager({
             className="font-medium text-slate-700 dark:text-slate-300"
             htmlFor={RUNTIME_FILTER_CONTROL_ID}
           >
-            Provider Profile runtime filter
+            Profile runtime filter
           </label>
           <select
             id={RUNTIME_FILTER_CONTROL_ID}
@@ -3741,7 +3757,7 @@ export function ProviderProfilesManager({
         <div className="flex flex-col gap-1 mb-6 md:flex-row md:items-end md:justify-between">
           <div>
             <h3 className="text-lg font-semibold text-slate-900 dark:text-white">
-              {isEditing ? `Edit Profile: ${editingProfileId}` : 'Create Provider Profile'}
+              {isEditing ? `Edit Profile: ${editingProfileId}` : 'Create Profile'}
             </h3>
             <p className="mt-1 text-sm text-slate-500 dark:text-slate-400">
               Fields marked <span className="text-amber-600 dark:text-amber-400 font-semibold">*</span> are
@@ -3934,7 +3950,7 @@ export function ProviderProfilesManager({
             ) : null}
             {tierCapabilities?.evidence?.stale ? (
               <div className="rounded-xl border border-amber-200 dark:border-amber-800 bg-amber-50 dark:bg-amber-950/30 p-3 text-xs text-amber-800 dark:text-amber-300">
-                Model catalog evidence is stale; observed catalog choices are disabled until the profile is revalidated. Runtime default and custom model entry remain available.
+                Model discovery is refreshing. Cached choices remain available; the runtime verifies your selected model before execution.
               </div>
             ) : null}
             {tierCapabilities?.diagnostics?.length ? (
@@ -3981,7 +3997,6 @@ export function ProviderProfilesManager({
                               <span>Model</span>
                               {(() => {
                                 const catalogOptions = tierCapabilities?.model?.options ?? [];
-                                const staleCatalog = tierCapabilities?.evidence?.stale === true;
                                 const allowCustomModel = tierCapabilities?.model?.allow_custom === true;
                                 const knownValues = new Set([
                                   '__runtime_default__',
@@ -4014,7 +4029,7 @@ export function ProviderProfilesManager({
                                     }} aria-label={`Tier ${tierNumber} model`}>
                                       <option value="__runtime_default__">Runtime default{tierCapabilities?.model?.runtime_default ? ` — ${tierCapabilities.model.runtime_default}` : ''}</option>
                                       {catalogOptions.map((opt) => (
-                                        <option key={opt.value} value={opt.value} disabled={staleCatalog && opt.value !== tier.model}>
+                                        <option key={opt.value} value={opt.value}>
                                           {opt.label}
                                           {opt.status === 'deprecated' ? ' (Deprecated)' : ''}
                                           {opt.recommended ? ' · Recommended' : ''}
@@ -4437,6 +4452,18 @@ export function ProviderProfilesManager({
 
               <fieldset className="rounded-2xl border border-slate-200 dark:border-slate-700 p-5 space-y-4">
                 <legend className="px-2 text-sm font-semibold text-slate-700 dark:text-slate-300">Advanced profile policy</legend>
+                <label>
+                  Execution configuration
+                  <select value={form.executionConfiguration || 'null'} onChange={(event) => setForm((current) => ({ ...current, executionConfiguration: event.target.value }))}>
+                    <option value="null">Automatic compatible configuration</option>
+                    {form.executionConfiguration && form.executionConfiguration !== 'null' ? <option value={form.executionConfiguration}>Saved configuration</option> : null}
+                    {(executionConfigurations.data || []).flatMap((configuration) => configuration.versions.filter((version) => version.version === configuration.activeVersion).map((version) => (
+                      <option key={configuration.profileId} value={JSON.stringify({profileId: configuration.profileId, version: version.version, digest: version.digest})}>{configuration.displayName}</option>
+                    )))}
+                  </select>
+                </label>
+                {executionConfigurations.isError ? <p role="status">Execution configurations could not be loaded. Your saved selection is preserved.</p> : null}
+                <a href="/omnigent/agents">Manage execution configurations</a>
                 <div className="grid gap-4 md:grid-cols-2">
                   <label data-advanced-field="provider_label" className="flex flex-col gap-1.5 text-sm font-medium text-slate-700 dark:text-slate-300">
                     <span>Provider label override</span>
@@ -4631,7 +4658,7 @@ export function ProviderProfilesManager({
                 ? 'Saving...'
                 : isEditing
                   ? 'Update provider profile'
-                  : 'Create provider profile'}
+                  : 'Create profile'}
             </button>
             <button
               type="button"

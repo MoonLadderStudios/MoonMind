@@ -19,6 +19,8 @@ from api_service.db.models import (
     ManagedAgentProviderProfile,
     ManagedAgentRateLimitPolicy,
     ManagedSecret,
+    OmnigentAgentProfile,
+    OmnigentAgentProfileVersion,
     ProviderCredentialSource,
     ProviderProfileAuthMethod,
     ProviderProfileAuthState,
@@ -3381,6 +3383,136 @@ async def test_update_profile(client_app: AsyncClient, _module_db):
     data = response.json()
     assert data["max_parallel_runs"] == 10
     assert data["enabled"] is False
+
+
+async def _seed_profile_with_execution_configuration() -> tuple[str, dict, dict]:
+    profile_id = f"pinned-update-{uuid4().hex}"
+    pins = []
+    async with db_base.async_session_maker() as session:
+        for index, (provider_id, source, mode) in enumerate(
+            (("original", "secret_ref", "api_key_env"), ("replacement", "oauth_volume", "oauth_home"))
+        ):
+            configuration_id = f"{profile_id}-configuration-{index}"
+            digest = "sha256:" + str(index + 1) * 64
+            session.add(OmnigentAgentProfile(
+                profile_id=configuration_id,
+                display_name=configuration_id,
+                visibility="shared",
+                state="active",
+                active_version=1,
+            ))
+            session.add(OmnigentAgentProfileVersion(
+                profile_id=configuration_id,
+                version=1,
+                digest=digest,
+                validation_result={"ready": True},
+                document={
+                    "providerRequirements": {
+                        "runtimeId": "pin_update_runtime",
+                        "providerIds": [provider_id],
+                        "credentialSource": source,
+                        "materializationMode": mode,
+                    },
+                },
+            ))
+            pins.append({"profileId": configuration_id, "version": 1, "digest": digest})
+        session.add(ManagedAgentProviderProfile(
+            profile_id=profile_id,
+            runtime_id="pin_update_runtime",
+            provider_id="original",
+            credential_source=ProviderCredentialSource.SECRET_REF,
+            runtime_materialization_mode=RuntimeMaterializationMode.API_KEY_ENV,
+            execution_configuration=pins[0],
+            enabled=False,
+        ))
+        await session.commit()
+    return profile_id, pins[0], pins[1]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("contract_update", [
+    {"provider_id": "replacement"},
+    {"credential_source": "oauth_volume"},
+    {"runtime_materialization_mode": "oauth_home"},
+])
+async def test_update_profile_rejects_retained_incompatible_configuration_before_mutation(
+    client_app: AsyncClient, _module_db, contract_update: dict
+) -> None:
+    _override_current_user()
+    profile_id, original_pin, _ = await _seed_profile_with_execution_configuration()
+
+    async with client_app as client:
+        response = await client.patch(
+            f"/api/v1/provider-profiles/{profile_id}",
+            json={**contract_update, "provider_label": "must not persist"},
+        )
+
+    assert response.status_code == 409
+    assert response.json()["detail"]["code"] == "profile_execution_configuration_required"
+    async with db_base.async_session_maker() as session:
+        stored = await session.get(ManagedAgentProviderProfile, profile_id)
+        assert stored.provider_id == "original"
+        assert stored.credential_source == ProviderCredentialSource.SECRET_REF
+        assert stored.runtime_materialization_mode == RuntimeMaterializationMode.API_KEY_ENV
+        assert stored.execution_configuration == original_pin
+        assert stored.provider_label is None
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("clear_configuration", [False, True])
+async def test_update_profile_can_replace_or_clear_pin_with_changed_contract(
+    client_app: AsyncClient, _module_db, monkeypatch: pytest.MonkeyPatch,
+    clear_configuration: bool,
+) -> None:
+    _override_current_user()
+    _advertise_expert_manual_contracts(
+        monkeypatch,
+        ("pin_update_runtime", "replacement", "oauth_volume", "oauth_home"),
+    )
+    profile_id, _, replacement_pin = await _seed_profile_with_execution_configuration()
+    requested_pin = None if clear_configuration else replacement_pin
+
+    async with client_app as client:
+        response = await client.patch(
+            f"/api/v1/provider-profiles/{profile_id}",
+            json={
+                "provider_id": "replacement",
+                "credential_source": "oauth_volume",
+                "runtime_materialization_mode": "oauth_home",
+                "execution_configuration": requested_pin,
+            },
+        )
+
+    assert response.status_code == 200, response.text
+    assert response.json()["execution_configuration"] == requested_pin
+    async with db_base.async_session_maker() as session:
+        stored = await session.get(ManagedAgentProviderProfile, profile_id)
+        assert stored.provider_id == "replacement"
+        assert stored.credential_source == ProviderCredentialSource.OAUTH_VOLUME
+        assert stored.runtime_materialization_mode == RuntimeMaterializationMode.OAUTH_HOME
+        assert stored.execution_configuration == requested_pin
+
+
+@pytest.mark.asyncio
+async def test_update_profile_unrelated_edit_does_not_revalidate_saved_pin(
+    client_app: AsyncClient, _module_db,
+) -> None:
+    _override_current_user()
+    profile_id, original_pin, _ = await _seed_profile_with_execution_configuration()
+    async with db_base.async_session_maker() as session:
+        configuration = await session.get(OmnigentAgentProfile, original_pin["profileId"])
+        configuration.state = "retired"
+        await session.commit()
+
+    async with client_app as client:
+        response = await client.patch(
+            f"/api/v1/provider-profiles/{profile_id}",
+            json={"provider_label": "Renamed profile"},
+        )
+
+    assert response.status_code == 200, response.text
+    assert response.json()["provider_label"] == "Renamed profile"
+    assert response.json()["execution_configuration"] == original_pin
 
 
 @pytest.mark.asyncio

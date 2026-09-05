@@ -267,7 +267,7 @@ describe('backend creation presets', () => {
     expect(screen.getByText('Materialization mode: api_key_env')).toBeTruthy();
     expect(screen.queryByLabelText('Enabled')).toBeNull();
 
-    fireEvent.click(screen.getByRole('button', { name: 'Create provider profile' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Create profile' }));
 
     await waitFor(() => {
       expect(
@@ -439,7 +439,7 @@ describe('backend creation presets', () => {
     fireEvent.change(screen.getByLabelText('Command behavior'), {
       target: { value: '{"auth_strategy":"manual"}' },
     });
-    fireEvent.click(screen.getByRole('button', { name: 'Create provider profile' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Create profile' }));
 
     await waitFor(() => {
       expect(fetchSpy.mock.calls.some(([, init]) => init?.method === 'POST')).toBe(true);
@@ -578,7 +578,7 @@ describe('backend creation presets', () => {
     fireEvent.click(await screen.findByLabelText('API key'));
 
     await screen.findByText(/provider-profile-create-v1-old loaded/);
-    fireEvent.click(screen.getByRole('button', { name: 'Create provider profile' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Create profile' }));
 
     await screen.findByText(/provider-profile-create-v1-current loaded/);
     expect(presetRequests).toBe(2);
@@ -1090,7 +1090,7 @@ describe('ProviderProfilesManager form controls', () => {
     expect(payload).not.toHaveProperty('default_effort');
   });
 
-  it('disables stale catalog choices while preserving backend-authorized custom entry', async () => {
+  it('preserves cached model choices and backend-authorized custom entry during refresh', async () => {
     const staleCapabilities = { version: 'tier-cap-v1-stale', profile_id: profile.profile_id, runtime_id: profile.runtime_id, provider_id: profile.provider_id, evidence: { source: 'profile_catalog_evidence', credential_generation: 1, image_ref: null, observed_at: null, stale: true }, tier_constraints: { min_count: 1, max_count: null }, model: { runtime_default: 'gpt-5.5', allow_custom: true, options: [{ value: 'gpt-5.5', label: 'GPT-5.5', description: null, status: 'available' }, { value: 'gpt-4o', label: 'GPT-4o', description: null, status: 'available', compatible_models: null }] }, effort: { supported: true, runtime_default: 'medium', allow_custom: false, application: 'native', options: [{ value: 'medium', label: 'Medium', description: null, status: 'available', compatible_models: null }] }, diagnostics: [] };
     vi.spyOn(window, 'fetch').mockImplementation(async (input) => {
       const url = String(input);
@@ -1108,13 +1108,13 @@ describe('ProviderProfilesManager form controls', () => {
     renderProviderProfilesManager([staleProfile]);
     fireEvent.click(screen.getByRole('button', { name: 'Edit' }));
 
-    await screen.findByText(/observed catalog choices are disabled/);
+    await screen.findByText(/Model discovery is refreshing/);
     const modelSelect = screen.getByLabelText('Tier 1 model') as HTMLSelectElement;
     expect(modelSelect.value).toBe('gpt-4o');
     const options = within(modelSelect).getAllByRole('option') as HTMLOptionElement[];
     const byValue = new Map(options.map((o) => [o.value, o]));
     expect(byValue.get('__runtime_default__')?.disabled).toBe(false);
-    expect(byValue.get('gpt-5.5')?.disabled).toBe(true);
+    expect(byValue.get('gpt-5.5')?.disabled).toBe(false);
     expect(byValue.get('gpt-4o')?.disabled).toBe(false);
     expect(within(modelSelect).getByRole('option', { name: 'Custom value…' })).toBeTruthy();
     fireEvent.change(modelSelect, { target: { value: '__custom__' } });
@@ -1137,6 +1137,9 @@ describe('ProviderProfilesManager form controls', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Edit' }));
 
     const modelSelect = await screen.findByLabelText('Tier 1 model') as HTMLSelectElement;
+    // Model discovery is non-blocking, so the select renders before the backend's
+    // allow_custom policy arrives. Wait for the authorized option, not just the select.
+    await within(modelSelect).findByRole('option', { name: 'Custom value…' });
     fireEvent.change(modelSelect, { target: { value: '__custom__' } });
     const customInput = screen.getByLabelText('Tier 1 custom model') as HTMLInputElement;
     fireEvent.change(customInput, { target: { value: 'my-custom-model' } });
@@ -1178,7 +1181,7 @@ describe('ProviderProfilesManager form controls', () => {
       target: { value: 'unknown-provider' },
     });
     await screen.findByText('No validated creation preset exists for this runtime and provider.');
-    fireEvent.click(screen.getByRole('button', { name: 'Create provider profile' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Create profile' }));
 
     await waitFor(() => {
       expect(onNotice).toHaveBeenCalledWith({
@@ -1186,7 +1189,7 @@ describe('ProviderProfilesManager form controls', () => {
         text: 'Choose a supported authentication method.',
       });
     });
-    expect(fetchSpy).toHaveBeenCalledTimes(2);
+    expect(fetchSpy.mock.calls.filter(([, init]) => init?.method === 'POST')).toHaveLength(0);
   });
 
   it('starts a Codex OAuth session from the profile OAuth action', async () => {
@@ -1900,7 +1903,7 @@ describe('ProviderProfilesManager form controls', () => {
     expect(screen.queryByRole('button', { name: 'Edit' })).toBeNull();
     expect(screen.queryByRole('button', { name: 'Disable' })).toBeNull();
     expect(screen.queryByRole('button', { name: 'Delete' })).toBeNull();
-    expect(screen.queryByRole('button', { name: 'Create provider profile' })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Create profile' })).toBeNull();
     expect(screen.queryByText('Create Provider Profile')).toBeNull();
   });
 });
@@ -2167,7 +2170,7 @@ describe('MoonLadderStudios/MoonMind#3820 guided provider-profile creation', () 
     });
     await selectOpenAiApiKeyCreation();
     await screen.findByText(/Backend preset provider-profile-creation-v1 loaded/);
-    fireEvent.click(screen.getByRole('button', { name: 'Create provider profile' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Create profile' }));
 
     expect(
       await screen.findByRole('dialog', { name: 'OpenAI API key enrollment for codex-guided-key' }),
@@ -2223,9 +2226,9 @@ describe('MoonLadderStudios/MoonMind#3820 guided provider-profile creation', () 
     fireEvent.change(screen.getByLabelText('OpenAI API key (required)'), {
       target: { value: 'db://OPENAI_API_KEY' },
     });
-    fireEvent.click(screen.getByRole('button', { name: 'Create provider profile' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Create profile' }));
 
-    await waitFor(() => expect(fetchSpy).toHaveBeenCalledTimes(4));
+    await waitFor(() => expect(fetchSpy.mock.calls.some(([, init]) => init?.method === 'POST')).toBe(true));
     expect(
       screen.queryByRole('dialog', {
         name: 'OpenAI API key enrollment for codex-guided-existing-key',
@@ -2300,7 +2303,7 @@ describe('MoonLadderStudios/MoonMind#3820 guided provider-profile creation', () 
     });
     fireEvent.click(await screen.findByLabelText('OAuth'));
     await screen.findByText(/Backend preset provider-profile-creation-v1 loaded/);
-    fireEvent.click(screen.getByRole('button', { name: 'Create provider profile' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Create profile' }));
 
     await waitFor(() => expect(openSpy).toHaveBeenCalledTimes(1));
     expect(fetchSpy).toHaveBeenCalledTimes(5);
@@ -2735,7 +2738,7 @@ describe('MoonLadderStudios/MoonMind#3815 cross-boundary verification (#3822 cov
     fireEvent.click(await screen.findByLabelText('API key'));
     await screen.findByText(/Backend preset provider-profile-create-v1-test loaded/);
     fireEvent.click(screen.getByLabelText('Runtime default'));
-    fireEvent.click(screen.getByRole('button', { name: 'Create provider profile' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Create profile' }));
 
     // Guided API-key setup opens automatically; the checked default intent
     // must survive creation (which stores is_default=false) and apply after

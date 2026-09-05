@@ -236,6 +236,8 @@ could change both model input and the idempotency digest.
 
 ## 7. Capacity and policy hierarchy
 
+This section describes the **profile-bound OAuth** adapter path. Its capacity of one comes from the mutable authentication home that path shares, not from a platform-wide limit. Credentialless profiles on the generic plane are governed by the four-layer model in `OmnigentHarnessPlatformDesign.md` §11.5 and may be configured above one.
+
 The capacity hierarchy is additive, not competing:
 
 1. **Provider Profile capacity** protects the mutable OpenAI OAuth identity and remains authoritative. OAuth capacity is one across direct execution, Omnigent execution, and credential-maintenance operations.

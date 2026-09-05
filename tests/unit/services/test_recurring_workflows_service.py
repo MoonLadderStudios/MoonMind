@@ -131,11 +131,15 @@ async def test_create_definition_creates_temporal_schedule(
             }
 
 
+@pytest.mark.parametrize("explicit_configuration", [False, True])
 async def test_create_definition_compiles_agent_profile_snapshot_separately(
+    explicit_configuration,
     tmp_path: Path,
     mock_temporal_adapter,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    provider_model = "vendor/" + "future-model-" * 16
+    provider_effort = "future-provider-effort"
     snapshot = {
         "schemaVersion": "moonmind.omnigent-agent-profile-snapshot.v1",
         "profileId": "omnigent-bootstrap-default",
@@ -156,6 +160,11 @@ async def test_create_definition_compiles_agent_profile_snapshot_separately(
     monkeypatch.setattr(
         "api_service.services.recurring_workflows_service.resolve_agent_profile_snapshot",
         resolver,
+    )
+    default_resolver = AsyncMock(return_value=snapshot)
+    monkeypatch.setattr(
+        "api_service.services.recurring_workflows_service.resolve_default_agent_profile_snapshot",
+        default_resolver,
     )
     plan_binding = {
         "planRef": "omnigent-execution-plan:sha256:" + "b" * 64,
@@ -190,6 +199,8 @@ async def test_create_definition_compiles_agent_profile_snapshot_separately(
                 profile_id="codex-openai-oauth",
                 runtime_id="codex_cli",
                 provider_id="openai",
+                default_model=provider_model,
+                default_effort=provider_effort,
             )
         )
         await session.flush()
@@ -218,7 +229,7 @@ async def test_create_definition_compiles_agent_profile_snapshot_separately(
                     },
                     "workflow": {
                         "instructions": "Run the selected profile.",
-                        "runtime": {"mode": "omnigent"},
+                        "runtime": {"mode": "omnigent", "profileId": "codex-openai-oauth"},
                     },
                 },
             },
@@ -226,7 +237,7 @@ async def test_create_definition_compiles_agent_profile_snapshot_separately(
             agent_profile_selection={
                 "profileId": "omnigent-bootstrap-default",
                 "providerProfileRef": "codex-openai-oauth",
-            },
+            } if explicit_configuration else None,
             actor=SimpleNamespace(id=uuid4()),
         )
 
@@ -241,6 +252,12 @@ async def test_create_definition_compiles_agent_profile_snapshot_separately(
     assert initial_parameters["omnigentExecutionPlan"] == plan_binding
     assert initial_parameters["resolvedSkillsetRef"] == "art_skills"
     assert compile_plan.await_count == 1
+    if not explicit_configuration:
+        assert default_resolver.await_args.kwargs["provider_profile_ref"] == "codex-openai-oauth"
+        resolver.assert_not_awaited()
+        assert initial_parameters["model"] == provider_model
+        assert initial_parameters["effort"] == provider_effort
+        assert compile_plan.await_args.kwargs["initial_parameters"]["model"] == provider_model
     scheduled_parameters = mock_temporal_adapter.create_schedule.await_args.kwargs[
         "workflow_input"
     ]["initial_parameters"]
@@ -1529,16 +1546,15 @@ async def test_mm3788_create_definition_leaves_omnigent_compatibility_to_selecti
             session, temporal_client_adapter=mock_temporal_adapter
         )
 
-        definition = await _mm3788_create(
-            service,
-            target=_mm3788_target(
-                target_runtime="omnigent", profile_id="codex_minimax_team"
-            ),
-            owner_user_id=uuid4(),
-        )
-
-        assert definition.target["initialParameters"]["targetRuntime"] == "omnigent"
-        mock_temporal_adapter.create_schedule.assert_awaited_once()
+        with pytest.raises(RecurringWorkflowValidationError, match="authenticated actor"):
+            await _mm3788_create(
+                service,
+                target=_mm3788_target(
+                    target_runtime="omnigent", profile_id="codex_minimax_team"
+                ),
+                owner_user_id=uuid4(),
+            )
+        mock_temporal_adapter.create_schedule.assert_not_awaited()
 
 
 async def test_mm3788_update_definition_rejects_a_cross_runtime_target(
