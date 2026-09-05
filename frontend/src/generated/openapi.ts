@@ -10905,6 +10905,15 @@ export interface components {
             visibility: "private" | "workspace" | "public";
             document: components["schemas"]["AgentProfileDocument"];
         };
+        /** ProfileExecutionConfiguration */
+        ProfileExecutionConfiguration: {
+            /** Profileid */
+            profileId: string;
+            /** Version */
+            version: number;
+            /** Digest */
+            digest: string;
+        };
         /** ProviderApiKeySetupRequest */
         ProviderApiKeySetupRequest: {
             /** Api Key */
@@ -11002,6 +11011,7 @@ export interface components {
         };
         /** ProviderProfileCreate */
         ProviderProfileCreate: {
+            execution_configuration?: components["schemas"]["ProfileExecutionConfiguration"] | null;
             /** Profile Id */
             profile_id: string;
             /** Runtime Id */
@@ -11202,6 +11212,15 @@ export interface components {
         ProviderProfileResponse: {
             /** Profile Id */
             profile_id: string;
+            execution_configuration?: components["schemas"]["ProfileExecutionConfiguration"] | null;
+            /** Execution Selection */
+            execution_selection?: {
+                [key: string]: unknown;
+            } | null;
+            /** Execution Selection Error */
+            execution_selection_error?: {
+                [key: string]: unknown;
+            } | null;
             /** Runtime Id */
             runtime_id: string;
             /** Provider Id */
@@ -11389,6 +11408,7 @@ export interface components {
         };
         /** ProviderProfileUpdate */
         ProviderProfileUpdate: {
+            execution_configuration?: components["schemas"]["ProfileExecutionConfiguration"] | null;
             /** Provider Id */
             provider_id?: string | null;
             /** Provider Label */
@@ -15728,6 +15748,7 @@ export interface operations {
             query?: {
                 runtime_id?: string | null;
                 enabled_only?: boolean;
+                include_execution?: boolean;
             };
             header?: never;
             path?: never;

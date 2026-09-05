@@ -412,11 +412,9 @@ class OmnigentExecutionPlanningService:
                 requested_host_mode=policy.hostMode,
                 requested_host_class_ref=self._requested_host_class_ref(request),
             )
-            self._verify_model_evidence(
-                provider_profile,
-                model,
-                expected_image_ref=host_class.imageRef,
-            )
+            # Discovery is advisory. The actual host attests the selected model
+            # before session creation; a cached observation cannot grant or
+            # revoke that authority, including after an image update.
             if str(effective_launch.get("hostImageRef") or "") != (
                 host_class.imageRef
             ):
@@ -715,23 +713,15 @@ class OmnigentExecutionPlanningService:
         explicit_effort = (
             omnigent.get("effort") if isinstance(omnigent, Mapping) else None
         )
-        profile_model = profile.model
-        profile_default = str(
-            profile_model.get("qualifiedId") or profile_model.get("model") or ""
-        ).strip()
-        profile_effort = str(profile_model.get("effort") or "").strip() or None
         try:
             resolved = resolve_model_effort(
                 runtime_id=provider.runtime_id,
                 profile=provider,
-                # Supplying the Agent Profile value as the requested value
-                # gives the product-defined precedence while retaining the
-                # canonical Provider Profile tier/default/runtime resolver.
-                requested_model=explicit_model or profile_default or None,
+                requested_model=explicit_model or None,
                 requested_effort=(
                     str(explicit_effort).strip()
                     if explicit_effort is not None
-                    else profile_effort
+                    else request.parameters.get("effort")
                 ),
             )
         except ValueError as exc:
@@ -753,70 +743,6 @@ class OmnigentExecutionPlanningService:
             )
         effort = str(resolved.effort or "").strip() or None
         return qualified, effort, provider.provider_id
-
-    @staticmethod
-    def _verify_model_evidence(
-        provider: Any,
-        qualified_model: str,
-        *,
-        expected_image_ref: str,
-    ) -> None:
-        from moonmind.omnigent.bootstrap.provider_revalidation import (
-            evidence_observation_is_current,
-        )
-
-        evidence = provider.model_catalog_evidence_json
-        if not isinstance(evidence, Mapping):
-            raise HarnessPlatformError(
-                "Provider Profile has no runtime-backed model catalog evidence",
-                code=HarnessPlatformFailure.OMNIGENT_MODEL_UNAVAILABLE,
-            )
-        try:
-            evidence_generation = int(evidence.get("credentialGeneration") or 0)
-        except (TypeError, ValueError):
-            evidence_generation = 0
-        if evidence_generation != int(provider.credential_generation):
-            raise HarnessPlatformError(
-                "Provider Profile model evidence belongs to a stale credential generation",
-                code=HarnessPlatformFailure.OMNIGENT_MODEL_UNAVAILABLE,
-            )
-        if str(evidence.get("imageRef") or "") != expected_image_ref:
-            raise HarnessPlatformError(
-                "Provider Profile model evidence belongs to a different host image",
-                code=HarnessPlatformFailure.OMNIGENT_MODEL_UNAVAILABLE,
-            )
-        if not evidence_observation_is_current(evidence):
-            # The credential generation and image digest of a healthy
-            # deployment never change on their own, so identity alone would let
-            # this boundary launch from the first catalog it ever observed --
-            # including a model the provider has since removed. The bootstrap
-            # reconciler re-probes on the same interval; refusing here is what
-            # makes that refresh authoritative instead of advisory.
-            raise HarnessPlatformError(
-                "Provider Profile model evidence is older than the configured "
-                "model catalog refresh interval",
-                code=HarnessPlatformFailure.OMNIGENT_MODEL_UNAVAILABLE,
-            )
-        raw_models = evidence.get("models")
-        if not isinstance(raw_models, list):
-            raise HarnessPlatformError(
-                "Provider Profile model catalog evidence is invalid",
-                code=HarnessPlatformFailure.OMNIGENT_MODEL_UNAVAILABLE,
-            )
-        available = {
-            str(
-                item.get("qualifiedId") or item.get("id") or ""
-                if isinstance(item, Mapping)
-                else item
-            ).strip()
-            for item in raw_models
-            if isinstance(item, (str, Mapping))
-        }
-        if qualified_model not in available:
-            raise HarnessPlatformError(
-                f"selected model {qualified_model} is absent from runtime-backed evidence",
-                code=HarnessPlatformFailure.OMNIGENT_MODEL_UNAVAILABLE,
-            )
 
     @staticmethod
     def _require_durable_legacy_authority(document: Mapping[str, Any]) -> None:
