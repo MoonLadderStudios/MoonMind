@@ -2814,7 +2814,6 @@ export type CapabilitySourceKind =
   | "preset"
   | "skill"
   | "tool"
-  | "runtime"
   | "publish"
   | "template";
 
@@ -2823,7 +2822,6 @@ const CAPABILITY_SOURCE_LABELS: Record<CapabilitySourceKind, string> = {
   preset: "from preset",
   skill: "from skill",
   tool: "from tool",
-  runtime: "from runtime",
   publish: "from publish mode",
   template: "from template",
 };
@@ -2862,7 +2860,6 @@ interface BuildCapabilityChipsArgs {
   generatedSkill?: string[] | null | undefined;
   generatedTool?: string[] | null | undefined;
   preset?: string[] | null | undefined;
-  runtime?: string[] | null | undefined;
   publish?: string[] | null | undefined;
   template?: string[] | null | undefined;
 }
@@ -2870,7 +2867,7 @@ interface BuildCapabilityChipsArgs {
 // Compute the display chips for a step's required capabilities. Sources are
 // additive and backend normalization is authoritative, so a capability chip is
 // only removable when the sole contribution is the explicit step authoring
-// field. Derived contributions (preset, skill, tool, runtime, publish mode,
+// field. Derived contributions (preset, skill, tool, publish mode,
 // template) keep the chip non-removable and carry provenance plus readiness
 // semantics for display without implying the UI grants backend access.
 export function buildCapabilityChips(
@@ -2887,7 +2884,6 @@ export function buildCapabilityChips(
     { tokens: args.generatedTool, sourceKind: "tool" },
     { tokens: args.preset, sourceKind: "preset" },
     { tokens: args.template, sourceKind: "template" },
-    { tokens: args.runtime, sourceKind: "runtime" },
     { tokens: args.publish, sourceKind: "publish" },
   ];
 
@@ -3519,8 +3515,6 @@ function validateJiraImageAttachment(
 }
 
 function deriveRequiredCapabilities(args: {
-  runtimeMode: string;
-  stepRuntimeModes: string[];
   publishMode: string;
   repositoryBacked: boolean;
   taskSkillRequiredCapabilities: string[];
@@ -3532,8 +3526,6 @@ function deriveRequiredCapabilities(args: {
   return Array.from(
     new Set(
       [
-        args.runtimeMode,
-        ...args.stepRuntimeModes,
         ...(args.repositoryBacked ? ["git"] : []),
         ...(args.publishMode === "pr" ? ["gh"] : []),
         ...args.taskSkillRequiredCapabilities,
@@ -6139,8 +6131,8 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
     dashboardConfig.system?.defaultTaskEffortByRuntime ||
     {};
   const supportedAgentRuntimes = dashboardConfig.system
-    ?.supportedAgentRuntimes ||
-    dashboardConfig.system?.supportedRuntimes || ["omnigent", "codex_cli", "claude_code"];
+    ?.supportedRuntimes ||
+    dashboardConfig.system?.supportedAgentRuntimes || ["omnigent", "codex_cli", "claude_code"];
   const runtimeOptions = Array.from(new Set(supportedAgentRuntimes));
 
   const [steps, setSteps] = useState<StepState[]>([createStepStateEntry(1)]);
@@ -10389,16 +10381,9 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
       submittedOmnigentAgentProfileVersion;
     const effectiveOmnigentAgentProfileDigest = submittedOmnigentAgentProfileDigest;
     const effectiveOmnigentExecutionTargetRef = omnigentExecutionTargetRef;
-    const supportedAgentRuntimeIds = runtimeOptions.map((item) =>
-      item.trim().toLowerCase(),
-    );
-    if (!supportedAgentRuntimeIds.includes(normalizedRuntime)) {
-      setSubmitMessage(
-        `Runtime must be one of: ${runtimeOptions.join(", ")}.`,
-      );
-      clearSubmitBusy();
-      return;
-    }
+    // The boot catalog supplies choices, not admission authority. Profiles,
+    // presets and persisted drafts may carry runtime selections beyond that
+    // snapshot. The API validates them against the selected execution profile.
     if (normalizedRuntime === "omnigent") {
       if (selectedProfileIsGenericV2) {
         const selected = activeProviderProfiles.find((profile) => profile.profile_id === providerProfile);
@@ -10483,23 +10468,6 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
       (!Number.isInteger(submittedModelTier) || submittedModelTier < 1)
     ) {
       setSubmitMessage("Model tier must be a positive number.");
-      clearSubmitBusy();
-      return;
-    }
-    const invalidStepRuntime = submissionSteps.find((step) => {
-      const stepRuntime = (step.runtimeMode || "").trim().toLowerCase();
-      return (
-        stepRuntime === "omnigent" ||
-        (stepRuntime && !supportedAgentRuntimeIds.includes(stepRuntime))
-      );
-    });
-    if (invalidStepRuntime) {
-      const stepIndex = submissionSteps.indexOf(invalidStepRuntime) + 1;
-      setSubmitMessage(
-        (invalidStepRuntime.runtimeMode || "").trim().toLowerCase() === "omnigent"
-          ? `Step ${stepIndex} cannot use Codex via Omnigent; select it as the workflow runtime instead.`
-          : `Step ${stepIndex} runtime must be one of: ${supportedAgentRuntimes.join(", ")}.`,
-      );
       clearSubmitBusy();
       return;
     }
@@ -11461,15 +11429,10 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
       primaryToolRequiredCapabilities,
       ...parsedAdditionalStepInputs.map((entry) => entry.toolCaps),
     );
+    // Runtime identity is compiled by API admission from the selected Profile
+    // and runtime fields. Sending UI-derived runtime tokens as independent
+    // requirements can leave stale harness names in Omnigent host admission.
     const mergedCapabilities = deriveRequiredCapabilities({
-      runtimeMode: normalizedRuntime,
-      stepRuntimeModes: normalizedSteps
-        .map((step) =>
-          String(
-            (step as { runtime?: { mode?: unknown } }).runtime?.mode || "",
-          ).trim(),
-        )
-        .filter(Boolean),
       publishMode: effectivePublishMode,
       taskSkillRequiredCapabilities,
       stepSkillRequiredCapabilities,
@@ -12953,7 +12916,7 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
                 step,
               );
               // MM-936: derive the capability chip row for this step. Explicit
-              // chips are removable; preset/skill/tool/runtime/publish/template
+              // chips are removable; preset/skill/tool/publish/template
               // derived chips are non-removable and carry provenance.
               const stepCapabilityChips = buildCapabilityChips({
                 explicit: step.explicitRequiredCapabilities,
@@ -12963,7 +12926,6 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
                 generatedTool: step.generatedTool?.requiredCapabilities,
                 preset: selectedPresetCapabilities,
                 template: stepTemplateCapabilities,
-                runtime: step.runtimeMode ? [step.runtimeMode] : [],
                 publish:
                   isPrimaryStep && stepPublishModeRequiresGh ? ["gh"] : [],
               });
@@ -13730,6 +13692,9 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
                           }
                         >
                           <option value="">Inherit agent runtime</option>
+                          {step.runtimeMode && !runtimeOptions.includes(step.runtimeMode) ? (
+                            <option value={step.runtimeMode}>{formatRuntimeLabel(step.runtimeMode)} (Current selection)</option>
+                          ) : null}
                           {supportedAgentRuntimes.map((runtimeOption) => (
                             <option key={runtimeOption} value={runtimeOption}>
                               {formatRuntimeLabel(runtimeOption)}
@@ -14033,6 +13998,9 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
                 setRuntimeAuthored(true);
               }}
             >
+              {runtime && !runtimeOptions.includes(runtime) ? (
+                <option value={runtime}>{formatRuntimeLabel(runtime)} (Current selection)</option>
+              ) : null}
               {runtimeOptions.map((runtimeOption) => (
                 <option key={runtimeOption} value={runtimeOption}>
                   {formatRuntimeLabel(runtimeOption)}
