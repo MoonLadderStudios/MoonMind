@@ -15,6 +15,8 @@ lease cleanup) is specific to smoke validation.
 """
 from __future__ import annotations
 
+from moonmind.omnigent.harness_platform.harness_registry import harness_registration
+
 import asyncio
 import hashlib
 import json
@@ -472,6 +474,7 @@ async def _run_v2_profile_readiness_checks(
                     or "native-server",
                     materializer_refs=[materializer_ref],
                     requested_host_mode=get_launch_policy(policy_ref).hostMode,
+                    requested_host_class_ref=harness_registration(harness.id).hostClassRef,
                 )
             # Smoke attests model availability on its actual host. Discovery
             # cache age or identity does not establish launch authority.
