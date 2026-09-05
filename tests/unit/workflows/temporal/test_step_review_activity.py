@@ -73,7 +73,7 @@ async def test_step_review_activity_with_previous_feedback():
 @pytest.mark.parametrize("model", [None, "default", "explicit-review-model"])
 async def test_configured_reviewer_crosses_worker_wrapper_and_provider_wire(provider, model, provider_verdict):
     import json
-    from fastapi import FastAPI, Request
+    from fastapi import FastAPI
     from httpx import ASGITransport
     from temporalio.testing import ActivityEnvironment
     from moonmind.config.settings import AppSettings

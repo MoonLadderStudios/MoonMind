@@ -2697,7 +2697,6 @@ async def test_pre_cutover_pending_persistence_invocations_keep_real_handlers(
     terminal,
 ):
     """Old workflow-queue payloads still cross the retained persistence owners."""
-    import json
     from pathlib import Path
     from temporalio.client import WorkflowHistory
     from temporalio.converter import DataConverter
