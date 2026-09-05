@@ -94,6 +94,15 @@ OPENCODE_API_KEY_ENV = "OPENCODE_API_KEY"
 OPENCODE_CONTRIBUTOR_DATA_USE_ENV = "OPENCODE_ACCEPT_CONTRIBUTOR_DATA_USE"
 OPENCODE_MODEL_CATALOG_MAX_AGE_ENV = "OPENCODE_MODEL_CATALOG_MAX_AGE_HOURS"
 OPENCODE_MODEL_CATALOG_DEFAULT_MAX_AGE_HOURS = 6.0
+OPENCODE_MODEL_CATALOG_REFRESH_LEAD_ENV = (
+    "OPENCODE_MODEL_CATALOG_REFRESH_LEAD_MINUTES"
+)
+#: Ceiling for the automatically derived refresh lead. Refreshing more than
+#: this far ahead of expiry buys no additional protection against a probe that
+#: runs long, and it spends provider attempts on evidence that is still current.
+OPENCODE_MODEL_CATALOG_MAX_DERIVED_REFRESH_LEAD = timedelta(minutes=5)
+#: Fraction of the interval the derived lead uses when the interval is short.
+_REFRESH_LEAD_INTERVAL_FRACTION = 10
 
 
 def _parse_bool_with_default(
@@ -239,6 +248,55 @@ def opencode_model_catalog_max_age(
     if hours == 0:
         return None
     return timedelta(hours=hours)
+
+
+def opencode_model_catalog_refresh_lead(
+    *,
+    env: Mapping[str, Any] | None = None,
+    max_age: timedelta | None = None,
+) -> timedelta:
+    """Return how far before expiry the catalog is proactively re-observed.
+
+    Discovery must be refreshed *before* the observation expires, or every
+    deployment spends an interval advertising a catalog it has already declared
+    stale. The lead is deployment-owned so an operator whose probe is slow, or
+    whose provider is far away, can widen it without editing code.
+
+    Omitting the value is the supported default and takes the same code path:
+    the lead is derived from the configured interval, bounded by
+    ``OPENCODE_MODEL_CATALOG_MAX_DERIVED_REFRESH_LEAD``. An explicit value is
+    clamped to half the interval, because a lead at or beyond the interval
+    would make every observation stale the moment it was written.
+    """
+
+    interval = (
+        max_age if max_age is not None else opencode_model_catalog_max_age(env=env)
+    )
+    if interval is None or interval <= timedelta(0):
+        # The interval is disabled, so identity is the only staleness rule and
+        # there is nothing to lead.
+        return timedelta(0)
+    source = env if env is not None else os.environ
+    cleaned = _clean(source.get(OPENCODE_MODEL_CATALOG_REFRESH_LEAD_ENV))
+    if not cleaned:
+        derived = min(
+            OPENCODE_MODEL_CATALOG_MAX_DERIVED_REFRESH_LEAD,
+            interval / _REFRESH_LEAD_INTERVAL_FRACTION,
+        )
+        return derived
+    try:
+        minutes = float(cleaned)
+    except ValueError as exc:
+        raise ValueError(
+            f"invalid {OPENCODE_MODEL_CATALOG_REFRESH_LEAD_ENV} value {cleaned!r}: "
+            "expected a non-negative number of minutes"
+        ) from exc
+    if minutes < 0:
+        raise ValueError(
+            f"invalid {OPENCODE_MODEL_CATALOG_REFRESH_LEAD_ENV} value {cleaned!r}: "
+            "expected a non-negative number of minutes"
+        )
+    return min(timedelta(minutes=minutes), interval / 2)
 
 
 def omnigent_evidence_policy(
@@ -456,6 +514,8 @@ __all__ = [
     "OPENCODE_CONTRIBUTOR_DATA_USE_ENV",
     "OPENCODE_MODEL_CATALOG_DEFAULT_MAX_AGE_HOURS",
     "OPENCODE_MODEL_CATALOG_MAX_AGE_ENV",
+    "OPENCODE_MODEL_CATALOG_MAX_DERIVED_REFRESH_LEAD",
+    "OPENCODE_MODEL_CATALOG_REFRESH_LEAD_ENV",
     "OmnigentRuntimeGate",
     "build_omnigent_gate",
     "generic_claude_qualified",
@@ -468,6 +528,7 @@ __all__ = [
     "omnigent_evidence_policy",
     "opencode_contributor_data_use_accepted",
     "opencode_model_catalog_max_age",
+    "opencode_model_catalog_refresh_lead",
     "opencode_support_enabled",
     "resolved_api_token",
     "resolved_default_agent_name",

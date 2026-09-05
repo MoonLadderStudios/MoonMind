@@ -8,9 +8,13 @@ activity/service boundary client; workflow code uses deterministic handles.
 from __future__ import annotations
 
 import hashlib
+import logging
 from dataclasses import dataclass
 from enum import Enum
 from typing import Any, Mapping
+
+
+logger = logging.getLogger(__name__)
 
 
 class CredentialLeasePurpose(str, Enum):
@@ -27,6 +31,23 @@ class CredentialLeasePurpose(str, Enum):
         return self not in {
             CredentialLeasePurpose.EXECUTION_DIRECT,
             CredentialLeasePurpose.EXECUTION_OMNIGENT,
+        }
+
+    @property
+    def consumes_provider_capacity(self) -> bool:
+        """Whether this purpose spends the upstream provider/host resource.
+
+        MoonLadderStudios/MoonMind#3879: shared-scope fullness and cooldown are
+        statements about the upstream resource, so they may only gate work that
+        actually spends it. Credential repair and revocation are local
+        credential-state operations; blocking them behind a saturated or
+        cooling-down scope would leave a broken credential unrepairable exactly
+        when the scope is under the most pressure.
+        """
+
+        return self not in {
+            CredentialLeasePurpose.CREDENTIAL_REPAIR,
+            CredentialLeasePurpose.OAUTH_DISCONNECT,
         }
 
 
@@ -46,6 +67,15 @@ class CredentialLeaseMode(str, Enum):
     SINGLE_FLIGHT_VALIDATION = "single_flight_validation"
     #: Blocks new consumers and drains existing credential consumers first.
     EXCLUSIVE_MAINTENANCE = "exclusive_maintenance"
+
+
+#: Error type the manager raises when it detaches an accepted Update so it can
+#: Continue-As-New. The request itself stays durable and ordered; the client is
+#: expected to reattach by resubmitting the identical owner request.
+MANAGER_ROLLOVER_ERROR_TYPE = "ProviderProfileManagerRollover"
+
+#: Bounded reattach budget: one clean-completion race plus one rollover detach.
+_MAX_MANAGER_UPDATE_ATTEMPTS = 3
 
 
 #: A Provider Profile whose credential source is ``none`` materializes no
@@ -133,6 +163,17 @@ class CredentialLease:
     #: Ledger mode the manager actually applied. ``None`` only for leases
     #: reconstructed from a persisted handle, where the mode is not replayed.
     mode: CredentialLeaseMode | None = None
+    #: Monotonic grant generation the manager assigned. Released leases quote
+    #: it back so a duplicate or delayed release cannot free the *next* holder
+    #: of the same deterministic owner ID. ``None`` for a manager whose history
+    #: predates fenced grants, and for a lease reconstructed from a persisted
+    #: handle written before the generation was recorded; the manager honours
+    #: an unfenced release so those handles still free capacity.
+    fencing_generation: int | None = None
+    #: Compact versioned identity this lease was granted against, when the
+    #: caller declared one. The manager rejects a second request that reuses
+    #: the owner ID under a different identity.
+    evidence_identity: str | None = None
 
 
 class ProviderProfileLeaseClient:
@@ -197,6 +238,11 @@ class ProviderProfileLeaseClient:
             },
         )
         raw_mode = str(result.get("lease_mode") or "").strip()
+        raw_fence = result.get("lease_fencing_generation")
+        try:
+            fencing_generation = int(raw_fence) if raw_fence is not None else None
+        except (TypeError, ValueError):
+            fencing_generation = None
         return CredentialLease(
             profile_id=str(result["profile_id"]),
             runtime_id=runtime_id,
@@ -205,6 +251,12 @@ class ProviderProfileLeaseClient:
             purpose=purpose,
             already_held=bool(result.get("already_held")),
             mode=CredentialLeaseMode(raw_mode) if raw_mode else None,
+            fencing_generation=fencing_generation,
+            evidence_identity=(
+                str(safe_metadata["evidenceIdentity"])
+                if safe_metadata.get("evidenceIdentity") is not None
+                else None
+            ),
         )
 
     async def _update_manager(
@@ -213,19 +265,30 @@ class ProviderProfileLeaseClient:
         update_name: str,
         payload: Mapping[str, Any],
     ) -> Mapping[str, Any]:
-        """Retry an Update that races the manager's clean completion.
+        """Retry an Update that races the manager's clean completion or rollover.
 
         Ensuring and updating are two distinct Temporal RPCs. The manager can
         complete after ``start_workflow`` reports it running but before the
         accepted Update resolves. Re-ensuring the canonical workflow ID and
         resubmitting the same idempotent owner request closes that race without
         consuming the caller Activity retry.
+
+        MoonLadderStudios/MoonMind#3879 adds the second case: the manager
+        detaches waiting maintenance handlers before Continue-As-New so the
+        rollover is not blocked by an unbounded wait. The waiter's queue entry
+        and its position are durable across the rollover, so resubmitting the
+        same owner request reattaches to the *same* pending request instead of
+        losing its turn. This is the client half of that protocol.
         """
 
         from temporalio.client import WorkflowUpdateFailedError
         from temporalio.exceptions import ApplicationError
 
-        for attempt in range(2):
+        reattachable = {
+            "AcceptedUpdateCompletedWorkflow",
+            MANAGER_ROLLOVER_ERROR_TYPE,
+        }
+        for attempt in range(_MAX_MANAGER_UPDATE_ATTEMPTS):
             workflow_id = await self._ensure_manager(runtime_id)
             try:
                 return await self._adapter.update_workflow(
@@ -235,14 +298,55 @@ class ProviderProfileLeaseClient:
                 )
             except WorkflowUpdateFailedError as exc:
                 cause = exc.cause
-                completed_race = bool(
-                    isinstance(cause, ApplicationError)
-                    and cause.type == "AcceptedUpdateCompletedWorkflow"
+                reattach = bool(
+                    isinstance(cause, ApplicationError) and cause.type in reattachable
                 )
-                if attempt == 0 and completed_race:
+                if attempt + 1 < _MAX_MANAGER_UPDATE_ATTEMPTS and reattach:
                     continue
+                if (
+                    update_name == "AcquireCredentialMaintenanceLease"
+                    and isinstance(cause, ApplicationError)
+                    and cause.type == MANAGER_ROLLOVER_ERROR_TYPE
+                ):
+                    # The final attempt detached on a rollover, so the
+                    # successor still preserves this request's queue entry
+                    # with nobody left to reattach it. Withdraw the entry
+                    # explicitly: otherwise it holds the queue head and blocks
+                    # every consumer behind it until the abandonment timeout.
+                    await self._withdraw_maintenance_waiter(runtime_id, payload)
                 raise
         raise AssertionError("bounded manager update retry did not terminate")
+
+    async def _withdraw_maintenance_waiter(
+        self, runtime_id: str, payload: Mapping[str, Any]
+    ) -> None:
+        """Withdraw the preserved queue entry this caller is abandoning.
+
+        Failures are logged, never raised: the caller is already failing, the
+        withdrawal touches only the waiter record (never a held lease), and
+        the manager's abandonment eviction remains the backstop.
+        """
+
+        try:
+            await self._adapter.signal_workflow(
+                await self._ensure_manager(runtime_id),
+                "withdraw_maintenance_waiter",
+                {
+                    "requester_workflow_id": (
+                        payload.get("requester_workflow_id")
+                        or payload.get("owner_id")
+                    ),
+                    "owner_id": payload.get("owner_id"),
+                    "profile_id": payload.get("execution_profile_ref"),
+                    "runtime_id": runtime_id,
+                },
+            )
+        except Exception:
+            logger.warning(
+                "Failed to withdraw abandoned maintenance waiter for runtime %s",
+                runtime_id,
+                exc_info=True,
+            )
 
     async def acquire_execution_lease(
         self,
@@ -287,17 +391,23 @@ class ProviderProfileLeaseClient:
         )
 
     async def release_lease(self, lease: CredentialLease) -> None:
+        payload: dict[str, Any] = {
+            "requester_workflow_id": lease.owner_id,
+            "owner_id": lease.owner_id,
+            "runtime_id": lease.runtime_id,
+            "profile_id": lease.profile_id,
+            "lease_id": lease.lease_id,
+            "purpose": lease.purpose.value,
+        }
+        if lease.fencing_generation is not None:
+            # Fence the release to the exact grant this handle owns. A retry
+            # that re-sends this signal after the owner ID was granted again
+            # must not release the replacement holder.
+            payload["fencing_generation"] = lease.fencing_generation
         await self._adapter.signal_workflow(
             await self._ensure_manager(lease.runtime_id),
             "release_slot",
-            {
-                "requester_workflow_id": lease.owner_id,
-                "owner_id": lease.owner_id,
-                "runtime_id": lease.runtime_id,
-                "profile_id": lease.profile_id,
-                "lease_id": lease.lease_id,
-                "purpose": lease.purpose.value,
-            },
+            payload,
         )
 
     async def record_cooldown(
@@ -332,6 +442,7 @@ class ProviderProfileLeaseClient:
 
 __all__ = [
     "CREDENTIALLESS_CREDENTIAL_SOURCES",
+    "MANAGER_ROLLOVER_ERROR_TYPE",
     "CredentialLease",
     "CredentialLeaseMode",
     "CredentialLeasePurpose",
