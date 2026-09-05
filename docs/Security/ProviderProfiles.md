@@ -1418,8 +1418,25 @@ themselves:
 - the narrowed drain set that exempts a credentialless profile, so a pre-marker
   manager still drains every lease;
 - the per-purpose scope exemption, so a pre-marker manager still gates credential
-  repair and revocation on shared-scope availability; and
+  repair and revocation on shared-scope availability;
 - withdrawing a pending request when its owner releases.
+
+Periodic released-lease tombstone cleanup has its own workflow marker,
+`provider-profile-manager-lease-tombstone-purge-v1`. Both DB lease persistence and
+maintenance durability predate cleanup; neither may enable the purge activity
+on replay. Histories without cleanup proceed directly to lease verification at
+that boundary. New executions record the cleanup marker and perform periodic
+cleanup, with failures contained so lease verification and admission can proceed.
+
+Deployment requires replaying every active singleton manager history against the
+candidate worker. Histories that already contain an unmarked `purge_released`
+activity cannot be distinguished from the older generation by its maintenance
+marker. Those histories require a controlled cutover: retain their compatible
+worker until its state-preserving Continue-As-New handoff, then route the new run
+to the patched worker before it starts. The handoff must retain held leases,
+fencing counters, pending slot requests and maintenance queue order. A direct
+worker replacement, termination, or reset is not a safe substitute. Managers
+whose histories contain no purge can upgrade directly after successful replay.
 
 A grant that moved under a recorded history would emit a reservation — and, under
 DB lease persistence, a `provider_profile.sync_slot_leases` activity — where the
