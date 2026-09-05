@@ -3376,7 +3376,7 @@ const RUNTIME_DISPLAY_LABELS: Record<string, string> = {
   claude_code: "Claude Code",
   codex_cli: "Codex CLI",
   codex_cloud: "Codex Cloud",
-  omnigent: "Codex via Omnigent",
+  omnigent: "Omnigent",
 };
 
 function formatRuntimeLabel(runtimeId: string): string {
@@ -14149,7 +14149,7 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
               </div>
             ) : null}
             <details className="notice small" aria-label="Effective Omnigent selection"><summary>Execution details</summary>
-              <div>Runtime: {selectedProfileIsGenericV2 ? selectedOmnigentAgentProfile?.displayName || "Omnigent" : "Codex via Omnigent"}</div>
+              <div>Runtime: {selectedProfileIsGenericV2 ? selectedOmnigentAgentProfile?.displayName || "Omnigent" : "Omnigent"}</div>
               <div>Profile: {providerOptions.find((option) => option.id === providerProfile)?.label || historicalOmnigentProviderProfile?.label || providerProfile || "Not selected"}</div>
               <div>Host mode: {selectedOmnigentLaunchPolicy?.hostMode === "on_demand_docker" ? "On-demand Docker" : selectedOmnigentLaunchPolicy?.hostMode === "static_compose" ? "Static Compose" : "Not selected"}</div>
               <div>Policy: {omnigentLaunchPolicyRef || "Not selected"}</div>
