@@ -13,12 +13,11 @@ from __future__ import annotations
 import asyncio
 import logging
 from collections.abc import Callable
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 from typing import Any
 from unittest.mock import patch as mock_patch
 
 import pytest
-from temporalio import exceptions
 
 from moonmind.provider_profiles.lease_client import CredentialLeasePurpose
 from moonmind.workflows.temporal.workflows.provider_profile_manager import (
