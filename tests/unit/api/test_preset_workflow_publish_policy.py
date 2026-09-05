@@ -59,6 +59,7 @@ _MANAGED_PUBLISH_PRESETS = frozenset(
         "document-health-update",
         "github-issue-implement",
         "github-issue-orchestrate",
+        "github-issue-search-and-implement",
         "issue-implement-work-pr",
         "jira-implement",
         "jira-orchestrate",
