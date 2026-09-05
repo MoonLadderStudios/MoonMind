@@ -37,7 +37,6 @@ DEFAULT_MANIFEST_MAX_CONCURRENCY = (
     manifest_ingest_module.DEFAULT_MANIFEST_MAX_CONCURRENCY
 )
 ManifestIngestValidationError = manifest_ingest_module.ManifestIngestValidationError
-from moonmind.workflows.temporal.workflows.manifest_ingest import MoonMindManifestIngestWorkflow
 _apply_manifest_node_update = manifest_ingest_module._apply_manifest_node_update
 _resolve_workflow_requested_by = manifest_ingest_module._resolve_workflow_requested_by
 _runtime_manifest_nodes = manifest_ingest_module._runtime_manifest_nodes
@@ -464,7 +463,7 @@ def test_manifest_workflow_run_uses_owner_principal_and_child_owner_id(
         fake_wait_condition,
     )
 
-    workflow_instance = MoonMindManifestIngestWorkflow()
+    workflow_instance = manifest_workflow_module.MoonMindManifestIngestWorkflow()
     result = asyncio.run(
         workflow_instance.run(
             {
@@ -527,7 +526,7 @@ def test_manifest_workflow_cancel_nodes_cancels_running_tasks(
         ),
     )
 
-    workflow_instance = MoonMindManifestIngestWorkflow()
+    workflow_instance = manifest_workflow_module.MoonMindManifestIngestWorkflow()
     workflow_instance._nodes = {
         "node-a": {"nodeId": "node-a", "state": "pending"},
         "node-b": {"nodeId": "node-b", "state": "running"},
@@ -851,7 +850,7 @@ def test_manifest_workflow_fail_fast_cancels_remaining_nodes(
         fake_wait_condition,
     )
 
-    workflow_instance = MoonMindManifestIngestWorkflow()
+    workflow_instance = manifest_workflow_module.MoonMindManifestIngestWorkflow()
     result = asyncio.run(
         workflow_instance.run(
             {
@@ -944,7 +943,7 @@ def test_manifest_workflow_dependency_ordering_blocks_dependents(
         fake_wait_condition,
     )
 
-    workflow_instance = MoonMindManifestIngestWorkflow()
+    workflow_instance = manifest_workflow_module.MoonMindManifestIngestWorkflow()
     result = asyncio.run(
         workflow_instance.run(
             {
@@ -1026,7 +1025,7 @@ def test_best_effort_continues_after_failures(
         fake_wait_condition,
     )
 
-    workflow_instance = MoonMindManifestIngestWorkflow()
+    workflow_instance = manifest_workflow_module.MoonMindManifestIngestWorkflow()
     result = asyncio.run(
         workflow_instance.run(
             {
@@ -1071,7 +1070,7 @@ def test_set_concurrency_rejects_out_of_bounds(
         ),
     )
 
-    workflow_instance = MoonMindManifestIngestWorkflow()
+    workflow_instance = manifest_workflow_module.MoonMindManifestIngestWorkflow()
 
     # Too high
     response = asyncio.run(workflow_instance.set_concurrency({"maxConcurrency": 501}))
@@ -1174,7 +1173,7 @@ def test_authorization_lineage_propagated_to_child(
         fake_wait_condition,
     )
 
-    workflow_instance = MoonMindManifestIngestWorkflow()
+    workflow_instance = manifest_workflow_module.MoonMindManifestIngestWorkflow()
     result = asyncio.run(
         workflow_instance.run(
             {
