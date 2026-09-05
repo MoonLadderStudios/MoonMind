@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from moonmind.schemas.workflow_control_models import WorkflowControlTarget
+
 from uuid import uuid4
 
 import pytest
@@ -40,13 +42,19 @@ class FakeTemporalService:
         self.resume_calls = 0
         self.metrics = {"queued": 0, "running": 0, "stale_running": 0}
 
-    async def send_quiesce_pause_signal(self) -> int:
+    async def send_quiesce_pause_signal(self, *, request_id, batch, on_progress):
         self.pause_calls += 1
-        return 3
+        batch.enumerated = True
+        batch.targets = [WorkflowControlTarget(workflowId="fixture-workflow", runId="fixture-run", updateId=request_id, state="safe_point")]
+        await on_progress(batch)
+        return batch
 
-    async def send_resume_signal(self) -> int:
+    async def send_quiesce_resume_signal(self, *, request_id, batch, on_progress):
         self.resume_calls += 1
-        return 2
+        batch.enumerated = True
+        batch.targets = [WorkflowControlTarget(workflowId="fixture-workflow", runId="fixture-run", updateId=request_id, state="resumed")]
+        await on_progress(batch)
+        return batch
 
     async def get_drain_metrics(self) -> dict[str, int]:
         return dict(self.metrics)
@@ -193,7 +201,7 @@ async def test_submit_returns_actual_subsystem_signal_status(
             actor_user_id=uuid4(),
         )
 
-    assert snapshot.signal_status == "succeeded:3"
+    assert snapshot.signal_status == "succeeded"
 
 
 @pytest.mark.asyncio
@@ -239,34 +247,37 @@ async def test_snapshot_degrades_when_temporal_metrics_are_unavailable(
 
 
 @pytest.mark.asyncio
-async def test_quiesce_and_resume_fail_fast_when_signal_handler_is_missing(
+async def test_quiesce_and_resume_retain_requested_state_when_signal_handler_is_missing(
     system_operations_session_maker,
 ) -> None:
     async with system_operations_session_maker() as session:
         service = SystemOperationsService(session, temporal_service=object())
 
-        with pytest.raises(SystemOperationUnavailableError, match="Quiesce pause"):
-            await service.submit(
-                WorkerOperationCommand(
-                    action="pause",
-                    mode="quiesce",
-                    reason="Stop claims",
-                    confirmation="Pause workers confirmed",
-                    idempotencyKey=_idempotency_key("missing-pause-handler"),
-                ),
-                actor_user_id=uuid4(),
-            )
+        snapshot = await service.submit(
+            WorkerOperationCommand(
+                action="pause",
+                mode="quiesce",
+                reason="Stop claims",
+                confirmation="Pause workers confirmed",
+                idempotencyKey=_idempotency_key("missing-pause-handler"),
+            ),
+            actor_user_id=uuid4(),
+        )
+        assert snapshot.signal_status == "requested"
+        assert snapshot.control is not None
+        assert snapshot.control.enumerated is False
 
-        with pytest.raises(SystemOperationUnavailableError, match="Resume signal"):
-            await service.submit(
-                WorkerOperationCommand(
-                    action="resume",
-                    reason="Done",
-                    idempotencyKey=_idempotency_key("missing-resume-handler"),
-                ),
-                actor_user_id=uuid4(),
-            )
-
+        snapshot = await service.submit(
+            WorkerOperationCommand(
+                action="resume",
+                reason="Done",
+                idempotencyKey=_idempotency_key("missing-resume-handler"),
+            ),
+            actor_user_id=uuid4(),
+        )
+        assert snapshot.signal_status == "requested"
+        assert snapshot.control is not None
+        assert snapshot.control.enumerated is False
 
 @pytest.mark.asyncio
 async def test_duplicate_idempotency_key_reuses_existing_operation_without_side_effects(
@@ -289,8 +300,8 @@ async def test_duplicate_idempotency_key_reuses_existing_operation_without_side_
         result = await session.execute(select(SettingsAuditEvent))
         audit_events = result.scalars().all()
 
-    assert first.signal_status == "succeeded:3"
-    assert second.signal_status == "succeeded:3"
+    assert first.signal_status == "succeeded"
+    assert second.signal_status == "succeeded"
     assert temporal.pause_calls == 1
     assert len(audit_events) == 1
 

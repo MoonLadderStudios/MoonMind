@@ -46,6 +46,7 @@ logger = logging.getLogger(__name__)
 
 WORKFLOW_NAME = "MoonMind.CheckpointBranchTurn"
 SCHEMA_VERSION = "checkpoint-branch-turn-execution/v1"
+CHECKPOINT_BRANCH_ARTIFACT_FLEET_PATCH = "checkpoint-branch-artifact-fleet-v1"
 CHECKPOINT_BRANCH_CANCELLATION_TERMINAL_PATCH = (
     "checkpoint-branch-cancellation-terminal-v1"
 )
@@ -1200,6 +1201,11 @@ class MoonMindCheckpointBranchTurnWorkflow:
     def state(self) -> dict[str, Any]:
         return {"phase": self._phase, "result": self._result}
 
+    def _persistence_route_options(self) -> dict[str, Any]:
+        if workflow.patched(CHECKPOINT_BRANCH_ARTIFACT_FLEET_PATCH):
+            return {"task_queue": ARTIFACTS_TASK_QUEUE}
+        return {}
+
     async def _persist_terminal(
         self,
         payload: Mapping[str, Any],
@@ -1209,7 +1215,7 @@ class MoonMindCheckpointBranchTurnWorkflow:
         checkpoint: Mapping[str, Any] | None = None,
         cancellation_type: ActivityCancellationType | None = None,
     ) -> dict[str, Any]:
-        activity_options: dict[str, Any] = {}
+        activity_options: dict[str, Any] = self._persistence_route_options()
         if cancellation_type is not None:
             activity_options["cancellation_type"] = cancellation_type
         terminal_payload = {
@@ -1318,6 +1324,7 @@ class MoonMindCheckpointBranchTurnWorkflow:
                 start_to_close_timeout=timedelta(minutes=1),
                 schedule_to_close_timeout=timedelta(minutes=3),
                 retry_policy=_RETRY,
+                **self._persistence_route_options(),
             )
         except (CancelledError, asyncio.CancelledError):
             await self._persist_cancellation_terminal(payload)

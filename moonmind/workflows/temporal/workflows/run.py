@@ -176,6 +176,11 @@ with workflow.unsafe.imports_passed_through():
     )
 
 from moonmind.workflows.skills.approval_policy import (
+    review_gate_budget_metadata,
+    review_gate_retry_allowed,
+    review_gate_verdict_made_progress,
+    terminal_disposition_for_gate_stop,
+    is_review_gate_active,
     ReviewRequest,
     StepGateResult,
     build_feedback_input,
@@ -1702,6 +1707,8 @@ class MoonMindRunWorkflow:
 
         # State tracking
         self._paused: bool = False
+        self._at_pause_safe_boundary = False
+        self._system_control_generation = 0
         self._pause_resume_transition_in_progress: bool = False
         self._awaiting_external: bool = False
         self._waiting_reason: Optional[str] = None
@@ -9256,78 +9263,6 @@ class MoonMindRunWorkflow:
         )
         return "\n".join(lines)
 
-    def _review_gate_budget_metadata(
-        self,
-        *,
-        max_review_attempts: int,
-        review_retry_count: int,
-        max_consecutive_no_progress_attempts: int,
-        consecutive_no_progress_attempts: int,
-        verdict: str | None = None,
-        recommended_next_action: str | None = None,
-    ) -> dict[str, Any]:
-        attempts_allowed = max_review_attempts + 1
-        attempts_consumed = review_retry_count + 1
-        remaining_executions = max(0, attempts_allowed - attempts_consumed)
-        no_progress_exhausted = (
-            consecutive_no_progress_attempts >= max_consecutive_no_progress_attempts
-        )
-        metadata: dict[str, Any] = {
-            "gate": "approval_policy",
-            "maxAttempts": attempts_allowed,
-            "attemptsConsumed": attempts_consumed,
-            "maxExecutions": attempts_allowed,
-            "executionsConsumed": attempts_consumed,
-            "retriesConsumed": review_retry_count,
-            "remainingExecutions": remaining_executions,
-            "additionalStopDimension": {
-                "type": "consecutive_no_progress_attempts",
-                "limit": max_consecutive_no_progress_attempts,
-                "consumed": consecutive_no_progress_attempts,
-                "remaining": max(
-                    0,
-                    max_consecutive_no_progress_attempts
-                    - consecutive_no_progress_attempts,
-                ),
-                "exhausted": no_progress_exhausted,
-            },
-            "stopRules": [
-                "structured_gate_verdict_required",
-                "accepted_output_evidence_required",
-                "consecutive_no_progress_attempts_exhaustion_stops_before_publication",
-                "budget_exhaustion_stops_before_publication",
-            ],
-            "exhausted": remaining_executions == 0 or no_progress_exhausted,
-        }
-        if verdict:
-            metadata["gateVerdict"] = str(verdict).strip().upper()
-        if recommended_next_action:
-            metadata["recommendedNextAction"] = recommended_next_action
-        return metadata
-
-    def _review_gate_retry_allowed(
-        self,
-        *,
-        verdict: Any,
-        review_retry_count: int,
-        max_review_attempts: int,
-        consecutive_no_progress_attempts: int,
-        max_consecutive_no_progress_attempts: int,
-    ) -> bool:
-        normalized = str(getattr(verdict, "verdict", "") or "").strip().upper()
-        if review_retry_count >= max_review_attempts:
-            return False
-        if consecutive_no_progress_attempts >= max_consecutive_no_progress_attempts:
-            return False
-        recommended_next_action = (
-            str(getattr(verdict, "recommended_next_action", "") or "").strip().lower()
-        )
-        if normalized == "ADDITIONAL_WORK_NEEDED":
-            return recommended_next_action == "reattempt_current_step"
-        return normalized == "NO_DETERMINATION" and bool(
-            getattr(verdict, "recoverable_in_current_runtime", False)
-        )
-
     @staticmethod
     def _gate_transition_allows_review_retry(
         *,
@@ -9339,33 +9274,6 @@ class MoonMindRunWorkflow:
             not plan_routed_moonspec_remediation_enabled
             or transition.disposition in {"generic", "retry"}
         )
-
-    @staticmethod
-    def _review_gate_verdict_made_progress(verdict: Any) -> bool:
-        normalized = str(getattr(verdict, "verdict", "") or "").strip().upper()
-        recommended_next_action = (
-            str(getattr(verdict, "recommended_next_action", "") or "").strip().lower()
-        )
-        remaining_work_ref = str(
-            getattr(verdict, "remaining_work_ref", "") or ""
-        ).strip()
-        return (
-            normalized == "ADDITIONAL_WORK_NEEDED"
-            and recommended_next_action == "reattempt_current_step"
-            and bool(remaining_work_ref)
-        )
-
-    def _terminal_disposition_for_gate_stop(self, verdict: Any) -> str:
-        normalized = str(getattr(verdict, "verdict", "") or "").strip().upper()
-        if normalized == "BLOCKED":
-            return "blocked"
-        if normalized == "FAILED_UNRECOVERABLE":
-            return "failed_unrecoverable"
-        if normalized == "ENVIRONMENT_CONTAMINATED_BY_SKILL_PROJECTION":
-            return "environment_contaminated_by_skill_projection"
-        if normalized == "ADDITIONAL_WORK_NEEDED":
-            return "failed_with_remaining_work"
-        return "needs_human"
 
     def _step_has_accepted_output_evidence(
         self,
@@ -9395,27 +9303,6 @@ class MoonMindRunWorkflow:
             value = outputs.get(source_key)
             if isinstance(value, str) and value.strip():
                 merged_outputs.setdefault(target_key, value.strip())
-
-    def _review_gate_active(
-        self,
-        *,
-        approval_policy: Any,
-        tool_type: str,
-        tool_name: str,
-    ) -> bool:
-        if approval_policy is None or not getattr(approval_policy, "enabled", False):
-            return False
-        skip_tool_types = {
-            str(value).strip().lower()
-            for value in getattr(approval_policy, "skip_tool_types", ())
-            if str(value).strip()
-        }
-        normalized_tool_type = str(tool_type or "").strip().lower()
-        normalized_tool_name = str(tool_name or "").strip().lower()
-        return (
-            normalized_tool_type not in skip_tool_types
-            and normalized_tool_name not in skip_tool_types
-        )
 
     def _inject_review_feedback_into_inputs(
         self,
@@ -10693,9 +10580,13 @@ class MoonMindRunWorkflow:
         self._attention_required = True
         self._update_search_attributes()
         self._update_memo()
-        await workflow.wait_condition(
-            lambda: not self._paused or self._cancel_requested
-        )
+        self._at_pause_safe_boundary = True
+        try:
+            await workflow.wait_condition(
+                lambda: not self._paused or self._cancel_requested
+            )
+        finally:
+            self._at_pause_safe_boundary = False
         if self._cancel_requested:
             return
         if self._waiting_reason == "operator_paused":
@@ -11919,7 +11810,7 @@ class MoonMindRunWorkflow:
             if tool_type == "skill":
                 await load_registry_snapshot()
             approval_policy = plan_definition.policy.approval_policy
-            review_gate_active = self._review_gate_active(
+            review_gate_active = is_review_gate_active(
                 approval_policy=approval_policy,
                 tool_type=tool_type,
                 tool_name=tool_name,
@@ -12144,7 +12035,7 @@ class MoonMindRunWorkflow:
                                 ),
                             },
                             budget=(
-                                self._review_gate_budget_metadata(
+                                review_gate_budget_metadata(
                                     max_review_attempts=max_review_attempts,
                                     review_retry_count=review_retry_count,
                                     max_consecutive_no_progress_attempts=(
@@ -12317,7 +12208,7 @@ class MoonMindRunWorkflow:
                                         ),
                                     },
                                     budget=(
-                                        self._review_gate_budget_metadata(
+                                        review_gate_budget_metadata(
                                             max_review_attempts=max_review_attempts,
                                             review_retry_count=review_retry_count,
                                             max_consecutive_no_progress_attempts=(
@@ -13154,7 +13045,7 @@ class MoonMindRunWorkflow:
                             if transition.successor is not None
                             else None
                         )
-                        review_budget = self._review_gate_budget_metadata(
+                        review_budget = review_gate_budget_metadata(
                             max_review_attempts=max_review_attempts,
                             review_retry_count=review_retry_count,
                             max_consecutive_no_progress_attempts=(
@@ -13207,7 +13098,7 @@ class MoonMindRunWorkflow:
                         )
                         accepted_execution = True
                         break
-                    if self._review_gate_verdict_made_progress(review_verdict):
+                    if review_gate_verdict_made_progress(review_verdict):
                         consecutive_no_progress_attempts = 0
                     else:
                         consecutive_no_progress_attempts += 1
@@ -13216,7 +13107,7 @@ class MoonMindRunWorkflow:
                             plan_routed_moonspec_remediation_enabled
                         ),
                         transition=transition,
-                    ) and self._review_gate_retry_allowed(
+                    ) and review_gate_retry_allowed(
                         verdict=review_verdict,
                         review_retry_count=review_retry_count,
                         max_review_attempts=max_review_attempts,
@@ -13257,10 +13148,10 @@ class MoonMindRunWorkflow:
                             if review_verdict.verdict == "BLOCKED"
                             else "failed"
                         ),
-                        terminal_disposition=self._terminal_disposition_for_gate_stop(
+                        terminal_disposition=terminal_disposition_for_gate_stop(
                             review_verdict
                         ),
-                        budget=self._review_gate_budget_metadata(
+                        budget=review_gate_budget_metadata(
                             max_review_attempts=max_review_attempts,
                             review_retry_count=review_retry_count,
                             max_consecutive_no_progress_attempts=(
@@ -13321,7 +13212,7 @@ class MoonMindRunWorkflow:
                         reason=attempt_reason,
                         status="failed",
                         terminal_disposition="needs_human",
-                        budget=self._review_gate_budget_metadata(
+                        budget=review_gate_budget_metadata(
                             max_review_attempts=max_review_attempts,
                             review_retry_count=review_retry_count,
                             max_consecutive_no_progress_attempts=(
@@ -13468,7 +13359,7 @@ class MoonMindRunWorkflow:
                 terminal_disposition=accepted_gate_disposition,
                 budget=(
                     accepted_gate_budget
-                    or self._review_gate_budget_metadata(
+                    or review_gate_budget_metadata(
                         max_review_attempts=max_review_attempts,
                         review_retry_count=review_retry_count,
                         max_consecutive_no_progress_attempts=(
@@ -23596,8 +23487,26 @@ class MoonMindRunWorkflow:
             return mapping.get(node_id)
         return None
 
+    @workflow.query(name="control_state")
+    def control_state(self) -> dict[str, Any]:
+        """Observable safe-point evidence; pause intent alone is insufficient."""
+        transition = self._pause_resume_transition_in_progress
+        return {
+            "runId": workflow.info().run_id,
+            "paused": self._paused,
+            "controlGeneration": self._system_control_generation,
+            "safePoint": bool(self._paused and self._at_pause_safe_boundary and not self._active_agent_child_workflow_id and not transition),
+            "resumed": bool(not self._paused and not transition),
+        }
+
     @workflow.update(name="Pause")
-    async def pause(self) -> None:
+    async def pause(self, payload: dict[str, Any] | None = None) -> None:
+        generation = (payload or {}).get("controlGeneration", 0)
+        if generation and generation <= self._system_control_generation:
+            return
+        if generation and self._paused:
+            self._system_control_generation = generation
+            return
         self._pause_resume_transition_in_progress = True
         previous_waiting_reason = self._waiting_reason
         try:
@@ -23609,21 +23518,33 @@ class MoonMindRunWorkflow:
                 raise RuntimeError(
                     "Failed to forward Pause update to active child workflow."
                 )
+            self._system_control_generation = max(self._system_control_generation, generation)
             self._update_search_attributes()
         finally:
             self._pause_resume_transition_in_progress = False
 
     @pause.validator
-    def validate_pause(self) -> None:
+    def validate_pause(self, payload: dict[str, Any] | None = None) -> None:
+        generation = (payload or {}).get("controlGeneration", 0)
+        if not isinstance(generation, int) or isinstance(generation, bool) or generation < 0:
+            raise ValueError("Invalid control generation.")
+        if generation and generation <= self._system_control_generation:
+            return
         if self._pause_resume_transition_in_progress:
             raise ValueError("Pause/Resume transition already in progress.")
-        if self._paused:
+        if self._paused and not generation:
             raise ValueError("Workflow is already paused.")
         if self._state in (STATE_COMPLETED, STATE_CANCELED, STATE_FAILED):
             raise ValueError("Cannot pause a completed workflow.")
 
     @workflow.update(name="Resume")
     async def resume(self, payload: dict[str, Any] | None = None) -> None:
+        generation = (payload or {}).get("controlGeneration", 0)
+        if generation and generation <= self._system_control_generation:
+            return
+        if generation and not self._paused and not self._awaiting_external:
+            self._system_control_generation = generation
+            return
         self._pause_resume_transition_in_progress = True
         previous_paused = self._paused
         previous_waiting_reason = self._waiting_reason
@@ -23639,15 +23560,21 @@ class MoonMindRunWorkflow:
             await self._forward_operator_message_to_active_child(payload)
             if self._awaiting_external:
                 self._recovery_requested = True
+            self._system_control_generation = max(self._system_control_generation, generation)
             self._update_search_attributes()
         finally:
             self._pause_resume_transition_in_progress = False
 
     @resume.validator
     def validate_resume(self, payload: dict[str, Any] | None = None) -> None:
+        generation = (payload or {}).get("controlGeneration", 0)
+        if not isinstance(generation, int) or isinstance(generation, bool) or generation < 0:
+            raise ValueError("Invalid control generation.")
+        if generation and generation <= self._system_control_generation:
+            return
         if self._pause_resume_transition_in_progress:
             raise ValueError("Pause/Resume transition already in progress.")
-        if not self._paused and not self._awaiting_external:
+        if not self._paused and not self._awaiting_external and not generation:
             raise ValueError("Workflow is not paused or awaiting external completion.")
         if self._state in (STATE_COMPLETED, STATE_CANCELED, STATE_FAILED):
             raise ValueError("Cannot resume a completed workflow.")

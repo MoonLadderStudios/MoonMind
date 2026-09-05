@@ -20,6 +20,7 @@ from api_service.api.schemas import (
     WorkerPauseSnapshotResponse,
 )
 from api_service.db.models import SettingsAuditEvent, SettingsOverride
+from moonmind.schemas.workflow_control_models import WorkflowControlBatch
 
 
 _DEFAULT_SUBJECT_ID = UUID("00000000-0000-0000-0000-000000000000")
@@ -100,6 +101,7 @@ class SystemOperationsService:
         signal_status: str | None = None,
         failure_reason: str | None = None,
     ) -> WorkerPauseSnapshotResponse:
+        control = await self._reconcile_control()
         state = await self._load_state()
         metrics = await self._load_metrics()
         audit = await self._latest_audit()
@@ -108,7 +110,8 @@ class SystemOperationsService:
             metrics=metrics,
             commands=self._command_descriptors(state),
             audit=WorkerPauseAuditListModel(latest=audit),
-            signalStatus=failure_reason or signal_status,
+            signalStatus=failure_reason or (control.status if control else signal_status or (audit[0].signal_status if audit else None)),
+            control=control,
         )
 
     async def submit(
@@ -138,18 +141,98 @@ class SystemOperationsService:
                 signal_status=str(payload.get("signalStatus") or "succeeded")
             )
 
-        signal_status = await self._invoke_subsystem(normalized)
         state = await self._persist_state(normalized, actor_user_id=actor_uuid)
         await self._persist_audit(
-            normalized,
-            actor_user_id=actor_uuid,
-            status="succeeded",
-            signal_status=signal_status,
-            state=state,
+            normalized, actor_user_id=actor_uuid,
+            status="succeeded" if normalized.mode == "drain" else "requested",
+            signal_status="succeeded" if normalized.mode == "drain" else "requested", state=state,
             idempotency_key=idempotency_key,
         )
+        # Persist intent and its retry identity before any Temporal side effect.
         await self._session.commit()
-        return await self.snapshot(signal_status=signal_status)
+        return await self.snapshot()
+
+    async def _reconcile_control(self) -> WorkflowControlBatch | None:
+        state_row = await self._state_row()
+        current = dict(state_row.value_json or {}) if state_row is not None else {}
+        request_id = current.get("controlRequestId")
+        if not request_id:
+            return None
+        row = await self._audit_event_by_idempotency_key(request_id)
+        if row is None or not isinstance(row.new_value_json, dict):
+            return None
+        payload = dict(row.new_value_json)
+        raw = payload.get("control")
+        if not raw:
+            return None  # Historical acceptance counts cannot become safe-point evidence.
+        batch = WorkflowControlBatch.model_validate(raw)
+        if batch.status == "succeeded":
+            return batch
+        sender = getattr(self._temporal_service, "send_quiesce_pause_signal" if batch.action == "Pause" else "send_quiesce_resume_signal", None)
+        if not callable(sender):
+            return batch
+        async def persist(progress):
+            merged = await self._persist_control_progress(row.id, progress)
+            # The adapter may be iterating this target list. Preserve its object
+            # identities so later observations remain part of the same batch.
+            confirmed = {target.update_id: target for target in merged.targets}
+            for target in batch.targets:
+                previous = confirmed.get(target.update_id)
+                if previous is not None:
+                    target.state, target.reason = previous.state, previous.reason
+            batch.enumerated = merged.enumerated
+            batch.enumeration_error = merged.enumeration_error
+
+        try:
+            observed = await sender(request_id=batch.request_id, batch=batch, on_progress=persist)
+            return observed if isinstance(observed, WorkflowControlBatch) else batch
+        except Exception:
+            # A transport observation whose persistence failed is not durable
+            # completion. Reload committed evidence before presenting the result.
+            _LOG.warning("Worker control reconciliation unavailable")
+            await self._session.rollback()
+            persisted = await self._audit_event_by_idempotency_key(request_id)
+            return WorkflowControlBatch.model_validate(persisted.new_value_json["control"])
+
+    async def _persist_control_progress(
+        self, audit_id: UUID, progress: WorkflowControlBatch,
+    ) -> WorkflowControlBatch:
+        """Serialize observers and retain already-confirmed target outcomes."""
+        row = await self._session.get(
+            SettingsAuditEvent, audit_id, with_for_update=True, populate_existing=True,
+        )
+        if row is None:
+            raise ValueError("Control audit owner is missing")
+        stored = WorkflowControlBatch.model_validate(row.new_value_json["control"])
+        if (stored.request_id, stored.action, stored.generation) != (
+            progress.request_id, progress.action, progress.generation,
+        ):
+            raise ValueError("Control progress has a different request authority")
+        merged = progress.model_copy(deep=True)
+        if stored.enumerated:
+            identities = lambda batch: {
+                (target.workflow_id, target.run_id, target.update_id)
+                for target in batch.targets
+            }
+            if not progress.enumerated:
+                merged = stored
+            elif identities(stored) != identities(progress):
+                raise ValueError("Enumerated control targets are immutable")
+            else:
+                prior = {target.update_id: target for target in stored.targets}
+                for index, target in enumerate(merged.targets):
+                    previous = prior[target.update_id]
+                    if previous.state in {"safe_point", "resumed", "failed"} or (
+                        target.state == "requested" and previous.state != "requested"
+                    ):
+                        merged.targets[index] = previous
+        row.new_value_json = {
+            **dict(row.new_value_json), "control": merged.model_dump(by_alias=True),
+            "status": merged.status, "resultStatus": merged.status,
+            "signalStatus": merged.status,
+        }
+        await self._session.commit()
+        return merged
 
     def _validate_command(
         self, command: WorkerOperationCommand
@@ -205,48 +288,6 @@ class SystemOperationsService:
             force_resume=bool(command.force_resume),
         )
 
-    async def _invoke_subsystem(self, command: WorkerOperationCommand) -> str:
-        try:
-            if command.action == "pause":
-                if command.mode == "drain":
-                    return "succeeded"
-                sender = getattr(
-                    self._temporal_service, "send_quiesce_pause_signal", None
-                )
-                if not callable(sender):
-                    raise SystemOperationUnavailableError(
-                        "worker_operation_unavailable",
-                        "Quiesce pause signal handler is not available.",
-                    )
-                count = await sender()
-                return f"succeeded:{count}"
-
-            if command.action == "resume":
-                sender = getattr(
-                    self._temporal_service,
-                    "send_resume_signal",
-                    None,
-                ) or getattr(
-                    self._temporal_service,
-                    "send_quiesce_resume_signal",
-                    None,
-                )
-                if not callable(sender):
-                    raise SystemOperationUnavailableError(
-                        "worker_operation_unavailable",
-                        "Resume signal handler is not available.",
-                    )
-                count = await sender()
-                return f"succeeded:{count}"
-        except SystemOperationUnavailableError:
-            raise
-        except Exception as exc:  # pragma: no cover - defensive sanitization
-            raise SystemOperationUnavailableError(
-                "worker_operation_unavailable",
-                "Worker operation subsystem is unavailable.",
-            ) from exc
-        return "succeeded"
-
     async def _persist_state(
         self,
         command: WorkerOperationCommand,
@@ -254,7 +295,7 @@ class SystemOperationsService:
         actor_user_id: UUID | str | None,
     ) -> _QueueSystemMetadata:
         now = self._timestamp()
-        current = await self._state_row()
+        current = await self._state_row(lock=True)
         current_payload = (
             dict(current.value_json)
             if current is not None and isinstance(current.value_json, dict)
@@ -264,6 +305,7 @@ class SystemOperationsService:
         actor_uuid = self._uuid_or_none(actor_user_id)
         payload: dict[str, Any] = {
             "workersPaused": command.action == "pause",
+            "controlRequestId": self._idempotency_key(command),
             "mode": command.mode if command.action == "pause" else None,
             "reason": command.reason,
             "version": next_version,
@@ -321,6 +363,10 @@ class SystemOperationsService:
                     "requestedState": "paused" if state.workers_paused else "running",
                     "idempotencyKey": idempotency_key,
                     "commandFingerprint": self._command_fingerprint(command),
+                    "control": (
+                        WorkflowControlBatch(requestId=idempotency_key, action="Pause" if command.action == "pause" else "Resume", generation=state.version).model_dump(by_alias=True)
+                        if command.mode == "quiesce" or command.action == "resume" else None
+                    ),
                 },
                 redacted=False,
                 reason=command.reason,
@@ -331,15 +377,12 @@ class SystemOperationsService:
         self, idempotency_key: str
     ) -> SettingsAuditEvent | None:
         result = await self._session.execute(
-            select(SettingsAuditEvent)
-            .where(SettingsAuditEvent.key == _WORKER_AUDIT_KEY)
-            .order_by(desc(SettingsAuditEvent.created_at))
+            select(SettingsAuditEvent).where(
+                SettingsAuditEvent.key == _WORKER_AUDIT_KEY,
+                SettingsAuditEvent.new_value_json["idempotencyKey"].as_string() == idempotency_key,
+            )
         )
-        for row in result.scalars():
-            payload = row.new_value_json if isinstance(row.new_value_json, dict) else {}
-            if payload.get("idempotencyKey") == idempotency_key:
-                return row
-        return None
+        return result.scalar_one_or_none()
 
     async def _load_state(self) -> _QueueSystemMetadata:
         row = await self._state_row()
@@ -387,15 +430,16 @@ class SystemOperationsService:
             metricsSource="temporal",
         )
 
-    async def _state_row(self) -> SettingsOverride | None:
-        result = await self._session.execute(
-            select(SettingsOverride).where(
-                SettingsOverride.scope == "workspace",
-                SettingsOverride.workspace_id == _DEFAULT_SUBJECT_ID,
-                SettingsOverride.user_id == _DEFAULT_SUBJECT_ID,
-                SettingsOverride.key == _WORKER_STATE_KEY,
-            )
-        )
+    async def _state_row(self, *, lock: bool = False) -> SettingsOverride | None:
+        statement = select(SettingsOverride).where(
+            SettingsOverride.scope == "workspace",
+            SettingsOverride.workspace_id == _DEFAULT_SUBJECT_ID,
+            SettingsOverride.user_id == _DEFAULT_SUBJECT_ID,
+            SettingsOverride.key == _WORKER_STATE_KEY,
+        ).execution_options(populate_existing=True)
+        if lock:
+            statement = statement.with_for_update()
+        result = await self._session.execute(statement)
         return result.scalar_one_or_none()
 
     async def _latest_audit(self) -> list[WorkerPauseAuditEventModel]:
@@ -441,12 +485,12 @@ class SystemOperationsService:
                 id="pause-workers",
                 label="Pause Workers",
                 target="workers",
-                impact="Blocks new worker claims or quiesces active workers.",
+                impact="Blocks new submissions and optionally requests workflow safe points.",
                 requiresConfirmation=True,
                 requiredPermission="operations.invoke",
                 available=not state.workers_paused,
                 unavailableReason=(
-                    "Workers are already paused." if state.workers_paused else None
+                    "Submission admission is already paused." if state.workers_paused else None
                 ),
                 rollbackAction="resume-workers",
             ),
@@ -454,12 +498,12 @@ class SystemOperationsService:
                 id="resume-workers",
                 label="Resume Workers",
                 target="workers",
-                impact="Allows workers to claim queued work again.",
+                impact="Reopens submission admission and requests workflow resumption.",
                 requiresConfirmation=False,
                 requiredPermission="operations.invoke",
                 available=state.workers_paused,
                 unavailableReason=(
-                    None if state.workers_paused else "Workers are already running."
+                    None if state.workers_paused else "Submission admission is already open."
                 ),
                 rollbackAction=None,
             ),
@@ -467,12 +511,12 @@ class SystemOperationsService:
                 id="drain-queue",
                 label="Drain Queue",
                 target="queue",
-                impact="Blocks new worker claims while running work finishes.",
+                impact="Blocks new submissions while existing work continues.",
                 requiresConfirmation=True,
                 requiredPermission="operations.invoke",
                 available=not state.workers_paused,
                 unavailableReason=(
-                    "Workers are already paused." if state.workers_paused else None
+                    "Submission admission is already paused." if state.workers_paused else None
                 ),
                 rollbackAction="resume-workers",
             ),
@@ -480,12 +524,12 @@ class SystemOperationsService:
                 id="quiesce-runtime-family",
                 label="Quiesce Runtime Family",
                 target="runtime-family",
-                impact="Stops new claims and signals active workers to pause.",
+                impact="Blocks new submissions and requests confirmed workflow safe points.",
                 requiresConfirmation=True,
                 requiredPermission="operations.invoke",
                 available=not state.workers_paused,
                 unavailableReason=(
-                    "Workers are already paused." if state.workers_paused else None
+                    "Submission admission is already paused." if state.workers_paused else None
                 ),
                 rollbackAction="resume-workers",
             ),

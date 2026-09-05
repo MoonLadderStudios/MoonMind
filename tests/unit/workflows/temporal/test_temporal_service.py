@@ -451,7 +451,7 @@ def test_visibility_helpers_ignore_empty_parameters() -> None:
 def mock_client_adapter():
     adapter = MagicMock()
     adapter.start_workflow = AsyncMock()
-    adapter.describe_workflow = AsyncMock()
+    adapter.describe_workflow = AsyncMock(return_value=None)
     adapter.update_workflow = AsyncMock()
     adapter.signal_workflow = AsyncMock()
     adapter.cancel_workflow = AsyncMock()
@@ -8771,3 +8771,19 @@ async def test_mm3788_typed_recovery_rejects_a_pair_persisted_before_the_invaria
             TemporalExecutionCanonicalRecord, "mm:mm3788-recovery-destination"
         )
         assert destination is None
+
+
+@pytest.mark.asyncio
+async def test_cached_operator_execution_cannot_enter_product_detail(tmp_path, mock_client_adapter):
+    from moonmind.workflows.temporal.workflow_registry import WorkflowProjectionExcluded
+    async with temporal_db(tmp_path) as session:
+        workflow_id = str(uuid4())
+        session.add(TemporalExecutionCanonicalRecord(
+            workflow_id=workflow_id, run_id=str(uuid4()),
+            workflow_type=TemporalWorkflowType.PROVIDER_PROFILE_MANAGER,
+            entry="provider_profile",
+        ))
+        await session.commit()
+        service = TemporalExecutionService(session, client_adapter=mock_client_adapter)
+        with pytest.raises(WorkflowProjectionExcluded, match="operator_only"):
+            await service.describe_execution(workflow_id)

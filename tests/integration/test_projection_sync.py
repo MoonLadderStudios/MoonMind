@@ -159,3 +159,74 @@ async def test_list_executions_router_sync_behavior(db_session, monkeypatch):
     assert record.state.value == "completed"
     assert record.close_status.value == "completed"
     assert record.projection_version == 2
+
+
+async def test_product_list_repairs_included_rows_and_excludes_persisted_internal_type(db_session, monkeypatch):
+    """The real HTTP/service/DB path applies registry policy to legacy rows."""
+    from uuid import uuid4
+    from temporalio import workflow
+    from api_service.api.routers import executions
+    from api_service.auth_providers import get_current_user
+    from api_service.db.base import get_async_session
+    from api_service.db.models import TemporalExecutionCanonicalRecord, TemporalWorkflowType
+    from moonmind.config.settings import settings
+    from moonmind.workflows.temporal.service import TemporalExecutionService
+    from moonmind.workflows.temporal.workflow_registry import (
+        USER_WORKFLOW_REGISTRATION, STATIC_WORKFLOW_REGISTRATIONS,
+        WorkflowProjectionExcluded,
+    )
+
+    owner = str(uuid4())
+    records = []
+    registrations = (USER_WORKFLOW_REGISTRATION, *STATIC_WORKFLOW_REGISTRATIONS)
+    # Exercise every type representable in the persisted root catalog, including
+    # the historical manager rows that must no longer enter product views.
+    for registration in registrations:
+        name = workflow._Definition.must_from_class(registration.load_class()).name
+        if name not in {item.value for item in TemporalWorkflowType}:
+            continue
+        record = TemporalExecutionCanonicalRecord(
+            workflow_id=str(uuid4()), run_id=str(uuid4()), workflow_type=name,
+            owner_type="user", owner_id=owner, entry="user_workflow",
+        )
+        records.append((registration, record))
+        db_session.add(record)
+    await db_session.commit()
+    service = TemporalExecutionService(db_session)
+    app = FastAPI()
+    app.include_router(executions.router)
+
+    async def session_dependency():
+        yield db_session
+
+    app.dependency_overrides[get_async_session] = session_dependency
+    app.dependency_overrides[executions._get_service] = lambda: service
+    # Projection-mode list does not access Temporal; accidental access must fail.
+    app.dependency_overrides[executions.get_temporal_client] = lambda: None
+    user = SimpleNamespace(id=owner, is_superuser=False)
+    app.dependency_overrides[get_current_user()] = lambda: user
+    routes = list(app.routes)
+    while routes:
+        route = routes.pop()
+        routes.extend(getattr(getattr(route, "original_router", route), "routes", ()))
+        for dependency in getattr(getattr(route, "dependant", None), "dependencies", ()):
+            if getattr(dependency.call, "__name__", "") == "_current_user_fallback":
+                app.dependency_overrides[dependency.call] = lambda: user
+    monkeypatch.setattr(settings.temporal, "temporal_authoritative_read_enabled", False)
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app), base_url="http://test") as client:
+        response = await client.get("/api/executions")
+    assert response.status_code == 200, response.text
+    expected = {record.workflow_id for registration, record in records if registration.projection_scope == "product"}
+    assert {item["workflowId"] for item in response.json()["items"]} == expected
+    assert response.json()["count"] == len(expected)
+    await db_session.commit()
+    for registration, record in records:
+        projection = await db_session.get(TemporalExecutionRecord, record.workflow_id)
+        if registration.projection_scope == "product":
+            assert projection is not None
+            assert projection.workflow_type == record.workflow_type
+        else:
+            assert projection is None
+            with pytest.raises(WorkflowProjectionExcluded):
+                await service._upsert_projection_from_source(record)
+            await db_session.rollback()

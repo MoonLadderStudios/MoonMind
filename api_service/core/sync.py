@@ -266,10 +266,10 @@ async def map_temporal_state_to_projection(
         (MoonMindWorkflowState.EXECUTING, None),
     )
 
-    try:
-        workflow_type = TemporalWorkflowType(desc.workflow_type)
-    except ValueError:
-        workflow_type = TemporalWorkflowType.USER_WORKFLOW
+    from moonmind.workflows.temporal.workflow_registry import require_product_projection
+
+    require_product_projection(desc.workflow_type)
+    workflow_type = TemporalWorkflowType(desc.workflow_type)
 
     entry = str(
         memo.get("entry") or WORKFLOW_ENTRY_BY_TYPE.get(workflow_type, "user_workflow")
@@ -403,103 +403,193 @@ async def map_temporal_state_to_projection(
         "_temporal_memo_loaded": memo_loaded,
     }
 
+# DB-owned memo fields may never be rolled back by a Temporal memo snapshot.
+_SNAPSHOT_MEMO_FIELDS = frozenset({
+    "task_input_snapshot_ref", "task_input_snapshot_version",
+    "task_input_snapshot_source_kind",
+})
+_BINDING_MEMO_FIELDS = frozenset({
+    "omnigent_runtime_binding_ref", "omnigent_runtime_binding_revision",
+    "omnigent_runtime_binding_fencing_generation", "omnigent_runtime_binding_state",
+})
+
+
+def _merge_owned_memo(incoming: dict[str, Any], records: list[Any], *, owner: str) -> dict[str, Any]:
+    stored = [dict(record.memo or {}) for record in records]
+    memo: dict[str, Any] = {}
+    if owner != "canonical":
+        for item in reversed(stored):
+            memo.update(item)
+    memo.update(incoming)
+    if owner == "snapshot":
+        for key in _SNAPSHOT_MEMO_FIELDS:
+            for item in stored:
+                if key in incoming and item.get(key) not in (None, incoming[key]):
+                    raise ValueError("execution snapshot identity is immutable")
+    if owner != "snapshot":
+        for key in _SNAPSHOT_MEMO_FIELDS:
+            for item in stored:
+                if key in item:
+                    memo[key] = item[key]
+                    break
+    bindings = [item for item in stored if item.get("omnigent_runtime_binding_revision") is not None]
+    if owner == "runtime_binding":
+        revision = int(incoming["omnigent_runtime_binding_revision"])
+        for item in bindings:
+            previous = int(item["omnigent_runtime_binding_revision"])
+            if previous > revision:
+                raise ValueError("execution runtime-binding projection is ahead of authority")
+            if previous == revision and item.get("omnigent_runtime_binding_ref") not in (None, incoming["omnigent_runtime_binding_ref"]):
+                raise ValueError("execution has conflicting runtime binding at same revision")
+    elif bindings:
+        binding = max(bindings, key=lambda item: int(item["omnigent_runtime_binding_revision"]))
+        for key in _BINDING_MEMO_FIELDS:
+            if key in binding:
+                memo[key] = binding[key]
+    else:
+        # Only the binding owner can introduce authoritative binding identity.
+        for key in _BINDING_MEMO_FIELDS:
+            memo.pop(key, None)
+    return memo
+
+
+def _semantic_time(value: datetime | None) -> datetime | None:
+    return value.replace(tzinfo=UTC) if value is not None and value.tzinfo is None else value
+
+
+def _projection_semantic_time(updated_at, search_attributes) -> datetime | None:
+    # API lifecycle decisions stamp mm_updated_at with full precision. A later
+    # metadata-only ORM write must not regress that time to a DB clock's lower
+    # precision (notably SQLite's second-resolution onupdate clock).
+    candidates = [
+        _semantic_time(updated_at),
+        _parse_temporal_datetime((search_attributes or {}).get("mm_updated_at")),
+    ]
+    return max((value for value in candidates if value is not None), default=None)
+
+
+async def mutate_execution_projection(
+    session: AsyncSession,
+    *,
+    workflow_id: str,
+    payload: dict[str, Any],
+    owner: str,
+    synced_at: datetime | None = None,
+    metadata_loaded: bool = True,
+) -> TemporalExecutionRecord | None:
+    """Apply one owner-scoped mutation under canonical-then-projection row locks.
+
+    Temporal owns lifecycle order (semantic updated_at, terminal close evidence).
+    Canonical writes supply API fields. Snapshot and binding owners only patch
+    their memo keys and artifact refs. Reconciliation repairs either projection
+    divergence or absence; caller owns commit/retry of the transaction. No writer
+    uses wall-clock sync time as evidence that workflow state became newer.
+    """
+    if owner not in {"temporal", "canonical", "snapshot", "runtime_binding"}:
+        raise ValueError("unknown execution projection mutation owner")
+    await session.flush()
+    canonical = await session.get(TemporalExecutionCanonicalRecord, workflow_id, with_for_update=True, populate_existing=True)
+    projection = await session.get(TemporalExecutionRecord, workflow_id, with_for_update=True, populate_existing=True)
+    records = [record for record in (canonical, projection) if record is not None]
+    incoming = dict(payload)
+    if owner == "canonical":
+        incoming["updated_at"] = _projection_semantic_time(
+            incoming.get("updated_at"), incoming.get("search_attributes")
+        )
+    patch_only = owner in {"snapshot", "runtime_binding"}
+    allowed_memo = _SNAPSHOT_MEMO_FIELDS if owner == "snapshot" else _BINDING_MEMO_FIELDS
+    if patch_only:
+        if set(incoming) - {"memo", "artifact_refs"} or set(incoming.get("memo") or {}) - allowed_memo:
+            raise ValueError("projection mutation exceeds field ownership")
+        if not records:
+            raise ValueError("projection mutation has no execution owner")
+    else:
+        from moonmind.workflows.temporal.workflow_registry import require_product_projection
+        require_product_projection(incoming.get("workflow_type"))
+
+    # Select the freshest stored lifecycle before reconciling both rows.
+    latest = max(records, key=lambda row: _projection_semantic_time(row.updated_at, row.search_attributes) or datetime.min.replace(tzinfo=UTC)) if records else None
+    if latest is not None:
+        records = [latest, *(record for record in records if record is not latest)]
+    stale = False
+    if latest is not None and not patch_only:
+        previous_time = _projection_semantic_time(latest.updated_at, latest.search_attributes)
+        incoming_time = _semantic_time(incoming.get("updated_at"))
+        stale = bool(previous_time and incoming_time and incoming_time < previous_time)
+        # A stale RUNNING describe with no semantic timestamp cannot reopen a
+        # terminal execution in the same run.
+        stale = stale or bool(latest.close_status and not incoming.get("close_status") and latest.run_id == incoming.get("run_id"))
+    if (patch_only or stale) and latest is not None:
+        merged = {column.name: getattr(latest, column.name) for column in TemporalExecutionCanonicalRecord.__table__.columns if hasattr(TemporalExecutionRecord, column.name)}
+    else:
+        merged = dict(incoming)
+    if latest is not None and (patch_only or stale or not metadata_loaded):
+        if not patch_only and not stale:
+            merged = {column.name: getattr(latest, column.name) for column in TemporalExecutionCanonicalRecord.__table__.columns if hasattr(TemporalExecutionRecord, column.name)}
+            merged.update({key: value for key, value in incoming.items() if key in CORE_TEMPORAL_SYNC_FIELDS})
+    merged["workflow_id"] = workflow_id
+    merged["updated_at"] = (
+        _projection_semantic_time(merged.get("updated_at"), merged.get("search_attributes"))
+        or merged.get("started_at") or synced_at or _utc_now()
+    )
+    if owner != "canonical" or stale:
+        preserve_local_only_fields(merged, *records)
+    memo_input = {} if stale or not metadata_loaded else dict(incoming.get("memo") or {})
+    merged["memo"] = _merge_owned_memo(
+        memo_input, records, owner="temporal" if stale and owner == "canonical" else owner
+    )
+    refs = []
+    for record in records:
+        for ref in record.artifact_refs or []:
+            if ref not in refs:
+                refs.append(ref)
+    for ref in incoming.get("artifact_refs") or []:
+        if ref not in refs:
+            refs.append(ref)
+    merged["artifact_refs"] = refs
+    params = {}
+    for record in reversed(records):
+        params.update(record.parameters or {})
+    if not stale and not patch_only and metadata_loaded:
+        params.update(incoming.get("parameters") or {})
+    merged["parameters"] = (
+        dict(incoming.get("parameters") or {})
+        if owner == "canonical" and not stale
+        else params
+    )
+    if projection is None:
+        projection = TemporalExecutionRecord(**merged, projection_version=0)
+        session.add(projection)
+    # Snapshot and binding mutation also repair a missing projection from the
+    # canonical source, without creating a second execution identity.
+    for record in (canonical, projection):
+        if record is None:
+            continue
+        for key, value in merged.items():
+            if hasattr(type(record), key):
+                setattr(record, key, value)
+        if record in session:
+            flag_modified(record, "updated_at")
+    projection.projection_version = max(int(projection.projection_version or 0) + 1, 1)
+    projection.last_synced_at = synced_at or _utc_now()
+    projection.sync_state = TemporalExecutionProjectionSyncState.FRESH
+    projection.sync_error = None
+    projection.source_mode = TemporalExecutionProjectionSourceMode.TEMPORAL_AUTHORITATIVE
+    return projection
+
+
 async def sync_execution_projection(
     session: AsyncSession,
     desc: WorkflowExecutionDescription,
     synced_at: datetime | None = None,
 ) -> TemporalExecutionRecord:
-    """Upsert the Temporal workflow state to the local projection database."""
+    """Reconcile Temporal lifecycle evidence through the shared mutation owner."""
     payload = await map_temporal_state_to_projection(desc)
-    temporal_memo_loaded = bool(payload.pop("_temporal_memo_loaded", False))
-
-    projection = await session.get(TemporalExecutionRecord, desc.id)
-    canonical = await session.get(TemporalExecutionCanonicalRecord, desc.id)
-    previous_version = int(projection.projection_version or 0) if projection else 0
-    synced_at = synced_at or _utc_now()
-    semantic_updated_at = payload.get("updated_at")
-    if semantic_updated_at is None:
-        if projection is not None:
-            semantic_updated_at = projection.updated_at
-        elif canonical is not None:
-            semantic_updated_at = canonical.updated_at
-        else:
-            semantic_updated_at = payload.get("started_at") or synced_at
-    payload["updated_at"] = semantic_updated_at
-    preserve_local_only_fields(payload, projection, canonical)
-    temporal_metadata_missing = (not temporal_memo_loaded) or not payload.get("memo")
-
-    if projection is None:
-        projection = TemporalExecutionRecord(
-            **payload,
-            projection_version=1,
-            last_synced_at=synced_at,
-            sync_state=TemporalExecutionProjectionSyncState.FRESH,
-            sync_error=None,
-            source_mode=TemporalExecutionProjectionSourceMode.TEMPORAL_AUTHORITATIVE,
-        )
-        session.add(projection)
-    else:
-        for field, value in payload.items():
-            if temporal_metadata_missing and field not in CORE_TEMPORAL_SYNC_FIELDS:
-                continue
-            setattr(projection, field, value)
-        projection.updated_at = semantic_updated_at
-        # Force SQLAlchemy to include updated_at in the UPDATE even when the
-        # semantic timestamp is unchanged, so the column's onupdate handler
-        # does not overwrite it with "now()" during sync-only refreshes.
-        flag_modified(projection, "updated_at")
-        projection.projection_version = max(previous_version + 1, 1)
-        projection.last_synced_at = synced_at
-        projection.sync_state = TemporalExecutionProjectionSyncState.FRESH
-        projection.sync_error = None
-        projection.source_mode = (
-            TemporalExecutionProjectionSourceMode.TEMPORAL_AUTHORITATIVE
-        )
-
-    # Also sync the canonical record (temporal_execution_sources) so that
-    # service.describe_execution doesn't read stale state and overwrite the projection
-    # with it. Only update state/close_status if they differ from what Temporal reports.
-    state_value: MoonMindWorkflowState = (
-        payload.get("state") or MoonMindWorkflowState.INITIALIZING
+    loaded = bool(payload.pop("_temporal_memo_loaded", False)) and bool(payload.get("memo"))
+    return await mutate_execution_projection(
+        session, workflow_id=desc.id, payload=payload, owner="temporal",
+        synced_at=synced_at, metadata_loaded=loaded,
     )
-    close_status_value: TemporalExecutionCloseStatus | None = payload.get(
-        "close_status"
-    )
-    # Preserve canonical parameters (targetRuntime, model, effort, etc.) that were
-    # set at execution creation time and are not present in the Temporal memo.
-    # The memo-derived parameters from map_temporal_state_to_projection are typically
-    # empty; the canonical record is the source of truth for creation-time parameters.
-    if canonical is not None or not temporal_metadata_missing:
-        projection.parameters = merged_parameters_for_projection(payload, canonical)
-
-    # Preserve DB-only memo keys (e.g. agentRunId written by _report_task_run_binding)
-    # that are absent from Temporal's immutable workflow memo.  Temporal keys win for
-    # any key present in both sources.
-    if canonical is not None or not temporal_metadata_missing:
-        projection.memo = merged_memo_for_projection(payload, canonical)
-
-    if canonical is not None:
-        for field, value in payload.items():
-            if temporal_metadata_missing and field not in CORE_TEMPORAL_SYNC_FIELDS:
-                continue
-            if field == "parameters":
-                canonical.parameters = merged_parameters_for_projection(payload, canonical)
-                continue
-            if field == "memo":
-                canonical.memo = merged_memo_for_projection(payload, canonical)
-                continue
-            setattr(canonical, field, value)
-        canonical.updated_at = semantic_updated_at
-        # Preserve the Temporal semantic timestamp even when other columns change.
-        flag_modified(canonical, "updated_at")
-        logger.info(
-            "Synced canonical record %s: state=%s close_status=%s",
-            desc.id,
-            state_value,
-            close_status_value,
-        )
-
-    return projection
 
 async def fetch_and_sync_execution(
     session: AsyncSession,

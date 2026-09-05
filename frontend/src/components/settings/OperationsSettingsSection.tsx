@@ -5,6 +5,11 @@ import { z } from 'zod';
 import { formatStatusLabel } from '../../utils/formatters';
 
 const WorkerSnapshotSchema = z.object({
+  signalStatus: z.string().nullable().optional(),
+  control: z.object({
+    enumerated: z.boolean(),
+    targets: z.array(z.object({ workflowId: z.string(), runId: z.string(), state: z.string(), reason: z.string().nullable().optional() })),
+  }).nullable().optional(),
   system: z
     .object({
       workersPaused: z.boolean().optional(),
@@ -426,12 +431,16 @@ export function OperationsSettingsSection({
       return WorkerSnapshotSchema.parse(await response.json());
     },
     onSuccess: (data, variables) => {
+      const confirmed = data.control?.enumerated && data.control.targets.every(
+        (target) => target.state === (variables.action === 'pause' ? 'safe_point' : 'resumed'),
+      );
       setNotice({
-        level: 'ok',
-        text:
-          variables.action === 'pause'
-            ? 'Workers paused successfully.'
-            : 'Workers resumed successfully.',
+        level: ['partial', 'unknown', 'failed'].includes(data.signalStatus || '') ? 'error' : 'ok',
+        text: variables.action === 'pause' && variables.mode === 'drain'
+          ? 'New work admission paused.'
+          : confirmed
+            ? variables.action === 'pause' ? 'Workflow pause confirmed.' : 'Workflow resume confirmed.'
+            : `${variables.action === 'pause' ? 'Pause' : 'Resume'} request recorded. Check the workflow confirmations below.`,
       });
       if (variables.action === 'pause') {
         setPauseReason('');
@@ -713,7 +722,7 @@ export function OperationsSettingsSection({
       `Mode: ${pauseMode === 'quiesce' ? 'Quiesce' : 'Drain'}`,
       `Reason: ${pauseReason}`,
       pauseMode === 'quiesce'
-        ? 'New claims stop immediately and running workflows receive pause signals.'
+        ? 'New submissions are blocked. Running workflows receive pause requests and confirm when they reach a safe point.'
         : 'New work is blocked while running jobs are allowed to finish.',
     ].join('\n');
     if (!window.confirm(confirmation)) {
@@ -786,9 +795,19 @@ export function OperationsSettingsSection({
   const isPaused = Boolean(system.workersPaused);
   const stateLabel = isPaused
     ? system.mode === 'quiesce'
-      ? 'Workers quiesced'
-      : 'Workers draining'
-    : 'Workers running';
+      ? snapshot?.control?.enumerated && snapshot.control.targets.every((target) => target.state === 'safe_point')
+        ? 'Workers quiesced'
+        : snapshot?.signalStatus === 'failed'
+          ? 'Pause failed'
+          : snapshot?.signalStatus === 'partial' || snapshot?.signalStatus === 'unknown'
+          ? 'Pause partially confirmed'
+          : 'Pause requested; confirmation pending'
+      : 'New work admission paused'
+    : snapshot?.control
+      ? snapshot.signalStatus === 'succeeded'
+        ? 'Workflow resume confirmed'
+        : 'Resume requested; confirmation pending'
+      : 'Work admission open';
 
   return (
     <div className="space-y-6">
@@ -1105,6 +1124,20 @@ export function OperationsSettingsSection({
               </p>
             </div>
 
+            {snapshot?.control && snapshot.control.targets.length > 0 ? (
+              <details>
+                <summary>Control confirmations</summary>
+                <ul>
+                  {snapshot.control.targets.map((target) => (
+                    <li key={`${target.workflowId}:${target.runId}`}>
+                      {target.workflowId}: {formatStatusLabel(target.state)}
+                      {target.reason ? ` (${formatStatusLabel(target.reason)})` : ''}
+                    </li>
+                  ))}
+                </ul>
+              </details>
+            ) : null}
+
             <div className="grid gap-4 md:grid-cols-4">
               <div className="rounded-2xl bg-slate-50 dark:bg-slate-800/50 p-4 text-center">
                 <div className="text-sm font-medium text-slate-500 dark:text-slate-400">Queued</div>
@@ -1282,8 +1315,8 @@ export function OperationsSettingsSection({
                 </span>
                 <h4 className="mt-2 text-base font-semibold text-slate-900 dark:text-white">Worker controls</h4>
                 <p className="mt-1 text-sm text-slate-600 dark:text-slate-400">
-                  Drain lets running jobs finish. Quiesce stops new claims immediately.
-                  These actions affect every running and queued workflow.
+                  Both modes block new submissions. Drain allows active work to finish.
+                  Quiesce also requests a pause and reports each workflow's confirmation.
                 </p>
 
                 <form className="mt-5 space-y-4" onSubmit={handlePause}>

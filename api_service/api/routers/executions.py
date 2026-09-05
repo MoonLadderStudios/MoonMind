@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from moonmind.workflows.temporal.workflow_registry import WorkflowProjectionExcluded
+
 import asyncio
 import base64
 import binascii
@@ -11791,6 +11793,8 @@ async def _get_owned_execution(
                 workflow_id,
                 include_orphaned=include_orphaned_projection,
             )
+    except WorkflowProjectionExcluded as exc:
+        raise HTTPException(status_code=404, detail={"code": exc.code, "message": str(exc)}) from exc
     except TemporalExecutionNotFoundError as exc:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
@@ -14079,7 +14083,14 @@ async def list_executions(
             if page:
                 live_progress_queries: list[tuple[int, str]] = []
                 for wf in page:
-                    payload = await map_temporal_state_to_projection(wf)
+                    try:
+                        payload = await map_temporal_state_to_projection(wf)
+                    except WorkflowProjectionExcluded as exc:
+                        logger.warning("Product projection excluded: %s", exc)
+                        count_value = None
+                        count_mode = "estimated_or_unknown"
+                        degraded_count = True
+                        continue
                     canonical_record = canonical_map.get(wf.id)
                     payload["parameters"] = merged_parameters_for_projection(
                         payload, canonical_record
@@ -14517,7 +14528,10 @@ async def get_execution_metrics(
         )
 
         for wf in page:
-            payload = await map_temporal_state_to_projection(wf)
+            try:
+                payload = await map_temporal_state_to_projection(wf)
+            except WorkflowProjectionExcluded:
+                continue
             canonical = canonical_map.get(wf.id)
             payload["parameters"] = merged_parameters_for_projection(payload, canonical)
             duration = _duration_seconds_from_payload(payload)
@@ -16490,6 +16504,9 @@ async def describe_execution(
             await session.commit()
             # Return the synced projection to avoid clobbering it with stale source data.
             use_projection_read = True
+        except WorkflowProjectionExcluded as exc:
+            await session.rollback()
+            raise HTTPException(status_code=404, detail={"code": exc.code, "message": str(exc)}) from exc
         except RPCError as exc:
             temporal_sync_unavailable = True
             await session.rollback()

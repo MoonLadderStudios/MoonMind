@@ -530,84 +530,108 @@ class TemporalClientAdapter:
 
     # --- Worker Pause/Resume: Batch Updates for Quiesce mode (DOC-REQ-003) ---
 
-    async def send_batch_pause_update(
-        self,
-        *,
-        task_queues: Sequence[str] | None = None,
-    ) -> int:
-        """Send the canonical ``Pause`` update to all running workflows.
-
-        Returns the number of workflows updated.
-        """
+    async def send_batch_pause_update(self, *, task_queues=None, request_id=None, batch=None, on_progress=None):
         return await self._send_update_to_running_workflows(
-            update_name="Pause",
-            task_queues=task_queues,
+            update_name="Pause", task_queues=task_queues, request_id=request_id,
+            batch=batch, on_progress=on_progress,
         )
 
-    async def send_batch_resume_update(
-        self,
-        *,
-        task_queues: Sequence[str] | None = None,
-    ) -> int:
-        """Send the canonical ``Resume`` update to all running workflows.
-
-        Returns the number of workflows updated.
-        """
+    async def send_batch_resume_update(self, *, task_queues=None, request_id=None, batch=None, on_progress=None):
         return await self._send_update_to_running_workflows(
-            update_name="Resume",
-            task_queues=task_queues,
+            update_name="Resume", task_queues=task_queues, request_id=request_id,
+            batch=batch, on_progress=on_progress,
         )
 
     async def _send_update_to_running_workflows(
-        self,
-        *,
-        update_name: str,
-        task_queues: Sequence[str] | None = None,
-    ) -> int:
-        """Iterate running workflows via Visibility and update each one.
+        self, *, update_name: str, task_queues=None, request_id=None,
+        batch=None, on_progress=None,
+    ):
+        """Persist target intent before dispatch, then observe actual safe points.
 
-        This approach works with all Temporal server versions.  When the
-        Temporal Batch Operations API becomes available in the Python SDK,
-        this can be replaced with a single ``StartBatchOperation`` call.
+        A durable caller supplies on_progress and retries the same batch after a
+        restart. IDs are pinned to runs; ACCEPTED never means quiesced. Query
+        failure retains unknown evidence and never destroys successful targets.
         """
+        import hashlib
+        from uuid import uuid4
+        from moonmind.schemas.workflow_control_models import WorkflowControlBatch, WorkflowControlTarget
+
         client = await self.get_client()
-
-        if task_queues is None:
-            task_queues = _MOONMIND_TASK_QUEUES
-
-        visibility_filter = 'ExecutionStatus="Running"'
-        if task_queues:
-            quoted = ", ".join(f'"{tq}"' for tq in task_queues)
-            visibility_filter += f" AND TaskQueue IN ({quoted})"
-
-        _log = logging.getLogger(__name__)
-        _sem = asyncio.Semaphore(50)
-
-        async def _update_one(wf_id: str) -> bool:
-            async with _sem:
+        result = batch or WorkflowControlBatch(requestId=request_id or str(uuid4()), action=update_name)
+        if result.action != update_name or (request_id and result.request_id != request_id):
+            raise ValueError("control request identity mismatch")
+        async def persist():
+            if on_progress is not None:
+                await on_progress(result.model_copy(deep=True))
+        if not result.enumerated:
+            queues = _MOONMIND_TASK_QUEUES if task_queues is None else task_queues
+            query = 'ExecutionStatus="Running"'
+            if queues:
+                query += ' AND TaskQueue IN (' + ', '.join(f'"{queue}"' for queue in queues) + ')'
+            targets = []
+            try:
+                async for execution in client.list_workflows(query=query):
+                    run_id = str(execution.run_id or "")
+                    update_id = hashlib.sha256(f"{result.request_id}:{update_name}:{execution.id}:{run_id}".encode()).hexdigest()
+                    targets.append(WorkflowControlTarget(workflowId=execution.id, runId=run_id, updateId=update_id))
+            except Exception:
+                result.enumeration_error = "control_visibility_unavailable"
+                await persist()
+                return result
+            result.enumeration_error = None
+            result.targets = targets
+            result.enumerated = True
+            await persist()
+        for target in result.targets:
+            if target.state in {"safe_point", "resumed", "failed"}:
+                continue
+            if not target.run_id:
+                target.state, target.reason = "unknown", "run_identity_unavailable"
+                await persist()
+                continue
+            handle = client.get_workflow_handle(target.workflow_id, run_id=target.run_id)
+            if target.state in {"requested", "unknown"}:
                 try:
-                    handle = client.get_workflow_handle(wf_id)
                     await handle.start_update(
                         update_name,
+                        args=[{"controlGeneration": result.generation}] if result.generation else [],
+                        id=target.update_id,
                         wait_for_stage=WorkflowUpdateStage.ACCEPTED,
                         rpc_timeout=_WORKFLOW_UPDATE_ACCEPTED_TIMEOUT,
                     )
-                    return True
+                    target.state, target.reason = "accepted", None
+                    await persist()
                 except Exception:
-                    _log.warning(
-                        "Failed to update workflow %s with %s",
-                        wf_id,
-                        update_name,
-                        exc_info=True,
-                    )
-                    return False
-
-        tasks: list[asyncio.Task[bool]] = []
-        async for execution in client.list_workflows(query=visibility_filter):
-            tasks.append(asyncio.create_task(_update_one(execution.id)))
-
-        results = await asyncio.gather(*tasks)
-        return sum(1 for ok in results if ok)
+                    target.state, target.reason = "unknown", "update_acceptance_unavailable"
+                    await persist()
+                    continue
+            try:
+                from temporalio.client import WorkflowUpdateFailedError
+                try:
+                    await handle.get_update_handle(target.update_id).result(rpc_timeout=timedelta(seconds=1))
+                except WorkflowUpdateFailedError:
+                    target.state, target.reason = "failed", "update_failed"
+                    await persist()
+                    continue
+                except Exception:
+                    target.state, target.reason = "pending", "update_completion_pending"
+                    await persist()
+                    continue
+                observed = await handle.query("control_state", rpc_timeout=_WORKFLOW_UPDATE_ACCEPTED_TIMEOUT)
+                if not isinstance(observed, dict) or observed.get("runId") != target.run_id:
+                    target.state, target.reason = "unknown", "control_evidence_unavailable"
+                elif result.generation and observed.get("controlGeneration") != result.generation:
+                    target.state, target.reason = "unknown", "control_generation_superseded"
+                elif update_name == "Pause" and observed.get("safePoint") is True:
+                    target.state, target.reason = "safe_point", None
+                elif update_name == "Resume" and observed.get("resumed") is True:
+                    target.state, target.reason = "resumed", None
+                else:
+                    target.state, target.reason = "pending", "safe_point_pending"
+            except Exception:
+                target.state, target.reason = "unknown", "control_query_unavailable"
+            await persist()
+        return result
 
     # --- Temporal Schedule CRUD ---
 

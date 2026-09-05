@@ -1137,47 +1137,20 @@ async def _project_runtime_binding_to_execution(
     """Publish a safe, monotonic binding summary to Workflow Detail."""
 
     from api_service.db.base import async_session_maker
-    from api_service.db.models import (
-        TemporalExecutionCanonicalRecord,
-        TemporalExecutionRecord,
-    )
+    from api_service.core.sync import mutate_execution_projection
 
     if not workflow_id:
         raise ValueError("runtime-binding projection requires workflow authority")
     async with async_session_maker() as db:
-        for model in (TemporalExecutionCanonicalRecord, TemporalExecutionRecord):
-            execution = await db.get(model, workflow_id)
-            if execution is None:
-                continue
-            memo = dict(execution.memo or {})
-            projected_revision = int(
-                memo.get("omnigent_runtime_binding_revision") or 0
-            )
-            if projected_revision > state.revision:
-                raise ValueError(
-                    "execution runtime-binding projection is ahead of authority"
-                )
-            if projected_revision == state.revision:
-                projected_ref = str(
-                    memo.get("omnigent_runtime_binding_ref") or ""
-                )
-                if projected_ref and projected_ref != state.binding.runtimeBindingRef:
-                    raise ValueError(
-                        "execution has conflicting runtime binding at same revision"
-                    )
-            memo.update(
-                {
-                    "omnigent_runtime_binding_ref": (
-                        state.binding.runtimeBindingRef
-                    ),
-                    "omnigent_runtime_binding_revision": state.revision,
-                    "omnigent_runtime_binding_fencing_generation": (
-                        state.fencing_generation
-                    ),
-                    "omnigent_runtime_binding_state": state.state,
-                }
-            )
-            execution.memo = memo
+        await mutate_execution_projection(
+            db, workflow_id=workflow_id, owner="runtime_binding",
+            payload={"memo": {
+                "omnigent_runtime_binding_ref": state.binding.runtimeBindingRef,
+                "omnigent_runtime_binding_revision": state.revision,
+                "omnigent_runtime_binding_fencing_generation": state.fencing_generation,
+                "omnigent_runtime_binding_state": state.state,
+            }},
+        )
         await db.commit()
 
 
