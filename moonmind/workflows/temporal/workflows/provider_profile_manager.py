@@ -49,6 +49,7 @@ WORKFLOW_ID_PREFIX = "provider-profile-manager"
 # "auth-profile" spellings in identifiers until a deliberate workflow migration.
 VERIFY_LEASE_HOLDERS_PATCH = "auth-profile-manager-verify-leases-v1"
 DB_LEASE_PERSISTENCE_PATCH = "provider-profile-manager-db-lease-persistence-v1"
+LEASE_TOMBSTONE_PURGE_PATCH = "provider-profile-manager-lease-tombstone-purge-v1"
 SLOT_HANDOFF_RESERVATION_PATCH = "provider-profile-manager-slot-handoff-v1"
 REFRESH_RESTORED_PROFILES_PATCH = (
     "provider-profile-manager-refresh-restored-profiles-v1"
@@ -2137,11 +2138,11 @@ class MoonMindProviderProfileManagerWorkflow:
 
             # Reap release tombstones on a deterministic cadence so the lease
             # table stays bounded while the high-water mark outlives them.
-            # Cleanup was introduced with maintenance durability. Older
-            # histories already have DB persistence but go straight to lease
-            # verification here; inserting an activity breaks their replay.
+            # Maintenance durability predates cleanup, so neither its marker
+            # nor DB persistence identifies a history that scheduled a purge.
+            # Preserve older histories' direct transition to lease verification.
             if (
-                self._durable_maintenance_queue
+                workflow.patched(LEASE_TOMBSTONE_PURGE_PATCH)
                 and workflow.patched(DB_LEASE_PERSISTENCE_PATCH)
                 and self._event_count % _LEASE_TOMBSTONE_PURGE_EVENT_INTERVAL == 0
             ):
