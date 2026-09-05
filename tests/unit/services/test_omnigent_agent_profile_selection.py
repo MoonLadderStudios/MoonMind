@@ -35,6 +35,7 @@ class _Session:
             visibility="workspace",
             owner_id=uuid4(),
             active_version=2,
+            default_for_runtime=True,
         )
         self.version = SimpleNamespace(
             version=2,
@@ -54,8 +55,8 @@ class _Session:
                 },
                 "providerRequirements": {
                     "runtimeId": "codex_cli",
-                    "credentialSource": "oauth",
-                    "materializationMode": "host",
+                    "credentialSource": "oauth_volume",
+                    "materializationMode": "oauth_home",
                     "providerIds": ["openai"],
                 },
                 "model": {"model": "gpt-5.4"},
@@ -107,6 +108,12 @@ class _Session:
     async def get(self, model, key):
         return self.profile if model is OmnigentAgentProfile else None
 
+    async def execute(self, statement):
+        return SimpleNamespace(all=lambda: [(self.profile, self.version)])
+
+    async def scalars(self, statement):
+        return SimpleNamespace(all=lambda: [self.provider])
+
     async def scalar(self, statement):
         self.statements.append(statement)
         entity = statement.column_descriptions[0].get("entity")
@@ -125,6 +132,33 @@ class _Session:
 
     async def flush(self):
         return None
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("provider_ref", [None, "oauth-team"])
+async def test_profile_model_authority_bypasses_legacy_configuration_constraints(provider_ref):
+    from moonmind.workflows.executions.model_resolver import resolve_model_effort
+
+    session = _Session()
+    model = "vendor/" + "future-model-" * 16
+    effort = "future-provider-effort"
+    session.provider.default_model = model
+    session.provider.default_effort = effort
+    snapshot = await resolve_default_agent_profile_snapshot(
+        session, provider_profile_ref=provider_ref, launch_policy_ref=None,
+        consumer_type="workflow", consumer_id="pass-through", user=SimpleNamespace(id=uuid4()),
+    )
+    resolved = resolve_model_effort(
+        runtime_id=session.provider.runtime_id, profile=session.provider,
+        require_launch_ready=False,
+    )
+    compiled = compile_agent_profile_snapshot_parameters(
+        {"model": resolved.model, "effort": resolved.effort}, snapshot=snapshot,
+    )
+    assert compiled["model"] == model
+    assert compiled["effort"] == effort
+    assert not snapshot["document"]["model"].get("model")
+    assert not snapshot["document"]["model"].get("effort")
 
 
 def test_snapshot_parameter_compiler_keeps_authority_out_of_authored_omnigent() -> None:

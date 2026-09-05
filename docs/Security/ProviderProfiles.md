@@ -31,6 +31,18 @@ Last Updated: 2026-06-23
 
 ---
 
+## Unified Profile selection
+
+The user-facing Profile is this existing credential and capacity identity. It also
+owns model tiers and an optional `execution_configuration` reference containing
+an immutable configuration id, version and digest. New workflow and schedule
+submissions supply the Profile id; API admission resolves compatible execution
+behavior and records the immutable snapshot transactionally. Existing consumer
+snapshots remain authoritative for continuations. Profile selection never changes
+because model discovery expires or a host image changes. Disabled and disconnected
+Profiles remain visible with an actionable setup state. Credentials, trust,
+capability compatibility and actual-host model verification remain launch gates.
+
 ## 1. Summary
 
 MoonMind-managed runtimes such as Claude Code and Codex CLI do not map one-to-one to a single upstream company or a single authentication method.
@@ -353,6 +365,7 @@ ManagedAgentProviderProfile:
   account_label:                 str | null
   enabled:                       bool
   is_default:                    bool
+  default_selected_by_operator:  bool
   tags:                          [str]
   priority:                      int
 
@@ -467,6 +480,20 @@ unless the profile is policy-blocked or the requested action is passive/backgrou
 `is_default` marks the default profile for a runtime.
 
 A disabled or not-launch-ready setup stub must not become the runtime default. If no launch-ready profile exists for a runtime, default normalization should clear the runtime default instead of choosing a disabled setup stub.
+
+#### `default_selected_by_operator`
+
+`default_selected_by_operator` records **why** a profile holds `is_default`.
+
+Runtime-default ownership has two sources. An operator selects a default explicitly (the create/update `is_default` field, or the `make_default` action on a credential-ready endpoint). Automatic reconciliation — startup seeding, deployment credential enrollment — settles the default when nothing else claims it. Only the first sets this flag, and only default normalization writes it, so the two sources stay distinguishable in the persisted row.
+
+Default normalization is the single authority for the flag:
+
+- an automatic preference settles an unclaimed default, but never takes one away from a launchable profile that carries an operator claim;
+- whichever profile loses `is_default` also loses the claim, so at most one profile per runtime carries it;
+- when no profile is launch-ready the runtime default is cleared, but the claim survives, because transient unlaunchability is not a revocation of operator intent.
+
+This is the runtime-default counterpart of `disabled_reason = user_disabled` for enablement: both record explicit operator intent that automatic reconciliation must respect.
 
 #### `auth_state`
 
@@ -1336,6 +1363,7 @@ CREATE TABLE managed_agent_provider_profiles (
     account_label                     TEXT,
     enabled                           BOOLEAN NOT NULL DEFAULT FALSE,
     is_default                        BOOLEAN NOT NULL DEFAULT FALSE,
+    default_selected_by_operator      BOOLEAN NOT NULL DEFAULT FALSE,
     tags                              JSONB NOT NULL DEFAULT '[]'::jsonb,
     priority                          INTEGER NOT NULL DEFAULT 100,
 

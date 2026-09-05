@@ -381,6 +381,10 @@ async def ensure_builtin_opencode_agent_profile(
 ) -> dict[str, Any] | None:
     """Seed or advance the default OpenCode profile from live authority."""
 
+    from api_service.services.omnigent_agent_bootstrap_service import (
+        OPENCODE_BUILTIN_PROFILE_ID,
+        reconcile_managed_default_agent_profile,
+    )
     from api_service.services.omnigent_policies import PolicyConflict, PolicyNotFound
     from moonmind.omnigent.harness_platform.agent_profile import OmnigentAgentProfileV2
     from moonmind.omnigent.harness_platform.catalog import TrustState
@@ -477,7 +481,7 @@ async def ensure_builtin_opencode_agent_profile(
             "allowedLaunchPolicyRefs": allowed_launch_policy_refs,
         }
     ).model_dump(by_alias=True, mode="json")
-    profile_id = "omnigent-opencode-default"
+    profile_id = OPENCODE_BUILTIN_PROFILE_ID
     profile = await session.get(OmnigentAgentProfile, profile_id)
     existing_versions = (
         []
@@ -568,7 +572,16 @@ async def ensure_builtin_opencode_agent_profile(
     }
     profile.state = "active"
     await session.commit()
-    return {"profileId": profile_id, "version": version.version, "ready": ready}
+    # MoonLadderStudios/MoonMind#3877: the built-in OpenCode profile is the
+    # deployment's preferred managed default, so settle default authority from
+    # the same live readiness evidence that just advanced this version.
+    default_profile_id = await reconcile_managed_default_agent_profile(session)
+    return {
+        "profileId": profile_id,
+        "version": version.version,
+        "ready": ready,
+        "defaultForRuntime": default_profile_id == profile_id,
+    }
 
 
 def _assert_owner(profile: OmnigentAgentProfile, user: User) -> None:

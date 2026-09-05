@@ -1814,11 +1814,13 @@ class TestProviderProfileManagerHelpers:
             "profile_id": "claude_anthropic",
             "lease_id": "pentest:run-1:step-1:1",
             "already_held": False,
+            "lease_mode": "shared_execution",
         }
         assert second == {
             "profile_id": "claude_anthropic",
             "lease_id": "pentest:run-1:step-1:1",
             "already_held": True,
+            "lease_mode": "shared_execution",
         }
         profile = wf._profiles["claude_anthropic"]
         assert profile.current_leases == ["pentest:run-1:step-1:1"]
@@ -3350,6 +3352,8 @@ async def test_provider_profile_manager_state_returns_compact_running_snapshot(
         "event_count": 7,
         "requester_pending": True,
         "requester_queue_position": 1,
+        # The requester is queued, not leased, so it holds no profile.
+        "requester_profile_id": None,
         "requested_profile": {
             "profile_id": "p1",
             "max_parallel_runs": 1,
@@ -3357,6 +3361,13 @@ async def test_provider_profile_manager_state_returns_compact_running_snapshot(
             "cooldown_until": None,
             "enabled": True,
             "launch_ready": True,
+            # MoonLadderStudios/MoonMind#3878 AC11: a pre-#3878 manager history
+            # reports no ledger fields, and the projection must say so rather
+            # than invent a configured or effective capacity.
+            "configured_capacity": None,
+            "effective_capacity": None,
+            "execution_lease_count": None,
+            "capacity_scope_ref": None,
         },
     }
     assert "state" not in result
@@ -3444,7 +3455,12 @@ async def test_provider_profile_manager_state_resolves_unique_selector_profile(
         "cooldown_until": None,
         "enabled": True,
         "launch_ready": True,
+        "configured_capacity": None,
+        "effective_capacity": None,
+        "execution_lease_count": None,
+        "capacity_scope_ref": None,
     }
+
 
 @pytest.mark.asyncio
 async def test_provider_profile_manager_state_checks_status_before_query(

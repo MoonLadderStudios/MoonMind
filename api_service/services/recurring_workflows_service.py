@@ -30,9 +30,11 @@ from api_service.services.omnigent_agent_profile_selection import (
     compile_agent_profile_snapshot_parameters,
     refresh_managed_bootstrap_snapshot,
     resolve_agent_profile_snapshot,
+    resolve_default_agent_profile_snapshot,
 )
 from api_service.services.provider_profile_runtime import (
     require_launch_target_provider_profile_runtime,
+    resolve_launch_target_profile_selection,
 )
 from moonmind.workflows.recurring.cron import (
     compute_next_occurrence,
@@ -1033,18 +1035,30 @@ class RecurringWorkflowsService:
         self._session.add(definition)
         await self._session.flush()
 
-        if agent_profile_selection is not None:
+        initial_parameters = dict(definition.target.get("initialParameters") or {})
+        authored_profile = resolve_launch_target_profile_selection(definition.target)
+        needs_profile_snapshot = (
+            "omnigent" in authored_profile.runtime_ids
+            and not initial_parameters.get("agentProfileSnapshot")
+            and not initial_parameters.get("omnigentExecutionPlan")
+        )
+        if agent_profile_selection is not None or needs_profile_snapshot:
             if actor is None:
                 raise RecurringWorkflowValidationError(
                     "an authenticated actor is required for agent profile selection"
                 )
-            snapshot = await resolve_agent_profile_snapshot(
-                self._session,
-                selection=agent_profile_selection,
-                consumer_type="schedule",
-                consumer_id=str(definition_id),
-                user=actor,
-            )
+            if agent_profile_selection is not None:
+                snapshot = await resolve_agent_profile_snapshot(
+                    self._session, selection=agent_profile_selection,
+                    consumer_type="schedule", consumer_id=str(definition_id), user=actor,
+                )
+            else:
+                snapshot = await resolve_default_agent_profile_snapshot(
+                    self._session,
+                    provider_profile_ref=authored_profile.profile_id,
+                    launch_policy_ref=(initial_parameters.get("omnigent") or {}).get("launchPolicyRef"),
+                    consumer_type="schedule", consumer_id=str(definition_id), user=actor,
+                )
             initial_parameters = dict(definition.target.get("initialParameters") or {})
             initial_parameters = compile_agent_profile_snapshot_parameters(
                 initial_parameters,
@@ -1077,6 +1091,23 @@ class RecurringWorkflowsService:
                 raise RecurringWorkflowValidationError(
                     "selected Provider Profile disappeared before plan compilation"
                 )
+            if needs_profile_snapshot and agent_profile_selection is None:
+                from moonmind.workflows.executions.model_resolver import (
+                    resolve_model_effort,
+                )
+
+                authored_parameters = definition.target.get("initialParameters") or {}
+                task_intent = authored_parameters.get("workflow") or authored_parameters.get("task") or {}
+                runtime_intent = task_intent.get("runtime") or {}
+                resolved = resolve_model_effort(
+                    runtime_id=provider_profile.runtime_id, profile=provider_profile,
+                    requested_model=runtime_intent.get("model", authored_parameters.get("model")),
+                    requested_effort=runtime_intent.get("effort", authored_parameters.get("effort")),
+                    requested_model_tier=runtime_intent.get("modelTier", authored_parameters.get("modelTier")),
+                    tier_fallback=runtime_intent.get("tierFallback", authored_parameters.get("tierFallback", "clamp")),
+                    require_launch_ready=False,
+                )
+                initial_parameters.update(model=resolved.model, effort=resolved.effort, modelSource=resolved.model_source)
             principal = str(getattr(actor, "id", "") or "system")
             artifact_service = self._artifact_service or TemporalArtifactService(
                 TemporalArtifactRepository(self._session)

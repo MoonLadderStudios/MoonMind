@@ -1,23 +1,12 @@
 #!/bin/sh
+# Thin compatibility wrapper (MoonLadderStudios/MoonMind#3834).
+#
+# The Claude static-host lifecycle now lives in the generic entrypoint
+# /opt/moonmind/start-omnigent-host.sh. This wrapper selects only the trusted
+# pack ref and delegates; it must not retain a duplicate lifecycle
+# implementation. Retirement: remove after no deployment or replay-visible
+# path references this name and the generic Claude static row has passed its
+# exact-image and lifecycle gates (see STATIC_HOST_STARTUP_INVENTORY.md).
 set -eu
-
-state_root=${OMNIGENT_STATE_PATH:-/home/app/.omnigent}
-expected_generation=${CLAUDE_CREDENTIAL_GENERATION:-}
-
-[ -n "$expected_generation" ] || { echo "credential generation is required" >&2; exit 64; }
-printf '%s\n' "$expected_generation" > "$state_root/credential-generation"
-
-unset OPENAI_API_KEY CODEX_ACCESS_TOKEN OPENAI_BASE_URL MINIMAX_API_KEY
-unset ANTHROPIC_API_KEY ANTHROPIC_AUTH_TOKEN CLAUDE_API_KEY CLAUDE_CODE_OAUTH_TOKEN
-unset GEMINI_API_KEY GOOGLE_API_KEY
-
-until /opt/moonmind/check-claude-oauth-host.sh; do
-  echo "Claude OAuth host waiting for authenticated credentials" >&2
-  sleep 5
-done
-until /opt/moonmind/check-runner-projections.sh; do
-  echo "Claude OAuth host waiting for a resolved Skill projection" >&2
-  sleep 5
-done
-/opt/moonmind/clear-stale-host-daemons.sh
-exec omnigent host --server "${OMNIGENT_SERVER_URL:-http://omnigent:8000}" --non-interactive
+export MOONMIND_OMNIGENT_RUNTIME_PACK_REF=claude-native-pack@1
+exec /opt/moonmind/start-omnigent-host.sh

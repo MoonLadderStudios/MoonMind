@@ -3404,6 +3404,9 @@ class ManagedAgentProviderProfile(Base):
         String(64), nullable=False, default="unknown", server_default=text("'unknown'")
     )
     provider_label: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    execution_configuration: Mapped[dict[str, Any] | None] = mapped_column(
+        JSON, nullable=True
+    )
     default_model: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
     default_effort: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
     model_tiers: Mapped[list[dict[str, Any]]] = mapped_column(
@@ -3474,6 +3477,15 @@ class ManagedAgentProviderProfile(Base):
         Boolean, nullable=False, default=False, server_default=text("false")
     )
     is_default: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False, server_default=text("false")
+    )
+    # MoonLadderStudios/MoonMind#3877: ``is_default`` records which profile
+    # currently holds runtime-default authority; this flag records whether an
+    # operator chose it explicitly. Automatic reconciliation (startup seeding,
+    # deployment credential enrollment) may move an unclaimed default, but must
+    # never move one an operator selected. It is the runtime-default counterpart
+    # of ``disabled_reason == user_disabled`` for enablement.
+    default_selected_by_operator: Mapped[bool] = mapped_column(
         Boolean, nullable=False, default=False, server_default=text("false")
     )
 

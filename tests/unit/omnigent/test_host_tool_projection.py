@@ -44,8 +44,11 @@ def test_login_profile_prepends_tools_path_idempotently() -> None:
 
 
 def test_codex_host_materializes_gh_auth_outside_workspace_and_drops_token() -> None:
+    # The generic static entrypoint owns GitHub materialization
+    # (MoonLadderStudios/MoonMind#3834); the Codex wrapper only selects the
+    # trusted pack ref and delegates.
     script = Path(
-        "services/omnigent/scripts/start-codex-oauth-host.sh"
+        "services/omnigent/scripts/start-omnigent-host.sh"
     ).read_text()
 
     materialize_index = script.index("github_config_home=")
@@ -56,3 +59,10 @@ def test_codex_host_materializes_gh_auth_outside_workspace_and_drops_token() -> 
     assert "/workspaces/run" not in script
     assert 'printf \'    oauth_token: %s\\n\' "$github_token"' in script
     assert materialize_index < unset_index < host_start_index
+
+    wrapper = Path(
+        "services/omnigent/scripts/start-codex-oauth-host.sh"
+    ).read_text()
+    assert "MOONMIND_OMNIGENT_RUNTIME_PACK_REF=codex-native-pack@1" in wrapper
+    assert "exec /opt/moonmind/start-omnigent-host.sh" in wrapper
+    assert "github_config_home" not in wrapper

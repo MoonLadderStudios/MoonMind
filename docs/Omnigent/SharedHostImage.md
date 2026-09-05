@@ -109,7 +109,13 @@ Both gates default to false. No generic plan silently falls back to a direct, le
 
 These remain the owned child issues of the primary-runtime program and are not claimed by this design:
 
-- **Exact support evidence** (#3832): the support-key matrix, protected-live conformance rows for generic Codex/Claude, and qualification of the shared digest.
+- **Exact support evidence** (#3832): the versioned required-row catalog and
+  deterministic exact-artifact validators live in
+  `moonmind/omnigent/harness_platform/shared_host_conformance.py`
+  (`moonmind.omnigent-shared-host-rows.v1`, covered by
+  `tests/unit/omnigent/test_shared_host_conformance.py`). Protected-live
+  conformance rows for generic Codex/Claude and qualification of the shared
+  digest remain with the provider-verification runner.
 - **Product-default migration** (#3833): versioned rollout policy, per-surface default promotion, canary/rollback controls, and migration telemetry.
 - **Compose consolidation** (#3834): converging static Codex/Claude hosts and startup scripts onto the shared image and generic startup.
 - **Retirement** (#3835): the code-owned retirement inventory and gated removal of direct and profile-bound lanes.

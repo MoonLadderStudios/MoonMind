@@ -109,6 +109,7 @@ class GenericOmnigentHostRealizer:
         artifact_gateway: Any | None = None,
         turn_command_service: Any | None = None,
         cleanup_authority: Any | None = None,
+        host_capacity_admission: Any | None = None,
         execution_state_notifier: Callable[[str, str, str], Awaitable[None]]
         | None = None,
         deployment_validator: Callable[[Any], None] | None = None,
@@ -148,10 +149,18 @@ class GenericOmnigentHostRealizer:
         # (#3707 §4). ``None`` keeps unit harnesses that do not wire the control
         # plane runnable, exactly like ``turn_command_service``.
         self._cleanup_authority = cleanup_authority
-        # Provider Profile capacity is acquired inside this Activity-owned
-        # lifecycle, outside the AgentRun workflow's managed-runtime slot loop.
-        # The notifier projects that authoritative wait into the owning user
-        # workflow without moving or duplicating lease semantics.
+        # Aggregate machine capacity and the bounded cold-launch rate are
+        # governed independently of Provider Profile capacity
+        # (MoonLadderStudios/MoonMind#3878 invariant 7). The AgentRun workflow
+        # reserves this provisionally before the Activity starts; enforcing it
+        # again here keeps a direct realizer call from oversubscribing the
+        # machine, and never waits inside the Activity.
+        self._host_capacity_admission = host_capacity_admission
+        # The AgentRun workflow admits Provider Profile capacity before this
+        # Activity starts and passes the admitted lease in, so this lifecycle
+        # confirms rather than queues for capacity. The notifier projects the
+        # authoritative launch state into the owning user workflow without
+        # moving or duplicating lease semantics.
         self._execution_state_notifier = execution_state_notifier
         if deployment_validator is None:
             from moonmind.omnigent.deployment_identity import (
@@ -236,11 +245,15 @@ class GenericOmnigentHostRealizer:
         resume_owns_terminal_outcome = False
 
         try:
-            await self._notify_execution_state(
-                workflow_id,
-                "awaiting_slot",
-                "Waiting for Provider Profile capacity.",
-            )
+            admitted_capacity = request.admitted_provider_capacity
+            if admitted_capacity is None:
+                # Pre-#3878 dispatch: this Activity queues for capacity itself,
+                # so project the wait into the owning user workflow.
+                await self._notify_execution_state(
+                    workflow_id,
+                    "awaiting_slot",
+                    "Waiting for Provider Profile capacity.",
+                )
             provider_wait_started = time.monotonic()
             try:
                 acquired = await self._provider_leases.acquire_all(
@@ -248,6 +261,7 @@ class GenericOmnigentHostRealizer:
                     workflow_id=workflow_id,
                     step_execution_id=step_execution_id,
                     idempotency_key=request.idempotency_key,
+                    admitted_capacity=admitted_capacity,
                 )
             finally:
                 # The observed wait covers capacity queueing and any provider
@@ -260,7 +274,7 @@ class GenericOmnigentHostRealizer:
             await self._notify_execution_state(
                 workflow_id,
                 "launching",
-                "Provider Profile capacity acquired.",
+                "Preparing runtime: validating the execution host and selected model.",
             )
             materializers = {
                 slot: value.materializerRef
@@ -394,6 +408,7 @@ class GenericOmnigentHostRealizer:
                 launch_policy=launch_policy,
                 authority_sink=record_prepared,
             )
+            await self._assert_host_capacity_admits()
             binding = await self._update_binding(
                 binding, state=RuntimeBindingState.host_allocating
             )
@@ -542,6 +557,11 @@ class GenericOmnigentHostRealizer:
                 ready=False if primary_error is not None else None,
             )
 
+        # Publish the only surviving startup logs before another cleanup owner,
+        # lease CAS, or Docker outage can prevent cleanup from reaching them.
+        prior_host_evidence = await self._publish_host_logs(
+            request, getattr(primary_error, "host_cleanup_evidence", None)
+        )
         if binding is not None:
             try:
                 binding, host_lease = await self._cleanup(
@@ -555,9 +575,7 @@ class GenericOmnigentHostRealizer:
                     # A host that failed registration or attestation was already
                     # removed by the runtime; its cleanup evidence (host log
                     # tail included) travels on the failure.
-                    prior_host_evidence=getattr(
-                        primary_error, "host_cleanup_evidence", None
-                    ),
+                    prior_host_evidence=prior_host_evidence,
                 )
             except BaseException as exc:
                 cleanup_error = exc
@@ -1080,6 +1098,26 @@ class GenericOmnigentHostRealizer:
                     task.cancel()
                     with suppress(asyncio.CancelledError):
                         await task
+
+    async def _assert_host_capacity_admits(self) -> None:
+        """Refuse a new host allocation the machine cannot safely carry.
+
+        The workflow reserves this capacity provisionally before the Activity
+        starts, so reaching a refusal here means the aggregate ledger changed
+        in between. Failing closed with a typed, waitable code preserves the
+        run's queued position instead of launching an unsafe container; it
+        never waits, because a wait here would occupy the execution Activity.
+        """
+
+        if self._host_capacity_admission is None:
+            return
+        decision = await self._host_capacity_admission.evaluate()
+        if decision.admitted:
+            return
+        raise HarnessPlatformError(
+            decision.waiting_reason,
+            code=HarnessPlatformFailure.OMNIGENT_HOST_CAPACITY_UNAVAILABLE,
+        )
 
     async def _notify_execution_state(
         self,
