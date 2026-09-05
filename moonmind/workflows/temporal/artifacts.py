@@ -4097,6 +4097,7 @@ class TemporalArtifactActivities:
         # Omnigent pre-Activity admission path reads this to recognize a grant
         # that landed while its signal was in flight (#3878 invariant 6).
         requester_profile_id = None
+        requester_fencing_generation: int | None = None
         if requester_workflow_id and isinstance(profiles, dict):
             for profile in profiles.values():
                 if not isinstance(profile, dict):
@@ -4104,6 +4105,18 @@ class TemporalArtifactActivities:
                 leases = profile.get("current_leases")
                 if isinstance(leases, list) and requester_workflow_id in leases:
                     requester_profile_id = str(profile.get("profile_id") or "")
+                    lease_metadata = profile.get("lease_metadata") or {}
+                    entry = (
+                        lease_metadata.get(requester_workflow_id)
+                        if isinstance(lease_metadata, dict)
+                        else None
+                    )
+                    if isinstance(entry, dict):
+                        try:
+                            generation = int(entry.get("fencingGeneration") or 0)
+                        except (TypeError, ValueError):
+                            generation = 0
+                        requester_fencing_generation = generation or None
                     break
 
         return {
@@ -4119,6 +4132,7 @@ class TemporalArtifactActivities:
             "requester_pending": requester_pending,
             "requester_queue_position": requester_queue_position,
             "requester_profile_id": requester_profile_id,
+            "requester_fencing_generation": requester_fencing_generation,
             "requested_profile": requested_profile,
         }
 
@@ -4280,11 +4294,29 @@ class TemporalArtifactActivities:
 
         async with get_async_session_context() as session:
             if action == "load":
+                from sqlalchemy import func as _func
+                from sqlalchemy import or_ as _or_
+
                 stmt = select(ProviderProfileSlotLease).where(
-                    ProviderProfileSlotLease.runtime_id == runtime_id
+                    ProviderProfileSlotLease.runtime_id == runtime_id,
+                    _or_(
+                        ProviderProfileSlotLease.lease_state == "held",
+                        ProviderProfileSlotLease.lease_state.is_(None),
+                    ),
                 )
                 result = await session.execute(stmt)
                 rows = result.scalars().all()
+                # The fencing high-water mark survives released leases:
+                # tombstoned rows keep their generation so a fresh manager
+                # that finds no live rows still resumes above every number
+                # it ever issued instead of reissuing generation 1.
+                max_generation = (
+                    await session.execute(
+                        select(
+                            _func.max(ProviderProfileSlotLease.fencing_generation)
+                        ).where(ProviderProfileSlotLease.runtime_id == runtime_id)
+                    )
+                ).scalar() or 0
                 leases_data = [
                     {
                         "workflow_id": row.workflow_id,
@@ -4312,7 +4344,10 @@ class TemporalArtifactActivities:
                     }
                     for row in rows
                 ]
-                return {"leases": leases_data}
+                return {
+                    "leases": leases_data,
+                    "max_fencing_generation": int(max_generation or 0),
+                }
 
             elif action == "save":
                 # Snapshot semantics: delete ALL rows for this runtime, then
@@ -4412,7 +4447,60 @@ class TemporalArtifactActivities:
                         or str(existing.owner_id or "") != str(payload.get("owner_id") or payload.get("ownerId") or "")
                     ):
                         return {"error": "lease identity conflict"}
-                    return {"granted": True, "duplicate": True}
+                    try:
+                        incoming_fence = int(payload.get("fencing_generation") or 0)
+                    except (TypeError, ValueError):
+                        incoming_fence = 0
+                    if incoming_fence <= 0:
+                        # A grant without a generation predates fenced grants;
+                        # keep the legacy duplicate acknowledgement.
+                        return {"granted": True, "duplicate": True}
+                    existing_live = (
+                        str(existing.lease_state or "held") == "held"
+                    )
+                    incoming_purpose = str(
+                        payload.get("purpose") or "execution_direct"
+                    )
+                    incoming_metadata = payload.get("safe_metadata")
+                    incoming_identity = (
+                        str(incoming_metadata.get("evidenceIdentity") or "")
+                        if isinstance(incoming_metadata, dict)
+                        else ""
+                    )
+                    existing_metadata = existing.safe_metadata_json
+                    existing_identity = (
+                        str(existing_metadata.get("evidenceIdentity") or "")
+                        if isinstance(existing_metadata, dict)
+                        else ""
+                    )
+                    try:
+                        existing_fence = int(existing.fencing_generation or 0)
+                    except (TypeError, ValueError):
+                        existing_fence = 0
+                    if (
+                        existing_live
+                        and existing_fence == incoming_fence
+                        and str(existing.purpose or "") == incoming_purpose
+                        and existing_identity == incoming_identity
+                    ):
+                        # An idempotent retry of the same grant: the complete
+                        # grant identity matches, so no new authority is made.
+                        return {"granted": True, "duplicate": True}
+                    if incoming_fence < existing_fence:
+                        # The persisted row is newer than the request. Replacing
+                        # it would downgrade the fence, so fail closed and let
+                        # the caller roll its in-memory reservation back.
+                        return {"error": "lease fencing regression"}
+                    # The row is stale \u2014 a tombstoned release, or a prior
+                    # DB release that failed after the in-memory lease was
+                    # freed while the manager moved on. Atomically replace it
+                    # with the incoming grant instead of reporting durable
+                    # success for authority the row does not describe.
+                    await session.delete(existing)
+                    await session.flush()
+                    replaced_stale_row = True
+                else:
+                    replaced_stale_row = False
                 new_lease = ProviderProfileSlotLease(
                     runtime_id=runtime_id,
                     workflow_id=str(payload.get("workflow_id") or lease_id),
@@ -4440,6 +4528,8 @@ class TemporalArtifactActivities:
                 )
                 session.add(new_lease)
                 await session.commit()
+                if replaced_stale_row:
+                    return {"granted": True, "duplicate": True, "replaced": True}
                 return {"granted": True, "duplicate": False}
 
             elif action == "heartbeat":
@@ -4461,6 +4551,8 @@ class TemporalArtifactActivities:
                     )
                 ).scalars().first()
                 if row is None:
+                    return {"heartbeat": False, "stale": True}
+                if str(row.lease_state or "held") != "held":
                     return {"heartbeat": False, "stale": True}
                 if expected_fence and int(row.fencing_generation) != expected_fence:
                     return {"heartbeat": False, "stale": True}
@@ -4490,13 +4582,41 @@ class TemporalArtifactActivities:
                     return {"released": True, "duplicate": True}
                 if expected_fence and int(row.fencing_generation) != expected_fence:
                     return {"released": False, "stale": True}
-                await session.execute(
-                    delete(ProviderProfileSlotLease).where(
-                        ProviderProfileSlotLease.lease_id == lease_id
-                    )
-                )
+                if str(row.lease_state or "held") != "held":
+                    return {"released": True, "duplicate": True}
+                # Tombstone instead of deleting: the row's fencing generation
+                # remains the runtime's high-water evidence, so a fresh
+                # manager that finds no live rows still resumes above every
+                # number it ever issued. Tombstones are excluded from "load"
+                # and reaped by "purge_released" after the redelivery horizon.
+                row.lease_state = "released"
+                row.released_at = datetime.now(timezone.utc)
                 await session.commit()
                 return {"released": True}
+
+            elif action == "purge_released":
+                payload = (leases or [{}])[0]
+                try:
+                    older_than_seconds = int(
+                        payload.get("older_than_seconds") or 30 * 24 * 3600
+                    )
+                except (TypeError, ValueError):
+                    older_than_seconds = 30 * 24 * 3600
+                horizon = datetime.now(timezone.utc) - timedelta(
+                    seconds=max(3600, older_than_seconds)
+                )
+                purged = (
+                    await session.execute(
+                        delete(ProviderProfileSlotLease).where(
+                            ProviderProfileSlotLease.runtime_id == runtime_id,
+                            ProviderProfileSlotLease.lease_state == "released",
+                            ProviderProfileSlotLease.released_at.is_not(None),
+                            ProviderProfileSlotLease.released_at < horizon,
+                        )
+                    )
+                ).rowcount or 0
+                await session.commit()
+                return {"purged": int(purged)}
 
             elif action == "list_active":
                 from sqlalchemy import select as _select
