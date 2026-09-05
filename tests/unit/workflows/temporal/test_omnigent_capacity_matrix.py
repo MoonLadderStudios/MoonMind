@@ -568,4 +568,4 @@ async def test_oauth_validation_stays_exclusive_at_the_manager_boundary(
 
         task.cancel()
         with pytest.raises(asyncio.CancelledError):
-            await task
+            _ = await task
