@@ -2,7 +2,7 @@
 
 Status: **Desired-state UI and implementation contract**  
 Owners: MoonMind Engineering  
-Last updated: 2026-08-28
+Last updated: 2026-09-05
 
 Canonical for: the create and edit experience for Provider Profiles on the **Providers & Secrets** Settings page
 
@@ -27,13 +27,15 @@ the execution host validates the actual selected model before work starts.
 
 Creating a Provider Profile should ask users for decisions they understand and are likely to change. It should not require them to review every launch-contract field before they can create a normal profile.
 
-The current form exposes low-level credential bindings, volume metadata, rate-limit behavior, routing metadata, and launch-shaping data beside the primary identity and model choices. Most users should not need those fields for a first-party or otherwise supported runtime and provider combination.
+Low-level credential bindings, volume metadata, rate-limit behavior, routing metadata, and launch-shaping data must not dominate the primary identity and model choices. Most users should not need those fields for a supported runtime and provider combination.
 
 The primary product decision is:
 
 > Provider Profile creation uses a focused standard form with a collapsed **Show advanced options** checkbox. Credential implementation details, volume metadata, secondary rate-limit controls, routing metadata, and launch-shaping fields stay behind that control. **Max parallel runs** remains visible in the standard form.
 
 This decision applies most strongly to creation. Editing must still make existing non-default or invalid advanced configuration easy to discover.
+
+The single form is the product foundation, not an interim step toward a separate wizard. Refinements improve identity selection, action wording, and truthful summaries within that form. They do not require another route, a second creation flow, a new profile type, or replacement of credential enrollment and backend policy.
 
 ---
 
@@ -48,8 +50,10 @@ The creation experience must:
 5. keep `max_parallel_runs` visible because it is an understandable capacity decision;
 6. avoid creating a profile that appears enabled when credential setup is incomplete;
 7. expose model and effort tier policy as a core profile decision rather than burying it with launch internals;
-8. protect existing advanced values during edit, collapse, validation failure, and save; and
-9. fail closed when no valid creation preset exists for a runtime, provider, and authentication combination.
+8. protect existing advanced values during edit, collapse, validation failure, and save;
+9. fail closed when no valid creation preset exists for a runtime, provider, and authentication combination;
+10. let users select supported runtimes and providers without memorizing internal IDs; and
+11. distinguish recommended policy, unsaved overrides, credential connection, and launch readiness in the language shown to users.
 
 ---
 
@@ -57,6 +61,8 @@ The creation experience must:
 
 This design does not:
 
+- introduce a separate multi-page onboarding wizard or parallel profile-creation route;
+- require a new persisted catalog, display-name field, or credential lifecycle to improve the form;
 - make all Provider Profile fields optional in the backend contract;
 - let the browser invent provider-specific materialization policy;
 - hide credential connection status or the action needed to connect a provider;
@@ -73,13 +79,13 @@ This design does not:
 The standard form should read as a short sequence of user decisions.
 
 ```text
-Create Provider Profile
+Create Profile
 
 Identity
-  Profile ID
-  Runtime
-  Provider
-  Account label
+  Runtime                 Select a supported runtime
+  Provider                Select a provider for that runtime
+  Account label           Optional
+  Profile ID              Suggested, editable before creation
 
 Authentication
   OAuth | API key | No credentials
@@ -101,19 +107,35 @@ Create profile / Create and connect
 
 ### 4.1 Profile ID
 
-`profile_id` is durable and normally immutable after creation. The UI should suggest an ID from runtime, provider, and account label, while keeping the field visible before create so the user can review the permanent identity.
+`profile_id` is durable and normally immutable after creation. The UI suggests an ID from the selected canonical runtime and provider IDs plus the optional account label. The field remains visible and editable before create so the user can review the permanent identity. Help text explains that the ID cannot be renamed after creation.
 
-A future separate display-name field may allow the technical ID to move behind advanced options. Until that contract exists, the form should not silently hide an immutable generated identifier.
+The suggestion follows the backend's existing format and length constraints. It is a convenience, not an identity reservation or a uniqueness guarantee. Empty or unusable account-label text still permits a suggestion from runtime and provider. The browser does not invent a second validation contract.
+
+While the ID remains suggestion-managed, changing its source fields may update it. After the user edits the ID, including clearing it, source changes, capability refreshes, and late responses must not overwrite it. An explicit `Use suggested ID` action may resume suggestion-managed behavior. This distinction is local draft state and is not stored on the profile.
+
+A uniqueness or format conflict preserves the whole draft and identifies the Profile ID field. A revised suggestion requires user review before submission. The client must not silently suffix an ID and retry creation. Only the backend validates and persists the final identity. OAuth account discovery after creation never renames the saved profile.
+
+A separate display-name field is not required for this behavior. Until such a contract exists, the form does not silently hide an immutable generated identifier.
 
 ### 4.2 Runtime and provider
 
 Runtime and provider remain visible and required. They determine the available authentication methods, model capabilities, creation preset, and approved materialization strategy.
 
-Use backend-provided choices rather than unrestricted text fields when the relevant catalog exists. Existing unknown values remain inspectable during edit.
+The standard path uses accessible selectors labeled `Runtime` and `Provider`. Choices have backend-provided display labels and canonical IDs as submitted values. Provider choices are scoped to the selected runtime. Display labels do not become identifiers or compatibility rules.
+
+The choice source reuses the trusted runtime/provider registries and creation-capability authority. If existing read APIs do not enumerate the choices, a small read-only projection of that authority supplies them. It is not a separately maintained catalog, a browser constant list, or an inference from existing profiles. Creating the first profile must work when no profiles exist. A temporary absence of launch-ready hosts must not erase an otherwise supported configuration choice.
+
+Provider Profiles retain their underlying runtime ownership, such as `codex_cli`, `claude_code`, or `opencode`. An Omnigent execution target is not a Provider Profile runtime, and its product display label must not be submitted as `runtime_id=omnigent`.
+
+Changing runtime retains a provider only when the new authoritative choice set confirms compatibility. Otherwise the provider selection is cleared and requires a new selection. Changing runtime or provider invalidates dependent authentication and preset selections until metadata for the new identity is available. Requests and caches include the relevant canonical identity, and stale responses cannot restore a previous selection or authorize submission. User-authored IDs, account labels, and unrelated draft values remain intact. Incompatible model or advanced overrides remain visible for review rather than being silently rewritten into a new launch contract.
+
+A Settings runtime filter may seed creation when its runtime is a permitted creation choice. It does not change the immutable runtime of a saved profile. No runtime/provider change silently selects a different credential method or billing route for an existing explicit choice.
+
+Loading, empty, denied, and failed-catalog states explain the affected control and any permitted retry. Failure preserves the draft and does not enable arbitrary text entry as an implicit fallback. A custom/manual path is available only when the backend explicitly advertises that capability. Unknown saved values remain inspectable during edit and may round-trip only when backend policy permits. A catalog outage alone must not erase them or prevent unrelated edits that the existing save contract permits.
 
 ### 4.3 Account label
 
-`account_label` should move out of the current Advanced Options group and remain a visible optional field.
+`account_label` remains a visible optional field in Identity.
 
 It is a user-facing identity aid, not a launch implementation detail. It becomes important when two profiles use the same runtime and provider but different accounts or credentials.
 
@@ -164,6 +186,25 @@ Desired behavior is:
 
 The UI must not use `enabled: true` as an unconditional client-side form default.
 
+### 4.9 Save actions and outcomes
+
+The primary action describes the operation that this submission will actually perform:
+
+| State | Primary action and explanation |
+|---|---|
+| Supported creation with a guided OAuth or API-key setup continuation | `Create and connect`. Explain that the profile is saved first and connection continues in the existing credential flow. |
+| Supported creation with no credential setup continuation, including an approved credential-free path | `Create profile`. Do not promise readiness before the backend returns it. |
+| Explicitly supported manual creation whose outcome is a disabled profile | `Save disabled profile`. Explain the required later setup. Do not offer this as a way around an unsupported combination. |
+| Editing an existing profile | `Update provider profile`. Credential lifecycle actions remain separate. |
+| Required choices, permissions, capabilities, or a valid preset are unavailable | A disabled creation action with the specific missing requirement or retry guidance. Do not imply that connection can proceed. |
+| A save is in progress | A disabled progress action such as `Creating profile...` or `Saving changes...`. Repeated clicks cannot issue another submission. |
+
+Action selection uses the same current backend capabilities, preset, manual-path permission, and submitted draft snapshot as the save and post-save continuation. Checking only whether the selected authentication method is named OAuth or API key is insufficient. The UI must have a supported continuation for that exact combination.
+
+After save, the normalized server response owns identity, activation, and readiness. The label is not evidence that enrollment succeeded. If creation succeeded but connection is pending, canceled, or failed, the UI identifies the saved profile and offers the existing connect/retry action rather than inviting the user to create it again. A saved-profile success notice must not claim `Connected` or `Ready` without the corresponding backend result. Runtime-default intent remains subject to section 4.7.
+
+Ordinary supporting copy describes user outcomes, for example `Recommended settings loaded` or `Connect this account to finish setup`. Preset versions, omission mechanics, and materialization terminology belong in the advanced diagnostic view rather than the primary success message. Error text remains actionable and does not discard useful diagnostics.
+
 ---
 
 ## 5. Advanced Options Control
@@ -192,30 +233,46 @@ On create, advanced options are collapsed by default.
 
 On edit:
 
-- start collapsed when every advanced value is empty, derived, or equal to the active creation preset;
+- start collapsed when every advanced value is derived or confirmed equal to the active recommendation and no advanced diagnostic requires attention;
 - start expanded when any advanced value is non-default, unknown, incompatible, or has a warning or error;
 - automatically expand when server validation targets a hidden control; and
-- preserve the user's explicit open or closed choice for the rest of the current edit session.
+- preserve the user's explicit open or closed choice for the rest of the current edit session, except when validation must reveal an affected control.
+
+Missing comparison metadata is unknown, not proof of recommended configuration. A background refresh does not repeatedly undo a user's disclosure choice.
 
 ### 5.3 Collapsed summary
 
-The collapsed control should summarize effective advanced policy without requiring expansion.
+The collapsed control summarizes the effective advanced draft policy without requiring expansion. It uses the same typed values, explicit-versus-inherited provenance, backend preset identity, and diagnostics used by the form and payload builder. Merely finding a supported authentication capability does not establish that the draft uses recommended settings.
 
-Example:
+| Comparison state | Summary behavior |
+|---|---|
+| A matching validated recommendation is available, all relevant values are understood, and none differ | `Using recommended <runtime> + <provider> settings`. Optional details include only confirmed effective values. |
+| Known user overrides differ from the recommendation | `N advanced overrides`, followed by bounded field labels such as `Custom cooldown and priority`. |
+| Values are unknown, incompatible, invalid, or associated with an advanced warning/error | `Advanced settings need attention`, followed by a safe diagnostic. A known override count may supplement but never replace the warning. |
+| Recommendation metadata is loading, unavailable, or no longer matches the selected identity | `Recommended settings unavailable` or an explicit loading message. Existing profiles may add `Preserving existing settings`; do not assert zero overrides or recommended status. |
+
+Example when comparison is complete:
 
 ```text
 Using recommended Codex + OpenAI settings
-API key environment · 300 second backoff · priority 100 · no custom volume
+API key environment · 300 second backoff · priority 100
 ```
 
-When advanced overrides exist:
+Example with custom draft values:
 
 ```text
-3 advanced overrides
-Custom volume · cooldown 600 seconds · tags configured
+2 advanced overrides
+Custom cooldown and priority
+Unsaved advanced changes
 ```
 
-The summary uses normalized backend metadata. It does not infer security posture from blank browser fields.
+Count each differing top-level advanced control once, not its nested JSON keys. Equality follows backend-normalized field semantics, including the distinction between inheritance and explicit empty, false, or zero values. The browser may compare normalized metadata, but must not implement an independent materialization or security policy. If a field cannot be compared reliably, report that uncertainty rather than guessing.
+
+Expected system-generated values, such as an enrollment-owned OAuth volume, derived environment isolation, or system tags, are not user overrides merely because a create-time field was empty. Their source must be known before classifying them. User routing tags remain distinct from system tags.
+
+The summary updates after draft edits, collapse, reset preview application, discard, normalized save, and relevant preset/profile refresh. Opening a reset preview alone does not change the summary. Unsaved differences are labeled as draft changes, not as already persisted policy. Summary computation and disclosure changes never mutate the draft or save payload.
+
+Show only bounded, authorized labels and policy metadata. Do not dump command JSON, SecretRefs, credential volume names, host paths, or secret-bearing diagnostics into the collapsed summary. Connection and launch-readiness status remain separate and visible. Recommended configuration does not mean connected, enabled, or launch ready, and valid custom overrides do not by themselves mean unhealthy.
 
 ### 5.4 Draft preservation
 
@@ -233,7 +290,7 @@ Resetting an advanced field to its recommended value should be an explicit field
 |---|---|---|
 | `profile_id` | Visible, suggested, reviewable, immutable after create | Frontend may suggest. Backend validates uniqueness and format. |
 | `runtime_id` | Visible required selector | Backend runtime catalog |
-| `provider_id` | Visible required selector | Backend provider catalog |
+| `provider_id` | Visible required selector scoped to runtime | Backend provider catalog and creation capabilities |
 | `account_label` | Visible optional friendly label | Empty, OAuth identity, or user value |
 | Authentication method | Visible guided choice | Backend capabilities for runtime and provider |
 | `model_tiers` and `default_model_tier` | Visible core policy, initially one runtime-default tier | Backend tier capabilities and resolution |
@@ -276,7 +333,7 @@ For known runtime and provider strategies, the backend must generate and validat
 
 #### Enabled state
 
-Enabled state follows credential activation and policy. Hiding a client-side `Enabled` checkbox while still submitting `true` would not simplify the experience without weakening activation controls. The create workflow must stop submitting unconditional enablement and let the backend return activation state.
+Enabled state follows credential activation and policy. Hiding a client-side `Enabled` checkbox while still submitting `true` would not simplify the experience without weakening activation controls. The create workflow does not submit unconditional enablement and lets the backend return activation state.
 
 ---
 
@@ -422,7 +479,7 @@ An advanced imported-volume workflow may exist where supported, but it must be e
 
 ### 9.1 Advanced override summary
 
-An existing profile with advanced configuration shows a compact summary beside the checkbox before expansion.
+An existing profile with advanced configuration shows a compact summary beside the checkbox before expansion. The comparison and uncertainty rules in section 5.3 apply equally to saved profiles and unsaved edits.
 
 Examples:
 
@@ -431,9 +488,11 @@ Examples:
 - `3 routing tags and custom command behavior`
 - `Launch-safety policy needs attention`
 
+Generated enrollment metadata describes its source without being counted as a custom override. A recommended-policy summary is never a substitute for credential or launch-readiness status.
+
 ### 9.2 Unknown values
 
-Unknown existing values remain visible and round-trippable. The UI does not erase them merely because the current creation preset no longer advertises them.
+Unknown existing values remain visible and round-trippable when backend policy permits. The UI does not erase them merely because the current creation preset no longer advertises them.
 
 Unknown or stale values start the advanced region expanded and receive a diagnostic.
 
@@ -447,6 +506,8 @@ The preview should distinguish:
 - fields changed from explicit override to inherited or omitted;
 - generated security fields that will be recalculated; and
 - changes that affect future launch selection or command construction.
+
+A preview performs no mutation. Applying it changes the draft and summary only until save. Credential and volume changes that require a dedicated lifecycle action are identified, not performed implicitly by reset.
 
 ### 9.4 Credential state
 
@@ -464,6 +525,9 @@ Credential replacement, reconnect, rotation, and disconnect remain dedicated act
 6. Treat a preset-version conflict like any other stale policy conflict. Reload metadata and require review.
 7. Show unsupported manual combinations before profile creation when possible.
 8. Preserve unrelated Provider Profile and Managed Secret content when one creation request fails.
+9. Preserve a user-authored Profile ID on validation conflicts and metadata refresh. No unreviewed ID substitution or automatic create retry is permitted.
+10. Discard stale selection metadata as authority, not the user's unrelated draft work.
+11. Distinguish a failed create from confirmed creation followed by incomplete enrollment. Resume setup for the confirmed saved profile rather than repeating creation.
 
 ---
 
@@ -479,8 +543,10 @@ The form must:
 - preserve logical focus order when the region opens;
 - avoid removing focused content without moving focus safely;
 - expose derived, locked, default, and override states in text;
-- avoid relying on color alone; and
-- keep guided credential flows keyboard accessible and secret safe.
+- avoid relying on color alone;
+- keep guided credential flows keyboard accessible and secret safe;
+- label runtime/provider selectors and expose loading, unavailable, and invalid-selection states accessibly; and
+- associate action explanations with the primary button and announce save/setup outcomes without moving focus unexpectedly.
 
 ---
 
@@ -537,6 +603,8 @@ validateProviderProfileDraft
 
 `buildProviderProfileCreatePayload` should distinguish untouched inherited values from explicit overrides. It should not serialize every displayed recommendation as though the user authored it.
 
+These are responsibilities, not a requirement to split the existing form into every named component. Identity suggestions, action presentation, and advanced summaries can use small pure helpers around the existing form. They share the existing generated API types and normalized draft/preset semantics rather than introducing a second validation, enrollment, or persistence model.
+
 ---
 
 ## 14. Test Contract
@@ -558,6 +626,13 @@ validateProviderProfileDraft
 - Non-default edit state starts expanded.
 - Hidden validation errors expand the region and receive focus.
 - The collapsed summary reflects advanced overrides without exposing secrets.
+- A custom cooldown or priority remains labeled as an override after collapse and save.
+- Matching, custom, warning, unknown, loading, unavailable, and mismatched-preset states have distinct truthful summaries.
+- Generated OAuth volumes, isolation policy, and system tags do not become false user overrides.
+- Explicit empty, false, zero, inherited values, and structured values follow backend normalization rather than truthiness or raw JSON string equality.
+- Reset preview alone changes nothing. Apply, discard, save, and refresh update the summary without changing payload semantics.
+- Recommended configuration with disconnected credentials does not render as launch ready. Valid custom configuration does not render as unhealthy solely because it is custom.
+- Repeated refreshes preserve the user's disclosure choice unless a hidden validation error requires expansion.
 
 ### 14.3 Field defaults
 
@@ -581,27 +656,57 @@ validateProviderProfileDraft
 ### 14.5 Editing
 
 - Existing custom advanced values are preserved.
-- Unknown values remain round-trippable.
+- Unknown values remain round-trippable when backend policy permits.
 - Reset to recommended previews all affected fields.
 - Cancel restores the normalized server profile.
 - Read-only users can inspect effective advanced policy without edit controls.
 
 ### 14.6 Conformance suite
 
-The end-to-end contract above is machine-verified by
-`frontend/src/components/settings/providerProfileRedesignConformance.test.tsx`,
-which exercises the standard-creation matrix for every authentication and
-materialization class the repository supports, progressive disclosure and draft
-preservation, hidden-field validation focus, the integrated model-tier create
-journey, existing-profile compatibility, and the guard that rejects a second
-hand-maintained creation-preset schema in React. The per-behavior unit tests
-remain in `frontend/src/components/settings/ProviderProfilesManager.test.tsx`.
+The form contract is covered by tests in
+`frontend/src/components/settings/providerProfileRedesignConformance.test.tsx`
+and `frontend/src/components/settings/ProviderProfilesManager.test.tsx`.
+Coverage must exercise the standard-creation matrix, progressive disclosure,
+draft preservation, hidden-field validation focus, model-tier integration,
+existing-profile compatibility, identity selection, and save/setup presentation.
+Generated-contract guards reject a second hand-maintained creation-preset schema
+in React. Backend tests cover any choice projection and its agreement with the
+existing creation-capability and save authorities.
+
+Test-file presence is not proof that every desired-state behavior is implemented
+or passing. Component tests with mocked network responses do not establish
+live provider enrollment or deployment readiness. Verification reports identify
+which boundaries ran and which remain unverified.
 
 Focused local command:
 
 ```bash
 npm run ui:test:settings-redesign
 ```
+
+### 14.7 Identity selection
+
+- Supported creation works with an empty profile collection and no launch-ready host.
+- Runtime/provider labels display correctly while payloads retain canonical IDs.
+- Runtime changes clear incompatible provider/authentication choices and reject delayed old responses as authority.
+- A Settings runtime filter seeds only a permitted creation runtime.
+- Catalog failure preserves drafts, exposes retry, and never enables an unauthorized manual fallback.
+- Unknown saved values remain inspectable and are not silently replaced.
+- Generated IDs follow current server constraints and update only while suggestion-managed.
+- User edits, explicit clearing, later account-label changes, metadata refresh, and OAuth identity discovery cannot overwrite or rename the user's ID.
+- Duplicate-ID and invalid-ID responses preserve the draft and require a reviewed resubmission.
+- Forged runtime/provider combinations are rejected at the API boundary regardless of selector filtering.
+
+### 14.8 Save actions and outcomes
+
+- Guided OAuth and API-key creation show `Create and connect` only when an actual supported continuation will run.
+- Credential-free creation, explicitly supported disabled/manual creation, edit, blocked, and in-flight states follow section 4.9.
+- The button and continuation use the same submitted identity/capability snapshot, including a selection change during a delayed response.
+- A repeated click while saving does not duplicate creation or enrollment.
+- Confirmed creation followed by canceled or failed enrollment retains the saved identity and offers setup recovery, not another create action for that profile.
+- Notices distinguish saved, pending connection, connected, enabled, and launch-ready results from the server.
+- Runtime-default intent is not applied before readiness permits it.
+- Keyboard, accessible names/descriptions, focus, narrow screens, and secret-safe summaries are verified through the production form.
 
 ---
 
@@ -627,19 +732,28 @@ The design is correctly implemented when:
 16. Hidden validation errors automatically reveal the affected controls.
 17. No secret plaintext appears in the profile payload, URL, summary, or saved UI state.
 18. A missing validated creation preset never falls back to a guessed materialization contract.
+19. Supported runtime/provider choices come from existing backend authority and remain usable for first-profile setup without memorized internal IDs.
+20. A suggested Profile ID remains reviewable, respects user edits, and is never silently changed after a conflict or creation.
+21. Primary action wording matches the permitted save/setup operation, and successful persistence is not confused with successful connection or readiness.
+22. Collapsed summaries distinguish confirmed recommendations, custom overrides, and unknown or invalid state without changing the underlying draft.
+23. These refinements retain one form and the existing credential, capability, validation, and persistence owners.
 
 ---
 
 ## 16. Decision Summary
 
-- Provider Profile creation uses progressive disclosure.
+- Provider Profile creation uses progressive disclosure within one form, not a separate wizard.
 - The default form focuses on identity, authentication, model policy, capacity, and default-selection intent.
+- Runtime and provider use backend-owned choices. Their display labels never replace canonical IDs.
+- Profile ID suggestions are reviewable and stop changing automatically once the user edits them.
 - `max_parallel_runs` remains visible.
-- Cooldown and rate-limit policy move behind advanced options.
-- Raw credential bindings and volume metadata move behind advanced options or are owned by guided setup.
+- Cooldown and rate-limit policy remain behind advanced options.
+- Raw credential bindings and volume metadata remain behind advanced options or are owned by guided setup.
 - Credential source and materialization mode are derived from the selected setup method.
 - Command behavior, tags, and priority remain advanced.
-- Account label moves into the standard identity experience.
-- Clear environment keys become backend-owned, read-only launch-security metadata.
+- Account label remains in the standard identity experience.
+- Clear environment keys are backend-owned, read-only launch-security metadata.
 - Enabled state follows credential activation and policy instead of a default-true creation checkbox.
 - Backend presets and omission replace global frontend guesses.
+- Save actions explain whether creation continues into connection. Backend responses alone establish the outcome.
+- Advanced summaries distinguish recommended, custom, and uncertain state while keeping readiness separate.
