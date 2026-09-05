@@ -29,8 +29,19 @@ from typing import Any, Mapping
 
 #: Host lease statuses that still own a container or its cleanup authority.
 ACTIVE_HOST_LEASE_STATUSES = ("allocating", "ready", "cleanup_pending")
-#: Statuses that mean a container launch has been started for this lease.
-COLD_LAUNCH_HOST_LEASE_STATUSES = ("allocating", "ready")
+#: A lease row exists only because a launch was started for it, so the
+#: cold-launch window counts rows by age and never by current status. Counting
+#: only live statuses let a launch that failed or finished cleanup inside the
+#: window stop being evidence, so repeated short-lived failures each observed
+#: an empty window and bypassed the burst limit entirely (#3878).
+
+#: Serializes the count-and-reserve pair for generic host admission. Two
+#: allocators that only read counts both observe a free slot and both insert,
+#: so neither the aggregate ceiling nor the burst limit is actually enforced
+#: under the concurrency this change enables (#3878). The key is a fixed
+#: constant: it names the machine-wide generic-host domain and never carries a
+#: provider, credential, host, or repository identity.
+GENERIC_HOST_ADMISSION_LOCK_KEY = 3878001
 
 #: Layer names are low-cardinality by construction: they never carry a
 #: provider, credential, host, or repository identity (#3878 AC11).
@@ -191,31 +202,67 @@ class GenericHostCapacityAdmission:
 
         from api_service.db.models import OmnigentHostLeaseRecordV2
 
+        async with self._session_factory() as session:
+            return await self.observe_within(session, now=now)
+
+    async def observe_within(
+        self, session: Any, *, now: datetime | None = None
+    ) -> tuple[int, int]:
+        """Count active hosts and in-window launches inside ``session``."""
+
+        from sqlalchemy import func, select
+
+        from api_service.db.models import OmnigentHostLeaseRecordV2
+
         observed_at = now or datetime.now(UTC)
         window_start = observed_at - timedelta(
             seconds=self._cold_launch_window_seconds
         )
-        async with self._session_factory() as session:
-            active = await session.execute(
-                select(func.count())
-                .select_from(OmnigentHostLeaseRecordV2)
-                .where(
-                    OmnigentHostLeaseRecordV2.status.in_(
-                        ACTIVE_HOST_LEASE_STATUSES
-                    )
+        active = await session.execute(
+            select(func.count())
+            .select_from(OmnigentHostLeaseRecordV2)
+            .where(
+                OmnigentHostLeaseRecordV2.status.in_(
+                    ACTIVE_HOST_LEASE_STATUSES
                 )
             )
-            recent = await session.execute(
-                select(func.count())
-                .select_from(OmnigentHostLeaseRecordV2)
-                .where(
-                    OmnigentHostLeaseRecordV2.status.in_(
-                        COLD_LAUNCH_HOST_LEASE_STATUSES
-                    ),
-                    OmnigentHostLeaseRecordV2.created_at >= window_start,
-                )
+        )
+        recent = await session.execute(
+            select(func.count())
+            .select_from(OmnigentHostLeaseRecordV2)
+            .where(
+                # Status-independent: a row inside the window is launch
+                # evidence even after it failed or finished cleanup.
+                OmnigentHostLeaseRecordV2.created_at >= window_start,
             )
+        )
         return int(active.scalar() or 0), int(recent.scalar() or 0)
+
+    async def lock_for_admission(self, session: Any) -> None:
+        """Serialize concurrent admissions for the caller's transaction.
+
+        PostgreSQL takes a transaction-scoped advisory lock, so a second
+        allocator blocks until the first has inserted its lease row and
+        therefore counts it. SQLite serializes writes and has no advisory
+        locks, so the surrounding transaction already provides the guarantee.
+        """
+
+        from sqlalchemy import text
+
+        dialect = getattr(getattr(session, "bind", None), "dialect", None)
+        name = getattr(dialect, "name", "") or ""
+        if not name:
+            engine = getattr(session, "get_bind", None)
+            if callable(engine):
+                try:
+                    name = getattr(engine().dialect, "name", "") or ""
+                except Exception:
+                    name = ""
+        if name.startswith("postgres"):
+            await session.execute(
+                text("SELECT pg_advisory_xact_lock(:key)"),
+                {"key": GENERIC_HOST_ADMISSION_LOCK_KEY},
+            )
 
     async def evaluate(
         self,
@@ -231,6 +278,43 @@ class GenericHostCapacityAdmission:
         """
 
         active_hosts, recent_cold_launches = await self.observe(now=now)
+        return self._verdict(
+            active_hosts=active_hosts,
+            recent_cold_launches=recent_cold_launches,
+            already_allocated=already_allocated,
+        )
+
+    async def evaluate_within(
+        self,
+        session: Any,
+        *,
+        already_allocated: bool = False,
+        now: datetime | None = None,
+    ) -> GenericHostCapacityDecision:
+        """Return the admission verdict inside the caller's transaction.
+
+        The caller must insert its durable reservation in this same
+        transaction: counting in one transaction and reserving in another is
+        the race this method exists to close (#3878).
+        """
+
+        await self.lock_for_admission(session)
+        active_hosts, recent_cold_launches = await self.observe_within(
+            session, now=now
+        )
+        return self._verdict(
+            active_hosts=active_hosts,
+            recent_cold_launches=recent_cold_launches,
+            already_allocated=already_allocated,
+        )
+
+    def _verdict(
+        self,
+        *,
+        active_hosts: int,
+        recent_cold_launches: int,
+        already_allocated: bool,
+    ) -> GenericHostCapacityDecision:
         if already_allocated:
             return GenericHostCapacityDecision(
                 admitted=True,
@@ -253,7 +337,6 @@ class GenericHostCapacityAdmission:
 
 __all__ = [
     "ACTIVE_HOST_LEASE_STATUSES",
-    "COLD_LAUNCH_HOST_LEASE_STATUSES",
     "LIMITING_LAYER_COLD_LAUNCH_RATE",
     "LIMITING_LAYER_HOST_CAPACITY",
     "GenericHostCapacityAdmission",

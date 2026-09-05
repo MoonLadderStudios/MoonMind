@@ -129,9 +129,11 @@ class _RecordingRun(MoonMindAgentRun):
                 self._assigned_profile_id = kwargs.get("execution_profile_ref")
                 self.slot_assigned_event.set()
 
+        recorder = self
+
         class _Handle:
-            async def signal(handle_self, name, payload=None):
-                self.signals.append((name, dict(payload or {})))
+            async def signal(self, name, payload=None):
+                recorder.signals.append((name, dict(payload or {})))
 
         return _Handle()
 

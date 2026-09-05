@@ -14,7 +14,6 @@ import pytest
 
 from moonmind.omnigent.host_capacity import (
     ACTIVE_HOST_LEASE_STATUSES,
-    COLD_LAUNCH_HOST_LEASE_STATUSES,
     LIMITING_LAYER_COLD_LAUNCH_RATE,
     LIMITING_LAYER_HOST_CAPACITY,
     GenericHostCapacityAdmission,
@@ -244,8 +243,6 @@ def test_cleanup_pending_hosts_still_hold_capacity() -> None:
     """A host is released by cleanup completing, not by the run finishing."""
 
     assert "cleanup_pending" in ACTIVE_HOST_LEASE_STATUSES
-    # A host being cleaned up is not a launch, so it must not consume burst.
-    assert "cleanup_pending" not in COLD_LAUNCH_HOST_LEASE_STATUSES
 
 
 def test_limits_default_without_configuration() -> None:
@@ -278,3 +275,76 @@ def test_invalid_limits_fail_fast_instead_of_falling_back(raw: str) -> None:
 
     with pytest.raises(ValueError, match=OMNIGENT_GENERIC_HOST_CAPACITY_ENV):
         generic_host_capacity(env={OMNIGENT_GENERIC_HOST_CAPACITY_ENV: raw})
+
+
+# ---------------------------------------------------------------------------
+# Count-and-reserve must be one operation (review finding on #3992)
+# ---------------------------------------------------------------------------
+
+
+class _FakeResult:
+    def __init__(self, value: int) -> None:
+        self._value = value
+
+    def scalar(self) -> int:
+        return self._value
+
+
+class _CountingSession:
+    """Records the statements a capacity evaluation issues in one transaction."""
+
+    def __init__(self, *, active: int, recent: int) -> None:
+        self._counts = [active, recent]
+        self.statements: list[str] = []
+
+    async def execute(self, statement, params=None):
+        text = str(statement)
+        self.statements.append(text)
+        if "pg_advisory_xact_lock" in text:
+            return _FakeResult(1)
+        return _FakeResult(self._counts.pop(0))
+
+
+@pytest.mark.asyncio
+async def test_admission_counts_inside_the_callers_transaction() -> None:
+    """Counting in one transaction and reserving in another is the race."""
+
+    admission = GenericHostCapacityAdmission(
+        session_factory=lambda: None,
+        host_capacity=2,
+        cold_launch_burst=8,
+        cold_launch_window_seconds=30,
+    )
+    session = _CountingSession(active=2, recent=0)
+
+    decision = await admission.evaluate_within(session)
+
+    assert decision.admitted is False
+    assert decision.limiting_layer == LIMITING_LAYER_HOST_CAPACITY
+    # The counts came from the session the caller will insert into, not from a
+    # separate read-only connection.
+    assert len(session.statements) >= 2
+
+
+@pytest.mark.asyncio
+async def test_a_lease_row_in_the_window_is_launch_evidence_at_any_status() -> None:
+    """A launch that already failed still consumed burst inside its window."""
+
+    admission = GenericHostCapacityAdmission(
+        session_factory=lambda: None,
+        host_capacity=8,
+        cold_launch_burst=2,
+        cold_launch_window_seconds=30,
+    )
+    session = _CountingSession(active=0, recent=2)
+
+    decision = await admission.evaluate_within(session)
+
+    assert decision.admitted is False
+    assert decision.limiting_layer == LIMITING_LAYER_COLD_LAUNCH_RATE
+    # The launch-window count must not filter on status: a short-lived failure
+    # moves to cleanup_pending/cleaned and would otherwise stop being evidence.
+    window_query = next(
+        stmt for stmt in session.statements if "created_at" in stmt
+    )
+    assert "status" not in window_query
