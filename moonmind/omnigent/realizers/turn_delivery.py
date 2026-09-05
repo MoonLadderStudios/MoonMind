@@ -15,9 +15,11 @@ from __future__ import annotations
 import logging
 from typing import Any, Awaitable, Callable
 
+from moonmind.omnigent.control_plane import metrics as control_plane_metrics
 from moonmind.omnigent.control_plane.records import compute_digest
 from moonmind.omnigent.control_plane.turn_admission import (
     CanonicalTurnAdmissionRejected,
+    RemediationAuthorityBroadenedError,
 )
 from moonmind.omnigent.control_plane.turn_commands import CanonicalSessionBootstrap
 from moonmind.omnigent.control_plane.turn_sources import (
@@ -73,6 +75,26 @@ def canonical_turn_source(request: AgentExecutionRequest) -> TurnSource:
     if lineage is None:
         return TurnSource.INITIAL
     return coerce_turn_source(lineage.source)
+
+
+def _record_followup_availability(
+    *, plan: Any, turn_source: TurnSource, available: bool
+) -> None:
+    """Record whether one follow-up turn source was admitted to this session.
+
+    ``TurnSource.INITIAL`` establishes a session rather than following one up,
+    so it is not a follow-up availability signal. Every other source is exactly
+    one bounded ``followup_kind``.
+    """
+
+    if turn_source is TurnSource.INITIAL:
+        return
+    control_plane_metrics.record_safely(
+        control_plane_metrics.record_followup_availability,
+        harness_id=getattr(getattr(plan, "payload", None), "harnessId", None),
+        followup_kind=turn_source.value,
+        available=available,
+    )
 
 
 def instruction_digest(request: AgentExecutionRequest) -> str:
@@ -153,17 +175,31 @@ async def deliver_canonical_turn(
             ),
         )
     except CanonicalTurnAdmissionRejected as exc:
+        _record_followup_availability(
+            plan=plan, turn_source=turn_source, available=False
+        )
         raise HarnessPlatformError(
             "canonical turn admission returned "
             f"{exc.decision.value}; the prior Omnigent session was not mutated",
             code=HarnessPlatformFailure.OMNIGENT_RUNTIME_BINDING_CONFLICT,
         ) from exc
+    except RemediationAuthorityBroadenedError:
+        _record_followup_availability(
+            plan=plan, turn_source=turn_source, available=False
+        )
+        raise
     if not command_claim.owns_delivery:
+        _record_followup_availability(
+            plan=plan, turn_source=turn_source, available=False
+        )
         raise HarnessPlatformError(
             "canonical turn command is already settled or owned; "
             "reconciliation is required",
             code=HarnessPlatformFailure.OMNIGENT_RUNTIME_BINDING_CONFLICT,
         )
+    _record_followup_availability(
+        plan=plan, turn_source=turn_source, available=True
+    )
 
     from moonmind.omnigent.control_plane.records import ControlPlaneOutcome
 

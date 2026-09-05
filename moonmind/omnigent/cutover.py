@@ -469,6 +469,7 @@ def select_runtime(
     submission_kind: str = "create",
     release_status: EffectivePhase | None = None,
     rollback_generation: str | None = None,
+    versioned_default: bool = False,
 ) -> RuntimeSelection:
     """Apply rollout defaults without ever rewriting an explicit selection.
 
@@ -476,6 +477,11 @@ def select_runtime(
     advance at phase 3.  Explicit direct launch is rejected from phase 5.  This
     helper never performs automatic fallback: callers must persist the returned
     evidence on the run before launch.
+
+    When ``versioned_default`` is true the caller already resolved the default
+    through the versioned rollout boundary, so the legacy phase promotion must
+    not rewrite it (MoonLadderStudios/MoonMind#3988): a restored direct default
+    stays direct instead of being promoted back to Omnigent.
 
     The rollout phase and the code-owned retirement class are separate
     authorities and both must permit a runtime before it becomes a new
@@ -511,7 +517,10 @@ def select_runtime(
         "schedule": CutoverPhase.SCHEDULE_DEFAULT,
         "preset": CutoverPhase.SCHEDULE_DEFAULT,
     }.get(submission_kind, CutoverPhase.BROAD_DEFAULT)
-    selected = "omnigent" if default == "codex_cli" and phase >= threshold else default
+    if versioned_default:
+        selected = normalize_runtime_id(default) if default else default
+    else:
+        selected = "omnigent" if default == "codex_cli" and phase >= threshold else default
     # A configured default may not keep a direct runtime as a default target
     # once its retirement class stops admitting new work (#3835 required work 2).
     assert_runtime_new_admission(selected, rollback_generation=rollback_generation)
