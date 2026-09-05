@@ -32,6 +32,9 @@ from api_service.db.base import get_async_session
 from api_service.db.models import (
     Base,
     ManagedAgentProviderProfile,
+    OmnigentAgentProfile,
+    OmnigentAgentProfileUsage,
+    OmnigentAgentProfileVersion,
     OmnigentPolicy,
     OmnigentPolicyVersion,
     ProviderCredentialSource,
@@ -918,10 +921,61 @@ async def test_public_root_continue_and_fork_cross_the_real_execution_owner(
         created_at=now,
         updated_at=now,
     )
+    from api_service.api.routers.omnigent_agent_profiles import AgentProfileDocument
+    from moonmind.provider_profiles.isolation_policy import derive_isolation_policy
+
+    configuration_document = AgentProfileDocument.model_validate({
+        "endpointRef": "default",
+        "bridgeMode": "proxy",
+        "source": {
+            "bundleArtifactRef": "artifact://checkpoint-owner-agent-bundle",
+            "bundleDigest": "sha256:" + "b" * 64,
+        },
+        "harness": "codex-native",
+        "requiredCapabilities": ["session.start"],
+        "execution": {
+            "defaultExecutionProfileRef": "omnigent-codex@1",
+            "allowedLaunchPolicyRefs": ["codex-on-demand@1"],
+        },
+        "providerRequirements": {
+            "runtimeId": "codex_cli",
+            "providerIds": ["openai"],
+            "credentialSource": "oauth_volume",
+            "materializationMode": "oauth_home",
+        },
+        "policyRef": policy["policyRef"],
+    }).model_dump(mode="json", by_alias=True, exclude_none=True)
+    configuration_digest = "sha256:" + hashlib.sha256(
+        json.dumps(configuration_document, sort_keys=True).encode()
+    ).hexdigest()
+    isolation = derive_isolation_policy(
+        runtime_id="codex_cli", provider_id="openai", authentication_method="oauth",
+        credential_source="oauth_volume", runtime_materialization_mode="oauth_home",
+    )
+    assert isolation is not None
     async with sessions() as session:
         session.add_all(
             [
                 record,
+                OmnigentAgentProfile(
+                    profile_id="checkpoint-owner-configuration",
+                    display_name="Checkpoint owner execution configuration",
+                    visibility="workspace",
+                    state="active",
+                    active_version=1,
+                    default_for_runtime=True,
+                ),
+                OmnigentAgentProfileVersion(
+                    profile_id="checkpoint-owner-configuration",
+                    version=1,
+                    digest=configuration_digest,
+                    document=configuration_document,
+                    validation_result={"ready": True},
+                    rollout_metadata={"bundleImport": {
+                        "status": "succeeded",
+                        "upstreamAgent": {"id": "checkpoint-owner-agent"},
+                    }},
+                ),
                 ManagedAgentProviderProfile(
                     profile_id="profile-1",
                     runtime_id="codex_cli",
@@ -937,6 +991,7 @@ async def test_public_root_continue_and_fork_cross_the_real_execution_owner(
                     last_auth_method=ProviderProfileAuthMethod.OAUTH_VOLUME,
                     default_model="gpt-test",
                     default_effort="high",
+                    clear_env_keys=list(isolation.keys),
                 ),
                 OmnigentPolicy(
                     policy_id=policy["policyId"],
@@ -1551,6 +1606,36 @@ async def test_public_root_continue_and_fork_cross_the_real_execution_owner(
     requests_by_turn = {
         request.correlation_id: request for request in ledger.requests
     }
+    async with sessions() as session:
+        artifacts = artifact_service(session)
+        for request in ledger.requests:
+            step = request.step_execution
+            assert step is not None
+            assert "agentProfileSnapshot" not in step.runtime_selection
+            assert "agentProfileSnapshot" not in request.parameters
+            assert step.runtime_selection["agentProfile"] == {
+                "profileId": "checkpoint-owner-configuration",
+                "version": 1,
+                "digest": configuration_digest,
+            }
+            assert step.runtime_selection["providerProfileRef"] == "profile-1"
+            assert step.runtime_selection["model"] == "gpt-test"
+            assert step.runtime_selection["effort"] == "high"
+            _artifact, context_bytes = await artifacts.read(
+                artifact_id=step.context_bundle_ref.removeprefix("artifact://"),
+                principal=principal,
+                allow_restricted_raw=True,
+            )
+            assert "sha256:" + hashlib.sha256(context_bytes).hexdigest() == step.context_bundle_digest
+            context = json.loads(context_bytes)
+            snapshot = context["runtimeSelection"]["agentProfileSnapshot"]
+            assert snapshot["document"]["providerRequirements"]["credentialSource"] == "oauth_volume"
+            usage = await session.scalar(select(OmnigentAgentProfileUsage).where(
+                OmnigentAgentProfileUsage.consumer_type == "checkpoint",
+                OmnigentAgentProfileUsage.consumer_id == context["branchId"],
+            ))
+            assert usage is not None
+            assert usage.effective_snapshot == snapshot
     assert set(requests_by_turn) == {
         root_turn_id,
         continue_turn_id,

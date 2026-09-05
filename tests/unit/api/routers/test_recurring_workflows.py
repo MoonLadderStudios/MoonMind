@@ -575,25 +575,36 @@ async def test_mm3788_create_route_accepts_a_profile_owned_by_the_target_runtime
 
 
 @pytest.mark.asyncio
-async def test_mm3788_create_route_defers_omnigent_compatibility_to_selection(
+async def test_create_route_preserves_missing_execution_configuration_error(
     tmp_path: Path,
 ) -> None:
-    """An Omnigent target is not a runtime mismatch; selection owns that check."""
+    """Omnigent selection rejects missing authority before schedule persistence."""
 
     user = SimpleNamespace(id=uuid4(), is_superuser=False)
 
     async with _mm3788_session(tmp_path) as session:
-        created = await recurring_router.create_recurring_workflow(
-            payload=_mm3788_create_payload(
-                _mm3788_route_target(
-                    target_runtime="omnigent", profile_id="codex_minimax_team"
-                )
-            ),
-            service=_mm3788_service(session),
-            user=user,
-        )
+        service = _mm3788_service(session)
+        with pytest.raises(HTTPException) as excinfo:
+            await recurring_router.create_recurring_workflow(
+                payload=_mm3788_create_payload(
+                    _mm3788_route_target(
+                        target_runtime="omnigent", profile_id="codex_minimax_team"
+                    )
+                ),
+                service=service,
+                user=user,
+            )
 
-        assert created.target["initialParameters"]["targetRuntime"] == "omnigent"
+        assert excinfo.value.status_code == status.HTTP_409_CONFLICT
+        assert excinfo.value.detail["code"] == "profile_execution_configuration_required"
+        assert excinfo.value.detail["profileId"] == "codex_minimax_team"
+        service._adapter.create_schedule.assert_not_awaited()
+        # Match the failed request's session cleanup before reading durable state.
+        await session.rollback()
+        stored = (
+            await session.execute(select(RecurringWorkflowDefinition))
+        ).scalars().all()
+        assert stored == []
 
 
 @pytest.mark.asyncio

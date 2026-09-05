@@ -623,6 +623,41 @@ async def resolve_default_agent_profile_snapshot(
     Agent Profile, so workers never repeat default/profile resolution.
     """
 
+    if provider_profile_ref:
+        from api_service.services.profile_execution_selection import (
+            profile_execution_selection,
+        )
+
+        query = select(ManagedAgentProviderProfile).where(
+            ManagedAgentProviderProfile.profile_id == provider_profile_ref
+        )
+        visibility_filter = _provider_profile_visibility_filter(user)
+        if visibility_filter is not None:
+            query = query.where(visibility_filter)
+        provider = await session.scalar(query)
+        if provider is None:
+            raise HTTPException(404, "Profile not found")
+        selection = await profile_execution_selection(session, provider, user)
+        configurations = await session.scalar(
+            select(OmnigentAgentProfileVersion).where(
+                OmnigentAgentProfileVersion.profile_id == selection["profileId"],
+                OmnigentAgentProfileVersion.version == selection["version"],
+            )
+        )
+        # Profile model authority belongs to execution parameters. Clear legacy
+        # configuration defaults without sending provider values through the
+        # legacy model schema (whose validation is intentionally narrower).
+        selection["overrides"] = {"model": {
+            key: None for key in ("model", "qualifiedId", "effort")
+            if key in (configurations.document.get("model") or {})
+        }}
+        if launch_policy_ref:
+            selection["launchPolicyRef"] = launch_policy_ref
+        return await resolve_agent_profile_snapshot(
+            session, selection=selection, consumer_type=consumer_type,
+            consumer_id=consumer_id, user=user,
+        )
+
     profile = await session.scalar(
         select(OmnigentAgentProfile)
         .where(OmnigentAgentProfile.default_for_runtime.is_(True))
@@ -723,22 +758,10 @@ async def resolve_default_agent_profile_snapshot(
                 "Agent Profile",
             )
         selected_provider_ref = selected.profile_id
-    selection = {
-        "profileId": profile.profile_id,
-        "version": profile.active_version,
-        "providerProfileRef": selected_provider_ref,
-        **(
-            {"launchPolicyRef": str(launch_policy_ref).strip()}
-            if str(launch_policy_ref or "").strip()
-            else {}
-        ),
-    }
-    return await resolve_agent_profile_snapshot(
-        session,
-        selection=selection,
-        consumer_type=consumer_type,
-        consumer_id=consumer_id,
-        user=user,
+    return await resolve_default_agent_profile_snapshot(
+        session, provider_profile_ref=selected_provider_ref,
+        launch_policy_ref=launch_policy_ref, consumer_type=consumer_type,
+        consumer_id=consumer_id, user=user,
     )
 
 

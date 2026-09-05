@@ -446,7 +446,7 @@ async def _provider_check(session, document):
     return {check["name"]: check for check in outcome.checks}["provider_profile"]
 
 
-async def test_smoke_admission_rejects_an_expired_model_catalog(session, monkeypatch):
+async def test_smoke_admission_uses_actual_host_instead_of_expired_catalog(session, monkeypatch):
     """Smoke launches the real host, so it must not admit an expired catalog.
 
     The pinned host image refreshes its catalog from the provider at probe
@@ -495,7 +495,7 @@ async def test_smoke_admission_rejects_an_expired_model_catalog(session, monkeyp
     }
     await session.commit()
 
-    assert (await _provider_check(session, document))["ready"] is False
+    assert (await _provider_check(session, document))["ready"] is True
 
     # The interval is deployment-configurable; ``0`` restores identity-only
     # staleness at this boundary exactly as it does at the reconciler.

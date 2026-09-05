@@ -4802,17 +4802,6 @@ type BranchCreateDraft = {
   effort: string;
 };
 
-type CheckpointAgentProfileOption = {
-  profileId: string;
-  displayName: string;
-  state: string;
-  activeVersion: number | null;
-  versions: Array<{
-    version: number;
-    validationResult?: { ready?: boolean } | null;
-  }>;
-};
-
 type BranchMutationKind = 'create' | 'continue' | 'fork' | 'promote' | 'publish' | 'archive' | 'compare';
 
 type BranchMutationRequest =
@@ -5075,18 +5064,15 @@ function BranchExplorerPanel({
   onBranchAction: (request: BranchMutationRequest) => void;
   retrievalCeilings: ReturnType<typeof retrievalCeilingsFromRuntimeConfig>;
 }) {
-  const agentProfilesQuery = useQuery({
-    queryKey: ['workflow-detail', 'omnigent-agent-profiles'],
-    queryFn: async (): Promise<CheckpointAgentProfileOption[]> => {
-      const response = await fetch(`${apiBase}/omnigent/agent-profiles`, { credentials: 'include' });
-      if (!response.ok) throw new Error(await response.text() || 'Failed to load agent profiles.');
+  const profilesQuery = useQuery({
+    queryKey: ['checkpoint-branch', 'profiles'],
+    enabled: actionsEnabled,
+    queryFn: async (): Promise<Array<{ profile_id: string; account_label?: string; enabled?: boolean; launch_ready?: boolean }>> => {
+      const response = await fetch(`${apiBase}/v1/provider-profiles?include_execution=true`, { credentials: 'same-origin' });
+      if (!response.ok) throw new Error('Profiles could not be loaded.');
       const value: unknown = await response.json();
-      return Array.isArray(value) ? value as CheckpointAgentProfileOption[] : [];
+      return Array.isArray(value) ? value : [];
     },
-  });
-  const readyAgentProfiles = (agentProfilesQuery.data || []).filter((profile) => {
-    const active = (profile.versions || []).find((version) => version.version === profile.activeVersion);
-    return profile.state === 'active' && active?.validationResult?.ready === true;
   });
   const checkpointRows = rows.filter((row) => isSupportedCheckpointRef(stepCheckpointRef(row)));
   const branchGroups = useMemo(() => buildBranchGroups(branches), [branches]);
@@ -5285,31 +5271,13 @@ function BranchExplorerPanel({
             </select>
           </label>
           <label>
-            Agent profile
-            <select
-              value={draft.agentProfileId}
-              disabled={busy || agentProfilesQuery.isFetching}
-              onChange={(event) => {
-                const selected = readyAgentProfiles.find((profile) => profile.profileId === event.target.value);
-                setDraft((current) => ({
-                  ...current,
-                  agentProfileId: event.target.value,
-                  agentProfileVersion: selected?.activeVersion ?? null,
-                }));
-              }}
-            >
-              <option value="">Inherit no agent profile</option>
-              {readyAgentProfiles.map((profile) => (
-                <option key={profile.profileId} value={profile.profileId}>
-                  {profile.displayName} · v{profile.activeVersion}
-                </option>
-              ))}
+            Profile
+            <select value={draft.providerProfileRef} disabled={busy} onChange={(event) => setDraft((current) => ({ ...current, providerProfileRef: event.target.value }))}>
+              <option value="">Inherit execution Profile</option>
+              {draft.providerProfileRef && !(profilesQuery.data || []).some((profile) => profile.profile_id === draft.providerProfileRef) ? <option value={draft.providerProfileRef}>{draft.providerProfileRef} · Unavailable</option> : null}
+              {(profilesQuery.data || []).map((profile) => <option key={profile.profile_id} value={profile.profile_id}>{profile.account_label || profile.profile_id}{profile.enabled === false ? ' · Disabled' : profile.launch_ready === false ? ' · Needs setup' : ''}</option>)}
             </select>
-            {agentProfilesQuery.isError ? <span className="small" role="alert">Agent-profile readiness is unavailable.</span> : null}
-          </label>
-          <label>
-            Provider profile
-            <input value={draft.providerProfileRef} disabled={busy} placeholder="Automatic authorized profile" onChange={(event) => setDraft((current) => ({ ...current, providerProfileRef: event.target.value }))} />
+            {profilesQuery.isError ? <span role="status">Profiles could not be loaded. Your selection is preserved.</span> : null}
           </label>
           <label>
             Execution profile / launch policy
