@@ -31,7 +31,8 @@ _UNSET_VALIDATED_AT = "__unset__"
 
 
 @pytest.fixture(autouse=True)
-def _clear_enrollment_latch():
+def _clear_enrollment_latch(monkeypatch):
+    monkeypatch.delenv("OPENCODE_API_KEY", raising=False)
     reset_enrollment_attempts()
     yield
     reset_enrollment_attempts()
@@ -122,6 +123,21 @@ class _Session:
 
 def _session_factory(rows):
     return lambda: _Session(rows)
+
+
+@pytest.mark.asyncio
+async def test_failed_discovery_preserves_enrolled_credential_readiness():
+    from moonmind.omnigent.bootstrap.provider_revalidation import _record_revalidation_failure
+
+    profile = _profile(command_behavior={"auth_readiness": {
+        "connected": True, "launch_ready": True, "backing_secret_exists": True,
+    }})
+    await _record_revalidation_failure(
+        session_factory=_session_factory([profile]), profile_id=profile.profile_id,
+        image_ref=CURRENT_IMAGE,
+    )
+    assert profile.command_behavior["auth_readiness"]["launch_ready"] is True
+    assert profile.auth_state == "connected"
 
 
 def _install_stubs(

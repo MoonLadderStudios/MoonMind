@@ -35,6 +35,7 @@ class _Session:
             visibility="workspace",
             owner_id=uuid4(),
             active_version=2,
+            default_for_runtime=True,
         )
         self.version = SimpleNamespace(
             version=2,
@@ -54,8 +55,8 @@ class _Session:
                 },
                 "providerRequirements": {
                     "runtimeId": "codex_cli",
-                    "credentialSource": "oauth",
-                    "materializationMode": "host",
+                    "credentialSource": "oauth_volume",
+                    "materializationMode": "oauth_home",
                     "providerIds": ["openai"],
                 },
                 "model": {"model": "gpt-5.4"},
@@ -106,6 +107,9 @@ class _Session:
 
     async def get(self, model, key):
         return self.profile if model is OmnigentAgentProfile else None
+
+    async def execute(self, statement):
+        return SimpleNamespace(all=lambda: [(self.profile, self.version)])
 
     async def scalar(self, statement):
         self.statements.append(statement)

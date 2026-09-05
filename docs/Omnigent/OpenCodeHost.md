@@ -423,7 +423,7 @@ OpenCode model-catalog evidence binds:
 
 `OPENCODE_MODEL_CATALOG_MAX_AGE_HOURS` bounds observation age and defaults to `6`. A value of `0` revalidates only when image or credential identity changes.
 
-Evidence is invalid when:
+Discovery needs refresh when:
 
 - the host image changes
 - the OpenCode runtime identity changes
@@ -434,12 +434,16 @@ Evidence is invalid when:
 
 The bootstrap reconciler revalidates connected profiles through their selected
 materializer: the existing SecretRef for OpenCode Go and no credential for
-OpenCode Zen. It does not request a new key. While a valid revalidation is
-pending, authoring reports `provider_runtime_revalidation_pending`.
+OpenCode Zen. It does not request a new key. Discovery freshness is advisory for connected Profiles. A refresh, image change,
+or failed background probe never removes a configured Profile from authoring or
+revokes previously established credential readiness. The existing durable launch
+phase reports preparation progress while the actual host verifies the selected
+model and credential materialization. Missing models produce an actionable failure
+without substituting a model or account.
 
 Revalidation attempts are bounded per image and credential generation. Failure to acquire the maintenance lease does not spend a provider probe attempt because no probe occurred.
 
-## 10. Agent Profile
+## 10. Advanced execution configuration
 
 A representative OpenCode Agent Profile remains:
 

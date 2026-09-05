@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { CSSProperties, DragEvent, ReactElement } from "react";
 import { createPortal } from "react-dom";
-import { keepPreviousData, useQuery } from "@tanstack/react-query";
+import { useQuery } from "@tanstack/react-query";
 import { useInRouterContext, useLocation } from "react-router-dom";
 
 import type { BootPayload } from "../boot/parseBootPayload";
@@ -547,6 +547,13 @@ interface JiraImportProvenance {
 
 interface ProviderProfile {
   profile_id: string;
+  runtime_id?: string;
+  execution_selection?: {
+    profileId: string; version: number; digest: string;
+    providerProfileRef: string; launchPolicyRef: string | null;
+    defaultForRuntime: boolean;
+  } | null;
+  execution_selection_error?: { message: string } | null;
   account_label?: string | null;
   provider_id?: string | null;
   provider_label?: string | null;
@@ -947,7 +954,9 @@ export function resolveDefaultProviderProfileId(
       return configured.profile_id;
     }
   }
-  const explicitDefault = launchableProfiles.find((profile) => profile.is_default);
+  const explicitDefault = launchableProfiles.find((profile) =>
+    profile.is_default && profile.execution_selection?.defaultForRuntime,
+  ) || launchableProfiles.find((profile) => profile.is_default);
   if (explicitDefault) {
     return explicitDefault.profile_id;
   }
@@ -6545,12 +6554,10 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
     runtime === "omnigent" ? selectedOmnigentProviderRuntime : runtime;
   const providerProfilesQuery = useQuery({
     ...configQueryDefaults,
-    queryKey: ["workflow-start", "provider-profiles", providerProfileRuntime],
+    queryKey: ["workflow-start", "provider-profiles"],
     queryFn: async (): Promise<ProviderProfile[]> => {
       const separator = providerProfilesEndpoint.includes("?") ? "&" : "?";
-      const providerUrl = runtime === "omnigent"
-        ? providerProfilesEndpoint
-        : `${providerProfilesEndpoint}${separator}runtime_id=${encodeURIComponent(providerProfileRuntime)}`;
+      const providerUrl = `${providerProfilesEndpoint}${separator}include_execution=true`;
       const response = await fetch(
         providerUrl,
         {
@@ -6567,15 +6574,8 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
       }
       return (await response.json()) as ProviderProfile[];
     },
-    // Omnigent eligibility comes exclusively from the readiness catalog, but
-    // the normal profile response remains the authority for model/effort
-    // capabilities. Load it for Codex and intersect the two below.
+    // Inventory is shared across runtimes and independent of discovery health.
     enabled: Boolean(runtime),
-    // Keep the previously loaded profiles visible while a runtime switch
-    // refetches. Without this, the query key change empties `data`, which
-    // collapses the Runtime/Provider-profile row from `grid-2` to `stack`
-    // (full width) until the fetch resolves and it snaps back to half width.
-    placeholderData: keepPreviousData,
   });
   const agentProfilesQuery = useQuery({
     queryKey: ["workflow-start", "omnigent-agent-profiles"],
@@ -6600,7 +6600,7 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
       : pageMode.mode !== "create" &&
           temporalDraftQuery.data?.draft.agentProfile?.profileId === agentProfile
         ? temporalDraftQuery.data.draft.agentProfile.version || undefined
-        : undefined;
+        : providerProfilesQuery.data?.find((profile) => profile.profile_id === providerProfile)?.execution_selection?.version;
   const selectedOmnigentAgentProfileVersion =
     selectedOmnigentAgentProfile?.versions.find(
       (version) =>
@@ -6670,6 +6670,7 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
     },
     staleTime: 0,
     refetchOnWindowFocus: true,
+    refetchInterval: 5000,
   });
   const selectedGenericOmnigentTarget = omnigentExecutionReadinessQuery.data?.executionTargets?.find(
     (target) =>
@@ -6686,37 +6687,21 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
     ? selectedGenericOmnigentTarget?.agentProfileRef.digest ||
       selectedOmnigentAgentProfileVersion?.digest
     : undefined;
-  const activeProviderProfiles: ProviderProfile[] = runtime === "omnigent"
-    ? selectedProfileIsGenericV2
-      ? (selectedGenericOmnigentTarget?.compatibleProviderProfiles || []).map((profile) => {
-          const capabilityProfile = (providerProfilesQuery.data || []).find(
-            (candidate) => candidate.profile_id === profile.profileId,
-          );
-          return {
-            ...capabilityProfile,
-            profile_id: profile.profileId,
-            account_label: profile.label,
-            provider_id: profile.providerId,
-            enabled: true,
-            launch_ready: true,
-          };
-        })
-      : (omnigentCatalogQuery.data?.eligibleProviderProfiles || [])
-      .filter((profile) => profile.runtimeId === selectedOmnigentProviderRuntime)
-      .map((profile) => {
-        const capabilityProfile = (providerProfilesQuery.data || []).find(
-          (candidate) => candidate.profile_id === profile.profileId,
-        );
-        return {
-          ...capabilityProfile,
-          profile_id: profile.profileId,
-          account_label: profile.label,
-          provider_id: profile.providerId,
-          enabled: true,
-          launch_ready: true,
-        };
-      })
-    : (providerProfilesQuery.data || []);
+  // Profile inventory is independent of transient host/catalog readiness.
+  const activeProviderProfiles: ProviderProfile[] = providerProfilesQuery.data || [];
+
+  useEffect(() => {
+    const selected = activeProviderProfiles.find((profile) => profile.profile_id === providerProfile);
+    if (!selected || pageMode.mode !== "create" || remediationDraft) return;
+    const configuration = selected.execution_selection;
+    if (configuration) {
+      setRuntime("omnigent");
+      setAgentProfile(configuration.profileId);
+      if (!omnigentLaunchPolicyAuthored) {
+        setOmnigentLaunchPolicyRef(configuration.launchPolicyRef || "");
+      }
+    }
+  }, [providerProfilesQuery.data, providerProfile, pageMode.mode, remediationDraft, omnigentLaunchPolicyAuthored]);
 
   const modelTierPreviewSelections = useMemo<ModelTierPreviewSelection[]>(() => {
     if (providerProfilesQuery.isPlaceholderData) {
@@ -6839,21 +6824,12 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
 
   useEffect(() => {
     const profiles = activeProviderProfiles;
-    if (
-      (runtime === "omnigent" && (
-        omnigentCatalogQuery.isFetching ||
-        (selectedProfileIsGenericV2 && omnigentExecutionReadinessQuery.isFetching)
-      )) ||
-      (runtime !== "omnigent" && (providerProfilesQuery.isLoading || providerProfilesQuery.isFetching))
-    ) {
-      return;
-    }
+    if (providerProfilesQuery.isPending) return;
     const resolvedProfileId = resolveLoadedProviderProfileId({
       profiles,
       providerProfile,
       configuredDefaultRef: configuredDefaultProviderProfileRef,
-      preserveUnavailableProfile:
-        pageMode.mode !== "create" && Boolean(temporalDraftAppliedRef.current),
+      preserveUnavailableProfile: Boolean(providerProfile),
     });
     if (providerProfile !== resolvedProfileId) {
       setProviderProfile(resolvedProfileId);
@@ -6885,7 +6861,6 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
     }
 
     if (runtimeChanged) {
-      setProviderProfile("");
       prevRuntimeRef.current = runtime;
     }
 
@@ -8500,11 +8475,7 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
   // placeholder data counts as unresolved too.
   const providerProfilesUnresolvedForRuntime =
     runtime === "omnigent"
-      ? omnigentCatalogQuery.isPending ||
-        omnigentCatalogQuery.isFetching ||
-        (selectedProfileIsGenericV2 &&
-          (omnigentExecutionReadinessQuery.isPending ||
-            omnigentExecutionReadinessQuery.isFetching))
+      ? providerProfilesQuery.isPending
       : providerProfilesQuery.isPending ||
         providerProfilesQuery.isPlaceholderData ||
         providerProfilesQuery.isFetching;
@@ -8513,12 +8484,7 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
   // load failure, not an empty result. For Omnigent the list comes from the
   // readiness projections, so the ordinary profile request can succeed while
   // the user still has no profiles to choose from.
-  const providerProfilesLoadFailedForRuntime =
-    providerProfilesQuery.isError ||
-    (runtime === "omnigent" &&
-      (omnigentCatalogQuery.isError ||
-        (selectedProfileIsGenericV2 &&
-          omnigentExecutionReadinessQuery.isError)));
+  const providerProfilesLoadFailedForRuntime = providerProfilesQuery.isError;
 
   const providerOptions = [...activeProviderProfiles]
     .sort((left, right) => {
@@ -8541,6 +8507,7 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
           ? profile.provider_label
           : profile.account_label || profile.profile_id,
       isDefault: Boolean(profile.is_default),
+      status: profile.enabled === false ? "Disabled" : profile.launch_ready === false ? "Needs setup" : "",
     }));
   const providerProfileScopeLabel =
     runtime === "omnigent" && selectedProfileIsGenericV2
@@ -8622,34 +8589,17 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
           : !selectedOmnigentPolicyAvailable
             ? "Choose a compatible Omnigent host policy."
             : null);
-  const omnigentSelectionEligible =
-    runtime !== "omnigent" ||
-    ((selectedProfileIsGenericV2
-        ? selectedGenericOmnigentTarget?.available === true
-        : omnigentCatalogQuery.data?.available === true) &&
-      effectiveOmnigentReadiness?.available === true &&
-      Boolean(selectedEligibleOmnigentProfile) &&
-      selectedOmnigentPolicyAvailable &&
-      !(
-        selectedEligibleOmnigentProfile?.busy === true &&
-        selectedEligibleOmnigentProfile.queueWhenBusy !== true
-      ));
-
-  useEffect(() => {
-    if (
-      runtime !== "omnigent" || !selectedProfileIsGenericV2 ||
-      modelManualOverride || !selectedGenericOmnigentTarget?.models.length
-    ) return;
-    if (!selectedGenericOmnigentTarget.models.includes(model)) {
-      setModel(selectedGenericOmnigentTarget.models[0] || "");
-    }
-  }, [
-    model,
-    modelManualOverride,
-    runtime,
-    selectedGenericOmnigentTarget,
-    selectedProfileIsGenericV2,
-  ]);
+  const selectedConfiguredProfile = activeProviderProfiles.find((profile) => profile.profile_id === providerProfile);
+  const profileSelectionError = selectedConfiguredProfile?.execution_selection_error?.message || (
+    selectedConfiguredProfile?.enabled === false || selectedConfiguredProfile?.launch_ready === false
+      ? "Connect and enable this Profile in Settings."
+      : omnigentSelectionGateReason
+  );
+  const omnigentSelectionEligible = runtime !== "omnigent" || (
+    Boolean(selectedConfiguredProfile) && selectedConfiguredProfile?.enabled !== false &&
+    selectedConfiguredProfile?.launch_ready !== false && !selectedConfiguredProfile?.execution_selection_error &&
+    (selectedProfileIsGenericV2 || !(selectedEligibleOmnigentProfile?.busy && !selectedEligibleOmnigentProfile?.queueWhenBusy))
+  );
 
   const selectedProviderProfileForPreview = providerProfilesQuery.isPlaceholderData
     ? undefined
@@ -10428,10 +10378,10 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
 
     const normalizedRuntime = runtime.trim().toLowerCase();
     let submittedOmnigentLaunchPolicyRef = omnigentLaunchPolicyRef;
-    let effectiveOmnigentAgentProfileVersion =
+    const effectiveOmnigentAgentProfileVersion =
       submittedOmnigentAgentProfileVersion;
-    let effectiveOmnigentAgentProfileDigest = submittedOmnigentAgentProfileDigest;
-    let effectiveOmnigentExecutionTargetRef = omnigentExecutionTargetRef;
+    const effectiveOmnigentAgentProfileDigest = submittedOmnigentAgentProfileDigest;
+    const effectiveOmnigentExecutionTargetRef = omnigentExecutionTargetRef;
     const supportedAgentRuntimeIds = runtimeOptions.map((item) =>
       item.trim().toLowerCase(),
     );
@@ -10444,48 +10394,11 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
     }
     if (normalizedRuntime === "omnigent") {
       if (selectedProfileIsGenericV2) {
-        const refreshed = await omnigentExecutionReadinessQuery.refetch();
-        const target = refreshed.data?.executionTargets?.find(
-          (item) =>
-            item.agentProfileRef.profileId === agentProfile &&
-            (authoredOmnigentAgentProfileVersion === undefined ||
-              (item.agentProfileRef.version === selectedOmnigentAgentProfileVersion?.version &&
-                item.agentProfileRef.digest === selectedOmnigentAgentProfileVersion?.digest)),
-        );
-        if (refreshed.isError || !target?.available) {
-          setSubmitMessage(
-            target?.gateReasons[0]?.message ||
-              "Generic Omnigent readiness could not be verified.",
-          );
+        const selected = activeProviderProfiles.find((profile) => profile.profile_id === providerProfile);
+        if (!selected || selected.enabled === false || selected.launch_ready === false || selected.execution_selection_error) {
+          setSubmitMessage(selected?.execution_selection_error?.message || "Connect and enable this Profile in Settings.");
           clearSubmitBusy();
           return;
-        }
-        effectiveOmnigentAgentProfileVersion = target.agentProfileRef.version;
-        effectiveOmnigentAgentProfileDigest = target.agentProfileRef.digest;
-        effectiveOmnigentExecutionTargetRef = target.ref;
-        if (target.ref !== omnigentExecutionTargetRef) {
-          setOmnigentExecutionTargetRef(target.ref);
-        }
-        if (!target.compatibleProviderProfiles.some(
-          (profile) => profile.profileId === providerProfile,
-        )) {
-          setSubmitMessage(
-            "The selected Provider Profile is not compatible with this Agent Profile.",
-          );
-          clearSubmitBusy();
-          return;
-        }
-        if (!target.policies.includes(submittedOmnigentLaunchPolicyRef)) {
-          if (!omnigentLaunchPolicyAuthored && target.policies[0]) {
-            submittedOmnigentLaunchPolicyRef = target.policies[0];
-            setOmnigentLaunchPolicyRef(target.policies[0]);
-          } else {
-            setSubmitMessage(
-              "The selected Omnigent host policy is no longer compatible.",
-            );
-            clearSubmitBusy();
-            return;
-          }
         }
       } else {
       const refreshed = await omnigentCatalogQuery.refetch();
@@ -11636,7 +11549,7 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
         ...(submittedModel ? { model: submittedModel } : {}),
         ...(submittedEffort ? { effort: submittedEffort } : {}),
         ...(providerProfile ? { profileId: providerProfile } : {}),
-        ...(runtime === "omnigent" && agentProfile
+        ...(runtime === "omnigent" && agentProfile && (pageMode.mode !== "create" || remediationDraft)
           ? {
               agentProfile: {
                 profileId: agentProfile,
@@ -11712,7 +11625,7 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
           ? { requiredCapabilities: mergedCapabilities }
           : {}),
         targetRuntime: normalizedRuntime,
-        ...(normalizedRuntime === "omnigent" && agentProfile
+        ...(normalizedRuntime === "omnigent" && agentProfile && (pageMode.mode !== "create" || remediationDraft)
           ? {
               agentProfile: {
                 profileId: agentProfile,
@@ -11730,7 +11643,7 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
               },
             }
           : {}),
-        ...(normalizedRuntime === "omnigent" && effectiveOmnigentExecutionTargetRef
+        ...(normalizedRuntime === "omnigent" && effectiveOmnigentExecutionTargetRef && (pageMode.mode !== "create" || remediationDraft)
           ? {
               omnigent: {
                 executionTargetRef: effectiveOmnigentExecutionTargetRef,
@@ -11739,7 +11652,9 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
                   : {}),
               },
             }
-          : {}),
+          : normalizedRuntime === "omnigent" && omnigentLaunchPolicyAuthored
+            ? { omnigent: { launchPolicyRef: submittedOmnigentLaunchPolicyRef } }
+            : {}),
         publishMode: effectivePublishMode,
         ...(produceReport || pageMode.mode !== "create"
           ? {
@@ -13815,7 +13730,7 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
                         </select>
                       </label>
                       <label>
-                        {`Step ${index + 1} Provider profile`}
+                        {`Step ${index + 1} Profile`}
                         <input
                           data-step-field="runtimeProviderProfile"
                           data-step-index={String(index)}
@@ -14100,7 +14015,7 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
           aria-label="Execution context"
         >
         <div className={providerOptions.length > 0 ? "grid-2" : "stack"}>
-          <label>
+          <details><summary>Advanced runtime</summary><label>
             Runtime
             <select
               name="runtime"
@@ -14130,44 +14045,25 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
             ) : null}
           </label>
 
-          {runtime === "omnigent" ? (
-            <label>
-              Agent profile
-              <select
-                name="agentProfile"
-                value={agentProfile}
-                onChange={(event) => setAgentProfile(event.target.value)}
-                disabled={agentProfilesQuery.isFetching}
-                required
-              >
-                <option value="">Select a launch-ready agent profile</option>
-                {readyAgentProfiles.map((profile) => (
-                  <option key={profile.profileId} value={profile.profileId}>
-                    {profile.displayName}{profile.defaultForRuntime ? " (Default)" : ""} · v{profile.activeVersion}
-                  </option>
-                ))}
-              </select>
-              {agentProfilesQuery.isError ? <span className="small" role="alert">Failed to load agent profiles.</span> : null}
-              {!agentProfilesQuery.isPending && !agentProfilesQuery.isError && readyAgentProfiles.length === 0 ? (
-                <span className="small" role="alert">No launch-ready agent profile is available.</span>
-              ) : null}
-            </label>
-          ) : null}
+          </details>
 
           {providerOptions.length > 0 ? (
             <div id="queue-provider-profile-wrap">
               <label>
-                Provider profile
+                Profile
                 <select
                   name="providerProfile"
                   value={providerProfile}
-                  onChange={(event) => setProviderProfile(event.target.value)}
+                  onChange={(event) => {
+                    setProviderProfile(event.target.value);
+                    setOmnigentLaunchPolicyAuthored(false);
+                  }}
                   // While a runtime switch refetch is in flight, `keepPreviousData`
                   // keeps the previous runtime's profiles in `data` only so the row
                   // layout stays stable. Those profiles do not belong to the newly
                   // selected runtime, so the control is disabled and the stale
                   // options are withheld to prevent selecting/submitting them.
-                  disabled={runtime === "omnigent" ? omnigentCatalogQuery.isFetching || (selectedProfileIsGenericV2 && omnigentExecutionReadinessQuery.isFetching) : providerProfilesQuery.isPlaceholderData}
+                  disabled={providerProfilesQuery.isPending}
                 >
                   {runtime !== "omnigent" && providerProfilesQuery.isPlaceholderData ? (
                     <option value="">Loading profiles…</option>
@@ -14182,7 +14078,7 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
                         <option key={option.id} value={option.id}>
                           {option.isDefault
                             ? `${option.label} (Default)`
-                            : option.label}
+                            : option.label}{option.status ? ` · ${option.status}` : ""}
                         </option>
                       ))}
                     </>
@@ -14203,7 +14099,7 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
                 </p>
               ) : (
                 <p className="small" role="alert" id="queue-provider-profile-empty">
-                  No launch-ready Provider Profiles are configured for{" "}
+                  No Profiles are configured for{" "}
                   {providerProfileScopeLabel}. Configure one in
                   Settings before starting this workflow.
                 </p>
@@ -14213,11 +14109,12 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
         </div>
 
         {runtime.trim().toLowerCase() === "omnigent" && (omnigentProfiles.length > 0 || Boolean(selectedGenericOmnigentTarget)) ? (
-          <div className="grid-2" aria-label="Omnigent execution target">
+          <details><summary>Advanced execution</summary><div className="grid-2" aria-label="Omnigent execution target">
             <label>
               Execution target
               <select
                 name="omnigentExecutionTargetRef"
+                disabled={pageMode.mode === "create" && !remediationDraft}
                 value={omnigentExecutionTargetRef}
                 onChange={(event) => {
                   const ref = event.target.value;
@@ -14264,23 +14161,23 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
                 ))}
               </select>
             </label>
-          </div>
+          </div></details>
         ) : null}
 
         {runtime.trim().toLowerCase() === "omnigent" ? (
           <>
-            {!omnigentSelectionEligible && omnigentSelectionGateReason ? (
+            {!omnigentSelectionEligible && profileSelectionError ? (
               <div className="notice error small" role="alert">
-                Omnigent cannot be submitted: {omnigentSelectionGateReason}
+                Omnigent cannot be submitted: {profileSelectionError}
               </div>
             ) : null}
-            <div className="notice small" aria-label="Effective Omnigent selection">
+            <details className="notice small" aria-label="Effective Omnigent selection"><summary>Execution details</summary>
               <div>Runtime: {selectedProfileIsGenericV2 ? selectedOmnigentAgentProfile?.displayName || "Omnigent" : "Codex via Omnigent"}</div>
-              <div>Provider Profile: {providerOptions.find((option) => option.id === providerProfile)?.label || historicalOmnigentProviderProfile?.label || providerProfile || "Not selected"}</div>
+              <div>Profile: {providerOptions.find((option) => option.id === providerProfile)?.label || historicalOmnigentProviderProfile?.label || providerProfile || "Not selected"}</div>
               <div>Host mode: {selectedOmnigentLaunchPolicy?.hostMode === "on_demand_docker" ? "On-demand Docker" : selectedOmnigentLaunchPolicy?.hostMode === "static_compose" ? "Static Compose" : "Not selected"}</div>
               <div>Policy: {omnigentLaunchPolicyRef || "Not selected"}</div>
               <div>Repository: {repository.trim() || "Not selected"}</div>
-            </div>
+            </details>
           </>
         ) : null}
 
