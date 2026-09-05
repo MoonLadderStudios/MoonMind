@@ -11,7 +11,6 @@ revalidation budgets, and rollover that waits out the persistence handoff.
 from __future__ import annotations
 
 import asyncio
-import contextlib
 import logging
 from collections.abc import Callable
 from datetime import datetime, timedelta, timezone
