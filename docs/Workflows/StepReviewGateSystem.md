@@ -335,6 +335,14 @@ The `step.review` activity:
 3. Parses the LLM response into a structured `ReviewVerdict`.
 4. Returns the verdict.
 
+When reviewer execution is unavailable, the activity returns
+`NO_DETERMINATION` with zero confidence, explicit unavailability feedback, and
+`recommendedNextAction: needs_human`. A completed step's result is not proof
+that a review occurred. The gate records an inconclusive check and preserves
+the step's output and checkpoint evidence; it does not spend implementation
+retries on an unavailable reviewer or authorize publication. The worker must
+bind an actual reviewer before this activity can return review approval.
+
 **Review Prompt Template (simplified):**
 
 ```

@@ -9,8 +9,8 @@ from moonmind.workflows.temporal.activities.step_review import (
 )
 
 @pytest.mark.asyncio
-async def test_step_review_activity_returns_pass():
-    """The placeholder implementation always returns FULLY_IMPLEMENTED."""
+async def test_step_review_activity_does_not_infer_review_from_completed_execution():
+    """MoonLadderStudios/MoonMind#3927: execution success is not review evidence."""
     result = await step_review_activity(
         {
             "node_id": "n1",
@@ -24,8 +24,13 @@ async def test_step_review_activity_returns_pass():
             "workflow_context": {"plan_title": "Fix tests"},
         }
     )
-    assert result["verdict"] == "FULLY_IMPLEMENTED"
-    assert result["confidence"] == 1.0
+    assert result["verdict"] == "NO_DETERMINATION"
+    assert result["confidence"] == 0.0
+    assert result["recommendedNextAction"] == "needs_human"
+    assert result["recoverableInCurrentRuntime"] is False
+    assert result["issues"][0]["code"] == "reviewer_unavailable"
+    assert "no reviewer implementation is configured" in result["feedback"]
+    assert "validatedRefs" not in result
 
 @pytest.mark.asyncio
 async def test_step_review_activity_with_minimal_payload():
@@ -39,7 +44,7 @@ async def test_step_review_activity_with_minimal_payload():
             "tool_name": "test",
         }
     )
-    assert result["verdict"] == "FULLY_IMPLEMENTED"
+    assert result["verdict"] == "NO_DETERMINATION"
 
 @pytest.mark.asyncio
 async def test_step_review_activity_with_previous_feedback():
@@ -58,4 +63,4 @@ async def test_step_review_activity_with_previous_feedback():
             "previous_feedback": "Missing import in utils.py",
         }
     )
-    assert result["verdict"] == "FULLY_IMPLEMENTED"
+    assert result["verdict"] == "NO_DETERMINATION"

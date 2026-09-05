@@ -115,6 +115,15 @@ def test_service_change_selects_component_suite() -> None:
     assert outputs["integration_ci"] == "false"
 
 
+def test_projection_sync_change_selects_its_integration_boundary() -> None:
+    """MoonLadderStudios/MoonMind#3927: select projection repair coverage."""
+    outputs = _outputs(["api_service/core/sync.py"])
+
+    assert outputs["unit_fast"] == "true"
+    assert outputs["integration_ci"] == "true"
+    assert outputs["full_backend"] == "false"
+
+
 def test_temporal_workflow_change_selects_temporal_boundary() -> None:
     outputs = _outputs(["moonmind/workflows/temporal/workflows/run.py"])
 

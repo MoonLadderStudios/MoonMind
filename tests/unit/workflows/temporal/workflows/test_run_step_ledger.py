@@ -5281,14 +5281,17 @@ def test_agent_child_cancellation_propagation_preserves_pre_patch_histories(
 
 
 @pytest.mark.asyncio
-async def test_run_execution_stage_marks_step_reviewing_and_records_passed_check(
+@pytest.mark.parametrize("review_available", [True, False])
+async def test_run_execution_stage_records_review_evidence(
     monkeypatch: pytest.MonkeyPatch,
+    review_available: bool,
 ) -> None:
     _configure_workflow_runtime(monkeypatch)
     workflow = MoonMindRunWorkflow()
     workflow._owner_id = "owner-1"
     review_snapshots: list[dict[str, Any]] = []
     written_review_payloads: list[dict[str, Any]] = []
+    child_invocations: list[Any] = []
     review_artifact_ids = iter(("art_review_1",))
     step_execution_artifact_ids = iter(
         ("art_attempt_1", "art_attempt_1_terminal")
@@ -5317,6 +5320,21 @@ async def test_run_execution_stage_marks_step_reviewing_and_records_passed_check
         if activity_type == "step.review":
             step = workflow.get_step_ledger()["steps"][0]
             review_snapshots.append(step)
+            if not review_available:
+                from moonmind.workflows.temporal.activity_runtime import (
+                    TemporalReviewActivities,
+                    _bind_activity_handler,
+                )
+
+                # Execute the actual worker wrapper with the workflow's payload.
+                # MoonLadderStudios/MoonMind#3927: missing review cannot buy
+                # another implementation attempt or discard completed outputs.
+                handler = _bind_activity_handler(
+                    TemporalReviewActivities(),
+                    func=TemporalReviewActivities.step_review,
+                    activity_type="step.review",
+                )
+                return await handler(payload)
             return {
                 "verdict": "PASS",
                 "confidence": 0.91,
@@ -5334,6 +5352,7 @@ async def test_run_execution_stage_marks_step_reviewing_and_records_passed_check
         _args: Any,
         **_kwargs: Any,
     ) -> Any:
+        child_invocations.append(_args)
         return {
             "summary": "Patch applied cleanly",
             "metadata": {"outputSummaryRef": "art_summary_1"},
@@ -5394,10 +5413,17 @@ async def test_run_execution_stage_marks_step_reviewing_and_records_passed_check
     )
     monkeypatch.setattr(run_module.workflow, "patched", lambda _patch_id: True)
 
-    await workflow._run_execution_stage(
-        parameters={"repo": "MoonLadderStudios/MoonMind"},
-        plan_ref="art_plan_1",
-    )
+    if review_available:
+        await workflow._run_execution_stage(
+            parameters={"repo": "MoonLadderStudios/MoonMind"},
+            plan_ref="art_plan_1",
+        )
+    else:
+        with pytest.raises(ValueError, match="NO_DETERMINATION"):
+            await workflow._run_execution_stage(
+                parameters={"repo": "MoonLadderStudios/MoonMind"},
+                plan_ref="art_plan_1",
+            )
 
     assert review_snapshots
     assert review_snapshots[0]["status"] == "reviewing"
@@ -5411,6 +5437,26 @@ async def test_run_execution_stage_marks_step_reviewing_and_records_passed_check
         }
     ]
     step = workflow.get_step_ledger()["steps"][0]
+    if not review_available:
+        assert len(child_invocations) == 1
+        assert len(review_snapshots) == 1
+        check = step["checks"][0]
+        assert check["status"] == "inconclusive"
+        assert check["gateVerdict"] == "NO_DETERMINATION"
+        assert check["confidence"] == 0.0
+        assert check["recommendedNextAction"] == "needs_human"
+        assert "Review unavailable" in check["summary"]
+        assert check["validatedRefs"] == {}
+        assert step["artifacts"]["outputSummary"] == "art_summary_1"
+        assert step["artifacts"]["stepExecutionManifestRef"] == "art_attempt_1_terminal"
+        terminal_manifest = next(
+            payload for payload in reversed(written_review_payloads)
+            if payload.get("terminalDisposition")
+        )
+        assert terminal_manifest["terminalDisposition"] == "needs_human"
+        assert terminal_manifest["checks"][0]["gateResultRef"] == "art_review_1"
+        assert workflow._publish_status != "published"
+        return
     assert step["status"] == "completed"
     assert step["checks"][0] == {
         "kind": "approval_policy",

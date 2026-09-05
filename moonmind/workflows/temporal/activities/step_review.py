@@ -1,6 +1,6 @@
 """Step review Temporal Activity.
 
-Evaluates a workflow step's output against its input aims using an LLM.
+Reports whether review evidence is available for a workflow step.
 Registered as ``step.review`` in the activity catalog.
 """
 
@@ -11,13 +11,17 @@ from typing import Any, Mapping
 
 from moonmind.workflows.skills.approval_policy import (
     ReviewRequest,
-    parse_review_verdict,
+    ReviewVerdict,
 )
 
 logger = logging.getLogger(__name__)
 
 async def step_review_activity(payload: Mapping[str, Any]) -> dict[str, Any]:
-    """Execute a step review via LLM.
+    """Return an explicit unavailable outcome until a reviewer is configured.
+
+    A successful step execution is not review evidence. The worker has no
+    reviewer implementation bound to this activity, so it cannot approve a gate
+    or infer that reexecuting the completed step will repair the missing review.
 
     Parameters
     ----------
@@ -54,25 +58,29 @@ async def step_review_activity(payload: Mapping[str, Any]) -> dict[str, Any]:
         ),
     )
 
-    # TODO: Wire LLM call using build_review_prompt(request) once
-    # the mm.activity.llm fleet integration is available.
     logger.info(
-        "step.review: node=%s attempt=%d tool=%s",
+        "step.review unavailable: node=%s attempt=%d tool=%s",
         request.node_id,
         request.review_attempt,
         request.tool_name,
     )
 
-    # ----- LLM call placeholder -----
-    # In production, this calls the LLM fleet via mm.activity.llm or an
-    # equivalent routing mechanism.  For now we return FULLY_IMPLEMENTED so
-    # the gate is non-blocking until the LLM integration is wired.
-    verdict = parse_review_verdict({
-        "verdict": "FULLY_IMPLEMENTED",
-        "confidence": 1.0,
-        "feedback": None,
-        "issues": [],
-    })
+    verdict = ReviewVerdict(
+        verdict="NO_DETERMINATION",
+        confidence=0.0,
+        feedback=(
+            "Review unavailable: no reviewer implementation is configured for "
+            "step.review. Preserve the completed step's outputs and obtain "
+            "review evidence before approving advancement."
+        ),
+        issues=({
+            "severity": "warning",
+            "description": "Reviewer unavailable; no review was performed.",
+            "code": "reviewer_unavailable",
+        },),
+        recommended_next_action="needs_human",
+        recoverable_in_current_runtime=False,
+    )
 
     return verdict.to_payload()
 

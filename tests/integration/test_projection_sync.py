@@ -1,8 +1,11 @@
 from datetime import UTC, datetime
-from unittest.mock import Mock
+from types import SimpleNamespace
+from unittest.mock import AsyncMock, Mock
 
+import httpx
 import pytest
 import pytest_asyncio
+from fastapi import FastAPI
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 from sqlalchemy.orm import sessionmaker
@@ -86,10 +89,73 @@ async def test_sync_execution_projection_upsert_no_duplicates(db_session: AsyncS
     records = result.scalars().all()
     assert len(records) == 1
 
-@pytest.mark.skip(reason="Not implemented yet")
 @pytest.mark.asyncio
-async def test_list_executions_router_sync_behavior():
-    # This acts as a proxy for T007 testing that the list endpoint updates items.
-    # The actual list endpoint uses the same sync_execution_projection function,
-    # so we test the data flow directly.
-    pass
+async def test_list_executions_router_sync_behavior(db_session, monkeypatch):
+    """MoonLadderStudios/MoonMind#3927: HTTP reads repair persisted drift."""
+    from api_service.api.routers import executions
+    from api_service.auth_providers import get_current_user
+    from api_service.db.base import get_async_session
+    from moonmind.config.settings import settings
+
+    now = datetime.now(UTC)
+    desc = Mock(spec=WorkflowExecutionDescription)
+    desc.id = "mm:projection-router-3927"
+    desc.run_id = "run-3927"
+    desc.namespace = "default"
+    desc.workflow_type = "MoonMind.UserWorkflow"
+    desc.status = WorkflowExecutionStatus.RUNNING
+    desc.start_time = now
+    desc.execution_time = now
+    desc.close_time = None
+    desc.search_attributes = {}
+    desc.memo = AsyncMock(return_value={
+        "entry": "user_workflow",
+        "owner_id": "owner-3927",
+        "owner_type": "user",
+    })
+    record = await sync_execution_projection(db_session, desc)
+    await db_session.commit()
+    assert record.state.value == "executing"
+
+    desc.status = WorkflowExecutionStatus.COMPLETED
+    desc.close_time = now
+    handle = SimpleNamespace(describe=AsyncMock(return_value=desc))
+    temporal = SimpleNamespace(get_workflow_handle=Mock(return_value=handle))
+    service = SimpleNamespace(list_executions=AsyncMock(return_value=SimpleNamespace(
+        items=[record], next_page_token=None, count=1,
+    )))
+    user = SimpleNamespace(id="owner-3927", is_superuser=False)
+    app = FastAPI()
+    app.include_router(executions.router)
+
+    async def session_dependency():
+        yield db_session
+
+    app.dependency_overrides[get_async_session] = session_dependency
+    app.dependency_overrides[executions._get_service] = lambda: service
+    app.dependency_overrides[executions.get_temporal_client] = lambda: temporal
+    app.dependency_overrides[get_current_user()] = lambda: user
+    # FastAPI may retain auth closures on nested router wrappers.
+    routes = list(app.routes)
+    while routes:
+        route = routes.pop()
+        wrapped = getattr(route, "original_router", route)
+        routes.extend(getattr(wrapped, "routes", ()))
+        for dependency in getattr(getattr(route, "dependant", None), "dependencies", ()):
+            if getattr(dependency.call, "__name__", "") == "_current_user_fallback":
+                app.dependency_overrides[dependency.call] = lambda: user
+    monkeypatch.setattr(settings.temporal, "temporal_authoritative_read_enabled", True)
+
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="http://test"
+    ) as client:
+        response = await client.get("/api/executions")
+
+    assert response.status_code == 200, response.text
+    assert response.json()["items"][0]["state"] == "completed"
+    temporal.get_workflow_handle.assert_called_once_with(desc.id)
+    handle.describe.assert_awaited_once()
+    await db_session.refresh(record)
+    assert record.state.value == "completed"
+    assert record.close_status.value == "completed"
+    assert record.projection_version == 2
