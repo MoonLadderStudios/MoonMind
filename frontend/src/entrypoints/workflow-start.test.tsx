@@ -21960,6 +21960,86 @@ describe("Task Create runtime switch layout stability", () => {
     expect(screen.getByLabelText("Runtime").closest("details")?.open).toBe(false);
   });
 
+  it("submits the native runtime of the selected Profile when switching from Codex to Claude", async () => {
+    const fallback = fetchSpy.getMockImplementation()!;
+    fetchSpy.mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
+      if (String(input).startsWith("/api/v1/provider-profiles")) {
+        return Promise.resolve({ ok: true, json: async () => [
+          { profile_id: "native-codex", account_label: "Native Codex", runtime_id: "codex_cli", is_default: true },
+          { profile_id: "native-claude", account_label: "Native Claude", runtime_id: "claude_code" },
+        ] } as Response);
+      }
+      return fallback(input, init);
+    });
+    const { queryClient } = renderWithClient(<WorkflowStartPage payload={mockPayload} />);
+    const profile = await screen.findByLabelText("Profile") as HTMLSelectElement;
+    await waitFor(() => expect(profile.value).toBe("native-codex"));
+    expect((screen.getByLabelText("Runtime") as HTMLSelectElement).value).toBe("codex_cli");
+
+    fireEvent.change(profile, { target: { value: "native-claude" } });
+    await waitFor(() => expect((screen.getByLabelText("Runtime") as HTMLSelectElement).value).toBe("claude_code"));
+    await act(async () => {
+      await queryClient.invalidateQueries({ queryKey: ["workflow-start", "provider-profiles"] });
+    });
+    expect(profile.value).toBe("native-claude");
+    fireEvent.change(screen.getByLabelText("Instructions"), { target: { value: "Use the selected native Claude profile." } });
+    fireEvent.click(screen.getByRole("button", { name: "Start Workflow" }));
+    await waitFor(() => expect(fetchSpy).toHaveBeenCalledWith("/api/executions", expect.objectContaining({ method: "POST" })));
+    const request = JSON.parse(String(fetchSpy.mock.calls.find(([url]) => String(url) === "/api/executions")?.[1]?.body));
+    expect(request.payload.task.runtime).toMatchObject({ mode: "claude_code", profileId: "native-claude" });
+    expect(request).not.toHaveProperty("agentProfile");
+  });
+
+  it.each([false, true])("preserves an explicit runtime override after Profile inventory refetch (Omnigent configuration: %s)", async (configured) => {
+    const fallback = fetchSpy.getMockImplementation()!;
+    let inventoryVersion = 0;
+    fetchSpy.mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
+      if (String(input).startsWith("/api/v1/provider-profiles")) {
+        inventoryVersion += 1;
+        return Promise.resolve({ ok: true, json: async () => [
+          { profile_id: "runtime-profile", account_label: `Profile ${inventoryVersion}`, runtime_id: "codex_cli", is_default: true,
+            ...(configured ? { execution_selection: { profileId: "team-codex" } } : {}),
+          },
+        ] } as Response);
+      }
+      return fallback(input, init);
+    });
+    const { queryClient } = renderWithClient(<WorkflowStartPage payload={mockPayload} />);
+    const profile = await screen.findByLabelText("Profile") as HTMLSelectElement;
+    await waitFor(() => expect(profile.value).toBe("runtime-profile"));
+    fireEvent.change(screen.getByLabelText("Runtime"), { target: { value: "claude_code" } });
+    await act(async () => {
+      await queryClient.invalidateQueries({ queryKey: ["workflow-start", "provider-profiles"] });
+    });
+    expect(inventoryVersion).toBe(2);
+    expect(profile.value).toBe("runtime-profile");
+    expect((screen.getByLabelText("Runtime") as HTMLSelectElement).value).toBe("claude_code");
+  });
+
+  it("keeps a Profile configuration error blocking instead of silently selecting its native runtime", async () => {
+    const fallback = fetchSpy.getMockImplementation()!;
+    fetchSpy.mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
+      if (String(input).startsWith("/api/v1/provider-profiles")) {
+        return Promise.resolve({ ok: true, json: async () => [
+          { profile_id: "native-codex", account_label: "Native Codex", runtime_id: "codex_cli", is_default: true },
+          { profile_id: "pinned-claude", account_label: "Pinned Claude", runtime_id: "claude_code",
+            execution_selection_error: { message: "The pinned execution configuration is incompatible with this Profile." },
+          },
+        ] } as Response);
+      }
+      return fallback(input, init);
+    });
+    renderWithClient(<WorkflowStartPage payload={mockPayload} />);
+    const profile = await screen.findByLabelText("Profile") as HTMLSelectElement;
+    await waitFor(() => expect(profile.value).toBe("native-codex"));
+    fireEvent.change(profile, { target: { value: "pinned-claude" } });
+    expect((screen.getByLabelText("Runtime") as HTMLSelectElement).value).toBe("codex_cli");
+    expect(await screen.findByText(/Profile cannot be submitted: The pinned execution configuration is incompatible/)).toBeTruthy();
+    fireEvent.change(screen.getByLabelText("Instructions"), { target: { value: "Do not bypass the pinned configuration." } });
+    expect((screen.getByRole("button", { name: "Start Workflow" }) as HTMLButtonElement).disabled).toBe(true);
+    expect(fetchSpy.mock.calls.some(([url]) => String(url) === "/api/executions")).toBe(false);
+  });
+
   it("omits task effort when the selected provider profile defines a default effort", async () => {
     renderWithClient(<WorkflowStartPage payload={mockPayload} />);
 

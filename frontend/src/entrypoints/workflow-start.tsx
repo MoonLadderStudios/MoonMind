@@ -6695,13 +6695,15 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
     if (!selected || pageMode.mode !== "create" || remediationDraft) return;
     const configuration = selected.execution_selection;
     if (configuration) {
-      setRuntime("omnigent");
+      if (!runtimeAuthored) setRuntime("omnigent");
       setAgentProfile(configuration.profileId);
       if (!omnigentLaunchPolicyAuthored) {
         setOmnigentLaunchPolicyRef(configuration.launchPolicyRef || "");
       }
+    } else if (!runtimeAuthored && !selected.execution_selection_error && selected.runtime_id) {
+      setRuntime(selected.runtime_id);
     }
-  }, [providerProfilesQuery.data, providerProfile, pageMode.mode, remediationDraft, omnigentLaunchPolicyAuthored]);
+  }, [providerProfilesQuery.data, providerProfile, pageMode.mode, remediationDraft, omnigentLaunchPolicyAuthored, runtimeAuthored]);
 
   const modelTierPreviewSelections = useMemo<ModelTierPreviewSelection[]>(() => {
     if (providerProfilesQuery.isPlaceholderData) {
@@ -10377,6 +10379,11 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
     setAttachmentTargetErrors({});
 
     const normalizedRuntime = runtime.trim().toLowerCase();
+    if (selectedConfiguredProfile?.execution_selection_error) {
+      setSubmitMessage(selectedConfiguredProfile.execution_selection_error.message);
+      clearSubmitBusy();
+      return;
+    }
     let submittedOmnigentLaunchPolicyRef = omnigentLaunchPolicyRef;
     const effectiveOmnigentAgentProfileVersion =
       submittedOmnigentAgentProfileVersion;
@@ -12050,7 +12057,8 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
     pageMode.mode !== "create" &&
     (temporalDraftQuery.isLoading || Boolean(modeLoadError));
   const isSubmitBlocked =
-    isTemporalFormBlocked || (runtime === "omnigent" && !omnigentSelectionEligible);
+    isTemporalFormBlocked || Boolean(selectedConfiguredProfile?.execution_selection_error) ||
+    (runtime === "omnigent" && !omnigentSelectionEligible);
 
   useEffect(() => {
     if (!showPrimaryCtaArrow || isTemporalFormBlocked) {
@@ -14056,13 +14064,9 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
                   value={providerProfile}
                   onChange={(event) => {
                     setProviderProfile(event.target.value);
+                    setRuntimeAuthored(false);
                     setOmnigentLaunchPolicyAuthored(false);
                   }}
-                  // While a runtime switch refetch is in flight, `keepPreviousData`
-                  // keeps the previous runtime's profiles in `data` only so the row
-                  // layout stays stable. Those profiles do not belong to the newly
-                  // selected runtime, so the control is disabled and the stale
-                  // options are withheld to prevent selecting/submitting them.
                   disabled={providerProfilesQuery.isPending}
                 >
                   {runtime !== "omnigent" && providerProfilesQuery.isPlaceholderData ? (
@@ -14164,6 +14168,11 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
           </div></details>
         ) : null}
 
+        {runtime !== "omnigent" && selectedConfiguredProfile?.execution_selection_error ? (
+          <div className="notice error small" role="alert">
+            Profile cannot be submitted: {selectedConfiguredProfile.execution_selection_error.message}
+          </div>
+        ) : null}
         {runtime.trim().toLowerCase() === "omnigent" ? (
           <>
             {!omnigentSelectionEligible && profileSelectionError ? (

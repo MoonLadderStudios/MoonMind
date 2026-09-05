@@ -44,6 +44,53 @@ from api_service.services.omnigent_agent_profile_service import (
 pytestmark = [pytest.mark.asyncio]
 
 
+@pytest.mark.parametrize("configuration_state", ["absent", "pinned_missing", "unready"])
+async def test_native_profile_inventory_distinguishes_missing_and_unready_configuration(
+    session, configuration_state
+):
+    from api_service.api.routers.provider_profiles import list_profiles
+
+    native = ManagedAgentProviderProfile(
+        profile_id="native-codex",
+        runtime_id="codex_cli",
+        provider_id="openai",
+        enabled=False,
+    )
+    session.add(native)
+    if configuration_state == "pinned_missing":
+        native.execution_configuration = {
+            "profileId": "missing", "version": 1, "digest": "sha256:" + "a" * 64,
+        }
+    elif configuration_state == "unready":
+        session.add(OmnigentAgentProfile(
+            profile_id="codex-config", display_name="Codex configuration",
+            state="active", visibility="shared", active_version=1,
+        ))
+        await session.flush()
+        session.add(OmnigentAgentProfileVersion(
+            profile_id="codex-config", version=1, digest="sha256:" + "b" * 64,
+            document={"providerRequirements": {
+                "runtimeId": "codex_cli", "providerIds": ["openai"],
+                "credentialSource": "none", "materializationMode": "composite",
+            }},
+            validation_result={"ready": False},
+        ))
+    await session.commit()
+
+    rows = await list_profiles(
+        include_execution=True, session=session,
+        current_user=SimpleNamespace(id=uuid4(), is_superuser=True),
+    )
+    selected = next(item for item in rows if item["profile_id"] == native.profile_id)
+    assert selected["runtime_id"] == "codex_cli"
+    assert selected["launch_ready"] is False
+    assert selected.get("execution_selection") is None
+    if configuration_state == "absent":
+        assert selected.get("execution_selection_error") is None
+    else:
+        assert selected["execution_selection_error"]["code"] == "profile_execution_configuration_required"
+
+
 async def test_profile_inventory_and_default_resolution_survive_catalog_expiry(session, monkeypatch):
     from api_service.api.routers.provider_profiles import list_profiles
 
@@ -91,7 +138,9 @@ async def test_disabled_profile_remains_in_inventory_without_gaining_launch_auth
 
 
 async def test_inventory_loads_active_and_explicitly_pinned_versions_only(session, monkeypatch):
-    from api_service.services.profile_execution_selection import load_execution_configurations
+    from api_service.services.profile_execution_selection import (
+        load_execution_configurations,
+    )
 
     await _seed_default_deployment(session, monkeypatch)
     profile = await session.get(OmnigentAgentProfile, OPENCODE_BUILTIN_PROFILE_ID)

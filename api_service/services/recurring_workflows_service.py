@@ -1011,11 +1011,6 @@ class RecurringWorkflowsService:
                 initial_parameters,
                 snapshot=snapshot,
             )
-            if needs_profile_snapshot and agent_profile_selection is None:
-                authored_parameters = definition.target.get("initialParameters") or {}
-                for key in ("model", "effort"):
-                    if authored_parameters.get(key) is not None:
-                        initial_parameters[key] = authored_parameters[key]
             target_runtime = str(
                 initial_parameters.get("targetRuntime") or ""
             ).strip().lower()
@@ -1043,6 +1038,23 @@ class RecurringWorkflowsService:
                 raise RecurringWorkflowValidationError(
                     "selected Provider Profile disappeared before plan compilation"
                 )
+            if needs_profile_snapshot and agent_profile_selection is None:
+                from moonmind.workflows.executions.model_resolver import (
+                    resolve_model_effort,
+                )
+
+                authored_parameters = definition.target.get("initialParameters") or {}
+                task_intent = authored_parameters.get("workflow") or authored_parameters.get("task") or {}
+                runtime_intent = task_intent.get("runtime") or {}
+                resolved = resolve_model_effort(
+                    runtime_id=provider_profile.runtime_id, profile=provider_profile,
+                    requested_model=runtime_intent.get("model", authored_parameters.get("model")),
+                    requested_effort=runtime_intent.get("effort", authored_parameters.get("effort")),
+                    requested_model_tier=runtime_intent.get("modelTier", authored_parameters.get("modelTier")),
+                    tier_fallback=runtime_intent.get("tierFallback", authored_parameters.get("tierFallback", "clamp")),
+                    require_launch_ready=False,
+                )
+                initial_parameters.update(model=resolved.model, effort=resolved.effort, modelSource=resolved.model_source)
             principal = str(getattr(actor, "id", "") or "system")
             artifact_service = self._artifact_service or TemporalArtifactService(
                 TemporalArtifactRepository(self._session)
