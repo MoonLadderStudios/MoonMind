@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from moonmind.omnigent.harness_platform.harness_registry import harness_registration
+
 import hashlib
 import json
 import re
@@ -439,6 +441,7 @@ async def ensure_builtin_opencode_agent_profile(
             integration_mode=harness.capabilities.integrationMode or "native-server",
             materializer_refs=["opencode-auth-json@1", "none@1"],
             requested_host_mode="on-demand",
+            requested_host_class_ref=harness_registration(harness.id).hostClassRef,
         )
     except Exception:
         host_ready = False
@@ -892,6 +895,7 @@ async def create_guided_profile(
             integration_mode=harness.capabilities.integrationMode or "native-server",
             materializer_refs=[str(preset["materializerRef"])],
             requested_host_mode=policy.hostMode,
+            requested_host_class_ref=harness_registration(harness.id).hostClassRef,
         )
     except Exception as exc:
         raise HTTPException(409, "selected_harness_host_class_unavailable") from exc
