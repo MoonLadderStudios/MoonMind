@@ -52,6 +52,7 @@ import {
   resolveDefaultRuntimeId,
   runtimeOptionGroups,
   runtimeUnavailableReason,
+  selectableTargetsForRuntime,
 } from "../runtime/runtimeTargets";
 import type {
   RuntimeTargetCatalog,
@@ -6162,6 +6163,11 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
   );
   const [runtime, setRuntime] = useState(defaultRuntime);
   const [runtimeAuthored, setRuntimeAuthored] = useState(false);
+  // Explicit rollout target identity within the chosen runtime. Empty means
+  // the preferred target; set when several selectable targets share one
+  // runtime so the exact identity is submitted instead of collapsing to the
+  // runtime string (MoonLadderStudios/MoonMind#3988).
+  const [runtimeTargetId, setRuntimeTargetId] = useState("");
   const omnigentCatalog = dashboardConfig.system?.omnigentExecutionCatalog;
   const omnigentProfiles = omnigentCatalog?.profiles || [];
   const omnigentPolicies = omnigentCatalog?.policies || [];
@@ -6563,6 +6569,19 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
     () => runtimeUnavailableReason(runtime, runtimeTargetCatalog),
     [runtime, runtimeTargetCatalog],
   );
+  // Every selectable target sharing the chosen runtime. More than one means
+  // the runtime string alone cannot name the exact target.
+  const selectableRuntimeTargets = useMemo(
+    () => selectableTargetsForRuntime(runtimeTargetCatalog, runtime),
+    [runtimeTargetCatalog, runtime],
+  );
+  const effectiveRuntimeTargetId =
+    runtimeTargetId ||
+    selectableRuntimeTargets.find(
+      (target) => target.targetId === selectedRuntimeTarget?.targetId,
+    )?.targetId ||
+    selectedRuntimeTarget?.targetId ||
+    "";
   const selectedOmnigentExecutionProfile = omnigentProfiles.find(
     (profile) => profile.ref === omnigentExecutionTargetRef,
   );
@@ -11618,6 +11637,22 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
           ? { requiredCapabilities: mergedCapabilities }
           : {}),
         targetRuntime: normalizedRuntime,
+        // Freeze the exact rollout target identity so the submitted
+        // combination cannot collapse to the runtime string when several
+        // selectable targets share it (MoonLadderStudios/MoonMind#3988).
+        ...(preferredTargetForRuntime(runtimeTargetCatalog, normalizedRuntime)
+          ?.targetId
+          ? {
+              requestedTargetId:
+                runtimeTargetId ||
+                String(
+                  preferredTargetForRuntime(
+                    runtimeTargetCatalog,
+                    normalizedRuntime,
+                  )?.targetId || "",
+                ),
+            }
+          : {}),
         ...(normalizedRuntime === "omnigent" && agentProfile && (pageMode.mode !== "create" || remediationDraft)
           ? {
               agentProfile: {
@@ -14043,6 +14078,7 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
               onChange={(event) => {
                 setRuntime(event.target.value);
                 setRuntimeAuthored(true);
+                setRuntimeTargetId("");
               }}
             >
               {runtime && !runtimeOptions.includes(runtime) ? (
@@ -14079,6 +14115,25 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
               </span>
             ) : null}
           </label>
+          {selectableRuntimeTargets.length > 1 ? (
+            <label>
+              Target
+              <select
+                name="runtimeTargetId"
+                value={effectiveRuntimeTargetId}
+                onChange={(event) => {
+                  setRuntimeTargetId(event.target.value);
+                  setRuntimeAuthored(true);
+                }}
+              >
+                {selectableRuntimeTargets.map((target) => (
+                  <option key={target.targetId} value={target.targetId}>
+                    {target.label}
+                  </option>
+                ))}
+              </select>
+            </label>
+          ) : null}
 
           {/* The truthful selected path and rollout state live outside the
               label so the Runtime field's accessible name stays "Runtime". */}

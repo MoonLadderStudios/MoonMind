@@ -759,7 +759,7 @@ class GenericOmnigentHostRealizer:
                         )
                     },
                 )
-        except BaseException as exc:
+        except BaseException as exc:  # noqa: BLE001 - primary boundary must capture cancellation for outcome recording, re-raised below
             primary_error = exc
         cleanup_error: BaseException | None = None
         try:
@@ -772,7 +772,7 @@ class GenericOmnigentHostRealizer:
                 credential_handles=credential_handles,
                 acquired=acquired,
             )
-        except BaseException as exc:
+        except BaseException as exc:  # noqa: BLE001 - cleanup must capture cancellation for outcome recording, janitor owns retry
             # Cleanup authority remains durable for janitor retry. Preserve the
             # primary provider boundary result when one exists.
             cleanup_error = exc

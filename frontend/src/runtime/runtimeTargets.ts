@@ -93,6 +93,20 @@ export function targetsForRuntime(
 }
 
 /**
+ * Return every selectable target for a runtime id, most promoted first, so an
+ * authoring surface can offer an explicit target choice instead of collapsing
+ * same-runtime targets into one option (MoonLadderStudios/MoonMind#3988).
+ */
+export function selectableTargetsForRuntime(
+  catalog: RuntimeTargetCatalog | null | undefined,
+  runtimeId: string,
+): RuntimeTarget[] {
+  return targetsForRuntime(catalog, runtimeId).filter(
+    (target) => target.explicitSelectionAllowed,
+  );
+}
+
+/**
  * Return the most promoted selectable target for a runtime id, or `null` when
  * the rollout policy registers none. A caller must never substitute another
  * runtime when this is `null`; it renders the unavailable reason instead.
@@ -153,6 +167,13 @@ export interface RuntimeOptionGroups {
  * compatibility paths, and unavailable rows. A runtime the catalog does not
  * register stays recommended-neutral: the rollout policy governs promotion, not
  * which runtimes exist.
+ *
+ * One option is emitted per runtime id carrying its preferred target identity.
+ * When several selectable targets share a runtime, the authoring surface must
+ * additionally offer `selectableTargetsForRuntime` as an explicit Target
+ * choice and submit the chosen `targetId` as `requestedTargetId` so the exact
+ * identity is frozen instead of collapsing to the runtime string
+ * (MoonLadderStudios/MoonMind#3988).
  */
 export function runtimeOptionGroups(
   runtimeIds: readonly string[],

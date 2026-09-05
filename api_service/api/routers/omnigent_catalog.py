@@ -1615,17 +1615,30 @@ async def get_omnigent_execution_readiness(
         # One versioned rollout authority decides whether this exact harness x
         # path-class row may be selected for new work. An unadmitted row never
         # advertises compatible Provider Profiles, host classes, or models.
+        # Several generic rows may share one harness while differing on Host
+        # Class, architecture, materializer, or model class, so admission is
+        # denied only when no matching row admits selection; a first-match
+        # lookup could hide a qualified combination or advertise a disabled
+        # one depending on sort order (MoonLadderStudios/MoonMind#3988).
+        rollout_views = [
+            view
+            for view in rollout_catalog
+            if view.harness_id == profile.harness.id
+            and view.path_class
+            is RuntimeProviderPathClass.generic_omnigent
+        ]
         rollout_view = next(
             (
                 view
-                for view in rollout_catalog
-                if view.harness_id == profile.harness.id
-                and view.path_class
-                is RuntimeProviderPathClass.generic_omnigent
+                for view in rollout_views
+                if view.explicit_selection_allowed
             ),
-            None,
+            rollout_views[0] if rollout_views else None,
         )
-        if rollout_view is not None and not rollout_view.explicit_selection_allowed:
+        rollout_blocked = bool(rollout_views) and not any(
+            view.explicit_selection_allowed for view in rollout_views
+        )
+        if rollout_blocked:
             reasons.append(_reason("runtime_provider_rollout_unavailable"))
         catalog = await catalogs.load(profile.harness.catalogRef)
         fresh_catalog = await catalogs.latest(profile.endpointRef)
@@ -1729,7 +1742,7 @@ async def get_omnigent_execution_readiness(
             )
             host_classes.update(item.ref for item in selected_classes)
             models.update(observed_models)
-        if rollout_view is not None and not rollout_view.explicit_selection_allowed:
+        if rollout_blocked:
             # Fail closed: a target the rollout policy does not admit must not
             # offer Provider Profiles, host classes, or models at all.
             compatible = []

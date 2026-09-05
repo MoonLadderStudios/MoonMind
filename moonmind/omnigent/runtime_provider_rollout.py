@@ -38,7 +38,7 @@ from collections.abc import Iterable, Mapping, Sequence
 from enum import StrEnum
 from typing import Any
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 RUNTIME_PROVIDER_ROLLOUT_POLICY_VERSION = (
     "moonmind.omnigent-runtime-provider-rollout/v1"
@@ -233,6 +233,24 @@ _COMBINATION_DIMENSIONS: tuple[str, ...] = (
 
 COMBINATION_DIMENSIONS: tuple[str, ...] = _COMBINATION_DIMENSIONS
 
+#: Documented external (camelCase) selector names accepted as aliases for the
+#: internal snake_case combination dimensions (MoonLadderStudios/MoonMind#3988).
+_SELECTOR_DIMENSION_ALIASES: dict[str, str] = {
+    "harnessId": "harness_id",
+    "harnessImplementationRef": "harness_implementation_ref",
+    "agentProfileCompatibilityClass": "agent_profile_compatibility_class",
+    "providerRuntimeId": "provider_runtime_id",
+    "providerClass": "provider_class",
+    "hostClassRef": "host_class_ref",
+    "runtimePackRef": "runtime_pack_ref",
+    "credentialMaterializerRef": "credential_materializer_ref",
+    "launchPolicyRef": "launch_policy_ref",
+    "hostMode": "host_mode",
+    "modelConfigurationClass": "model_configuration_class",
+    "executionRealizerRef": "execution_realizer_ref",
+    "pathClass": "path_class",
+}
+
 
 def compute_runtime_provider_combination_key(
     combination: "RuntimeProviderCombination | Mapping[str, Any]",
@@ -360,6 +378,17 @@ class RolloutRule(BaseModel):
         default=False, alias="legacyDefaultRestorable"
     )
     description: str = ""
+
+    @field_validator("selector", mode="before")
+    @classmethod
+    def _normalize_selector_dimensions(cls, value: Any) -> Any:
+        if not isinstance(value, Mapping):
+            return value
+        normalized: dict[str, Any] = {}
+        for key, item in value.items():
+            name = str(key)
+            normalized[_SELECTOR_DIMENSION_ALIASES.get(name, name)] = item
+        return normalized
 
     @model_validator(mode="after")
     def _validate_selector(self) -> "RolloutRule":
@@ -1068,10 +1097,16 @@ def load_runtime_provider_rollout_policy(
         )
     payload = dict(document)
     payload.setdefault("policyVersion", RUNTIME_PROVIDER_ROLLOUT_POLICY_VERSION)
-    if "rollbackControls" not in payload:
-        payload["rollbackControls"] = parse_rollback_controls(
-            source.get(RUNTIME_PROVIDER_ROLLBACK_ENV)
-        )
+    # The dedicated rollback env is the emergency overlay: it always applies on
+    # top of a document's serialized controls so the rollback runbook works
+    # without editing the policy document (MoonLadderStudios/MoonMind#3988).
+    doc_controls = list(parse_rollback_controls(payload.get("rollbackControls")))
+    env_controls = list(
+        parse_rollback_controls(source.get(RUNTIME_PROVIDER_ROLLBACK_ENV))
+    )
+    payload["rollbackControls"] = doc_controls + [
+        control for control in env_controls if control not in doc_controls
+    ]
     return RuntimeProviderRolloutPolicy.model_validate(payload)
 
 

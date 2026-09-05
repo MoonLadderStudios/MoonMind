@@ -17,7 +17,6 @@ reader needs support state, not launch authority.
 
 from __future__ import annotations
 
-import logging
 from datetime import UTC, datetime
 from typing import Any, Iterable, Mapping
 
@@ -33,13 +32,12 @@ from moonmind.omnigent.runtime_provider_rollout import (
     RuntimeProviderRollbackControl,
     RuntimeProviderRolloutPolicy,
     _rollback_blocks,
+    effective_rule_state,
     load_runtime_provider_rollout_policy,
     native_interactive_chat_allowed,
     state_admits_execution,
     state_admits_new_authoring,
 )
-
-logger = logging.getLogger(__name__)
 
 RUNTIME_PROVIDER_MIGRATION_STATUS_VERSION = (
     "moonmind.omnigent-runtime-provider-migration-status.v1"
@@ -168,12 +166,13 @@ def _default_status(state: RolloutState) -> str:
     return "unavailable"
 
 
-def _compatibility_path_status(rule: RolloutRule) -> str:
+def _compatibility_path_status(rule: RolloutRule, state: RolloutState | None = None) -> str:
     if rule.path_class is RuntimeProviderPathClass.generic_omnigent:
         return "not_a_compatibility_path"
-    if not state_admits_execution(rule.state):
+    effective = state if state is not None else rule.state
+    if not state_admits_execution(effective):
         return "disabled"
-    if not state_admits_new_authoring(rule.state):
+    if not state_admits_new_authoring(effective):
         return "retired_for_new_work"
     return "active_compatibility"
 
@@ -265,15 +264,48 @@ def _evidence_view(
     )
 
 
-def _newest_matching(
-    entries: Iterable[Any], *, host_class_ref: str, realizer_ref: str
-) -> Any | None:
-    matches = [
-        entry
-        for entry in entries
-        if entry.support_identity.hostClassRef == host_class_ref
-        and entry.support_identity.executionRealizerRef == realizer_ref
+def _evidence_matches_rule(entry: Any, rule: RolloutRule) -> bool:
+    """Return whether evidence belongs to the rule's exact combination.
+
+    Compares every rule-pinned dimension that has a direct support-identity
+    counterpart instead of only Host Class and realizer, so evidence from a
+    different architecture, pack, materializer, launch policy, or harness
+    implementation cannot attach to this row (MoonLadderStudios/MoonMind#3988).
+    """
+
+    identity = entry.support_identity
+    selector = rule.selector
+    checks: list[bool] = [
+        identity.hostClassRef
+        == _rule_dimension(rule, "host_class_ref", identity.hostClassRef),
+        identity.executionRealizerRef
+        == _rule_dimension(
+            rule, "execution_realizer_ref", identity.executionRealizerRef
+        ),
     ]
+    pinned = {
+        "harness_implementation_ref": "harnessImplementationRef",
+        "launch_policy_ref": "launchPolicyRef",
+        "architecture": "architecture",
+    }
+    for dimension, field in pinned.items():
+        expected = selector.get(dimension, ANY_DIMENSION)
+        if expected != ANY_DIMENSION and str(getattr(identity, field)) != str(
+            expected
+        ):
+            return False
+    materializer = selector.get("credential_materializer_ref", ANY_DIMENSION)
+    if materializer != ANY_DIMENSION and str(materializer) not in set(
+        getattr(identity, "materializerRefs", ()) or ()
+    ):
+        return False
+    return all(checks)
+
+
+def _newest_matching(
+    entries: Iterable[Any], *, rule: RolloutRule,
+) -> Any | None:
+    matches = [entry for entry in entries if _evidence_matches_rule(entry, rule)]
     if not matches:
         return None
     return max(matches, key=lambda entry: entry.generated_at)
@@ -296,7 +328,7 @@ def _load_protected_entries() -> tuple[tuple[Any, ...], bool]:
     from pathlib import Path
 
     from moonmind.omnigent.execution_support_evidence import (
-        validate_protected_execution_support_evidence,
+        ProtectedExecutionSupportEvidence,
     )
 
     configured = str(
@@ -315,10 +347,58 @@ def _load_protected_entries() -> tuple[tuple[Any, ...], bool]:
         if not isinstance(item, Mapping):
             continue
         try:
-            parsed.append(validate_protected_execution_support_evidence(item))
+            # Parse structurally valid entries without the admission freshness
+            # check so expired evidence is retained and reported as expired in
+            # the projection instead of disappearing
+            # (MoonLadderStudios/MoonMind#3988).
+            parsed.append(ProtectedExecutionSupportEvidence.model_validate(item))
         except Exception:
             continue
     return (tuple(parsed), True)
+
+
+def _load_shared_outcome_series() -> tuple[tuple[str, dict[str, str], int], ...]:
+    """Load worker-published outcome counters shared across processes.
+
+    ``counter_series()`` only sees the current process's aggregates, while the
+    lifecycle recorders run in the workflow worker process and this projection
+    runs in the API service process. The worker persists its bounded aggregate
+    series to the JSON file named by
+    ``MOONMIND_OMNIGENT_MIGRATION_OUTCOME_COUNTS``; this merges that shared
+    series with the local one so the Compose topology reports both halves
+    (MoonLadderStudios/MoonMind#3988).
+    """
+
+    import json
+    import os
+    from pathlib import Path
+
+    configured = str(
+        os.getenv("MOONMIND_OMNIGENT_MIGRATION_OUTCOME_COUNTS", "")
+    ).strip()
+    if not configured:
+        return ()
+    try:
+        raw = json.loads(Path(configured).read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return ()
+    items = raw.get("counters") if isinstance(raw, Mapping) else None
+    if not isinstance(items, list):
+        return ()
+    series: list[tuple[str, dict[str, str], int]] = []
+    for item in items:
+        if not isinstance(item, Mapping):
+            continue
+        name = str(item.get("name") or "")
+        labels = item.get("labels")
+        try:
+            value = int(item.get("value") or 0)
+        except (TypeError, ValueError):
+            continue
+        if not name or not isinstance(labels, Mapping):
+            continue
+        series.append((name, {str(k): str(v) for k, v in labels.items()}, value))
+    return tuple(series)
 
 
 def _outcome_counts(harness_class: str) -> MigrationOutcomeCounts:
@@ -328,7 +408,15 @@ def _outcome_counts(harness_class: str) -> MigrationOutcomeCounts:
     followup: dict[str, int] = {}
     cleanup: dict[str, int] = {}
     selected: dict[str, int] = {}
-    for name, labels, value in control_plane_metrics.counter_series():
+    merged: dict[tuple[str, tuple[tuple[str, str], ...]], int] = {}
+    for name, labels, value in (
+        *control_plane_metrics.counter_series(),
+        *_load_shared_outcome_series(),
+    ):
+        key = (name, tuple(sorted(labels.items())))
+        merged[key] = merged.get(key, 0) + value
+    for (name, label_items), value in merged.items():
+        labels = dict(label_items)
         if labels.get("harness_class") != harness_class:
             continue
         if name == control_plane_metrics.MIGRATION_LAUNCH_READINESS:
@@ -403,15 +491,16 @@ def build_runtime_provider_migration_status(
         architectures = _host_class_architectures(host_class_ref)
         deterministic = _newest_matching(
             deterministic_entries,
-            host_class_ref=host_class_ref,
-            realizer_ref=realizer_ref,
+            rule=rule,
         )
         protected = _newest_matching(
             protected_entries,
-            host_class_ref=host_class_ref,
-            realizer_ref=realizer_ref,
+            rule=rule,
         )
         applicable = _applicable_controls(rule)
+        # Project the effective post-rollback state so the operator view
+        # matches active admission during a rollback (MoonLadderStudios/MoonMind#3988).
+        effective_state = effective_rule_state(rule, active)[0]
         rows.append(
             RuntimeProviderMigrationRow(
                 targetId=rule.target_id,
@@ -420,10 +509,12 @@ def build_runtime_provider_migration_status(
                 pathClass=(
                     rule.path_class or RuntimeProviderPathClass.generic_omnigent
                 ),
-                rolloutState=rule.state,
+                rolloutState=effective_state,
                 rolloutGeneration=rule.generation,
-                defaultStatus=_default_status(rule.state),
-                compatibilityPathStatus=_compatibility_path_status(rule),
+                defaultStatus=_default_status(effective_state),
+                compatibilityPathStatus=_compatibility_path_status(
+                    rule, effective_state
+                ),
                 harnessId=harness_id,
                 agentProfileCompatibilityClass=_rule_dimension(
                     rule,
