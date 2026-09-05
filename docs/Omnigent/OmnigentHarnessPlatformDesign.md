@@ -667,6 +667,8 @@ Work above the effective limit waits as durable workflow state with an explicit 
 Provider capacity and host capacity are admitted in one documented order, by the launching AgentRun workflow, before the long execution Activity is scheduled:
 
 1. **Request provider capacity.** The workflow queues with the ProviderProfileManager for the exact Provider Profile the committed plan selected, and waits as durable workflow state. The workflow — not the Activity — is the lease owner.
+
+   The committed plan reference the whole hand-off is fenced on is read from the request's execution-plan binding — the same authority that selects this lane and that the Activity loads its plan from. An optional workflow-authored `executionPlanRef` parameter may also be present; when both are, they must name the same plan, and a disagreement is a plan-substitution conflict that fails closed rather than picking one.
 2. **Admit host capacity.** With provider capacity held, the workflow polls a short control Activity that evaluates the aggregate host ceiling and the cold-launch rate against the durable host-lease ledger, and it waits on a workflow timer between polls. The poll names the run's stable host-lease identity (execution plan, request idempotency key, Host Class), so whether this run already holds a reservation is read from the ledger rather than from a caller-supplied flag.
 3. **Release on failure.** If host capacity cannot be admitted, provider capacity is released immediately. Provisional ownership is bounded: a run never occupies a provider lease indefinitely while waiting for a machine.
 4. **Execute.** The Activity receives a compact, secret-free admitted-capacity ticket and *consumes* it by inspection. It never calls an acquiring client, so it can neither grant new capacity nor wait for a replacement inside the execution slot.
@@ -684,7 +686,7 @@ A failure of this kind is recoverable, not terminal: the run returns to durable 
 
 #### Multi-profile plans
 
-The ProviderProfileManager ledger holds at most one lease per requester workflow, so a workflow-owned all-required admission across several Provider Profiles cannot be expressed without a second capacity ledger. An execution plan that selects more than one Provider Profile is therefore **rejected before execution** on this path, with an actionable typed error. It is never silently routed back to Activity-side queueing. Histories recorded before pre-Activity admission keep their classified Activity acquisition.
+The ProviderProfileManager ledger holds at most one lease per requester workflow, so a workflow-owned all-required admission across several Provider Profiles cannot be expressed without a second capacity ledger. An execution plan that selects more than one Provider Profile is therefore **rejected before execution** on this path, with an actionable typed error. It is never silently routed back to Activity-side queueing. Histories recorded before pre-Activity admission keep their classified Activity acquisition: the rejection carries its own workflow patch marker, so a retained history replays onto the Activity-owned execution it already scheduled while every new run is rejected before execution.
 
 #### Worker lanes
 

@@ -257,6 +257,15 @@ OMNIGENT_EXECUTION_PLAN_ADMISSION_PATCH_ID = (
 OMNIGENT_PRE_ACTIVITY_CAPACITY_ADMISSION_PATCH_ID = (
     "agent-run-omnigent-pre-activity-capacity-admission-v1"
 )
+# MoonLadderStudios/MoonMind#3880 requirement 4: an advertised pre-Activity
+# admission path must not silently restore Activity-side queueing, so a plan
+# that names the Activity as its capacity owner is rejected before execution.
+# Histories recorded under #3878 already scheduled their Activity-owned
+# execution under the marker above, and the issue keeps that classified
+# compatibility acquisition, so the rejection needs its own marker.
+OMNIGENT_MULTI_PROFILE_ADMISSION_REJECTION_PATCH_ID = (
+    "agent-run-omnigent-multi-profile-admission-rejection-v1"
+)
 # MoonLadderStudios/MoonMind#3878: a plan-bound generic Omnigent run holds
 # workflow-owned provider capacity, so its structured 429 must reach the same
 # ProviderProfileManager ledger the managed path reports to. Without this the
@@ -3705,6 +3714,60 @@ class MoonMindAgentRun:
             }
         )
 
+    def _omnigent_admits_capacity_before_activity(
+        self,
+        *,
+        recorded_plan_realizer: str | None,
+        admission: Any,
+    ) -> bool:
+        """Decide whether this run admits capacity before the execution Activity.
+
+        MoonLadderStudios/MoonMind#3878 invariants 6 and 7: provider and
+        generic-host capacity become durable workflow state before the long
+        execution Activity, so work above the effective limit waits with an
+        explicit reason and holds no execution slot.
+
+        MoonLadderStudios/MoonMind#3880 requirement 4: a plan whose admission
+        names the Activity as the capacity owner (today, a multi-profile plan —
+        see ``_plan_capacity_authority``) cannot be admitted by the workflow,
+        and an advertised pre-Activity path must not silently restore
+        Activity-side queueing for it. New runs are therefore rejected before
+        any execution slot or host is committed.
+
+        Retained #3878-era histories recorded that same owner *and* the
+        ``ActivityTaskScheduled`` event of their classified Activity-owned
+        acquisition, because the owner used to be one term of the boolean this
+        method replaces. The issue keeps that compatibility acquisition, so the
+        rejection is gated behind its own patch marker: an old history replays
+        onto the Activity-owned lane it already contains, a new run is rejected.
+        """
+
+        if recorded_plan_realizer != "generic-omnigent-host@1":
+            return False
+        if not workflow.patched(
+            OMNIGENT_PRE_ACTIVITY_CAPACITY_ADMISSION_PATCH_ID
+        ):
+            return False
+        capacity_owner = str(
+            getattr(admission, "capacity_acquisition_owner", "workflow")
+        )
+        if capacity_owner == "workflow":
+            return True
+        if not workflow.patched(
+            OMNIGENT_MULTI_PROFILE_ADMISSION_REJECTION_PATCH_ID
+        ):
+            # Replay of a history recorded before the rejection existed. It
+            # already scheduled the Activity-owned execution; raising here
+            # would be non-deterministic against its own recorded events.
+            return False
+        raise ApplicationError(
+            "Omnigent execution plan requires Activity-owned capacity "
+            "acquisition, which the pre-Activity admission path does not "
+            "support",
+            type="CapacityAdmissionOwnerUnsupported",
+            non_retryable=True,
+        )
+
     @staticmethod
     def _omnigent_host_binding_identity(
         request: AgentExecutionRequest,
@@ -3731,12 +3794,41 @@ class MoonMindAgentRun:
 
     @staticmethod
     def _omnigent_execution_plan_ref(request: AgentExecutionRequest) -> str:
-        """Return the committed execution plan this capacity is admitted for."""
+        """Return the committed execution plan this capacity is admitted for.
 
+        The plan-bound generic-host lane is *selected* by
+        ``request.omnigent_execution_plan``, and the execution Activity loads
+        that binding's persisted plan and derives its stable runtime binding
+        from the loaded ``plan.planRef``
+        (``moonmind/omnigent/realizers/generic_host.py``). The committed plan
+        reference must therefore be read from the same authority the lane is
+        defined by. ``parameters['executionPlanRef']`` is an optional
+        workflow-authored surface that ``MoonMindRunWorkflow`` writes only when
+        the caller supplied a workflow-level ``executionPlanRef``; the API and
+        scheduler start paths author only ``omnigentExecutionPlan``, so reading
+        the parameter alone leaves the default production run with no plan
+        authority at all.
+        """
+
+        binding_ref = str(
+            getattr(request.omnigent_execution_plan, "plan_ref", "") or ""
+        ).strip()
         parameters = request.parameters
-        if not isinstance(parameters, Mapping):
-            return ""
-        return str(parameters.get("executionPlanRef") or "").strip()
+        parameter_ref = ""
+        if isinstance(parameters, Mapping):
+            parameter_ref = str(parameters.get("executionPlanRef") or "").strip()
+        if binding_ref and parameter_ref and binding_ref != parameter_ref:
+            # Two different committed plans cannot both be the one this
+            # capacity is admitted for. Preferring either would fence the
+            # Activity against a plan the workflow never admitted, so this is
+            # a plan-substitution conflict and fails closed.
+            raise ApplicationError(
+                "Omnigent execution plan authority conflicts with the admitted "
+                "executionPlanRef parameter",
+                type="OmnigentExecutionPlanAuthorityConflict",
+                non_retryable=True,
+            )
+        return binding_ref or parameter_ref
 
     @staticmethod
     def _omnigent_capacity_profiles(
@@ -6479,38 +6571,12 @@ class MoonMindAgentRun:
                                 act_name = (
                                     "integration.omnigent.profile_bound_execute"
                                 )
-                            # MoonLadderStudios/MoonMind#3878 invariants 6 and 7:
-                            # admit provider and generic-host capacity as durable
-                            # workflow state before the long execution Activity,
-                            # so work above the effective limit waits with an
-                            # explicit reason and holds no execution slot.
                             admit_capacity_before_activity = (
-                                recorded_plan_realizer
-                                == "generic-omnigent-host@1"
-                                and workflow.patched(
-                                    OMNIGENT_PRE_ACTIVITY_CAPACITY_ADMISSION_PATCH_ID
+                                self._omnigent_admits_capacity_before_activity(
+                                    recorded_plan_realizer=recorded_plan_realizer,
+                                    admission=admission,
                                 )
                             )
-                            if admit_capacity_before_activity and str(
-                                getattr(
-                                    admission,
-                                    "capacity_acquisition_owner",
-                                    "workflow",
-                                )
-                            ) != "workflow":
-                                # MoonLadderStudios/MoonMind#3880 requirement 4:
-                                # an advertised pre-Activity path must not fall
-                                # back to Activity-side queueing. A plan the
-                                # workflow cannot admit is rejected here, before
-                                # any execution slot or host is committed.
-                                raise ApplicationError(
-                                    "Omnigent execution plan requires "
-                                    "Activity-owned capacity acquisition, which "
-                                    "the pre-Activity admission path does not "
-                                    "support",
-                                    type="CapacityAdmissionOwnerUnsupported",
-                                    non_retryable=True,
-                                )
                             (
                                 result_payload,
                                 admitted_at,
