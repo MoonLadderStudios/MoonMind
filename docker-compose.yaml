@@ -134,6 +134,18 @@ services:
       - OMNIGENT_SHARED_HOST_IMAGE=${OMNIGENT_SHARED_HOST_IMAGE:-ghcr.io/moonladderstudios/omnigent-host-moonmind}
       - OMNIGENT_SHARED_HOST_IMAGE_TAG=${OMNIGENT_SHARED_HOST_IMAGE_TAG:-1.18.11}
       - MOONMIND_OMNIGENT_GENERIC_HOST_ENABLED=${MOONMIND_OMNIGENT_GENERIC_HOST_ENABLED:-true}
+      # MoonLadderStudios/MoonMind#3878 invariant 7: on-demand generic hosts
+      # are admitted against aggregate machine capacity and a separately
+      # bounded cold-launch rate, so a higher provider ceiling can never
+      # translate into an unsafe number of simultaneous containers.
+      - MOONMIND_OMNIGENT_GENERIC_HOST_CAPACITY=${MOONMIND_OMNIGENT_GENERIC_HOST_CAPACITY:-8}
+      - MOONMIND_OMNIGENT_GENERIC_HOST_COLD_LAUNCH_BURST=${MOONMIND_OMNIGENT_GENERIC_HOST_COLD_LAUNCH_BURST:-2}
+      - MOONMIND_OMNIGENT_GENERIC_HOST_COLD_LAUNCH_WINDOW_SECONDS=${MOONMIND_OMNIGENT_GENERIC_HOST_COLD_LAUNCH_WINDOW_SECONDS:-30}
+      # The pooled Omnigent HTTP client is sized for that host ceiling: each
+      # concurrent run holds one long-lived SSE stream plus a few control calls.
+      - MOONMIND_OMNIGENT_HTTP_MAX_CONNECTIONS=${MOONMIND_OMNIGENT_HTTP_MAX_CONNECTIONS:-64}
+      - MOONMIND_OMNIGENT_HTTP_MAX_KEEPALIVE_CONNECTIONS=${MOONMIND_OMNIGENT_HTTP_MAX_KEEPALIVE_CONNECTIONS:-32}
+      - MOONMIND_OMNIGENT_HTTP_KEEPALIVE_EXPIRY_SECONDS=${MOONMIND_OMNIGENT_HTTP_KEEPALIVE_EXPIRY_SECONDS:-30}
       - MOONMIND_OMNIGENT_OPENCODE_ENABLED=${MOONMIND_OMNIGENT_OPENCODE_ENABLED:-true}
       - MOONMIND_OMNIGENT_GENERIC_CODEX_QUALIFIED=${MOONMIND_OMNIGENT_GENERIC_CODEX_QUALIFIED:-false}
       - MOONMIND_OMNIGENT_GENERIC_CLAUDE_QUALIFIED=${MOONMIND_OMNIGENT_GENERIC_CLAUDE_QUALIFIED:-false}
@@ -692,7 +704,12 @@ services:
       - TEMPORAL_WORKER_FLEET=agent_runtime
       - TEMPORAL_ACTIVITY_AGENT_RUNTIME_TASK_QUEUE=${TEMPORAL_ACTIVITY_AGENT_RUNTIME_TASK_QUEUE:-mm.activity.agent_runtime}
       - TEMPORAL_ACTIVITY_AGENT_RUNTIME_CONTROL_TASK_QUEUE=${TEMPORAL_ACTIVITY_AGENT_RUNTIME_CONTROL_TASK_QUEUE:-mm.activity.agent_runtime.control}
-      - TEMPORAL_AGENT_RUNTIME_WORKER_CONCURRENCY=${TEMPORAL_AGENT_RUNTIME_WORKER_CONCURRENCY:-4}
+      # MoonLadderStudios/MoonMind#3878: this compose default previously
+      # pinned four concurrent Activities, an undocumented deployment
+      # ceiling below the code default. Effective Omnigent concurrency must
+      # be the minimum of the governed provider, host, and worker limits —
+      # never a hidden compose value — so this now tracks the code default.
+      - TEMPORAL_AGENT_RUNTIME_WORKER_CONCURRENCY=${TEMPORAL_AGENT_RUNTIME_WORKER_CONCURRENCY:-16}
       - MOONMIND_URL=${MOONMIND_URL:-http://api:8000}
       - MOONMIND_OAUTH_RUNNER_IMAGE=${MOONMIND_OAUTH_RUNNER_IMAGE:-${MOONMIND_IMAGE:-ghcr.io/moonladderstudios/moonmind:latest}}
       - CODEX_VOLUME_PATH=${CODEX_VOLUME_PATH:-/home/app/.codex}
@@ -735,6 +752,18 @@ services:
       - OMNIGENT_SHARED_HOST_IMAGE=${OMNIGENT_SHARED_HOST_IMAGE:-ghcr.io/moonladderstudios/omnigent-host-moonmind}
       - OMNIGENT_SHARED_HOST_IMAGE_TAG=${OMNIGENT_SHARED_HOST_IMAGE_TAG:-1.18.11}
       - MOONMIND_OMNIGENT_GENERIC_HOST_ENABLED=${MOONMIND_OMNIGENT_GENERIC_HOST_ENABLED:-true}
+      # MoonLadderStudios/MoonMind#3878 invariant 7: on-demand generic hosts
+      # are admitted against aggregate machine capacity and a separately
+      # bounded cold-launch rate, so a higher provider ceiling can never
+      # translate into an unsafe number of simultaneous containers.
+      - MOONMIND_OMNIGENT_GENERIC_HOST_CAPACITY=${MOONMIND_OMNIGENT_GENERIC_HOST_CAPACITY:-8}
+      - MOONMIND_OMNIGENT_GENERIC_HOST_COLD_LAUNCH_BURST=${MOONMIND_OMNIGENT_GENERIC_HOST_COLD_LAUNCH_BURST:-2}
+      - MOONMIND_OMNIGENT_GENERIC_HOST_COLD_LAUNCH_WINDOW_SECONDS=${MOONMIND_OMNIGENT_GENERIC_HOST_COLD_LAUNCH_WINDOW_SECONDS:-30}
+      # The pooled Omnigent HTTP client is sized for that host ceiling: each
+      # concurrent run holds one long-lived SSE stream plus a few control calls.
+      - MOONMIND_OMNIGENT_HTTP_MAX_CONNECTIONS=${MOONMIND_OMNIGENT_HTTP_MAX_CONNECTIONS:-64}
+      - MOONMIND_OMNIGENT_HTTP_MAX_KEEPALIVE_CONNECTIONS=${MOONMIND_OMNIGENT_HTTP_MAX_KEEPALIVE_CONNECTIONS:-32}
+      - MOONMIND_OMNIGENT_HTTP_KEEPALIVE_EXPIRY_SECONDS=${MOONMIND_OMNIGENT_HTTP_KEEPALIVE_EXPIRY_SECONDS:-30}
       - MOONMIND_OMNIGENT_OPENCODE_ENABLED=${MOONMIND_OMNIGENT_OPENCODE_ENABLED:-true}
       - MOONMIND_OMNIGENT_GENERIC_CODEX_QUALIFIED=${MOONMIND_OMNIGENT_GENERIC_CODEX_QUALIFIED:-false}
       - MOONMIND_OMNIGENT_GENERIC_CLAUDE_QUALIFIED=${MOONMIND_OMNIGENT_GENERIC_CLAUDE_QUALIFIED:-false}

@@ -1009,6 +1009,20 @@ def build_default_activity_catalog(
             timeouts=TemporalActivityTimeouts(30, 60),
             retries=_activity_retries(max_attempts=3, max_interval_seconds=10),
         ),
+        # MoonLadderStudios/MoonMind#3878: aggregate generic-host and
+        # cold-launch admission is a short, side-effect-free ledger read that
+        # the AgentRun workflow polls while it waits. It runs on the control
+        # queue so it can never queue behind a long execution Activity on the
+        # same fleet — the hidden ceiling this program removes.
+        TemporalActivityDefinition(
+            activity_type="omnigent.admit_generic_host_capacity",
+            family="integration",
+            capability_class="agent_runtime",
+            task_queue=agent_runtime_control_task_queue,
+            fleet=AGENT_RUNTIME_FLEET,
+            timeouts=TemporalActivityTimeouts(30, 60),
+            retries=_activity_retries(max_attempts=3, max_interval_seconds=10),
+        ),
         TemporalActivityDefinition(
             activity_type="omnigent.resolve_intent",
             family="integration",

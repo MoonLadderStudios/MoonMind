@@ -743,6 +743,11 @@ async def lifespan(app: FastAPI):
             except asyncio.CancelledError:
                 # Shutdown owns this task, so cancellation is the expected outcome.
                 pass
+        # The pooled Omnigent HTTP/SSE transport lives for the process, so
+        # this process closes it (MoonLadderStudios/MoonMind#3878).
+        from moonmind.omnigent.production import close_omnigent_transport_pool
+
+        await close_omnigent_transport_pool()
         # Shutdown logic
         teardown_providers()
 

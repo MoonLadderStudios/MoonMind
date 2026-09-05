@@ -29,7 +29,6 @@ import logging
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from typing import Any, Collection, Mapping
-from uuid import uuid4
 
 from sqlalchemy import select
 
@@ -287,6 +286,34 @@ def _pinned_image_ref() -> str | None:
         return get_opencode_host_image_ref()
     except Exception:
         return None
+
+
+def model_catalog_evidence_identity(
+    *,
+    profile_id: str,
+    image_ref: str,
+    credential_generation: Any = None,
+) -> str:
+    """Return the exact evidence identity one re-validation pass refreshes.
+
+    MoonLadderStudios/MoonMind#3878 invariant 3: credentialless validation is
+    single-flight for one exact evidence identity. The identity is exactly what
+    :func:`evidence_matches_launchable_identity` compares — the profile, the
+    pinned host image, and the credential generation — so two maintainers that
+    would produce interchangeable evidence collapse onto one probe, while a
+    re-pinned image or a rotated credential is a different identity that is
+    always allowed to run.
+    """
+
+    material = "\x1f".join(
+        (
+            str(profile_id or "").strip(),
+            str(image_ref or "").strip(),
+            str(credential_generation if credential_generation is not None else ""),
+        )
+    )
+    digest = hashlib.sha256(material.encode("utf-8")).hexdigest()[:32]
+    return f"opencode-model-catalog:{digest}"
 
 
 def _enrollment_fingerprint(
@@ -621,7 +648,16 @@ async def _revalidate_stale_evidence(
     deferred: list[str] = sorted(exhausted_ids)
     for row in pending:
         profile_id = row.profile_id
-        operation_id = uuid4().hex
+        # MoonLadderStudios/MoonMind#3878 invariant 3: the lease identity is the
+        # exact evidence identity being refreshed, not a fresh operation id. Two
+        # maintainers racing the same refresh derive the same owner, so the
+        # manager grants one of them and reports ``already_held`` to the other
+        # instead of running a second provider probe.
+        operation_id = model_catalog_evidence_identity(
+            profile_id=profile_id,
+            image_ref=image_ref,
+            credential_generation=getattr(row, "credential_generation", None),
+        )
         try:
             guard = await acquire_credential_maintenance_guard(
                 runtime_id=OPENCODE_RUNTIME_ID,
@@ -650,6 +686,21 @@ async def _revalidate_stale_evidence(
                 profile_id,
                 image_ref,
                 exc,
+            )
+            continue
+
+        if guard.lease.already_held:
+            # Another maintainer already owns this exact evidence identity.
+            # Re-probing would duplicate provider load, and releasing the lease
+            # would cancel the holder's authority, so stand down with the
+            # attempt budget intact.
+            deferred.append(profile_id)
+            logger.info(
+                "OpenCode Provider Profile re-validation is already in flight for "
+                "this evidence identity; deferring to the current holder: "
+                "profile_id=%s image_ref=%s",
+                profile_id,
+                image_ref,
             )
             continue
 
@@ -876,6 +927,7 @@ __all__ = [
     "evidence_is_current",
     "evidence_matches_launchable_identity",
     "evidence_observation_is_current",
+    "model_catalog_evidence_identity",
     "reconcile_opencode_provider_readiness",
     "reset_enrollment_attempts",
     "revalidation_is_exhausted",
