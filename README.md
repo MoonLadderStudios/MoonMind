@@ -35,7 +35,7 @@ See the canonical [Omnigent Primary Runtime Provider Strategy](docs/Omnigent/Pri
     - Add a GitHub personal access token
     - Add an API key or use OAuth to authenticate a Provider Profile
     - Configure any other secrets or settings needed for the first workflow
-8. Click Create and submit a workflow. Select only a runtime target whose readiness entry is available. Default migration to Omnigent occurs independently for each qualified combination.
+8. Click Create, select Runtime and one Profile, and submit a workflow. The Profile resolves its execution configuration; readiness and rollout policy validate the resulting plan.
 
 `.env` is optional for normal local startup. Use `.env-template` only when you want to override defaults or preconfigure advanced settings before launch.
 

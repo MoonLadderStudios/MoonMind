@@ -60,6 +60,23 @@ direct_compatibility
 
 The path class is what makes "Codex via generic Omnigent", "Codex via legacy profile-bound Omnigent", and "Direct Codex compatibility" three distinct, independently governed rows even though the first two submit the same canonical `external/omnigent` identity.
 
+### Authoring and diagnostic presentation
+
+Ordinary authoring exposes Runtime and one Profile selection. Execution
+configuration and rollout target are resolved subordinate values. Migration
+metadata must not introduce additional required authoring controls, including
+controls hidden behind Advanced mode. Runtime labels identify families; technical
+target labels belong in diagnostics and execution history.
+
+The Profile's pinned or unambiguous compatible configuration owns the harness.
+Neither rollout promotion nor catalog ordering can substitute another Profile
+or configuration. The Create request carries the displayed immutable configuration
+reference as an admission expectation. Admission re-resolves the Profile,
+validates that expectation, and freezes the exact rollout row from the compiled
+plan. An explicitly requested target must also agree with that plan; sharing
+`runtimeId=omnigent` alone is insufficient. Existing recorded plans retain their
+authority independently of changes to authoring defaults.
+
 ## 2. Rollout states
 
 | State | Offered as a new-work default | Offered as an explicit choice | Executes recorded authority |
@@ -102,7 +119,10 @@ The built-in policy expresses this deployment's current qualification gates as o
 | `codex.direct` | Direct Codex compatibility | `direct_compatibility` | `direct_compatibility_only` |
 | `claude.direct` | Direct Claude compatibility | `direct_compatibility` | `direct_compatibility_only` |
 
-Those six labels are the target identities the UI and API distinguish. A friendly label never becomes a new top-level runtime id: the canonical submitted identity for the first four rows stays `omnigent`, and for the last two it stays the direct provider runtime id.
+These six rows distinguish execution paths in admission, diagnostics and history.
+They are not six authoring choices. A friendly target label never becomes a
+runtime-family label or a new runtime id: the first four rows remain within
+`omnigent`, while the last two retain their direct provider runtime ids.
 
 The `State` column is the *authored* state. A promoted row becomes a product default for an execution only when the readiness gate in section 5 also passes for that execution's exact combination.
 

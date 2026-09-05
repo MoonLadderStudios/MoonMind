@@ -15,6 +15,7 @@ from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy import and_, or_, select
 
 from api_service.db.models import OmnigentAgentProfile, OmnigentAgentProfileVersion
+from moonmind.omnigent.harness_platform.harness_registry import canonical_harness_id
 
 
 class ProfileExecutionConfiguration(BaseModel):
@@ -167,6 +168,7 @@ def select_execution_configuration(
         "version": version.version,
         "digest": version.digest,
         "providerProfileRef": provider.profile_id,
+        "harnessId": canonical_harness_id(document.get("harness")),
         "launchPolicyRef": policies[0] if policies else None,
         "defaultForRuntime": any(
             candidate.default_for_runtime
@@ -183,3 +185,31 @@ async def profile_execution_selection(
         provider,
         await load_execution_configurations(session, user, [provider]),
     )
+
+
+def validate_execution_configuration_expectation(
+    expected: Any, snapshot: Mapping[str, Any]
+) -> None:
+    """Reject stale authoring projections without selecting a different config.
+
+    Older API clients omit the expectation and retain profile-first resolution.
+    This check runs at admission only; recorded snapshots remain replay authority.
+    """
+    if expected is None:
+        return
+    from pydantic import ValidationError
+
+    try:
+        reference = ProfileExecutionConfiguration.model_validate(expected)
+    except ValidationError as exc:
+        raise HTTPException(
+            422, "Invalid runtime.executionConfiguration reference."
+        ) from exc
+    if any(snapshot.get(key) != value for key, value in reference.model_dump().items()):
+        raise HTTPException(
+            409,
+            {
+                "code": "profile_execution_configuration_changed",
+                "message": "This Profile's execution configuration changed. Refresh the form and review the Profile in Settings before submitting again.",
+            },
+        )

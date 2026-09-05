@@ -58,9 +58,11 @@ export interface RuntimeTargetCatalog {
  */
 const RUNTIME_ID_LABELS: Record<string, string> = {
   claude_code: 'Claude Code',
+  claude: 'Claude Code',
   codex_cli: 'Codex CLI',
   codex_cloud: 'Codex Cloud',
   omnigent: 'Omnigent',
+  opencode: 'OpenCode',
 };
 
 function titleCaseRuntimeId(runtimeId: string): string {
@@ -92,67 +94,23 @@ export function targetsForRuntime(
   );
 }
 
-/**
- * Return every selectable target for a runtime id, most promoted first, so an
- * authoring surface can offer an explicit target choice instead of collapsing
- * same-runtime targets into one option (MoonLadderStudios/MoonMind#3988).
- */
-export function selectableTargetsForRuntime(
-  catalog: RuntimeTargetCatalog | null | undefined,
-  runtimeId: string,
-): RuntimeTarget[] {
-  return targetsForRuntime(catalog, runtimeId).filter(
-    (target) => target.explicitSelectionAllowed,
-  );
-}
-
-/**
- * Return the most promoted selectable target for a runtime id, or `null` when
- * the rollout policy registers none. A caller must never substitute another
- * runtime when this is `null`; it renders the unavailable reason instead.
- */
-export function preferredTargetForRuntime(
-  catalog: RuntimeTargetCatalog | null | undefined,
-  runtimeId: string,
-): RuntimeTarget | null {
-  const candidates = targetsForRuntime(catalog, runtimeId);
-  const selectable = candidates.filter(
-    (target) => target.explicitSelectionAllowed,
-  );
-  const promoted = selectable.filter((target) => target.defaultEligible);
-  return promoted[0] || selectable[0] || null;
-}
-
-/**
- * Label one runtime option with the truthful selected path.
- *
- * The label is the explicit target identity — "Codex via generic Omnigent",
- * "Direct Codex compatibility", and so on — whenever the catalog identifies one
- * target for the runtime: either the single selectable row or the promoted row
- * a new submission would receive. Otherwise it falls back to the runtime
- * product name. A label never becomes a top-level runtime identity of its own;
- * the submitted identity stays the canonical `runtimeId`.
- */
+/** Runtime labels describe families; migration rows never rename Omnigent. */
 export function formatRuntimeLabel(
   runtimeId: string,
   catalog?: RuntimeTargetCatalog | null,
 ): string {
-  const selected = preferredTargetForRuntime(catalog, runtimeId);
-  const selectable = targetsForRuntime(catalog, runtimeId).filter(
-    (target) => target.explicitSelectionAllowed,
+  const direct = targetsForRuntime(catalog, runtimeId).find(
+    (target) => target.pathClass === 'direct_compatibility',
   );
-  if (selected && (selectable.length === 1 || selected.defaultEligible)) {
-    return selected.label;
-  }
-  return RUNTIME_ID_LABELS[runtimeId] || titleCaseRuntimeId(runtimeId);
+  return (
+    direct?.label || RUNTIME_ID_LABELS[runtimeId] || titleCaseRuntimeId(runtimeId)
+  );
 }
 
 export interface RuntimeOption {
   runtimeId: string;
   label: string;
   compatibilityPath: boolean;
-  rolloutState: RuntimeTargetRolloutState | null;
-  targetId: string | null;
   available: boolean;
 }
 
@@ -162,19 +120,7 @@ export interface RuntimeOptionGroups {
   unavailable: RuntimeOption[];
 }
 
-/**
- * Group the supported runtime ids into recommended targets, explicitly labeled
- * compatibility paths, and unavailable rows. A runtime the catalog does not
- * register stays recommended-neutral: the rollout policy governs promotion, not
- * which runtimes exist.
- *
- * One option is emitted per runtime id carrying its preferred target identity.
- * When several selectable targets share a runtime, the authoring surface must
- * additionally offer `selectableTargetsForRuntime` as an explicit Target
- * choice and submit the chosen `targetId` as `requestedTargetId` so the exact
- * identity is frozen instead of collapsing to the runtime string
- * (MoonLadderStudios/MoonMind#3988).
- */
+/** Group runtime families by direct compatibility and policy availability. */
 export function runtimeOptionGroups(
   runtimeIds: readonly string[],
   catalog?: RuntimeTargetCatalog | null,
@@ -185,15 +131,15 @@ export function runtimeOptionGroups(
     unavailable: [],
   };
   runtimeIds.forEach((runtimeId) => {
-    const target = preferredTargetForRuntime(catalog, runtimeId);
     const registered = targetsForRuntime(catalog, runtimeId);
     const option: RuntimeOption = {
       runtimeId,
       label: formatRuntimeLabel(runtimeId, catalog),
-      compatibilityPath: Boolean(target?.compatibilityPath),
-      rolloutState: target?.rolloutState ?? null,
-      targetId: target?.targetId ?? null,
-      available: registered.length === 0 ? true : Boolean(target),
+      compatibilityPath: registered.some(
+        (row) => row.pathClass === 'direct_compatibility',
+      ),
+      available: registered.length === 0 ||
+        registered.some((row) => row.explicitSelectionAllowed),
     };
     if (!option.available) {
       groups.unavailable.push(option);
@@ -249,7 +195,7 @@ export function runtimeUnavailableReason(
   return `No qualified target is available for ${formatRuntimeLabel(
     runtimeId,
     catalog,
-  )} (${detail}). Choose an explicitly available target instead.`;
+  )} (${detail}). Review runtime availability and the Profile configuration in Settings.`;
 }
 
 /**

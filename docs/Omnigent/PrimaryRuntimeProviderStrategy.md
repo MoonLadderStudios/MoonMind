@@ -103,7 +103,11 @@ The third generation is the destination. The first two remain explicit compatibi
 
 Which generation a product surface offers is no longer implied by code paths or scattered boolean flags. One versioned runtime-provider rollout policy governs each exact combination independently, and every authoring and follow-up surface reads that one decision through one shared selection and admission boundary. [`docs/Omnigent/RuntimeProviderRollout.md`](./RuntimeProviderRollout.md) is the authority for the rollout states, the exact compatibility dimensions, the canary and rollback controls, the operator-visible migration status view, and the migration telemetry contract.
 
-Direct Codex, direct Claude Code, and the legacy profile-bound Codex realizer are presented as **labeled compatibility paths**, never as equal recommended defaults. A promoted generic row is the only non-compatibility default a surface preselects.
+Direct Codex and direct Claude Code are labeled compatibility choices in Runtime.
+Legacy profile-bound paths remain labeled in diagnostics and history; they cannot
+rename the Omnigent family or become independent authoring controls. Promotion
+governs the resolved execution path and cannot displace an explicit Profile or
+pinned compatible configuration.
 
 No current path is silently reclassified as generic. Existing execution plans and Temporal histories continue to invoke the realizer and compatibility version they recorded, and every admitted plan freezes the rollout decision generation that admitted it.
 
@@ -381,13 +385,31 @@ The exact schema may evolve. The durable rules are:
 
 ## 9. Product selection and defaults
 
-The long-term normal Workflow Create experience is:
+Ordinary authoring exposes an always-visible Runtime selector and one Profile
+selector. Runtime labels identify stable families, such as Omnigent; the Profile
+identifies the account and owns its subordinate execution configuration. Within
+Omnigent, Profiles are grouped by their underlying provider runtime.
 
-1. Select or accept an Omnigent Agent Profile.
-2. Select a compatible Provider Profile.
-3. Select model, effort, workspace, policy, Skills, and publication intent.
-4. Submit one `external/omnigent` execution.
-5. Let the immutable plan select the approved Host Class, runtime pack, materializer, and generic realizer.
+1. Select or accept Runtime and Profile.
+2. Resolve the Profile's pinned configuration or compatible default/sole configuration.
+   Unresolved ambiguity requires a choice in Profile settings.
+3. Set workspace, Skills and publication intent. Model and host-policy overrides
+   use the existing Advanced mode control where supported.
+4. Submit the Profile and the displayed configuration's immutable reference for
+   validation at admission, then compile one `external/omnigent` execution plan.
+
+Execution configuration and rollout target are resolved subordinate values.
+Migration metadata must not introduce additional required authoring controls.
+Target, Harness, Agent Profile, Host Class and Realizer are not independent
+selectors. The configuration's harness determines the execution description;
+the first rollout row cannot rename the Omnigent family.
+
+The displayed selection, submitted expectation and admitted plan must agree.
+A changed configuration produces an actionable conflict before execution. An
+explicit Profile, pinned configuration or supported override is never displaced
+by discovery response ordering or a newly available harness. Temporary capacity
+or discovery changes retain the Profile's identity and show waiting or setup
+status. Direct runtime compatibility is never an automatic recovery path.
 
 Direct Codex and direct Claude Code may remain visible during migration when policy permits them. They must be labeled as direct compatibility paths rather than equal long-term architecture choices.
 
@@ -458,7 +480,9 @@ See [`docs/Omnigent/RuntimeProviderRollout.md`](./RuntimeProviderRollout.md) for
 
 - A versioned runtime-provider rollout policy controls each exact combination, and the decision plus its generation is frozen into the immutable execution plan.
 - One shared selection and admission boundary serves Workflow Create, presets, schedules, edit, rerun, retry as a fresh execution, Checkpoint Branch, remediation, linked continuation, and API/MCP submissions.
-- Direct and legacy paths are labeled compatibility choices and are never preselected while a generic row is promoted.
+- Direct paths are labeled compatibility choices in Runtime; legacy path labels
+  remain in diagnostics and history. Generic promotion respects the selected
+  Profile and its pinned compatible configuration.
 - Continuation, remediation, checkpoint, steering, approval, and Workflow Chat turns enter the canonical Omnigent session and turn-command path.
 - Unsupported combinations stay unavailable with an exact reason rather than silently using a direct runtime.
 - Exact canary allowlists, six independent rollback controls, an operator-visible migration status view, and eleven bounded migration metric families — each emitted by one production owner across the selection boundary, plan compilation, the generic host lifecycle, and the canonical-turn wrapper — make the migration observable and reversible.

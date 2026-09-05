@@ -544,3 +544,19 @@ def test_conformance_input_inventory_matches_the_runner() -> None:
         assert is_omnigent_conformance_input(candidate), path
     for path in OMNIGENT_CONFORMANCE_INPUT_EXACT:
         assert (REPO_ROOT / path).exists(), path
+
+
+@pytest.mark.parametrize(
+    "path",
+    sorted(select_test_suites.PROFILE_AUTHORING_EXACT)
+    + [
+        "frontend/src/runtime/runtimeTargets.ts",
+        "moonmind/omnigent/runtime_provider_rollout.py",
+        "moonmind/omnigent/harness_platform/planner.py",
+    ],
+)
+def test_profile_authoring_changes_run_renderer_and_admission_replay(path):
+    outputs = _outputs([path])
+    assert outputs["frontend_static"] == "true"
+    assert outputs["unit_fast"] == "true"
+    assert outputs["api_component"] == "true"

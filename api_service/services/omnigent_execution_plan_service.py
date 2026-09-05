@@ -1130,6 +1130,19 @@ async def compile_and_persist_execution_plan(
         execution_authority=authority,
         agent_profile_snapshot_ref=f"artifact:{profile_snapshot_ref}",
     )
+    # A client may name an exact rollout row, but only the compiled Profile,
+    # policy and harness can establish it. Validate before persisting the plan.
+    workflow = initial_parameters.get("workflow") or {}
+    runtime = workflow.get("runtime") or {}
+    requested_target_id = runtime.get("targetId")
+    if requested_target_id and (
+        plan.payload.runtimeProviderRollout is None
+        or plan.payload.runtimeProviderRollout.targetId != requested_target_id
+    ):
+        raise ValueError(
+            "Requested runtime target does not match the selected Profile's "
+            "execution plan."
+        )
     from moonmind.omnigent.session_supervisor_rollback import (
         SUPERVISOR_ROLLBACK_POLICY_VERSION,
     )

@@ -11197,6 +11197,15 @@ async def _create_execution_from_workflow_request(
             )
         canonical_target_runtime = normalized_rt
 
+    if (
+        runtime_payload.get("executionConfiguration") is not None
+        and canonical_target_runtime != "omnigent"
+    ):
+        raise _invalid_workflow_request(
+            "runtime.executionConfiguration requires targetRuntime='omnigent'. "
+            "Refresh the form and review the Profile configuration in Settings."
+        )
+
     if canonical_target_runtime:
         normalized_runtime_for_planner = dict(
             normalized_task_for_planner.get("runtime") or {}
@@ -11454,6 +11463,20 @@ async def _create_execution_from_workflow_request(
                 consumer_type=consumer_type,
                 consumer_id=reserved_workflow_id,
                 user=user,
+            )
+        from api_service.services.profile_execution_selection import (
+            validate_execution_configuration_expectation,
+        )
+
+        validate_execution_configuration_expectation(
+            runtime_payload.get("executionConfiguration"), profile_snapshot
+        )
+        if (
+            raw_profile_id
+            and profile_snapshot.get("providerProfileRef") != raw_profile_id
+        ):
+            raise _invalid_workflow_request(
+                "The execution configuration must use the selected Profile."
             )
         authored_execution_target_ref = (
             str(authored_omnigent.get("executionTargetRef") or "").strip()
