@@ -54,6 +54,10 @@ class AcquiredProviderLease:
             "leaseOwnerId": self.lease.owner_id,
             "leasePurpose": self.lease.purpose.value,
             "leaseOwnerIsWorkflow": self.owned_by_workflow,
+            # MoonLadderStudios/MoonMind#3879: carry the grant generation into
+            # the persisted handle so janitor recovery releases the exact grant
+            # this binding owns, not whatever the owner ID holds later.
+            "leaseFencingGeneration": self.lease.fencing_generation,
             "credentialGeneration": self.credential_generation,
             "credentialRuntimeRef": credential_runtime_ref,
         }
@@ -263,6 +267,7 @@ class OmnigentProviderLeaseCoordinator:
                 continue
             try:
                 purpose = CredentialLeasePurpose(str(value["leasePurpose"]))
+                raw_fence = value.get("leaseFencingGeneration")
                 reconstructed.append(
                     CredentialLease(
                         profile_id=str(value["providerProfileRef"]),
@@ -270,6 +275,12 @@ class OmnigentProviderLeaseCoordinator:
                         lease_id=lease_id,
                         owner_id=str(value["leaseOwnerId"]),
                         purpose=purpose,
+                        # A binding written before fenced grants carries no
+                        # generation; the manager honours an unfenced release
+                        # so recovery of those handles still frees capacity.
+                        fencing_generation=(
+                            int(raw_fence) if raw_fence is not None else None
+                        ),
                     )
                 )
             except (KeyError, TypeError, ValueError) as exc:

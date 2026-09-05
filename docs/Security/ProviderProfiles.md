@@ -1267,7 +1267,7 @@ This prevents disabled setup stubs from becoming runnable simply because they ex
 | Signal | Direction | Payload |
 | --- | --- | --- |
 | `request_slot` | AgentRun → Manager | `{requester_workflow_id, runtime_id, priority?, requested_profile_id?, provider_id?, tags_any?, tags_all?, runtime_materialization_mode?}` |
-| `release_slot` | AgentRun → Manager | `{requester_workflow_id, profile_id}` |
+| `release_slot` | AgentRun → Manager | `{requester_workflow_id, profile_id, lease_id?, purpose?, fencing_generation?}` |
 | `report_cooldown` | AgentRun → Manager | `{profile_id, cooldown_seconds}` |
 | `sync_profiles` | System → Manager | `{profiles: [...]}` |
 | `slot_assigned` | Manager → AgentRun | `{profile_id}` |
@@ -1307,6 +1307,127 @@ Claude Code and Codex CLI rate limits must be reported against the selected prov
 Temporary provider or selected-model capacity exhaustion follows the same default cooldown path as provider rate limits. MoonMind preserves the requested model and credential authority, releases the profile slot, and retries after the profile cooldown with bounded exponential backoff rather than silently selecting a different model or credential source. The default budget permits three cooldown retries; after the third retry fails, AgentRun returns the final structured provider failure with explicit exhaustion metadata instead of waiting forever.
 
 The slot-release + cooldown path is gated by provider error classification. Runtime strategies must classify provider rate-limit signals as `failure_class="integration_error"` with `provider_error_code="429"`, or an equivalent retry recommendation that asks the orchestration layer to wait for provider cooldown instead of retrying immediately.
+
+### 11.8 Lease modes, durability, and fairness
+
+Configured capacity `N` is a **shared execution ceiling**, not a statement about
+credential work. Every acquisition is classified into exactly one ledger mode by
+one trusted classifier (`moonmind/provider_profiles/lease_client.py`), derived
+from the declared purpose plus the profile's durable credential contract. A
+caller never names its own mode, so no caller can widen its own authority.
+
+| Mode | When | Ledger effect |
+| --- | --- | --- |
+| `shared_execution` | any execution purpose | consumes one of the `N` execution slots |
+| `single_flight_validation` | `credential_validation` on a profile whose `credential_source` is `none` | one holder per exact evidence identity; consumes no execution slot and imposes no capacity-one requirement |
+| `exclusive_maintenance` | every other maintenance purpose | blocks new consumers and drains existing credential consumers first |
+
+A mutable OAuth home (Codex, Claude) materializes shared credential state, so
+validation against it stays `exclusive_maintenance` and the profile stays
+capacity one. Credentialless validation is admitted beside executions only under
+its non-mutating probe contract; it still spends bounded host and provider
+resources and is accounted against the shared capacity scope.
+
+#### Incompatibility is per resource and per purpose
+
+Two different questions gate exclusive maintenance, and each is asked against
+the resource it actually describes:
+
+- **Credential material.** The drain set is the leases holding the credential
+  the maintenance operation is about to take. A profile whose credential source
+  is `none` materializes no credential, so it has nothing for credential work to
+  wait on.
+- **Upstream provider capacity.** Shared-scope fullness and cooldown gate only
+  purposes that spend the upstream resource. Credential repair and revocation do
+  not, so a saturated or cooling-down scope must never be what stops a broken
+  credential from being fixed or revoked.
+
+The wait predicate is the same expression as the grant condition, evaluated
+against the profile resolved by ID on every pass. A waiter therefore cannot wake
+on a condition that can never become a grant, and a profile refresh during a
+wait cannot leave a maintainer reasoning about a replaced object.
+
+#### Pending maintenance is durable and fairly ordered
+
+Pending exclusive maintenance is a **queue of waiter records**, each carrying its
+owner, purpose, position, and the compact identity it was queued for — never a
+bare count, because a count serialized without its owners loses exactly what
+fairness depends on.
+
+- Admission stops at the head of the queue, before the drain wait, so continuous
+  execution cannot starve maintenance by replacing its consumers.
+- The queue rolls over with the manager: it is serialized into the
+  Continue-As-New payload and restored with owner and order intact, and the
+  ordering sequence resumes above every restored position.
+- Before Continue-As-New the manager sets a rollover flag and waits for its
+  accepted Updates to finish. A handler still waiting fails with
+  `ProviderProfileManagerRollover` while **keeping** its queue entry. That is the
+  explicit client reattachment protocol: `ProviderProfileLeaseClient` resubmits
+  the identical owner request against the successor run, and re-enqueueing an
+  owner that is already queued preserves its original position rather than
+  sending a request that already waited to the back of the line.
+- Every other exit — grant, shutdown, persistence failure, caller cancellation —
+  removes the queue entry, so a caller that gave up never leaves an admission
+  block behind.
+
+#### Grants are fenced
+
+Owner IDs are deterministic so an activity retry reuses one lease, which means
+the same owner ID is granted again after it is released. Each grant is therefore
+stamped with a monotonic **fencing generation**, returned to the caller,
+persisted on the lease row, and restored on manager restart. A release quotes the
+generation it holds; a duplicate or delayed release naming an earlier generation
+is dropped instead of freeing the replacement holder. A release that carries no
+generation is still honoured, so callers whose handles predate fenced grants keep
+working.
+
+#### Validation identity
+
+A `single_flight_validation` lease is granted against a **versioned evidence
+identity** covering everything the launch boundary later compares: probe contract
+version, profile, pinned image digest, credential generation, materializer ref,
+provider route, and selected model. The identity is stored on the lease contract,
+so:
+
+- exactly one committed owner may run the probe;
+- a joiner observes `already_held`, is handed the owner's generation rather than
+  a new one, and stands down without releasing the owner's lease;
+- a request that reuses an owner ID under a different identity or purpose fails
+  closed with `ProviderProfileLeaseIdentityConflict`;
+- a persistence failure rolls the grant back and raises, so a failed pending
+  grant is never mistaken for a completed probe; and
+- an abandoned probe is recovered by the validation lease's shorter maximum
+  duration rather than suppressing the identity indefinitely.
+
+Discovery freshness and launch authorization stay separate: the catalog interval
+schedules re-observation, while exact-host model verification remains a launch
+boundary. See `docs/Omnigent/OpenCodeHost.md` for the interval and the
+deployment-owned proactive refresh lead.
+
+#### In-flight managers keep the admission rules they started under
+
+`ProviderProfileManager` is long-lived, so it replays its own history on every
+worker restart and Continue-As-New. Everything on this page that changes *when a
+maintenance grant happens* is therefore gated on one workflow marker,
+`provider-profile-manager-maintenance-queue-durability-v1` — not just the durable
+queue, the fencing generations and the rollover detach, but the admission rules
+themselves:
+
+- queue-head serialization, so a manager that granted two concurrent maintainers
+  keeps granting them;
+- the narrowed drain set that exempts a credentialless profile, so a pre-marker
+  manager still drains every lease;
+- the per-purpose scope exemption, so a pre-marker manager still gates credential
+  repair and revocation on shared-scope availability; and
+- withdrawing a pending request when its owner releases.
+
+A grant that moved under a recorded history would emit a reservation — and, under
+DB lease persistence, a `provider_profile.sync_slot_leases` activity — where the
+history recorded a timer, failing the workflow task on non-determinism until the
+capacity ledger for that runtime is wedged. The one pre-marker behaviour that is
+*not* preserved is the busy loop this work removed: a waiter whose profile was
+empty while its scope was cooling down woke immediately and re-evaluated without
+suspending, so it recorded no commands to replay.
 
 ---
 
