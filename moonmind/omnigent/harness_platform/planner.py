@@ -381,6 +381,42 @@ if TYPE_CHECKING:  # pragma: no cover - typing-only import
     )
 
 
+def _effective_default_prefers_legacy(
+    *, policy: RuntimeProviderRolloutPolicy,
+) -> bool:
+    """Return whether the effective default row for codex-native is legacy.
+
+    Compares the highest effective (post-rollback) state rank of the generic
+    row against the legacy profile-bound row. A restored legacy default
+    outranks a demoted generic row so new plans honor the rollback policy.
+    """
+
+    rank = {
+        "disabled": 0,
+        "retired_for_new_work": 1,
+        "direct_compatibility_only": 2,
+        "explicit_only": 3,
+        "canary": 4,
+        "preferred": 5,
+        "new_work_default": 6,
+    }
+
+    def _best_state(harness_id: str, path_class: RuntimeProviderPathClass) -> int:
+        best = -1
+        for rule in policy.rules_for(harness_id=harness_id, path_class=path_class):
+            state = effective_rule_state(rule, policy)[0]
+            best = max(best, rank.get(str(state), -1))
+        return best
+
+    generic_best = _best_state(
+        "codex-native", RuntimeProviderPathClass.generic_omnigent
+    )
+    legacy_best = _best_state(
+        "codex-native", RuntimeProviderPathClass.legacy_profile_bound_omnigent
+    )
+    return legacy_best >= rank["new_work_default"] and legacy_best > generic_best
+
+
 # Trusted realizer selection - never workflow-authored, never overridable via Agent Profile settings
 def select_execution_realizer(
     *,
@@ -407,6 +443,19 @@ def select_execution_realizer(
         path_class=RuntimeProviderPathClass.generic_omnigent,
     )
     if harness_id == "codex-native" and is_codex:
+        # Honor the effective default row: a rollback control may restore the
+        # legacy row to new_work_default while demoting generic to
+        # explicit_only, in which case new plans must use the legacy path
+        # (MoonLadderStudios/MoonMind#3988).
+        if _effective_default_prefers_legacy(policy=policy):
+            if _rollout_admits_new_authoring(
+                policy=policy,
+                harness_id=harness_id,
+                path_class=(
+                    RuntimeProviderPathClass.legacy_profile_bound_omnigent
+                ),
+            ):
+                return LEGACY_CODEX_REALIZER_REF
         if generic_admitted:
             return GENERIC_REALIZER_REF
         if _rollout_admits_new_authoring(

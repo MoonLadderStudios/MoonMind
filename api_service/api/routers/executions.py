@@ -11173,6 +11173,7 @@ async def _create_execution_from_workflow_request(
             phase=cutover_status.phase,
             submission_kind=submission_kind,
             release_status=cutover_status,
+            versioned_default=True,
         )
     except ValueError as exc:
         raise _invalid_workflow_request(str(exc)) from exc
@@ -11203,6 +11204,59 @@ async def _create_execution_from_workflow_request(
             normalized_runtime_for_planner["profileSelector"] = dict(
                 runtime_payload["profileSelector"]
             )
+        # Freeze the exact requested rollout target identity (when supplied)
+        # so the recorded authority names the target, not just the runtime
+        # string (MoonLadderStudios/MoonMind#3988).
+        requested_target_id = (
+            str(
+                payload.get("requestedTargetId")
+                or payload.get("requested_target_id")
+                or runtime_payload.get("requestedTargetId")
+                or runtime_payload.get("requested_target_id")
+                or ""
+            ).strip()
+            or None
+        )
+        if requested_target_id is not None:
+            requested_selection = resolve_runtime_target_selection(
+                surface=(
+                    AuthoringSurface.schedule
+                    if submission_kind == "schedule"
+                    else AuthoringSurface.workflow_create
+                ),
+                requested_runtime=canonical_target_runtime,
+                requested_target_id=requested_target_id,
+                workflow_settings=settings.workflow,
+                record_metrics=False,
+            )
+            if (
+                requested_selection.target_id != requested_target_id
+                or normalize_runtime_id(requested_selection.runtime_id)
+                != canonical_target_runtime
+                or not requested_selection.available
+            ):
+                raise _invalid_workflow_request(
+                    f"Requested runtime target {requested_target_id!r} is not "
+                    "selectable for "
+                    f"{canonical_target_runtime!r}."
+                )
+            normalized_runtime_for_planner["targetId"] = requested_target_id
+        elif submission_kind != "schedule":
+            preferred_selection = resolve_runtime_target_selection(
+                surface=AuthoringSurface.workflow_create,
+                requested_runtime=canonical_target_runtime,
+                workflow_settings=settings.workflow,
+                record_metrics=False,
+            )
+            if (
+                preferred_selection.target_id is not None
+                and preferred_selection.available
+                and normalize_runtime_id(preferred_selection.runtime_id)
+                == canonical_target_runtime
+            ):
+                normalized_runtime_for_planner["targetId"] = (
+                    preferred_selection.target_id
+                )
         normalized_task_for_planner["runtime"] = normalized_runtime_for_planner
 
     # Load provider profile when a profileId is supplied. For tier-aware
@@ -11924,6 +11978,7 @@ async def _resolve_recurring_runtime_metadata(
             phase=cutover_status.phase,
             submission_kind="schedule",
             release_status=cutover_status,
+            versioned_default=True,
         )
     except ValueError as exc:
         raise _invalid_workflow_request(str(exc)) from exc

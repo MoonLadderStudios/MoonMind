@@ -1161,6 +1161,15 @@ class RecurringWorkflowsService:
             initial_parameters["resolvedSkillsetRef"] = (
                 persisted_plan.resolved_skillset_ref
             )
+            # Seed the schedule pin from the creation result so the first
+            # refresh compares against the initially compiled target instead of
+            # None (MoonLadderStudios/MoonMind#3988).
+            created_rollout = getattr(
+                persisted_plan, "runtime_provider_rollout", None
+            )
+            created_target = (
+                dict(created_rollout) if created_rollout is not None else None
+            )
             definition.target = {
                 **definition.target,
                 "agentProfile": {
@@ -1175,6 +1184,12 @@ class RecurringWorkflowsService:
                     *persisted_plan.artifact_refs,
                 ],
             }
+            if created_target is not None:
+                definition.target = {
+                    **definition.target,
+                    "runtimeProviderTarget": created_target,
+                    "runtimeProviderTargetUpdatePolicy": SCHEDULE_TARGET_PINNED,
+                }
             await self._session.flush()
 
         workflow_type, workflow_input = self._workflow_bundle_for_target(
