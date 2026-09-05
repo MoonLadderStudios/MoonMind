@@ -4101,6 +4101,12 @@ async def test_fresh_omnigent_launch_is_not_reaped_before_materialization() -> N
         async def release_lease(self, provider_lease):
             released.append(provider_lease.lease_id)
 
+        async def record_cooldown(self, **_kwargs):
+            return None
+
+        async def record_provider_success(self, **_kwargs):
+            return None
+
     class RunStore:
         async def cleanup_required_host_lease_refs(self):
             return set()

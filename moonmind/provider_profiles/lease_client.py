@@ -418,15 +418,61 @@ class ProviderProfileLeaseClient:
         owner_id: str,
         cooldown_seconds: int,
         reason: str,
+        report_id: str | None = None,
+        retry_after_seconds: int | None = None,
+        observed_at: str | None = None,
     ) -> None:
+        """Report one observed provider rate limit against a profile.
+
+        MoonLadderStudios/MoonMind#3882: the manager deduplicates the whole
+        profile-and-scope transition on the reporting attempt's identity, so a
+        redelivered signal cannot halve capacity twice. ``report_id`` is that
+        identity; without one, distinct 429s from the same deterministic owner
+        would be indistinguishable from a redelivery of the first.
+        """
+
+        payload: dict[str, Any] = {
+            "profile_id": profile_id,
+            "requester_workflow_id": owner_id,
+            "cooldown_seconds": cooldown_seconds,
+            "reason": reason,
+            "failure_class": "rate_limit",
+        }
+        if report_id:
+            payload["report_id"] = report_id
+        if retry_after_seconds is not None:
+            payload["retry_after_seconds"] = retry_after_seconds
+        if observed_at:
+            payload["observed_at"] = observed_at
         await self._adapter.signal_workflow(
             await self._ensure_manager(runtime_id),
             "report_cooldown",
+            payload,
+        )
+
+    async def record_provider_success(
+        self,
+        *,
+        runtime_id: str,
+        profile_id: str,
+        owner_id: str,
+    ) -> None:
+        """Report one classified successful provider interaction.
+
+        This is the only qualifying evidence the manager accepts for stepping
+        a reduced shared allowance back toward its configured ceiling. Callers
+        must send it only for a provider interaction they have classified as
+        successful — elapsed time, an idle manager and a worker restart are
+        deliberately not evidence (MoonLadderStudios/MoonMind#3882).
+        """
+
+        await self._adapter.signal_workflow(
+            await self._ensure_manager(runtime_id),
+            "report_provider_success",
             {
                 "profile_id": profile_id,
                 "requester_workflow_id": owner_id,
-                "cooldown_seconds": cooldown_seconds,
-                "reason": reason,
+                "outcome": "success",
             },
         )
 

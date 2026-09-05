@@ -1364,6 +1364,18 @@ async def create_profile(
                 effective_limit=int(values.get("max_parallel_runs") or 1),
             )
         )
+        # MoonLadderStudios/MoonMind#3882: a shared provider allowance is
+        # operator policy, so every change to one is attributable. Workflows
+        # never author capacity; they only report observations against it.
+        logger.info(
+            "provider_capacity_scope_created scope_ref=%s runtime_id=%s "
+            "configured_limit=%s actor=%s profile_id=%s",
+            _scope_ref,
+            str(values.get("runtime_id") or body.runtime_id),
+            int(values.get("max_parallel_runs") or 1),
+            str(getattr(current_user, "id", "unknown") or "unknown"),
+            body.profile_id,
+        )
 
     profile = ManagedAgentProviderProfile(
         profile_id=body.profile_id,
@@ -2017,6 +2029,7 @@ async def update_profile(
                     if len(list(_count_result.scalars().all())) == 1:
                         _scope_row = await session.get(ProviderCapacityScope, _default_scope)
                         if _scope_row is not None:
+                            _previous_configured = _scope_row.configured_limit
                             _scope_row.configured_limit = _new_max
                             if _new_max > profile.max_parallel_runs:
                                 _scope_row.effective_limit = _new_max
@@ -2024,6 +2037,19 @@ async def update_profile(
                                 _scope_row.effective_limit = min(
                                     _scope_row.effective_limit, _new_max
                                 )
+                            logger.info(
+                                "provider_capacity_scope_updated scope_ref=%s "
+                                "configured_limit=%s previous_configured_limit=%s "
+                                "actor=%s profile_id=%s",
+                                _default_scope,
+                                _new_max,
+                                _previous_configured,
+                                str(
+                                    getattr(current_user, "id", "unknown")
+                                    or "unknown"
+                                ),
+                                profile_id,
+                            )
     for key, value in update_data.items():
         if key == "rate_limit_policy" and value is not None:
             value = ManagedAgentRateLimitPolicy(value)

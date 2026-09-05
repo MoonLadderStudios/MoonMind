@@ -477,3 +477,101 @@ async def test_the_client_withdraws_its_waiter_when_reattachment_runs_out(
     assert withdrawal["requester_workflow_id"] == "repair-a"
     assert profile.maintenance_queue_position("repair-a") == -1
     assert profile.exclusive_maintenance_waiters == 0
+
+
+# ---------------------------------------------------------------------------
+# MoonLadderStudios/MoonMind#3882: backpressure and recovery cross the same seam
+# ---------------------------------------------------------------------------
+
+
+def _scope_aware_wire(capacity: int):
+    """A manager on the scope-accounting contract, wired to the real client."""
+
+    manager, adapter, client = _wire(capacity)
+    manager._scope_accounting = True
+    adapter.stubs.patched = lambda _patch_id: True  # type: ignore[assignment]
+    return manager, adapter, client
+
+
+@pytest.mark.asyncio
+async def test_the_client_reports_a_rate_limit_the_manager_can_deduplicate() -> None:
+    """The report the client sends must carry the attempt identity.
+
+    Without one the manager cannot tell a redelivered signal from a second
+    genuine 429 by the same deterministic owner, and either deduplicates a real
+    report away or halves capacity twice for one observation.
+    """
+
+    manager, adapter, client = _scope_aware_wire(8)
+    scope = manager._scopes[f"provider-profile:{PROFILE_ID}"] = (
+        manager._ensure_scope(f"provider-profile:{PROFILE_ID}")
+    )
+    scope.configured_limit = 8
+    scope.effective_limit = 8
+    profile = manager._profiles[PROFILE_ID]
+
+    for _ in range(2):
+        await client.record_cooldown(
+            runtime_id=RUNTIME_ID,
+            profile_id=PROFILE_ID,
+            owner_id="agent-run-1",
+            cooldown_seconds=300,
+            reason="provider_429",
+            report_id="agent-run-1:7",
+        )
+
+    assert [name for _, name, _ in adapter.signals] == [
+        "report_cooldown",
+        "report_cooldown",
+    ]
+    _, _, payload = adapter.signals[0]
+    assert payload["report_id"] == "agent-run-1:7"
+    assert payload["failure_class"] == "rate_limit"
+    # One observation, one transition, on both ledgers.
+    assert scope.effective_limit == 4
+    assert profile.admission_limit == 4
+
+    # A distinct attempt is a distinct observation and reduces again.
+    adapter.stubs.advance(timedelta(seconds=30))
+    await client.record_cooldown(
+        runtime_id=RUNTIME_ID,
+        profile_id=PROFILE_ID,
+        owner_id="agent-run-1",
+        cooldown_seconds=300,
+        reason="provider_429",
+        report_id="agent-run-1:8",
+    )
+    assert scope.effective_limit == 2
+    assert profile.admission_limit == 2
+
+
+@pytest.mark.asyncio
+async def test_the_client_supplies_the_evidence_recovery_requires() -> None:
+    manager, adapter, client = _scope_aware_wire(8)
+    scope = manager._scopes[f"provider-profile:{PROFILE_ID}"] = (
+        manager._ensure_scope(f"provider-profile:{PROFILE_ID}")
+    )
+    scope.configured_limit = 8
+    scope.effective_limit = 4
+    scope.backpressure_state = "probing"
+    scope.healthy_since = (NOW - timedelta(hours=1)).isoformat()
+
+    def _tick() -> None:
+        with mock_patch(MANAGER_MODULE, adapter.stubs):
+            manager._clear_expired_cooldowns()
+
+    # Elapsed time alone leaves the reduction in force.
+    adapter.stubs.advance(timedelta(hours=1))
+    _tick()
+    assert scope.effective_limit == 4
+
+    await client.record_provider_success(
+        runtime_id=RUNTIME_ID,
+        profile_id=PROFILE_ID,
+        owner_id="agent-run-1",
+    )
+    assert [name for _, name, _ in adapter.signals] == ["report_provider_success"]
+    assert scope.success_evidence == 1
+
+    _tick()
+    assert scope.effective_limit == 5

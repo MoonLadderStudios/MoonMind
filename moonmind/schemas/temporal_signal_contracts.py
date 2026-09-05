@@ -76,12 +76,43 @@ class ReportCooldownSignal(BaseModel):
     """Payload for report_cooldown signals.
 
     Informs the manager that a profile is rate-limited and needs recovery time.
+
+    MoonLadderStudios/MoonMind#3882: the manager normalizes this into a bounded
+    identity — the source attempt together with the profile, the admitted scope
+    and that scope's generation — and deduplicates the whole profile-and-scope
+    transition on it. ``report_id`` is the source attempt's identity; a report
+    that omits it cannot be told apart from a redelivery of the previous report
+    by the same deterministic owner. A caller-supplied ``capacity_scope_ref`` or
+    ``scope_generation`` is validated against the profile's admitted scope, not
+    trusted.
     """
     model_config = ConfigDict(populate_by_name=True)
 
     requester_workflow_id: str = Field(..., alias="requesterWorkflowId")
     profile_id: str = Field(..., alias="profileId")
     cooldown_seconds: int = Field(..., alias="cooldownSeconds", ge=0)
+    report_id: str | None = Field(default=None, alias="reportId")
+    failure_class: str | None = Field(default=None, alias="failureClass")
+    retry_after_seconds: int | None = Field(
+        default=None, alias="retryAfterSeconds", ge=0
+    )
+    observed_at: str | None = Field(default=None, alias="observedAt")
+    capacity_scope_ref: str | None = Field(default=None, alias="capacityScopeRef")
+    scope_generation: int | None = Field(default=None, alias="scopeGeneration", ge=1)
+
+class ReportProviderSuccessSignal(BaseModel):
+    """Payload for report_provider_success signals.
+
+    The only qualifying evidence the manager accepts for stepping a reduced
+    shared provider allowance back toward its configured ceiling. Elapsed time,
+    an idle manager, a worker restart and an unavailable host are deliberately
+    not evidence (MoonLadderStudios/MoonMind#3882).
+    """
+    model_config = ConfigDict(populate_by_name=True)
+
+    requester_workflow_id: str = Field(..., alias="requesterWorkflowId")
+    profile_id: str = Field(..., alias="profileId")
+    outcome: str = Field(default="success")
 
 class SyncProfilesSignal(BaseModel):
     """Payload for sync_profiles signals.

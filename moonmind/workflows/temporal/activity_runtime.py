@@ -976,6 +976,10 @@ _ACTIVITY_HANDLER_ATTRS: dict[str, tuple[str, str]] = {
         "artifacts",
         "provider_profile_sync_slot_leases",
     ),
+    "provider_profile.sync_capacity_scope": (
+        "artifacts",
+        "provider_profile_sync_capacity_scope",
+    ),
     "provider_profile.pending_request_order": (
         "artifacts",
         "provider_profile_pending_request_order",

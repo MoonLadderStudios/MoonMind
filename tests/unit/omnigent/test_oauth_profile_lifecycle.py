@@ -3664,6 +3664,9 @@ async def test_coordinator_releases_provider_lease_after_host_cleanup() -> None:
         lease_id="provider-lease-1",
         owner_id="owner-1",
         purpose=CredentialLeasePurpose.EXECUTION_OMNIGENT,
+        # The grant generation a rate-limit report is identified by
+        # (MoonLadderStudios/MoonMind#3882).
+        fencing_generation=1,
     )
 
     class LeaseClient:
@@ -3676,6 +3679,9 @@ async def test_coordinator_releases_provider_lease_after_host_cleanup() -> None:
 
         async def record_cooldown(self, **_kwargs):
             actions.append("cooldown")
+
+        async def record_provider_success(self, **_kwargs):
+            actions.append("provider_success")
 
     class Hosts:
         def __init__(self):
@@ -3859,6 +3865,9 @@ async def _drive_authority_chain_coordinator(
         lease_id="provider-lease-1",
         owner_id="owner-1",
         purpose=CredentialLeasePurpose.EXECUTION_OMNIGENT,
+        # The grant generation a rate-limit report is identified by
+        # (MoonLadderStudios/MoonMind#3882).
+        fencing_generation=1,
     )
 
     class LeaseClient:
@@ -3869,6 +3878,9 @@ async def _drive_authority_chain_coordinator(
             ordered.append("provider_released")
 
         async def record_cooldown(self, **_kwargs):
+            return None
+
+        async def record_provider_success(self, **_kwargs):
             return None
 
     # An on-demand binding: repository mutation (publishMode=branch) is only
@@ -4605,6 +4617,9 @@ async def test_coordinator_records_runner_preflight_block_before_execution() -> 
         lease_id="provider-lease-1",
         owner_id="owner-1",
         purpose=CredentialLeasePurpose.EXECUTION_OMNIGENT,
+        # The grant generation a rate-limit report is identified by
+        # (MoonLadderStudios/MoonMind#3882).
+        fencing_generation=1,
     )
 
     class LeaseClient:
@@ -4770,6 +4785,9 @@ async def test_coordinator_compiles_durable_workspace_intent_before_host_mutatio
         lease_id="provider-lease-1",
         owner_id="owner-1",
         purpose=CredentialLeasePurpose.EXECUTION_OMNIGENT,
+        # The grant generation a rate-limit report is identified by
+        # (MoonLadderStudios/MoonMind#3882).
+        fencing_generation=1,
     )
 
     class LeaseClient:
@@ -5077,6 +5095,9 @@ async def _run_coordinator_failure_case(
         lease_id="provider-lease-1",
         owner_id="owner-1",
         purpose=CredentialLeasePurpose.EXECUTION_OMNIGENT,
+        # The grant generation a rate-limit report is identified by
+        # (MoonLadderStudios/MoonMind#3882).
+        fencing_generation=1,
     )
     error = injected_error or _injected_launch_error(code)
     request_uses_on_demand_policy = bool(

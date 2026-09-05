@@ -294,6 +294,9 @@ async def execute_checkpoint_branch_request(
         async def record_cooldown(self, **_kwargs) -> None:
             return None
 
+        async def record_provider_success(self, **_kwargs) -> None:
+            return None
+
     class Hosts:
         async def get_binding_for_profile(self, _profile_id):
             return _binding(key)

@@ -1328,6 +1328,110 @@ capacity one. Credentialless validation is admitted beside executions only under
 its non-mutating probe contract; it still spends bounded host and provider
 resources and is accounted against the shared capacity scope.
 
+#### Four different limits, four different resources
+
+"Concurrency" on a Provider Profile is four independent limits. Conflating them
+is how a shared ceiling stops holding, so each is named, owned and metered
+separately:
+
+| Limit | What it protects | Where it lives | Who lowers it |
+| --- | --- | --- | --- |
+| **Shared provider allowance** | one real upstream quota — a route, account, deployment, model family, or provider/IP rate limit — that several Provider Profiles may draw from | `provider_capacity_scopes.configured_limit` / `effective_limit`, keyed by `capacity_scope_ref` | operator sets configured; adaptive backpressure lowers effective |
+| **Credential exclusivity** | one profile's mutable credential state (an OAuth home, a token file) | the lease mode classifier: `exclusive_maintenance` blocks and drains, `single_flight_validation` admits one holder per evidence identity | the purpose of the acquisition, never the caller |
+| **Host resources** | the machine the runtime actually executes on: disk, memory, container slots | Omnigent host leases and host-class bindings (`docs/Omnigent/`), not the profile ledger | host admission |
+| **Worker throughput** | how much work a Temporal worker fleet will pull at once | worker/task-queue concurrency configuration | deployment configuration |
+
+A Provider Profile's `max_parallel_runs` is its own **execution ceiling**, which
+is a fifth number and a strictly local one: it bounds that profile, while the
+scope bounds every profile pointing at the same upstream allowance. Admission
+requires room on **both**, so two profiles configured for 8 each under a shared
+scope of 10 admit at most 10 execution units in total.
+
+#### One unit-accounting function
+
+The profile ledger and the scope ledger meter different resources, so they
+deliberately charge different purposes — but both read their per-lease units
+from one function (`lease_capacity_cost`), because two ledgers deriving their
+own counts is exactly how the joint ceiling stopped holding:
+
+| Purpose | Profile execution units | Shared scope units |
+| --- | --- | --- |
+| `execution_direct`, `execution_omnigent` | 1 | 1 |
+| `credential_validation`, `oauth_connect`, `oauth_reconnect` | 0 | 1 |
+| `credential_repair`, `oauth_disconnect` | 0 | 0 |
+| unrecognized | 1 | 1 (fails closed) |
+
+Credential repair and revocation spend neither, which is what keeps a saturated
+or cooling-down scope from being the thing that stops a broken credential from
+being fixed.
+
+A profile's effective admission limit has exactly one owner
+(`adaptive_capacity_limit`); the persisted `effective_limit` is its projection,
+so the allocator, the operator view and gradual recovery cannot read different
+numbers.
+
+#### Backpressure is idempotent, validated and evidence-driven
+
+A provider rate-limit report is normalized into a bounded identity — the source
+attempt together with the profile, the **admitted** scope and that scope's
+generation — and validated before it mutates anything:
+
+- Knowing a `capacity_scope_ref` is not authority over it. A report naming a
+  scope the affected profile was not admitted under is refused, as is one
+  quoting a generation that has since been replaced.
+- Deduplication covers the **whole** profile-and-scope transition. Delivering
+  the same 429 twice changes neither the scope's effective limit nor the
+  profile's concurrency or cooldown a second time.
+- An observation older than the retention horizon, or older than the reduction
+  currently in force, is refused as stale rather than applied out of order.
+- Retry-After is bounded and **extend-only**, on both the scope deadline and the
+  profile deadline: a short deadline never shortens a longer one already in
+  force. A failure class that is not a provider rate limit stays profile-local
+  and never reduces a shared allowance.
+
+Recovery is the mirror image. Elapsed time is not health — an idle manager, a
+worker restart and an unavailable host all produce elapsed time. A reduced scope
+steps back up only when it has a classified provider success (`release_slot`
+with `provider_outcome: "success"`, or the `report_provider_success` signal), and
+then only once per interval of its own **versioned** recovery policy
+(`recovery_policy_ref`), never past the configured ceiling. A scope whose policy
+ref is unrecognized gets no automatic increase at all, and a `disabled` scope
+stays disabled until an authorized configuration change.
+
+#### Scope state is authoritative, not derivable
+
+A shared allowance is owned by its row, never by whichever member profiles
+happen to be loaded. If the authoritative snapshot does not describe a shared
+scope a profile names, or the tracked state is malformed, the scope is
+**reconciliation-required**: the manager refuses new grants against it and asks
+for an authoritative refresh. Synthesizing one from profile maxima would
+silently reset a shared ceiling to a single member's ceiling and turn a
+`disabled` scope back into a healthy one. A profile's own default scope
+(`provider-profile:<profile_id>`) has exactly one member by construction, so it
+remains derivable.
+
+Adapted state is durable, not workflow-local. A reduction, its cooldown and its
+backpressure state are written back to `provider_capacity_scopes` through
+`provider_profile.sync_capacity_scope`, fenced on the scope generation so a
+stale manager cannot overwrite a replacement's state, and adopted on the next
+authoritative read. A manager that is reset or replaced therefore resumes
+holding the reduction instead of granting at the full configured ceiling into a
+provider that is still rate-limiting. That write never touches
+`configured_limit` and never clears `disabled` — both are operator policy.
+
+Active leases are bound to the scope and generation that admitted them, on the
+in-memory lease, on the durable `provider_profile_slot_leases` row, and across
+Continue-As-New. Repointing a profile at a different allowance therefore routes
+**new** grants to the new scope while in-flight work keeps counting against the
+old one until it releases; units are never transferred by re-reading profile
+metadata. Reducing a limit below current usage blocks new grants without
+terminating existing work.
+
+The manager exposes one `capacity_scopes` projection from this same accounting
+owner — configured, effective, active units, queued requests, cooldown,
+backpressure state and whether reconciliation is required — so an operator view
+and the allocator cannot disagree.
+
 #### Incompatibility is per resource and per purpose
 
 Two different questions gate exclusive maintenance, and each is asked against
@@ -1420,6 +1524,13 @@ themselves:
 - the per-purpose scope exemption, so a pre-marker manager still gates credential
   repair and revocation on shared-scope availability; and
 - withdrawing a pending request when its owner releases.
+
+The joint unit ledger, validated and idempotent rate-limit reports,
+evidence-driven recovery and reconciliation-required scope state are gated the
+same way, on `provider-profile-manager-scope-accounting-v1`. A history recorded
+before that marker keeps gating profile admission on its raw lease count,
+applying reports without ownership validation, and recovering scope limits from
+elapsed time, because those are the decisions it recorded.
 
 A grant that moved under a recorded history would emit a reservation — and, under
 DB lease persistence, a `provider_profile.sync_slot_leases` activity — where the

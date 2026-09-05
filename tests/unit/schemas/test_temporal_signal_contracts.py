@@ -11,6 +11,7 @@ from moonmind.schemas.temporal_signal_contracts import (
     ProfileAssignedSignal,
     ReleaseSlotSignal,
     ReportCooldownSignal,
+    ReportProviderSuccessSignal,
     RequestSlotSignal,
     RescheduleSignal,
     SlotAssignedSignal,
@@ -107,6 +108,50 @@ def test_report_cooldown_signal_invalid_negative_cooldown():
     }
     with pytest.raises(ValidationError):
         ReportCooldownSignal.model_validate(data)
+
+def test_report_cooldown_signal_carries_the_attempt_identity():
+    """MoonLadderStudios/MoonMind#3882: dedup needs the source attempt.
+
+    Without ``reportId`` the manager cannot tell a redelivered signal from a
+    second genuine 429 by the same deterministic owner.
+    """
+
+    model = ReportCooldownSignal.model_validate(
+        {
+            "requesterWorkflowId": "wf-123",
+            "profileId": "prof-1",
+            "cooldownSeconds": 60,
+            "reportId": "wf-123:7",
+            "failureClass": "rate_limit",
+            "retryAfterSeconds": 120,
+            "observedAt": "2026-09-05T12:00:00+00:00",
+            "capacityScopeRef": "opencode-zen-account",
+            "scopeGeneration": 3,
+        }
+    )
+    assert model.report_id == "wf-123:7"
+    assert model.failure_class == "rate_limit"
+    assert model.retry_after_seconds == 120
+    assert model.capacity_scope_ref == "opencode-zen-account"
+    assert model.scope_generation == 3
+
+def test_report_cooldown_signal_rejects_a_replaced_generation_placeholder():
+    with pytest.raises(ValidationError):
+        ReportCooldownSignal.model_validate(
+            {
+                "requesterWorkflowId": "wf-123",
+                "profileId": "prof-1",
+                "cooldownSeconds": 60,
+                "scopeGeneration": 0,
+            }
+        )
+
+def test_report_provider_success_signal_valid():
+    model = ReportProviderSuccessSignal.model_validate(
+        {"requesterWorkflowId": "wf-123", "profileId": "prof-1"}
+    )
+    assert model.profile_id == "prof-1"
+    assert model.outcome == "success"
 
 def test_sync_profiles_signal_valid():
     model = SyncProfilesSignal.model_validate({})

@@ -3681,13 +3681,14 @@ class TemporalArtifactActivities:
                 session=session,
                 rows=rows,
             )
-            try:
-                scope_result = await session.execute(select(ProviderCapacityScope))
-                scope_rows = list(scope_result.scalars().all())
-            except Exception:
-                # Migration 368 may not have run yet; fall back to
-                # per-profile derived scopes so new workers stay up.
-                scope_rows = []
+            # MoonLadderStudios/MoonMind#3882: this read is authoritative. A
+            # swallowed failure used to look identical to "this deployment has
+            # no scopes", which let the manager derive a fresh one-profile
+            # allowance and silently discard a shared ceiling or a disabled
+            # scope. Failing the activity instead leaves the manager on its
+            # last authoritative snapshot and retries.
+            scope_result = await session.execute(select(ProviderCapacityScope))
+            scope_rows = list(scope_result.scalars().all())
 
         profiles = []
         profile_statuses = []
@@ -3706,6 +3707,19 @@ class TemporalArtifactActivities:
                     ),
                     "backpressure_state": scope.backpressure_state,
                     "recovery_policy_ref": scope.recovery_policy_ref,
+                    "healthy_since": (
+                        scope.healthy_since.isoformat() if scope.healthy_since else None
+                    ),
+                    "last_decrease_at": (
+                        scope.last_decrease_at.isoformat()
+                        if scope.last_decrease_at
+                        else None
+                    ),
+                    "last_increase_at": (
+                        scope.last_increase_at.isoformat()
+                        if scope.last_increase_at
+                        else None
+                    ),
                 }
             )
 
@@ -4249,6 +4263,101 @@ class TemporalArtifactActivities:
 
         return {"orders": orders}
 
+    async def provider_profile_sync_capacity_scope(
+        self,
+        *,
+        scope_ref: str,
+        generation: int = 1,
+        effective_limit: int | None = None,
+        cooldown_until: Any = None,
+        backpressure_state: str | None = None,
+        healthy_since: Any = None,
+        last_decrease_at: Any = None,
+        last_increase_at: Any = None,
+    ) -> dict[str, Any]:
+        """Persist one shared allowance's adapted state.
+
+        MoonLadderStudios/MoonMind#3882: a reduced limit and its cooldown are
+        the manager's authority over an upstream provider, and a manager that
+        is replaced or reset must resume holding them rather than granting at
+        the full configured ceiling. Only the adaptive columns are written —
+        ``configured_limit`` is operator policy and is never authored from a
+        workflow — and the write is fenced on the scope generation so a stale
+        manager cannot overwrite a replacement's state.
+        """
+
+        from datetime import datetime, timezone
+
+        from sqlalchemy import select
+
+        from api_service.db.base import get_async_session_context
+        from api_service.db.models import ProviderCapacityScope
+
+        normalized_ref = str(scope_ref or "").strip()
+        if not normalized_ref:
+            return {"error": "scope_ref is required"}
+
+        def _parse(value: Any) -> Any:
+            if not value:
+                return None
+            if isinstance(value, datetime):
+                return value
+            try:
+                parsed = datetime.fromisoformat(str(value))
+            except (TypeError, ValueError):
+                return None
+            return (
+                parsed.replace(tzinfo=timezone.utc)
+                if parsed.tzinfo is None
+                else parsed
+            )
+
+        async with get_async_session_context() as session:
+            row = (
+                await session.execute(
+                    select(ProviderCapacityScope).where(
+                        ProviderCapacityScope.scope_ref == normalized_ref
+                    )
+                )
+            ).scalars().first()
+            if row is None:
+                # A shared allowance the manager does not own is not one it may
+                # create. The caller reconciles from the authoritative list.
+                return {"persisted": False, "reason": "scope_not_found"}
+            try:
+                claimed_generation = int(generation or 0)
+            except (TypeError, ValueError):
+                claimed_generation = 0
+            if claimed_generation < row.generation:
+                return {"persisted": False, "reason": "stale_generation"}
+            if effective_limit is not None:
+                try:
+                    bounded = int(effective_limit)
+                except (TypeError, ValueError):
+                    bounded = row.effective_limit
+                row.effective_limit = max(1, min(row.configured_limit, bounded))
+            row.cooldown_until = _parse(cooldown_until)
+            if backpressure_state in {
+                "healthy",
+                "reduced",
+                "cooldown",
+                "probing",
+            }:
+                # ``disabled`` is operator policy; a workflow never clears or
+                # sets it.
+                if row.backpressure_state != "disabled":
+                    row.backpressure_state = backpressure_state
+            row.healthy_since = _parse(healthy_since)
+            row.last_decrease_at = _parse(last_decrease_at)
+            row.last_increase_at = _parse(last_increase_at)
+            await session.commit()
+            return {
+                "persisted": True,
+                "scope_ref": normalized_ref,
+                "effective_limit": row.effective_limit,
+                "backpressure_state": row.backpressure_state,
+            }
+
     async def provider_profile_sync_slot_leases(
         self,
         *,
@@ -4342,6 +4451,13 @@ class TemporalArtifactActivities:
                         # authority it actually granted rather than a lease
                         # that any stale release could free.
                         "fencingGeneration": row.fencing_generation,
+                        # MoonLadderStudios/MoonMind#3882: the shared allowance
+                        # a lease was admitted against is part of its authority.
+                        # Without it a restarted manager would re-derive scope
+                        # membership from the profile's current ref and move
+                        # in-flight units onto a different allowance.
+                        "capacityScopeRef": row.capacity_scope_ref,
+                        "scopeGeneration": row.scope_generation,
                         "safeMetadata": row.safe_metadata_json,
                         "expiresAt": row.expires_at.isoformat()
                         if row.expires_at
