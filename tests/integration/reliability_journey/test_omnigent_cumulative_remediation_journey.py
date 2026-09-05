@@ -143,7 +143,11 @@ async def test_normal_create_c0_c1_c2_survives_destroyed_attempts_and_restarts(
     app.dependency_overrides[_get_service] = lambda: service
     app.dependency_overrides[get_temporal_client] = AsyncMock
     provider_profile = SimpleNamespace(
-        profile_id="omnigent-codex", provider_id="openai"
+        profile_id="omnigent-codex",
+        provider_id="openai",
+        runtime_id="codex_cli",
+        default_model="gpt-5",
+        default_effort="high",
     )
     db_session = SimpleNamespace(
         get=AsyncMock(return_value=provider_profile),
@@ -227,6 +231,9 @@ async def test_normal_create_c0_c1_c2_survives_destroyed_attempts_and_restarts(
     assert authored["targetRuntime"] == "omnigent"
     assert authored["omnigent"]["executionTargetRef"] == "omnigent-host-codex"
     assert authored["workflow"]["runtime"]["executionProfileRef"] == "omnigent-codex"
+    assert authored["model"] == "gpt-5"
+    assert authored["effort"] == "high"
+    assert authored["modelSource"] == "provider_profile_default"
     assert authored["agentProfileSnapshot"]["profileId"] == (
         "omnigent-bootstrap-default"
     )
@@ -268,6 +275,8 @@ async def test_normal_create_c0_c1_c2_survives_destroyed_attempts_and_restarts(
     assert compiled.agent_kind == "external"
     assert compiled.agent_id == "omnigent"
     assert compiled.execution_profile_ref == "omnigent-codex"
+    assert compiled.parameters["model"] == "gpt-5"
+    assert compiled.parameters["effort"] == "high"
     assert "executionPlanRef" not in compiled.parameters
     assert compiled.parameters["omnigent"]["executionTargetRef"] == (
         "omnigent-host-codex"

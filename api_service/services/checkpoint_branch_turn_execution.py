@@ -1179,6 +1179,20 @@ class CheckpointBranchTurnExecutionOwner:
             kind="runtime.branch_turn.context_bundle.json",
             branch_turn_id=branch_turn_id,
         )
+        # The complete immutable configuration stays in the verified branch
+        # usage and context artifact. AgentRun carries only selection metadata;
+        # providerRequirements and arbitrary configuration sections are not a
+        # compact runtime contract (and can contain credential metadata keys).
+        compact_runtime_selection = {
+            key: runtime_selection[key]
+            for key in (
+                "providerProfileRef", "executionProfileRef", "profileId",
+                "agentProfile", "runtimeId", "model", "effort", "maxBudgetUsd",
+                "runtimeContextPolicy", "publishMode", "gitWorkBranch",
+                "launchPolicyRef", "executionPlanRef",
+            )
+            if key in runtime_selection
+        }
         step_launch = {
             "schemaVersion": "v1",
             "workflowId": identity.workflow_id,
@@ -1203,7 +1217,7 @@ class CheckpointBranchTurnExecutionOwner:
                     ]
                 )
             ),
-            "runtimeSelection": runtime_selection,
+            "runtimeSelection": compact_runtime_selection,
             "runtimeSessionReset": {
                 "mode": "new_agent_run",
                 "sourceProviderSessionReused": False,
@@ -1260,7 +1274,7 @@ class CheckpointBranchTurnExecutionOwner:
                 "checkoutCommit": binding.base_commit,
             },
             parameters={
-                **runtime_selection,
+                **compact_runtime_selection,
                 "repository": binding.repository,
                 "startingBranch": binding.base_branch,
                 "targetBranch": binding.work_branch,

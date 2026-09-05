@@ -580,7 +580,7 @@ describe('MoonLadderStudios/MoonMind#3822 Settings redesign conformance', () => 
       const selected = frontendSourceTestFiles(join(process.cwd(), 'frontend', 'src')).filter(
         (file) => new RegExp(filter).test(file),
       );
-      expect(selected.map((file) => file.split('/').pop()).sort()).toEqual([
+      expect(selected.map((file) => file.split(/[\\/]/).pop()).sort()).toEqual([
         'providerProfileRedesignConformance.test.tsx',
         'settingsRedesignConformance.test.tsx',
       ]);

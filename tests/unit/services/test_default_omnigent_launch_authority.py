@@ -43,6 +43,131 @@ from api_service.services.omnigent_agent_profile_service import (
 
 pytestmark = [pytest.mark.asyncio]
 
+
+@pytest.mark.parametrize("configuration_state", ["absent", "pinned_missing", "unready"])
+async def test_native_profile_inventory_distinguishes_missing_and_unready_configuration(
+    session, configuration_state
+):
+    from api_service.api.routers.provider_profiles import list_profiles
+
+    native = ManagedAgentProviderProfile(
+        profile_id="native-codex",
+        runtime_id="codex_cli",
+        provider_id="openai",
+        enabled=False,
+    )
+    session.add(native)
+    if configuration_state == "pinned_missing":
+        native.execution_configuration = {
+            "profileId": "missing", "version": 1, "digest": "sha256:" + "a" * 64,
+        }
+    elif configuration_state == "unready":
+        session.add(OmnigentAgentProfile(
+            profile_id="codex-config", display_name="Codex configuration",
+            state="active", visibility="shared", active_version=1,
+        ))
+        await session.flush()
+        session.add(OmnigentAgentProfileVersion(
+            profile_id="codex-config", version=1, digest="sha256:" + "b" * 64,
+            document={"providerRequirements": {
+                "runtimeId": "codex_cli", "providerIds": ["openai"],
+                "credentialSource": "none", "materializationMode": "composite",
+            }},
+            validation_result={"ready": False},
+        ))
+    await session.commit()
+
+    rows = await list_profiles(
+        include_execution=True, session=session,
+        current_user=SimpleNamespace(id=uuid4(), is_superuser=True),
+    )
+    selected = next(item for item in rows if item["profile_id"] == native.profile_id)
+    assert selected["runtime_id"] == "codex_cli"
+    assert selected["launch_ready"] is False
+    assert selected.get("execution_selection") is None
+    if configuration_state == "absent":
+        assert selected.get("execution_selection_error") is None
+    else:
+        assert selected["execution_selection_error"]["code"] == "profile_execution_configuration_required"
+
+
+async def test_profile_inventory_and_default_resolution_survive_catalog_expiry(session, monkeypatch):
+    from api_service.api.routers.provider_profiles import list_profiles
+
+    await _seed_default_deployment(session, monkeypatch)
+    row = await session.get(ManagedAgentProviderProfile, "opencode-zen-free")
+    row.model_catalog_evidence_json = {
+        "validatedAt": "2000-01-01T00:00:00+00:00", "imageRef": "previous-image",
+        "credentialGeneration": 0, "models": [],
+    }
+    await session.commit()
+    user = SimpleNamespace(id=uuid4(), is_superuser=True)
+    rows = await list_profiles(include_execution=True, session=session, current_user=user)
+    selected = next(item for item in rows if item["profile_id"] == row.profile_id)
+    assert selected["execution_selection"]["providerProfileRef"] == row.profile_id
+    assert selected["launch_ready"] is True
+    automatic = await resolve_default_agent_profile_snapshot(
+        session, provider_profile_ref=None, launch_policy_ref=None,
+        consumer_type="workflow", consumer_id="default-expired", user=user,
+    )
+    explicit = await resolve_default_agent_profile_snapshot(
+        session, provider_profile_ref=row.profile_id, launch_policy_ref=None,
+        consumer_type="workflow", consumer_id="explicit-expired", user=user,
+    )
+    assert automatic == explicit
+
+
+async def test_disabled_profile_remains_in_inventory_without_gaining_launch_authority(session, monkeypatch):
+    from api_service.api.routers.provider_profiles import list_profiles
+
+    await _seed_default_deployment(session, monkeypatch)
+    row = await session.get(ManagedAgentProviderProfile, "opencode-zen-free")
+    row.enabled = False
+    row.disabled_reason = ProviderProfileDisabledReason.USER_DISABLED
+    await session.commit()
+    user = SimpleNamespace(id=uuid4(), is_superuser=True)
+    rows = await list_profiles(include_execution=True, session=session, current_user=user)
+    selected = next(item for item in rows if item["profile_id"] == row.profile_id)
+    assert selected["launch_ready"] is False
+    assert selected["execution_selection"]["providerProfileRef"] == row.profile_id
+    with pytest.raises(HTTPException):
+        await resolve_default_agent_profile_snapshot(
+            session, provider_profile_ref=row.profile_id, launch_policy_ref=None,
+            consumer_type="workflow", consumer_id="disabled", user=user,
+        )
+
+
+async def test_inventory_loads_active_and_explicitly_pinned_versions_only(session, monkeypatch):
+    from api_service.services.profile_execution_selection import (
+        load_execution_configurations,
+    )
+
+    await _seed_default_deployment(session, monkeypatch)
+    profile = await session.get(OmnigentAgentProfile, OPENCODE_BUILTIN_PROFILE_ID)
+    old = await session.scalar(select(OmnigentAgentProfileVersion).where(
+        OmnigentAgentProfileVersion.profile_id == profile.profile_id,
+        OmnigentAgentProfileVersion.version == profile.active_version,
+    ))
+    provider = await session.get(ManagedAgentProviderProfile, "opencode-zen-free")
+    for number in (2, 3):
+        session.add(OmnigentAgentProfileVersion(
+            profile_id=profile.profile_id, version=number,
+            digest="sha256:" + str(number) * 64,
+            document={**old.document, "version": number},
+            validation_result=old.validation_result,
+        ))
+    profile.active_version = 3
+    provider.execution_configuration = {
+        "profileId": profile.profile_id, "version": 1, "digest": old.digest,
+    }
+    await session.flush()
+    user = SimpleNamespace(id=uuid4(), is_superuser=True)
+    pinned = await load_execution_configurations(session, user, [provider])
+    assert {version.version for row, version in pinned if row.profile_id == profile.profile_id} == {1, 3}
+    provider.execution_configuration = None
+    automatic = await load_execution_configurations(session, user, [provider])
+    assert {version.version for row, version in automatic if row.profile_id == profile.profile_id} == {3}
+
 _SERVER_IMAGE_REF = "registry.test/server@sha256:" + "1" * 64
 _OPENCODE_HOST_IMAGE_REF = "registry.test/opencode@sha256:" + "6" * 64
 
@@ -417,9 +542,7 @@ async def test_selection_rejects_a_provider_the_slot_auth_model_forbids(
     assert caught.value.status_code == 409
     # The incompatibility is the slot auth-model contract, not readiness: an
     # unenforced contract would fall through to the launch-ready check instead.
-    assert "not compatible with the selected Omnigent execution target" in str(
-        caught.value.detail
-    )
+    assert caught.value.detail["code"] == "profile_execution_configuration_required"
 
     # The automatic default still resolves the credentialless route the slot
     # does accept.

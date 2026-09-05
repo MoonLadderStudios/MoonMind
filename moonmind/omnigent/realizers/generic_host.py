@@ -241,7 +241,7 @@ class GenericOmnigentHostRealizer:
             await self._notify_execution_state(
                 workflow_id,
                 "launching",
-                "Provider Profile capacity acquired.",
+                "Preparing runtime: validating the execution host and selected model.",
             )
             materializers = {
                 slot: value.materializerRef

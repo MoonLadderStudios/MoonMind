@@ -249,20 +249,6 @@ def _profile_snapshot_digest(value: Mapping[str, Any]) -> str:
     return "sha256:" + hashlib.sha256(encoded).hexdigest()
 
 
-def _profile_model_ids(value: Any) -> set[str]:
-    if isinstance(value, str):
-        return {value} if "/" in value else set()
-    if isinstance(value, Mapping):
-        return {
-            model
-            for item in value.values()
-            for model in _profile_model_ids(item)
-        }
-    if isinstance(value, list):
-        return {model for item in value for model in _profile_model_ids(item)}
-    return set()
-
-
 async def _run_v2_profile_readiness_checks(
     session: AsyncSession,
     *,
@@ -275,9 +261,6 @@ async def _run_v2_profile_readiness_checks(
     from api_service.db.models import (
         OmnigentHarnessCatalogSnapshotRecord,
         OmnigentHarnessTrustRecord,
-    )
-    from moonmind.omnigent.bootstrap.provider_revalidation import (
-        evidence_observation_is_current,
     )
     from moonmind.omnigent.harness_platform.agent_profile import (
         BundleSource,
@@ -480,7 +463,7 @@ async def _run_v2_profile_readiness_checks(
             materializer_ref = materializer_ref_for_provider(
                 provider.runtime_id, provider.provider_id
             )
-            selected_classes = [
+            for policy_ref in profile.allowedLaunchPolicyRefs:
                 OmnigentHostClassSelector().select(
                     harness=harness,
                     omnigent_version=authority.omnigentVersion,
@@ -490,22 +473,8 @@ async def _run_v2_profile_readiness_checks(
                     materializer_refs=[materializer_ref],
                     requested_host_mode=get_launch_policy(policy_ref).hostMode,
                 )
-                for policy_ref in profile.allowedLaunchPolicyRefs
-            ]
-            evidence = dict(provider.model_catalog_evidence_json or {})
-            model = str(profile.model.get("qualifiedId") or "").strip()
-            if (
-                int(evidence.get("credentialGeneration") or 0)
-                != int(provider.credential_generation)
-                or str(evidence.get("imageRef") or "")
-                not in {item.imageRef for item in selected_classes}
-                # Smoke launches the real host, so it must not admit a catalog
-                # the provider may have changed since it was observed.
-                or not evidence_observation_is_current(evidence)
-                or not model
-                or model not in _profile_model_ids(evidence.get("models", []))
-            ):
-                continue
+            # Smoke attests model availability on its actual host. Discovery
+            # cache age or identity does not establish launch authority.
             compatible_provider = True
             break
         except Exception:
