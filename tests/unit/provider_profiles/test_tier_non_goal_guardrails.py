@@ -96,6 +96,7 @@ async def test_different_tiers_share_one_provider_profile_capacity_pool() -> Non
     manager._signal_slot_assigned = AsyncMock()
     # Mock persistence boundary so active patched durable-lease path can run.
     manager._sync_leases_to_db = AsyncMock(return_value=True)  # type: ignore[method-assign]
+    manager._grant_lease_to_db = AsyncMock(return_value=True)  # type: ignore[method-assign]
 
     # Verify the contract has no tier field — tier is resolved before slot request.
     assert "model_tier" not in SlotRequestPayload.__annotations__
@@ -153,7 +154,7 @@ async def test_different_tiers_share_one_provider_profile_capacity_pool() -> Non
         "run-tier-2"
     ]
     # Verify persistence was attempted on the active path.
-    assert manager._sync_leases_to_db.await_count >= 1
+    assert manager._grant_lease_to_db.await_count >= 1
 
 
 @pytest.mark.asyncio
@@ -203,6 +204,7 @@ async def test_tier_policy_refresh_does_not_change_profile_slot_leasing() -> Non
     assert profile_after_sync.default_model_tier == 2
 
     manager._sync_leases_to_db = AsyncMock(return_value=True)  # type: ignore[method-assign]
+    manager._grant_lease_to_db = AsyncMock(return_value=True)  # type: ignore[method-assign]
     with patch(
         "moonmind.workflows.temporal.workflows.provider_profile_manager.workflow"
     ) as temporal_workflow:

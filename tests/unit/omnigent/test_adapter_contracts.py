@@ -1176,3 +1176,86 @@ def test_deployed_adapter_satisfies_its_declared_port(port, implementation) -> N
     assert not missing, (
         f"{implementation.__name__} no longer satisfies {port.__name__}: {missing}"
     )
+
+
+def test_expected_host_id_is_deterministic_and_generation_fenced() -> None:
+    from uuid import NAMESPACE_URL, UUID, uuid5
+
+    from moonmind.omnigent.host_ports import expected_omnigent_host_id
+
+    first = expected_omnigent_host_id("lease-abc", 1)
+    previous_attempt_id = str(uuid5(NAMESPACE_URL, "lease-abc:1"))
+    assert first == UUID(previous_attempt_id).hex
+    assert first == UUID(first).hex
+    assert first == expected_omnigent_host_id("lease-abc", 1)
+    assert first != expected_omnigent_host_id("lease-abc", 2)
+    assert first != expected_omnigent_host_id("lease-other", 1)
+
+
+@pytest.mark.asyncio
+async def test_targeted_registration_verifies_exact_identity() -> None:
+    from moonmind.omnigent.host_services.registration import (
+        OmnigentHostRegistrationService,
+    )
+    from moonmind.workflows.adapters.omnigent_client import OmnigentClientError
+
+    expected_id = "host-expected-123"
+    ready_host = {
+        "host_id": expected_id,
+        "name": "mm-host-abc",
+        "owner": "local",
+        "status": "online",
+        "harnesses": {"opencode": "ready"},
+    }
+
+    class FakeClient:
+        def __init__(self):
+            self.get_calls = 0
+
+        async def get_host(self, host_id):
+            self.get_calls += 1
+            assert host_id == expected_id
+            if self.get_calls < 3:
+                raise OmnigentClientError("not found", status_code=404)
+            return dict(ready_host)
+
+        async def list_hosts(self):
+            raise AssertionError("targeted path must not list inventory")
+
+    service = OmnigentHostRegistrationService(
+        client=FakeClient(), expected_owner="local", attempts=5
+    )
+    result = await service.wait_for_registration(
+        correlation_name="mm-host-abc",
+        harness_id="opencode",
+        expected_host_id=expected_id,
+    )
+    assert result["omnigentHostId"] == expected_id
+    assert result["lookupMode"] == "targeted"
+
+
+@pytest.mark.asyncio
+async def test_targeted_registration_rejects_wrong_owner() -> None:
+    from moonmind.omnigent.host_services.registration import (
+        OmnigentHostRegistrationService,
+    )
+
+    class FakeClient:
+        async def get_host(self, host_id):
+            return {
+                "host_id": host_id,
+                "name": "mm-host-abc",
+                "owner": "someone-else",
+                "status": "online",
+                "harnesses": {"opencode": "ready"},
+            }
+
+    service = OmnigentHostRegistrationService(
+        client=FakeClient(), expected_owner="local", attempts=2
+    )
+    with pytest.raises(HarnessPlatformError, match="owner mismatch"):
+        await service.wait_for_registration(
+            correlation_name="mm-host-abc",
+            harness_id="opencode",
+            expected_host_id="host-expected-123",
+        )

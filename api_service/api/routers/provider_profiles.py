@@ -21,6 +21,7 @@ from api_service.db.models import (
     ManagedAgentProviderProfile,
     ManagedAgentRateLimitPolicy,
     ManagedSecret,
+    ProviderCapacityScope,
     ProviderCredentialSource,
     ProviderProfileAuthMethod,
     ProviderProfileAuthState,
@@ -1157,6 +1158,74 @@ async def get_profile(
     )
 
 
+def _deployment_parallel_ceiling() -> int:
+    import os as _os
+
+    try:
+        value = int(str(_os.getenv("MOONMIND_MAX_PROVIDER_PROFILE_PARALLEL_RUNS") or "").strip())
+    except (TypeError, ValueError):
+        return 32
+    return max(1, min(256, value))
+
+
+def _enforce_parallel_ceiling(max_parallel_runs: int | None) -> None:
+    if max_parallel_runs is None:
+        return
+    ceiling = _deployment_parallel_ceiling()
+    if int(max_parallel_runs) > ceiling:
+        raise HTTPException(
+            status_code=422,
+            detail={
+                "code": "provider_profile_parallel_ceiling_exceeded",
+                "message": (
+                    f"max_parallel_runs {max_parallel_runs} exceeds deployment "
+                    f"safety ceiling {ceiling}."
+                ),
+            },
+        )
+
+
+async def _enforce_scope_compatibility(
+    session: AsyncSession,
+    *,
+    runtime_id: str,
+    capacity_scope_ref: str | None,
+    provider_id: str | None = None,
+) -> None:
+    """Prevent unrelated runtimes/providers sharing one scope.
+
+    A scope is owned by the runtime (and provider class) of the first
+    profile that references it; a second profile with a different runtime
+    or provider cannot attach without a compatible trusted scope policy.
+    """
+    scope_ref = str(capacity_scope_ref or "").strip()
+    if not scope_ref:
+        return
+    from sqlalchemy import select as _select
+
+    from api_service.db.models import ProviderCapacityScope as _Scope
+
+    scope = await session.get(_Scope, scope_ref)
+    if scope is None:
+        return
+    if scope.runtime_id and scope.runtime_id != runtime_id:
+        raise HTTPException(
+            status_code=422,
+            detail={
+                "code": "provider_profile_scope_incompatible",
+                "message": "Capacity scope belongs to a different runtime.",
+            },
+        )
+    if provider_id and scope.provider_class not in ("unknown", "", provider_id):
+        raise HTTPException(
+            status_code=422,
+            detail={
+                "code": "provider_profile_scope_incompatible",
+                "message": "Capacity scope belongs to a different provider.",
+            },
+        )
+
+
 @router.post("", response_model=ProviderProfileResponse, status_code=201)
 async def create_profile(
     body: ProviderProfileCreate,
@@ -1251,6 +1320,27 @@ async def create_profile(
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
 
+    _enforce_parallel_ceiling(values.get("max_parallel_runs"))
+    await _enforce_scope_compatibility(
+        session,
+        runtime_id=str(values.get("runtime_id") or body.runtime_id),
+        capacity_scope_ref=str(values.get("capacity_scope_ref") or ""),
+        provider_id=str(values.get("provider_id") or ""),
+    )
+    _scope_ref = str(
+        values.get("capacity_scope_ref") or f"provider-profile:{body.profile_id}"
+    ).strip()
+    if await session.get(ProviderCapacityScope, _scope_ref) is None:
+        session.add(
+            ProviderCapacityScope(
+                scope_ref=_scope_ref,
+                runtime_id=str(values.get("runtime_id") or body.runtime_id),
+                provider_class=str(values.get("provider_id") or "unknown"),
+                configured_limit=int(values.get("max_parallel_runs") or 1),
+                effective_limit=int(values.get("max_parallel_runs") or 1),
+            )
+        )
+
     profile = ManagedAgentProviderProfile(
         profile_id=body.profile_id,
         runtime_id=values["runtime_id"],
@@ -1327,6 +1417,7 @@ async def create_profile(
         preferred_profile_id=(
             profile.profile_id if values["is_default"] else None
         ),
+        operator_selected=bool(values["is_default"]),
     )
     await session.commit()
     await session.refresh(profile)
@@ -1392,6 +1483,14 @@ async def update_profile(
         }.intersection(update_data)
         or update_data.get("enabled") is True
         or import_existing_credential_volume
+    )
+    # MoonLadderStudios/MoonMind#3877: the Settings toggle disables a profile by
+    # sending only ``enabled: false``. Persist that as ``user_disabled`` so the
+    # operator's intent is distinguishable from automatic disablement; startup
+    # seeding and deployment credential enrollment read that marker before they
+    # re-enable a profile or move runtime-default authority.
+    operator_disable_requested = (
+        update_data.get("enabled") is False and "disabled_reason" not in update_data
     )
     requested_is_default = update_data.pop("is_default", None)
     target_provider_id = update_data.get("provider_id") or profile.provider_id
@@ -1818,6 +1917,43 @@ async def update_profile(
             raise HTTPException(status_code=422, detail=str(exc)) from exc
         profile.model_tiers = model_tiers
         profile.default_model_tier = default_model_tier
+    if "max_parallel_runs" in update_data or "capacity_scope_ref" in update_data or "provider_id" in update_data:
+        _enforce_parallel_ceiling(update_data.get("max_parallel_runs", profile.max_parallel_runs))
+        await _enforce_scope_compatibility(
+            session,
+            runtime_id=profile.runtime_id,
+            capacity_scope_ref=str(
+                update_data.get("capacity_scope_ref", profile.capacity_scope_ref) or ""
+            ),
+            provider_id=str(update_data.get("provider_id", profile.provider_id) or ""),
+        )
+        if "max_parallel_runs" in update_data:
+            try:
+                _new_max = int(update_data.get("max_parallel_runs") or 0)
+            except (TypeError, ValueError):
+                _new_max = 0
+            if _new_max > 0 and _new_max != profile.max_parallel_runs:
+                _default_scope = f"provider-profile:{profile.profile_id}"
+                if (profile.capacity_scope_ref or _default_scope) == _default_scope:
+                    from sqlalchemy import select as _select_scope_count
+
+                    from api_service.db.models import ManagedAgentProviderProfile as _Profile
+
+                    _count_result = await session.execute(
+                        _select_scope_count(_Profile.profile_id).where(
+                            _Profile.capacity_scope_ref == _default_scope
+                        )
+                    )
+                    if len(list(_count_result.scalars().all())) == 1:
+                        _scope_row = await session.get(ProviderCapacityScope, _default_scope)
+                        if _scope_row is not None:
+                            _scope_row.configured_limit = _new_max
+                            if _new_max > profile.max_parallel_runs:
+                                _scope_row.effective_limit = _new_max
+                            else:
+                                _scope_row.effective_limit = min(
+                                    _scope_row.effective_limit, _new_max
+                                )
     for key, value in update_data.items():
         if key == "rate_limit_policy" and value is not None:
             value = ManagedAgentRateLimitPolicy(value)
@@ -1832,6 +1968,8 @@ async def update_profile(
         elif key == "last_auth_method" and value is not None:
             value = ProviderProfileAuthMethod(value)
         setattr(profile, key, value)
+    if operator_disable_requested:
+        profile.disabled_reason = ProviderProfileDisabledReason.USER_DISABLED
     try:
         model_tiers, default_model_tier = coerce_model_effort_tier_policy(
             model_tiers=profile.model_tiers,
@@ -1897,6 +2035,7 @@ async def update_profile(
 
     if requested_is_default is False:
         profile.is_default = False
+        profile.default_selected_by_operator = False
 
     _validate_codex_oauth_profile_row(profile)
     await session.flush()
@@ -1904,6 +2043,7 @@ async def update_profile(
         session=session,
         runtime_id=profile.runtime_id,
         preferred_profile_id=profile.profile_id if requested_is_default else None,
+        operator_selected=bool(requested_is_default),
     )
     await session.commit()
     await session.refresh(profile)
@@ -2129,6 +2269,7 @@ async def setup_provider_api_key(
         session=session,
         runtime_id=profile.runtime_id,
         preferred_profile_id=profile.profile_id if body.make_default else None,
+        operator_selected=bool(body.make_default),
     )
     await session.commit()
     await session.refresh(profile)

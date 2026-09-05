@@ -35,6 +35,7 @@ from moonmind.omnigent.host_ports import (
     OmnigentRuntimeEnvironmentPort,
     OmnigentSkillDeliveryPort,
     OmnigentWorkspaceMaterializationPort,
+    expected_omnigent_host_id,
     host_correlation_identity,
 )
 from moonmind.schemas.agent_runtime_models import AgentExecutionRequest
@@ -267,6 +268,9 @@ class GenericOmnigentHostRuntime:
                 "limits": launch_policy.limits,
                 "runtime": host_class.runtime,
                 "correlationName": correlation,
+                "expectedOmnigentHostId": expected_omnigent_host_id(
+                    host_lease_ref, host_lease_generation
+                ),
                 "workspaceAttachment": prepared.workspace_attachment,
                 "skillAttachment": prepared.skill_attachment,
                 "toolAttachments": list(prepared.tool_attachments),
@@ -327,6 +331,7 @@ class GenericOmnigentHostRuntime:
                         for handle in credential_handles
                     )
                 ),
+                expected_host_id=(str(spec.expectedOmnigentHostId) or None),
             )
             attestations = await self._attestor.attest(
                 request=request,
@@ -344,14 +349,19 @@ class GenericOmnigentHostRuntime:
             # the failure so the realizer's single publication point persists
             # it; otherwise the only runner diagnostics for a registration or
             # attestation failure would be lost with the container.
-            host_cleanup_evidence = await self._cleanup.cleanup(
-                container_name=launch["containerName"],
-                host_lease_ref=host_lease_ref,
-                host_lease_generation=host_lease_generation,
-                state_volume_ref=launch["stateVolumeRef"],
-                control_volume_ref=launch.get("controlVolumeRef"),
-            )
-            setattr(exc, "host_cleanup_evidence", host_cleanup_evidence)
+            try:
+                host_cleanup_evidence = await self._cleanup.cleanup(
+                    container_name=launch["containerName"],
+                    host_lease_ref=host_lease_ref,
+                    host_lease_generation=host_lease_generation,
+                    state_volume_ref=launch["stateVolumeRef"],
+                    control_volume_ref=launch.get("controlVolumeRef"),
+                )
+                setattr(exc, "host_cleanup_evidence", host_cleanup_evidence)
+            except Exception as cleanup_error:
+                # The durable owner retains cleanup authority. An auxiliary
+                # cleanup failure must not replace the startup failure.
+                setattr(exc, "host_cleanup_error", type(cleanup_error).__name__)
             raise
         return {
             "hostId": registration["omnigentHostId"],

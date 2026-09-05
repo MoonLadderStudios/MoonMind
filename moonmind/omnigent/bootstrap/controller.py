@@ -1140,15 +1140,17 @@ class BootstrapController:
                 # that would turn an unverified selection into readiness
                 # evidence and defer the rejection until exact-host launch.
                 prof.model_catalog_evidence_json = validation_evidence
-                # Clear the previous runtime default before promoting the
-                # validated profile. The helper flushes those changes in the
-                # order required by ux_provider_profiles_runtime_default, so a
-                # seeded Zen default and a newly enrolled Go profile never
-                # overlap as defaults, even transiently.
+                # MoonLadderStudios/MoonMind#3877: enrolling the deployment's
+                # OPENCODE_API_KEY is configuration, not an explicit default
+                # selection, so it must never transfer runtime-default authority
+                # away from a launch-ready credentialless Zen default. Normalize
+                # without a preference: the existing default is preserved, and
+                # the newly validated Go profile is promoted only when nothing
+                # else holds a launch-ready default (for example after an
+                # explicit operator disable of the Zen profile).
                 await normalize_runtime_default_profile(
                     session=session,
                     runtime_id=prof.runtime_id,
-                    preferred_profile_id=profile_id,
                 )
                 await session.commit()
                 await sync_provider_profile_manager(

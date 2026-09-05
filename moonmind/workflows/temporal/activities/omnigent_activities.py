@@ -626,13 +626,19 @@ async def _try_generic_realizer_dispatch(
                 exc,
                 exc_info=True,
             )
+            typed_code = str(getattr(exc, "code", "") or "").strip()
+            if (
+                typed_code
+                == HarnessPlatformFailure.OMNIGENT_GENERIC_REALIZER_NOT_READY.value
+            ):
+                # Same bounded bootstrap race as the planning path below.
+                raise
             # A typed platform code on the cause is the operator-facing
             # classification; only an untyped cause collapses to the generic
             # dispatch code and its contact_administrator remediation.
             provider_error_code = (
                 HarnessPlatformFailure.OMNIGENT_GENERIC_DISPATCH_FAILED.value
             )
-            typed_code = str(getattr(exc, "code", "") or "").strip()
             if typed_code in HarnessPlatformFailure.__members__:
                 provider_error_code = typed_code
             return AgentRunResult(
@@ -751,6 +757,15 @@ async def _try_generic_realizer_dispatch(
         raise
     except HarnessPlatformError as exc:
         code = str(exc.code)
+        if (
+            code
+            == HarnessPlatformFailure.OMNIGENT_GENERIC_REALIZER_NOT_READY.value
+        ):
+            # Degraded worker startup (missing resolved digest) is a bounded
+            # bootstrap race, not a terminal configuration error. Raise so
+            # Temporal retries with backoff; the digest typically appears
+            # moments later via publish_resolved_omnigent_images.
+            raise
         configuration_codes = {
             HarnessPlatformFailure.OMNIGENT_AGENT_PROFILE_INVALID.value,
             HarnessPlatformFailure.OMNIGENT_AGENT_SOURCE_UNAVAILABLE.value,

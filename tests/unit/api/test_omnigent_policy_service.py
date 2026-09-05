@@ -24,6 +24,7 @@ from api_service.services.omnigent_policies import (
     bootstrap_policies_ready,
     bootstrap_document,
     configured_bootstrap_image_refs,
+    configured_opencode_bootstrap_image_ref,
     resolve_bootstrap_image_ref,
     resolve_live_server_image_ref,
     seed_bootstrap_policies,
@@ -542,20 +543,30 @@ async def test_bootstrap_uses_safe_local_digest_when_latest_refresh_times_out(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "image_env",
+    [
+        {},
+        {
+            "OMNIGENT_OPENCODE_HOST_IMAGE": "ghcr.io/moonladderstudios/omnigent-host-moonmind",
+            "OMNIGENT_OPENCODE_HOST_IMAGE_TAG": "latest",
+        },
+    ],
+)
 async def test_bootstrap_policies_activate_with_resolved_latest_images(
-    tmp_path, monkeypatch
+    tmp_path, monkeypatch, image_env
 ):
     monkeypatch.setenv("MOONMIND_CONTAINER_JOBS_ENABLED", "true")
     server_digest = "ghcr.io/omnigent-ai/omnigent-server@sha256:" + "1" * 64
     host_digest = "ghcr.io/omnigent-ai/omnigent-host@sha256:" + "2" * 64
     opencode_host_digest = (
-        "ghcr.io/moonladderstudios/omnigent-host-opencode@sha256:" + "3" * 64
+        "ghcr.io/moonladderstudios/omnigent-host-moonmind@sha256:" + "3" * 64
     )
     resolution_calls: list[str] = []
 
     async def resolver(image_ref: str) -> str:
         resolution_calls.append(image_ref)
-        if "host-opencode" in image_ref:
+        if "host-moonmind" in image_ref:
             return opencode_host_digest
         return host_digest if "host" in image_ref else server_digest
 
@@ -565,6 +576,7 @@ async def test_bootstrap_policies_activate_with_resolved_latest_images(
             env={
                 "OMNIGENT_IMAGE_TAG": "latest",
                 "OMNIGENT_HOST_IMAGE_TAG": "latest",
+                **image_env,
             },
             image_resolver=resolver,
         )
@@ -633,15 +645,15 @@ async def test_dynamic_opencode_child_resolves_bootstrapped_policy(
     server_digest = "ghcr.io/omnigent-ai/omnigent-server@sha256:" + "1" * 64
     codex_host_digest = "ghcr.io/omnigent-ai/omnigent-host@sha256:" + "2" * 64
     first_opencode_host_digest = (
-        "ghcr.io/moonladderstudios/omnigent-host-opencode@sha256:" + "3" * 64
+        "ghcr.io/moonladderstudios/omnigent-host-moonmind@sha256:" + "3" * 64
     )
     next_opencode_host_digest = (
-        "ghcr.io/moonladderstudios/omnigent-host-opencode@sha256:" + "4" * 64
+        "ghcr.io/moonladderstudios/omnigent-host-moonmind@sha256:" + "4" * 64
     )
     resolved_opencode_host = {"image": first_opencode_host_digest}
 
     async def resolver(image_ref: str) -> str:
-        if "host-opencode" in image_ref:
+        if "host-moonmind" in image_ref:
             return resolved_opencode_host["image"]
         return codex_host_digest if "host" in image_ref else server_digest
 
@@ -651,12 +663,14 @@ async def test_dynamic_opencode_child_resolves_bootstrapped_policy(
     async with policy_db(tmp_path) as sessions, sessions() as session:
         await seed_bootstrap_policies(
             session,
+            env={},
             image_resolver=resolver,
             live_server_image_resolver=live_server,
         )
         resolved_opencode_host["image"] = next_opencode_host_digest
         await seed_bootstrap_policies(
             session,
+            env={},
             image_resolver=resolver,
             live_server_image_resolver=live_server,
         )
@@ -686,12 +700,12 @@ async def test_unavailable_opencode_image_does_not_withhold_codex_policies(
     codex_host_digest = "ghcr.io/omnigent-ai/omnigent-host@sha256:" + "2" * 64
 
     async def resolver(image_ref: str) -> str | None:
-        if "host-opencode" in image_ref:
+        if "host-moonmind" in image_ref:
             return None
         return codex_host_digest if "host" in image_ref else server_digest
 
     async with policy_db(tmp_path) as sessions, sessions() as session:
-        seeded = await seed_bootstrap_policies(session, image_resolver=resolver)
+        seeded = await seed_bootstrap_policies(session, env={}, image_resolver=resolver)
 
         assert set(seeded) == {
             "omnigent-codex",
@@ -1270,3 +1284,13 @@ async def test_bootstrap_seed_cuts_over_legacy_stock_agent_identity(tmp_path, mo
         )
         assert binding.launch_policy_ref == "codex-on-demand@2"
         assert binding.effective_launch_snapshot_json is None
+
+
+def test_explicit_opencode_bootstrap_pin_remains_authoritative():
+    pin = "registry.test/custom-opencode@sha256:" + "a" * 64
+    assert configured_opencode_bootstrap_image_ref(
+        {
+            "OMNIGENT_OPENCODE_HOST_IMAGE_REF": pin,
+            "OMNIGENT_OPENCODE_HOST_IMAGE": "ghcr.io/moonladderstudios/omnigent-host-moonmind",
+        }
+    ) == pin

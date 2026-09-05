@@ -1,22 +1,12 @@
 #!/bin/sh
+# Thin compatibility wrapper (MoonLadderStudios/MoonMind#3834).
+#
+# Claude static-host readiness now lives in the generic contract
+# /opt/moonmind/check-omnigent-host.sh. This wrapper selects only the trusted
+# pack ref and delegates; it must not retain duplicate probe logic.
+# Retirement: remove after no deployment or replay-visible path references
+# this name and the generic Claude static row has passed its exact-image and
+# lifecycle gates (see STATIC_HOST_STARTUP_INVENTORY.md).
 set -eu
-
-state_root=${OMNIGENT_STATE_PATH:-/home/app/.omnigent}
-claude_root=${CLAUDE_CONFIG_DIR:-/home/app/.claude}
-expected_generation=${CLAUDE_CREDENTIAL_GENERATION:-}
-
-[ "$(id -u):$(id -g)" = "1000:1000" ] || exit 70
-[ "$HOME" = "/home/app" ] || exit 71
-[ "$claude_root" = "/home/app/.claude" ] || exit 72
-[ "$CLAUDE_HOME" = "/home/app/.claude" ] || exit 73
-[ -d "$claude_root" ] && [ -w "$claude_root" ] || exit 74
-
-for key in OPENAI_API_KEY CODEX_ACCESS_TOKEN OPENAI_BASE_URL MINIMAX_API_KEY ANTHROPIC_API_KEY ANTHROPIC_AUTH_TOKEN CLAUDE_API_KEY CLAUDE_CODE_OAUTH_TOKEN GEMINI_API_KEY GOOGLE_API_KEY; do
-  eval "present=\${$key+x}"
-  [ -z "$present" ] || exit 75
-done
-
-[ -n "$expected_generation" ] || exit 76
-[ -f "$state_root/credential-generation" ] || exit 77
-[ "$(cat "$state_root/credential-generation")" = "$expected_generation" ] || exit 78
-claude auth status >/dev/null 2>&1 || exit 79
+export MOONMIND_OMNIGENT_RUNTIME_PACK_REF=claude-native-pack@1
+exec /opt/moonmind/check-omnigent-host.sh

@@ -9,8 +9,9 @@ from __future__ import annotations
 
 import os
 import re
+from collections.abc import Mapping
 from dataclasses import dataclass
-from typing import Any, Literal, Mapping
+from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
@@ -25,6 +26,7 @@ _SAFE_ID_RE = re.compile(r"^[a-z0-9][a-z0-9._-]*$")
 
 OMNIGENT_OPENCODE_HOST_IMAGE_ENV = "OMNIGENT_OPENCODE_HOST_IMAGE_REF"
 OMNIGENT_PI_HOST_IMAGE_ENV = "OMNIGENT_PI_HOST_IMAGE_REF"
+OMNIGENT_SHARED_HOST_IMAGE_ENV = "OMNIGENT_SHARED_HOST_IMAGE_REF"
 OPENCODE_PINNED_VERSION = "1.18.11"
 OPENCODE_SUPPORTED_RANGE = ">=1.17.7,<1.19.0"
 
@@ -52,6 +54,7 @@ def _persisted_image_ref(key: str) -> str:
     attribute = {
         OMNIGENT_OPENCODE_HOST_IMAGE_ENV: "opencode_host_image_ref",
         OMNIGENT_PI_HOST_IMAGE_ENV: "pi_host_image_ref",
+        OMNIGENT_SHARED_HOST_IMAGE_ENV: "shared_host_image_ref",
     }.get(key)
     if attribute is None:
         return ""
@@ -135,6 +138,17 @@ def get_pi_host_image_ref() -> str:
     return _require_image_ref(os.environ, OMNIGENT_PI_HOST_IMAGE_ENV)
 
 
+def get_shared_host_image_ref() -> str:
+    """Return the digest-pinned shared Omnigent host image ref.
+
+    The neutral ``omnigent-host-moonmind`` image is the one host image Codex,
+    Claude Code, and OpenCode Host Classes share. Like the per-harness images,
+    it must be digest-pinned: mutable tags never become launch authority.
+    """
+
+    return _require_image_ref(os.environ, OMNIGENT_SHARED_HOST_IMAGE_ENV)
+
+
 class HostClassHarnessEntry(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
 
@@ -164,7 +178,7 @@ class HostClass(BaseModel):
     runtime: dict[str, Any]
 
     @model_validator(mode="after")
-    def validate_top(self) -> "HostClass":
+    def validate_top(self) -> HostClass:
         if not _SAFE_ID_RE.fullmatch(self.hostClassId):
             raise ValueError("invalid hostClassId")
         if not _IMAGE_RE.fullmatch(self.imageRef):
@@ -209,6 +223,7 @@ class HostClassTemplate:
     materializer_refs: tuple[str, ...]
     architectures: tuple[str, ...] = ("linux/amd64", "linux/arm64")
     runtime_dependencies: tuple[dict[str, Any], ...] = ()
+    runtime_pack_ref: str | None = None
 
     @property
     def ref(self) -> str:
@@ -238,6 +253,40 @@ DEFAULT_HOST_CLASS_TEMPLATES: tuple[HostClassTemplate, ...] = (
             "host-owned-auth@1",
             "none@1",
         ),
+    ),
+    # Shared-image Host Classes (#3828, #3832 §9): Codex, Claude Code, and
+    # OpenCode share one digest-pinned neutral image. Separate classes keep
+    # harness support exact: each declares only its own harness, runtime pack,
+    # and materializers, so a shared image never conflates installed CLIs with
+    # supported runtimes. omnigent-opencode@1 remains the dedicated-image
+    # legacy row for historical reads; omnigent-opencode@2 is the shared-image
+    # generic row.
+    HostClassTemplate(
+        host_class_id="omnigent-codex",
+        version=1,
+        harness_ids=("codex-native",),
+        image_env=OMNIGENT_SHARED_HOST_IMAGE_ENV,
+        integration_modes=("native-server",),
+        materializer_refs=("codex-oauth-home@1", "none@1"),
+        runtime_pack_ref="codex-native-pack@1",
+    ),
+    HostClassTemplate(
+        host_class_id="omnigent-claude",
+        version=1,
+        harness_ids=("claude-native",),
+        image_env=OMNIGENT_SHARED_HOST_IMAGE_ENV,
+        integration_modes=("native-server",),
+        materializer_refs=("claude-oauth-home@1", "none@1"),
+        runtime_pack_ref="claude-native-pack@1",
+    ),
+    HostClassTemplate(
+        host_class_id="omnigent-opencode",
+        version=2,
+        harness_ids=("opencode-native",),
+        image_env=OMNIGENT_SHARED_HOST_IMAGE_ENV,
+        integration_modes=("native-server",),
+        materializer_refs=("opencode-auth-json@1", "none@1"),
+        runtime_pack_ref="opencode-native-pack@1",
     ),
 )
 
@@ -303,6 +352,25 @@ class OmnigentHostClassSelector:
                     f"{template.ref}: host mode {requested_host_mode} unsupported"
                 )
                 continue
+            runtime_dependencies = template.runtime_dependencies
+            if template.runtime_pack_ref is not None:
+                from moonmind.omnigent.harness_platform.runtime_packs import (
+                    get_runtime_pack,
+                    runtime_dependencies_for_pack,
+                )
+
+                try:
+                    pack = get_runtime_pack(template.runtime_pack_ref)
+                except HarnessPlatformError as exc:
+                    reasons.append(f"{template.ref}: {exc}")
+                    continue
+                if not pack.supports_harness(harness.id):
+                    reasons.append(
+                        f"{template.ref}: runtime pack {pack.ref} does not own "
+                        f"harness {harness.id}"
+                    )
+                    continue
+                runtime_dependencies = runtime_dependencies_for_pack(pack)
             candidates.append(
                 HostClass.model_validate(
                     {
@@ -316,9 +384,7 @@ class OmnigentHostClassSelector:
                             {
                                 "harnessId": harness.id,
                                 "implementationRef": harness.implementation.implementation_ref(),
-                                "runtimeDependencies": list(
-                                    template.runtime_dependencies
-                                ),
+                                "runtimeDependencies": list(runtime_dependencies),
                             }
                         ],
                         "integrationModes": list(template.integration_modes),
@@ -415,7 +481,7 @@ class LaunchPolicy(BaseModel):
     controlCapabilities: tuple[str, ...] = Field(alias="controlCapabilities")
 
     @model_validator(mode="after")
-    def validate_top(self) -> "LaunchPolicy":
+    def validate_top(self) -> LaunchPolicy:
         if not _SAFE_ID_RE.fullmatch(self.policyId):
             raise ValueError("invalid policyId")
         required_limits = {
@@ -521,6 +587,12 @@ _register_policy(
     ["readOnlyRoot", "restrictedEgress", "workspaceBind"],
 )
 _register_policy("codex-static", "static-connected", ["workspaceBind"])
+_register_policy(
+    "claude-on-demand",
+    "on-demand",
+    ["readOnlyRoot", "restrictedEgress", "workspaceBind"],
+)
+_register_policy("claude-static", "static-connected", ["workspaceBind"])
 
 
 def get_launch_policy(ref: str) -> LaunchPolicy:

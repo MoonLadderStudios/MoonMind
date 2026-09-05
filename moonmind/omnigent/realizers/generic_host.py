@@ -487,6 +487,11 @@ class GenericOmnigentHostRealizer:
         except BaseException as exc:
             primary_error = exc
 
+        # Publish the only surviving startup logs before another cleanup owner,
+        # lease CAS, or Docker outage can prevent cleanup from reaching them.
+        prior_host_evidence = await self._publish_host_logs(
+            request, getattr(primary_error, "host_cleanup_evidence", None)
+        )
         if binding is not None:
             try:
                 binding, host_lease = await self._cleanup(
@@ -500,9 +505,7 @@ class GenericOmnigentHostRealizer:
                     # A host that failed registration or attestation was already
                     # removed by the runtime; its cleanup evidence (host log
                     # tail included) travels on the failure.
-                    prior_host_evidence=getattr(
-                        primary_error, "host_cleanup_evidence", None
-                    ),
+                    prior_host_evidence=prior_host_evidence,
                 )
             except BaseException as exc:
                 cleanup_error = exc

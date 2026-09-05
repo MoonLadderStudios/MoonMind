@@ -42,7 +42,7 @@ class _Backend:
     async def run(self, argv, **kwargs):
         self.commands.append(list(argv))
         self.kwargs.append(dict(kwargs))
-        if argv[:2] == ["docker", "inspect"]:
+        if argv[:3] == ["docker", "container", "inspect"]:
             return 0, self.owner + "\n", ""
         if argv[:3] == ["docker", "volume", "inspect"]:
             return 0, self.owner + "\n", ""

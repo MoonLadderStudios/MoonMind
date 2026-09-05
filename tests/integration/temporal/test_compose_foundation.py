@@ -13,6 +13,24 @@ MOUNTED_TOOL_PATH = (
     "${OMNIGENT_HOST_BASE_PATH:-/opt/venv/bin:/usr/local/bin:/usr/local/sbin:"
     "/usr/bin:/usr/sbin:/bin:/sbin}"
 )
+# Shared static-host image expression (MoonLadderStudios/MoonMind#3834): both
+# static rows and both init services must reference this exact string.
+SHARED_STATIC_HOST_IMAGE = (
+    "${OMNIGENT_SHARED_HOST_IMAGE_REF:-${OMNIGENT_SHARED_HOST_IMAGE:-"
+    "ghcr.io/moonladderstudios/omnigent-host-moonmind}:"
+    "${OMNIGENT_SHARED_HOST_IMAGE_TAG:-1.18.11}}"
+)
+GENERIC_STATIC_ENTRYPOINT = ["/opt/moonmind/start-omnigent-host.sh"]
+GENERIC_STATIC_HEALTHCHECK = {
+    "test": [
+        "CMD-SHELL",
+        "/opt/moonmind/check-omnigent-host.sh && /opt/moonmind/check-runner-projections.sh",
+    ],
+    "interval": "10s",
+    "timeout": "5s",
+    "retries": 12,
+    "start_period": "30s",
+}
 
 pytestmark = [pytest.mark.integration, pytest.mark.integration_ci]
 
@@ -727,11 +745,9 @@ def test_omnigent_claude_host_profile_uses_only_canonical_oauth_credentials():
 
     assert host_service["profiles"] == ["omnigent-host-claude"]
     assert host_service["hostname"] == "omnigent-host-claude"
-    assert host_service["image"] == (
-        "${OMNIGENT_HOST_IMAGE_REF:-${OMNIGENT_HOST_IMAGE:-ghcr.io/omnigent-ai/omnigent-host}:"
-        "${OMNIGENT_HOST_IMAGE_TAG:-latest}}"
-    )
-    assert host_service["entrypoint"] == ["/opt/moonmind/start-claude-oauth-host.sh"]
+    assert host_service["image"] == SHARED_STATIC_HOST_IMAGE
+    assert host_service["entrypoint"] == GENERIC_STATIC_ENTRYPOINT
+    assert "command" not in host_service
     assert host_service["user"] == "1000:1000"
     assert host_service["working_dir"] == "/home/app"
     assert "env_file" not in host_service
@@ -752,17 +768,12 @@ def test_omnigent_claude_host_profile_uses_only_canonical_oauth_credentials():
         "OMNIGENT_SERVER_URL": "http://omnigent:8000",
         "HOME": "/home/app",
         "PATH": MOUNTED_TOOL_PATH,
+        "MOONMIND_OMNIGENT_RUNTIME_PACK_REF": "claude-native-pack@1",
+        "MOONMIND_OMNIGENT_CREDENTIAL_MATERIALIZER_REF": "claude-oauth-home@1",
         "CLAUDE_HOME": "/home/app/.claude",
         "CLAUDE_VOLUME_PATH": "/home/app/.claude",
         "CLAUDE_CONFIG_DIR": "/home/app/.claude",
         "CLAUDE_CREDENTIAL_GENERATION": "${CLAUDE_CREDENTIAL_GENERATION:-1}",
-        "ANTHROPIC_API_KEY": "",
-        "ANTHROPIC_AUTH_TOKEN": "",
-        "CLAUDE_API_KEY": "",
-        "CLAUDE_CODE_OAUTH_TOKEN": "",
-        "OPENAI_API_KEY": "",
-        "GEMINI_API_KEY": "",
-        "GOOGLE_API_KEY": "",
     }
 
     host_volumes = {
@@ -809,30 +820,21 @@ def test_omnigent_claude_host_profile_uses_only_canonical_oauth_credentials():
     assert host_service["cap_drop"] == ["ALL"]
     assert host_service["security_opt"] == ["no-new-privileges:true"]
     assert host_service["restart"] == "unless-stopped"
-    assert host_service["healthcheck"] == {
-        "test": [
-            "CMD-SHELL",
-            "/opt/moonmind/check-claude-oauth-host.sh && /opt/moonmind/check-runner-projections.sh",
-        ],
-        "interval": "10s",
-        "timeout": "5s",
-        "retries": 12,
-        "start_period": "30s",
-    }
+    assert host_service["healthcheck"] == GENERIC_STATIC_HEALTHCHECK
 
 
 def test_omnigent_codex_host_profile_uses_only_canonical_oauth_credentials():
     compose = _load_compose()
     host_service = compose["services"]["omnigent-host-codex"]
-    expected_image = (
-        "${OMNIGENT_HOST_IMAGE_REF:-${OMNIGENT_HOST_IMAGE:-ghcr.io/omnigent-ai/omnigent-host}:"
-        "${OMNIGENT_HOST_IMAGE_TAG:-latest}}"
-    )
 
     assert host_service["profiles"] == ["omnigent-host-codex"]
     assert host_service["hostname"] == "omnigent-host-codex"
-    assert host_service["image"] == expected_image
-    assert compose["services"]["omnigent-host-codex-init"]["image"] == expected_image
+    assert host_service["image"] == SHARED_STATIC_HOST_IMAGE
+    assert compose["services"]["omnigent-host-codex-init"]["image"] == SHARED_STATIC_HOST_IMAGE
+    assert compose["services"]["omnigent-host-claude"]["image"] == SHARED_STATIC_HOST_IMAGE
+    assert compose["services"]["omnigent-host-claude-init"]["image"] == SHARED_STATIC_HOST_IMAGE
+    assert host_service["entrypoint"] == GENERIC_STATIC_ENTRYPOINT
+    assert "command" not in host_service
     assert host_service["user"] == "1000:1000"
     assert host_service["working_dir"] == "/home/app"
     assert "env_file" not in host_service
@@ -854,6 +856,8 @@ def test_omnigent_codex_host_profile_uses_only_canonical_oauth_credentials():
         "MOONMIND_ACTIVE_SKILLS_DIR": "/opt/moonmind-skills",
         "HOME": "/home/app",
         "PATH": MOUNTED_TOOL_PATH,
+        "MOONMIND_OMNIGENT_RUNTIME_PACK_REF": "codex-native-pack@1",
+        "MOONMIND_OMNIGENT_CREDENTIAL_MATERIALIZER_REF": "codex-oauth-home@1",
         "CODEX_HOME": "/home/app/.codex",
         "CODEX_CONFIG_HOME": "/home/app/.codex",
         "CODEX_CONFIG_PATH": "/home/app/.codex/config.toml",
@@ -866,21 +870,7 @@ def test_omnigent_codex_host_profile_uses_only_canonical_oauth_credentials():
         "OMNIGENT_CAPTURE_RETENTION_DAYS": "${OMNIGENT_CAPTURE_RETENTION_DAYS:-30}",
     }
     assert host_service["stop_grace_period"] == "${OMNIGENT_HOST_STOP_GRACE_SECONDS:-20}s"
-    entrypoint = host_service["entrypoint"]
-    assert entrypoint[:2] == ["/usr/bin/env", "-u"]
-    assert set(entrypoint[2::2]) == {
-        "OPENAI_API_KEY",
-        "CODEX_ACCESS_TOKEN",
-        "OPENAI_BASE_URL",
-        "MINIMAX_API_KEY",
-        "ANTHROPIC_API_KEY",
-        "ANTHROPIC_AUTH_TOKEN",
-        "CLAUDE_API_KEY",
-        "CLAUDE_CODE_OAUTH_TOKEN",
-        "GEMINI_API_KEY",
-        "GOOGLE_API_KEY",
-    }
-    assert set(entrypoint[1::2]) == {"-u"}
+    assert "command" not in host_service
     assert {
         volume for volume in host_service["volumes"] if isinstance(volume, str)
     } == {
@@ -936,6 +926,7 @@ def test_omnigent_codex_host_profile_uses_only_canonical_oauth_credentials():
     assert host_service["labels"]["moonmind.egress.applied_rule_digest"] == (
         "${OMNIGENT_EGRESS_APPLIED_RULE_DIGEST:-unattested}"
     )
+    assert host_service["healthcheck"] == GENERIC_STATIC_HEALTHCHECK
 
 
 def test_canonical_omnigent_codex_host_uses_base_owned_oauth_volume():

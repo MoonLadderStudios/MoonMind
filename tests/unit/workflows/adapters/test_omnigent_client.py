@@ -10,7 +10,11 @@ import pytest
 from moonmind.workflows.adapters.omnigent_client import (
     OmnigentClientError,
     OmnigentHttpClient,
+    aclose_shared_pool_client,
+    default_omnigent_pool_limits,
+    init_shared_pool_client,
     parse_sse_line,
+    shared_pool_client,
 )
 
 
@@ -354,3 +358,37 @@ async def test_omnigent_client_forwards_explicitly_allowlisted_headers() -> None
 
     assert captured["x-moonmind-trace"] == "trace-1"
     assert "cookie" not in captured
+
+
+def test_pool_limits_are_bounded_and_overridable(monkeypatch) -> None:
+    limits = default_omnigent_pool_limits()
+    assert 10 <= limits.max_connections <= 500
+    assert 1 <= limits.max_keepalive_connections <= 100
+
+    monkeypatch.setenv("MOONMIND_OMNIGENT_HTTP_MAX_CONNECTIONS", "10000")
+    capped = default_omnigent_pool_limits()
+    assert capped.max_connections <= 500
+
+
+@pytest.mark.asyncio
+async def test_shared_pool_reused_and_closed() -> None:
+    await aclose_shared_pool_client()
+    assert shared_pool_client() is None
+    first = await init_shared_pool_client()
+    assert shared_pool_client() is first
+    assert (await init_shared_pool_client()) is first
+    await aclose_shared_pool_client()
+    assert shared_pool_client() is None
+
+
+@pytest.mark.asyncio
+async def test_pool_exhaustion_returns_actionable_failure() -> None:
+    async def handler(request: httpx.Request) -> httpx.Response:
+        raise httpx.PoolTimeout("pool exhausted")
+
+    client = OmnigentHttpClient(
+        base_url="https://omnigent.test",
+        transport=httpx.MockTransport(handler),
+    )
+    with pytest.raises(OmnigentClientError, match="pool exhausted"):
+        await client.list_agents()
