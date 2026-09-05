@@ -14059,7 +14059,7 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
           aria-label="Execution context"
         >
         <div className={providerOptions.length > 0 ? "grid-2" : "stack"}>
-          <details><summary>Advanced runtime</summary><label>
+          <div className="stack"><label>
             Runtime
             <select
               name="runtime"
@@ -14149,7 +14149,7 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
             </div>
           ) : null}
 
-          </details>
+          </div>
 
           {providerOptions.length > 0 ? (
             <div id="queue-provider-profile-wrap">
@@ -14208,8 +14208,8 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
           )}
         </div>
 
-        {runtime.trim().toLowerCase() === "omnigent" && (omnigentProfiles.length > 0 || Boolean(selectedGenericOmnigentTarget)) ? (
-          <details><summary>Advanced execution</summary><div className="grid-2" aria-label="Omnigent execution target">
+        {runtime.trim().toLowerCase() === "omnigent" && (omnigentProfiles.length > 0 || Boolean(selectedGenericOmnigentTarget)) && (pageMode.mode !== "create" || remediationDraft || showAdvancedStepOptions) ? (
+          <div className="grid-2" aria-label="Omnigent execution target">
             <label>
               Execution target
               <select
@@ -14261,7 +14261,7 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
                 ))}
               </select>
             </label>
-          </div></details>
+          </div>
         ) : null}
 
         {runtime !== "omnigent" && selectedConfiguredProfile?.execution_selection_error ? (
