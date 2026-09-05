@@ -1710,7 +1710,7 @@ describe("MoonLadderStudios/MoonMind#3451 Omnigent readiness", () => {
         available: true,
         launchPolicies: [
           { ref: "on-demand-v1", displayName: "On-demand v1", hostMode: "on_demand_docker", isDefault: true },
-          { ref: "pinned-v1", displayName: "Pinned v1", hostMode: "on_demand_docker" },
+          { ref: "pinned-v1", displayName: "Pinned v1", hostMode: "on_demand_docker", isDefault: false },
         ],
         gateReasons: [],
       }],
