@@ -9,6 +9,7 @@
 ## Related documents
 
 - [`docs/Omnigent/PrimaryRuntimeProviderStrategy.md`](./PrimaryRuntimeProviderStrategy.md)
+- [`docs/Omnigent/RuntimeProviderRollout.md`](./RuntimeProviderRollout.md)
 - [`docs/Omnigent/OmnigentHarnessPlatformDesign.md`](./OmnigentHarnessPlatformDesign.md)
 - [`docs/Omnigent/OpenCodeHost.md`](./OpenCodeHost.md)
 - [`docs/Omnigent/OmnigentHostOAuth.md`](./OmnigentHostOAuth.md)
@@ -99,7 +100,8 @@ The legacy static deployment's single shared `codex_auth_volume` / `claude_auth_
 The trusted planner (never the workflow) selects the execution realizer:
 
 - `codex-native` keeps `codex-profile-bound@1` until the operator sets `MOONMIND_OMNIGENT_GENERIC_CODEX_QUALIFIED=true` after exact shared-image Codex evidence passes. Before then, an explicit `generic-omnigent-host@1` Codex selection fails closed.
-- `claude-native` owns `generic-omnigent-host@1` directly; `MOONMIND_OMNIGENT_GENERIC_CLAUDE_QUALIFIED` gates advertisement for follow-up rollout surfaces.
+- `claude-native` requires `MOONMIND_OMNIGENT_GENERIC_CLAUDE_QUALIFIED=true`; before then, planning a `claude-native` combination fails closed rather than advertising an unqualified target.
+- Those operator flags are inputs to the versioned runtime-provider rollout policy, which is the one authority that decides whether a combination is a default, an explicit-only choice, a labeled compatibility path, or unavailable. See [`docs/Omnigent/RuntimeProviderRollout.md`](./RuntimeProviderRollout.md).
 
 Both gates default to false. No generic plan silently falls back to a direct, legacy, or another-harness path: a failed generic launch returns a typed terminal failure through the same plan and fenced binding.
 

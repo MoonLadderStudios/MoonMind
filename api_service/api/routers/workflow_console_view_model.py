@@ -22,8 +22,12 @@ from moonmind.utils.build_info import resolve_moonmind_build_id
 from moonmind.workflows.executions.runtime_defaults import (
     DEFAULT_REPOSITORY,
     normalize_runtime_id,
-    resolve_default_workflow_runtime,
     resolve_runtime_defaults,
+)
+from moonmind.workflows.executions.runtime_target_selection import (
+    AuthoringSurface,
+    resolve_runtime_target_selection,
+    runtime_target_catalog_payload,
 )
 from moonmind.workflows.executions.execution_contract import build_runtime_command_preview_config
 
@@ -643,16 +647,22 @@ def build_runtime_config(
     configured_runtime = normalize_runtime_id(
         str(os.environ.get("MOONMIND_WORKER_RUNTIME", "")).strip().lower() or None
     ) if os.environ.get("MOONMIND_WORKER_RUNTIME", "").strip() else ""
+    # The versioned runtime-provider rollout policy owns the promoted default
+    # (MoonLadderStudios/MoonMind#3833). Per-request user/workspace overrides and
+    # the worker runtime pin remain explicit authored intentions above it.
+    runtime_target_catalog = runtime_target_catalog_payload()
+    rollout_selection = resolve_runtime_target_selection(
+        surface=AuthoringSurface.dashboard_config,
+        workflow_settings=settings.workflow,
+    )
     if runtime_override in supported_runtimes:
         default_runtime = runtime_override
     elif configured_runtime in supported_runtimes:
         default_runtime = configured_runtime
+    elif rollout_selection.runtime_id in supported_runtimes:
+        default_runtime = rollout_selection.runtime_id
     else:
-        configured_default = resolve_default_workflow_runtime(settings.workflow)
-        if configured_default in supported_runtimes:
-            default_runtime = configured_default
-        else:
-            default_runtime = supported_runtimes[0]
+        default_runtime = supported_runtimes[0]
     default_model_by_runtime: dict[str, str] = {}
     default_effort_by_runtime: dict[str, str] = {}
     for runtime in supported_runtimes:
@@ -769,6 +779,7 @@ def build_runtime_config(
         "system": {
             **system_metadata,
             "omnigentExecutionCatalog": public_execution_catalog(),
+            "runtimeTargetCatalog": runtime_target_catalog,
             "defaultRepository": default_repository,
             "repositoryOptions": repository_options,
             "defaultRuntime": default_runtime,

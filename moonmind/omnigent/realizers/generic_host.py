@@ -10,9 +10,11 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import time
 from contextlib import suppress
 from typing import Any, Awaitable, Callable
 
+from moonmind.omnigent.control_plane import metrics as control_plane_metrics
 from moonmind.omnigent.credential_materializers import (
     CredentialRuntimeHandle,
     credential_runtime_identity,
@@ -47,6 +49,20 @@ _GENERIC_HOST_CLEANUP_OWNER = "omnigent_generic_host"
 #: Distinguishes "this owner lost the shared cleanup claim" from "no control
 #: plane is wired", which must stay runnable in unit harnesses.
 _CLEANUP_NOT_OWNED = object()
+
+
+def _cleanup_outcome_label(*, cancelled: bool, released: bool) -> str:
+    """Return the bounded cleanup outcome for one terminal execution.
+
+    ``released`` means this owner durably reached the cleaned state and released
+    every resource it held. An unreleased outcome stays durably
+    ``cleanup_pending`` for the janitor, which is a leak until that janitor
+    completes it -- never a clean terminal state.
+    """
+
+    if cancelled:
+        return "cancelled_clean" if released else "cancelled_incomplete"
+    return "completed_clean" if released else "leaked"
 
 
 def _carry_host_logs(host_evidence: Any, prior_host_evidence: Any) -> Any:
@@ -220,6 +236,13 @@ class GenericOmnigentHostRealizer:
         result: AgentRunResult | None = None
         primary_error: BaseException | None = None
         cleanup_error: BaseException | None = None
+        # Bounded migration telemetry (MoonLadderStudios/MoonMind#3833 required
+        # work 11). The harness class is derived once, here, from the immutable
+        # plan; no call site below names its own label.
+        harness_id = plan.payload.harnessId
+        launch_readiness_recorded = False
+        # The attested-resume lifecycle is its own terminal telemetry owner.
+        resume_owns_terminal_outcome = False
 
         try:
             admitted_capacity = request.admitted_provider_capacity
@@ -231,13 +254,23 @@ class GenericOmnigentHostRealizer:
                     "awaiting_slot",
                     "Waiting for Provider Profile capacity.",
                 )
-            acquired = await self._provider_leases.acquire_all(
-                plan=plan,
-                workflow_id=workflow_id,
-                step_execution_id=step_execution_id,
-                idempotency_key=request.idempotency_key,
-                admitted_capacity=admitted_capacity,
-            )
+            provider_wait_started = time.monotonic()
+            try:
+                acquired = await self._provider_leases.acquire_all(
+                    plan=plan,
+                    workflow_id=workflow_id,
+                    step_execution_id=step_execution_id,
+                    idempotency_key=request.idempotency_key,
+                    admitted_capacity=admitted_capacity,
+                )
+            finally:
+                # The observed wait covers capacity queueing and any provider
+                # cooldown the coordinator enforced, on the failing path too.
+                control_plane_metrics.record_safely(
+                    control_plane_metrics.record_provider_profile_wait,
+                    harness_id=harness_id,
+                    wait_seconds=time.monotonic() - provider_wait_started,
+                )
             await self._notify_execution_state(
                 workflow_id,
                 "launching",
@@ -303,6 +336,11 @@ class GenericOmnigentHostRealizer:
                         plan=plan,
                         host_context=host_context,
                     )
+                    # A resume launches no host and reports its own cleanup
+                    # outcome, so this lifecycle must not add a second cleanup
+                    # outcome or a launch-readiness failure when the resumed
+                    # session raises through here.
+                    resume_owns_terminal_outcome = True
                     return await self._resume_attested_host(
                         request=request,
                         plan=plan,
@@ -318,6 +356,7 @@ class GenericOmnigentHostRealizer:
                 )
 
             self._deployment_validator(plan.payload)
+            host_started_at = time.monotonic()
             host_class, launch_policy = await self._resolve_host(plan)
             credential_handles = await self._credentials.materialize_all(
                 request=request,
@@ -450,10 +489,24 @@ class GenericOmnigentHostRealizer:
                     "attestationRefs": attestations,
                 },
             )
+            # An attested, ready host is the objective launch evidence; a
+            # process start or a realize() return alone is not.
+            control_plane_metrics.record_safely(
+                control_plane_metrics.record_host_latency,
+                harness_id=harness_id,
+                latency_seconds=time.monotonic() - host_started_at,
+            )
+            control_plane_metrics.record_safely(
+                control_plane_metrics.record_migration_launch_readiness,
+                harness_id=harness_id,
+                ready=True,
+            )
+            launch_readiness_recorded = True
             binding = await self._update_binding(
                 binding, state=RuntimeBindingState.session_creating
             )
             sink = RuntimeBindingSessionAuthoritySink(self._runtime_bindings, binding)
+            first_turn_started = time.monotonic()
             try:
                 result = await self._drive_session(
                     request=self._bind_exact_host(request, plan, host_context, binding),
@@ -462,6 +515,14 @@ class GenericOmnigentHostRealizer:
                 )
             finally:
                 binding = sink.binding
+                # This lifecycle creates the canonical session, so the driven
+                # turn is its first turn. A resumed host reports its own turns
+                # through the canonical turn boundary instead.
+                control_plane_metrics.record_safely(
+                    control_plane_metrics.record_first_turn_latency,
+                    harness_id=harness_id,
+                    latency_seconds=time.monotonic() - first_turn_started,
+                )
             if result.failure_class is None:
                 result = await self._publish_repository(request, result)
             result = result.model_copy(
@@ -486,6 +547,15 @@ class GenericOmnigentHostRealizer:
             )
         except BaseException as exc:
             primary_error = exc
+
+        if not launch_readiness_recorded and not resume_owns_terminal_outcome:
+            # Only a launch that never reached an attested ready host is a
+            # launch-readiness failure; a session that failed afterwards is not.
+            control_plane_metrics.record_safely(
+                control_plane_metrics.record_migration_launch_readiness,
+                harness_id=harness_id,
+                ready=False if primary_error is not None else None,
+            )
 
         # Publish the only surviving startup logs before another cleanup owner,
         # lease CAS, or Docker outage can prevent cleanup from reaching them.
@@ -515,6 +585,16 @@ class GenericOmnigentHostRealizer:
             except BaseException as exc:
                 cleanup_error = exc
 
+        if (binding is not None or acquired) and not resume_owns_terminal_outcome:
+            # An execution that never held a resource has no cleanup outcome to
+            # report; counting it as clean would inflate the operator view.
+            self._record_cleanup_outcome(
+                harness_id=harness_id,
+                primary_error=primary_error,
+                cleanup_error=cleanup_error,
+                binding=binding,
+            )
+
         if primary_error is not None:
             raise primary_error
         if result is None:
@@ -526,6 +606,36 @@ class GenericOmnigentHostRealizer:
         # not overwrite an objectively completed provider turn.
         _ = cleanup_error
         return result
+
+    def _record_cleanup_outcome(
+        self,
+        *,
+        harness_id: str,
+        primary_error: BaseException | None,
+        cleanup_error: BaseException | None,
+        binding: StableRuntimeBinding | None,
+    ) -> None:
+        """Report one terminal cleanup outcome for the migration view.
+
+        Both terminal lifecycles -- a fresh launch and an attested resume --
+        report through here, so a resumed execution is not silently missing from
+        the operator's cleanup outcomes.
+        """
+
+        control_plane_metrics.record_safely(
+            control_plane_metrics.record_cleanup_outcome,
+            harness_id=harness_id,
+            cleanup_outcome=_cleanup_outcome_label(
+                cancelled=isinstance(primary_error, asyncio.CancelledError),
+                released=(
+                    cleanup_error is None
+                    and (
+                        binding is None
+                        or binding.state is RuntimeBindingState.cleaned
+                    )
+                ),
+            ),
+        )
 
     async def _validate_bound_host_identity(
         self,
@@ -649,10 +759,13 @@ class GenericOmnigentHostRealizer:
                         )
                     },
                 )
-        except BaseException as exc:
+        except (Exception, asyncio.CancelledError) as exc:
+            # Primary boundary captures failures and cancellation for outcome
+            # recording; the error is re-raised after cleanup below.
             primary_error = exc
+        cleanup_error: BaseException | None = None
         try:
-            await self._cleanup(
+            current, _host_lease = await self._cleanup(
                 request=request,
                 binding=current,
                 host_lease=host_lease,
@@ -661,10 +774,16 @@ class GenericOmnigentHostRealizer:
                 credential_handles=credential_handles,
                 acquired=acquired,
             )
-        except BaseException:
+        except (Exception, asyncio.CancelledError) as exc:
             # Cleanup authority remains durable for janitor retry. Preserve the
             # primary provider boundary result when one exists.
-            pass
+            cleanup_error = exc
+        self._record_cleanup_outcome(
+            harness_id=plan.payload.harnessId,
+            primary_error=primary_error,
+            cleanup_error=cleanup_error,
+            binding=current,
+        )
         if primary_error is not None:
             raise primary_error
         if result is None:
