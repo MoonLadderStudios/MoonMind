@@ -1116,6 +1116,15 @@ describe("MoonLadderStudios/MoonMind#3451 Omnigent readiness", () => {
     fireEvent.change(await screen.findByLabelText("Profile"), { target: { value: "oauth-1" } });
     fireEvent.change(screen.getByLabelText("Instructions"), { target: { value: "Exercise the Omnigent submit boundary." } });
 
+    {
+      const advancedToggle = screen.getByLabelText("Advanced mode") as HTMLInputElement;
+      if (advancedToggle.checked) fireEvent.click(advancedToggle);
+    }
+    expect(screen.queryByLabelText("Execution target")).toBeNull();
+    {
+      const advancedToggle = screen.getByLabelText("Advanced mode") as HTMLInputElement;
+      if (!advancedToggle.checked) fireEvent.click(advancedToggle);
+    }
     expect(screen.getByLabelText("Execution target").getAttribute("name")).toBe("omnigentExecutionTargetRef");
     expect(screen.getByLabelText("Execution target").closest(".grid-2")).toBeTruthy();
     fireEvent.click(screen.getByRole("button", { name: "Start Workflow" }));
@@ -1242,6 +1251,10 @@ describe("MoonLadderStudios/MoonMind#3451 Omnigent readiness", () => {
     fireEvent.change(screen.getByLabelText("Instructions"), {
       target: { value: "Read the repository through OpenCode." },
     });
+    {
+      const advancedToggle = screen.getByLabelText("Advanced mode") as HTMLInputElement;
+      if (!advancedToggle.checked) fireEvent.click(advancedToggle);
+    }
     await waitFor(() => expect(
       (screen.getByLabelText("Execution target") as HTMLSelectElement).value,
     ).toBe("omnigent-opencode-default@201"));
@@ -1435,6 +1448,10 @@ describe("MoonLadderStudios/MoonMind#3451 Omnigent readiness", () => {
     fireEvent.change(await screen.findByLabelText("Runtime"), {
       target: { value: "omnigent" },
     });
+    {
+      const advancedToggle = await screen.findByLabelText("Advanced mode") as HTMLInputElement;
+      if (!advancedToggle.checked) fireEvent.click(advancedToggle);
+    }
     await waitFor(() => {
       expect((screen.getByLabelText("Profile") as HTMLSelectElement).value)
         .toBe("oauth-1");
@@ -1660,6 +1677,10 @@ describe("MoonLadderStudios/MoonMind#3451 Omnigent readiness", () => {
     renderWorkflowStartPage(omnigentPayload());
     fireEvent.change(await screen.findByLabelText("Runtime"), { target: { value: "omnigent" } });
     fireEvent.change(await screen.findByLabelText("Profile"), { target: { value: "oauth-1" } });
+    {
+      const advancedToggle = screen.getByLabelText("Advanced mode") as HTMLInputElement;
+      if (!advancedToggle.checked) fireEvent.click(advancedToggle);
+    }
 
     const hostPolicy = await screen.findByLabelText("Host policy");
     await waitFor(() => expect((hostPolicy as HTMLSelectElement).value).toBe("on-demand-v2"));
@@ -1678,6 +1699,72 @@ describe("MoonLadderStudios/MoonMind#3451 Omnigent readiness", () => {
     const request = JSON.parse(String((createCall?.[1] as RequestInit | undefined)?.body));
     expect(request.payload.task.runtime.profileId).toBe("oauth-1");
     expect(request.payload.agentProfile).toBeUndefined();
+  });
+
+  it("clears a hidden host-policy override when Advanced mode is turned off", async () => {
+    const twoPolicyCatalog = {
+      ...readyOmnigentCatalog,
+      executionProfiles: [{
+        ref: "omnigent-codex-default",
+        displayName: "Codex default",
+        available: true,
+        launchPolicies: [
+          { ref: "on-demand-v1", displayName: "On-demand v1", hostMode: "on_demand_docker", isDefault: true },
+          { ref: "pinned-v1", displayName: "Pinned v1", hostMode: "on_demand_docker", isDefault: false },
+        ],
+        gateReasons: [],
+      }],
+    } satisfies components["schemas"]["OmnigentCodexCatalogReadiness"];
+    fetchSpy.mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url === "/api/omnigent/codex-catalog-readiness") {
+        return Promise.resolve({ ok: true, json: async () => twoPolicyCatalog } as Response);
+      }
+      if (url.startsWith("/api/v1/provider-profiles")) {
+        return Promise.resolve({ ok: true, json: async () => [{ profile_id: "oauth-1", account_label: "Codex OAuth", provider_id: "openai" }] } as Response);
+      }
+      if (url === "/api/omnigent/agent-profiles") {
+        return Promise.resolve({ ok: true, json: async () => readyAgentProfiles } as Response);
+      }
+      if (url === "/api/executions" && init?.method === "POST") {
+        return Promise.resolve({ ok: true, json: async () => ({ workflowId: "mm:omnigent-cleared-policy" }) } as Response);
+      }
+      if (url.startsWith("/api/github/branches")) {
+        return Promise.resolve(defaultBranchOptionsResponse());
+      }
+      return Promise.resolve({ ok: true, json: async () => ({ items: [] }) } as Response);
+    });
+
+    renderWorkflowStartPage(omnigentPayload());
+    fireEvent.change(await screen.findByLabelText("Runtime"), { target: { value: "omnigent" } });
+    fireEvent.change(await screen.findByLabelText("Profile"), { target: { value: "oauth-1" } });
+    {
+      const advancedToggle = screen.getByLabelText("Advanced mode") as HTMLInputElement;
+      if (!advancedToggle.checked) fireEvent.click(advancedToggle);
+    }
+
+    const hostPolicy = await screen.findByLabelText("Host policy");
+    fireEvent.change(hostPolicy, { target: { value: "pinned-v1" } });
+    expect((hostPolicy as HTMLSelectElement).value).toBe("pinned-v1");
+
+    {
+      const advancedToggle = screen.getByLabelText("Advanced mode") as HTMLInputElement;
+      fireEvent.click(advancedToggle);
+    }
+    expect(screen.queryByLabelText("Host policy")).toBeNull();
+    expect(screen.queryByLabelText("Execution target")).toBeNull();
+
+    fireEvent.change(screen.getByLabelText("Instructions"), {
+      target: { value: "Submit without a hidden host override." },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Start Workflow" }));
+
+    await waitFor(() => expect(navigateTo).toHaveBeenCalledWith("/workflows/mm%3Aomnigent-cleared-policy?source=temporal"));
+    const createCall = fetchSpy.mock.calls.find(([url, options]) =>
+      String(url) === "/api/executions" && (options as RequestInit | undefined)?.method === "POST",
+    );
+    const request = JSON.parse(String((createCall?.[1] as RequestInit | undefined)?.body));
+    expect(request.payload.omnigent).toBeUndefined();
   });
 
   it("keeps a historical profile version compatible for an Omnigent rerun", async () => {
@@ -1895,6 +1982,10 @@ describe("MoonLadderStudios/MoonMind#3451 Omnigent readiness", () => {
     const profileSelect = await screen.findByLabelText("Profile");
     await waitFor(() => expect((profileSelect as HTMLSelectElement).value).toBe("codex-oauth"));
     expect(within(profileSelect).queryByRole("option", { name: /Anthropic subscription/ })).toBeTruthy();
+    {
+      const advancedToggle = screen.getByLabelText("Advanced mode") as HTMLInputElement;
+      if (!advancedToggle.checked) fireEvent.click(advancedToggle);
+    }
 
     fireEvent.change(screen.getByLabelText("Execution target"), {
       target: { value: "omnigent-claude@1" },
@@ -22038,7 +22129,7 @@ describe("Task Create runtime switch layout stability", () => {
     expect(screen.getByRole("option", { name: /Codex Default/ })).toBeTruthy();
     expect(fetchSpy.mock.calls.filter(([url]) => String(url).startsWith("/api/v1/provider-profiles"))).toHaveLength(requests);
     expect(screen.queryByLabelText("Agent profile")).toBeNull();
-    expect(screen.getByLabelText("Runtime").closest("details")?.open).toBe(false);
+    expect(screen.getByLabelText("Runtime").closest("details")).toBeNull();
   });
 
   it("submits the native runtime of the selected Profile when switching from Codex to Claude", async () => {
