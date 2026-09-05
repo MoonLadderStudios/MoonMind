@@ -32,6 +32,11 @@ LLM_TASK_QUEUE = "mm.activity.llm"
 SANDBOX_TASK_QUEUE = "mm.activity.sandbox"
 INTEGRATIONS_TASK_QUEUE = "mm.activity.integrations"
 AGENT_RUNTIME_TASK_QUEUE = "mm.activity.agent_runtime"
+#: MoonLadderStudios/MoonMind#3880 requirement 6: the agent-runtime fleet's
+#: short control, liveness and cleanup lane. The same worker process polls it
+#: alongside the long execution queue, so it carries an independent activity
+#: budget without adding a service per queue.
+AGENT_RUNTIME_CONTROL_TASK_QUEUE = "mm.activity.agent_runtime.control"
 DEPLOYMENT_TASK_QUEUE = "mm.activity.deployment"
 
 
@@ -331,6 +336,19 @@ class TemporalActivityCatalog:
                     f"Activity '{activity.activity_type}' routes to queue '{activity.task_queue}' "
                     f"outside fleet '{activity.fleet}'"
                 )
+
+
+#: MoonLadderStudios/MoonMind#3880 requirement 6: Omnigent session activities
+#: that must progress independently of the long execution lane. These are the
+#: bounded control, liveness and cleanup steps — never turn execution itself.
+_AGENT_RUNTIME_CONTROL_LANE_ACTIVITIES = frozenset(
+    {
+        "omnigent.heartbeat_host_lease",
+        "omnigent.stop_provider_session",
+        "omnigent.stop_host",
+        "omnigent.release_leases",
+    }
+)
 
 
 def build_default_activity_catalog(
@@ -1050,12 +1068,21 @@ def build_default_activity_catalog(
             timeouts=TemporalActivityTimeouts(30, 60),
             retries=_activity_retries(max_attempts=3, max_interval_seconds=10),
         ),
+        # MoonLadderStudios/MoonMind#3880 requirement 6: liveness and cleanup
+        # must keep progressing while the execution lane is saturated. The
+        # agent-runtime fleet already polls the isolated control queue from the
+        # same worker process, so these route there and get their own activity
+        # budget without adding a service per queue (reconciles with #3937).
         *(
             TemporalActivityDefinition(
                 activity_type=activity_type,
                 family="integration",
                 capability_class="agent_runtime",
-                task_queue=cfg.activity_agent_runtime_task_queue,
+                task_queue=(
+                    agent_runtime_control_task_queue
+                    if activity_type in _AGENT_RUNTIME_CONTROL_LANE_ACTIVITIES
+                    else cfg.activity_agent_runtime_task_queue
+                ),
                 fleet=AGENT_RUNTIME_FLEET,
                 timeouts=TemporalActivityTimeouts(start_to_close, schedule_to_close),
                 retries=_activity_retries(
@@ -1096,7 +1123,8 @@ def build_default_activity_catalog(
             activity_type="integration.omnigent.oauth_host_janitor",
             family="integration",
             capability_class="agent_runtime",
-            task_queue=cfg.activity_agent_runtime_task_queue,
+            # Reclamation must not wait for the capacity it reclaims.
+            task_queue=agent_runtime_control_task_queue,
             fleet=AGENT_RUNTIME_FLEET,
             timeouts=TemporalActivityTimeouts(300, 600),
             retries=_activity_retries(max_attempts=3, max_interval_seconds=30),
@@ -1548,7 +1576,9 @@ def build_default_activity_catalog(
             activity_type="agent_runtime.cancel",
             family="agent_runtime",
             capability_class="agent_runtime",
-            task_queue=cfg.activity_agent_runtime_task_queue,
+            # Cancellation that queues behind saturated long executions is not
+            # cancellation (MoonLadderStudios/MoonMind#3880 requirement 6).
+            task_queue=agent_runtime_control_task_queue,
             fleet=AGENT_RUNTIME_FLEET,
             timeouts=TemporalActivityTimeouts(60, 120),
             retries=_activity_retries(max_attempts=2, max_interval_seconds=60),

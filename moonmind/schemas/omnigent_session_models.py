@@ -296,6 +296,23 @@ class OmnigentSessionAdmissionRequest(_OmnigentSessionModel):
         return _require_compact_identifier(value, field_name=info.field_name)
 
 
+class OmnigentAdmittedCapacityProfile(_OmnigentSessionModel):
+    """One Provider Profile the AgentRun workflow admits capacity for."""
+
+    provider_profile_ref: str = Field(
+        alias="providerProfileRef", min_length=1, max_length=128
+    )
+    provider_runtime_id: str = Field(
+        alias="providerRuntimeId", min_length=1, max_length=64
+    )
+    capacity_scope_ref: str | None = Field(
+        None, alias="capacityScopeRef", max_length=255
+    )
+    credential_generation: int | None = Field(
+        None, alias="credentialGeneration", ge=0
+    )
+
+
 class OmnigentSessionAdmissionDecision(_OmnigentSessionModel):
     """Frozen replay authority for one new-session admission decision."""
 
@@ -333,6 +350,20 @@ class OmnigentSessionAdmissionDecision(_OmnigentSessionModel):
     )
     capacity_scope_ref: str | None = Field(
         None, alias="capacityScopeRef", max_length=255
+    )
+    #: MoonLadderStudios/MoonMind#3880: every Provider Profile the plan selected,
+    #: in deterministic order, each with the credential generation observed at
+    #: admission. The workflow binds these to its capacity ticket so the
+    #: execution Activity can inspect the exact admitted identity instead of
+    #: acquiring one. Retained histories recorded before this field carry the
+    #: single flat authority above.
+    capacity_profiles: tuple[OmnigentAdmittedCapacityProfile, ...] = Field(
+        (), alias="capacityProfiles", max_length=16
+    )
+    #: The plan's host class, so pre-Activity host admission and the allocation
+    #: that follows resolve the same durable host-lease reservation.
+    host_class_ref: str | None = Field(
+        None, alias="hostClassRef", max_length=255
     )
     #: Who acquires Provider Profile capacity for this plan. ``workflow`` is the
     #: pre-Activity path and requires the identities above. ``activity`` is the

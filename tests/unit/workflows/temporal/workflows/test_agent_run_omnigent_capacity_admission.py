@@ -1,13 +1,20 @@
 """Provider and host capacity are admitted before the long execution Activity.
 
-Source issue: MoonLadderStudios/MoonMind#3878 (AC4, AC6, AC7, AC10, AC12,
-invariants 6, 7, 10, 12).
+Source issues: MoonLadderStudios/MoonMind#3878 (AC4, AC6, AC7, AC10, AC12,
+invariants 6, 7, 10, 12) and MoonLadderStudios/MoonMind#3880 (remaining
+implementation 1, 3-5; AC1, AC3-AC5).
 
 The behaviour under test is the target flow's ordering: request Provider
 Profile capacity, wait durably when unavailable, reserve provisional
 generic-host capacity, and only then start ``integration.omnigent.execute``.
 The wait must be workflow state — a timer and a signal — never an Activity that
 holds an execution slot open.
+
+The ticket that crosses into the Activity is the second half of the contract.
+It must bind the committed plan, this run's step and request identity, and the
+credential generation admitted against, and the manager must record that same
+fence — otherwise the Activity has nothing to inspect and would be back to
+acquiring capacity inside the execution slot.
 """
 
 from __future__ import annotations
@@ -20,7 +27,14 @@ from typing import Any
 import pytest
 from temporalio.exceptions import ApplicationError
 
-from moonmind.schemas.agent_runtime_models import AgentExecutionRequest
+from moonmind.schemas.agent_runtime_models import (
+    ADMITTED_PROVIDER_CAPACITY_SCHEMA_V2,
+    AgentExecutionRequest,
+    AgentRunResult,
+)
+from moonmind.schemas.omnigent_session_models import (
+    OmnigentSessionAdmissionDecision,
+)
 from moonmind.workflows.temporal.workflows import agent_run as agent_run_module
 from moonmind.workflows.temporal.workflows.agent_run import MoonMindAgentRun
 
@@ -82,7 +96,10 @@ def _capture_release_signals(
     )
 
 
-def _omnigent_request() -> AgentExecutionRequest:
+PLAN_REF = "omnigent-execution-plan:sha256:" + "1" * 64
+
+
+def _omnigent_request(**parameters: Any) -> AgentExecutionRequest:
     return AgentExecutionRequest(
         agentKind="managed",
         agentId="omnigent",
@@ -90,7 +107,11 @@ def _omnigent_request() -> AgentExecutionRequest:
         correlationId="corr-1",
         idempotencyKey="idem-1",
         instructionRef="artifact:instructions",
-        parameters={"publishMode": "none"},
+        parameters={
+            "publishMode": "none",
+            "executionPlanRef": PLAN_REF,
+            **parameters,
+        },
         workspaceSpec={},
     )
 
@@ -100,11 +121,44 @@ def _admission(
     profile_ref: str | None = "opencode-zen-free",
     runtime_id: str | None = "opencode",
     capacity_scope_ref: str | None = "opencode-zen:contributor-free",
-) -> SimpleNamespace:
-    return SimpleNamespace(
-        provider_profile_ref=profile_ref,
-        provider_runtime_id=runtime_id,
-        capacity_scope_ref=capacity_scope_ref,
+    credential_generation: int | None = 7,
+    extra_profiles: tuple[tuple[str, str], ...] = (),
+    host_class_ref: str | None = "omnigent-opencode@1",
+) -> Any:
+    """The frozen admission decision, in the production model's own shape."""
+
+    profiles = []
+    if profile_ref and runtime_id:
+        profiles.append(
+            {
+                "providerProfileRef": profile_ref,
+                "providerRuntimeId": runtime_id,
+                "capacityScopeRef": capacity_scope_ref,
+                "credentialGeneration": credential_generation,
+            }
+        )
+    profiles.extend(
+        {
+            "providerProfileRef": ref,
+            "providerRuntimeId": runtime,
+            "capacityScopeRef": None,
+            "credentialGeneration": 1,
+        }
+        for ref, runtime in extra_profiles
+    )
+    return OmnigentSessionAdmissionDecision.model_validate(
+        {
+            "admitted": True,
+            "reasonCode": "enabled",
+            "admissionMode": "enabled",
+            "executionRealizerRef": "generic-omnigent-host@1",
+            "providerProfileRef": profile_ref,
+            "providerRuntimeId": runtime_id,
+            "capacityScopeRef": capacity_scope_ref,
+            "capacityProfiles": profiles,
+            "hostClassRef": host_class_ref,
+            "capacityAcquisitionOwner": "workflow",
+        }
     )
 
 
@@ -169,7 +223,7 @@ class _RecordingRun(MoonMindAgentRun):
 async def test_admission_returns_request_carrying_workflow_owned_capacity(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Invariant 6: the workflow becomes the lease owner before the Activity."""
+    """Invariant 6 / #3880 requirement 1: the ticket binds the whole authority."""
 
     _configure_workflow_runtime(monkeypatch)
     run = _RecordingRun()
@@ -180,10 +234,142 @@ async def test_admission_returns_request_carrying_workflow_owned_capacity(
 
     capacity = admitted.admitted_provider_capacity
     assert capacity is not None
-    assert capacity.provider_profile_ref == "opencode-zen-free"
-    assert capacity.provider_runtime_id == "opencode"
+    assert capacity.schema_version == ADMITTED_PROVIDER_CAPACITY_SCHEMA_V2
     assert capacity.lease_owner_id == "agent-run-1"
-    assert capacity.capacity_scope_ref == "opencode-zen:contributor-free"
+    assert capacity.profile_refs == ("opencode-zen-free",)
+    assert capacity.profiles[0].provider_runtime_id == "opencode"
+    assert capacity.profiles[0].capacity_scope_ref == "opencode-zen:contributor-free"
+    assert capacity.profiles[0].credential_generation == 7
+    assert capacity.execution_plan_ref == PLAN_REF
+    assert capacity.agent_run_workflow_id == "agent-run-1"
+    assert capacity.agent_run_run_id == "run-1"
+    assert capacity.step_execution_id == "idem-1"
+    assert capacity.idempotency_key == "idem-1"
+    assert capacity.admission_epoch == 1
+    # The ticket carries identity only: no secret, credential or host detail.
+    payload = capacity.model_dump(mode="json", by_alias=True)
+    assert "secret" not in str(payload).lower()
+
+
+@pytest.mark.asyncio
+async def test_the_manager_records_the_same_fence_the_activity_inspects(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """#3880 requirement 2: without a recorded fence there is nothing to inspect."""
+
+    _configure_workflow_runtime(monkeypatch)
+    run = _RecordingRun()
+
+    await run._admit_omnigent_capacity_before_execution(
+        request=_omnigent_request(), admission=_admission(), parent_info=None
+    )
+
+    request_slot = next(
+        payload for name, payload in run.signals if name == "request_slot"
+    )
+    assert request_slot["lease_metadata"] == {
+        "stepExecutionId": "idem-1",
+        "idempotencyKey": "idem-1",
+        "executionPlanRef": PLAN_REF,
+        "credentialGeneration": 7,
+    }
+
+
+@pytest.mark.asyncio
+async def test_a_plan_without_its_committed_plan_ref_fails_closed(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """An unbound ticket could be replayed against another plan."""
+
+    _configure_workflow_runtime(monkeypatch)
+    run = _RecordingRun()
+    request = _omnigent_request()
+    request = request.model_copy(update={"parameters": {"publishMode": "none"}})
+
+    with pytest.raises(ApplicationError) as exc_info:
+        await run._admit_omnigent_capacity_before_execution(
+            request=request, admission=_admission(), parent_info=None
+        )
+
+    assert exc_info.value.type == "ProviderProfileCapacityAuthorityMissing"
+    assert run.signals == []
+
+
+@pytest.mark.asyncio
+async def test_a_multi_profile_plan_is_rejected_before_any_capacity_is_taken(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """#3880 requirement 4 / AC4: rejected explicitly, not routed to a side path.
+
+    The ProviderProfileManager ledger holds at most one lease per requester
+    workflow, so a workflow-owned all-required admission across several
+    profiles cannot be expressed without a second capacity ledger. Saying so
+    before execution is the supported behaviour; silently falling back to
+    Activity-side queueing is not.
+    """
+
+    _configure_workflow_runtime(monkeypatch)
+    run = _RecordingRun()
+
+    with pytest.raises(ApplicationError) as exc_info:
+        await run._admit_omnigent_capacity_before_execution(
+            request=_omnigent_request(),
+            admission=_admission(
+                extra_profiles=(("second-profile", "opencode"),)
+            ),
+            parent_info=None,
+        )
+
+    assert exc_info.value.type == "MultiProfileCapacityAdmissionUnsupported"
+    assert exc_info.value.non_retryable is True
+    assert run.signals == []
+    assert run.activity_calls == []
+
+
+@pytest.mark.asyncio
+async def test_a_history_recorded_without_capacity_profiles_still_admits(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Retained histories carry the flat #3878 authority and must keep working."""
+
+    _configure_workflow_runtime(monkeypatch)
+    run = _RecordingRun()
+    admission = SimpleNamespace(
+        provider_profile_ref="opencode-zen-free",
+        provider_runtime_id="opencode",
+        capacity_scope_ref="opencode-zen:contributor-free",
+    )
+
+    admitted = await run._admit_omnigent_capacity_before_execution(
+        request=_omnigent_request(), admission=admission, parent_info=None
+    )
+
+    capacity = admitted.admitted_provider_capacity
+    assert capacity.profile_refs == ("opencode-zen-free",)
+    assert capacity.profiles[0].credential_generation is None
+
+
+@pytest.mark.asyncio
+async def test_host_admission_names_the_reservation_not_a_bare_precheck(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """#3880 requirement 5: pre-admission and allocation resolve one host lease."""
+
+    _configure_workflow_runtime(monkeypatch)
+    run = _RecordingRun()
+
+    await run._admit_omnigent_capacity_before_execution(
+        request=_omnigent_request(), admission=_admission(), parent_info=None
+    )
+
+    _, payload = next(
+        item
+        for item in run.activity_calls
+        if item[0] == "omnigent.admit_generic_host_capacity"
+    )
+    assert payload["executionPlanRef"] == PLAN_REF
+    assert payload["idempotencyKey"] == "idem-1"
+    assert payload["hostClassRef"] == "omnigent-opencode@1"
 
 
 @pytest.mark.asyncio
@@ -481,3 +667,315 @@ async def test_a_cancelled_workflow_defers_release_to_manager_verification(
     # No release was signalled; the manager reclaims the lease when this
     # workflow ends, which is never before the Activity stops using its host.
     assert [name for name, _ in run.signals if name == "release_slot"] == []
+
+
+class _ExecutingRun(_RecordingRun):
+    """A run whose execution Activity returns a scripted sequence of results."""
+
+    def __init__(self, results: list[Any]) -> None:
+        super().__init__()
+        self.results = list(results)
+        self.executions: list[AgentExecutionRequest] = []
+        self.capacity_states: list[str] = []
+
+    async def _execute_routed_activity(self, name, payload=None, **kwargs):
+        if name.startswith("integration.omnigent."):
+            self.executions.append(payload)
+            self.capacity_states.append(self._omnigent_capacity_state)
+            return self.results.pop(0)
+        return await super()._execute_routed_activity(name, payload, **kwargs)
+
+
+async def _run_execution(run: _ExecutingRun) -> tuple[Any, Any]:
+    return await run._execute_omnigent_with_admitted_capacity(
+        act_name="integration.omnigent.execute",
+        request=_omnigent_request(),
+        admission=_admission(),
+        parent_info=None,
+        stc_seconds=600,
+        admit_capacity_before_activity=True,
+    )
+
+
+def _capacity_failure(code: str) -> dict[str, Any]:
+    return {
+        "summary": f"failed ({code})",
+        "failureClass": "integration_error",
+        "providerErrorCode": code,
+    }
+
+
+def test_only_recoverable_capacity_codes_return_a_run_to_waiting() -> None:
+    """AC5: a lost slot is recoverable; a real failure must stay terminal."""
+
+    for code in (
+        "OMNIGENT_HOST_CAPACITY_UNAVAILABLE",
+        "OMNIGENT_PROVIDER_LEASE_UNAVAILABLE",
+        "OMNIGENT_CREDENTIAL_GENERATION_FENCED",
+    ):
+        assert (
+            MoonMindAgentRun._omnigent_capacity_requeue_reason(
+                _capacity_failure(code)
+            )
+            is not None
+        )
+    for code in (
+        "OMNIGENT_HOST_LAUNCH_FAILED",
+        "OMNIGENT_PROVIDER_PROFILE_INCOMPATIBLE",
+        "OMNIGENT_MODEL_UNAVAILABLE",
+        "",
+    ):
+        assert (
+            MoonMindAgentRun._omnigent_capacity_requeue_reason(
+                _capacity_failure(code)
+            )
+            is None
+        )
+    assert (
+        MoonMindAgentRun._omnigent_capacity_requeue_reason(
+            AgentRunResult(
+                summary="lost the slot",
+                failureClass="integration_error",
+                providerErrorCode="OMNIGENT_HOST_CAPACITY_UNAVAILABLE",
+            )
+        )
+        is not None
+    )
+    assert MoonMindAgentRun._omnigent_capacity_requeue_reason({}) is None
+
+
+@pytest.mark.asyncio
+async def test_a_host_slot_lost_after_admission_requeues_instead_of_failing(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """AC5: durable requeue, no leaked provider capacity, no duplicate host."""
+
+    _configure_workflow_runtime(monkeypatch)
+    run = _ExecutingRun(
+        [
+            _capacity_failure("OMNIGENT_HOST_CAPACITY_UNAVAILABLE"),
+            {"summary": "done"},
+        ]
+    )
+    _capture_release_signals(monkeypatch, run)
+
+    result, admitted_at = await _run_execution(run)
+
+    assert result == {"summary": "done"}
+    assert admitted_at is not None
+    assert len(run.executions) == 2
+    # The lost attempt released its provider capacity before requeueing, and the
+    # retry queued for a fresh grant under the same owner.
+    releases = [name for name, _ in run.signals if name == "release_slot"]
+    assert len(releases) == 2
+    requests = [payload for name, payload in run.signals if name == "request_slot"]
+    assert len(requests) == 2
+    assert {payload["execution_profile_ref"] for payload in requests} == {
+        "opencode-zen-free"
+    }
+    # Both attempts name the same stable host reservation, so the retry reuses
+    # the run's host lease rather than racing for a second one.
+    host_payloads = [
+        payload
+        for name, payload in run.activity_calls
+        if name == "omnigent.admit_generic_host_capacity"
+    ]
+    assert len({payload["idempotencyKey"] for payload in host_payloads}) == 1
+    waiting_reasons = [
+        reason for state, reason in run.parent_states if state == "awaiting_slot"
+    ]
+    assert len(waiting_reasons) == 1
+    assert "generic host capacity was lost after admission" in waiting_reasons[0]
+
+
+@pytest.mark.asyncio
+async def test_a_re_admission_is_a_fresh_ticket_not_the_stale_one(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Requirement 2: re-admission returns to the workflow owner, epoch bumped."""
+
+    _configure_workflow_runtime(monkeypatch)
+    run = _ExecutingRun(
+        [
+            _capacity_failure("OMNIGENT_CREDENTIAL_GENERATION_FENCED"),
+            {"summary": "done"},
+        ]
+    )
+    _capture_release_signals(monkeypatch, run)
+
+    await _run_execution(run)
+
+    epochs = [
+        item.admitted_provider_capacity.admission_epoch for item in run.executions
+    ]
+    assert epochs == [1, 2]
+
+
+@pytest.mark.asyncio
+async def test_requeueing_is_bounded(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A permanently oversubscribed machine reports; it does not loop forever."""
+
+    _configure_workflow_runtime(monkeypatch)
+    failure = _capacity_failure("OMNIGENT_HOST_CAPACITY_UNAVAILABLE")
+    run = _ExecutingRun([failure] * 12)
+    _capture_release_signals(monkeypatch, run)
+
+    result, _ = await _run_execution(run)
+
+    assert result == failure
+    assert len(run.executions) == (
+        agent_run_module._MAX_OMNIGENT_CAPACITY_REQUEUE_ATTEMPTS + 1
+    )
+
+
+@pytest.mark.asyncio
+async def test_capacity_is_marked_consumed_while_the_activity_may_hold_a_host(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Requirement 3: queued, granted-unconsumed and consumed are distinguished."""
+
+    _configure_workflow_runtime(monkeypatch)
+    run = _ExecutingRun([{"summary": "done"}])
+    _capture_release_signals(monkeypatch, run)
+
+    assert run._omnigent_capacity_state == "none"
+    await _run_execution(run)
+
+    assert run.capacity_states == ["consumed"]
+    assert run._omnigent_capacity_state == "released"
+
+
+@pytest.mark.asyncio
+async def test_release_is_refused_while_an_activity_attempt_may_hold_a_host(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Releasing a consumed lease would hand a live host to the next run."""
+
+    _configure_workflow_runtime(monkeypatch)
+    run = _RecordingRun()
+    _capture_release_signals(monkeypatch, run)
+    await run._admit_omnigent_capacity_before_execution(
+        request=_omnigent_request(), admission=_admission(), parent_info=None
+    )
+    run._omnigent_capacity_state = "consumed"
+
+    await run._release_omnigent_provider_capacity(request=_omnigent_request())
+
+    assert [name for name, _ in run.signals if name == "release_slot"] == []
+    assert run._omnigent_capacity_profile_id == "opencode-zen-free"
+
+
+class _TimeoutRecordingRun(_ExecutingRun):
+    """Records the timeouts the execution Activity is actually scheduled with."""
+
+    def __init__(self, results: list[Any]) -> None:
+        super().__init__(results)
+        self.timeouts: list[dict[str, Any]] = []
+
+    async def _execute_routed_activity(self, name, payload=None, **kwargs):
+        if name.startswith("integration.omnigent."):
+            self.timeouts.append(kwargs)
+        return await super()._execute_routed_activity(name, payload, **kwargs)
+
+
+@pytest.mark.asyncio
+async def test_worker_handoff_is_bounded_separately_from_the_execution_budget(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Requirement 7: queue time must not be charged to the execution window.
+
+    Temporal's StartToClose already excludes worker-queue wait, but
+    ScheduleToClose does not. Setting them equal spends the run's execution
+    budget on waiting for a worker, so a saturated fleet produces timeouts that
+    look like slow runs.
+    """
+
+    _configure_workflow_runtime(monkeypatch)
+    run = _TimeoutRecordingRun([{"summary": "done"}])
+    _capture_release_signals(monkeypatch, run)
+
+    await run._execute_omnigent_with_admitted_capacity(
+        act_name="integration.omnigent.execute",
+        request=_omnigent_request(),
+        admission=_admission(),
+        parent_info=None,
+        stc_seconds=3600,
+        admit_capacity_before_activity=True,
+    )
+
+    scheduled = run.timeouts[0]
+    assert scheduled["start_to_close_timeout"] == timedelta(seconds=3600)
+    assert scheduled["schedule_to_close_timeout"] == timedelta(
+        seconds=3600 + agent_run_module._OMNIGENT_EXECUTION_HANDOFF_SECONDS
+    )
+
+
+@pytest.mark.asyncio
+async def test_a_run_without_admitted_capacity_keeps_its_recorded_timeouts(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Retained histories must keep scheduling the shape they recorded."""
+
+    _configure_workflow_runtime(monkeypatch)
+    run = _TimeoutRecordingRun([{"summary": "done"}])
+
+    await run._execute_omnigent_with_admitted_capacity(
+        act_name="integration.omnigent.execute",
+        request=_omnigent_request(),
+        admission=_admission(),
+        parent_info=None,
+        stc_seconds=3600,
+        admit_capacity_before_activity=False,
+    )
+
+    scheduled = run.timeouts[0]
+    assert scheduled["schedule_to_close_timeout"] == timedelta(seconds=3600)
+    assert run.signals == []
+
+
+@pytest.mark.asyncio
+async def test_the_wait_the_run_is_actually_in_is_reported(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Requirement 7: provider wait, host wait and worker wait are distinct."""
+
+    _configure_workflow_runtime(monkeypatch)
+
+    async def wait_condition(_predicate, timeout=None):
+        # The provider slot is not free yet, so the durable wait times out and
+        # the workflow re-inspects the manager rather than holding a slot.
+        raise TimeoutError()
+
+    monkeypatch.setattr(
+        agent_run_module.workflow, "wait_condition", wait_condition
+    )
+    run = _ExecutingRun([{"summary": "done"}])
+    run.grant_on_signal = False
+    run.host_decisions = [
+        {
+            "admitted": False,
+            "retryAfterSeconds": 5,
+            "waitingReason": (
+                "Waiting for generic host capacity; "
+                "missing_condition=generic_host_capacity."
+            ),
+        },
+        {"admitted": True},
+    ]
+    _capture_release_signals(monkeypatch, run)
+
+    async def grant_after_first_wait(**kwargs):
+        run._assigned_profile_id = "opencode-zen-free"
+        run.slot_assigned_event.set()
+        return {}
+
+    run._manager_state_for_slot_wait = grant_after_first_wait  # type: ignore
+
+    await _run_execution(run)
+
+    reasons = [reason for _, reason in run.parent_states]
+    assert any("Waiting for provider capacity." == reason for reason in reasons)
+    assert any("generic_host_capacity" in reason for reason in reasons)
+    assert any("waiting for an execution worker" in reason for reason in reasons)

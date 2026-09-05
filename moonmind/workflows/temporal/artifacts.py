@@ -4298,6 +4298,11 @@ class TemporalArtifactActivities:
                         "stepExecutionId": row.step_execution_id,
                         "oauthSessionId": row.oauth_session_id,
                         "idempotencyKey": row.idempotency_key,
+                        # MoonLadderStudios/MoonMind#3880: the admitted-capacity
+                        # fence must survive a manager restart, so the durable
+                        # row returns it with the rest of the lease identity.
+                        "executionPlanRef": row.execution_plan_ref,
+                        "credentialGeneration": row.credential_generation,
                         "expiresAt": row.expires_at.isoformat()
                         if row.expires_at
                         else None,
@@ -4350,6 +4355,8 @@ class TemporalArtifactActivities:
                         step_execution_id=lease.get("stepExecutionId"),
                         oauth_session_id=lease.get("oauthSessionId"),
                         idempotency_key=lease.get("idempotencyKey"),
+                        execution_plan_ref=lease.get("executionPlanRef"),
+                        credential_generation=lease.get("credentialGeneration"),
                         expires_at=expires_at,
                     )
                     session.add(new_lease)

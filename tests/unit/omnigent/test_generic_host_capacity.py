@@ -348,3 +348,131 @@ async def test_a_lease_row_in_the_window_is_launch_evidence_at_any_status() -> N
         stmt for stmt in session.statements if "created_at" in stmt
     )
     assert "status" not in window_query
+
+
+# --- Pre-admission reuses the authoritative reservation (#3880 requirement 5) ---
+#
+# A precheck boolean is not a ticket. If the workflow simply told the activity
+# "I have not allocated yet", a requeue after a lost slot would be refused by
+# the very host lease this run already owns, and a race could create a second
+# host. Whether the reservation exists is therefore read from the durable
+# ledger, keyed by the run's stable runtime binding.
+
+
+class _LeaseRowSession:
+    def __init__(self, rows: dict[str, object]) -> None:
+        self.rows = rows
+        self.requested: list[str] = []
+
+    async def get(self, _model, key):
+        self.requested.append(key)
+        return self.rows.get(key)
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, *exc):
+        return False
+
+
+@pytest.mark.asyncio
+async def test_an_existing_host_reservation_is_read_from_the_ledger(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from types import SimpleNamespace
+
+    from moonmind.omnigent.host_leases import generic_host_lease_ref
+    from moonmind.omnigent.runtime_bindings import stable_binding_id
+    from moonmind.workflows.temporal.activities import (
+        omnigent_session_activities as module,
+    )
+
+    lease_ref = generic_host_lease_ref(
+        runtime_binding_id=stable_binding_id(
+            execution_plan_ref="omnigent-execution-plan:sha256:" + "1" * 64,
+            idempotency_key="idem-1",
+        ),
+        host_class_ref="omnigent-opencode@1",
+    )
+    session = _LeaseRowSession({lease_ref: SimpleNamespace(status="ready")})
+    monkeypatch.setattr(
+        "api_service.db.base.async_session_maker", lambda: session, raising=False
+    )
+
+    held = await module._run_already_holds_generic_host(
+        {
+            "executionPlanRef": "omnigent-execution-plan:sha256:" + "1" * 64,
+            "idempotencyKey": "idem-1",
+            "hostClassRef": "omnigent-opencode@1",
+            # The workflow's own view is deliberately wrong; the ledger wins.
+            "alreadyAllocated": False,
+        }
+    )
+
+    assert held is True
+    assert session.requested == [lease_ref]
+
+
+@pytest.mark.parametrize("status", ["cleaned", "failed"])
+@pytest.mark.asyncio
+async def test_a_finished_reservation_is_not_reused(
+    monkeypatch: pytest.MonkeyPatch, status: str
+) -> None:
+    """A finished lease freed its slot; reusing it would oversubscribe the host."""
+
+    from types import SimpleNamespace
+
+    from moonmind.omnigent.host_leases import generic_host_lease_ref
+    from moonmind.omnigent.runtime_bindings import stable_binding_id
+    from moonmind.workflows.temporal.activities import (
+        omnigent_session_activities as module,
+    )
+
+    plan_ref = "omnigent-execution-plan:sha256:" + "2" * 64
+    lease_ref = generic_host_lease_ref(
+        runtime_binding_id=stable_binding_id(
+            execution_plan_ref=plan_ref, idempotency_key="idem-2"
+        ),
+        host_class_ref="omnigent-opencode@1",
+    )
+    session = _LeaseRowSession({lease_ref: SimpleNamespace(status=status)})
+    monkeypatch.setattr(
+        "api_service.db.base.async_session_maker", lambda: session, raising=False
+    )
+
+    held = await module._run_already_holds_generic_host(
+        {
+            "executionPlanRef": plan_ref,
+            "idempotencyKey": "idem-2",
+            "hostClassRef": "omnigent-opencode@1",
+            "alreadyAllocated": True,
+        }
+    )
+
+    assert held is False
+
+
+@pytest.mark.asyncio
+async def test_a_caller_without_a_binding_cannot_claim_a_reservation(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Retained histories send only the flag; they get exactly what they sent."""
+
+    from moonmind.workflows.temporal.activities import (
+        omnigent_session_activities as module,
+    )
+
+    session = _LeaseRowSession({})
+    monkeypatch.setattr(
+        "api_service.db.base.async_session_maker", lambda: session, raising=False
+    )
+
+    assert (
+        await module._run_already_holds_generic_host({"alreadyAllocated": True})
+        is True
+    )
+    assert (
+        await module._run_already_holds_generic_host({"alreadyAllocated": False})
+        is False
+    )
+    assert session.requested == []
