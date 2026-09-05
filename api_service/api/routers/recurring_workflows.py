@@ -520,6 +520,8 @@ def _recurring_sort_value(
     return definition.updated_at or _MIN_AWARE_DATETIME
 
 def _map_error(exc: Exception) -> HTTPException:
+    if isinstance(exc, HTTPException):
+        return exc
     if isinstance(exc, ProviderProfileRuntimeMismatchError):
         # Provider Profiles are runtime-owned launch contracts; the shared
         # invariant raises one error contract for every authoring boundary.

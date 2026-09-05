@@ -63,6 +63,7 @@ from moonmind.omnigent.settings import (
     resolved_proxy_forward_headers,
     resolved_server_url,
 )
+from moonmind.omnigent.transport import omnigent_httpx_client
 from moonmind.schemas.agent_runtime_models import (
     AgentExecutionRequest,
     AgentRunResult,
@@ -2044,8 +2045,15 @@ async def run_omnigent_execution(
     first_message_text: str | None = None,
     defer_bridge_terminal: bool = False,
     session_authority_sink: Any | None = None,
+    transport_pool: Any | None = None,
 ) -> AgentRunResult:
-    """Execute one Omnigent session and return only terminal AgentRunResult."""
+    """Execute one Omnigent session and return only terminal AgentRunResult.
+
+    ``transport_pool`` injects the process-wide pooled ``httpx.AsyncClient``
+    (MoonLadderStudios/MoonMind#3878). When omitted, each transport block owns
+    a short-lived client exactly as before, so no caller is required to manage
+    a pool it does not have.
+    """
 
     marked_turn_timeout_seconds = _resolved_marked_turn_timeout_seconds(request)
     gate = build_omnigent_gate()
@@ -2100,7 +2108,7 @@ async def run_omnigent_execution(
         delete_after_harvest = bool(
             selection.capture.get("deleteOmnigentSessionAfterHarvest", False)
         )
-        async with httpx.AsyncClient() as httpx_client:
+        async with omnigent_httpx_client(transport_pool) as httpx_client:
             client = OmnigentHttpClient(
                 base_url=resolved_server_url(),
                 api_token=resolved_api_token(),
@@ -3331,7 +3339,7 @@ async def run_omnigent_execution(
         await _cancel_task(heartbeat_task)
         await _cancel_task(stream_task)
         if client is not None and session_id:
-            async with httpx.AsyncClient() as cleanup_httpx_client:
+            async with omnigent_httpx_client(transport_pool) as cleanup_httpx_client:
                 cleanup_client = OmnigentHttpClient(
                     base_url=resolved_server_url(),
                     api_token=resolved_api_token(),
@@ -3697,9 +3705,10 @@ async def run_omnigent_execution(
                             separators=(",", ":"),
                         ).encode()
                     ).hexdigest()
-                    # The attempt client is closed after its async-with exit;
-                    # reconcile over a fresh short-lived client instead.
-                    async with httpx.AsyncClient() as reconcile_httpx:
+                    # The attempt client is released after its async-with
+                    # exit; reconcile over the pool (or a fresh short-lived
+                    # client when no pool is injected).
+                    async with omnigent_httpx_client(transport_pool) as reconcile_httpx:
                         reconcile_client = OmnigentHttpClient(
                             base_url=resolved_server_url(),
                             api_token=resolved_api_token(),

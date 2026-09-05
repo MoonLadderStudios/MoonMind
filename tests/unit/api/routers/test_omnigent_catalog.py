@@ -441,10 +441,7 @@ async def test_generic_readiness_requires_both_feature_gates_and_real_launch_dat
     )
     assert enabled_target.compatibility_path is False
 
-    # The pinned host image refreshes its catalog from the provider at probe
-    # time, so an observation older than the configured interval no longer
-    # describes the provider's current models. Advertising a target from it
-    # would keep offering a model the provider may have removed.
+    # Expiry updates discovery, never profile inventory or launch authority.
     provider.model_catalog_evidence_json["validatedAt"] = (
         datetime.now(UTC) - timedelta(hours=9)
     ).isoformat()
@@ -452,12 +449,12 @@ async def test_generic_readiness_requires_both_feature_gates_and_real_launch_dat
         session=Session(), current_user=current_user
     )
     expired_target = expired.execution_targets[0]
-    assert expired_target.available is False
-    assert expired_target.models == []
+    assert expired_target.available is True
+    assert expired_target.models == ["opencode-go/test-model"]
     expired_codes = {reason.code for reason in expired_target.gate_reasons}
     # Connected and enrolled: this is a bounded re-validation wait, not a
     # request to reconnect a profile that is already connected.
-    assert "provider_runtime_revalidation_pending" in expired_codes
+    assert "provider_runtime_revalidation_pending" not in expired_codes
     assert "compatible_provider_profile_unavailable" not in expired_codes
 
     # ``0`` disables the interval and restores identity-only staleness.
@@ -469,7 +466,7 @@ async def test_generic_readiness_requires_both_feature_gates_and_real_launch_dat
 
 
 @pytest.mark.asyncio
-async def test_stale_host_image_evidence_reports_revalidation_instead_of_reconnect(
+async def test_catalog_identity_changes_do_not_hide_configured_profiles(
     monkeypatch,
 ):
     """A connected profile awaiting re-validation must not read as unconnected."""
@@ -598,9 +595,9 @@ async def test_stale_host_image_evidence_reports_revalidation_instead_of_reconne
         session=Session(stale_provider), current_user=current_user
     )
     stale_target = stale.execution_targets[0]
-    assert stale_target.available is False
+    assert stale_target.available is True
     codes = {reason.code for reason in stale_target.gate_reasons}
-    assert "provider_runtime_revalidation_pending" in codes
+    assert "provider_runtime_revalidation_pending" not in codes
     assert "compatible_provider_profile_unavailable" not in codes
 
     # A profile that was never runtime-validated still needs an operator action.
@@ -618,7 +615,7 @@ async def test_stale_host_image_evidence_reports_revalidation_instead_of_reconne
         session=Session(never_validated), current_user=current_user
     )
     fresh_codes = {reason.code for reason in fresh.execution_targets[0].gate_reasons}
-    assert "compatible_provider_profile_unavailable" in fresh_codes
+    assert "compatible_provider_profile_unavailable" not in fresh_codes
     assert "provider_runtime_revalidation_pending" not in fresh_codes
 
     # A credential the pinned runtime keeps rejecting needs an operator, so the
@@ -655,7 +652,7 @@ async def test_stale_host_image_evidence_reports_revalidation_instead_of_reconne
     exhausted_codes = {
         reason.code for reason in exhausted.execution_targets[0].gate_reasons
     }
-    assert "compatible_provider_profile_unavailable" in exhausted_codes
+    assert "compatible_provider_profile_unavailable" not in exhausted_codes
     assert "provider_runtime_revalidation_pending" not in exhausted_codes
 
 
@@ -1226,6 +1223,53 @@ def test_catalog_filters_profiles_not_visible_to_caller(monkeypatch):
     assert [item["profileId"] for item in body["eligibleProviderProfiles"]] == [
         "visible"
     ]
+
+
+def test_catalog_admits_the_credentialless_opencode_zen_profile(monkeypatch):
+    """MoonLadderStudios/MoonMind#3877: eligibility is capability-derived.
+
+    OpenCode's built-in Zen Contributor Free route uses the ``none@1``
+    materializer and holds no secret reference, so filtering eligibility on
+    ``credential_source == "secret_ref"`` hid the default Provider Profile from
+    every launch surface that reads this projection.
+    """
+
+    zen = _profile(
+        profile_id="opencode-zen-free",
+        account_label="OpenCode Zen Contributor Free",
+        provider_label="OpenCode Zen",
+        provider_id="opencode",
+        runtime_id="opencode",
+        credential_source=SimpleNamespace(value="none"),
+        runtime_materialization_mode=SimpleNamespace(value="composite"),
+    )
+    app = _app(monkeypatch, session=_Session([zen]))
+
+    body = TestClient(app).get("/api/omnigent/codex-catalog-readiness").json()
+
+    assert [item["profileId"] for item in body["eligibleProviderProfiles"]] == [
+        "opencode-zen-free"
+    ]
+    assert body["eligibleProviderProfiles"][0]["runtimeId"] == "opencode"
+    assert body["ineligibleProviderProfiles"] == []
+
+
+def test_catalog_still_rejects_an_unregistered_credentialless_runtime(monkeypatch):
+    """`credential_source == "none"` is not a blanket eligibility escape hatch."""
+
+    stray = _profile(
+        profile_id="claude-credentialless",
+        provider_id="anthropic",
+        runtime_id="claude_code",
+        credential_source=SimpleNamespace(value="none"),
+        runtime_materialization_mode=SimpleNamespace(value="composite"),
+    )
+    app = _app(monkeypatch, session=_Session([stray]))
+
+    body = TestClient(app).get("/api/omnigent/codex-catalog-readiness").json()
+
+    assert body["eligibleProviderProfiles"] == []
+    assert body["ineligibleProviderProfiles"] == []
 
 
 @pytest.mark.parametrize(

@@ -349,7 +349,7 @@ Trust is bound to implementation identity. A plugin name or canonical harness id
 
 ### 7.4 Freshness
 
-Catalog snapshots are immutable. New plans require a snapshot inside the configured freshness bound unless the selected policy explicitly permits a previously verified offline snapshot. Historical plans retain their original snapshot ref.
+Catalog snapshots are immutable. New plans retain the Agent Profile's pinned catalog as authority and require a current observation that attests the same endpoint, Omnigent build, and harness implementation. The current observation supplies freshness only; it never replaces the pinned authority. Historical plans retain their original snapshot ref.
 
 An endpoint outage may retain the last known catalog for diagnostics. It does not silently make stale harnesses launchable.
 
@@ -630,17 +630,49 @@ A generation mismatch after binding produces a typed fenced outcome and reconcil
 
 ### 11.5 Capacity
 
-Effective capacity is the minimum of:
+#### Four independently governed layers
+
+Operators reason about four distinct limits. They are named separately because they are owned by different parties, changed for different reasons, and surfaced separately when a run waits:
+
+| Layer | Owner | What it means | Where it is set |
+| --- | --- | --- | --- |
+| **Configured profile capacity** | Operator | The ceiling this Provider Profile may ever admit. Never lowered by runtime behavior. | `max_parallel_runs` on the Provider Profile |
+| **Effective provider capacity** | Runtime | The limit currently applied, at or below the ceiling. Lowered by adaptive rate-limit backpressure or operator policy, and restored toward the ceiling as the provider recovers. | Derived; reported as `effective_capacity` |
+| **Host capacity** | Deployment | How many on-demand generic hosts the machine may carry at once, plus a separately bounded cold-launch rate. | `MOONMIND_OMNIGENT_GENERIC_HOST_CAPACITY`, `MOONMIND_OMNIGENT_GENERIC_HOST_COLD_LAUNCH_BURST`, `MOONMIND_OMNIGENT_GENERIC_HOST_COLD_LAUNCH_WINDOW_SECONDS` |
+| **Worker capacity** | Deployment | How many Activities one worker fleet executes concurrently. | `TEMPORAL_AGENT_RUNTIME_WORKER_CONCURRENCY` |
+
+Effective concurrency is the minimum of all four:
 
 ```text
-Provider Profile account capacity
-credential materializer capacity
-host binding capacity
-launch policy capacity
-worker and container backend capacity
+min(
+  configured profile capacity,
+  effective provider capacity,
+  available generic-host capacity,
+  available Temporal execution capacity
+)
 ```
 
-All Provider Profile leases for one execution are acquired in deterministic order by Provider Profile id. They are released in reverse order after host and credential cleanup.
+A configured ceiling of `N` is not a promise of `N` concurrent runs. It is a promise that nothing above `N` is admitted. Any of the other three layers may hold the run lower, and readiness must name which one did.
+
+#### Configured versus effective
+
+Raising or lowering the configured ceiling is an operator action and is always safe while work is running: reduction stops new admission and never evicts an active workflow, and admission resumes once usage falls below the new limit. Lowering the *effective* limit is a runtime action — for example, halving admission after a provider rate-limit report — and it never edits the operator's configured value or discards queued work. Queued work simply waits for one of the remaining admitted slots.
+
+#### Waiting
+
+Work above the effective limit waits as durable workflow state with an explicit reason. It does not occupy a long-running execution Activity slot, silently fall back to another runtime, profile, model, or Host Class, or launch a host the machine cannot carry.
+
+#### Lease purposes
+
+Not every lease consumes an execution slot:
+
+- **Shared execution** leases count against the effective provider capacity.
+- **Single-flight validation** leases apply to credentialless profiles, which own no shared mutable authentication state. One holder per exact evidence identity is sufficient, so these consume no execution slot and impose no capacity-one requirement.
+- **Exclusive credential maintenance** leases block new consumers and wait for every existing credential consumer to drain.
+
+Mutable OAuth-home profiles remain capacity one. Their validation is exclusive maintenance, not single-flight, because a probe and a run would share the same authentication home.
+
+All Provider Profile leases for one execution are acquired in deterministic order by Provider Profile id. They are released in reverse order after host and credential cleanup, and provider capacity is released last.
 
 A provider cooldown applies across every harness using the same Provider Profile. Switching harnesses does not evade quota or cooldown authority.
 

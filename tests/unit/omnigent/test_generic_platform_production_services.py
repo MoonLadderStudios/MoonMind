@@ -64,7 +64,7 @@ from moonmind.omnigent.host_services.github_credentials import (
     OmnigentGithubCredentialService,
     github_repository_from_request,
 )
-from moonmind.omnigent.host_ports import HostLaunchSpec
+from moonmind.omnigent.host_ports import HostLaunchSpec, expected_omnigent_host_id
 from moonmind.omnigent.host_services.launcher import DockerOmnigentHostLauncher
 from moonmind.omnigent.host_services.mounted_tools import (
     OmnigentMountedToolService,
@@ -313,92 +313,19 @@ async def test_opencode_exact_host_model_options_fail_closed_without_diagnostics
     assert "sensitive context" not in str(exc.value)
 
 
-def _evidence_provider(*, validated_at: datetime | None = None) -> SimpleNamespace:
-    image_ref = "ghcr.io/moonmind/opencode@sha256:" + "a" * 64
-    return SimpleNamespace(
-        credential_generation=4,
-        model_catalog_evidence_json={
-            "credentialGeneration": 4,
-            "imageRef": image_ref,
-            "models": [{"qualifiedId": "opencode-go/model"}],
-            "validatedAt": (validated_at or datetime.now(UTC)).isoformat(),
-        },
+@pytest.mark.parametrize("evidence", [None, {}, {"validatedAt": "2000-01-01", "imageRef": "old"}])
+def test_profile_model_intent_does_not_depend_on_discovery(evidence):
+    service = object.__new__(OmnigentExecutionPlanningService)
+    service._deployment_default_model = ""
+    provider = SimpleNamespace(
+        runtime_id="opencode", provider_id="opencode", default_model="opencode/selected",
+        default_effort="high", model_tiers=None, default_model_tier=1,
+        model_catalog_evidence_json=evidence,
     )
-
-
-def test_planning_model_evidence_is_bound_to_generation_and_host_image() -> None:
-    image_ref = "ghcr.io/moonmind/opencode@sha256:" + "a" * 64
-    provider = _evidence_provider()
-    OmnigentExecutionPlanningService._verify_model_evidence(
-        provider,
-        "opencode-go/model",
-        expected_image_ref=image_ref,
-    )
-
-    provider.model_catalog_evidence_json["credentialGeneration"] = 3
-    with pytest.raises(HarnessPlatformError) as stale:
-        OmnigentExecutionPlanningService._verify_model_evidence(
-            provider,
-            "opencode-go/model",
-            expected_image_ref=image_ref,
-        )
-    assert stale.value.code == HarnessPlatformFailure.OMNIGENT_MODEL_UNAVAILABLE
-
-    provider.model_catalog_evidence_json["credentialGeneration"] = 4
-    with pytest.raises(HarnessPlatformError) as wrong_image:
-        OmnigentExecutionPlanningService._verify_model_evidence(
-            provider,
-            "opencode-go/model",
-            expected_image_ref="ghcr.io/moonmind/opencode@sha256:" + "b" * 64,
-        )
-    assert wrong_image.value.code == HarnessPlatformFailure.OMNIGENT_MODEL_UNAVAILABLE
-
-
-def test_planning_rejects_a_model_catalog_older_than_the_refresh_interval(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """Identity alone would launch from the first catalog ever observed.
-
-    A healthy deployment never changes its credential generation or host image
-    digest on its own, so pre-session planning has to enforce the same
-    observation interval the bootstrap reconciler refreshes on. Otherwise it
-    keeps admitting -- and launching -- a model the provider may have removed.
-    """
-
-    # Exercise the documented default: the interval applies with no env value.
-    monkeypatch.delenv("OPENCODE_MODEL_CATALOG_MAX_AGE_HOURS", raising=False)
-    image_ref = "ghcr.io/moonmind/opencode@sha256:" + "a" * 64
-    expired = _evidence_provider(validated_at=datetime.now(UTC) - timedelta(hours=9))
-
-    with pytest.raises(HarnessPlatformError) as stale:
-        OmnigentExecutionPlanningService._verify_model_evidence(
-            expired,
-            "opencode-go/model",
-            expected_image_ref=image_ref,
-        )
-    assert stale.value.code == HarnessPlatformFailure.OMNIGENT_MODEL_UNAVAILABLE
-    assert "refresh interval" in str(stale.value)
-
-    # The interval is deployment-configurable, and ``0`` restores identity-only
-    # staleness at this boundary exactly as it does at the reconciler.
-    monkeypatch.setenv("OPENCODE_MODEL_CATALOG_MAX_AGE_HOURS", "0")
-    OmnigentExecutionPlanningService._verify_model_evidence(
-        expired,
-        "opencode-go/model",
-        expected_image_ref=image_ref,
-    )
-
-    # An observation that cannot say when it was taken is never admitted.
-    monkeypatch.delenv("OPENCODE_MODEL_CATALOG_MAX_AGE_HOURS")
-    undated = _evidence_provider()
-    undated.model_catalog_evidence_json.pop("validatedAt")
-    with pytest.raises(HarnessPlatformError) as undatable:
-        OmnigentExecutionPlanningService._verify_model_evidence(
-            undated,
-            "opencode-go/model",
-            expected_image_ref=image_ref,
-        )
-    assert undatable.value.code == HarnessPlatformFailure.OMNIGENT_MODEL_UNAVAILABLE
+    request = _request()
+    profile = SimpleNamespace(model={"qualifiedId": "opencode-go/different", "effort": "low"})
+    model, effort, route = service._resolve_model(request, profile, provider)
+    assert (model, effort, route) == ("opencode/selected", "high", "opencode")
 
 
 class _Session:
@@ -990,6 +917,15 @@ async def test_github_credential_projection_transports_secret_only_on_stdin(
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
+    "expected_host_id",
+    [
+        None,
+        expected_omnigent_host_id("host-lease:one", 1),
+        "d4ad2354-2db9-5413-9d35-92eff5f026bb",
+    ],
+    ids=["legacy-spec", "canonical-spec", "persisted-dashed-spec"],
+)
+@pytest.mark.parametrize(
     ("host_api_token", "expected_secret_payloads"),
     [
         (
@@ -1002,6 +938,7 @@ async def test_github_credential_projection_transports_secret_only_on_stdin(
 async def test_host_volume_initializers_use_setup_authority(
     host_api_token: str,
     expected_secret_payloads: list[bytes],
+    expected_host_id: str | None,
 ) -> None:
     calls: list[tuple[list[str], dict[str, object]]] = []
 
@@ -1048,6 +985,7 @@ async def test_host_volume_initializers_use_setup_authority(
                 "runtimeBindingId": "binding-1",
                 "hostLeaseRef": owner_ref,
                 "hostLeaseGeneration": 1,
+                "expectedOmnigentHostId": expected_host_id,
                 "hostClassRef": host_class.ref,
                 "imageRef": host_class.imageRef,
                 "serverEndpointRef": "default",
@@ -1103,6 +1041,11 @@ async def test_host_volume_initializers_use_setup_authority(
         assert argv[argv.index("--user") + 1] == "0:0"
     workload_create = next(argv for argv, _kwargs in calls if argv[:2] == ["docker", "create"])
     assert workload_create[workload_create.index("--user") + 1] == "1000:1000"
+    from uuid import NAMESPACE_URL, uuid5
+
+    launched_id = expected_host_id or str(uuid5(NAMESPACE_URL, owner_ref))
+    assert f"OMNIGENT_HOST_ID={launched_id}" in workload_create
+    assert "OMNIGENT_HOST_NAME=mm-host-test" in workload_create
     assert "scoped-fanout-token" not in json.dumps(
         [argv for argv, _kwargs in calls]
     )
@@ -2267,7 +2210,7 @@ async def test_generic_realizer_projects_provider_capacity_wait() -> None:
         (
             "workflow-1",
             "launching",
-            "Provider Profile capacity acquired.",
+            "Preparing runtime: validating the execution host and selected model.",
         ),
         ("workflow-1", "running", "Agent is running."),
     ]
@@ -2391,7 +2334,8 @@ async def test_generic_realizer_records_host_log_publication_failure() -> None:
 
 
 @pytest.mark.asyncio
-async def test_generic_realizer_publishes_host_logs_from_failed_host_realization() -> (
+@pytest.mark.parametrize("cleanup_fails", [False, True])
+async def test_generic_realizer_publishes_host_logs_from_failed_host_realization(cleanup_fails) -> (
     None
 ):
     """Logs captured when the runtime removes an unattested host are still published.
@@ -2446,6 +2390,8 @@ async def test_generic_realizer_publishes_host_logs_from_failed_host_realization
 
     async def cleanup_without_container(**_kwargs):
         harness.events.append("host-cleaned")
+        if cleanup_fails:
+            raise RuntimeError("proxy unavailable after host removal")
         return {"containerRemoved": True}
 
     realizer._host_runtime.realize = realize_fails
@@ -2462,6 +2408,9 @@ async def test_generic_realizer_publishes_host_logs_from_failed_host_realization
     assert artifacts.text_writes[0]["payload"].startswith(
         "runner: registration timed out"
     )
+    if cleanup_fails:
+        assert not any(write["name"] == "generic-host-cleanup.json" for write in artifacts.json_writes)
+        return
     host_results = next(
         write["payload"]
         for write in artifacts.json_writes
@@ -2473,7 +2422,8 @@ async def test_generic_realizer_publishes_host_logs_from_failed_host_realization
 
 
 @pytest.mark.asyncio
-async def test_generic_host_runtime_carries_cleanup_evidence_on_failed_realization() -> (
+@pytest.mark.parametrize("cleanup_fails", [False, True])
+async def test_generic_host_runtime_carries_cleanup_evidence_on_failed_realization(cleanup_fails) -> (
     None
 ):
     """The runtime's own failure cleanup keeps the host log tail on the failure."""
@@ -2517,6 +2467,8 @@ async def test_generic_host_runtime_carries_cleanup_evidence_on_failed_realizati
     class Cleanup:
         async def cleanup(self, **kwargs):
             cleanup_calls.append(dict(kwargs))
+            if cleanup_fails:
+                raise RuntimeError("cleanup unavailable")
             return {
                 "containerRemoved": True,
                 "hostLogs": "runner: registration never completed\n",
@@ -2600,6 +2552,9 @@ async def test_generic_host_runtime_carries_cleanup_evidence_on_failed_realizati
         )
 
     assert [call["container_name"] for call in cleanup_calls] == ["mm-host-realize-1"]
+    if cleanup_fails:
+        assert excinfo.value.host_cleanup_error == "RuntimeError"
+        return
     evidence = excinfo.value.host_cleanup_evidence
     assert evidence["containerRemoved"] is True
     assert evidence["hostLogs"].startswith("runner: registration never completed")

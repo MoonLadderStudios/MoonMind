@@ -962,12 +962,11 @@ describe("MoonLadderStudios/MoonMind#3451 Omnigent readiness", () => {
     await waitFor(() => expect(readinessRequests).toBe(2));
   });
 
-  it("MoonLadderStudios/MoonMind#3788 reports an Omnigent readiness failure instead of an empty provider-profile state", async () => {
+  it("keeps Zen and Go Profiles visible during a readiness service outage", async () => {
     fetchSpy.mockImplementation((input: RequestInfo | URL) => {
       const url = String(input);
       if (url === "/api/omnigent/codex-catalog-readiness") {
-        // The readiness projection is the only source of Omnigent-eligible
-        // Provider Profiles, so its failure is what empties the selector.
+        // Runtime readiness is independent of configured Profile inventory.
         return Promise.resolve({
           ok: false,
           status: 503,
@@ -978,7 +977,10 @@ describe("MoonLadderStudios/MoonMind#3451 Omnigent readiness", () => {
       if (url.startsWith("/api/v1/provider-profiles")) {
         // The ordinary profile request still succeeds, so it cannot be the
         // query that reports the failure.
-        return Promise.resolve({ ok: true, json: async () => [] } as Response);
+        return Promise.resolve({ ok: true, json: async () => [
+          { profile_id: "zen", account_label: "OpenCode Zen", is_default: true },
+          { profile_id: "go", account_label: "OpenCode Go" },
+        ] } as Response);
       }
       if (url === "/api/omnigent/agent-profiles") {
         return Promise.resolve({ ok: true, json: async () => readyAgentProfiles } as Response);
@@ -994,11 +996,9 @@ describe("MoonLadderStudios/MoonMind#3451 Omnigent readiness", () => {
       target: { value: "omnigent" },
     });
 
-    await waitFor(() => {
-      expect(screen.getByText("Failed to load provider profiles.")).toBeTruthy();
-    });
-    // Directing the operator to Settings would hide a transient outage behind a
-    // configuration error.
+    expect(await screen.findByRole("option", { name: "OpenCode Zen (Default)" })).toBeTruthy();
+    expect(screen.getByRole("option", { name: "OpenCode Go" })).toBeTruthy();
+    expect(screen.queryByText("Failed to load provider profiles.")).toBeNull();
     expect(
       screen.queryByText(/No launch-ready Provider Profiles are configured/),
     ).toBeNull();
@@ -1055,7 +1055,7 @@ describe("MoonLadderStudios/MoonMind#3451 Omnigent readiness", () => {
 
     renderWorkflowStartPage(payload);
     fireEvent.change(await screen.findByLabelText("Runtime"), { target: { value: "omnigent" } });
-    fireEvent.change(await screen.findByLabelText("Provider profile"), { target: { value: "oauth-1" } });
+    fireEvent.change(await screen.findByLabelText("Profile"), { target: { value: "oauth-1" } });
 
     expect(await screen.findByText(/busy and does not support queued waiting/)).toBeTruthy();
     expect((screen.getByRole("button", { name: "Start Workflow" }) as HTMLButtonElement).disabled).toBe(true);
@@ -1113,7 +1113,7 @@ describe("MoonLadderStudios/MoonMind#3451 Omnigent readiness", () => {
     expect(document.activeElement).toBe(runtime);
     fireEvent.change(runtime, { target: { value: "omnigent" } });
     expect((runtime as HTMLSelectElement).value).toBe("omnigent");
-    fireEvent.change(await screen.findByLabelText("Provider profile"), { target: { value: "oauth-1" } });
+    fireEvent.change(await screen.findByLabelText("Profile"), { target: { value: "oauth-1" } });
     fireEvent.change(screen.getByLabelText("Instructions"), { target: { value: "Exercise the Omnigent submit boundary." } });
 
     expect(await screen.findByText("Runtime: Codex via Omnigent")).toBeTruthy();
@@ -1128,28 +1128,14 @@ describe("MoonLadderStudios/MoonMind#3451 Omnigent readiness", () => {
     const request = JSON.parse(String((createCall?.[1] as RequestInit | undefined)?.body));
     expect(request.payload).toMatchObject({
       targetRuntime: "omnigent",
-      agentProfile: {
-        profileId: "team-codex",
-        providerProfileRef: "oauth-1",
-        launchPolicyRef: "on-demand-v1",
-      },
-      omnigent: { executionTargetRef: "omnigent-codex-default", launchPolicyRef: "on-demand-v1" },
-      task: {
-        runtime: {
-          mode: "omnigent",
-          profileId: "oauth-1",
-          agentProfile: {
-            profileId: "team-codex",
-            providerProfileRef: "oauth-1",
-            launchPolicyRef: "on-demand-v1",
-          },
-        },
-      },
+      task: { runtime: { mode: "omnigent", profileId: "oauth-1" } },
     });
+    expect(request.payload.agentProfile).toBeUndefined();
+    expect(request.payload.omnigent).toBeUndefined();
     expect(JSON.stringify(request)).not.toMatch(/hostId|volume|credential|registrationToken|image|network|mount/i);
   });
 
-  it("follows current generic v2 readiness and submits its latest refresh", async () => {
+  it("submits the selected Profile without waiting for another catalog refresh", async () => {
     vi.mocked(navigateTo).mockClear();
     const staleDigest = `sha256:${"c".repeat(64)}`;
     const currentDigest = `sha256:${"d".repeat(64)}`;
@@ -1252,7 +1238,7 @@ describe("MoonLadderStudios/MoonMind#3451 Omnigent readiness", () => {
     fireEvent.change(await screen.findByLabelText("Runtime"), {
       target: { value: "omnigent" },
     });
-    fireEvent.change(await screen.findByLabelText("Provider profile"), {
+    fireEvent.change(await screen.findByLabelText("Profile"), {
       target: { value: "opencode-1" },
     });
     fireEvent.change(screen.getByLabelText("Instructions"), {
@@ -1273,18 +1259,10 @@ describe("MoonLadderStudios/MoonMind#3451 Omnigent readiness", () => {
       (options as RequestInit | undefined)?.method === "POST",
     );
     const request = JSON.parse(String((createCall?.[1] as RequestInit | undefined)?.body));
-    expect(request.payload.agentProfile).toEqual({
-      profileId: "omnigent-opencode-default",
-      version: 202,
-      digest: submitDigest,
-      providerProfileRef: "opencode-1",
-      launchPolicyRef: "omnigent-on-demand@1",
-    });
-    expect(request.payload.task.runtime.agentProfile).toEqual(request.payload.agentProfile);
-    expect(request.payload.omnigent).toEqual({
-      executionTargetRef: "omnigent-opencode-default@202",
-      launchPolicyRef: "omnigent-on-demand@1",
-    });
+    expect(request.payload.task.runtime.profileId).toBe("opencode-1");
+    expect(request.payload.agentProfile).toBeUndefined();
+    expect(request.payload.omnigent).toBeUndefined();
+    expect(genericReadinessRequests).toBe(1);
   });
 
   it("names the selected generic Omnigent agent when no provider profile is ready", async () => {
@@ -1359,12 +1337,12 @@ describe("MoonLadderStudios/MoonMind#3451 Omnigent readiness", () => {
     });
 
     expect(await screen.findByText(
-      "No launch-ready Provider Profiles are configured for OpenCode via Omnigent. Configure one in Settings before starting this workflow.",
+      "No Profiles are configured for OpenCode via Omnigent. Configure one in Settings before starting this workflow.",
     )).toBeTruthy();
     expect(screen.queryByText(/configured for Codex CLI/)).toBeNull();
   });
 
-  it("synchronizes the execution target when the Agent Profile changes", async () => {
+  it("resolves advanced execution from the selected Profile", async () => {
     const payload = omnigentPayload();
     const initialData = payload.initialData as {
       dashboardConfig: { system: Record<string, unknown> };
@@ -1444,7 +1422,10 @@ describe("MoonLadderStudios/MoonMind#3451 Omnigent readiness", () => {
         return Promise.resolve({ ok: true, json: async () => profiles } as Response);
       }
       if (url.startsWith("/api/v1/provider-profiles")) {
-        return Promise.resolve({ ok: true, json: async () => [] } as Response);
+        return Promise.resolve({ ok: true, json: async () => [
+          { profile_id: "oauth-1", account_label: "Codex", is_default: true, execution_selection: { profileId: "team-codex", launchPolicyRef: "on-demand-v1" } },
+          { profile_id: "claude-1", account_label: "Claude", execution_selection: { profileId: "team-claude", launchPolicyRef: "claude-on-demand-v1" } },
+        ] } as Response);
       }
       if (url.startsWith("/api/github/branches")) {
         return Promise.resolve(defaultBranchOptionsResponse());
@@ -1457,14 +1438,14 @@ describe("MoonLadderStudios/MoonMind#3451 Omnigent readiness", () => {
       target: { value: "omnigent" },
     });
     await waitFor(() => {
-      expect((screen.getByLabelText("Agent profile") as HTMLSelectElement).value)
-        .toBe("team-codex");
+      expect((screen.getByLabelText("Profile") as HTMLSelectElement).value)
+        .toBe("oauth-1");
       expect((screen.getByLabelText("Execution target") as HTMLSelectElement).value)
         .toBe("omnigent-codex-default");
     });
 
-    fireEvent.change(screen.getByLabelText("Agent profile"), {
-      target: { value: "team-claude" },
+    fireEvent.change(screen.getByLabelText("Profile"), {
+      target: { value: "claude-1" },
     });
 
     await waitFor(() => {
@@ -1680,7 +1661,7 @@ describe("MoonLadderStudios/MoonMind#3451 Omnigent readiness", () => {
 
     renderWorkflowStartPage(omnigentPayload());
     fireEvent.change(await screen.findByLabelText("Runtime"), { target: { value: "omnigent" } });
-    fireEvent.change(await screen.findByLabelText("Provider profile"), { target: { value: "oauth-1" } });
+    fireEvent.change(await screen.findByLabelText("Profile"), { target: { value: "oauth-1" } });
 
     const hostPolicy = await screen.findByLabelText("Host policy");
     await waitFor(() => expect((hostPolicy as HTMLSelectElement).value).toBe("on-demand-v2"));
@@ -1697,14 +1678,8 @@ describe("MoonLadderStudios/MoonMind#3451 Omnigent readiness", () => {
       String(url) === "/api/executions" && (options as RequestInit | undefined)?.method === "POST",
     );
     const request = JSON.parse(String((createCall?.[1] as RequestInit | undefined)?.body));
-    expect(request.payload.omnigent).toEqual({
-      executionTargetRef: "omnigent-codex-default",
-      launchPolicyRef: "on-demand-v2",
-    });
-    expect(request.payload.agentProfile.launchPolicyRef).toBe("on-demand-v2");
-    expect(request.payload.task.runtime.agentProfile.launchPolicyRef).toBe(
-      "on-demand-v2",
-    );
+    expect(request.payload.task.runtime.profileId).toBe("oauth-1");
+    expect(request.payload.agentProfile).toBeUndefined();
   });
 
   it("keeps a historical profile version compatible for an Omnigent rerun", async () => {
@@ -1876,7 +1851,7 @@ describe("MoonLadderStudios/MoonMind#3451 Omnigent readiness", () => {
     });
   });
 
-  it("filters mixed Provider Profiles by execution target and resets an incompatible selection", async () => {
+  it("keeps all configured Profiles visible without changing the selected account", async () => {
     const payload = omnigentPayload();
     const initialData = payload.initialData as {
       dashboardConfig: { system: Record<string, unknown> };
@@ -1912,23 +1887,23 @@ describe("MoonLadderStudios/MoonMind#3451 Omnigent readiness", () => {
         return Promise.resolve({ ok: true, json: async () => [{ profile_id: "claude-oauth", account_label: "Anthropic subscription", provider_id: "anthropic" }] } as Response);
       }
       if (url.startsWith("/api/v1/provider-profiles")) {
-        return Promise.resolve({ ok: true, json: async () => [{ profile_id: "codex-oauth", account_label: "OpenAI subscription", provider_id: "openai" }] } as Response);
+        return Promise.resolve({ ok: true, json: async () => [{ profile_id: "codex-oauth", is_default: true, account_label: "OpenAI subscription", provider_id: "openai" }, { profile_id: "claude-oauth", account_label: "Anthropic subscription", provider_id: "anthropic" }] } as Response);
       }
       return Promise.resolve({ ok: true, json: async () => ({ items: [] }) } as Response);
     });
 
     renderWorkflowStartPage(payload);
     fireEvent.change(await screen.findByLabelText("Runtime"), { target: { value: "omnigent" } });
-    const profileSelect = await screen.findByLabelText("Provider profile");
+    const profileSelect = await screen.findByLabelText("Profile");
     await waitFor(() => expect((profileSelect as HTMLSelectElement).value).toBe("codex-oauth"));
-    expect(within(profileSelect).queryByRole("option", { name: /Anthropic subscription/ })).toBeNull();
+    expect(within(profileSelect).queryByRole("option", { name: /Anthropic subscription/ })).toBeTruthy();
 
     fireEvent.change(screen.getByLabelText("Execution target"), {
       target: { value: "omnigent-claude@1" },
     });
 
-    await waitFor(() => expect((profileSelect as HTMLSelectElement).value).toBe("claude-oauth"));
-    expect(within(profileSelect).queryByRole("option", { name: /OpenAI subscription/ })).toBeNull();
+    await waitFor(() => expect((profileSelect as HTMLSelectElement).value).toBe("codex-oauth"));
+    expect(within(profileSelect).queryByRole("option", { name: /OpenAI subscription/ })).toBeTruthy();
     expect(within(profileSelect).getByRole("option", { name: /Anthropic subscription/ })).toBeTruthy();
   });
 
@@ -1936,7 +1911,7 @@ describe("MoonLadderStudios/MoonMind#3451 Omnigent readiness", () => {
     ["deferred", "deferred_minutes", "Minutes from now", "5", { mode: "once" }],
     ["once", "once", "Scheduled For", "2099-01-01T12:00", { mode: "once", scheduledFor: new Date("2099-01-01T12:00").toISOString() }],
     ["recurring", "recurring", "Cron Expression", "0 4 * * *", { mode: "recurring", cron: "0 4 * * *", timezone: "UTC" }],
-  ])("preserves canonical Omnigent refs in %s schedule submissions", async (_label, mode, fieldLabel, fieldValue, expectedSchedule) => {
+  ])("submits one Profile identity in %s schedule submissions", async (_label, mode, fieldLabel, fieldValue, expectedSchedule) => {
     fetchSpy.mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
       const url = String(input);
       if (url === "/api/omnigent/codex-catalog-readiness") {
@@ -1960,7 +1935,7 @@ describe("MoonLadderStudios/MoonMind#3451 Omnigent readiness", () => {
 
     renderWorkflowStartPage(omnigentPayload());
     fireEvent.change(await screen.findByLabelText("Runtime"), { target: { value: "omnigent" } });
-    fireEvent.change(await screen.findByLabelText("Provider profile"), { target: { value: "oauth-1" } });
+    fireEvent.change(await screen.findByLabelText("Profile"), { target: { value: "oauth-1" } });
     fireEvent.change(screen.getByLabelText("Instructions"), { target: { value: `Exercise ${mode} scheduling.` } });
     fireEvent.change(screen.getByLabelText("Schedule Mode"), { target: { value: mode } });
     fireEvent.change(screen.getByLabelText(fieldLabel), { target: { value: fieldValue } });
@@ -1971,7 +1946,6 @@ describe("MoonLadderStudios/MoonMind#3451 Omnigent readiness", () => {
     const request = JSON.parse(String((createCall?.[1] as RequestInit | undefined)?.body));
     expect(request.payload).toMatchObject({
       targetRuntime: "omnigent",
-      omnigent: { executionTargetRef: "omnigent-codex-default", launchPolicyRef: "on-demand-v1" },
       task: { runtime: { mode: "omnigent", profileId: "oauth-1" } },
       schedule: expectedSchedule,
     });
@@ -2001,13 +1975,13 @@ describe("MoonLadderStudios/MoonMind#3451 Omnigent readiness", () => {
 
     renderWorkflowStartPage(omnigentPayload());
     fireEvent.change(await screen.findByLabelText("Runtime"), { target: { value: "omnigent" } });
-    fireEvent.change(await screen.findByLabelText("Provider profile"), { target: { value: "oauth-1" } });
+    fireEvent.change(await screen.findByLabelText("Profile"), { target: { value: "oauth-1" } });
     fireEvent.change(screen.getByLabelText("Instructions"), { target: { value: "Do not launch stale authority." } });
     fireEvent.click(screen.getByRole("button", { name: "Start Workflow" }));
 
     expect(await screen.findByText("Omnigent deployment became unavailable.")).toBeTruthy();
     expect(fetchSpy.mock.calls.some(([url, options]) => String(url) === "/api/executions" && (options as RequestInit | undefined)?.method === "POST")).toBe(false);
-    expect((screen.getByLabelText("Provider profile") as HTMLSelectElement).value).toBe("oauth-1");
+    expect((screen.getByLabelText("Profile") as HTMLSelectElement).value).toBe("oauth-1");
     const readinessCalls = fetchSpy.mock.calls.filter(
       ([url]) => String(url) === "/api/omnigent/codex-catalog-readiness",
     );
@@ -2060,7 +2034,7 @@ describe("MoonLadderStudios/MoonMind#3451 Omnigent readiness", () => {
     fireEvent.change(await screen.findByLabelText("Runtime"), {
       target: { value: "omnigent" },
     });
-    fireEvent.change(await screen.findByLabelText("Provider profile"), {
+    fireEvent.change(await screen.findByLabelText("Profile"), {
       target: { value: "oauth-1" },
     });
     fireEvent.change(screen.getByLabelText("Instructions"), {
@@ -5783,7 +5757,7 @@ describe.skip("Task Create Entrypoint", () => {
         "claude_code",
       );
       expect(
-        (screen.getByLabelText("Provider profile") as HTMLSelectElement).value,
+        (screen.getByLabelText("Profile") as HTMLSelectElement).value,
       ).toBe("profile:claude-default");
       expect((screen.getByLabelText("Model") as HTMLInputElement).value).toBe(
         "claude-sonnet-test",
@@ -5939,7 +5913,7 @@ describe.skip("Task Create Entrypoint", () => {
         (screen.getByLabelText("Instructions") as HTMLTextAreaElement).value,
       ).toBe("Rerun from artifact-backed instructions.");
       expect(
-        (screen.getByLabelText("Provider profile") as HTMLSelectElement).value,
+        (screen.getByLabelText("Profile") as HTMLSelectElement).value,
       ).toBe("profile:codex-secondary");
     });
     expect(fetchSpy).toHaveBeenCalledWith(
@@ -6773,7 +6747,7 @@ describe.skip("Task Create Entrypoint", () => {
     expect(await screen.findByRole("heading", { name: "Edit Workflow" })).toBeTruthy();
     await waitFor(() => {
       expect(
-        (screen.getByLabelText("Provider profile") as HTMLSelectElement).value,
+        (screen.getByLabelText("Profile") as HTMLSelectElement).value,
       ).toBe("profile:claude-default");
     });
 
@@ -6783,7 +6757,7 @@ describe.skip("Task Create Entrypoint", () => {
 
     await waitFor(() => {
       expect(
-        (screen.getByLabelText("Provider profile") as HTMLSelectElement).value,
+        (screen.getByLabelText("Profile") as HTMLSelectElement).value,
       ).toBe("profile:codex-default");
     });
     fireEvent.click(screen.getByRole("button", { name: "Save Changes" }));
@@ -7310,7 +7284,6 @@ describe.skip("Task Create Entrypoint", () => {
       },
     });
     expect(request.payload.requiredCapabilities).toEqual([
-      "codex_cli",
       "git",
       "gh",
     ]);
@@ -7493,7 +7466,6 @@ describe.skip("Task Create Entrypoint", () => {
       };
     };
     expect(request.payload.requiredCapabilities).toEqual([
-      "codex_cli",
       "git",
       "gh",
       "jira",
@@ -7567,8 +7539,6 @@ describe.skip("Task Create Entrypoint", () => {
       };
     };
     expect(request.payload.requiredCapabilities).toEqual([
-      "codex_cli",
-      "claude_code",
       "git",
       "gh",
     ]);
@@ -7581,6 +7551,7 @@ describe.skip("Task Create Entrypoint", () => {
       effort: "high",
     });
   });
+
 
   it("reveals per-step advanced skill options from the bottom toggle", async () => {
     renderWithClient(<WorkflowStartPage payload={mockPayload} />);
@@ -7655,7 +7626,6 @@ describe.skip("Task Create Entrypoint", () => {
       "qdrant",
     ]);
     expect(request.payload.requiredCapabilities).toEqual([
-      "codex_cli",
       "git",
       "gh",
       "docker",
@@ -7790,7 +7760,6 @@ describe.skip("Task Create Entrypoint", () => {
       name: "auto",
     });
     expect(payload.requiredCapabilities).toEqual([
-      "codex_cli",
       "git",
       "gh",
     ]);
@@ -10008,7 +9977,7 @@ describe.skip("Task Create Entrypoint", () => {
     renderWithClient(<WorkflowStartPage payload={mockPayload} />);
 
     expect(await screen.findByPlaceholderText("owner/repo")).not.toBeNull();
-    expect(await screen.findByLabelText("Provider profile")).not.toBeNull();
+    expect(await screen.findByLabelText("Profile")).not.toBeNull();
     expect(
       await screen.findByLabelText("Instructions"),
     ).not.toBeNull();
@@ -11635,7 +11604,7 @@ describe.skip("Task Create Entrypoint", () => {
   it("updates provider-profile options when the selected runtime changes", async () => {
     renderWithClient(<WorkflowStartPage payload={mockPayload} />);
 
-    const providerSelect = await screen.findByLabelText("Provider profile");
+    const providerSelect = await screen.findByLabelText("Profile");
     await waitFor(() => {
       const labels = Array.from(
         (providerSelect as HTMLSelectElement).options,
@@ -20513,7 +20482,6 @@ describe("Task Create governed Tool authoring", () => {
     };
     expect(request.payload.repository).toBeUndefined();
     expect(request.payload.requiredCapabilities).toEqual([
-      "codex_cli",
       "gh",
       "jira",
     ]);
@@ -20579,7 +20547,6 @@ describe("Task Create governed Tool authoring", () => {
     };
     expect(request.payload.repository).toBeUndefined();
     expect(request.payload.requiredCapabilities).toEqual([
-      "codex_cli",
       "gh",
       "jira",
     ]);
@@ -20643,7 +20610,6 @@ describe("Task Create governed Tool authoring", () => {
       };
     };
     expect(request.payload.requiredCapabilities).toEqual([
-      "codex_cli",
       "git",
       "gh",
       "jira",
@@ -21947,26 +21913,12 @@ describe("resolveDefaultProviderProfileId", () => {
 
 describe("Task Create runtime switch layout stability", () => {
   let fetchSpy: MockInstance;
-  let resolveClaudeProfiles:
-    | ((profiles: Array<Record<string, unknown>>) => void)
-    | null;
-
-  // The Runtime/Provider-profile row container is the parent of the wrapping
-  // <label> around the Runtime <select>. Its class toggles between "grid-2"
-  // (two columns / half width) and "stack" (single column / full width).
-  function runtimeRowContainer(): HTMLElement {
-    const container = screen.getByLabelText("Runtime").closest("label")
-      ?.parentElement;
-    expect(container).not.toBeNull();
-    return container as HTMLElement;
-  }
 
   beforeEach(() => {
     window.history.pushState({}, "Task Create", "/workflows/new");
     window.sessionStorage.clear();
     window.localStorage.clear();
     vi.mocked(navigateTo).mockReset();
-    resolveClaudeProfiles = null;
     fetchSpy = vi
       .spyOn(window, "fetch")
       .mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
@@ -22021,20 +21973,6 @@ describe("Task Create runtime switch layout stability", () => {
           } as Response);
         }
         if (url.startsWith("/api/v1/provider-profiles")) {
-          const runtimeId = new URL(`http://localhost${url}`).searchParams.get(
-            "runtime_id",
-          );
-          if (runtimeId === "claude_code") {
-            // Hold the switched-to runtime's profiles in-flight so the test
-            // can observe the layout while the refetch is still pending.
-            return new Promise<Response>((resolve) => {
-              resolveClaudeProfiles = (profiles) =>
-                resolve({
-                  ok: true,
-                  json: async () => profiles,
-                } as Response);
-            });
-          }
           return Promise.resolve({
             ok: true,
             json: async () => [
@@ -22091,136 +22029,170 @@ describe("Task Create runtime switch layout stability", () => {
     fetchSpy.mockRestore();
   });
 
-  it("keeps the Runtime/Provider-profile row at half width while a runtime switch refetches profiles", async () => {
+  it("keeps Profile inventory and explicit selection stable when advanced runtime changes", async () => {
     renderWithClient(<WorkflowStartPage payload={mockPayload} />);
-
-    // The initial runtime (codex_cli) loads two provider profiles, so the row
-    // renders as the two-column grid (half width each).
-    await screen.findByLabelText("Provider profile");
-    expect(runtimeRowContainer().className).toContain("grid-2");
-
-    // Switch to a runtime whose provider profiles are still in-flight.
-    await act(async () => {
-      fireEvent.change(screen.getByLabelText("Runtime"), {
-        target: { value: "claude_code" },
-      });
-    });
-
-    // Regression (MM runtime-dropdown width flicker): the row must stay
-    // grid-2 during the refetch instead of collapsing to the full-width
-    // "stack" layout that hid the Provider profile field until the new
-    // profiles arrived.
-    expect(runtimeRowContainer().className).toContain("grid-2");
-    expect(runtimeRowContainer().className).not.toContain("stack");
-    expect(screen.getByLabelText("Provider profile")).toBeTruthy();
-
-    // Resolving the in-flight fetch swaps in the new runtime's profiles while
-    // the row stays at half width throughout.
-    await act(async () => {
-      resolveClaudeProfiles?.([
-        {
-          profile_id: "profile:claude-default",
-          account_label: "Claude Default",
-          is_default: true,
-        },
-      ]);
-    });
-
-    await waitFor(() => {
-      expect(runtimeRowContainer().className).toContain("grid-2");
-    });
-    expect(screen.getByLabelText("Provider profile")).toBeTruthy();
-  });
-
-  it("withholds the previous runtime's profiles while a runtime switch refetches", async () => {
-    renderWithClient(<WorkflowStartPage payload={mockPayload} />);
-
-    // The initial runtime exposes its (Codex) profiles as selectable options.
-    await screen.findByLabelText("Provider profile");
-    expect(
-      (screen.getByLabelText("Provider profile") as HTMLSelectElement).disabled,
-    ).toBe(false);
+    const profile = await screen.findByLabelText("Profile") as HTMLSelectElement;
+    fireEvent.change(profile, { target: { value: "profile:codex-secondary" } });
+    const requests = fetchSpy.mock.calls.filter(([url]) => String(url).startsWith("/api/v1/provider-profiles")).length;
+    fireEvent.change(screen.getByLabelText("Runtime"), { target: { value: "claude_code" } });
+    expect(profile.disabled).toBe(false);
+    expect(profile.value).toBe("profile:codex-secondary");
     expect(screen.getByRole("option", { name: /Codex Default/ })).toBeTruthy();
-
-    // Switch to a runtime whose provider profiles are still in-flight.
-    await act(async () => {
-      fireEvent.change(screen.getByLabelText("Runtime"), {
-        target: { value: "claude_code" },
-      });
-    });
-
-    // Regression (codex r3463139233): keepPreviousData keeps the previous
-    // runtime's profiles in `data` only to stabilize layout. The control must
-    // not expose those stale profiles as selectable/submittable while the new
-    // runtime's profiles are still loading.
-    const switchingSelect = screen.getByLabelText(
-      "Provider profile",
-    ) as HTMLSelectElement;
-    expect(switchingSelect.disabled).toBe(true);
-    expect(screen.queryByRole("option", { name: /Codex Default/ })).toBeNull();
-    expect(
-      screen.queryByRole("option", { name: /Codex Secondary/ }),
-    ).toBeNull();
-
-    // Once the new runtime's profiles arrive, the control re-enables with its
-    // own options.
-    await act(async () => {
-      resolveClaudeProfiles?.([
-        {
-          profile_id: "profile:claude-default",
-          account_label: "Claude Default",
-          is_default: true,
-        },
-      ]);
-    });
-
-    await waitFor(() => {
-      expect(
-        (screen.getByLabelText("Provider profile") as HTMLSelectElement)
-          .disabled,
-      ).toBe(false);
-    });
-    expect(screen.getByRole("option", { name: /Claude Default/ })).toBeTruthy();
-    expect(screen.queryByRole("option", { name: /Codex Default/ })).toBeNull();
+    expect(fetchSpy.mock.calls.filter(([url]) => String(url).startsWith("/api/v1/provider-profiles"))).toHaveLength(requests);
+    expect(screen.queryByLabelText("Agent profile")).toBeNull();
+    expect(screen.getByLabelText("Runtime").closest("details")?.open).toBe(false);
   });
 
-  it("MoonLadderStudios/MoonMind#3788 names the runtime in the empty state when it has no launch-ready profiles", async () => {
+  it("submits the native runtime of the selected Profile when switching from Codex to Claude", async () => {
+    const fallback = fetchSpy.getMockImplementation()!;
+    fetchSpy.mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
+      if (String(input).startsWith("/api/v1/provider-profiles")) {
+        return Promise.resolve({ ok: true, json: async () => [
+          { profile_id: "native-codex", account_label: "Native Codex", runtime_id: "codex_cli", is_default: true },
+          { profile_id: "native-claude", account_label: "Native Claude", runtime_id: "claude_code" },
+        ] } as Response);
+      }
+      return fallback(input, init);
+    });
+    const { queryClient } = renderWithClient(<WorkflowStartPage payload={mockPayload} />);
+    const profile = await screen.findByLabelText("Profile") as HTMLSelectElement;
+    await waitFor(() => expect(profile.value).toBe("native-codex"));
+    expect((screen.getByLabelText("Runtime") as HTMLSelectElement).value).toBe("codex_cli");
+
+    fireEvent.change(profile, { target: { value: "native-claude" } });
+    await waitFor(() => expect((screen.getByLabelText("Runtime") as HTMLSelectElement).value).toBe("claude_code"));
+    await act(async () => {
+      await queryClient.invalidateQueries({ queryKey: ["workflow-start", "provider-profiles"] });
+    });
+    expect(profile.value).toBe("native-claude");
+    fireEvent.change(screen.getByLabelText("Instructions"), { target: { value: "Use the selected native Claude profile." } });
+    fireEvent.click(screen.getByRole("button", { name: "Start Workflow" }));
+    await waitFor(() => expect(fetchSpy).toHaveBeenCalledWith("/api/executions", expect.objectContaining({ method: "POST" })));
+    const request = JSON.parse(String(fetchSpy.mock.calls.find(([url]) => String(url) === "/api/executions")?.[1]?.body));
+    expect(request.payload.task.runtime).toMatchObject({ mode: "claude_code", profileId: "native-claude" });
+    expect(request).not.toHaveProperty("agentProfile");
+    expect(request.payload.requiredCapabilities).toEqual(["git", "gh"]);
+  });
+
+  it("uses the canonical runtime catalog ahead of legacy boot metadata", async () => {
+    const payload = {
+      ...mockPayload,
+      initialData: { dashboardConfig: {
+        ...mockDashboardConfig,
+        system: { ...mockDashboardConfig.system, supportedRuntimes: ["codex_cli", "claude_code", "jules"] },
+      } },
+    } as BootPayload;
+    renderWithClient(<WorkflowStartPage payload={payload} />);
+    const runtime = await screen.findByLabelText("Runtime");
+    expect(within(runtime).getByRole("option", { name: "Jules" })).toBeTruthy();
+    expect(within(runtime).queryByRole("option", { name: "Codex via Omnigent" })).toBeNull();
+  });
+
+  it.each(["codex", "claude"])("submits a Profile's %s runtime for API validation despite a stale boot catalog", async (runtimeId) => {
+    const fallback = fetchSpy.getMockImplementation()!;
+    fetchSpy.mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
+      if (String(input).startsWith("/api/v1/provider-profiles")) {
+        return Promise.resolve({ ok: true, json: async () => [
+          { profile_id: "selected-profile", runtime_id: runtimeId, is_default: true },
+        ] } as Response);
+      }
+      return fallback(input, init);
+    });
     renderWithClient(<WorkflowStartPage payload={mockPayload} />);
+    await waitFor(() => expect((screen.getByLabelText("Profile") as HTMLSelectElement).value).toBe("selected-profile"));
+    await waitFor(() => expect((screen.getByLabelText("Runtime") as HTMLSelectElement).value).toBe(runtimeId));
+    fireEvent.change(screen.getByLabelText("Instructions"), { target: { value: "Preserve the selected Profile's runtime intent." } });
+    fireEvent.click(screen.getByRole("button", { name: "Start Workflow" }));
+    await waitFor(() => expect(fetchSpy).toHaveBeenCalledWith("/api/executions", expect.objectContaining({ method: "POST" })));
+    const request = JSON.parse(String(fetchSpy.mock.calls.find(([url]) => String(url) === "/api/executions")?.[1]?.body));
+    expect(request.payload.task.runtime).toMatchObject({ mode: runtimeId, profileId: "selected-profile" });
+    expect(request.payload.requiredCapabilities).toEqual(["git", "gh"]);
+  });
 
-    await screen.findByLabelText("Provider profile");
+  it.each(["omnigent", "claude_code"])("submits a %s step selection without deriving host capability claims", async (runtimeId) => {
+    renderWithClient(<WorkflowStartPage payload={mockPayload} />);
+    fireEvent.click(screen.getByLabelText("Advanced mode"));
+    fireEvent.change(await screen.findByLabelText("Instructions"), { target: { value: "Validate the step runtime at API admission." } });
+    fireEvent.change(screen.getByLabelText("Step 1 Runtime"), { target: { value: runtimeId } });
+    fireEvent.click(screen.getByRole("button", { name: "Start Workflow" }));
+    await waitFor(() => expect(fetchSpy).toHaveBeenCalledWith("/api/executions", expect.objectContaining({ method: "POST" })));
+    const request = JSON.parse(String(fetchSpy.mock.calls.find(([url]) => String(url) === "/api/executions")?.[1]?.body));
+    expect(request.payload.task.steps[0].runtime.mode).toBe(runtimeId);
+    expect(request.payload.requiredCapabilities).toEqual(["git", "gh"]);
+  });
 
+  it("surfaces authoritative capability admission errors from the API", async () => {
+    const fallback = fetchSpy.getMockImplementation()!;
+    fetchSpy.mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
+      if (String(input) === "/api/executions" && init?.method === "POST") {
+        return Promise.resolve({ ok: false, status: 409, text: async () => JSON.stringify({
+          detail: { message: "required capabilities unknown: ['custom-tool']" },
+        }) } as Response);
+      }
+      return fallback(input, init);
+    });
+    renderWithClient(<WorkflowStartPage payload={mockPayload} />);
+    fireEvent.change(await screen.findByLabelText("Instructions"), { target: { value: "Check capability admission." } });
+    fireEvent.click(screen.getByRole("button", { name: "Start Workflow" }));
+    expect(await screen.findByText(/required capabilities unknown/)).toBeTruthy();
+    expect(navigateTo).not.toHaveBeenCalled();
+  });
+
+  it.each([false, true])("preserves an explicit runtime override after Profile inventory refetch (Omnigent configuration: %s)", async (configured) => {
+    const fallback = fetchSpy.getMockImplementation()!;
+    let inventoryVersion = 0;
+    fetchSpy.mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
+      if (String(input).startsWith("/api/v1/provider-profiles")) {
+        inventoryVersion += 1;
+        return Promise.resolve({ ok: true, json: async () => [
+          { profile_id: "runtime-profile", account_label: `Profile ${inventoryVersion}`, runtime_id: "codex_cli", is_default: true,
+            ...(configured ? { execution_selection: { profileId: "team-codex" } } : {}),
+          },
+        ] } as Response);
+      }
+      return fallback(input, init);
+    });
+    const { queryClient } = renderWithClient(<WorkflowStartPage payload={mockPayload} />);
+    const profile = await screen.findByLabelText("Profile") as HTMLSelectElement;
+    await waitFor(() => expect(profile.value).toBe("runtime-profile"));
+    fireEvent.change(screen.getByLabelText("Runtime"), { target: { value: "claude_code" } });
     await act(async () => {
-      fireEvent.change(screen.getByLabelText("Runtime"), {
-        target: { value: "claude_code" },
-      });
+      await queryClient.invalidateQueries({ queryKey: ["workflow-start", "provider-profiles"] });
     });
+    expect(inventoryVersion).toBe(2);
+    expect(profile.value).toBe("runtime-profile");
+    expect((screen.getByLabelText("Runtime") as HTMLSelectElement).value).toBe("claude_code");
+  });
 
-    // The runtime-scoped refetch is still in flight, so the surface must not
-    // yet claim the runtime has no profiles.
-    expect(
-      screen.queryByText(/No launch-ready Provider Profiles are configured/),
-    ).toBeNull();
-
-    await act(async () => {
-      resolveClaudeProfiles?.([]);
+  it("keeps a Profile configuration error blocking instead of silently selecting its native runtime", async () => {
+    const fallback = fetchSpy.getMockImplementation()!;
+    fetchSpy.mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
+      if (String(input).startsWith("/api/v1/provider-profiles")) {
+        return Promise.resolve({ ok: true, json: async () => [
+          { profile_id: "native-codex", account_label: "Native Codex", runtime_id: "codex_cli", is_default: true },
+          { profile_id: "pinned-claude", account_label: "Pinned Claude", runtime_id: "claude_code",
+            execution_selection_error: { message: "The pinned execution configuration is incompatible with this Profile." },
+          },
+        ] } as Response);
+      }
+      return fallback(input, init);
     });
-
-    await waitFor(() => {
-      expect(
-        screen.getByText(
-          /No launch-ready Provider Profiles are configured for Direct Claude compatibility\. Configure one in Settings before starting this workflow\./,
-        ),
-      ).toBeTruthy();
-    });
-    // No selector means no way to submit an incompatible profile.
-    expect(screen.queryByLabelText("Provider profile")).toBeNull();
+    renderWithClient(<WorkflowStartPage payload={mockPayload} />);
+    const profile = await screen.findByLabelText("Profile") as HTMLSelectElement;
+    await waitFor(() => expect(profile.value).toBe("native-codex"));
+    fireEvent.change(profile, { target: { value: "pinned-claude" } });
+    expect((screen.getByLabelText("Runtime") as HTMLSelectElement).value).toBe("codex_cli");
+    expect(await screen.findByText(/Profile cannot be submitted: The pinned execution configuration is incompatible/)).toBeTruthy();
+    fireEvent.change(screen.getByLabelText("Instructions"), { target: { value: "Do not bypass the pinned configuration." } });
+    expect((screen.getByRole("button", { name: "Start Workflow" }) as HTMLButtonElement).disabled).toBe(true);
+    expect(fetchSpy.mock.calls.some(([url]) => String(url) === "/api/executions")).toBe(false);
   });
 
   it("omits task effort when the selected provider profile defines a default effort", async () => {
     renderWithClient(<WorkflowStartPage payload={mockPayload} />);
 
     const providerProfileSelect = (await screen.findByLabelText(
-      "Provider profile",
+      "Profile",
     )) as HTMLSelectElement;
     await waitFor(() => {
       expect(providerProfileSelect.value).toBe("profile:codex-default");
@@ -22257,7 +22229,7 @@ describe("Task Create runtime switch layout stability", () => {
 
     await waitFor(() => {
       expect(
-        (screen.getByLabelText("Provider profile") as HTMLSelectElement).value,
+        (screen.getByLabelText("Profile") as HTMLSelectElement).value,
       ).toBe("profile:codex-default");
     });
 
@@ -22346,7 +22318,7 @@ describe("Task Create runtime switch layout stability", () => {
 
     await waitFor(() => {
       expect(
-        (screen.getByLabelText("Provider profile") as HTMLSelectElement).value,
+        (screen.getByLabelText("Profile") as HTMLSelectElement).value,
       ).toBe("profile:codex-default");
     });
 
@@ -22447,7 +22419,7 @@ describe("Task Create runtime switch layout stability", () => {
     renderWithClient(<WorkflowStartPage payload={mockPayload} />);
 
     await waitFor(() => {
-      expect((screen.getByLabelText("Provider profile") as HTMLSelectElement).value).toBe(
+      expect((screen.getByLabelText("Profile") as HTMLSelectElement).value).toBe(
         "profile:codex-default",
       );
       expect((screen.getByLabelText("Hard override model") as HTMLInputElement).value).toBe(
@@ -22531,11 +22503,10 @@ describe("MM-936/MM-941 capability registry and chip computation", () => {
 
   it("keeps derived capabilities non-removable with provenance", () => {
     const chips = buildCapabilityChips({
-      skill: ["git"],
+      skill: ["git", "codex_cli"],
       tool: ["gh"],
       generatedTool: ["docker"],
       preset: ["jira"],
-      runtime: ["codex_cli"],
       publish: ["gh"],
       template: ["unity"],
     });
@@ -22553,7 +22524,7 @@ describe("MM-936/MM-941 capability registry and chip computation", () => {
       "from preset",
     );
     expect(capabilityChipProvenanceLabel(requireChip(chips, "codex_cli"))).toBe(
-      "from runtime",
+      "from skill",
     );
     expect(requireChip(chips, "gh").readiness.sourceLabels).toEqual([
       "from tool",

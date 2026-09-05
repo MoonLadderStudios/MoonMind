@@ -1,9 +1,10 @@
-# Omnigent Agent Profiles
+# Omnigent Execution Configurations
 
 Status: **Desired-State Design**  
+Document Class: System / Feature Design View
 Owners: MoonMind Engineering  
 Issue: MoonLadderStudios/MoonMind#3517  
-Last updated: 2026-08-07
+Last updated: 2026-09-04
 
 ## Implementation status
 
@@ -21,7 +22,7 @@ Every execution resolves these references into a secret-free immutable snapshot 
 
 A stable `profileId` owns monotonically numbered immutable versions. Each version stores canonical JSON, a SHA-256 digest, parent/clone/supersedes lineage, upstream metadata at selection time, validation results, rollout metadata, actor, and timestamp. Editing always creates a version. Activation only moves the stable profile's active pointer. Disablement and deprecation block new selection without deleting versions or historical snapshots. Deletion is permitted only for an unused draft; referenced profiles and versions are retained.
 
-The version document includes endpoint and bridge-mode refs; stable upstream or artifact-backed bundle identity; harness and capabilities; execution and allowed launch policies; credential-free Provider Profile compatibility requirements; model and effort settings; workspace mutation and capability constraints; Skills and tools; capture, retention, evidence, and RAG defaults and ceilings; continuation compatibility; publish default; and versioned policy ref.
+The version document includes endpoint and bridge-mode refs; stable upstream or artifact-backed bundle identity; harness and capabilities; execution and allowed launch policies; credential-free Provider Profile compatibility requirements; legacy model and effort settings (new Profile launches resolve these from Profile tiers and explicit overrides); workspace mutation and capability constraints; Skills and tools; capture, retention, evidence, and RAG defaults and ceilings; continuation compatibility; publish default; and versioned policy ref.
 
 Profiles never contain credentials, OAuth homes, registration secrets, Dockerfiles, host paths, volume names, host ids, or privileged launch settings.
 
@@ -29,7 +30,14 @@ Profiles never contain credentials, OAuth homes, registration secrets, Dockerfil
 
 MoonMind synchronizes the stock `/v1/agents` built-in catalog through its authenticated bridge boundary into a bounded last-known projection keyed by endpoint plus stable upstream id and version. The stock catalog's session bindability is projected as the canonical `session.start` capability. MoonMind records harness, capabilities, health, provenance, compatibility, successful-sync time, attempt time, and redacted error state. An outage retains the prior snapshot but marks it stale. Missing or incompatible agents block new launches; historical snapshots remain readable.
 
-The selector shown by workflow, schedule, checkpoint-branch, and remediation authoring lists active versions and fresh readiness diagnostics. Submission persists the profile id/version/digest, upstream snapshot, Provider Profile id, execution and policy refs, and effective model/workspace/capture/RAG values. Overrides are accepted only after policy validation.
+Workflow, schedule, checkpoint-branch, and remediation authoring select one
+Profile. The existing Provider Profile identity owns account, model tiers and
+capacity, and optionally pins an immutable execution configuration. Configuration
+versions remain an advanced implementation contract, not a second required
+profile selector. Automatic resolution selects the compatible deployment default
+or the sole compatible configuration; ambiguity requires an explicit choice in
+Profile settings. A pinned version remains selected after the active version
+changes. Discovery freshness never filters Profile inventory. Submission persists the profile id/version/digest, upstream snapshot, Provider Profile id, execution and policy refs, and effective model/workspace/capture/RAG values. Overrides are accepted only after policy validation.
 
 ## Native Workflow Chat capability authority
 
@@ -79,3 +87,17 @@ Native Workflow Chat validation also proves that the binding-scoped facade can p
 ## Bootstrap
 
 The synchronized stock `codex-native-ui` identity is materialized as an explicit active bootstrap profile version after structural readiness passes. `OMNIGENT_DEFAULT_AGENT_NAME` may override that first-start selector only when durable profile state is absent in bootstrap/local development; its use is recorded. Durable state wins, and conflicts fail closed.
+
+## Deployment-managed default authority
+
+Exactly one profile holds `default_for_runtime`, and one boundary decides which MoonMind-managed profile that is. The default workflow runtime is Omnigent (OpenCode), so the built-in OpenCode profile `omnigent-opencode-default` holds the deployment default whenever its active version is launch ready and its observed upstream identity satisfies the document contract. The Codex bootstrap profile `omnigent-bootstrap-default` is the fallback and holds the default only while the OpenCode built-in cannot launch — for example when `MOONMIND_OMNIGENT_OPENCODE_ENABLED=false`.
+
+Explicit authority is never displaced:
+
+- an operator-authored profile that holds the default keeps it;
+- an operator `make_default` selection on a managed profile keeps it; and
+- `OMNIGENT_DEFAULT_AGENT_NAME` preserves the current default, because it selects the agent identity itself.
+
+Every transfer is recorded as a `managed_default_selected` audit event carrying the previous holder.
+
+A default launch resolves its Provider Profile from the default profile's own contract. A v2 profile declares accepted providers through its credential slots, so the default is the highest-ranked accepted Provider Profile the selected harness can materialize under every launch policy the document allows. On the default deployment path that is the credentialless `opencode-zen-free` seed, which holds the `opencode` runtime default (see [OpenCode Host](OpenCodeHost.md)). A v1 profile keeps pinning one credential contract through `providerRequirements`.

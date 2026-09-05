@@ -254,10 +254,13 @@ DEFAULT_HOST_CLASS_TEMPLATES: tuple[HostClassTemplate, ...] = (
             "none@1",
         ),
     ),
-    # Shared-image Host Classes (#3828): Codex and Claude Code share one
-    # digest-pinned neutral image. Separate classes keep harness support exact:
-    # each declares only its own harness, runtime pack, and materializers, so a
-    # shared image never conflates installed CLIs with supported runtimes.
+    # Shared-image Host Classes (#3828, #3832 §9): Codex, Claude Code, and
+    # OpenCode share one digest-pinned neutral image. Separate classes keep
+    # harness support exact: each declares only its own harness, runtime pack,
+    # and materializers, so a shared image never conflates installed CLIs with
+    # supported runtimes. omnigent-opencode@1 remains the dedicated-image
+    # legacy row for historical reads; omnigent-opencode@2 is the shared-image
+    # generic row.
     HostClassTemplate(
         host_class_id="omnigent-codex",
         version=1,
@@ -275,6 +278,15 @@ DEFAULT_HOST_CLASS_TEMPLATES: tuple[HostClassTemplate, ...] = (
         integration_modes=("native-server",),
         materializer_refs=("claude-oauth-home@1", "none@1"),
         runtime_pack_ref="claude-native-pack@1",
+    ),
+    HostClassTemplate(
+        host_class_id="omnigent-opencode",
+        version=2,
+        harness_ids=("opencode-native",),
+        image_env=OMNIGENT_SHARED_HOST_IMAGE_ENV,
+        integration_modes=("native-server",),
+        materializer_refs=("opencode-auth-json@1", "none@1"),
+        runtime_pack_ref="opencode-native-pack@1",
     ),
 )
 

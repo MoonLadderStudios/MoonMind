@@ -43,6 +43,9 @@ class HarnessPlatformFailure(StrEnum):
         "OMNIGENT_CREDENTIAL_MATERIALIZATION_FAILED"
     )
     OMNIGENT_HOST_CLASS_UNAVAILABLE = "OMNIGENT_HOST_CLASS_UNAVAILABLE"
+    # MoonLadderStudios/MoonMind#3878 invariant 7: aggregate machine
+    # capacity or the bounded cold-launch rate refused this allocation.
+    OMNIGENT_HOST_CAPACITY_UNAVAILABLE = "OMNIGENT_HOST_CAPACITY_UNAVAILABLE"
     OMNIGENT_HOST_LAUNCH_FAILED = "OMNIGENT_HOST_LAUNCH_FAILED"
     OMNIGENT_HOST_REGISTRATION_TIMEOUT = "OMNIGENT_HOST_REGISTRATION_TIMEOUT"
     OMNIGENT_HOST_HARNESS_NOT_READY = "OMNIGENT_HOST_HARNESS_NOT_READY"
@@ -93,6 +96,7 @@ _FAILURE_REMEDIATION: dict[str, str] = {
     HarnessPlatformFailure.OMNIGENT_CREDENTIAL_MATERIALIZER_UNAVAILABLE: "register_materializer",
     HarnessPlatformFailure.OMNIGENT_CREDENTIAL_MATERIALIZATION_FAILED: "retry_materialization",
     HarnessPlatformFailure.OMNIGENT_HOST_CLASS_UNAVAILABLE: "select_available_host_class",
+    HarnessPlatformFailure.OMNIGENT_HOST_CAPACITY_UNAVAILABLE: "wait_for_host_capacity",
     HarnessPlatformFailure.OMNIGENT_HOST_LAUNCH_FAILED: "repair_host_launcher",
     HarnessPlatformFailure.OMNIGENT_HOST_REGISTRATION_TIMEOUT: "repair_host_registration",
     HarnessPlatformFailure.OMNIGENT_HOST_HARNESS_NOT_READY: "provision_host_harness",

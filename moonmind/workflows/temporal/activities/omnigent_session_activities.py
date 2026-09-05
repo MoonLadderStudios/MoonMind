@@ -247,6 +247,9 @@ async def omnigent_evaluate_session_admission_activity(
         managed_lifecycle = (
             plan.payload.executionRealizerRef != "codex-profile-bound@1"
         )
+        capacity_authority = await _plan_capacity_authority(
+            plan, execution_profile_ref=request.execution_profile_ref
+        )
         return OmnigentSessionAdmissionDecision(
             admitted=not managed_lifecycle,
             reasonCode=(
@@ -255,6 +258,7 @@ async def omnigent_evaluate_session_admission_activity(
             admissionMode="enabled",
             admittedFeatureGeneration=OMNIGENT_SESSION_FEATURE_GENERATION,
             executionRealizerRef=plan.payload.executionRealizerRef,
+            **capacity_authority,
         ).model_dump(mode="json", by_alias=True)
     elif request.execution_plan_ref:
         from api_service.db.base import async_session_maker
@@ -309,12 +313,96 @@ async def omnigent_evaluate_session_admission_activity(
     elif mode == "canary":
         reason = "canary_selected"
 
+    capacity_authority = (
+        await _plan_capacity_authority(
+            plan, execution_profile_ref=request.execution_profile_ref
+        )
+        if plan is not None
+        else {}
+    )
     return OmnigentSessionAdmissionDecision(
         admitted=admitted,
         reasonCode=reason,
         admissionMode=effective_mode,
         admittedFeatureGeneration=OMNIGENT_SESSION_FEATURE_GENERATION,
+        executionRealizerRef=(
+            plan.payload.executionRealizerRef if plan is not None else None
+        ),
+        **capacity_authority,
     ).model_dump(mode="json", by_alias=True)
+
+
+async def _plan_capacity_authority(
+    plan: Any,
+    *,
+    execution_profile_ref: str | None,
+) -> dict[str, Any]:
+    """Return the capacity identities the AgentRun workflow admits against.
+
+    MoonLadderStudios/MoonMind#3878 invariant 6: waiting for Provider Profile
+    capacity must be durable workflow state, so the workflow needs the exact
+    profile, its runtime family, and its capacity scope before it starts the
+    long execution Activity. Only these compact identities cross the boundary;
+    no credential, secret, or host detail does.
+
+    Only the generic host plane admits capacity before its Activity, so only it
+    resolves this authority. Resolving it for every realizer would add a
+    database read and a new failure mode to admission decisions that never use
+    the result.
+    """
+
+    from api_service.db.base import async_session_maker
+    from api_service.db.models import ManagedAgentProviderProfile
+
+    if plan.payload.executionRealizerRef != "generic-omnigent-host@1":
+        return {}
+    selected = {
+        binding.providerProfileRef
+        for binding in plan.payload.credentialBindings.values()
+    }
+    if len(selected) != 1:
+        # Multi-profile plans keep Activity-side acquisition in deterministic
+        # profile order via OmnigentProviderLeaseCoordinator.acquire_all. Say so
+        # explicitly: an empty authority alone is indistinguishable from a
+        # missing one, and the workflow rejects the latter.
+        return {"capacityAcquisitionOwner": "activity"}
+    profile_ref = next(iter(selected))
+    if execution_profile_ref and execution_profile_ref != profile_ref:
+        raise ValueError("AgentRun Provider Profile conflicts with execution plan")
+    async with async_session_maker() as session:
+        profile = await session.get(ManagedAgentProviderProfile, profile_ref)
+    if profile is None:
+        raise ValueError("selected Provider Profile no longer exists")
+    runtime_id = str(getattr(profile.runtime_id, "value", profile.runtime_id))
+    return {
+        "providerProfileRef": profile_ref,
+        "providerRuntimeId": runtime_id,
+        "capacityScopeRef": profile.capacity_scope_ref,
+        "capacityAcquisitionOwner": "workflow",
+    }
+
+
+async def omnigent_admit_generic_host_capacity_activity(
+    payload: Mapping[str, Any],
+) -> dict[str, Any]:
+    """Report whether aggregate host and cold-launch limits admit a new host.
+
+    MoonLadderStudios/MoonMind#3878 invariant 7. This is a short read of the
+    durable host-lease ledger with no side effects, so the AgentRun workflow
+    holds the wait as durable workflow state (invariant 6) instead of
+    occupying an execution Activity slot.
+    """
+
+    from api_service.db.base import async_session_maker
+    from moonmind.omnigent.host_capacity import GenericHostCapacityAdmission
+
+    admission = GenericHostCapacityAdmission.from_environment(
+        session_factory=async_session_maker
+    )
+    decision = await admission.evaluate(
+        already_allocated=bool(payload.get("alreadyAllocated"))
+    )
+    return {**decision.as_payload(), "waitingReason": decision.waiting_reason}
 
 
 def _validate_plan_support_authority(plan: Any) -> None:
@@ -5150,6 +5238,7 @@ async def omnigent_release_leases_activity(
 
 
 __all__ = [
+    "omnigent_admit_generic_host_capacity_activity",
     "omnigent_evaluate_session_admission_activity",
     "omnigent_resolve_intent_activity",
     "omnigent_load_reconciliation_inputs_activity",

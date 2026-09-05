@@ -3009,9 +3009,11 @@ def test_stale_host_daemon_cleanup_removes_only_runtime_markers(tmp_path) -> Non
 def test_host_launchers_wait_for_projection_and_clear_stale_state_before_starting() -> None:
     scripts = Path(__file__).resolve().parents[3] / "services" / "omnigent" / "scripts"
 
+    # The generic static entrypoint owns the shared lifecycle
+    # (MoonLadderStudios/MoonMind#3834); runtime wrappers only select a
+    # trusted pack ref and delegate without duplicating it.
     for script_name in (
-        "start-codex-oauth-host.sh",
-        "start-claude-oauth-host.sh",
+        "start-omnigent-host.sh",
         "start-host-with-projections.sh",
     ):
         source = (scripts / script_name).read_text(encoding="utf-8")
@@ -3020,6 +3022,15 @@ def test_host_launchers_wait_for_projection_and_clear_stale_state_before_startin
         assert source.index("/opt/moonmind/clear-stale-host-daemons.sh") < source.index(
             "exec omnigent host"
         )
+    for wrapper_name, pack_ref in (
+        ("start-codex-oauth-host.sh", "codex-native-pack@1"),
+        ("start-claude-oauth-host.sh", "claude-native-pack@1"),
+    ):
+        wrapper = (scripts / wrapper_name).read_text(encoding="utf-8")
+        assert f"MOONMIND_OMNIGENT_RUNTIME_PACK_REF={pack_ref}" in wrapper
+        assert "exec /opt/moonmind/start-omnigent-host.sh" in wrapper
+        assert "check-runner-projections" not in wrapper
+        assert "clear-stale-host-daemons" not in wrapper
 
 
 def test_omnigent_projects_portable_pr_resolver_semantics_without_copying_them() -> None:

@@ -1,10 +1,10 @@
 # OpenCode Host and Shared Omnigent Runtime Image
 
-**Status:** OpenCode implementation is current; shared-image migration is desired state  
+**Status:** Current
 **Document Class:** System / Operator Guide  
 **Owners:** MoonMind Platform  
-**Last updated:** 2026-09-03
-**Authority:** OpenCode runtime contract and transition from `omnigent-host-opencode` to the shared MoonMind Omnigent host image
+**Last updated:** 2026-09-04
+**Authority:** OpenCode runtime contract on the shared MoonMind Omnigent host image
 
 ## Related documents
 
@@ -16,11 +16,11 @@
 
 ## Advance organizer
 
-**One sentence:** `omnigent-host-opencode` is the first working generic Omnigent host image, and its image lineage should become the shared MoonMind Omnigent host for OpenCode, Codex, and Claude Code rather than remain a permanent OpenCode-only architecture.
+**One sentence:** OpenCode, Codex, and Claude Code use the shared MoonMind Omnigent image with separate Host Classes and credential authority.
 
-**One paragraph:** The current image derives from an immutable stock Omnigent host and adds a pinned OpenCode CLI at build time. The OpenCode Host Class, Provider Profile, materializer, exact-host attestation, and generic realizer remain valid. The next architecture stage publishes the same image lineage under a neutral name, verifies every approved runtime in the exact digest, and allows separate OpenCode, Codex, and Claude Host Classes to reference that digest. Credentials remain strictly isolated. A shared image does not share OAuth homes, API keys, materializers, Host Classes, or support evidence.
+**One paragraph:** The image derives from an immutable stock Omnigent host and installs pinned vendor CLIs at build time. Each Host Class, Provider Profile, materializer, and exact-host attestation authorizes only its selected runtime. Credentials remain strictly isolated. A shared image does not share OAuth homes, API keys, materializers, Host Classes, or support evidence.
 
-## 1. Current and desired state
+## 1. Supported runtime
 
 ### Current supported implementation
 
@@ -31,7 +31,7 @@ opencode-native
 + generic-omnigent-host@1
 + none@1 (OpenCode Zen) or opencode-auth-json@1 (OpenCode Go)
 + omnigent-opencode@1
-+ ghcr.io/moonladderstudios/omnigent-host-opencode@sha256:<digest>
++ ghcr.io/moonladderstudios/omnigent-host-moonmind@sha256:<digest>
 ```
 
 The image derives from the same immutable Omnigent host base as the stock host and adds the OpenCode CLI at image-build time. No workflow installs OpenCode dynamically.
@@ -47,15 +47,15 @@ RUN npm install --cache /opt/moonmind/opencode-npm-cache '@opencode-ai/plugin@1.
     && npm install --cache /opt/moonmind/opencode-npm-cache --offline '@opencode-ai/plugin@1.18.11'
 ```
 
-### Desired shared-image implementation
+### Shared-image implementation
 
-The image lineage should be renamed and promoted to a neutral shared image such as:
+The default Compose image is:
 
 ```text
 ghcr.io/moonladderstudios/omnigent-host-moonmind@sha256:<digest>
 ```
 
-The shared image should contain and verify the approved versions of:
+The shared image contains and verifies the approved versions of:
 
 ```text
 omnigent
@@ -64,7 +64,7 @@ claude
 opencode
 ```
 
-During migration, `omnigent-host-opencode` may remain as an alias to the same manifest digest. New documentation, Host Classes, deployment state, and support evidence should use the neutral image identity after cutover.
+An explicit `OMNIGENT_OPENCODE_HOST_IMAGE_REF` or image/tag override remains authoritative for specialized deployments. It must pass the same bootstrap checks. An incompatible pin is quarantined rather than silently replaced. Existing environment files selecting the old image repository must be updated explicitly.
 
 The image migration does not by itself move Codex or Claude execution to the generic realizer. Those changes require their own runtime-pack, credential-materializer, conformance, rollout, and replay-safe retirement work.
 
@@ -87,17 +87,28 @@ The shared image must:
 
 A shared image is an implementation artifact, not a permission boundary. The selected immutable plan still controls which harness, materializer, Provider Profile, model, and runtime pack are authorized.
 
+Image admission checks the selected digest's executable Omnigent version and
+offline plugin-enabled OpenCode startup from the warm cache. Matching
+build labels alone cannot make an image launch-ready. Release CI exercises
+plugin-enabled OpenCode startup offline before publishing the shared manifest.
+
+Registration observes the launched container as well as the exact upstream
+host identity. An exited host produces `OMNIGENT_HOST_LAUNCH_FAILED` promptly;
+only a runnable host may consume the bounded registration wait. The captured
+startup log is published before later cleanup operations, so a cleanup outage
+does not hide the primary failure. Container cleanup uses typed Docker
+inspection and treats an absent container as already removed without probing
+unrelated resource types through the Docker proxy. Cleanup and credential
+release remain fenced by the durable lease owner.
+
 ## 3. Separate Host Classes share the image
 
-OpenCode should retain its own Host Class even when the image becomes shared.
+OpenCode retains its own Host Class on the shared image.
 
-The expected transition is:
+The default image mapping is:
 
 ```text
 omnigent-opencode@1
-  -> current omnigent-host-opencode digest
-
-omnigent-opencode@2
   -> shared omnigent-host-moonmind digest
 
 omnigent-codex@1
@@ -113,7 +124,7 @@ A representative OpenCode class remains:
 
 ```yaml
 hostClassId: omnigent-opencode
-version: 2
+version: 1
 imageRef: ghcr.io/moonladderstudios/omnigent-host-moonmind@sha256:...
 omnigentBuildDigest: sha256:...
 declaredHarnessImplementations:
@@ -297,6 +308,7 @@ credentialSource: none
 runtimeMaterializationMode: composite
 secretRefs: {}
 enabled: true
+isDefault: true
 authState: connected
 defaultModel: opencode/muse-spark-1.3-contributor-free
 defaultEffort: xhigh
@@ -306,6 +318,47 @@ The seed runs before the first bootstrap reconciliation. Startup validates the
 model against the exact pinned host and publishes the same deployment evidence
 required by key-backed profiles. An existing explicit operator disable remains
 authoritative.
+
+The seed declares `isDefault: true`, so it holds runtime-default authority for
+`opencode` from first start rather than inheriting it only while it happens to
+be the sole launch-ready profile. Two things release that authority, and nothing
+else does:
+
+- an explicit operator disable of `opencode-zen-free`, which removes it from the
+  launch-ready set and hands the default to the next ranked profile; or
+- an explicit default selection on another profile (the Settings
+  `make_default` action).
+
+Configuring `OPENCODE_API_KEY` is neither. Deployment enrollment of
+`opencode-go-default` validates and enables that profile alongside the Zen
+default without transferring runtime-default authority.
+
+The rule is declared on every start, not only when the row is first written.
+Startup seeding states `opencode-zen-free` as the runtime-default preference
+whenever the profile is not operator-disabled, and
+`normalize_runtime_default_profile` settles the single-default invariant from
+there. A deployment whose persisted rows still assign the default elsewhere —
+including one upgraded from the release where a configured `OPENCODE_API_KEY`
+transferred it to `opencode-go-default` — returns the default to the Zen profile
+on its next restart.
+
+An explicit default selection is durable because it is persisted, not inferred.
+The Settings `make_default` action and an explicit `isDefault` create or update
+record `defaultSelectedByOperator` on the chosen profile, and the automatic
+preference above never overrules a launchable profile that carries it. The
+marker moves with the default: whichever profile loses runtime-default authority
+also loses the marker, so at most one profile per runtime carries an operator
+claim.
+
+Deployments upgrading to this behavior are cut over once. The migration that
+adds `defaultSelectedByOperator` backfills every existing row to `false`,
+because releases before it recorded nothing that distinguishes an operator
+selection from the automatic transfer. An operator who wants a different
+`opencode` profile to hold the default re-selects it once after the upgrade.
+
+Every launch surface derives OpenCode eligibility from the runtime/provider
+capability, not from the presence of a secret reference, so a credentialless
+profile is advertised and selectable on the same terms as a key-backed one.
 
 Deployment qualification is independent of runtime-default selection. MoonMind
 publishes one exact signed entry for each launch-ready OpenCode materializer
@@ -370,7 +423,7 @@ OpenCode model-catalog evidence binds:
 
 `OPENCODE_MODEL_CATALOG_MAX_AGE_HOURS` bounds observation age and defaults to `6`. A value of `0` revalidates only when image or credential identity changes.
 
-Evidence is invalid when:
+Discovery needs refresh when:
 
 - the host image changes
 - the OpenCode runtime identity changes
@@ -381,12 +434,16 @@ Evidence is invalid when:
 
 The bootstrap reconciler revalidates connected profiles through their selected
 materializer: the existing SecretRef for OpenCode Go and no credential for
-OpenCode Zen. It does not request a new key. While a valid revalidation is
-pending, authoring reports `provider_runtime_revalidation_pending`.
+OpenCode Zen. It does not request a new key. Discovery freshness is advisory for connected Profiles. A refresh, image change,
+or failed background probe never removes a configured Profile from authoring or
+revokes previously established credential readiness. The existing durable launch
+phase reports preparation progress while the actual host verifies the selected
+model and credential materialization. Missing models produce an actionable failure
+without substituting a model or account.
 
 Revalidation attempts are bounded per image and credential generation. Failure to acquire the maintenance lease does not spend a provider probe attempt because no probe occurred.
 
-## 10. Agent Profile
+## 10. Advanced execution configuration
 
 A representative OpenCode Agent Profile remains:
 
@@ -412,7 +469,7 @@ credentialSlots:
     acceptedProviderIds:
       - opencode
       - opencode-go
-hostClassRef: omnigent-opencode@2
+hostClassRef: omnigent-opencode@1
 runtimePackRef: opencode-native-pack@1
 launchPolicyRef: omnigent-on-demand@1
 executionRealizerRef: generic-omnigent-host@1
@@ -449,7 +506,7 @@ The trusted planner resolves the runtime pack, Host Class, image, materializer, 
 Before runner or session creation, the exact OpenCode host proves:
 
 ```text
-shared or transitional image digest matches the selected Host Class
+selected image digest matches the selected Host Class
 moonmind.omnigent.build_digest matches the catalog authority
 command -v opencode succeeds
 opencode --version is within >=1.17.7,<1.19.0
@@ -468,35 +525,38 @@ The selected-model probe uses Omnigent's portable OpenCode catalog helper inside
 
 ## 13. Deployment configuration
 
-### Current transitional configuration
+The default OpenCode and shared host coordinates use the same repository:
 
 ```env
-MOONMIND_OMNIGENT_GENERIC_HOST_ENABLED=true
-MOONMIND_OMNIGENT_OPENCODE_ENABLED=true
-OMNIGENT_OPENCODE_HOST_IMAGE_REF=ghcr.io/moonladderstudios/omnigent-host-opencode@sha256:<digest>
-OMNIGENT_OPENCODE_HOST_IMAGE=ghcr.io/moonladderstudios/omnigent-host-opencode
-OMNIGENT_OPENCODE_HOST_IMAGE_TAG=1.18.11
+OMNIGENT_OPENCODE_HOST_IMAGE=ghcr.io/moonladderstudios/omnigent-host-moonmind
+OMNIGENT_OPENCODE_HOST_IMAGE_TAG=latest
+OMNIGENT_SHARED_HOST_IMAGE=ghcr.io/moonladderstudios/omnigent-host-moonmind
+OMNIGENT_SHARED_HOST_IMAGE_TAG=latest
 ```
 
-Mutable image and tag coordinates are resolution inputs only. Launch authority is always the resolved digest.
+`OMNIGENT_OPENCODE_HOST_IMAGE_REF` selects an explicit immutable OpenCode host
+pin. `OMNIGENT_SHARED_HOST_IMAGE_REF` independently selects the shared host pin.
+The OpenCode keys remain the canonical OpenCode configuration; there is no
+`OMNIGENT_RUNTIME_HOST_IMAGE*` configuration or alias translation. Omitting the
+OpenCode repository in direct API startup selects the same default as Compose.
+Mutable image and tag coordinates are resolution inputs only. Launch authority
+is always the resolved digest, and explicit pins are never silently replaced.
 
-The deployment resolver treats the current Omnigent server and OpenCode host as one paired runtime. On the default release path, before publishing either image as launch authority, it requires the resolved server digest to match the host's `moonmind.omnigent.build_digest` label and executes `omnigent --version` in both immutable images. An explicitly configured independent build identity instead must match the host label. A build-identity or executable-version mismatch is persisted as a blocked compatibility verdict. Host Class selection and advertised harness inventory consume that verdict, so no plan or worker may launch the stale host while recurring image reconciliation waits for a matching runtime pack.
-
-### Desired shared-image configuration
-
-```env
-OMNIGENT_RUNTIME_HOST_IMAGE_REF=ghcr.io/moonladderstudios/omnigent-host-moonmind@sha256:<digest>
-OMNIGENT_RUNTIME_HOST_IMAGE=ghcr.io/moonladderstudios/omnigent-host-moonmind
-OMNIGENT_RUNTIME_HOST_IMAGE_TAG=<release>
-```
-
-Legacy OpenCode image variables may remain as temporary aliases. Configuration fails closed when both the canonical and alias values are present but identify different images.
+The deployment resolver treats the current Omnigent server and OpenCode host as
+one paired runtime. Before admitting a host, it requires the host's
+`moonmind.omnigent.build_digest` label to match the server build identity and
+executes `omnigent --version` in both immutable images. It also runs
+`services/omnigent/opencode-host/verify-warm-plugin-cache.sh` against the exact
+selected OpenCode image, proving plugin-enabled server startup with networking
+disabled. Missing or incomplete caches, failed startup, and probe timeouts
+block compatibility even when labels and versions match. Host Class selection
+and advertised inventory consume that verdict until reconciliation succeeds.
 
 `OMNIGENT_BUILD_DIGEST` remains optional operator authority only for an independently paired server and host build. An image manifest digest must not be substituted for the separate portable Omnigent build identity.
 
 ## 14. Image release and compatibility
 
-The shared release workflow should:
+The shared release contract requires:
 
 - resolve an immutable Omnigent base image
 - build `linux/amd64` and `linux/arm64` variants where supported
@@ -509,10 +569,12 @@ The shared release workflow should:
 - record each vendor runtime independently
 - generate provenance and SBOM data
 - publish a neutral manifest tag and digest
-- optionally publish the transitional `omnigent-host-opencode` alias to the same digest
 
-The transitional OpenCode image workflow also runs on a recurring schedule. It rebuilds against the current upstream server and base-host images so a new Omnigent release cannot leave the deployment's mutable server channel permanently ahead of the runtime pack. Runtime quarantine remains authoritative during the bounded publication window; successful recurring reconciliation automatically restores the Host Class when the paired image appears.
-
+The shared image release workflow runs on a recurring schedule against the
+current upstream server and base-host images. Runtime quarantine remains
+authoritative during the publication window; successful reconciliation restores
+availability only when the selected image passes compatibility and bootstrap
+checks.
 A new shared image does not automatically replace any Host Class. Each harness promotes the new digest only after its own conformance row passes.
 
 ## 15. Qualification and support
@@ -548,19 +610,18 @@ default or manual requalification. The deployment evidence publication retains
 one independently signed entry per launchable materializer class; entries are
 replaced only by a newly qualified entry for the same deployment-scoped class.
 
-## 16. Migration and rollback
+## 16. Deployment upgrades and rollback
 
-The image transition should proceed in this order:
+Operators selecting explicit image pins update the server and host as a
+compatible pair. Existing pins remain authoritative until changed; adopting a
+new MoonMind revision does not silently switch an old deployment to another
+image. The selected image must pass bootstrap admission and exact-host
+qualification before new plans can use it.
 
-1. Build and verify the neutral shared image.
-2. Publish the old OpenCode image name as an alias when compatibility requires it.
-3. Add `omnigent-opencode@2` pointing to the shared digest.
-4. Qualify OpenCode on the new class without changing its generic lifecycle.
-5. Admit new OpenCode plans to the new class.
-6. Preserve existing `omnigent-opencode@1` plans and evidence.
-7. Remove the old image name only after no active plan, deployment pin, or rollback path requires it.
-
-Rollback changes future Host Class selection. It does not rewrite an admitted execution plan or silently use another digest.
+The OpenCode Host Class retains `omnigent-opencode@1`; its resolved image and
+qualification evidence bind the exact immutable digest. Updates and rollbacks
+change future selection. They do not rewrite an admitted execution plan or
+silently use another digest for an in-flight run.
 
 ## 17. Non-goals
 
@@ -572,7 +633,7 @@ This document does not authorize:
 - workflow-authored runtime packs, image refs, probes, mounts, or Docker options
 - package installation during workflow launch
 - silent fallback to Codex, Claude, a direct runtime, another model, or another Provider Profile
-- removal of legacy image and Host Class identities before replay and rollback obligations pass
+- rewriting immutable image selections in existing execution plans
 
 ## 18. Strategic rule
 

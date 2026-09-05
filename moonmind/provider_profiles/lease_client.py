@@ -30,6 +30,60 @@ class CredentialLeasePurpose(str, Enum):
         }
 
 
+class CredentialLeaseMode(str, Enum):
+    """How one acquisition interacts with a Provider Profile's capacity ledger.
+
+    MoonLadderStudios/MoonMind#3878: configured capacity ``N`` is a shared
+    execution ceiling. Validation that touches no shared credential state must
+    not require capacity one, and exclusive credential maintenance must both
+    block new consumers and wait for existing ones to drain.
+    """
+
+    #: Counts against the profile's effective execution ceiling.
+    SHARED_EXECUTION = "shared_execution"
+    #: One in-flight holder per exact evidence identity; consumes no execution
+    #: slot and imposes no capacity-one requirement.
+    SINGLE_FLIGHT_VALIDATION = "single_flight_validation"
+    #: Blocks new consumers and drains existing credential consumers first.
+    EXCLUSIVE_MAINTENANCE = "exclusive_maintenance"
+
+
+#: A Provider Profile whose credential source is ``none`` materializes no
+#: shared, mutable authentication state, so validating its model evidence
+#: cannot corrupt a concurrent execution.
+CREDENTIALLESS_CREDENTIAL_SOURCES = frozenset({"none"})
+
+
+def credential_source_is_credentialless(credential_source: Any) -> bool:
+    """Return whether a profile owns no shared mutable credential state."""
+
+    value = getattr(credential_source, "value", credential_source)
+    return str(value or "").strip().lower() in CREDENTIALLESS_CREDENTIAL_SOURCES
+
+
+def credential_lease_mode(
+    *,
+    purpose: CredentialLeasePurpose | str,
+    credentialless: bool,
+) -> CredentialLeaseMode:
+    """Derive the canonical capacity-ledger mode for one lease acquisition.
+
+    The mode is a function of the declared purpose and the profile's durable
+    credential contract only. Callers never choose it, so no caller can widen
+    its own authority by naming a weaker mode.
+    """
+
+    normalized = CredentialLeasePurpose(purpose)
+    if not normalized.is_maintenance:
+        return CredentialLeaseMode.SHARED_EXECUTION
+    if (
+        normalized is CredentialLeasePurpose.CREDENTIAL_VALIDATION
+        and credentialless
+    ):
+        return CredentialLeaseMode.SINGLE_FLIGHT_VALIDATION
+    return CredentialLeaseMode.EXCLUSIVE_MAINTENANCE
+
+
 def deterministic_lease_owner_id(
     *,
     profile_id: str,
@@ -76,6 +130,9 @@ class CredentialLease:
     owner_id: str
     purpose: CredentialLeasePurpose
     already_held: bool = False
+    #: Ledger mode the manager actually applied. ``None`` only for leases
+    #: reconstructed from a persisted handle, where the mode is not replayed.
+    mode: CredentialLeaseMode | None = None
 
 
 class ProviderProfileLeaseClient:
@@ -139,6 +196,7 @@ class ProviderProfileLeaseClient:
                 "metadata": safe_metadata,
             },
         )
+        raw_mode = str(result.get("lease_mode") or "").strip()
         return CredentialLease(
             profile_id=str(result["profile_id"]),
             runtime_id=runtime_id,
@@ -146,6 +204,7 @@ class ProviderProfileLeaseClient:
             owner_id=owner_id,
             purpose=purpose,
             already_held=bool(result.get("already_held")),
+            mode=CredentialLeaseMode(raw_mode) if raw_mode else None,
         )
 
     async def _update_manager(
@@ -272,8 +331,12 @@ class ProviderProfileLeaseClient:
 
 
 __all__ = [
+    "CREDENTIALLESS_CREDENTIAL_SOURCES",
     "CredentialLease",
+    "CredentialLeaseMode",
     "CredentialLeasePurpose",
     "ProviderProfileLeaseClient",
+    "credential_lease_mode",
+    "credential_source_is_credentialless",
     "deterministic_lease_owner_id",
 ]
