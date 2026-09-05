@@ -612,7 +612,7 @@ The workflow executes the following stages:
  - Spawn a child `MoonMind.UserWorkflow` workflow with the node's parameters, linked to the parent via `manifestIngestWorkflowId` and `nodeId`.
  - Track child state transitions (`running` → `succeeded`/`failed`).
  - Apply failure policy: `fail_fast` cancels remaining nodes on first failure; `continue` proceeds.
-5. **Finalize**: Execute `manifest.write_summary` on the artifacts fleet to produce summary and run-index artifacts.
+5. **Finalize**: Execute `manifest.write_summary` on the artifacts fleet to produce summary and run-index artifacts. A node-execution workflow succeeds only when every node completes, under every failure policy. Failed, canceled, or stranded nodes cause a non-retryable Temporal workflow failure after those artifacts are written; failure details retain their refs so authoritative close state and the summary agree.
 
 ### 17.4 Idempotency and stable node IDs
 
@@ -651,6 +651,11 @@ Manifest runs produce three key artifacts:
 | Checkpoint (`checkpointArtifactRef`) | Per-(manifest, dataSource) state for incremental sync resumption |
 
 These are referenced via memo fields and stored in MinIO via the artifact Activities.
+Each launched node records the child handle's run ID before awaiting its result.
+`RetryNodes` replaces that identity with the newly started run, even when the child
+workflow ID is reused. The run index's `resultArtifactRef` comes from the child
+`executionOutcome.resultRef`, or the first available `executionOutcome.outputRefs`
+entry when there is no primary ref.
 
 ### 17.7 UpdateManifest modes
 
@@ -693,6 +698,6 @@ The manifest contract (`manifest_contract.py`) enforces this at validation time 
 1. **Manifest schema**: How expressive should dependencies be (simple DAG vs conditionals vs dynamic fan-out)?
 2. **Node execution mapping (future extension)**: Do we ever introduce inline activity-only nodes later, or keep the v1 rule that manifest nodes execute as child workflows?
 3. ~~**Delta semantics on UpdateManifest**: Do we allow changing existing node definitions, or only append new nodes?~~ **Resolved:** Both `APPEND` and `REPLACE_FUTURE` modes are supported (see §17.7).
-4. **Failure semantics**: In `BEST_EFFORT` mode, should the Temporal execution close as `succeeded` with errors recorded in summary artifacts, or close as `failed` once any node failure occurs?
+4. **Failure semantics**: Every node must complete for the node-execution workflow to succeed, including in `best_effort` mode (see §17.3).
 5. **Visibility lineage**: When do we standardize a bounded manifest-lineage Search Attribute (for example `mm_manifest_ingest_id`) instead of relying on the run index artifact for child-run lookup?
 6. **Sharding strategy**: At what size do we require Continue-As-New vs hierarchical shard ingests?

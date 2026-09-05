@@ -1197,3 +1197,106 @@ def test_authorization_lineage_propagated_to_child(
     assert initial_params["manifestIngestRunId"] == "run-auth"
     # Child parent close policy must be REQUEST_CANCEL
     assert initial_params["parentClosePolicy"] == "REQUEST_CANCEL"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "outcome, expected_ref",
+    [
+        ({"resultRef": "art_primary", "outputRefs": ["art_other"]}, "art_primary"),
+        ({"resultRef": None, "outputRefs": ["art_other"]}, "art_other"),
+        ({"resultRef": "", "outputRefs": [None, "", "art_other"]}, "art_other"),
+        ({}, None),  # Previous child payloads have no executionOutcome.
+    ],
+)
+async def test_manifest_child_contract_preserves_exact_run_and_nested_evidence(
+    monkeypatch, outcome, expected_ref
+):
+    instance = manifest_workflow_module.MoonMindManifestIngestWorkflow()
+    monkeypatch.setattr(
+        manifest_workflow_module.workflow, "patched",
+        lambda patch: patch == manifest_workflow_module.MANIFEST_TERMINAL_EVIDENCE_PATCH,
+    )
+    monkeypatch.setattr(
+        manifest_workflow_module.workflow, "info",
+        lambda: SimpleNamespace(workflow_id="manifest", run_id="parent-run", search_attributes={}),
+    )
+
+    class ChildHandle:
+        first_execution_run_id = "exact-child-run"
+
+        def __await__(self):
+            async def result():
+                assert instance._nodes["node"]["childRunId"] == self.first_execution_run_id
+                return {"status": "completed", "executionOutcome": outcome}
+            return result().__await__()
+
+    async def start_child(name, *, args, id, **kwargs):
+        assert name == "MoonMind.UserWorkflow"
+        assert args[0]["initial_parameters"]["manifestIngestRunId"] == "parent-run"
+        assert id == "manifest:parent-run:node"
+        return ChildHandle()
+
+    async def write_summary(name, *, args, **kwargs):
+        assert name == "manifest_write_summary"
+        index = manifest_ingest_module.build_manifest_run_index(
+            workflow_id=args[0]["workflow_id"], manifest_ref=args[0]["manifest_ref"],
+            nodes=args[0]["nodes"],
+        )
+        assert index.items[0].child_workflow_id == "manifest:parent-run:node"
+        assert index.items[0].child_run_id == "exact-child-run"
+        assert index.items[0].result_artifact_ref == expected_ref
+        return "summary", "index"
+
+    async def wait_condition(predicate):
+        assert predicate()
+
+    monkeypatch.setattr(manifest_workflow_module.workflow, "start_child_workflow", start_child)
+    monkeypatch.setattr(manifest_workflow_module.workflow, "execute_activity", write_summary)
+    monkeypatch.setattr(manifest_workflow_module.workflow, "wait_condition", wait_condition)
+    result = await instance.run({
+        "manifestArtifactRef": "manifest-ref", "planArtifactRef": "plan-ref",
+        "manifestNodes": [{
+            "nodeId": "node", "state": "ready", "childWorkflowId": None,
+            "childRunId": "previous-run", "resultArtifactRef": "previous-result",
+        }],
+    })
+    assert result["status"] == "completed"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("state", ["failed", "canceled", "pending", "ready"])
+@pytest.mark.parametrize("policy", [None, "fail_fast", "best_effort"])
+async def test_manifest_terminal_failure_retains_summary_refs(monkeypatch, state, policy):
+    from temporalio.exceptions import ApplicationError
+
+    instance = manifest_workflow_module.MoonMindManifestIngestWorkflow()
+    monkeypatch.setattr(manifest_workflow_module.workflow, "patched", lambda _patch: True)
+    monkeypatch.setattr(
+        manifest_workflow_module.workflow, "info",
+        lambda: SimpleNamespace(workflow_id="manifest", run_id="parent-run", search_attributes={}),
+    )
+    written = []
+
+    async def write_summary(name, *, args, **kwargs):
+        assert name == "manifest.write_summary"
+        written.append(args[0])
+        return {"artifact_id": "summary"}, {"artifact_id": "index"}
+
+    async def wait_condition(predicate):
+        assert predicate()
+
+    monkeypatch.setattr(manifest_workflow_module.workflow, "execute_activity", write_summary)
+    monkeypatch.setattr(manifest_workflow_module.workflow, "wait_condition", wait_condition)
+    with pytest.raises(ApplicationError) as failure:
+        await instance.run({
+            "manifestArtifactRef": "manifest-ref", "planArtifactRef": "plan-ref",
+            **({"executionPolicy": {"failurePolicy": policy}} if policy else {}),
+            "manifestNodes": [{"nodeId": "node", "state": state, "dependencies": ["missing"]}],
+        })
+    assert failure.value.type == "ManifestNodesIncomplete"
+    assert failure.value.non_retryable
+    assert failure.value.details == ({"summaryRef": "summary", "runIndexRef": "index"},)
+    assert len(written) == 1
+    assert written[0]["state"] == "failed"
+    assert instance._status == "failed"

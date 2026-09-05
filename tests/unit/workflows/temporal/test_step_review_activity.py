@@ -69,7 +69,7 @@ async def test_step_review_activity_with_previous_feedback():
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("provider_verdict", ["PASS", "FAIL"])
-@pytest.mark.parametrize("provider", ["google", "openai", "anthropic"])
+@pytest.mark.parametrize("provider", ["google", "openai", "anthropic", "Google", "OpenAI", "ANTHROPIC"])
 @pytest.mark.parametrize("model", [None, "default", "explicit-review-model"])
 async def test_configured_reviewer_crosses_worker_wrapper_and_provider_wire(provider, model, provider_verdict):
     import json
@@ -81,6 +81,7 @@ async def test_configured_reviewer_crosses_worker_wrapper_and_provider_wire(prov
     from moonmind.workflows.temporal.activities.reviewer import ConfiguredStepReviewer
 
     config = AppSettings(default_chat_provider=provider)
+    provider = provider.lower()
     selected = getattr(config, provider)
     setattr(selected, f"{provider}_api_key", "hermetic-provider-credential")
     setattr(selected, f"{provider}_enabled", True)

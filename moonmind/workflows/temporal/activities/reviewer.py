@@ -25,7 +25,7 @@ class ConfiguredStepReviewer:
         self._transport = transport
 
     async def review(self, *, prompt: str, model: str, timeout: int) -> str:
-        provider = self._config.default_chat_provider
+        provider = self._config.default_chat_provider.lower()
         if provider not in {"google", "openai", "anthropic"}:
             raise ReviewerUnavailable("Configured reviewer provider is unsupported.")
         provider_config = getattr(self._config, provider)

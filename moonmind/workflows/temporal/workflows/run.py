@@ -716,6 +716,8 @@ RUN_TERMINAL_STATE_ACTIVITY_PATCH = "run-terminal-state-activity-v1"
 # predate the manifest artifact writes keep replaying deterministically.
 RUN_FAILED_RUN_RECOVERY_MANIFEST_PATCH = "run-failed-run-recovery-manifest-v1"
 RUN_PAUSE_SAFE_BOUNDARIES_PATCH = "run-pause-safe-boundaries-v1"
+# Preserve dependency timers and memo commands in existing workflow histories.
+RUN_DEPENDENCY_PAUSE_SAFE_BOUNDARY_PATCH = "run-dependency-pause-safe-boundary-v1"
 # Replay-stable patch id for stamping mm_started_at when real work begins.
 RUN_REAL_STARTED_AT_PATCH = "run-real-started-at-v1"
 RUN_STEP_EXECUTION_MANIFEST_PATCH = "run-step-" + "attempt-manifest-v1"
@@ -10517,13 +10519,24 @@ class MoonMindRunWorkflow:
 
         try:
             await self._reconcile_dependencies(dependency_ids)
+            pause_safe_boundary_enabled = workflow.patched(
+                RUN_DEPENDENCY_PAUSE_SAFE_BOUNDARY_PATCH
+            )
             while not self._cancel_requested and (
                 (self._dependency_failure is None and self._unresolved_dependency_ids)
                 or self._paused
             ):
+                if pause_safe_boundary_enabled and self._paused:
+                    await self._wait_if_paused_at_safe_boundary()
+                    if not self._cancel_requested:
+                        self._waiting_reason = "dependency_wait"
+                        self._update_search_attributes()
+                        self._update_memo()
+                    continue
                 try:
                     await workflow.wait_condition(
                         lambda: self._cancel_requested
+                        or (pause_safe_boundary_enabled and self._paused)
                         or (self._dependency_failure is not None and not self._paused)
                         or (not self._paused and not self._unresolved_dependency_ids),
                         timeout=DEPENDENCY_RECONCILE_INTERVAL,

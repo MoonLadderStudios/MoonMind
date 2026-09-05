@@ -94,7 +94,11 @@ async def test_canonical_manifest_compiles_and_persists_real_artifacts(
 
 
 @pytest.mark.parametrize(
-    "control", ["complete", "cancel_and_retry", "parent_cancel", "update"]
+    "control", [
+        "complete", "cancel_and_retry", "parent_cancel", "update",
+        "child_failure", "cancel_node", "cancel_dependency",
+        "default_failure", "explicit_failure",
+    ]
 )
 async def test_manifest_controls_real_user_children(tmp_path, monkeypatch, control):
     import asyncio
@@ -190,6 +194,9 @@ async def test_manifest_controls_real_user_children(tmp_path, monkeypatch, contr
             if len(children) >= 2:
                 ready.set()
             await release.wait()
+            if control in {"child_failure", "default_failure", "explicit_failure"} and activity.info().workflow_id.endswith(":" + node_ids[0]):
+                from temporalio.exceptions import ApplicationError
+                raise ApplicationError("Manifest child failed", non_retryable=True)
             return {
                 "status": "COMPLETED",
                 "outputs": {
@@ -239,13 +246,17 @@ async def test_manifest_controls_real_user_children(tmp_path, monkeypatch, contr
                         "manifestArtifactRef": manifest_ref,
                         "planArtifactRef": plan_ref,
                         "executionPolicy": {
-                            "failurePolicy": "best_effort",
+                            **({} if control == "default_failure" else {
+                                "failurePolicy": "fail_fast" if control == "explicit_failure" else "best_effort",
+                            }),
                             "maxConcurrency": 2,
                         },
                         "manifestNodes": [
-                            {"nodeId": node, "state": "pending", "dependencies": []}
+                            {"nodeId": node, "state": "pending", "dependencies": [],
+                             "childWorkflowId": None, "childRunId": None, "resultArtifactRef": None}
                             for node in node_ids
-                        ],
+                        ] + ([{"nodeId": "dependent", "state": "pending", "dependencies": [node_ids[0]]}]
+                             if control == "cancel_dependency" else []),
                     },
                     id=str(uuid4()),
                     task_queue=queue,
@@ -268,7 +279,7 @@ async def test_manifest_controls_real_user_children(tmp_path, monkeypatch, contr
                     await handle.execute_update("SetConcurrency", {"maxConcurrency": 0})
                 )["accepted"]
                 assert (await handle.execute_update("Pause"))["accepted"]
-                if control == "cancel_and_retry":
+                if control in {"cancel_and_retry", "cancel_node", "cancel_dependency"}:
                     canceled = await handle.execute_update(
                         "CancelNodes", {"nodeIds": [node_ids[0]]}
                     )
@@ -282,9 +293,10 @@ async def test_manifest_controls_real_user_children(tmp_path, monkeypatch, contr
                         await env.client.get_workflow_handle(
                             first[0], run_id=first[1]
                         ).result()
-                    await handle.execute_update(
-                        "RetryNodes", {"nodeIds": [node_ids[0]]}
-                    )
+                    if control == "cancel_and_retry":
+                        await handle.execute_update(
+                            "RetryNodes", {"nodeIds": [node_ids[0]]}
+                        )
                 if control == "update":
                     response = await handle.execute_update(
                         "UpdateManifest",
@@ -306,12 +318,42 @@ async def test_manifest_controls_real_user_children(tmp_path, monkeypatch, contr
                 else:
                     await handle.execute_update("Resume")
                     release.set()
-                    result = await handle.result()
-                    assert result["status"] == "completed"
+                    incomplete = control in {
+                        "child_failure", "cancel_node", "cancel_dependency",
+                        "default_failure", "explicit_failure",
+                    }
+                    if incomplete:
+                        with pytest.raises(WorkflowFailureError) as failure:
+                            await handle.result()
+                        assert failure.value.cause.type == "ManifestNodesIncomplete"
+                        assert failure.value.cause.non_retryable
+                        result = failure.value.cause.details[0]
+                        description = await handle.describe()
+                        assert description.status.name == "FAILED"
+                        from api_service.core.sync import map_temporal_state_to_projection
+                        projection = await map_temporal_state_to_projection(description)
+                        assert projection["state"].value == "failed"
+                    else:
+                        result = await handle.result()
+                        assert result["status"] == "completed"
                     summary = json.loads(
                         await owners.read(result["summaryRef"], principal=owner)
                     )
                     assert summary["workflowId"] == handle.id
+                    assert summary["state"] == ("failed" if incomplete else "completed")
+                    index = json.loads(await owners.read(result["runIndexRef"], principal=owner))
+                    latest_runs = dict(children)
+                    for item in index["items"]:
+                        if item["nodeId"] == "dependent":
+                            assert item["state"] == "pending"
+                            assert item["childRunId"] is None
+                            continue
+                        assert item["childWorkflowId"] in latest_runs
+                        assert item["childRunId"] == latest_runs[item["childWorkflowId"]]
+                        if item["state"] == "completed":
+                            assert item["resultArtifactRef"] == output_ref
+                        else:
+                            assert item["resultArtifactRef"] is None
                     if control == "cancel_and_retry":
                         assert len(children) == 3
                         assert len({run_id for _id, run_id in children}) == 3
