@@ -4,7 +4,7 @@
 
 Status: **Desired-State UI Contract**  
 Owners: MoonMind Engineering  
-Last Updated: 2026-08-28
+Last Updated: 2026-09-05
 
 > [!NOTE]
 > This document supersedes the single `/settings` page with a three-way tab, radio, or segmented section switcher. The existing Settings dropdown remains the only cross-page navigation surface. Its **Configuration** group exposes the three former Settings sections as separate pages.
@@ -86,6 +86,8 @@ Provider Profiles, Managed Secrets, OAuth credentials, and Operations controls a
 Forms should lead with understandable choices and hide low-level implementation details until requested.
 
 For Provider Profile creation, credential connection remains visible, while raw SecretRefs, volume metadata, materialization details, secondary rate-limit controls, routing metadata, and launch shaping belong behind `Show advanced options`. Max parallel runs remains visible.
+
+Provider Profile refinements stay within this single form. Clearer choices, action wording, and policy summaries do not introduce a separate wizard, another route, or a parallel credential flow.
 
 ### 3.7 References over secrets
 
@@ -307,18 +309,22 @@ A page-local runtime filter may narrow the visible Provider Profile collection. 
 
 #### 7.1.1 Provider Profile creation
 
-Provider Profile creation uses progressive disclosure as defined by [ProviderProfileCreation.md](./ProviderProfileCreation.md).
+Provider Profile creation uses one standard form with progressive disclosure as defined by [ProviderProfileCreation.md](./ProviderProfileCreation.md). Improving this form does not add an onboarding route or replace the existing credential lifecycle.
 
 The standard form keeps these user-facing decisions visible:
 
 - Profile ID, with an auto-generated suggestion and review before creation;
-- runtime;
-- provider;
+- runtime selected from backend-owned choices;
+- provider selected from backend-owned choices scoped to that runtime;
 - optional account label;
 - high-level authentication method and connection action;
 - model and effort tier policy;
 - max parallel runs; and
 - optional `Use as runtime default` intent when readiness permits.
+
+Runtime/provider selectors display friendly labels but submit canonical IDs. Choice discovery reuses creation-capability authority and works before any profile or launch-ready host exists. The Settings runtime filter can seed a permitted creation runtime but does not redefine profile ownership. In particular, an Omnigent execution target is not the underlying Provider Profile runtime.
+
+Profile ID suggestions follow the existing backend constraints, remain visible, and stop updating automatically after the user edits them. Refreshes and account-label changes do not overwrite a user-authored ID. Format or uniqueness conflicts preserve the draft and require a reviewed resubmission, never an automatically suffixed retry. Section 4 of [ProviderProfileCreation.md](./ProviderProfileCreation.md) owns selection changes, unknown saved values, and explicit manual-path behavior.
 
 One unchecked `Show advanced options` checkbox reveals:
 
@@ -337,11 +343,19 @@ Credential setup itself does not disappear behind the checkbox. OAuth and API-ke
 
 Creation must use backend presets or omit untouched advanced values. It must not blindly submit global React defaults. A profile with required missing credentials is saved disabled, while successful guided setup may enable it when policy permits.
 
+The primary button describes the supported operation: `Create and connect` when creation continues into guided enrollment, `Create profile` when no setup continuation is needed, and `Save disabled profile` only for an explicitly supported manual outcome. Editing uses `Update provider profile`. Missing prerequisites disable the action with an explanation, and an in-flight save cannot be submitted again. Action wording and post-save continuation consume the same submitted capability/preset identity.
+
+Persistence, connection, activation, and launch readiness are separate outcomes. If creation succeeds but enrollment fails or is canceled, the page identifies the saved profile and offers its existing setup recovery action instead of prompting another creation. Ordinary copy describes the user's next action. Internal preset versions and normalization details remain in advanced diagnostics. The complete action contract is in section 4.9 of [ProviderProfileCreation.md](./ProviderProfileCreation.md).
+
 #### 7.1.2 Provider Profile edit behavior
 
 On edit, advanced options start expanded when the profile has non-default, unknown, incompatible, or invalid advanced values. Otherwise they may start collapsed with an effective-policy summary.
 
 Collapsing the region preserves every draft value. A validation error targeting a hidden field automatically expands the region and moves focus to the affected control.
+
+The collapsed summary distinguishes a confirmed recommendation, known custom overrides, and unavailable or invalid comparison state. An authentication capability alone is not evidence that every advanced field uses recommended values. Summaries reflect unsaved edits, applied resets, discard, normalized saves, and metadata changes without modifying the draft. Generated credential-volume and isolation metadata are not counted as user overrides merely because they differ from empty creation fields.
+
+Connection and readiness remain visible independently. `Using recommended settings` does not mean connected or launch ready, and custom settings are not automatically unhealthy. Summaries contain bounded safe labels, not credential references, host paths, command JSON, or secret values. Section 5.3 of [ProviderProfileCreation.md](./ProviderProfileCreation.md) owns comparison, source, warning, and uncertainty semantics.
 
 ### 7.2 User / Workspace
 
@@ -382,7 +396,7 @@ The page title `Operations` is distinct from any broader dropdown group also lab
 
 | Page | Primary data |
 |---|---|
-| Providers & Secrets | Provider Profiles, Managed Secret metadata, OAuth state, readiness diagnostics, profile creation presets |
+| Providers & Secrets | Provider Profiles, Managed Secret metadata, OAuth state, readiness diagnostics, permitted runtime/provider choices, profile creation capabilities and presets |
 | User / Workspace | catalog descriptors, effective values, scoped overrides, diagnostics, audit metadata |
 | Operations | worker state, queue and runtime health, operation capabilities, command history |
 
@@ -394,6 +408,8 @@ On route load:
 4. defer expensive diagnostics, audit timelines, and graphs until needed;
 5. show route-level and region-level loading states; and
 6. preserve page-local scope and filters across browser navigation.
+
+Provider creation queries are scoped to their canonical runtime/provider/authentication identity as applicable. A stale response cannot restore incompatible selections or authorize a new submission. A failed choice query preserves unrelated profile and Managed Secret content and does not introduce a manual-entry fallback without explicit backend capability.
 
 The backend may continue using `section=user-workspace` as catalog classification. It no longer represents a client-side Settings tab.
 
@@ -600,6 +616,8 @@ Forbidden patterns include:
 - eager loading of every configuration dataset on every route;
 - one hard-coded React row per setting key;
 - frontend copies of backend defaults or authoritative validation;
+- a second provider-creation wizard or a duplicate runtime/provider catalog for the same form;
+- recommended-policy summaries inferred solely from authentication-method availability;
 - unconditional client-side `enabled: true` for a credential-required Provider Profile;
 - a global fallback credential source or materialization mode for every provider;
 - plaintext credential inputs in generic settings;
@@ -675,18 +693,22 @@ The design is satisfied when:
 27. Navigation tests and telemetry use canonical destination keys instead of the removed `section` state.
 28. A concurrent-change `version_conflict` stops the save, refreshes the affected descriptors, shows the conflict, and requires explicit resubmission.
 29. Rendered rows keep the descriptor fields section 9 declares load-bearing, including active state, activation guidance, application requirements, and ordering.
+30. Runtime/provider creation choices work for the first profile, submit canonical IDs, and cannot be restored from stale metadata after a selection change.
+31. Profile ID suggestions preserve user edits and require review after format or uniqueness conflicts.
+32. Creation actions match supported save/setup behavior, and collapsed summaries distinguish recommendations, overrides, and uncertainty without implying credential readiness.
 
 ### 15.1 Conformance suite
 
-The acceptance criteria above are machine-verified by one conformance suite that
-crosses the routing, navigation, page-boundary, draft-guard, and Provider
-Profile boundaries:
+Tests for these contracts cross the routing, navigation, page-boundary,
+draft-guard, and Provider Profile boundaries:
 
 | File | Covers |
 |---|---|
 | `frontend/src/entrypoints/settingsRedesignConformance.test.tsx` | canonical route resolution and document titles, legacy `/settings`, `?section=`, `/secrets`, `/workers`, and retained-alias replacement redirects, dirty-draft departure after successful and failed saves, and the architecture guards for sections 12 and 14 |
 | `frontend/src/components/settings/providerProfileRedesignConformance.test.tsx` | the Provider Profile standard-creation matrix, progressive disclosure, model-tier integration, existing-profile compatibility, and the generated-contract guard described in `docs/UI/ProviderProfileCreation.md` |
 | `tests/unit/api/routers/test_dashboard_destination_registry_agreement.py` | exact agreement between the server destination registry and `frontend/src/lib/dashboardRoutes.ts`, including Configuration group membership and order |
+
+Provider Profile coverage must also exercise identity selection, non-destructive ID suggestions, truthful action/summary states, and creation-to-enrollment recovery as specified in section 14 of [ProviderProfileCreation.md](./ProviderProfileCreation.md). Test-file presence is not a claim that every desired-state criterion already passes. Component tests do not substitute for backend contract tests or live credential verification.
 
 Focused local commands:
 
@@ -716,7 +738,10 @@ substitute for the per-page unit tests, which remain in
 - The Settings trigger remains stable on all three pages.
 - Query parameters represent page-local state, not page identity.
 - Every page owns its title, status, authorization, loading, queries, and failures.
-- Provider Profile creation uses one collapsed advanced-options region.
+- Provider Profile creation uses one collapsed advanced-options region and no separate wizard.
+- Runtime/provider selectors use existing backend authority and do not require memorized IDs or an existing profile.
+- Suggested Profile IDs stay reviewable and respect user edits.
+- Creation actions describe the real setup continuation. Policy summaries do not imply credential readiness.
 - Max parallel runs remains visible.
 - Credential plumbing, volumes, secondary rate limits, routing metadata, and launch shaping are advanced or backend-derived.
 - Account label remains visible.
