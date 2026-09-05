@@ -299,6 +299,12 @@ class _LeaseRow:
         self.idempotency_key = fields.get("idempotency_key")
         self.execution_plan_ref = fields.get("execution_plan_ref")
         self.credential_generation = fields.get("credential_generation")
+        # MoonLadderStudios/MoonMind#3882: the admitted shared allowance and
+        # its generation are restored with the rest of the lease authority.
+        self.capacity_scope_ref = fields.get(
+            "capacity_scope_ref", "provider-profile:opencode-zen-free"
+        )
+        self.scope_generation = fields.get("scope_generation", 1)
         self.lease_state = fields.get("lease_state", "held")
         self.fencing_generation = fields.get("fencing_generation", 1)
         self.safe_metadata_json = fields.get("safe_metadata_json")

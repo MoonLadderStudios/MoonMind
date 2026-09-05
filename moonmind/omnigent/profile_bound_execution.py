@@ -2169,6 +2169,15 @@ class OmnigentProfileBoundExecutionCoordinator:
                     owner_id=provider_lease.owner_id,
                     cooldown_seconds=profile.cooldown_after_429_seconds,
                     reason="provider_429",
+                    # The grant generation makes this the identity of *this*
+                    # attempt: a retry after the cooldown holds a new grant and
+                    # reports a new observation, while a redelivery of this
+                    # signal is recognized as the duplicate it is
+                    # (MoonLadderStudios/MoonMind#3882).
+                    report_id=(
+                        f"{provider_lease.owner_id}:"
+                        f"{provider_lease.fencing_generation or 0}"
+                    ),
                 )
                 await emit(
                     "profile_cooldown",
@@ -2176,6 +2185,15 @@ class OmnigentProfileBoundExecutionCoordinator:
                     code="provider_429",
                     remediation_action="retry_after_provider_cooldown",
                     metadata={"providerProfileId": profile_id},
+                )
+            elif not result_failed:
+                # A provider interaction this run classified as successful is
+                # the qualifying evidence gradual recovery of a reduced shared
+                # allowance consumes.
+                await self._lease_client.record_provider_success(
+                    runtime_id=provider_runtime,
+                    profile_id=profile_id,
+                    owner_id=provider_lease.owner_id,
                 )
             return result
         except (Exception, asyncio.CancelledError) as exc:

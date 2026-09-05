@@ -731,6 +731,9 @@ async def _drive_coordinator_materialization_to_cleanup(
         async def record_cooldown(self, **_kwargs):
             return None
 
+        async def record_provider_success(self, **_kwargs):
+            return None
+
     class Hosts:
         def __init__(self):
             self.lease = _host_lease()

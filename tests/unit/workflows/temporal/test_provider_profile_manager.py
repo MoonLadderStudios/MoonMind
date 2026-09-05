@@ -2707,41 +2707,79 @@ class TestProviderProfileManagerHelpers:
             assert wf._profile_admitted_by_capacity(wf._profiles["b"]) is False
 
     def test_scope_rate_limit_halves_once_and_extends_cooldown(self):
-        from datetime import timezone
+        """The whole profile-and-scope transition is applied exactly once.
 
-        wf = self._make_workflow()
-        now = datetime.now(timezone.utc)
-        wf._apply_scope_rate_limit(
-            scope_ref="s1", retry_after_seconds=100, report_id="r1", now=now
-        )
-        # Default scope starts 1/1; use explicit scope for halving check.
-        wf._scopes["s2"] = wf._ensure_scope("s2")
-        wf._scopes["s2"].configured_limit = 8
-        wf._scopes["s2"].effective_limit = 8
-        wf._apply_scope_rate_limit(
-            scope_ref="s2", retry_after_seconds=100, report_id="r2", now=now
-        )
-        assert wf._scopes["s2"].effective_limit == 4
-        first_cooldown = wf._scopes["s2"].cooldown_until
-        wf._apply_scope_rate_limit(
-            scope_ref="s2", retry_after_seconds=100, report_id="r2", now=now
-        )
-        assert wf._scopes["s2"].effective_limit == 4
-        assert wf._scopes["s2"].cooldown_until == first_cooldown
-        later = now + timedelta(seconds=10)
-        wf._apply_scope_rate_limit(
-            scope_ref="s2", retry_after_seconds=500, report_id="r3", now=later
-        )
-        assert wf._scopes["s2"].effective_limit == 2
-        assert wf._scopes["s2"].cooldown_until is not None
-        assert wf._scopes["s2"].cooldown_until >= first_cooldown
+        Driven through the ``report_cooldown`` signal rather than the scope
+        helper, because MoonLadderStudios/MoonMind#3882's finding was in the
+        seam: the helper deduplicated and returned, and the handler then
+        halved the profile and reset its cooldown anyway.
+        """
 
-    def test_scope_recovers_gradually_without_exceeding_configured(self):
         from moonmind.workflows.temporal.workflows.provider_profile_manager import (
             CapacityScopeState,
         )
 
         wf = self._make_workflow()
+        wf._purpose_aware_capacity_ledger = True
+        wf._scope_accounting = True
+        now = datetime.now(timezone.utc)
+        wf._scopes["s2"] = CapacityScopeState(
+            scope_ref="s2", configured_limit=8, effective_limit=8
+        )
+        wf._profiles["p1"] = ProfileSlotState(
+            profile_id="p1",
+            max_parallel_runs=8,
+            cooldown_after_429_seconds=300,
+            rate_limit_policy="backoff",
+            enabled=True,
+            capacity_scope_ref="s2",
+            effective_limit=8,
+            purpose_aware_capacity=True,
+        )
+
+        def _report(report_id: str, retry_after: int, at: datetime) -> None:
+            with patch(
+                "moonmind.workflows.temporal.workflows.provider_profile_manager.workflow"
+            ) as mock_wf:
+                mock_wf.patched.return_value = True
+                mock_wf.now.return_value = at
+                mock_wf.logger = None
+                wf.report_cooldown(
+                    {
+                        "profile_id": "p1",
+                        "failure_class": "rate_limit",
+                        "retry_after_seconds": retry_after,
+                        "report_id": report_id,
+                    }
+                )
+
+        _report("r2", 100, now)
+        assert wf._scopes["s2"].effective_limit == 4
+        assert wf._profiles["p1"].admission_limit == 4
+        first_cooldown = wf._scopes["s2"].cooldown_until
+        first_profile_cooldown = wf._profiles["p1"].cooldown_until
+
+        _report("r2", 100, now)
+        assert wf._scopes["s2"].effective_limit == 4
+        assert wf._profiles["p1"].admission_limit == 4
+        assert wf._scopes["s2"].cooldown_until == first_cooldown
+        assert wf._profiles["p1"].cooldown_until == first_profile_cooldown
+
+        _report("r3", 500, now + timedelta(seconds=10))
+        assert wf._scopes["s2"].effective_limit == 2
+        assert wf._profiles["p1"].admission_limit == 2
+        assert wf._scopes["s2"].cooldown_until is not None
+        assert wf._scopes["s2"].cooldown_until >= first_cooldown
+
+    def test_scope_recovery_before_the_marker_still_uses_elapsed_time(self):
+        """A history recorded before the marker keeps the decisions it made."""
+
+        from moonmind.workflows.temporal.workflows.provider_profile_manager import (
+            CapacityScopeState,
+        )
+
+        wf = self._make_workflow()
+        assert wf._scope_accounting is False
         now = datetime.now(timezone.utc)
         wf._scopes["s1"] = CapacityScopeState(
             scope_ref="s1",
