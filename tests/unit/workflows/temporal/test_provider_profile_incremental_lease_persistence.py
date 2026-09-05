@@ -185,13 +185,13 @@ class _Recorder:
         self.statements.append(statement)
 
         class _Result:
-            def scalars(self_inner):
-                return self_inner
+            def scalars(self):
+                return self
 
-            def all(self_inner):
+            def all(self):
                 return []
 
-            def first(self_inner):
+            def first(self):
                 return None
 
         return _Result()

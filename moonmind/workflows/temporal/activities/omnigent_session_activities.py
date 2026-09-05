@@ -362,8 +362,10 @@ async def _plan_capacity_authority(
     }
     if len(selected) != 1:
         # Multi-profile plans keep Activity-side acquisition in deterministic
-        # profile order; the workflow admits one exact profile or none.
-        return {}
+        # profile order via OmnigentProviderLeaseCoordinator.acquire_all. Say so
+        # explicitly: an empty authority alone is indistinguishable from a
+        # missing one, and the workflow rejects the latter.
+        return {"capacityAcquisitionOwner": "activity"}
     profile_ref = next(iter(selected))
     if execution_profile_ref and execution_profile_ref != profile_ref:
         raise ValueError("AgentRun Provider Profile conflicts with execution plan")
@@ -376,6 +378,7 @@ async def _plan_capacity_authority(
         "providerProfileRef": profile_ref,
         "providerRuntimeId": runtime_id,
         "capacityScopeRef": profile.capacity_scope_ref,
+        "capacityAcquisitionOwner": "workflow",
     }
 
 

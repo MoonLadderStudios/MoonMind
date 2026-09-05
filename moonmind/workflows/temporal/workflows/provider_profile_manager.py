@@ -390,6 +390,22 @@ class ProfileSlotState:
         )
 
     @property
+    def exclusive_maintenance_active(self) -> bool:
+        """Whether exclusive credential maintenance is waiting or holding.
+
+        Exclusive maintenance blocks every new credential consumer, including
+        single-flight validation, for as long as it waits to drain and for as
+        long as it holds the credential state.
+        """
+
+        if not self.purpose_aware_capacity:
+            return False
+        return (
+            self.exclusive_maintenance_waiters > 0
+            or self.exclusive_maintenance_lease_count > 0
+        )
+
+    @property
     def execution_lease_count(self) -> int:
         return sum(
             1
@@ -419,10 +435,7 @@ class ProfileSlotState:
             return False
         if self.cooldown_until is not None:
             return False
-        if self.purpose_aware_capacity and (
-            self.exclusive_maintenance_waiters > 0
-            or self.exclusive_maintenance_lease_count > 0
-        ):
+        if self.exclusive_maintenance_active:
             # Exclusive credential maintenance must block new consumers while
             # it waits for existing ones to drain, and for as long as it holds
             # the credential state.
@@ -481,6 +494,8 @@ class ProfileSlotState:
         """
 
         if not self.purpose_aware_capacity:
+            return False
+        if self.exclusive_maintenance_active:
             return False
         if requester_workflow_id in self.current_leases:
             return False
@@ -1243,7 +1258,29 @@ class MoonMindProviderProfileManagerWorkflow:
         The owner ID is derived from the evidence identity by the caller, so a
         second concurrent maintainer computing the same identity observes
         ``already_held`` and stands down instead of re-probing the provider.
+
+        A validation lease is still a credential consumer, so it queues behind
+        exclusive credential maintenance rather than running concurrently with
+        credential mutation and publishing evidence for stale state.
         """
+
+        while (
+            not self._shutdown_requested and profile.exclusive_maintenance_active
+        ):
+            try:
+                await workflow.wait_condition(
+                    lambda: (
+                        self._shutdown_requested
+                        or not profile.exclusive_maintenance_active
+                    ),
+                    timeout=timedelta(seconds=60),
+                )
+            except TimeoutError:
+                continue
+        if self._shutdown_requested:
+            raise exceptions.ApplicationError(
+                "provider profile manager is shutting down", non_retryable=True
+            )
 
         if not profile.reserve_unmetered(
             requester_id,

@@ -18,6 +18,14 @@ import pytest
 import yaml
 
 from moonmind.config.settings import TemporalSettings
+from moonmind.omnigent.transport import (
+    OMNIGENT_HTTP_DEFAULT_KEEPALIVE_EXPIRY_SECONDS,
+    OMNIGENT_HTTP_DEFAULT_MAX_CONNECTIONS,
+    OMNIGENT_HTTP_DEFAULT_MAX_KEEPALIVE_CONNECTIONS,
+    OMNIGENT_HTTP_KEEPALIVE_EXPIRY_ENV,
+    OMNIGENT_HTTP_MAX_CONNECTIONS_ENV,
+    OMNIGENT_HTTP_MAX_KEEPALIVE_ENV,
+)
 from moonmind.omnigent.settings import (
     OMNIGENT_GENERIC_HOST_CAPACITY_ENV,
     OMNIGENT_GENERIC_HOST_COLD_LAUNCH_BURST_ENV,
@@ -99,3 +107,33 @@ def test_host_capacity_limits_are_declared_with_the_code_default(
 
     assert declared.startswith(f"${{{env_key}:-")
     assert int(_default_of(declared)) == expected_default
+
+
+@pytest.mark.parametrize("service", _HOST_CAPACITY_SERVICES)
+@pytest.mark.parametrize(
+    ("env_key", "expected_default"),
+    [
+        (OMNIGENT_HTTP_MAX_CONNECTIONS_ENV, OMNIGENT_HTTP_DEFAULT_MAX_CONNECTIONS),
+        (
+            OMNIGENT_HTTP_MAX_KEEPALIVE_ENV,
+            OMNIGENT_HTTP_DEFAULT_MAX_KEEPALIVE_CONNECTIONS,
+        ),
+        (
+            OMNIGENT_HTTP_KEEPALIVE_EXPIRY_ENV,
+            OMNIGENT_HTTP_DEFAULT_KEEPALIVE_EXPIRY_SECONDS,
+        ),
+    ],
+)
+def test_http_pool_limits_are_forwarded_on_the_compose_path(
+    service: str, env_key: str, expected_default: float
+) -> None:
+    """A pool setting Compose never forwards is fixed at its code default.
+
+    Compose uses the deployment ``.env`` only for interpolation, so a variable
+    absent from the service environment cannot be set by an operator at all.
+    """
+
+    declared = _service_environment(service)[env_key]
+
+    assert declared.startswith(f"${{{env_key}:-")
+    assert float(_default_of(declared)) == float(expected_default)

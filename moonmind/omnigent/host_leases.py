@@ -233,8 +233,15 @@ class InMemoryOmnigentHostLeaseRepository:
         return updated
 
 class DbOmnigentHostLeaseRepository:
-    def __init__(self, session_factory: Any) -> None:
+    def __init__(
+        self, session_factory: Any, *, capacity_admission: Any | None = None
+    ) -> None:
         self._session_factory = session_factory
+        # MoonLadderStudios/MoonMind#3878: aggregate host and cold-launch
+        # limits are only real if the count and the durable reservation are one
+        # serialized operation. Read-only pre-checks elsewhere are for waiting;
+        # this is where admission is enforced.
+        self._capacity_admission = capacity_admission
 
     @staticmethod
     def _from_row(row: Any) -> HostLeaseAuthority:
@@ -281,6 +288,16 @@ class DbOmnigentHostLeaseRepository:
             seconds=int(kwargs.get("ttl_seconds", 3600))
         )
         async with self._session_factory() as session:
+            if self._capacity_admission is not None:
+                decision = await self._capacity_admission.evaluate_within(session)
+                if not decision.admitted:
+                    raise HarnessPlatformError(
+                        decision.waiting_reason,
+                        code=(
+                            HarnessPlatformFailure
+                            .OMNIGENT_HOST_CAPACITY_UNAVAILABLE
+                        ),
+                    )
             binding = await session.get(OmnigentHostBindingRecordV2, binding_ref)
             if binding is None:
                 session.add(

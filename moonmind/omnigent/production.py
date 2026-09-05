@@ -266,7 +266,15 @@ def build_generic_omnigent_execution_services(
         )
 
     runtime_bindings = DbRuntimeBindingStore(session_factory)
-    host_leases = DbOmnigentHostLeaseRepository(session_factory)
+    # Aggregate machine capacity and cold-launch rate (#3878 invariant 7). One
+    # instance is shared: the realizer uses it for the fail-closed pre-check and
+    # the lease repository enforces it atomically with the reservation itself.
+    host_capacity_admission = GenericHostCapacityAdmission.from_environment(
+        session_factory=session_factory
+    )
+    host_leases = DbOmnigentHostLeaseRepository(
+        session_factory, capacity_admission=host_capacity_admission
+    )
     realizer = GenericOmnigentHostRealizer(
         runtime_binding_store=runtime_bindings,
         provider_lease_coordinator=OmnigentProviderLeaseCoordinator(
@@ -293,10 +301,7 @@ def build_generic_omnigent_execution_services(
         cleanup_authority=CanonicalCleanupAuthority(
             OmnigentControlPlaneStore(session_factory)
         ),
-        # Aggregate machine capacity and cold-launch rate (#3878 invariant 7).
-        host_capacity_admission=GenericHostCapacityAdmission.from_environment(
-            session_factory=session_factory
-        ),
+        host_capacity_admission=host_capacity_admission,
         execution_state_notifier=notify_execution_state,
     )
     registry = OmnigentExecutionRealizerRegistry()

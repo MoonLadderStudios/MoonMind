@@ -256,6 +256,13 @@ OMNIGENT_EXECUTION_PLAN_ADMISSION_PATCH_ID = (
 OMNIGENT_PRE_ACTIVITY_CAPACITY_ADMISSION_PATCH_ID = (
     "agent-run-omnigent-pre-activity-capacity-admission-v1"
 )
+# MoonLadderStudios/MoonMind#3878: a plan-bound generic Omnigent run holds
+# workflow-owned provider capacity, so its structured 429 must reach the same
+# ProviderProfileManager ledger the managed path reports to. Without this the
+# lease is released and the profile stays at full effective capacity.
+OMNIGENT_PROVIDER_COOLDOWN_REPORT_PATCH_ID = (
+    "agent-run-omnigent-provider-cooldown-report-v1"
+)
 MANAGED_STATUS_ACTIVITY_PATCH_ID = "agent-run-managed-status-activity-v1"
 MANAGED_STATUS_ROLLOUT_TOLERANCE_PATCH_ID = (
     "agent-run-managed-status-rollout-tolerance-v1"
@@ -3682,7 +3689,7 @@ class MoonMindAgentRun:
             manager_handle=manager_handle,
             runtime_id=runtime_id,
         )
-        manager_handle = await self._ensure_manager_and_signal(
+        await self._ensure_manager_and_signal(
             manager_id,
             runtime_id,
             request_slot=True,
@@ -3734,7 +3741,7 @@ class MoonMindAgentRun:
                     self._assigned_profile_id = profile_id
                     self.slot_assigned_event.set()
                     break
-                manager_handle = await self._ensure_manager_and_signal(
+                await self._ensure_manager_and_signal(
                     manager_id,
                     runtime_id,
                     request_slot=True,
@@ -3807,6 +3814,49 @@ class MoonMindAgentRun:
                 released_profile_id,
                 exc_info=True,
             )
+
+    async def _report_omnigent_provider_cooldown(
+        self,
+        *,
+        cooldown_seconds: int,
+        profile_id: str | None = None,
+    ) -> bool:
+        """Report a provider rate limit against workflow-owned Omnigent capacity.
+
+        MoonLadderStudios/MoonMind#3878: the generic realizer has no independent
+        ``record_cooldown`` call, and the managed cooldown branch is gated on a
+        manager handle this path never holds. Without this report the lease is
+        released and the profile stays at its configured ceiling, so repeated
+        runs keep hitting the provider instead of lowering effective admission.
+        """
+
+        reported_profile_id = (
+            str(profile_id or self._omnigent_capacity_profile_id or "").strip()
+        )
+        runtime_id = self._omnigent_capacity_runtime_id
+        if not reported_profile_id or not runtime_id:
+            return False
+        try:
+            manager_handle = workflow.get_external_workflow_handle(
+                self._manager_workflow_id(runtime_id)
+            )
+            await manager_handle.signal(
+                "report_cooldown",
+                {
+                    "profile_id": reported_profile_id,
+                    "cooldown_seconds": max(1, int(cooldown_seconds)),
+                },
+            )
+            return True
+        except Exception:
+            # Backpressure is an optimisation over the manager's own eviction
+            # and cooldown safety nets, so a failed report must not fail the run.
+            self._get_logger().warning(
+                "Failed to report Omnigent provider cooldown for profile %s",
+                reported_profile_id,
+                exc_info=True,
+            )
+            return False
 
     async def _await_omnigent_host_capacity(
         self,
@@ -6106,6 +6156,19 @@ class MoonMindAgentRun:
                                 and workflow.patched(
                                     OMNIGENT_PRE_ACTIVITY_CAPACITY_ADMISSION_PATCH_ID
                                 )
+                                # A multi-profile plan names the Activity as its
+                                # capacity owner; acquire_all takes every profile
+                                # in deterministic order there. Pre-Activity
+                                # admission would reject it for the missing
+                                # single authority it never had.
+                                and str(
+                                    getattr(
+                                        admission,
+                                        "capacity_acquisition_owner",
+                                        "workflow",
+                                    )
+                                )
+                                != "activity"
                             )
                             if admit_capacity_before_activity:
                                 request = (
@@ -6115,6 +6178,13 @@ class MoonMindAgentRun:
                                         parent_info=parent_info,
                                     )
                                 )
+                                # The capacity wait above is durable queueing,
+                                # not execution. Reset the clock at admission the
+                                # way the managed slot path does, or a run that
+                                # queued for hours starts its Activity with a
+                                # budget already spent and a successful result is
+                                # later overwritten with a timeout.
+                                overall_start = workflow.now()
                                 self.run_status = RunStatus.launching
                                 await self._signal_parent_child_state_changed(
                                     parent_info,
@@ -6136,7 +6206,21 @@ class MoonMindAgentRun:
                                         STREAMING_EXTERNAL_HEARTBEAT_TIMEOUT
                                     ),
                                     cancellation_type=(
-                                        ActivityCancellationType.TRY_CANCEL
+                                        # The workflow owns the provider lease
+                                        # but the Activity owns host, session,
+                                        # and credential cleanup. Waiting for
+                                        # cancellation to complete keeps those
+                                        # two facts consistent: with TRY_CANCEL
+                                        # the workflow goes terminal while the
+                                        # Activity still runs, the manager's
+                                        # terminal-owner verifier reclaims the
+                                        # lease, and the next run gets a slot
+                                        # whose host is still in use. The wait
+                                        # is bounded by the Activity's
+                                        # start-to-close and heartbeat timeouts.
+                                        ActivityCancellationType.WAIT_CANCELLATION_COMPLETED
+                                        if admit_capacity_before_activity
+                                        else ActivityCancellationType.TRY_CANCEL
                                     ),
                                 )
                             finally:
@@ -6146,14 +6230,10 @@ class MoonMindAgentRun:
                                 # Provider capacity is therefore released last,
                                 # by its owner (invariant 10).
                                 #
-                                # Under cancellation the Activity is TRY_CANCEL,
-                                # so it may still be draining. Signalling from a
-                                # cancelled workflow raises CancelledError
-                                # instead of releasing, which is the ordering we
-                                # want: the manager's lease-holder verification
-                                # reclaims a workflow-owned lease once its owner
-                                # is gone, and never while the Activity may
-                                # still hold host or session state.
+                                # Under cancellation the Activity is awaited to
+                                # completion, so by the time this runs the host
+                                # and session are drained and releasing the lease
+                                # cannot hand a live host to the next run.
                                 if admit_capacity_before_activity:
                                     await self._release_omnigent_provider_capacity(
                                         request=request
@@ -6771,6 +6851,32 @@ class MoonMindAgentRun:
                         )
                     )
                     requires_provider_cooldown = False
+
+                if (
+                    requires_provider_cooldown
+                    and request.agent_kind != "managed"
+                    and self._omnigent_capacity_profile_id
+                    and workflow.patched(
+                        OMNIGENT_PROVIDER_COOLDOWN_REPORT_PATCH_ID
+                    )
+                ):
+                    # Plan-bound generic Omnigent capacity is workflow-owned, so
+                    # this workflow is the only reporter the manager will hear.
+                    omnigent_cooldown_seconds = self._cooldown_seconds_for_profile(
+                        self._omnigent_capacity_profile_id
+                    )
+                    if (
+                        prefer_structured_failure
+                        and provider_failure_event is not None
+                    ):
+                        omnigent_cooldown_seconds = resolve_provider_cooldown_seconds(
+                            provider_failure_event,
+                            now=workflow.now(),
+                            default_seconds=omnigent_cooldown_seconds,
+                        )
+                    await self._report_omnigent_provider_cooldown(
+                        cooldown_seconds=omnigent_cooldown_seconds
+                    )
 
                 if (
                     request.agent_kind == "managed"
