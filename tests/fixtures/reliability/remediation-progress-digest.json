@@ -1,0 +1,23 @@
+{
+  "incidentWorkflowId": "mm:e2ed01e4-ffb1-45e3-b3b6-3eebb2994773",
+  "boundary": "agent_runtime.publish_artifacts to dynamic remediation verification",
+  "escapedFailure": "progressSignature must be a sha256 digest",
+  "verifierPayload": {
+    "schemaVersion": "moonspec-verify.issue_brief.v1",
+    "verdict": "ADDITIONAL_WORK_NEEDED",
+    "recommendedNextAction": "reattempt_current_step",
+    "recoverableInCurrentRuntime": false,
+    "remainingWork": [
+      {
+        "gapType": "verification",
+        "recoverableInCurrentRuntime": false,
+        "requirement": "CLI contract unit evidence + default admission authority suite + required hermetic journey + selector regression (execution)",
+        "remainingWork": "Execute the required tests in a runner with pytest or the managed container backend and attach PASS evidence."
+      }
+    ],
+    "validatedRefs": {
+      "authoritativeEvidenceDigest": "sha256:recomputed-by-publisher-from-remainingWork",
+      "progressEvidenceSchemaVersion": "remediation-progress-evidence/v1"
+    }
+  }
+}
