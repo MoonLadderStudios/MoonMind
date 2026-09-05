@@ -171,8 +171,8 @@ class OmnigentCodexCatalogReadiness(BaseModel):
         _SCHEMA_VERSION, alias="schemaVersion"
     )
     runtime_id: Literal["omnigent"] = Field("omnigent", alias="runtimeId")
-    display_name: Literal["Codex via Omnigent"] = Field(
-        "Codex via Omnigent", alias="displayName"
+    display_name: Literal["Omnigent"] = Field(
+        "Omnigent", alias="displayName"
     )
     agent_kind: Literal["external"] = Field("external", alias="agentKind")
     agent_id: Literal["omnigent"] = Field("omnigent", alias="agentId")

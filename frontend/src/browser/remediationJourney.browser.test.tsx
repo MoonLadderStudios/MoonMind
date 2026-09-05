@@ -174,7 +174,7 @@ const createdRelationship = {
 const readyOmnigentCatalog = {
   schemaVersion: 'moonmind.omnigent-codex-readiness.v2',
   runtimeId: 'omnigent',
-  displayName: 'Codex via Omnigent',
+  displayName: 'Omnigent',
   available: true,
   defaultExecutionProfileRef: 'omnigent-codex-default',
   executionProfiles: [
