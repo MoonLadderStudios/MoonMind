@@ -65,6 +65,19 @@ def _identity(prefix: str, *parts: str) -> str:
     return f"{prefix}:sha256:{digest}"
 
 
+def generic_host_lease_ref(
+    *, runtime_binding_id: str, host_class_ref: str
+) -> str:
+    """Return the deterministic host-lease identity for one runtime binding.
+
+    MoonLadderStudios/MoonMind#3880 requirement 5: the pre-Activity host
+    admission read and the transactional allocation must name the same
+    reservation, so both derive it here rather than each computing its own.
+    """
+
+    return _identity("omnigent-host-lease", runtime_binding_id, host_class_ref)
+
+
 def _conflict(message: str) -> NoReturn:
     raise HarnessPlatformError(
         message,
@@ -95,7 +108,9 @@ class InMemoryOmnigentHostLeaseRepository:
             provider_profile_refs,
         )
         binding_ref = _identity("omnigent-host-binding", execution_plan_ref)
-        lease_ref = _identity("omnigent-host-lease", runtime_binding_id, host_class_ref)
+        lease_ref = generic_host_lease_ref(
+            runtime_binding_id=runtime_binding_id, host_class_ref=host_class_ref
+        )
         existing = self._leases.get(lease_ref)
         if existing is not None:
             if (
@@ -278,7 +293,9 @@ class DbOmnigentHostLeaseRepository:
         runtime_binding_id = str(kwargs["runtime_binding_id"])
         host_class_ref = str(kwargs["host_class_ref"])
         binding_ref = _identity("omnigent-host-binding", execution_plan_ref)
-        lease_ref = _identity("omnigent-host-lease", runtime_binding_id, host_class_ref)
+        lease_ref = generic_host_lease_ref(
+            runtime_binding_id=runtime_binding_id, host_class_ref=host_class_ref
+        )
         existing = await self.get(lease_ref)
         if existing is not None:
             if existing.runtimeBindingId != runtime_binding_id:
@@ -456,6 +473,7 @@ class DbOmnigentHostLeaseRepository:
 
 __all__ = [
     "DbOmnigentHostLeaseRepository",
+    "generic_host_lease_ref",
     "HostLeaseAuthority",
     "InMemoryOmnigentHostLeaseRepository",
     "OmnigentHostLeaseRepository",

@@ -137,3 +137,68 @@ def test_http_pool_limits_are_forwarded_on_the_compose_path(
 
     assert declared.startswith(f"${{{env_key}:-")
     assert float(_default_of(declared)) == float(expected_default)
+
+
+# --- The chosen 8/16 execution rows (MoonLadderStudios/MoonMind#3880 AC7) ---
+#
+# The concurrency journey is exercised at 8 and 16. Those rows are only
+# meaningful if the deployment can actually be configured to carry them: a
+# limit that quietly sits at 4 somewhere between the setting and the ledger
+# would make the 16 row a test of the harness, not of the product.
+
+
+@pytest.mark.parametrize("execution_row", [8, 16])
+def test_deployment_settings_can_carry_the_chosen_execution_rows(
+    execution_row: int,
+) -> None:
+    """Every governed layer must be settable to the row, with no hidden cap."""
+
+    from moonmind.omnigent.host_capacity import evaluate_generic_host_capacity
+    from moonmind.omnigent.settings import generic_host_capacity
+
+    configured = generic_host_capacity(
+        env={OMNIGENT_GENERIC_HOST_CAPACITY_ENV: str(execution_row)}
+    )
+    assert configured == execution_row
+
+    worker_capacity = TemporalSettings(
+        TEMPORAL_AGENT_RUNTIME_WORKER_CONCURRENCY=str(execution_row)
+    ).agent_runtime_worker_concurrency
+    assert worker_capacity == execution_row
+
+    # The ledger admits exactly the configured number of hosts — no more, and
+    # crucially no fewer.
+    for active in range(execution_row):
+        assert (
+            evaluate_generic_host_capacity(
+                active_hosts=active,
+                recent_cold_launches=0,
+                host_capacity=execution_row,
+                cold_launch_burst=execution_row,
+                cold_launch_window_seconds=30,
+            ).admitted
+            is True
+        )
+
+
+@pytest.mark.parametrize("execution_row", [8, 16])
+def test_a_configurable_row_does_not_weaken_actual_admission(
+    execution_row: int,
+) -> None:
+    """Raising the setting raises the ceiling; it never removes the ceiling."""
+
+    from moonmind.omnigent.host_capacity import (
+        LIMITING_LAYER_HOST_CAPACITY,
+        evaluate_generic_host_capacity,
+    )
+
+    decision = evaluate_generic_host_capacity(
+        active_hosts=execution_row,
+        recent_cold_launches=0,
+        host_capacity=execution_row,
+        cold_launch_burst=execution_row,
+        cold_launch_window_seconds=30,
+    )
+
+    assert decision.admitted is False
+    assert decision.limiting_layer == LIMITING_LAYER_HOST_CAPACITY

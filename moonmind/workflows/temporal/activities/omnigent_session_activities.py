@@ -342,8 +342,13 @@ async def _plan_capacity_authority(
     MoonLadderStudios/MoonMind#3878 invariant 6: waiting for Provider Profile
     capacity must be durable workflow state, so the workflow needs the exact
     profile, its runtime family, and its capacity scope before it starts the
-    long execution Activity. Only these compact identities cross the boundary;
-    no credential, secret, or host detail does.
+    long execution Activity.
+
+    MoonLadderStudios/MoonMind#3880 requirement 1 adds the credential
+    generation observed at admission: the workflow records it on its ticket so
+    the execution Activity can fence a rotation that happened while the run
+    queued. Only these compact identities cross the boundary; no credential,
+    secret, or host detail does.
 
     Only the generic host plane admits capacity before its Activity, so only it
     resolves this authority. Resolving it for every realizer would add a
@@ -356,28 +361,44 @@ async def _plan_capacity_authority(
 
     if plan.payload.executionRealizerRef != "generic-omnigent-host@1":
         return {}
-    selected = {
-        binding.providerProfileRef
-        for binding in plan.payload.credentialBindings.values()
-    }
+    selected = sorted(
+        {
+            binding.providerProfileRef
+            for binding in plan.payload.credentialBindings.values()
+        }
+    )
     if len(selected) != 1:
-        # Multi-profile plans keep Activity-side acquisition in deterministic
-        # profile order via OmnigentProviderLeaseCoordinator.acquire_all. Say so
-        # explicitly: an empty authority alone is indistinguishable from a
-        # missing one, and the workflow rejects the latter.
+        # MoonLadderStudios/MoonMind#3880 requirement 4: the ProviderProfile
+        # manager ledger holds at most one lease per requester workflow, so a
+        # workflow-owned all-required admission across several profiles is not
+        # expressible without a second capacity ledger. Say so explicitly.
+        # Histories recorded before the pre-Activity path keep their classified
+        # Activity acquisition; a new run is rejected before execution.
         return {"capacityAcquisitionOwner": "activity"}
-    profile_ref = next(iter(selected))
-    if execution_profile_ref and execution_profile_ref != profile_ref:
+    if execution_profile_ref and execution_profile_ref != selected[0]:
         raise ValueError("AgentRun Provider Profile conflicts with execution plan")
+    profiles: list[dict[str, Any]] = []
     async with async_session_maker() as session:
-        profile = await session.get(ManagedAgentProviderProfile, profile_ref)
-    if profile is None:
-        raise ValueError("selected Provider Profile no longer exists")
-    runtime_id = str(getattr(profile.runtime_id, "value", profile.runtime_id))
+        for profile_ref in selected:
+            profile = await session.get(ManagedAgentProviderProfile, profile_ref)
+            if profile is None:
+                raise ValueError("selected Provider Profile no longer exists")
+            profiles.append(
+                {
+                    "providerProfileRef": profile_ref,
+                    "providerRuntimeId": str(
+                        getattr(profile.runtime_id, "value", profile.runtime_id)
+                    ),
+                    "capacityScopeRef": profile.capacity_scope_ref,
+                    "credentialGeneration": int(profile.credential_generation),
+                }
+            )
     return {
-        "providerProfileRef": profile_ref,
-        "providerRuntimeId": runtime_id,
-        "capacityScopeRef": profile.capacity_scope_ref,
+        "providerProfileRef": profiles[0]["providerProfileRef"],
+        "providerRuntimeId": profiles[0]["providerRuntimeId"],
+        "capacityScopeRef": profiles[0]["capacityScopeRef"],
+        "capacityProfiles": profiles,
+        "hostClassRef": plan.payload.hostClassRef,
         "capacityAcquisitionOwner": "workflow",
     }
 
@@ -391,18 +412,54 @@ async def omnigent_admit_generic_host_capacity_activity(
     durable host-lease ledger with no side effects, so the AgentRun workflow
     holds the wait as durable workflow state (invariant 6) instead of
     occupying an execution Activity slot.
+
+    MoonLadderStudios/MoonMind#3880 requirement 5: whether this run already
+    holds a host is read from the authoritative ledger, keyed by the run's
+    stable runtime binding, not taken from a caller-supplied boolean. A retry
+    or a requeue after a lost slot therefore reuses the reservation the ledger
+    already records and is never refused by the capacity it is counted in.
     """
 
     from api_service.db.base import async_session_maker
     from moonmind.omnigent.host_capacity import GenericHostCapacityAdmission
 
+    already_allocated = await _run_already_holds_generic_host(payload)
     admission = GenericHostCapacityAdmission.from_environment(
         session_factory=async_session_maker
     )
-    decision = await admission.evaluate(
-        already_allocated=bool(payload.get("alreadyAllocated"))
+    decision = await admission.evaluate(already_allocated=already_allocated)
+    return {
+        **decision.as_payload(),
+        "alreadyAllocated": already_allocated,
+        "waitingReason": decision.waiting_reason,
+    }
+
+
+async def _run_already_holds_generic_host(payload: Mapping[str, Any]) -> bool:
+    """Return whether this run's own host lease is already in the ledger."""
+
+    from api_service.db.base import async_session_maker
+    from api_service.db.models import OmnigentHostLeaseRecordV2
+    from moonmind.omnigent.host_capacity import ACTIVE_HOST_LEASE_STATUSES
+    from moonmind.omnigent.host_leases import generic_host_lease_ref
+    from moonmind.omnigent.runtime_bindings import stable_binding_id
+
+    execution_plan_ref = str(payload.get("executionPlanRef") or "").strip()
+    idempotency_key = str(payload.get("idempotencyKey") or "").strip()
+    host_class_ref = str(payload.get("hostClassRef") or "").strip()
+    if not (execution_plan_ref and idempotency_key and host_class_ref):
+        # A caller that cannot name its binding has no reservation to reuse.
+        return bool(payload.get("alreadyAllocated"))
+    lease_ref = generic_host_lease_ref(
+        runtime_binding_id=stable_binding_id(
+            execution_plan_ref=execution_plan_ref,
+            idempotency_key=idempotency_key,
+        ),
+        host_class_ref=host_class_ref,
     )
-    return {**decision.as_payload(), "waitingReason": decision.waiting_reason}
+    async with async_session_maker() as session:
+        row = await session.get(OmnigentHostLeaseRecordV2, lease_ref)
+    return row is not None and str(row.status) in ACTIVE_HOST_LEASE_STATUSES
 
 
 def _validate_plan_support_authority(plan: Any) -> None:
