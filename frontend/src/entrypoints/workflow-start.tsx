@@ -8566,9 +8566,6 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
   const selectedOmnigentPolicyAvailable = selectableOmnigentPolicies.some(
     (policy) => policy.ref === omnigentLaunchPolicyRef,
   );
-  const selectedOmnigentLaunchPolicy = selectableOmnigentPolicies.find(
-    (policy) => policy.ref === omnigentLaunchPolicyRef,
-  );
   const omnigentSelectionGateReason =
     effectiveOmnigentReadiness?.gateReasons?.[0]?.message ||
     (!selectedProfileIsGenericV2
@@ -14141,21 +14138,10 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
             Profile cannot be submitted: {selectedConfiguredProfile.execution_selection_error.message}
           </div>
         ) : null}
-        {runtime.trim().toLowerCase() === "omnigent" ? (
-          <>
-            {!omnigentSelectionEligible && profileSelectionError ? (
-              <div className="notice error small" role="alert">
-                Omnigent cannot be submitted: {profileSelectionError}
-              </div>
-            ) : null}
-            <details className="notice small" aria-label="Effective Omnigent selection"><summary>Execution details</summary>
-              <div>Runtime: {selectedProfileIsGenericV2 ? selectedOmnigentAgentProfile?.displayName || "Omnigent" : "Omnigent"}</div>
-              <div>Profile: {providerOptions.find((option) => option.id === providerProfile)?.label || historicalOmnigentProviderProfile?.label || providerProfile || "Not selected"}</div>
-              <div>Host mode: {selectedOmnigentLaunchPolicy?.hostMode === "on_demand_docker" ? "On-demand Docker" : selectedOmnigentLaunchPolicy?.hostMode === "static_compose" ? "Static Compose" : "Not selected"}</div>
-              <div>Policy: {omnigentLaunchPolicyRef || "Not selected"}</div>
-              <div>Repository: {repository.trim() || "Not selected"}</div>
-            </details>
-          </>
+        {runtime.trim().toLowerCase() === "omnigent" && !omnigentSelectionEligible && profileSelectionError ? (
+          <div className="notice error small" role="alert">
+            Omnigent cannot be submitted: {profileSelectionError}
+          </div>
         ) : null}
 
         {selectedProfileSupportsModelControls ? (
