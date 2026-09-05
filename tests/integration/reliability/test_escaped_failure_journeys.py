@@ -280,13 +280,17 @@ pytestmark = [
 REPO_ROOT = Path(__file__).resolve().parents[3]
 
 
+@pytest.mark.parametrize("replay_id", [
+    "direct-managed-fanout-readiness",
+    "direct-managed-fanout-repository-context",
+])
 async def test_direct_managed_fanout_crosses_repository_and_launch_readiness(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
+    replay_id: str,
 ) -> None:
-    """Replay mm:91c47b8e across both pre-launch authority handoffs."""
+    """Replay direct fan-out failures across repository and runtime authority."""
 
-    replay_id = "direct-managed-fanout-readiness"
     manifest = load_replay(replay_id, "manifest.json")
     expected = load_replay(replay_id, "expected-outcome.json")
     evidence = RepositoryClientEvidence(
@@ -325,6 +329,7 @@ async def test_direct_managed_fanout_crosses_repository_and_launch_readiness(
         "MOONMIND_URL": "http://api:8000",
         "MOONMIND_EXECUTION_FANOUT_BEARER_TOKEN": "stale-token",
         "MOONMIND_EXECUTION_FANOUT_BEARER_TOKEN_FILE": "/stale/token-file",
+        "MOONMIND_REPOSITORY_CONNECTION_REF": "repository-connection:stale",
     }
     launcher._materialize_execution_fanout_environment(
         environment=environment,
@@ -348,6 +353,10 @@ async def test_direct_managed_fanout_crosses_repository_and_launch_readiness(
     assert capability.agent_run_id == manifest["agentRunId"]
     assert capability.step_id == manifest["logicalStepId"]
     assert capability.runtime_id == manifest["targetRuntime"]
+    assert (
+        environment["MOONMIND_REPOSITORY_CONNECTION_REF"]
+        == resolved_repository.connection_ref
+    )
     assert "MOONMIND_EXECUTION_FANOUT_BEARER_TOKEN_FILE" not in environment
 
 
