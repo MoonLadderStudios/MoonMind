@@ -6,6 +6,8 @@ selection data, never launch authority or provider/host secret material.
 
 from __future__ import annotations
 
+from moonmind.omnigent.harness_platform.harness_registry import harness_registration
+
 import json
 import os
 import re
@@ -171,8 +173,8 @@ class OmnigentCodexCatalogReadiness(BaseModel):
         _SCHEMA_VERSION, alias="schemaVersion"
     )
     runtime_id: Literal["omnigent"] = Field("omnigent", alias="runtimeId")
-    display_name: Literal["Codex via Omnigent"] = Field(
-        "Codex via Omnigent", alias="displayName"
+    display_name: Literal["Omnigent"] = Field(
+        "Omnigent", alias="displayName"
     )
     agent_kind: Literal["external"] = Field("external", alias="agentKind")
     agent_id: Literal["omnigent"] = Field("omnigent", alias="agentId")
@@ -1660,6 +1662,7 @@ async def get_omnigent_execution_readiness(
                         or "native-server",
                         materializer_refs=[materializer],
                         requested_host_mode=get_launch_policy(policy_ref).hostMode,
+                        requested_host_class_ref=harness_registration(harness.id).hostClassRef,
                     )
                     for policy_ref in policy_refs
                 ]

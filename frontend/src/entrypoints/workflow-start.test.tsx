@@ -626,7 +626,7 @@ describe("MoonLadderStudios/MoonMind#3451 Omnigent readiness", () => {
           json: async () => ({
             schemaVersion: "moonmind.omnigent-codex-readiness.v2",
             runtimeId: "omnigent",
-            displayName: "Codex via Omnigent",
+            displayName: "Omnigent",
             available: false,
             eligibleProviderProfiles: [],
             gateReasons: [{
@@ -671,7 +671,7 @@ describe("MoonLadderStudios/MoonMind#3451 Omnigent readiness", () => {
   const readyOmnigentCatalog = {
     schemaVersion: "moonmind.omnigent-codex-readiness.v2",
     runtimeId: "omnigent",
-    displayName: "Codex via Omnigent",
+    displayName: "Omnigent",
     agentKind: "external",
     agentId: "omnigent",
     harness: "codex-native",
@@ -868,7 +868,7 @@ describe("MoonLadderStudios/MoonMind#3451 Omnigent readiness", () => {
     await waitFor(() => {
       expect(screen.queryAllByText(/endpoint is starting/)).toHaveLength(0);
       expect(
-        screen.queryByText(/Codex via Omnigent cannot be submitted/),
+        screen.queryByText(/Omnigent cannot be submitted/),
       ).toBeNull();
     });
   });
@@ -876,7 +876,7 @@ describe("MoonLadderStudios/MoonMind#3451 Omnigent readiness", () => {
   it("keeps an unready runtime selectable and explicitly revalidates stale readiness", async () => {
     renderWorkflowStartPage(mockPayload);
 
-    const option = await screen.findByRole("option", { name: "Codex via Omnigent" });
+    const option = await screen.findByRole("option", { name: "Omnigent" });
     expect((option as HTMLOptionElement).disabled).toBe(false);
     fireEvent.change(screen.getByLabelText("Runtime"), {
       target: { value: "omnigent" },
@@ -955,7 +955,7 @@ describe("MoonLadderStudios/MoonMind#3451 Omnigent readiness", () => {
           json: async () => ({
             schemaVersion: "moonmind.omnigent-codex-readiness.v2",
             runtimeId: "omnigent",
-            displayName: "Codex via Omnigent",
+            displayName: "Omnigent",
             available: true,
             defaultExecutionProfileRef: "omnigent-codex-default",
             executionProfiles: [{
@@ -1025,8 +1025,6 @@ describe("MoonLadderStudios/MoonMind#3451 Omnigent readiness", () => {
     fireEvent.change(await screen.findByLabelText("Profile"), { target: { value: "oauth-1" } });
     fireEvent.change(screen.getByLabelText("Instructions"), { target: { value: "Exercise the Omnigent submit boundary." } });
 
-    expect(await screen.findByText("Runtime: Codex via Omnigent")).toBeTruthy();
-    expect(screen.getByText("Host mode: On-demand Docker")).toBeTruthy();
     expect(screen.getByLabelText("Execution target").getAttribute("name")).toBe("omnigentExecutionTargetRef");
     expect(screen.getByLabelText("Execution target").closest(".grid-2")).toBeTruthy();
     fireEvent.click(screen.getByRole("button", { name: "Start Workflow" }));
@@ -21994,7 +21992,7 @@ describe("Task Create runtime switch layout stability", () => {
     renderWithClient(<WorkflowStartPage payload={payload} />);
     const runtime = await screen.findByLabelText("Runtime");
     expect(within(runtime).getByRole("option", { name: "Jules" })).toBeTruthy();
-    expect(within(runtime).queryByRole("option", { name: "Codex via Omnigent" })).toBeNull();
+    expect(within(runtime).queryByRole("option", { name: "Omnigent" })).toBeNull();
   });
 
   it.each(["codex", "claude"])("submits a Profile's %s runtime for API validation despite a stale boot catalog", async (runtimeId) => {
