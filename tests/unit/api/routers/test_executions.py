@@ -18280,6 +18280,61 @@ def test_mm3788_create_execution_accepts_provider_profile_owned_by_selected_runt
     assert initial_parameters["profileId"] == "claude_minimax_team"
 
 
+@pytest.mark.parametrize("runtime", ["claude_code", "codex_cli"])
+@pytest.mark.parametrize("selection", ["profile_inferred", "omitted", "explicit"])
+def test_profile_selected_runtime_survives_deployment_default(
+    monkeypatch, runtime, selection
+) -> None:
+    """Replay the UI's untouched advanced-runtime control at Temporal admission."""
+    monkeypatch.setattr(settings.workflow, "default_runtime", "omnigent")
+    profile = _mm3788_provider_profile(profile_id="subscription", runtime_id=runtime)
+    profile.provider_id = "anthropic" if runtime == "claude_code" else "openai"
+    body = _mm3788_task_request(target_runtime=runtime, profile_id=profile.profile_id)
+    authored = body["payload"]["workflow"]["runtime"]
+    model = "claude-opus-5" if runtime == "claude_code" else "gpt-5"
+    authored.update(model=model, effort="xhigh")
+    if selection == "profile_inferred":
+        authored["authored"] = False
+    elif selection == "omitted":
+        del body["payload"]["targetRuntime"]
+        del authored["mode"]
+
+    for test_client, service in _mm3788_client(profile):
+        response = test_client.post("/api/executions", json=body)
+
+    assert response.status_code == 201, response.text
+    parameters = service.create_execution.await_args.kwargs["initial_parameters"]
+    assert parameters["targetRuntime"] == runtime
+    assert parameters["profileId"] == profile.profile_id
+    assert parameters["model"] == model
+    assert parameters["effort"] == "xhigh"
+    assert parameters["workflow"]["runtime"]["mode"] == runtime
+
+
+@pytest.mark.parametrize("explicit_omnigent", [False, True])
+def test_profile_runtime_inference_does_not_bypass_omnigent_authority(
+    monkeypatch, explicit_omnigent
+) -> None:
+    monkeypatch.setattr(settings.workflow, "default_runtime", "claude_code")
+    profile = _mm3788_provider_profile(
+        profile_id="subscription", runtime_id="claude_code"
+    )
+    profile.execution_configuration = {
+        "profileId": "missing", "version": 1, "digest": "sha256:" + "a" * 64,
+    }
+    body = _mm3788_task_request(
+        target_runtime="omnigent" if explicit_omnigent else "claude_code",
+        profile_id=profile.profile_id,
+    )
+    body["payload"]["workflow"]["runtime"]["authored"] = explicit_omnigent
+    for test_client, service in _mm3788_client(profile):
+        response = test_client.post("/api/executions", json=body)
+
+    assert response.status_code == 409, response.text
+    assert response.json()["detail"]["code"] == "profile_execution_configuration_required"
+    service.create_execution.assert_not_awaited()
+
+
 def test_mm3788_create_execution_rejects_legacy_runtime_alias_mismatch() -> None:
     """Canonical runtime IDs decide the comparison, not the submitted spelling."""
 

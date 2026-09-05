@@ -43,6 +43,14 @@ because model discovery expires or a host image changes. Disabled and disconnect
 Profiles remain visible with an actionable setup state. Credentials, trust,
 capability compatibility and actual-host model verification remain launch gates.
 
+When the advanced runtime control is untouched or omitted, the selected Profile
+owns runtime selection before deployment defaults apply. A supported direct
+runtime Profile without a compatible Omnigent configuration uses its owning
+runtime. A pinned or compatible Omnigent configuration keeps Omnigent authority,
+including when validation is incomplete; it cannot silently fall back to direct
+execution. Explicit runtime overrides remain subject to compatibility checks.
+The selected model and effort are preserved through this admission decision.
+
 ## 1. Summary
 
 MoonMind-managed runtimes such as Claude Code and Codex CLI do not map one-to-one to a single upstream company or a single authentication method.
