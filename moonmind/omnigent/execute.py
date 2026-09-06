@@ -1344,6 +1344,36 @@ async def _unsupported_bundle_upload(bundle_ref: str) -> dict[str, Any]:
     )
 
 
+def _journaled_marked_turn_failure_snapshot(
+    raw_events: list[dict[str, Any]],
+    normalized_events: list[dict[str, Any]],
+    snapshot: Mapping[str, Any],
+    *,
+    session_id: str,
+    marker: str,
+) -> dict[str, Any] | None:
+    """Recover a native rejection using durably recorded dispatch provenance.
+
+    Old journals lack this observation and remain readable, but cannot prove
+    that a failure was live rather than replayed before message dispatch.
+    """
+    for event in reversed(normalized_events):
+        reconciliation = (event.get("metadata") or {}).get("reconciliation") or {}
+        index = reconciliation.get("postDispatchRawEventIndex")
+        if type(index) is not int or not 0 <= index < len(raw_events):
+            continue
+        failed_snapshot = _marked_turn_failure_snapshot(
+            raw_events[index],
+            snapshot,
+            session_id=session_id,
+            marker=marker,
+            arrived_after_message_post=True,
+        )
+        if failed_snapshot is not None:
+            return failed_snapshot
+    return None
+
+
 async def _maybe_await(value: Any) -> Any:
     if inspect.isawaitable(value):
         return await value
@@ -2883,6 +2913,22 @@ async def run_omnigent_execution(
                 retry_state.get("turnTerminalResponseIds")
             )
             start_watchdog.restore_terminal_response_events(raw_events)
+            if terminal_status is None and isinstance(initial_snapshot, dict):
+                journaled_failure = _journaled_marked_turn_failure_snapshot(
+                    raw_events,
+                    normalized_events,
+                    initial_snapshot,
+                    session_id=session_id,
+                    marker=marker,
+                )
+                if journaled_failure is not None:
+                    terminal_status = "failed"
+                    terminal_snapshot_override = journaled_failure
+                    heartbeat_status["value"] = terminal_status
+                    external_state["terminalReconciliation"] = {
+                        "source": "journaled_native_failure",
+                        "status": terminal_status,
+                    }
             if (
                 terminal_status is None
                 and first_message_posted
@@ -3037,6 +3083,13 @@ async def run_omnigent_execution(
                         omnigent_session_id=session_id,
                         bridge_session_id=bridge_session_id,
                     )
+                    if arrived_after_message_post:
+                        # Persist observation provenance with the same journal
+                        # pair as the event, before any crash-prone snapshot or
+                        # harvest work. Provider payloads cannot set this field.
+                        normalized_bridge_event.event["metadata"]["reconciliation"][
+                            "postDispatchRawEventIndex"
+                        ] = (len(raw_events) - 1)
                     if normalized_bridge_event.diagnostic is not None:
                         event_diagnostics.append(normalized_bridge_event.diagnostic)
                     normalized_events.append(normalized_bridge_event.event)

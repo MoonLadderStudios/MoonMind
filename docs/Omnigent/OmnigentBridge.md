@@ -667,6 +667,16 @@ Heartbeats expose `currentTurnProgress`, `terminalEventToolOnlyCandidate`, `turn
 
 ## 10. Stream and event normalization
 
+The normalized journal records `metadata.reconciliation.postDispatchRawEventIndex`
+for each event observed after message dispatch, pointing into its paired raw
+journal. This provenance is committed with the journal refs before terminal
+snapshot reads or artifact harvesting. On Activity reattachment, a journaled
+native failure is evaluated against the current marked-turn snapshot before
+opening another stream. A crash before final terminal publication therefore
+preserves the original provider code and summary. Older journals remain
+readable, but missing dispatch provenance never authorizes treating a replayed
+failure as live; they retain snapshot-based reconciliation.
+
 ### 10.1 Raw event retention
 
 Provider frames are redacted and copied into:

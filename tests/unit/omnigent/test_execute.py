@@ -37,6 +37,7 @@ from moonmind.omnigent.execute import (
     _first_message_text,
     _marked_turn_item_state,
     _marked_turn_failure_snapshot,
+    _journaled_marked_turn_failure_snapshot,
     _marked_turn_timeout_diagnostics,
     _marked_turn_timeout_message,
     _MarkedTurnStartWatchdog,
@@ -1196,8 +1197,9 @@ def _never_started_client(
 @pytest.mark.parametrize(
     "agent_name", ["opencode-native-ui", "codex-native-ui", "claude-native-ui"]
 )
+@pytest.mark.parametrize("crash_at", [None, "journal", "harvest"])
 async def test_provider_rejection_after_injection_completion(
-    monkeypatch, tmp_path, agent_name
+    monkeypatch, tmp_path, agent_name, crash_at
 ):
     """The injection response must not hide a later native failure behind polling."""
     replay = json.loads(
@@ -1208,12 +1210,61 @@ async def test_provider_rejection_after_injection_completion(
     )
     marker = "MoonMind-Omnigent-Run:\n  correlationId: corr-1\n  idempotencyKey: idem-1"
     base = _never_started_client(marker, stream_shape="silent", streamed={"value": 0})
+    retrying = False
+    crashed = False
+    posts = []
+
+    class WorkerCrash(BaseException):
+        pass
+
+    class Store(_RecordingBridgeStore):
+        async def attach_session(self, _, session_id):
+            self.row.omnigent_session_id = session_id
+            return self.row
+
+        async def mark_posted(self, _, **kwargs):
+            self.row.first_message_state = "posted"
+            self.row.first_message_posted_at = "2026-09-06T00:00:00Z"
+            return self.row
+
+        async def attach_active_journal_refs(self, _, *, raw_ref, normalized_ref):
+            self.row.raw_events_ref = raw_ref
+            self.row.normalized_events_ref = normalized_ref
+            return self.row
+
+        async def append_events(self, _, events):
+            nonlocal crashed
+            if (
+                crash_at == "journal"
+                and not crashed
+                and any(
+                    event["type"] == "session.status"
+                    and event["normalizedStatus"] == "failed"
+                    for event in events
+                )
+            ):
+                crashed = True
+                raise WorkerCrash()
+
+    store = Store()
 
     class Client(base):
+        def __init__(self, **kwargs):
+            super().__init__(**kwargs)
+            if retrying:
+                self.posted.set()
+
+        async def post_event(self, session_id, payload):
+            posts.append(session_id)
+            return await super().post_event(session_id, payload)
+
         async def list_agents(self):
             return {"items": [{"id": "agent-1", "name": agent_name}]}
 
         async def stream_events(self, session_id):
+            assert (
+                not retrying
+            ), "journaled terminal evidence must precede SSE reattachment"
             await self.posted.wait()
             for event in replay["events"]:
                 yield event
@@ -1226,7 +1277,18 @@ async def test_provider_rejection_after_injection_completion(
     monkeypatch.setattr(
         "moonmind.omnigent.execute._MARKED_TURN_START_TIMEOUT_SECONDS", 0.05
     )
-    store = _RecordingBridgeStore()
+    import moonmind.omnigent.execute as execute_module
+
+    capture = execute_module._build_capture_bundle
+
+    async def capture_with_crash(**kwargs):
+        nonlocal crashed
+        if crash_at == "harvest" and not crashed and kwargs["harvest_resources"]:
+            crashed = True
+            raise WorkerCrash()
+        return await capture(**kwargs)
+
+    monkeypatch.setattr(execute_module, "_build_capture_bundle", capture_with_crash)
     request = _request().model_copy(
         update={
             "parameters": {
@@ -1238,11 +1300,21 @@ async def test_provider_rejection_after_injection_completion(
             }
         }
     )
+    gateway = LocalOmnigentArtifactGateway(root=tmp_path)
+    if crash_at:
+        with pytest.raises(WorkerCrash):
+            await run_omnigent_execution(
+                request, artifact_gateway=gateway, run_store=store
+            )
+        assert not store.terminal_calls
+        assert store.row.raw_events_ref and store.row.normalized_events_ref
+        retrying = True
     result = await run_omnigent_execution(
         request,
-        artifact_gateway=LocalOmnigentArtifactGateway(root=tmp_path),
+        artifact_gateway=gateway,
         run_store=store,
     )
+    assert posts == ["session-1"]
     assert result.failure_class == "integration_error"
     assert result.retry_recommendation == "reauthenticate"
     assert result.provider_error_code == "codex_reauth_required"
@@ -1260,7 +1332,8 @@ async def test_provider_rejection_after_injection_completion(
     "scenario",
     ["replayed", "other-session", "newer-user", "active", "unknown", "blank"],
 )
-def test_native_failure_requires_current_turn_authority(scenario):
+@pytest.mark.parametrize("source", ["live", "journal"])
+def test_native_failure_requires_current_turn_authority(scenario, source):
     snapshot = _never_started_snapshot("current-marker")
     event = {
         "type": "session.status",
@@ -1280,13 +1353,45 @@ def test_native_failure_requires_current_turn_authority(scenario):
         event["status"] = "new-provider-status"
     elif scenario == "blank":
         event["error"]["message"] = " "
-    assert (
-        _marked_turn_failure_snapshot(
+    if source == "journal":
+        metadata = {} if scenario == "replayed" else {"postDispatchRawEventIndex": 0}
+        failure = _journaled_marked_turn_failure_snapshot(
+            [event],
+            [{"metadata": {"reconciliation": metadata}}],
+            snapshot,
+            session_id="session-1",
+            marker="current-marker",
+        )
+    else:
+        failure = _marked_turn_failure_snapshot(
             event,
             snapshot,
             session_id="session-1",
             marker="current-marker",
             arrived_after_message_post=scenario != "replayed",
+        )
+    assert failure is None
+
+
+@pytest.mark.parametrize("index", [None, -1, True, "0", 99])
+def test_journaled_failure_requires_valid_dispatch_provenance(index):
+    """Old journal shapes cannot turn pre-dispatch replay into live evidence."""
+    event = {
+        "type": "session.status",
+        "status": "failed",
+        "conversation_id": "session-1",
+        "error": {
+            "message": "provider rejected credential",
+            "code": "codex_reauth_required",
+        },
+    }
+    assert (
+        _journaled_marked_turn_failure_snapshot(
+            [event],
+            [{"metadata": {"reconciliation": {"postDispatchRawEventIndex": index}}}],
+            _never_started_snapshot("current-marker"),
+            session_id="session-1",
+            marker="current-marker",
         )
         is None
     )
