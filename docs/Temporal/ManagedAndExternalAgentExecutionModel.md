@@ -231,6 +231,13 @@ Direct Codex managed sessions remain compatibility substrate during the Codex-th
 
 ### 7.1 Identity and topology
 
+Bootstrap and resolved-image evidence belongs to one deployment. Explicit
+`MOONMIND_OMNIGENT_BOOTSTRAP_STATE_PATH` and
+`MOONMIND_OMNIGENT_RESOLVED_IMAGES_PATH` values select the sole write destination;
+saves do not mirror evidence into another deployment path. Test containers mask
+repository runtime state with private storage so their startup probes cannot
+consume or replace live host compatibility evidence.
+
 The canonical request remains:
 
 ```text
@@ -453,6 +460,21 @@ Rules:
 
 The generic Container Jobs plane owns reusable workspace-resolution and daemon-translation primitives. Long-lived Omnigent hosts reuse them where compatible while retaining separate host/session lease semantics.
 
+Existing PR discovery follows remote-head verification. When publication adds
+no commits, discovery requires the workflow's previously accepted publication
+head, bound to the same workflow, repository, branch, and exact commit. An
+unchanged shared authored base does not grant this authority. The GitHub PR
+head must still match the verified commit before its URL crosses the durable
+result boundary. Older requests without accepted publication authority retain
+no-commit evidence but cannot discover a PR from that base alone.
+
+Before repository publication, the workspace owner fetches the authored base
+branch into its explicit remote-tracking ref using the same repository
+credential. A candidate-only clone must remain publishable without agent edits
+or an incidental fetch. An unavailable base stops publication before candidate
+mutation; it never substitutes another branch or treats an unknown commit count
+as successful publication.
+
 ---
 
 ## 11. Runtime filesystem and network policy
@@ -550,6 +572,13 @@ Every lane publishes as applicable:
 - cleanup and lease-release evidence.
 
 Artifact persistence is authoritative. Live publication is secondary and must not prevent terminal completion or durable capture when a subscriber transport fails.
+
+An accepted assessment artifact remains the controlling input for downstream
+issue steps. Implementation and publication steps consume its durable reference
+and the associated issue brief; their local assessment-path arguments do not
+declare new outputs or authorize replacement of that assessment. A fresh
+workspace need not reproduce the producer's local files. The initial assessment
+producer still must supply its declared verdict and brief before advancing.
 
 Terminal-contract validation occurs before MoonMind releases the workspace,
 retry budget, credential lease, or cleanup authority. A successful process exit
@@ -742,6 +771,11 @@ silently create a fresh checkout or switch source authority.
 
 Changes that add, remove, or reorder workflow commands use Temporal patch/version markers or Worker Versioning so in-flight histories replay to the recorded command path.
 
+Temporal resets preserve dynamic remediation child identities from the run
+identity recorded by the policy-compilation Activity. A new reset execution ID
+does not rename children already present in history. Continue-as-new executions
+retain their own recorded policy identity.
+
 ### 16.3 Rerun and re-resolution
 
 A rerun reuses the original immutable Skill and policy/profile snapshots by default. Explicit re-resolution is a distinct operator or workflow action.
@@ -771,6 +805,11 @@ Checkpoint capabilities remain distinct:
 - `session_state_checkpoint` preserves a provider/runtime session, thread, epoch, or external-state ref;
 - `step_workspace_checkpoint_capture` captures the workspace owned by a completed Step Execution;
 - `step_workspace_checkpoint_restore` materializes a declared compatible workspace checkpoint kind.
+
+Omnigent checkpoint extraction assigns restored files and their containing
+directories to the selected runtime identity before launch. Archive ownership is
+not runtime authority. Restored modes remain intact, and newly injected input
+artifacts retain their read-only projection contract.
 
 A session-state ref is not evidence of workspace capture or restore. `external_state_ref` can preserve Omnigent/provider continuity without being locally restorable.
 

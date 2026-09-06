@@ -26,6 +26,7 @@ from moonmind.workflows.temporal.story_output_tools import (
     register_story_output_tool_handlers,
 )
 from moonmind.workflows.temporal.workflows.run import MoonMindRunWorkflow
+from moonmind.workflows.temporal.github_issue_search import declared_prerequisites
 
 REPOSITORY = "MoonLadderStudios/MoonMind"
 PRESET = "github-issue-search-and-implement"
@@ -50,6 +51,7 @@ def activity_boundary(monkeypatch):
     requests = []
     pages = [[issue()]]
     detail = issue()
+    dependency_details = {}
 
     def handler(request):
         requests.append(request)
@@ -58,7 +60,9 @@ def activity_boundary(monkeypatch):
             if request.url.path == "/search/issues" and isinstance(payload, list):
                 payload = {"items": payload, "incomplete_results": False}
         else:
-            payload = detail
+            payload = dependency_details.get(request.url.path, detail)
+            if callable(payload):
+                payload = payload()
         return httpx.Response(200, json=payload)
 
     client_type = httpx.AsyncClient
@@ -113,8 +117,252 @@ def activity_boundary(monkeypatch):
         )
 
     return SimpleNamespace(
-        execute=execute, pages=pages, requests=requests, detail=detail
+        execute=execute, pages=pages, requests=requests, detail=detail,
+        dependency_details=dependency_details,
     )
+
+
+@pytest.mark.parametrize(
+    "declaration",
+    [
+        "Parent epic: #4003. Completion depends on #4004–#4006. Related #4007.",
+        "Parent epic: #4003. Integration prerequisites: #4004, #4005 and #4006.",
+        "Parent epic: #4003. Depends on: #4004–#4006. Coordinate with #4007.",
+    ],
+)
+def test_explicit_prerequisites_preserve_ranges_without_parent_or_related_links(
+    declaration,
+):
+    assert declared_prerequisites(declaration, REPOSITORY) == [
+        (REPOSITORY, 4004),
+        (REPOSITORY, 4005),
+        (REPOSITORY, 4006),
+    ]
+
+
+def test_prerequisite_urls_and_qualified_refs_keep_repository_scope():
+    assert declared_prerequisites(
+        "Depends on https://github.com/other/project/issues/12 and other/project#13.",
+        REPOSITORY,
+    ) == [("other/project", 12), ("other/project", 13)]
+    assert declared_prerequisites("Parent #4003. Related to #4004.", REPOSITORY) == []
+
+
+@pytest.mark.parametrize("body", ["Depends on #1–#101.", "Depends on #10–#1."])
+def test_prerequisite_ranges_are_bounded(body):
+    with pytest.raises(ValueError, match="range is invalid"):
+        declared_prerequisites(body, REPOSITORY)
+
+
+@pytest.mark.parametrize(
+    "context",
+    [
+        "; see related issue #20",
+        ", related issue #20",
+        " (parent #20)",
+        " and see #20",
+        "; coordinate with #20",
+    ],
+)
+def test_dependency_list_stops_before_contextual_references(context):
+    assert declared_prerequisites(
+        f"Completion depends on #10 and #11{context}.", REPOSITORY
+    ) == [(REPOSITORY, 10), (REPOSITORY, 11)]
+
+
+@pytest.mark.asyncio
+async def test_related_open_issue_does_not_block_selection_or_preflight(
+    activity_boundary,
+):
+    candidate = issue(body="Completion depends on #10; see related issue #20.")
+    activity_boundary.pages[:] = [[candidate]]
+    activity_boundary.detail.update(candidate)
+    activity_boundary.dependency_details[f"/repos/{REPOSITORY}/issues/10"] = issue(
+        10, state="closed"
+    )
+    activity_boundary.dependency_details[f"/repos/{REPOSITORY}/issues/20"] = issue(20)
+    result = await activity_boundary.execute(
+        "github.load_issue_preset_brief", {"repository": REPOSITORY, "issueSearch": ""}
+    )
+    assert result.status == "COMPLETED"
+    preflight = await activity_boundary.execute(
+        "github.check_issue_blockers", {"repository": REPOSITORY, "issueNumber": 4025}
+    )
+    assert preflight.outputs["decision"] == "continue"
+    assert not any(
+        request.url.path.endswith("/20") for request in activity_boundary.requests
+    )
+
+
+@pytest.mark.asyncio
+async def test_scan_reuses_prerequisite_evidence_across_all_500_candidates(
+    activity_boundary,
+):
+    candidates = [
+        issue(
+            1000 + n,
+            body=f"Depends on {REPOSITORY if n % 2 else REPOSITORY.lower()}#10–#20.",
+        )
+        for n in range(499)
+    ] + [issue()]
+    activity_boundary.pages[:] = [
+        candidates[start : start + 100] for start in range(0, 500, 100)
+    ]
+    for number in range(10, 21):
+        for repository in (REPOSITORY, REPOSITORY.lower()):
+            activity_boundary.dependency_details[
+                f"/repos/{repository}/issues/{number}"
+            ] = issue(number, state="closed" if number < 20 else "open")
+    result = await activity_boundary.execute(
+        "github.load_issue_preset_brief", {"repository": REPOSITORY, "issueSearch": ""}
+    )
+    assert result.status == "COMPLETED"
+    assert result.outputs["searchEvidence"]["candidatesExamined"] == 500
+    assert len(activity_boundary.requests) == 5 + 11 + 1
+
+
+@pytest.mark.asyncio
+async def test_scan_stops_before_exceeding_aggregate_prerequisite_budget(
+    activity_boundary,
+):
+    candidates = [
+        issue(1000 + n, body=f"Depends on #{2000 + 2*n} and #{2001 + 2*n}.")
+        for n in range(100)
+    ]
+    activity_boundary.pages[:] = [candidates, [issue()]]
+    for number in range(2000, 2200):
+        activity_boundary.dependency_details[f"/repos/{REPOSITORY}/issues/{number}"] = (
+            issue(number, state="open" if number % 2 else "closed")
+        )
+    result = await activity_boundary.execute(
+        "github.load_issue_preset_brief", {"repository": REPOSITORY, "issueSearch": ""}
+    )
+    assert result.status == "FAILED"
+    assert "100-request prerequisite lookup budget" in result.outputs["error"]
+    assert len(activity_boundary.requests) == 1 + 100
+    assert all(request.method == "GET" for request in activity_boundary.requests)
+
+
+@pytest.mark.asyncio
+async def test_selected_issue_confirmation_refreshes_cached_prerequisite_state(
+    activity_boundary,
+):
+    candidate = issue(body="Depends on #10.")
+    activity_boundary.pages[:] = [[candidate]]
+    activity_boundary.detail.update(candidate)
+    states = iter(["closed", "open"])
+    activity_boundary.dependency_details[f"/repos/{REPOSITORY}/issues/10"] = (
+        lambda: issue(10, state=next(states))
+    )
+    result = await activity_boundary.execute(
+        "github.load_issue_preset_brief", {"repository": REPOSITORY, "issueSearch": ""}
+    )
+    assert result.status == "FAILED"
+    assert "changed or could not be confirmed" in result.outputs["error"]
+    assert len(activity_boundary.requests) == 4
+
+
+@pytest.mark.asyncio
+async def test_maximum_prerequisite_list_has_fresh_confirmation_budget(
+    activity_boundary,
+):
+    candidate = issue(body="Depends on #10–#109.")
+    activity_boundary.pages[:] = [[candidate]]
+    activity_boundary.detail.update(candidate)
+    for number in range(10, 110):
+        activity_boundary.dependency_details[f"/repos/{REPOSITORY}/issues/{number}"] = (
+            issue(number, state="closed")
+        )
+    result = await activity_boundary.execute(
+        "github.load_issue_preset_brief", {"repository": REPOSITORY, "issueSearch": ""}
+    )
+    assert result.status == "COMPLETED"
+    assert len(activity_boundary.requests) == 1 + 100 + 1 + 100
+
+
+@pytest.mark.asyncio
+async def test_prerequisite_cache_preserves_cross_repository_identity(
+    activity_boundary,
+):
+    activity_boundary.pages[:] = [
+        [
+            issue(1000, body="Depends on one/project#10 and one/project#11."),
+            issue(1001, body="Depends on two/project#10."),
+            issue(),
+        ]
+    ]
+    for repository, number, state in (
+        ("one/project", 10, "closed"),
+        ("one/project", 11, "open"),
+        ("two/project", 10, "open"),
+    ):
+        activity_boundary.dependency_details[f"/repos/{repository}/issues/{number}"] = (
+            issue(
+                number,
+                state=state,
+                html_url=f"https://github.com/{repository}/issues/{number}",
+            )
+        )
+    result = await activity_boundary.execute(
+        "github.load_issue_preset_brief", {"repository": REPOSITORY, "issueSearch": ""}
+    )
+    assert result.status == "COMPLETED"
+    assert result.outputs["searchEvidence"]["candidatesExamined"] == 3
+    assert len(activity_boundary.requests) == 5
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("state", ["open", "closed"])
+async def test_dependency_gate_selection_and_preflight_use_fresh_github_state(
+    activity_boundary,
+    state,
+):
+    # Follow-up incident mm:ec76f857: the release gate was admitted while
+    # its explicitly required implementation issues remained open.
+    gate = issue(4024, body="Parent epic: #4003. Completion depends on #2615.")
+    candidate = gate if state == "closed" else issue(4004)
+    activity_boundary.pages[:] = [[gate, issue(4004)]]
+    activity_boundary.detail.update(candidate)
+    dependency_path = f"/repos/{REPOSITORY}/issues/2615"
+    activity_boundary.dependency_details[dependency_path] = issue(2615, state=state)
+    result = await activity_boundary.execute(
+        "github.load_issue_preset_brief",
+        {"repository": REPOSITORY, "issueSearch": ""},
+    )
+    assert result.status == "COMPLETED"
+    assert result.outputs["issue"]["number"] == candidate["number"]
+    assert any(
+        request.url.path == dependency_path for request in activity_boundary.requests
+    )
+    # A fresh preflight also protects an explicitly selected issue and sees
+    # a prerequisite that reopened after candidate selection.
+    activity_boundary.detail.update(gate)
+    activity_boundary.dependency_details[dependency_path] = issue(2615, state="open")
+    preflight = await activity_boundary.execute(
+        "github.check_issue_blockers",
+        {"repository": REPOSITORY, "issueNumber": 4024},
+    )
+    assert preflight.outputs["decision"] == "blocked"
+    assert preflight.outputs["blockingIssues"][0]["number"] == 2615
+    assert all(request.method == "GET" for request in activity_boundary.requests)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("state", ["unknown", "", "archived"])
+async def test_unverifiable_dependency_state_cannot_admit_an_issue(
+    activity_boundary, state
+):
+    activity_boundary.pages[:] = [[issue(body="Depends on #2615.")]]
+    activity_boundary.dependency_details[f"/repos/{REPOSITORY}/issues/2615"] = issue(
+        2615, state=state
+    )
+    result = await activity_boundary.execute(
+        "github.load_issue_preset_brief",
+        {"repository": REPOSITORY, "issueSearch": ""},
+    )
+    assert result.status == "FAILED"
+    assert "prerequisite identity or state is invalid" in result.outputs["error"]
+    assert all(request.method == "GET" for request in activity_boundary.requests)
 
 
 @pytest.mark.asyncio

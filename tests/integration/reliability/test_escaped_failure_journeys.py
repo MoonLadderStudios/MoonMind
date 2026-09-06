@@ -2624,14 +2624,27 @@ async def test_omnigent_dynamic_remediation_restores_workspace_archive_replay(
     async def no_clone(*_args: object, **_kwargs: object):
         raise AssertionError("pre-materialized replay workspace must not be cloned")
 
+    # This replay runs directly as the unprivileged CI user, so that user is
+    # the selected runtime identity. The Compose ownership journey separately
+    # covers the worker's root-to-runtime handoff with the default UID/GID 1000.
+    workspace_owner = generic_workspace.stat()
     await OmnigentWorkspaceMaterializer(
         command_runner=no_clone,
         workspace_root=tmp_path,
         artifact_service=ReplayArtifactService(),
-    ).materialize(generic_request)
-    assert (
-        generic_workspace / manifest["archiveMember"]["path"]
-    ).read_text(encoding="utf-8") == expected["restoredContent"]
+    ).materialize(
+        generic_request,
+        runtime_uid=workspace_owner.st_uid,
+        runtime_gid=workspace_owner.st_gid,
+    )
+    generic_restored = generic_workspace / manifest["archiveMember"]["path"]
+    assert generic_restored.read_text(encoding="utf-8") == expected["restoredContent"]
+    restored_owner = generic_restored.stat()
+    assert (restored_owner.st_uid, restored_owner.st_gid) == (
+        workspace_owner.st_uid,
+        workspace_owner.st_gid,
+    )
+    generic_restored.write_text(expected["retryPreservedContent"], encoding="utf-8")
 
 
 async def test_standalone_omnigent_resolver_rejects_unowned_continuation_without_retry(
