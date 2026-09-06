@@ -93,6 +93,26 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
+    # Fail-closed when scopes are shared: restoring 1:1 uniqueness with
+    # shared refs would silently discard the shared allowance. Reject the
+    # rollback explicitly instead of relying on a backend-specific
+    # constraint error. MoonLadderStudios/MoonMind#3882.
+    shared = list(
+        op.get_bind().execute(
+            sa.text(
+                "SELECT capacity_scope_ref, COUNT(*) AS profile_count "
+                "FROM managed_agent_provider_profiles "
+                "GROUP BY capacity_scope_ref HAVING COUNT(*) > 1"
+            )
+        )
+    )
+    if shared:
+        refs = ", ".join(sorted(str(row[0]) for row in shared))
+        raise RuntimeError(
+            "Refusing to roll back provider capacity scopes while shared "
+            f"scopes are referenced by multiple profiles: {refs}. Move each "
+            "profile back to a dedicated scope before downgrading."
+        )
     with op.batch_alter_table("managed_agent_provider_profiles") as batch:
         batch.drop_index("ix_provider_profile_capacity_scope")
         # Fail-closed when scopes are shared: restoring 1:1 uniqueness with

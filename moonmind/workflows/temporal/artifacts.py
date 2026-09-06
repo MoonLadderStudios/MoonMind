@@ -3681,6 +3681,7 @@ class TemporalArtifactActivities:
                 session=session,
                 rows=rows,
             )
+            scopes_authoritative = True
             try:
                 scope_result = await session.execute(select(ProviderCapacityScope))
                 scope_rows = list(scope_result.scalars().all())
@@ -3688,6 +3689,7 @@ class TemporalArtifactActivities:
                 # Migration 368 may not have run yet; fall back to
                 # per-profile derived scopes so new workers stay up.
                 scope_rows = []
+                scopes_authoritative = False
 
         profiles = []
         profile_statuses = []
@@ -3806,7 +3808,7 @@ class TemporalArtifactActivities:
                 }
             )
 
-        return {"profiles": profiles, "profile_statuses": profile_statuses, "scopes": scopes}
+        return {"profiles": profiles, "profile_statuses": profile_statuses, "scopes": scopes, "scopes_authoritative": scopes_authoritative}
 
     async def provider_profile_ensure_manager(
         self,

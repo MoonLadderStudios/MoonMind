@@ -310,6 +310,27 @@ _MAX_VALIDATION_LEASE_DURATION_SECONDS = 900
 _ADAPTIVE_CAPACITY_RECOVERY_SECONDS = 60
 _MIN_ADAPTIVE_CAPACITY = 1
 
+# MoonLadderStudios/MoonMind#3882: shared-scope recovery is evidence-driven.
+# The default interval applies to the versioned recovery policy recorded on
+# each scope (``recovery_policy_ref``); unknown or missing policy versions
+# fail safe to this cadence rather than recovering faster or never.
+_SCOPE_RECOVERY_INTERVAL_SECONDS = 300
+_SCOPE_RECOVERY_POLICY_INTERVALS = {
+    "additive-increase-multiplicative-decrease@1": 300,
+}
+
+# A client-initiated release may carry an explicit outcome classification.
+# Only these values count as qualifying provider-success evidence for
+# backpressure recovery. Anything else (including an absent classification)
+# releases capacity without healing reduced limits.
+_SUCCESS_RESULT_CLASSES = frozenset({"succeeded", "provider_success", "healthy"})
+
+# Terminal owner close states that count as qualifying provider-activity
+# evidence. A holder that ran to COMPLETED proves the provider served that
+# lease's work end-to-end; every other terminal state proves nothing about
+# provider health and must not heal reduced limits.
+_COMPLETED_TERMINAL_STATUSES = frozenset({"COMPLETED"})
+
 _EXECUTION_PURPOSE_VALUES = frozenset(
     {
         CredentialLeasePurpose.EXECUTION_DIRECT.value,
@@ -546,15 +567,36 @@ class ProfileSlotState:
 
         count = 0
         for lease_id in self.current_leases:
-            try:
-                consuming = CredentialLeasePurpose(
-                    self.lease_purpose(lease_id)
-                ).consumes_provider_capacity
-            except ValueError:
-                consuming = True
-            if consuming:
+            if self.lease_consumes_scope_capacity(lease_id):
                 count += 1
         return count
+
+    def lease_consumes_scope_capacity(self, lease_id: str) -> bool:
+        """Whether one held lease spends the shared upstream provider resource."""
+
+        if not self.purpose_aware_capacity:
+            # Histories recorded before purpose-aware accounting counted every
+            # lease as one unit; replay must keep that accounting.
+            return True
+        try:
+            return CredentialLeasePurpose(
+                self.lease_purpose(lease_id)
+            ).consumes_provider_capacity
+        except ValueError:
+            return True
+
+    def capacity_consuming_lease_count(self) -> int:
+        """The one unit count every admission path uses for this profile.
+
+        MoonLadderStudios/MoonMind#3882: profile admission and shared-scope
+        admission must agree. Execution leases count against both the profile
+        and the scope; validation and maintenance follow the trusted
+        purpose classifier instead of accidentally counting as executions.
+        """
+
+        if not self.purpose_aware_capacity:
+            return len(self.current_leases)
+        return self.scope_consuming_lease_count()
 
     def purpose_max_duration_seconds(self, purpose: str) -> int:
         """The longest one acquisition for this purpose may hold or wait."""
@@ -891,6 +933,16 @@ class CapacityScopeState:
     healthy_since: Optional[str] = None
     last_decrease_at: Optional[str] = None
     last_increase_at: Optional[str] = None
+    # MoonLadderStudios/MoonMind#3882: the newest explicitly classified
+    # provider-success observation for this scope. Recovery steps toward the
+    # configured ceiling only from this evidence, never from idle time.
+    last_success_at: Optional[str] = None
+    # A scope synthesized without an authoritative record (missing DB row or
+    # scope-less Continue-As-New payload) while leases are active. Provisional
+    # scopes floor their limits at current usage so existing work is
+    # preserved, and automatic recovery stays off until the authoritative
+    # sync restores the real limits.
+    provisional: bool = False
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -906,6 +958,8 @@ class CapacityScopeState:
             "healthy_since": self.healthy_since,
             "last_decrease_at": self.last_decrease_at,
             "last_increase_at": self.last_increase_at,
+            "last_success_at": self.last_success_at,
+            "provisional": self.provisional,
         }
 
 
@@ -985,7 +1039,15 @@ class MoonMindProviderProfileManagerWorkflow:
         self._runtime_id: Optional[str] = None
         self._profiles: dict[str, ProfileSlotState] = {}
         self._scopes: dict[str, CapacityScopeState] = {}
+        # Whether the scopes table is known to exist (migration 368). Only
+        # then is a missing scope row an anomaly worth provisional handling;
+        # pre-migration databases synthesize classic one-profile defaults.
+        self._scopes_authoritative: bool = False
         self._seen_rate_limit_reports: list[str] = []
+        # MoonLadderStudios/MoonMind#3882: bounded identities of provider-success
+        # observations already applied, so a redelivered success cannot heal
+        # twice. Like the rate-limit report list, this is retention-bounded.
+        self._seen_success_observations: list[str] = []
         self._lease_profile_index: dict[str, str] = {}
         self._owner_lease_index: dict[str, str] = {}
         # MoonLadderStudios/MoonMind#3883: the reverse direction of
@@ -1243,9 +1305,14 @@ class MoonMindProviderProfileManagerWorkflow:
             return
         if profile:
             released_generation = profile.lease_fencing_generation(requester_id)
+            admitted_scope_ref = self._lease_admitted_scope_ref(
+                profile, requester_id
+            )
             released = profile.release(requester_id)
             if released:
                 self._unindex_lease(requester_id)
+                if self._release_claims_success(payload):
+                    self._note_scope_success_evidence(admitted_scope_ref)
             # A release also withdraws any pending maintenance request from the
             # same owner, so a caller that gave up cannot hold the queue head.
             # Pre-marker histories never withdrew a waiter here, and doing so
@@ -1320,9 +1387,17 @@ class MoonMindProviderProfileManagerWorkflow:
         # refresh that replaced the object this handler started with.
         profile = self._profiles.get(profile_id)
         if profile:
+            # Capture the admitted scope before the release drops the stamped
+            # grant identity, or a scope reassignment would credit the wrong
+            # allowance for an explicitly successful release.
+            admitted_scope_ref = self._lease_admitted_scope_ref(
+                profile, requester_id
+            )
             released = profile.release(requester_id)
             if released:
                 self._unindex_lease(requester_id)
+                if self._release_claims_success(payload):
+                    self._note_scope_success_evidence(admitted_scope_ref)
             # A release also withdraws any pending maintenance request from the
             # same owner, so a caller that gave up cannot hold the queue head.
             profile.dequeue_maintenance_waiter(requester_id)
@@ -1345,6 +1420,20 @@ class MoonMindProviderProfileManagerWorkflow:
                 ).isoformat(),
             )
         return outcome
+
+    @staticmethod
+    def _release_claims_success(payload: dict[str, Any]) -> bool:
+        """Whether a release carries an explicitly successful classification.
+
+        MoonLadderStudios/MoonMind#3882: only an explicit opt-in outcome
+        counts as recovery evidence. An absent or unrecognized classification
+        releases capacity without healing reduced limits.
+        """
+
+        result_class = str(
+            payload.get("result_class") or payload.get("resultClass") or ""
+        ).strip().lower()
+        return result_class in _SUCCESS_RESULT_CLASSES
 
     def _record_unresolved_release(
         self,
@@ -1520,37 +1609,284 @@ class MoonMindProviderProfileManagerWorkflow:
             profile.cooldown_until = cooldown_until.isoformat()
             return
         now = workflow.now()
-        failure_class = str(payload.get("failure_class") or "rate_limit").strip()
-        if failure_class not in {"rate_limit", "429", "provider_rate_limit"}:
-            # Profile-specific credential errors must not reduce a shared scope.
-            cooldown_seconds = payload.get(
-                "cooldown_seconds", profile.cooldown_after_429_seconds
-            )
-            profile.cooldown_until = (now + timedelta(seconds=cooldown_seconds)).isoformat()
+        observation = self._normalize_rate_limit_report(profile, payload)
+        if observation is None:
+            # Wrong-scope, wrong-generation, or malformed: validated and
+            # ignored so a stale or foreign report cannot corrupt current
+            # capacity.
             return
-        retry_after = payload.get("retry_after_seconds")
-        try:
-            retry_after_seconds = int(retry_after) if retry_after is not None else None
-        except (TypeError, ValueError):
-            retry_after_seconds = None
-        if retry_after_seconds is None:
-            retry_after_seconds = int(
-                payload.get("cooldown_seconds", profile.cooldown_after_429_seconds)
+        if observation["profile_only"]:
+            # Profile-specific credential errors must not reduce a shared
+            # scope. They cool the reporting profile down without touching
+            # any shared allowance, and never shorten its current deadline.
+            self._extend_profile_cooldown(
+                profile, observation["retry_after_seconds"], now
             )
-        scope_ref = (
-            str(payload.get("capacity_scope_ref") or "").strip()
-            or profile.capacity_scope_ref
-            or f"provider-profile:{profile_id}"
-        )
-        report_id = payload.get("report_id") or payload.get("idempotency_key")
-        self._apply_scope_rate_limit(
-            scope_ref=scope_ref,
-            retry_after_seconds=retry_after_seconds,
-            report_id=str(report_id) if report_id else None,
+            return
+        applied = self._apply_scope_rate_limit(
+            scope_ref=observation["scope_ref"],
+            retry_after_seconds=observation["retry_after_seconds"],
+            report_key=observation["report_key"],
             now=now,
         )
-        profile.effective_limit = max(1, profile.effective_limit // 2) if profile.effective_limit else max(1, profile.max_parallel_runs // 2)
-        profile.cooldown_until = (now + timedelta(seconds=max(1, min(3600, int(retry_after_seconds))))).isoformat()
+        if not applied:
+            # Duplicate delivery: the whole profile-and-scope transition was
+            # already applied for this observation, including the profile
+            # backpressure step and both cooldown deadlines below.
+            return
+        if profile.purpose_aware_capacity:
+            # New histories use exactly one profile-effective-limit
+            # mechanism: the adaptive limit. The legacy ``effective_limit``
+            # field is left untouched so allocation, UI, and recovery cannot
+            # disagree about the current admission limit.
+            lowered = profile.apply_rate_limit_backpressure(now)
+            self._get_logger().warning(
+                "Provider profile %s lowered effective admission to %d of %d "
+                "after a rate-limit report",
+                profile_id,
+                lowered,
+                profile.configured_capacity,
+            )
+        else:
+            profile.effective_limit = (
+                max(1, profile.effective_limit // 2)
+                if profile.effective_limit
+                else max(1, profile.max_parallel_runs // 2)
+            )
+        self._extend_profile_cooldown(
+            profile, observation["retry_after_seconds"], now
+        )
+
+    def _normalize_rate_limit_report(
+        self, profile: ProfileSlotState, payload: dict[str, Any]
+    ) -> dict[str, Any] | None:
+        """Validate one rate-limit observation into a bounded identity.
+
+        MoonLadderStudios/MoonMind#3882: the identity is tied to the source
+        attempt, the reporting profile, its admitted scope, and the scope
+        generation. A caller-supplied scope ref is checked against the
+        profile's admitted scope, never trusted: generation and report
+        ownership are validated, not assumed from knowledge of a ref.
+
+        Returns the normalized observation, or ``None`` when the report must
+        be ignored without mutating any capacity state.
+        """
+
+        failure_class = str(payload.get("failure_class") or "rate_limit").strip()
+        retry_after_seconds = self._coerce_cooldown_seconds(
+            payload.get("retry_after_seconds", payload.get("cooldown_seconds")),
+            profile.cooldown_after_429_seconds,
+        )
+        if failure_class not in {"rate_limit", "429", "provider_rate_limit"}:
+            return {
+                "profile_only": True,
+                "scope_ref": self._profile_scope_ref(profile),
+                "scope_generation": self._scope_generation_for(profile),
+                "report_key": None,
+                "retry_after_seconds": retry_after_seconds,
+            }
+        admitted_scope_ref = self._profile_scope_ref(profile)
+        caller_scope_ref = str(payload.get("capacity_scope_ref") or "").strip()
+        if caller_scope_ref and caller_scope_ref != admitted_scope_ref:
+            self._get_logger().warning(
+                "Ignoring a rate-limit report for profile %s; it names scope "
+                "%s but the profile is admitted against scope %s",
+                profile.profile_id,
+                caller_scope_ref,
+                admitted_scope_ref,
+            )
+            return None
+        scope_generation = self._scope_generation_for(profile)
+        caller_generation = payload.get("scope_generation")
+        if caller_generation is not None:
+            try:
+                caller_generation = int(caller_generation)
+            except (TypeError, ValueError):
+                self._get_logger().warning(
+                    "Ignoring a rate-limit report for profile %s; it carries "
+                    "a malformed scope generation",
+                    profile.profile_id,
+                )
+                return None
+            if caller_generation != scope_generation:
+                self._get_logger().warning(
+                    "Ignoring a stale rate-limit report for profile %s; it "
+                    "names scope generation %d but the current generation "
+                    "is %d",
+                    profile.profile_id,
+                    caller_generation,
+                    scope_generation,
+                )
+                return None
+        report_id = payload.get("report_id") or payload.get("idempotency_key")
+        source_attempt = self._normalize_optional_string(
+            payload.get("requester_workflow_id") or payload.get("owner_id")
+        )
+        report_key: str | None = None
+        if report_id is not None:
+            # A report ID alone is not globally unique across unrelated
+            # authorities, so it is namespaced by the exact transition it
+            # describes. Reports without any identity stay fire-and-forget
+            # observations: they always apply, exactly as before.
+            report_key = "\x00".join(
+                (
+                    profile.profile_id,
+                    admitted_scope_ref,
+                    str(scope_generation),
+                    str(report_id),
+                    source_attempt or "",
+                )
+            )
+        return {
+            "profile_only": False,
+            "scope_ref": admitted_scope_ref,
+            "scope_generation": scope_generation,
+            "report_key": report_key,
+            "retry_after_seconds": retry_after_seconds,
+        }
+
+    @staticmethod
+    def _coerce_cooldown_seconds(value: object, default: int) -> int:
+        """Coerce a caller-supplied cooldown into bounded seconds.
+
+        Malformed input fails safe to the profile default; the result is
+        always at least one second and at most one hour so a corrupt or
+        hostile payload can neither clear a deadline nor park capacity.
+        """
+
+        try:
+            seconds = int(value) if value is not None else int(default)
+        except (TypeError, ValueError):
+            try:
+                seconds = int(default)
+            except (TypeError, ValueError):
+                seconds = 900
+        return max(1, min(3600, seconds))
+
+    def _extend_profile_cooldown(
+        self, profile: ProfileSlotState, retry_after_seconds: int, now: datetime
+    ) -> None:
+        """Move one profile's cooldown deadline only forward, never back.
+
+        A trustworthy Retry-After extends an applicable deadline under the
+        bounded policy above; a smaller or duplicate value must never shorten
+        protection the manager already owes the provider.
+        """
+
+        new_until = now + timedelta(
+            seconds=self._coerce_cooldown_seconds(
+                retry_after_seconds, profile.cooldown_after_429_seconds
+            )
+        )
+        if profile.cooldown_until is not None:
+            try:
+                existing = datetime.fromisoformat(profile.cooldown_until)
+                if existing.tzinfo is None:
+                    existing = existing.replace(tzinfo=timezone.utc)
+                if existing >= new_until:
+                    return
+            except (ValueError, TypeError):
+                pass
+        profile.cooldown_until = new_until.isoformat()
+
+    @workflow.signal
+    def report_provider_success(self, payload: dict[str, Any]) -> None:
+        """Record one explicitly classified provider-success observation.
+
+        MoonLadderStudios/MoonMind#3882: automatic recovery heals reduced
+        limits only from this evidence (or terminal COMPLETED holders and
+        explicitly classified releases). Idle time, restarts, and host
+        unavailability are not evidence and never appear here: the caller
+        asserts the provider just served this scope successfully.
+        """
+
+        self._event_count += 1
+        self._has_new_events = True
+        now = workflow.now()
+        profile_id = self._normalize_optional_string(payload.get("profile_id"))
+        profile = self._profiles.get(profile_id) if profile_id else None
+        if profile_id is not None and profile is None:
+            return
+        if profile is not None:
+            admitted_scope_ref = self._profile_scope_ref(profile)
+            caller_scope_ref = str(payload.get("capacity_scope_ref") or "").strip()
+            if caller_scope_ref and caller_scope_ref != admitted_scope_ref:
+                self._get_logger().warning(
+                    "Ignoring a provider-success report for profile %s; it "
+                    "names scope %s but the profile is admitted against "
+                    "scope %s",
+                    profile_id,
+                    caller_scope_ref,
+                    admitted_scope_ref,
+                )
+                return
+            scope_ref = admitted_scope_ref
+        else:
+            scope_ref = str(payload.get("capacity_scope_ref") or "").strip()
+            if not scope_ref:
+                return
+        scope = self._scopes.get(scope_ref)
+        if scope is None:
+            # Success for an unknown scope is meaningless: never synthesize
+            # allowance from a healthy observation.
+            self._get_logger().warning(
+                "Ignoring a provider-success report for unknown scope %s",
+                scope_ref,
+            )
+            return
+        caller_generation = payload.get("scope_generation")
+        if caller_generation is not None:
+            try:
+                caller_generation = int(caller_generation)
+            except (TypeError, ValueError):
+                return
+            if caller_generation != scope.generation:
+                return
+        observation_id = payload.get("observation_id") or payload.get("report_id")
+        source_attempt = self._normalize_optional_string(
+            payload.get("requester_workflow_id") or payload.get("owner_id")
+        )
+        observation_key: str | None = None
+        if observation_id is not None:
+            observation_key = "\x00".join(
+                (
+                    scope_ref,
+                    str(scope.generation),
+                    str(observation_id),
+                    source_attempt or "",
+                )
+            )
+        self._record_scope_success(
+            scope,
+            now,
+            observation_key=observation_key,
+        )
+
+    def _record_scope_success(
+        self,
+        scope: CapacityScopeState,
+        now: datetime,
+        *,
+        observation_key: str | None = None,
+    ) -> bool:
+        """Record qualifying success evidence on one scope.
+
+        Returns whether the evidence was newly applied. A redelivered
+        observation changes nothing a second time. Disabled scopes never gain
+        evidence: disabled stays disabled until an authorized change.
+        """
+
+        if scope.backpressure_state == "disabled":
+            return False
+        if observation_key is not None:
+            if observation_key in self._seen_success_observations:
+                return False
+            self._seen_success_observations.append(observation_key)
+            del self._seen_success_observations[:-500]
+        scope.last_success_at = now.isoformat()
+        if scope.healthy_since is None:
+            scope.healthy_since = now.isoformat()
+        return True
 
     @workflow.signal
     def sync_profiles(self, payload: dict[str, Any]) -> None:
@@ -2277,6 +2613,49 @@ class MoonMindProviderProfileManagerWorkflow:
             "acquiredAt": profile.lease_granted_at.get(lease_id),
         }
 
+    def _scope_safe_view(self, scope: CapacityScopeState) -> dict[str, Any]:
+        """One safe configured/effective/active/cooldown snapshot per scope.
+
+        MoonLadderStudios/MoonMind#3882: operator projections read this view
+        from the same accounting owner that admits leases, so the dashboard
+        cannot disagree with admission. Exact lease identities stay behind
+        authorized detail views and out of metric labels: only counts travel
+        here.
+        """
+
+        try:
+            now = workflow.now()
+        except Exception:
+            # Observability only: queries never record history, so a
+            # wall-clock fallback is safe when no workflow clock exists.
+            now = datetime.now(timezone.utc)
+        return {
+            "scope_ref": scope.scope_ref,
+            "runtime_id": scope.runtime_id,
+            "provider_class": scope.provider_class,
+            "generation": scope.generation,
+            "configured_limit": scope.configured_limit,
+            "effective_limit": scope.effective_limit,
+            "active_units": self._scope_active_units(scope.scope_ref),
+            "queued": sum(
+                1
+                for request in self._pending_requests
+                if request.execution_profile_ref is not None
+                and (
+                    self._profiles.get(request.execution_profile_ref) is not None
+                    and self._profile_scope_ref(
+                        self._profiles[request.execution_profile_ref]
+                    )
+                    == scope.scope_ref
+                )
+            ),
+            "cooldown_until": scope.cooldown_until,
+            "cooldown_active": self._scope_cooldown_active(scope, now),
+            "backpressure_state": scope.backpressure_state,
+            "recovery_policy_ref": scope.recovery_policy_ref,
+            "provisional": scope.provisional,
+        }
+
     # -- Queries ---------------------------------------------------------------
 
     @workflow.query
@@ -2285,6 +2664,11 @@ class MoonMindProviderProfileManagerWorkflow:
         return {
             "runtime_id": self._runtime_id,
             "profiles": {pid: p.to_dict() for pid, p in self._profiles.items()},
+            "scopes_authoritative": self._scopes_authoritative,
+            "scopes": {
+                ref: self._scope_safe_view(scope)
+                for ref, scope in self._scopes.items()
+            },
             "pending_requests": [
                 {
                     "requester_workflow_id": r.requester_workflow_id,
@@ -2624,6 +3008,9 @@ class MoonMindProviderProfileManagerWorkflow:
         self._maintenance_queue_sequence = self._normalize_sequence(
             input_payload.get("maintenance_queue_sequence")
         )
+        self._scopes_authoritative = (
+            input_payload.get("scopes_authoritative", False) is True
+        )
         self._lease_grant_sequence = self._normalize_sequence(
             input_payload.get("lease_grant_sequence")
         )
@@ -2732,8 +3119,18 @@ class MoonMindProviderProfileManagerWorkflow:
             if isinstance(seen, list)
             else []
         )
+        seen_success = input_payload.get("seen_success_observations", [])
+        self._seen_success_observations = (
+            [str(value) for value in seen_success[-500:] if str(value)]
+            if isinstance(seen_success, list)
+            else []
+        )
         scopes_data = input_payload.get("scopes", [])
         if isinstance(scopes_data, list) and scopes_data:
+            # A continued run inherits live scope authority from its
+            # predecessor, so a scope missing from the payload is an anomaly,
+            # not a pre-migration default.
+            self._scopes_authoritative = True
             for entry in scopes_data:
                 if not isinstance(entry, dict):
                     continue
@@ -2747,15 +3144,45 @@ class MoonMindProviderProfileManagerWorkflow:
                     continue
                 if configured <= 0:
                     continue
+                try:
+                    generation = int(entry.get("generation") or 1)
+                except (TypeError, ValueError):
+                    generation = 1
+                if generation < 1:
+                    generation = 1
+                raw_cooldown = entry.get("cooldown_until")
+                if raw_cooldown is not None and (
+                    self._parse_workflow_time(raw_cooldown) is None
+                ):
+                    # A malformed persisted deadline is reconciliation
+                    # evidence, not a block: drop it rather than wedging
+                    # admission or crashing the restore.
+                    self._record_lease_index_conflict(
+                        "scope_cooldown_malformed",
+                        lease_id=scope_ref,
+                        existing=str(raw_cooldown)[:200],
+                    )
+                    raw_cooldown = None
+                backpressure = str(entry.get("backpressure_state") or "healthy")
+                if backpressure not in {
+                    "healthy",
+                    "reduced",
+                    "cooldown",
+                    "probing",
+                    "disabled",
+                }:
+                    backpressure = "healthy"
                 self._scopes[scope_ref] = CapacityScopeState(
                     scope_ref=scope_ref,
                     runtime_id=str(entry.get("runtime_id") or ""),
                     provider_class=str(entry.get("provider_class") or "unknown"),
-                    generation=int(entry.get("generation") or 1),
+                    generation=generation,
                     configured_limit=configured,
                     effective_limit=effective if effective > 0 else configured,
-                    cooldown_until=entry.get("cooldown_until"),
-                    backpressure_state=str(entry.get("backpressure_state") or "healthy"),
+                    cooldown_until=(
+                        raw_cooldown if isinstance(raw_cooldown, str) else None
+                    ),
+                    backpressure_state=backpressure,
                     recovery_policy_ref=str(
                         entry.get("recovery_policy_ref")
                         or "additive-increase-multiplicative-decrease@1"
@@ -2763,17 +3190,15 @@ class MoonMindProviderProfileManagerWorkflow:
                     healthy_since=entry.get("healthy_since"),
                     last_decrease_at=entry.get("last_decrease_at"),
                     last_increase_at=entry.get("last_increase_at"),
+                    last_success_at=entry.get("last_success_at"),
+                    provisional=entry.get("provisional", False) is True,
                 )
         else:
             for profile in self._profiles.values():
                 scope_ref = profile.capacity_scope_ref or f"provider-profile:{profile.profile_id}"
-                scope = self._scopes.get(scope_ref)
-                if scope is None:
-                    self._scopes[scope_ref] = CapacityScopeState(
-                        scope_ref=scope_ref,
-                        configured_limit=profile.max_parallel_runs,
-                        effective_limit=profile.effective_limit or profile.max_parallel_runs,
-                    )
+                self._ensure_scope(
+                    scope_ref, runtime_id=self._runtime_id or ""
+                )
         self._restore_lease_obligations(input_payload)
         self._absorb_fencing_generations()
         self._rebuild_lease_indexes()
@@ -2884,6 +3309,11 @@ class MoonMindProviderProfileManagerWorkflow:
                 )
                 new_scope = str(p.get("capacity_scope_ref") or "").strip()
                 if new_scope:
+                    # The ref change applies to future grants immediately, but
+                    # active leases stay bound to their admitted scope through
+                    # their stamped grant identity until release
+                    # (MoonLadderStudios/MoonMind#3882): a move never
+                    # transfers existing units to the new allowance.
                     existing.capacity_scope_ref = new_scope
                 elif not existing.capacity_scope_ref:
                     existing.capacity_scope_ref = f"provider-profile:{pid}"
@@ -2964,7 +3394,9 @@ class MoonMindProviderProfileManagerWorkflow:
         below current effective, but never auto-raises effective (gradual
         recovery owns increases). Reducing below active usage blocks new
         grants without terminating work, since admission compares usage to
-        the clamped effective.
+        the clamped effective. A provisional scope synthesized without an
+        authoritative record adopts the authoritative limits outright: the
+        guess ends where the authority arrives.
         """
         for entry in scopes_data:
             if not isinstance(entry, dict):
@@ -2978,11 +3410,19 @@ class MoonMindProviderProfileManagerWorkflow:
                 continue
             if configured <= 0:
                 continue
+            # A scope the manager has never seen (fresh start, or a genuinely
+            # new row) adopts the authoritative record outright, including
+            # its adapted effective limit and cooldown: resetting to full
+            # here would discard backpressure the database still describes.
+            # A scope already owned in-workflow keeps clamp-only semantics so
+            # a stale DB read cannot wipe fresher 429 handling.
+            is_new = scope_ref not in self._scopes
             scope = self._ensure_scope(
                 scope_ref,
                 runtime_id=str(entry.get("runtime_id") or self._runtime_id or ""),
                 provider_class=str(entry.get("provider_class") or "unknown"),
             )
+            was_provisional = scope.provisional
             try:
                 generation = int(entry.get("generation") or scope.generation)
             except (TypeError, ValueError):
@@ -2992,7 +3432,51 @@ class MoonMindProviderProfileManagerWorkflow:
             scope.runtime_id = str(entry.get("runtime_id") or scope.runtime_id)
             scope.provider_class = str(entry.get("provider_class") or scope.provider_class)
             scope.configured_limit = configured
-            scope.effective_limit = min(scope.effective_limit or configured, configured)
+            if was_provisional or is_new:
+                try:
+                    authoritative_effective = int(entry.get("effective_limit") or 0)
+                except (TypeError, ValueError):
+                    authoritative_effective = 0
+                scope.effective_limit = (
+                    max(1, min(authoritative_effective, configured))
+                    if authoritative_effective > 0
+                    else configured
+                )
+                scope.provisional = False
+                scope.last_success_at = None
+                scope.healthy_since = None
+                # The synthesized scope owned no cooldown or backpressure
+                # state worth keeping; adopt the authoritative record. A
+                # malformed authoritative deadline is dropped, never
+                # admitted as a block.
+                raw_cooldown = entry.get("cooldown_until")
+                if raw_cooldown is None:
+                    scope.cooldown_until = None
+                else:
+                    parsed_cooldown = self._parse_workflow_time(raw_cooldown)
+                    scope.cooldown_until = (
+                        parsed_cooldown.isoformat()
+                        if parsed_cooldown is not None
+                        else None
+                    )
+                backpressure = self._normalize_optional_string(
+                    entry.get("backpressure_state")
+                )
+                if backpressure in {
+                    "healthy",
+                    "reduced",
+                    "cooldown",
+                    "probing",
+                    "disabled",
+                }:
+                    scope.backpressure_state = backpressure
+            else:
+                scope.effective_limit = min(scope.effective_limit or configured, configured)
+            policy_ref = self._normalize_optional_string(
+                entry.get("recovery_policy_ref")
+            )
+            if policy_ref is not None:
+                scope.recovery_policy_ref = policy_ref
             if scope.effective_limit >= scope.configured_limit:
                 scope.backpressure_state = "healthy"
 
@@ -4216,15 +4700,42 @@ class MoonMindProviderProfileManagerWorkflow:
             self._unresolved_releases.pop(lease_id, None)
             self._cleanup_requested_leases.discard(lease_id)
             profile = self._profiles.get(profile_id)
-            if profile is not None and profile.release(lease_id):
+            if profile is None:
+                continue
+            # The admitted scope is stamped on the lease: capture it before
+            # the release drops the metadata, or a profile scope reassignment
+            # would credit the wrong allowance for this holder's evidence.
+            admitted_scope_ref = self._lease_admitted_scope_ref(profile, lease_id)
+            if profile.release(lease_id):
                 self._unindex_lease(lease_id)
                 self._has_new_events = True
+                if status in _COMPLETED_TERMINAL_STATUSES:
+                    self._note_scope_success_evidence(admitted_scope_ref)
                 self._get_logger().warning(
                     "Reclaimed slot for profile %s from terminated workflow %s (status=%s)",
                     profile_id,
                     lease_id,
                     status,
                 )
+
+    def _note_scope_success_evidence(self, scope_ref: str) -> None:
+        """Record provider-activity evidence on one admitted scope.
+
+        MoonLadderStudios/MoonMind#3882: a lease holder that ran to the
+        COMPLETED terminal state, or a release carrying an explicitly
+        successful ``result_class``, proves the provider served that scope's
+        work end-to-end. Every other terminal state or unclassified release
+        proves nothing about provider health and heals nothing.
+        """
+
+        scope = self._scopes.get(scope_ref)
+        if scope is None:
+            return
+        try:
+            now = workflow.now()
+        except Exception:
+            return
+        self._record_scope_success(scope, now)
 
     def _reclaim_terminal_leases(
         self,
@@ -4241,9 +4752,12 @@ class MoonMindProviderProfileManagerWorkflow:
             profile = self._profiles.get(profile_id)
             if profile is None:
                 continue
+            admitted_scope_ref = self._lease_admitted_scope_ref(profile, wf_id)
             profile.release(wf_id)
             self._unindex_lease(wf_id)
             reclaimed = True
+            if status in _COMPLETED_TERMINAL_STATUSES:
+                self._note_scope_success_evidence(admitted_scope_ref)
             self._get_logger().warning(
                 "Reclaimed slot for profile %s from terminated workflow %s (status=%s)",
                 profile_id,
@@ -4367,10 +4881,12 @@ class MoonMindProviderProfileManagerWorkflow:
     ) -> CapacityScopeState:
         scope = self._scopes.get(scope_ref)
         if scope is None:
+            active_units = 0
             derived_max = 0
             for profile in self._profiles.values():
                 if (profile.capacity_scope_ref or f"provider-profile:{profile.profile_id}") == scope_ref:
                     derived_max = max(derived_max, profile.max_parallel_runs)
+                    active_units += profile.capacity_consuming_lease_count()
             configured = derived_max if derived_max > 0 else 1
             scope = CapacityScopeState(
                 scope_ref=scope_ref,
@@ -4379,15 +4895,60 @@ class MoonMindProviderProfileManagerWorkflow:
                 configured_limit=configured,
                 effective_limit=configured,
             )
+            if active_units > 0 and self._scopes_authoritative:
+                # A missing authoritative scope after migration must not
+                # silently reset a shared allowance or disable state while
+                # leases are active against it. Floor the synthesized limits
+                # at current usage so existing work is preserved and no new
+                # grant can be admitted against a guessed allowance, mark
+                # the scope provisional so automatic recovery stays off, and
+                # publish the disagreement as reconciliation evidence. The
+                # authoritative sync adopts the real limits when they arrive.
+                # Pre-migration databases (no scopes table) keep the classic
+                # silent one-profile default instead.
+                scope.configured_limit = max(configured, active_units)
+                scope.effective_limit = max(active_units, 1)
+                scope.provisional = True
+                self._record_lease_index_conflict(
+                    "scope_synthesized",
+                    lease_id=scope_ref,
+                    existing=(
+                        f"synthesized {scope.configured_limit}/"
+                        f"{scope.effective_limit} for {active_units} "
+                        "active units without an authoritative record"
+                    ),
+                )
             self._scopes[scope_ref] = scope
         return scope
 
+    def _lease_admitted_scope_ref(
+        self, profile: ProfileSlotState, lease_id: str
+    ) -> str:
+        """The scope one held lease spends its units against.
+
+        MoonLadderStudios/MoonMind#3882: active leases are bound to the scope
+        (and generation) they were admitted against. Changing a profile's
+        scope while work is active cannot transfer its existing units to a
+        new allowance merely by re-reading profile metadata: the stamped
+        grant identity decides, with the profile's current scope as the
+        fallback for unstamped legacy leases.
+        """
+
+        metadata = profile.lease_metadata.get(lease_id) or {}
+        stamped = str(metadata.get("capacityScopeRef") or "").strip()
+        if stamped:
+            return stamped
+        return self._capacity_scope_ref(profile)
+
     def _scope_active_units(self, scope_ref: str) -> int:
-        return sum(
-            p.scope_consuming_lease_count()
-            for p in self._profiles.values()
-            if (p.capacity_scope_ref or f"provider-profile:{p.profile_id}") == scope_ref
-        )
+        total = 0
+        for profile in self._profiles.values():
+            for lease_id in profile.current_leases:
+                if not profile.lease_consumes_scope_capacity(lease_id):
+                    continue
+                if self._lease_admitted_scope_ref(profile, lease_id) == scope_ref:
+                    total += 1
+        return total
 
     def _scope_is_available(self, scope: CapacityScopeState) -> bool:
         if scope.backpressure_state == "disabled":
@@ -4419,22 +4980,89 @@ class MoonMindProviderProfileManagerWorkflow:
                 except (ValueError, TypeError):
                     scope.cooldown_until = None
 
+    @staticmethod
+    def _scope_recovery_interval_seconds(recovery_policy_ref: str | None) -> int:
+        """Resolve one scope's versioned recovery interval.
+
+        Unknown or missing policy versions fail safe to the default cadence
+        rather than recovering faster than the known policy allows.
+        """
+
+        if recovery_policy_ref:
+            interval = _SCOPE_RECOVERY_POLICY_INTERVALS.get(
+                str(recovery_policy_ref).strip()
+            )
+            if interval is not None:
+                return interval
+        return _SCOPE_RECOVERY_INTERVAL_SECONDS
+
+    @staticmethod
+    def _parse_workflow_time(value: object) -> datetime | None:
+        try:
+            parsed = datetime.fromisoformat(str(value))
+        except (TypeError, ValueError):
+            return None
+        if parsed.tzinfo is None:
+            parsed = parsed.replace(tzinfo=timezone.utc)
+        return parsed
+
+    def _scope_cooldown_active(self, scope: CapacityScopeState, now: datetime) -> bool:
+        if scope.cooldown_until is None:
+            return False
+        cooldown_dt = self._parse_workflow_time(scope.cooldown_until)
+        if cooldown_dt is None:
+            # Expected: malformed cooldown never blocks admission.
+            return False
+        return now < cooldown_dt
+
+    def _scope_has_recovery_evidence(self, scope: CapacityScopeState) -> bool:
+        """Whether one scope holds qualifying success evidence for recovery.
+
+        MoonLadderStudios/MoonMind#3882: only an explicitly classified
+        provider-success observation recorded after the last backpressure
+        decrease counts. Idle time, worker restarts, and host unavailability
+        never produce such evidence. Out-of-order or stale observations
+        (older than the last decrease) cannot heal current capacity.
+        """
+
+        if scope.last_success_at is None or scope.last_decrease_at is None:
+            return False
+        success_at = self._parse_workflow_time(scope.last_success_at)
+        decrease_at = self._parse_workflow_time(scope.last_decrease_at)
+        if success_at is None or decrease_at is None:
+            return False
+        return success_at > decrease_at
+
     def _recover_scope_capacity(self, now: datetime) -> None:
-        healthy_interval = timedelta(seconds=300)
         for scope in self._scopes.values():
-            if scope.cooldown_until is not None:
+            if scope.backpressure_state == "disabled":
+                # Disabled scope remains disabled until an authorized change;
+                # automatic recovery must never clear it.
+                continue
+            if scope.provisional:
+                # A synthesized scope without an authoritative record owns no
+                # allowance to recover toward; the authoritative sync adopts
+                # the real limits when they arrive.
+                continue
+            if self._scope_cooldown_active(scope, now):
                 continue
             if scope.effective_limit >= scope.configured_limit:
                 continue
-            since_raw = scope.healthy_since or scope.last_decrease_at
+            if not self._scope_has_recovery_evidence(scope):
+                continue
+            healthy_interval = timedelta(
+                seconds=self._scope_recovery_interval_seconds(
+                    scope.recovery_policy_ref
+                )
+            )
+            since_raw = (
+                scope.last_increase_at or scope.healthy_since or scope.last_decrease_at
+            )
             if since_raw is None:
                 scope.healthy_since = now.isoformat()
                 continue
-            try:
-                since = datetime.fromisoformat(since_raw)
-                if since.tzinfo is None:
-                    since = since.replace(tzinfo=timezone.utc)
-            except (ValueError, TypeError):
+            since = self._parse_workflow_time(since_raw)
+            if since is None:
                 scope.healthy_since = now.isoformat()
                 continue
             if now - since >= healthy_interval:
@@ -4446,6 +5074,12 @@ class MoonMindProviderProfileManagerWorkflow:
                 if scope.effective_limit >= scope.configured_limit:
                     scope.backpressure_state = "healthy"
         for profile in self._profiles.values():
+            if profile.purpose_aware_capacity:
+                # New histories recover the single adaptive mechanism through
+                # _recover_adaptive_capacity below; the legacy effective_limit
+                # field is never stepped here so the two mechanisms cannot
+                # disagree.
+                continue
             effective = profile.effective_limit or profile.max_parallel_runs
             if effective >= profile.max_parallel_runs:
                 continue
@@ -4458,13 +5092,22 @@ class MoonMindProviderProfileManagerWorkflow:
         *,
         scope_ref: str,
         retry_after_seconds: int | None,
-        report_id: str | None,
+        report_key: str | None,
         now: datetime,
-    ) -> None:
-        if report_id:
-            if report_id in self._seen_rate_limit_reports:
-                return
-            self._seen_rate_limit_reports.append(report_id)
+    ) -> bool:
+        """Apply one validated rate-limit observation to its scope.
+
+        Returns whether the transition was applied. A repeated composite
+        identity is a redelivery: it changes nothing a second time, so the
+        caller must also skip the profile-side backpressure step and both
+        cooldown extensions. Retention stays bounded without letting delayed
+        duplicates repeatedly halve capacity.
+        """
+
+        if report_key is not None:
+            if report_key in self._seen_rate_limit_reports:
+                return False
+            self._seen_rate_limit_reports.append(report_key)
             del self._seen_rate_limit_reports[:-500]
         scope = self._ensure_scope(scope_ref)
         scope.effective_limit = max(1, scope.effective_limit // 2)
@@ -4488,6 +5131,7 @@ class MoonMindProviderProfileManagerWorkflow:
                     pass
             scope.cooldown_until = new_until.isoformat()
             scope.backpressure_state = "cooldown"
+        return True
 
     def _profile_scope_ref(self, profile: ProfileSlotState) -> str:
         return (
@@ -4495,8 +5139,11 @@ class MoonMindProviderProfileManagerWorkflow:
         )
 
     def _profile_effective_available(self, profile: ProfileSlotState) -> bool:
-        effective = profile.effective_limit or profile.max_parallel_runs
-        return len(profile.current_leases) < max(1, effective)
+        if profile.purpose_aware_capacity:
+            limit = profile.effective_capacity
+        else:
+            limit = profile.effective_limit or profile.max_parallel_runs
+        return profile.capacity_consuming_lease_count() < max(1, limit)
 
     def _profile_scope_available(self, profile: ProfileSlotState) -> bool:
         scope = self._ensure_scope(self._profile_scope_ref(profile))
@@ -4513,19 +5160,39 @@ class MoonMindProviderProfileManagerWorkflow:
             return True
         if not self._profile_effective_available(profile):
             return False
-        if len(profile.current_leases) + reserved_slots >= max(
-            1, profile.effective_limit or profile.max_parallel_runs
-        ):
+        if profile.purpose_aware_capacity:
+            limit = profile.effective_capacity
+        else:
+            limit = profile.effective_limit or profile.max_parallel_runs
+        if profile.capacity_consuming_lease_count() + reserved_slots >= max(1, limit):
             return False
         return self._profile_scope_available(profile)
 
     def _recover_adaptive_capacity(self) -> int:
-        """Step lowered effective limits back toward the configured ceiling."""
+        """Step lowered adaptive limits back toward the configured ceiling.
+
+        MoonLadderStudios/MoonMind#3882: like scope recovery, each step
+        requires qualifying provider-success evidence on the profile's scope
+        and stays interval-bounded. A cooling-down or disabled scope heals
+        nothing, and a scope without evidence heals nothing, so idle time
+        alone can never restore traded-away concurrency.
+        """
 
         now = workflow.now()
         recovered = 0
         for profile in self._profiles.values():
             if not profile.purpose_aware_capacity:
+                continue
+            if profile.adaptive_capacity_limit is None:
+                continue
+            scope = self._scopes.get(self._profile_scope_ref(profile))
+            if scope is None:
+                continue
+            if scope.backpressure_state == "disabled":
+                continue
+            if self._scope_cooldown_active(scope, now):
+                continue
+            if not self._scope_has_recovery_evidence(scope):
                 continue
             if profile.recover_adaptive_capacity(now):
                 recovered += 1
@@ -4623,7 +5290,11 @@ class MoonMindProviderProfileManagerWorkflow:
                 for group_id, reservation in self._handoff_reservations.items()
             },
             "scopes": [s.to_dict() for s in self._scopes.values()],
+            "scopes_authoritative": self._scopes_authoritative,
             "seen_rate_limit_reports": list(self._seen_rate_limit_reports[-500:]),
+            "seen_success_observations": list(
+                self._seen_success_observations[-500:]
+            ),
             **(
                 {
                     # Fairness and fencing are both order-sensitive, so the
@@ -4683,6 +5354,13 @@ class MoonMindProviderProfileManagerWorkflow:
             profiles_data = result.get("profiles", []) if result else []
             self._apply_profile_sync(profiles_data, authoritative=True)
             if workflow.patched(PROVIDER_CAPACITY_SCOPE_PATCH):
+                # The activity reports whether the scopes table exists. A
+                # missing table (pre-migration 368) means synthesized scopes
+                # are the authority; a present table with a missing row means
+                # the synthesis is provisional until the row arrives.
+                self._scopes_authoritative = bool(
+                    (result or {}).get("scopes_authoritative", True)
+                )
                 self._apply_scope_sync(result.get("scopes", []) if result else [])
             if prune_removed_profiles:
                 self._prune_disabled_profiles_without_leases()

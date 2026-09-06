@@ -2711,26 +2711,50 @@ class TestProviderProfileManagerHelpers:
 
         wf = self._make_workflow()
         now = datetime.now(timezone.utc)
-        wf._apply_scope_rate_limit(
-            scope_ref="s1", retry_after_seconds=100, report_id="r1", now=now
+        assert (
+            wf._apply_scope_rate_limit(
+                scope_ref="s1",
+                retry_after_seconds=100,
+                report_key="s1\x001\x00r1",
+                now=now,
+            )
+            is True
         )
         # Default scope starts 1/1; use explicit scope for halving check.
         wf._scopes["s2"] = wf._ensure_scope("s2")
         wf._scopes["s2"].configured_limit = 8
         wf._scopes["s2"].effective_limit = 8
-        wf._apply_scope_rate_limit(
-            scope_ref="s2", retry_after_seconds=100, report_id="r2", now=now
+        assert (
+            wf._apply_scope_rate_limit(
+                scope_ref="s2",
+                retry_after_seconds=100,
+                report_key="s2\x001\x00r2",
+                now=now,
+            )
+            is True
         )
         assert wf._scopes["s2"].effective_limit == 4
         first_cooldown = wf._scopes["s2"].cooldown_until
-        wf._apply_scope_rate_limit(
-            scope_ref="s2", retry_after_seconds=100, report_id="r2", now=now
+        assert (
+            wf._apply_scope_rate_limit(
+                scope_ref="s2",
+                retry_after_seconds=100,
+                report_key="s2\x001\x00r2",
+                now=now,
+            )
+            is False
         )
         assert wf._scopes["s2"].effective_limit == 4
         assert wf._scopes["s2"].cooldown_until == first_cooldown
         later = now + timedelta(seconds=10)
-        wf._apply_scope_rate_limit(
-            scope_ref="s2", retry_after_seconds=500, report_id="r3", now=later
+        assert (
+            wf._apply_scope_rate_limit(
+                scope_ref="s2",
+                retry_after_seconds=500,
+                report_key="s2\x001\x00r3",
+                now=later,
+            )
+            is True
         )
         assert wf._scopes["s2"].effective_limit == 2
         assert wf._scopes["s2"].cooldown_until is not None
@@ -2748,12 +2772,36 @@ class TestProviderProfileManagerHelpers:
             configured_limit=8,
             effective_limit=4,
             healthy_since=(now - timedelta(seconds=600)).isoformat(),
+            last_decrease_at=(now - timedelta(seconds=900)).isoformat(),
+            # MoonLadderStudios/MoonMind#3882: recovery requires qualifying
+            # provider-success evidence recorded after the last decrease;
+            # idle time alone heals nothing.
+            last_success_at=(now - timedelta(seconds=700)).isoformat(),
         )
         wf._recover_scope_capacity(now)
         assert wf._scopes["s1"].effective_limit == 5
         wf._scopes["s1"].healthy_since = now.isoformat()
         wf._recover_scope_capacity(now)
         assert wf._scopes["s1"].effective_limit == 5
+
+    def test_scope_recovery_requires_success_evidence(self):
+        from moonmind.workflows.temporal.workflows.provider_profile_manager import (
+            CapacityScopeState,
+        )
+
+        wf = self._make_workflow()
+        now = datetime.now(timezone.utc)
+        wf._scopes["s1"] = CapacityScopeState(
+            scope_ref="s1",
+            configured_limit=8,
+            effective_limit=4,
+            healthy_since=(now - timedelta(seconds=3600)).isoformat(),
+            last_decrease_at=(now - timedelta(seconds=1800)).isoformat(),
+        )
+        # Elapsed time without any classified success observation heals
+        # nothing, no matter how long the scope has sat idle.
+        wf._recover_scope_capacity(now)
+        assert wf._scopes["s1"].effective_limit == 4
 
     def test_lease_lookup_uses_index_without_scanning(self):
         wf = self._make_workflow()
