@@ -27,6 +27,10 @@ from moonmind.integrations.jira.models import (
 from moonmind.integrations.jira.tool import JiraToolService
 from moonmind.workflows.adapters.github_service import GitHubService
 from moonmind.workflows.skills.tool_plan_contracts import ToolResult
+from moonmind.workflows.temporal.github_issue_search import (
+    is_complete_open_issue,
+    resolve_issue,
+)
 
 JIRA_CREATE_ISSUES_TOOL_NAME = "story.create_jira_issues"
 JIRA_ORCHESTRATE_TASKS_TOOL_NAME = "story.create_jira_orchestrate_tasks"
@@ -4464,8 +4468,6 @@ async def load_github_issue_preset_brief(
 
     search_evidence: dict[str, Any] = {}
     if "issueSearch" in inputs:
-        from moonmind.workflows.temporal.github_issue_search import resolve_issue
-
         repository = _string(inputs.get("repository"))
         issue_number, search_evidence = await resolve_issue(
             repository=repository,
@@ -4494,14 +4496,13 @@ async def load_github_issue_preset_brief(
                 "issueNumber": issue_number,
             },
         )
-    issue = _github_issue_payload(issue_data, repository)
     if search_evidence and (
-        issue["number"] != issue_number
-        or issue["url"].casefold()
-        != f"https://github.com/{repository}/issues/{issue_number}".casefold()
-        or issue["state"] != "open"
-        or "pull_request" in issue_data
-        or (not _string(inputs.get("issueSearch")) and _github_blockers_from_issue(issue))
+        not is_complete_open_issue(issue_data, repository)
+        or issue_data["number"] != issue_number
+        or (
+            not _string(inputs.get("issueSearch"))
+            and _github_blockers_from_issue(_github_issue_payload(issue_data, repository))
+        )
     ):
         return ToolResult(
             status="FAILED",
@@ -4510,6 +4511,7 @@ async def load_github_issue_preset_brief(
                 "error": "Selected GitHub issue changed or could not be confirmed before brief loading.",
             },
         )
+    issue = _github_issue_payload(issue_data, repository)
     issue_ref = f"{repository}#{issue['number'] or issue_number}"
     body = _string(issue.get("body"))
     title = _string(issue.get("title"))

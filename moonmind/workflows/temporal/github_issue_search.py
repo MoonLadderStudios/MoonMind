@@ -11,6 +11,33 @@ import httpx
 from moonmind.workflows.adapters.github_service import GitHubService
 
 
+def is_complete_open_issue(payload: Any, repository: str) -> bool:
+    """Validate raw GitHub evidence before normalization can hide missing fields."""
+
+    if not isinstance(payload, Mapping) or "pull_request" in payload:
+        return False
+    number = payload.get("number")
+    labels = payload.get("labels")
+    return (
+        type(number) is int
+        and number > 0
+        and payload.get("state") == "open"
+        and str(payload.get("html_url")).casefold()
+        == f"https://github.com/{repository}/issues/{number}".casefold()
+        and isinstance(payload.get("title"), str)
+        and bool(payload["title"].strip())
+        and "body" in payload
+        and isinstance(payload["body"], (str, type(None)))
+        and isinstance(labels, list)
+        and all(
+            isinstance(label, Mapping)
+            and isinstance(label.get("name"), str)
+            and bool(label["name"].strip())
+            for label in labels
+        )
+    )
+
+
 async def resolve_issue(
     *,
     repository: str,
@@ -92,36 +119,17 @@ async def resolve_issue(
                     }
                 if "pull_request" in candidate:
                     continue
-                number = candidate.get("number")
-                if (
-                    type(number) is not int
-                    or number <= 0
-                    or candidate.get("state") != "open"
-                    or str(candidate.get("html_url")).casefold()
-                    != f"https://github.com/{repository}/issues/{number}".casefold()
-                    or not isinstance(candidate.get("body"), (str, type(None)))
-                    or "body" not in candidate
-                    or not isinstance(candidate.get("labels"), list)
-                ):
+                if not is_complete_open_issue(candidate, repository):
                     return None, {
                         **evidence,
                         "error": "GitHub candidate identity, state, or blocker evidence is invalid.",
                     }
                 normalized = dict(candidate)
                 labels = candidate["labels"]
-                if any(
-                    not isinstance(label, Mapping)
-                    or not isinstance(label.get("name"), str)
-                    for label in labels
-                ):
-                    return None, {
-                        **evidence,
-                        "error": "GitHub returned malformed blocker labels.",
-                    }
                 normalized["labels"] = [label["name"] for label in labels]
                 if not query and blockers_from_issue(normalized):
                     continue
-                return number, evidence
+                return candidate["number"], evidence
             if len(candidates) < 100:
                 return None, {
                     **evidence,

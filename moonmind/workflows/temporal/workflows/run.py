@@ -9398,6 +9398,7 @@ class MoonMindRunWorkflow:
                 "summary",
             ),
             "moonmind.github.get_issue": (
+                "searchEvidence",
                 "repository",
                 "issueNumber",
                 "issueRef",
@@ -9477,6 +9478,7 @@ class MoonMindRunWorkflow:
             key: compact_context[key]
             for key in (
                 "trustedSource",
+                "searchEvidence",
                 "jiraIssueKey",
                 "repository",
                 "issueNumber",
