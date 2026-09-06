@@ -440,6 +440,10 @@ class GenericOmnigentHostRealizer:
                 provider_profile_refs=tuple(
                     sorted({item.provider_profile_ref for item in acquired})
                 ),
+                # MoonLadderStudios/MoonMind#3881: the machine reservation this
+                # allocation takes is resolved from the trusted Launch Policy,
+                # in the same transaction that counts the hosts.
+                resource_limits=launch_policy.limits,
                 ttl_seconds=int(launch_policy.limits["timeoutSeconds"]) + 900,
             )
             binding = await self._update_binding(
@@ -466,6 +470,10 @@ class GenericOmnigentHostRealizer:
                     binding, updates={"cleanupAuthorityRefs": cleanup}
                 )
 
+            # The reservation was taken in the allocating transaction; a
+            # read-only precheck is advisory, so re-verify the exact fence
+            # before anything mutates Docker (#3881 remaining implementation 3).
+            await self._assert_machine_reservation_holds(host_lease.leaseRef)
             host_context = await self._host_runtime.realize(
                 request=request,
                 plan=plan,
@@ -492,6 +500,13 @@ class GenericOmnigentHostRealizer:
                     "controlVolumeRef": host_context.get("controlVolumeRef"),
                     "launchGeneration": host_lease.launchGeneration,
                 },
+            )
+            # The container now exists, so the reservation stops being
+            # clock-reclaimable: a live consumer keeps its accounting even if
+            # the workflow that asked for it dies (#3881 remaining
+            # implementation 6).
+            await self._confirm_machine_reservation(
+                host_lease.leaseRef, str(host_context["containerName"])
             )
             attestations = {
                 key: str(value)
@@ -926,6 +941,13 @@ class GenericOmnigentHostRealizer:
             host_lease = await self._host_leases.mark_cleaned(
                 host_lease.leaseRef, expected_generation=host_lease.generation
             )
+            # Capacity accounting observes cleanup's evidence; it never performs
+            # teardown and never asserts completion on cleanup's behalf. A
+            # cleanup that could not read the daemon releases nothing, so a
+            # failed teardown cannot manufacture free capacity (#3881 AC7).
+            await self._release_machine_reservation(
+                host_lease.leaseRef, cleanup_evidence.get("host")
+            )
         if prepared is not None:
             await self._host_runtime.cleanup_prepared(prepared)
         else:
@@ -1118,6 +1140,75 @@ class GenericOmnigentHostRealizer:
                     task.cancel()
                     with suppress(asyncio.CancelledError):
                         await task
+
+    def _machine_reservation_ref(self, host_lease_ref: str) -> tuple[Any, str] | None:
+        """Return (ledger, reservation id) for one host lease, when accounted."""
+
+        ledger = getattr(self._host_capacity_admission, "machine_capacity", None)
+        backend_ref = getattr(self._host_capacity_admission, "backend_ref", None)
+        if ledger is None or not backend_ref:
+            return None
+        from moonmind.capacity import machine_reservation_id
+
+        return ledger, machine_reservation_id(
+            backend_ref=str(backend_ref),
+            owner_kind="omnigent_host_lease",
+            owner_ref=host_lease_ref,
+            generation=1,
+        )
+
+    async def _assert_machine_reservation_holds(self, host_lease_ref: str) -> None:
+        """Refuse to mutate Docker unless the exact reservation still holds."""
+
+        resolved = self._machine_reservation_ref(host_lease_ref)
+        if resolved is None:
+            return
+        ledger, reservation_id = resolved
+        if await ledger.verify(reservation_id=reservation_id, generation=1):
+            return
+        raise HarnessPlatformError(
+            "machine capacity reservation no longer holds; "
+            "missing_condition=machine_resources.",
+            code=HarnessPlatformFailure.OMNIGENT_HOST_CAPACITY_UNAVAILABLE,
+        )
+
+    async def _confirm_machine_reservation(
+        self, host_lease_ref: str, container_ref: str
+    ) -> None:
+        resolved = self._machine_reservation_ref(host_lease_ref)
+        if resolved is None:
+            return
+        ledger, reservation_id = resolved
+        await ledger.confirm(
+            reservation_id=reservation_id,
+            generation=1,
+            container_ref=container_ref,
+        )
+
+    async def _release_machine_reservation(
+        self, host_lease_ref: str, host_evidence: Any
+    ) -> None:
+        resolved = self._machine_reservation_ref(host_lease_ref)
+        if resolved is None:
+            return
+        ledger, reservation_id = resolved
+        from moonmind.capacity import ReleaseEvidence
+
+        evidence = host_evidence if isinstance(host_evidence, dict) else {}
+        # Cleanup reports what it observed. Absent positive evidence the
+        # accounting is retained and the janitor reconciles it against the
+        # backend, rather than the clock releasing it here.
+        await ledger.release(
+            reservation_id=reservation_id,
+            generation=1,
+            evidence=ReleaseEvidence(
+                daemon_observed=bool(evidence.get("daemonObserved")),
+                consumer_removed=bool(evidence.get("containerRemoved")),
+                consumer_stopped=bool(evidence.get("containerStopped")),
+                # Storage stays accounted while a retained volume consumes it.
+                storage_retained=not bool(evidence.get("stateVolumeRemoved")),
+            ),
+        )
 
     async def _assert_host_capacity_admits(self) -> None:
         """Refuse a new host allocation the machine cannot safely carry.

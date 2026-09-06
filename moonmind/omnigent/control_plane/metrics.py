@@ -184,6 +184,27 @@ BOUNDED_LABEL_VALUES: dict[str, frozenset[str]] = {
     "cleanup_outcome": frozenset(
         {"cancelled_clean", "cancelled_incomplete", "completed_clean", "leaked"}
     ),
+    #: Which machine resource is currently limiting admission (#3881). Fixed,
+    #: low-cardinality names only: never a plan, lease, host, job or credential
+    #: identity.
+    "limiting_resource": frozenset(
+        {
+            "machine_cpu",
+            "machine_memory",
+            "machine_processes",
+            "machine_temporary_storage",
+            "concurrent_initialization",
+            "reconciliation_health",
+            "generic_host_capacity",
+            "generic_host_cold_launch_rate",
+            "none",
+        }
+    ),
+    #: Which machine resource a utilization sample describes (#3881).
+    "machine_resource": frozenset(
+        {"cpu", "memory", "processes", "temporary_storage"}
+    ),
+    "reconciliation_health": frozenset({"healthy", "faulted", "unprovable"}),
     "rollback_control": frozenset(
         {
             "stop_new_generic_codex_admission",
@@ -291,6 +312,21 @@ MIGRATION_CLEANUP_OUTCOME = "omnigent_migration_cleanup_outcome"
 MIGRATION_FALLBACK_DENIED = "omnigent_migration_fallback_denied"
 MIGRATION_ROLLBACK_ACTIVATION = "omnigent_migration_rollback_activation"
 
+# --- Machine capacity accounting (#3881) -------------------------------------
+#
+# Safe utilization, the configured ceiling, the limiting resource, the oldest
+# waiter's age and reconciliation health. Identity-free by construction: the
+# only labels are the fixed resource and health vocabularies above, so plan,
+# lease, host, job and credential identities can never reach a metric backend.
+
+MACHINE_CAPACITY_UTILIZATION = "omnigent_machine_capacity_utilization_percent"
+MACHINE_CAPACITY_CEILING = "omnigent_machine_capacity_ceiling"
+MACHINE_CAPACITY_LIMITING_RESOURCE = "omnigent_machine_capacity_limiting_resource"
+MACHINE_CAPACITY_OLDEST_WAITER_AGE = (
+    "omnigent_machine_capacity_oldest_waiter_age_seconds"
+)
+MACHINE_CAPACITY_RECONCILIATION = "omnigent_machine_capacity_reconciliation"
+
 
 METRICS: dict[str, MetricDefinition] = {
     m.name: m
@@ -370,6 +406,25 @@ METRICS: dict[str, MetricDefinition] = {
             ("harness_class", "denial_reason"),
         ),
         _def(MIGRATION_ROLLBACK_ACTIVATION, COUNTER, ("rollback_control",)),
+        # Machine capacity accounting (#3881)
+        _def(
+            MACHINE_CAPACITY_UTILIZATION,
+            OBSERVATION,
+            ("machine_resource",),
+            "percent",
+        ),
+        _def(MACHINE_CAPACITY_CEILING, OBSERVATION, ("machine_resource",)),
+        _def(
+            MACHINE_CAPACITY_LIMITING_RESOURCE,
+            COUNTER,
+            ("limiting_resource",),
+        ),
+        _def(MACHINE_CAPACITY_OLDEST_WAITER_AGE, OBSERVATION, (), "seconds"),
+        _def(
+            MACHINE_CAPACITY_RECONCILIATION,
+            COUNTER,
+            ("reconciliation_health",),
+        ),
     )
 }
 
@@ -590,6 +645,65 @@ def record_safely(recorder: Callable[..., None], /, **labels: object) -> None:
         logger.warning("Omnigent metric recording failed", exc_info=True)
 
 
+def record_machine_capacity(
+    *,
+    utilization_percent: Mapping[str, object] | None = None,
+    ceilings: Mapping[str, object] | None = None,
+    limiting_resource: object = None,
+    oldest_waiter_age_seconds: object = None,
+    reconciliation_health: object = None,
+) -> None:
+    """Record one machine-capacity admission observation (#3881).
+
+    Every argument is optional so one call site can report exactly what it
+    established. Nothing here carries a plan, lease, host, job or credential
+    identity: only the fixed resource and health vocabularies reach the
+    exporter.
+    """
+
+    resource_keys = {
+        "cpu": "cpu",
+        "cpuMillis": "cpu",
+        "memory": "memory",
+        "memoryMiB": "memory",
+        "processes": "processes",
+        "temporaryStorage": "temporary_storage",
+        "temporaryStorageMiB": "temporary_storage",
+    }
+    for key, value in (utilization_percent or {}).items():
+        resource = resource_keys.get(str(key))
+        if resource is None:
+            continue
+        observe(
+            MACHINE_CAPACITY_UTILIZATION,
+            max(0.0, float(value)),
+            machine_resource=resource,
+        )
+    for key, value in (ceilings or {}).items():
+        resource = resource_keys.get(str(key))
+        if resource is None:
+            continue
+        observe(
+            MACHINE_CAPACITY_CEILING,
+            max(0.0, float(value)),
+            machine_resource=resource,
+        )
+    increment(
+        MACHINE_CAPACITY_LIMITING_RESOURCE,
+        limiting_resource=(limiting_resource if limiting_resource else "none"),
+    )
+    if oldest_waiter_age_seconds is not None:
+        observe(
+            MACHINE_CAPACITY_OLDEST_WAITER_AGE,
+            max(0.0, float(oldest_waiter_age_seconds)),
+        )
+    if reconciliation_health is not None:
+        increment(
+            MACHINE_CAPACITY_RECONCILIATION,
+            reconciliation_health=reconciliation_health,
+        )
+
+
 def record_migration_launch_readiness(
     *, harness_id: object, ready: bool | None
 ) -> None:
@@ -742,6 +856,12 @@ __all__ = [
     "MIGRATION_CLEANUP_OUTCOME",
     "MIGRATION_FALLBACK_DENIED",
     "MIGRATION_ROLLBACK_ACTIVATION",
+    "MACHINE_CAPACITY_UTILIZATION",
+    "MACHINE_CAPACITY_CEILING",
+    "MACHINE_CAPACITY_LIMITING_RESOURCE",
+    "MACHINE_CAPACITY_OLDEST_WAITER_AGE",
+    "MACHINE_CAPACITY_RECONCILIATION",
+    "record_machine_capacity",
     "harness_class_for",
     "record_safely",
     "record_runtime_target_selection",

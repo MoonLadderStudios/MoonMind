@@ -240,7 +240,9 @@ async def test_production_backend_makes_every_registered_activity_callable(
         if args[:2] == ("image", "inspect"):
             return 0, b"sha256:" + b"a" * 64, b""
         if args[0] == "info":
-            return 0, str(10 * 1024**3).encode(), b""
+            # MoonLadderStudios/MoonMind#3881: the shared machine budget is
+            # probed from memory *and* CPU count.
+            return 0, f"{10 * 1024**3}\t16".encode(), b""
         if args[0] == "ps":
             return 0, b"", b""
         if args[:2] == ("inspect", "--format"):

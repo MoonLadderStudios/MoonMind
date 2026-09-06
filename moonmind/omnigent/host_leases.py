@@ -78,6 +78,47 @@ def generic_host_lease_ref(
     return _identity("omnigent-host-lease", runtime_binding_id, host_class_ref)
 
 
+def _record_machine_capacity(decision: Any) -> None:
+    """Publish the identity-free machine-capacity view for one admission.
+
+    MoonLadderStudios/MoonMind#3881 remaining implementation 8. This is the
+    point where safe utilization, the configured ceilings and the limiting
+    resource are all established at once. Telemetry is never authority, so it
+    is recorded through the failure-tolerant helper.
+    """
+
+    from moonmind.omnigent.control_plane import metrics as control_plane_metrics
+
+    machine = getattr(decision, "machine", None)
+    usage = getattr(decision, "machine_usage", None) or (
+        machine.usage if machine is not None else None
+    )
+    if machine is None and usage is None:
+        return
+    health = "healthy"
+    if usage is not None and usage.reconciliation_blocked:
+        health = "unprovable"
+    elif usage is not None and usage.reconciliation_faults:
+        health = "faulted"
+    control_plane_metrics.record_safely(
+        control_plane_metrics.record_machine_capacity,
+        utilization_percent=(
+            machine.utilization_percent if machine is not None else None
+        ),
+        ceilings=(machine.budget.as_payload() if machine is not None else None),
+        limiting_resource=(
+            machine.limiting_resource
+            if machine is not None
+            else decision.limiting_resource_without_budget
+        )
+        or decision.limiting_layer,
+        oldest_waiter_age_seconds=(
+            usage.oldest_waiter_age_seconds if usage is not None else None
+        ),
+        reconciliation_health=health,
+    )
+
+
 def _conflict(message: str) -> NoReturn:
     raise HarnessPlatformError(
         message,
@@ -100,12 +141,16 @@ class InMemoryOmnigentHostLeaseRepository:
         harness_implementation_ref: str,
         provider_profile_refs: tuple[str, ...],
         ttl_seconds: int = 3600,
+        resource_limits: Any | None = None,
     ) -> HostLeaseAuthority:
+        # The in-memory repository is a test/local substrate with no durable
+        # ledger, so it holds no machine reservation.
         del (
             launch_policy_ref,
             harness_id,
             harness_implementation_ref,
             provider_profile_refs,
+            resource_limits,
         )
         binding_ref = _identity("omnigent-host-binding", execution_plan_ref)
         lease_ref = generic_host_lease_ref(
@@ -249,7 +294,11 @@ class InMemoryOmnigentHostLeaseRepository:
 
 class DbOmnigentHostLeaseRepository:
     def __init__(
-        self, session_factory: Any, *, capacity_admission: Any | None = None
+        self,
+        session_factory: Any,
+        *,
+        capacity_admission: Any | None = None,
+        machine_budget_provider: Any | None = None,
     ) -> None:
         self._session_factory = session_factory
         # MoonLadderStudios/MoonMind#3878: aggregate host and cold-launch
@@ -257,6 +306,12 @@ class DbOmnigentHostLeaseRepository:
         # serialized operation. Read-only pre-checks elsewhere are for waiting;
         # this is where admission is enforced.
         self._capacity_admission = capacity_admission
+        # MoonLadderStudios/MoonMind#3881: the machine's own CPU, memory,
+        # process and temporary-storage budget, probed from the exact Docker
+        # backend this host will launch on. Awaited here rather than cached at
+        # construction so an unreadable daemon blocks the allocation it would
+        # otherwise be admitted against.
+        self._machine_budget_provider = machine_budget_provider
 
     @staticmethod
     def _from_row(row: Any) -> HostLeaseAuthority:
@@ -304,9 +359,30 @@ class DbOmnigentHostLeaseRepository:
         expires_at = datetime.now(UTC) + timedelta(
             seconds=int(kwargs.get("ttl_seconds", 3600))
         )
+        reservation, budget = await self._machine_reservation(
+            lease_ref=lease_ref,
+            execution_plan_ref=execution_plan_ref,
+            host_class_ref=host_class_ref,
+            launch_policy_ref=str(kwargs.get("launch_policy_ref") or "") or None,
+            resource_limits=kwargs.get("resource_limits"),
+        )
         async with self._session_factory() as session:
             if self._capacity_admission is not None:
-                decision = await self._capacity_admission.evaluate_within(session)
+                decision = await self._capacity_admission.evaluate_within(
+                    session, reservation=reservation, budget=budget
+                )
+                _record_machine_capacity(decision)
+                if getattr(decision, "unsatisfiable", False):
+                    # Larger than the ceiling itself. Queueing it would wait
+                    # forever and clamping it would silently change a
+                    # billing-relevant resource value, so reject it here.
+                    raise HarnessPlatformError(
+                        decision.waiting_reason,
+                        code=(
+                            HarnessPlatformFailure
+                            .OMNIGENT_LAUNCH_POLICY_INCOMPATIBLE
+                        ),
+                    )
                 if not decision.admitted:
                     raise HarnessPlatformError(
                         decision.waiting_reason,
@@ -359,6 +435,64 @@ class DbOmnigentHostLeaseRepository:
         created = await self.get(lease_ref)
         assert created is not None
         return created
+
+    async def _machine_reservation(
+        self,
+        *,
+        lease_ref: str,
+        execution_plan_ref: str,
+        host_class_ref: str,
+        launch_policy_ref: str | None,
+        resource_limits: Any,
+    ) -> tuple[Any | None, Any | None]:
+        """Build the shared machine reservation for this host allocation.
+
+        Demand is resolved from the trusted Launch Policy limits, never from a
+        workflow argument: a caller-supplied number would let one run spend the
+        machine's budget on behalf of a Host Class that never authorized it.
+        """
+
+        admission_ledger = getattr(self._capacity_admission, "machine_capacity", None)
+        backend_ref = getattr(self._capacity_admission, "backend_ref", None)
+        if (
+            self._machine_budget_provider is None
+            or admission_ledger is None
+            or not backend_ref
+        ):
+            # No machine accounting is wired at all (an in-process or local
+            # substrate). Host counting still applies.
+            return None, None
+        if resource_limits is None:
+            # Accounting *is* wired, so a caller that did not name its Launch
+            # Policy demand must not slip past it. Failing closed here is the
+            # difference between "this deployment does not account" and "this
+            # launch quietly did not".
+            raise HarnessPlatformError(
+                "generic host allocation did not name its Launch Policy "
+                "resource limits; machine capacity cannot be reserved",
+                code=HarnessPlatformFailure.OMNIGENT_LAUNCH_POLICY_INCOMPATIBLE,
+            )
+        from moonmind.capacity import (
+            WORKLOAD_CLASS_GENERIC_HOST,
+            ReservationRequest,
+            ResourceDemand,
+        )
+
+        budget = await self._machine_budget_provider()
+        reservation = ReservationRequest(
+            backend_ref=str(backend_ref),
+            workload_class=WORKLOAD_CLASS_GENERIC_HOST,
+            owner_kind="omnigent_host_lease",
+            # The lease ref already binds the exact runtime binding and Host
+            # Class, so the reservation and the lease name the same owner.
+            owner_ref=lease_ref,
+            generation=1,
+            demand=ResourceDemand.from_launch_policy_limits(resource_limits),
+            plan_ref=execution_plan_ref,
+            host_class_ref=host_class_ref,
+            launch_policy_ref=launch_policy_ref,
+        )
+        return reservation, budget
 
     async def mark_ready(self, lease_ref: str, **kwargs: Any) -> HostLeaseAuthority:
         return await self._db_transition(

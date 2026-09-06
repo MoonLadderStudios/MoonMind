@@ -1170,6 +1170,12 @@ async def omnigent_oauth_host_janitor_activity(
                 host_leases=services.host_lease_repository,
                 runtime_bindings=services.runtime_binding_store,
                 realizer=services.generic_realizer,
+                # MoonLadderStudios/MoonMind#3881: the existing janitor also
+                # reconciles machine-capacity reservations against owned
+                # container state. No second cleanup coordinator is introduced.
+                machine_capacity=services.machine_capacity,
+                machine_backend_ref=services.machine_backend_ref,
+                container_inventory=services.owned_container_inventory,
             ).run()
             result = {**result, "genericHost": generic_result}
         return result

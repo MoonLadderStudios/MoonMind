@@ -132,6 +132,10 @@ def test_payload_projection_is_compact_and_serializable() -> None:
         "coldLaunchBurst": 2,
         "coldLaunchWindowSeconds": 30,
         "retryAfterSeconds": 0,
+        # MoonLadderStudios/MoonMind#3881: a request larger than the configured
+        # ceiling is rejected rather than queued, so the workflow needs to be
+        # able to tell "wait" from "this can never fit".
+        "unsatisfiable": False,
     }
 
 
@@ -456,7 +460,13 @@ async def test_a_finished_reservation_is_not_reused(
 async def test_a_caller_without_a_binding_cannot_claim_a_reservation(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Retained histories send only the flag; they get exactly what they sent."""
+    """A caller assertion is not evidence of a reservation.
+
+    MoonLadderStudios/MoonMind#3881: the shortcut must be derived from the
+    exact persisted owner. A payload that cannot name its binding has no
+    reservation to reuse, so its own ``alreadyAllocated`` flag must not let it
+    bypass either the host count or the machine accounting.
+    """
 
     from moonmind.workflows.temporal.activities import (
         omnigent_session_activities as module,
@@ -469,7 +479,7 @@ async def test_a_caller_without_a_binding_cannot_claim_a_reservation(
 
     assert (
         await module._run_already_holds_generic_host({"alreadyAllocated": True})
-        is True
+        is False
     )
     assert (
         await module._run_already_holds_generic_host({"alreadyAllocated": False})

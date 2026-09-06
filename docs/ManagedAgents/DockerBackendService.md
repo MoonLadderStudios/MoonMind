@@ -695,18 +695,63 @@ Structured jobs apply:
 Callers may request resources only within deployment ceilings. They may not
 weaken security defaults.
 
-The trusted Docker launch boundary also enforces an aggregate active-memory
-budget across running MoonMind container jobs. Starts are serialized under a
-backend-scoped OS advisory lock so concurrent workflows cannot both admit
-against the same capacity snapshot. The operating system releases the lock if a
-worker exits, so admission never depends on stale-lease reclamation. By default,
-jobs may consume at most 70 percent of the Docker daemon's reported memory; the
-remaining capacity is reserved for the MoonMind control plane and Docker itself.
-Operators may set
-`MOONMIND_CONTAINER_BACKEND_MAX_ACTIVE_MEMORY_MIB` to a lower explicit ceiling.
+### Shared machine resource budget
+
+The trusted Docker launch boundary enforces an aggregate machine resource
+budget before a container starts. That budget is **shared**: container jobs,
+generic Omnigent hosts and validation hosts all run on the same daemon, so they
+all reserve from the same deployment-owned ledger
+(`machine_capacity_reservations`, `moonmind.capacity`). Enforcing a
+container-job-private ceiling would let two full workload classes still
+oversubscribe one machine.
+
+Reservations are scoped by exact Docker backend ref, so two independent
+backends have two independent budgets and are never pooled.
+
+Starts are serialized twice, in a fixed order that cannot deadlock: a
+backend-scoped OS advisory lock around the daemon probe (released by the
+operating system if a worker exits, so admission never depends on stale-lease
+reclamation), then the shared PostgreSQL transaction-scoped advisory lock that
+makes count-and-reserve one operation across worker replicas.
+
+By default, managed launches may reserve at most 70 percent of the daemon's
+reported CPU and memory; the remainder is documented headroom for the MoonMind
+control plane, the janitors and Docker itself. Operators may lower any ceiling
+explicitly:
+
+| Setting | Effect |
+| --- | --- |
+| `MOONMIND_MACHINE_UTILIZATION_PERCENT` | Share of the machine managed launches may reserve. Refused above 99: headroom is not optional. |
+| `MOONMIND_MACHINE_CPU_MILLIS` | Explicit CPU ceiling in millis. Refused above what the daemon reports. |
+| `MOONMIND_MACHINE_MEMORY_MIB` | Explicit memory ceiling. |
+| `MOONMIND_MACHINE_PROCESSES` | Explicit machine-wide process ceiling. Docker reports no such total, so the default derives it from CPU count. |
+| `MOONMIND_MACHINE_TEMPORARY_STORAGE_MIB` | Explicit temporary-storage ceiling. Defaults to the memory total because MoonMind temporary storage is RAM-backed tmpfs. |
+| `MOONMIND_MACHINE_MAX_CONCURRENT_INITIALIZING` | How many managed launches may be initializing at once. |
+| `MOONMIND_MACHINE_PRELAUNCH_TTL_SECONDS` | How long a prelaunch reservation may be held before it is reclaimable as proven-unused. |
+| `MOONMIND_CONTAINER_BACKEND_MAX_ACTIVE_MEMORY_MIB` | Lowers this deployment's memory ceiling for the container-job path specifically. |
+
+Every value is optional. Omitting all of them exercises the same production
+path: the backend is probed and the documented share is applied.
+
+The reservation is taken before the container starts and re-verified against
+its exact generation immediately before the Docker mutation, because a
+read-only precheck is advisory — another worker may have won the machine in
+between. It is confirmed against the container once the container exists, and
+it is released only on observed evidence that the consumer is gone. An
+Activity retry of the same job reconciles with the reservation it already
+holds rather than taking a second one.
+
 When admitting a job would exceed the budget, the job fails before start with
-`resource_limit_exceeded` and actionable retry guidance; an unbounded or
-unobservable active workload fails closed.
+`resource_limit_exceeded` and actionable retry guidance. An unbounded or
+unobservable active workload fails closed: an unreadable daemon or an
+unreadable owned-container inventory is `infrastructure`, never free capacity.
+
+Reconciliation runs in the existing janitor, not a second coordinator. It
+reclaims reservations that provably never launched, keeps accounting for live
+consumers whose workflow died, adopts an owned live container that has no
+accounting record as a reconciliation fault, and blocks new admission while the
+backend cannot be established. Only MoonMind's own owner labels are queried, so
+a foreign container is never inspected, adopted or removed.
 
 Local image builds use separate deployment policy. Their Dockerfile, context,
 target, arguments, network access, timeout, output limit, and validation command
