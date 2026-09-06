@@ -1283,6 +1283,61 @@ def _snapshot_confirms_current_turn_terminal(
     )
 
 
+def _marked_turn_failure_snapshot(
+    event: Mapping[str, Any],
+    snapshot: Mapping[str, Any],
+    *,
+    session_id: str,
+    marker: str,
+    arrived_after_message_post: bool,
+) -> dict[str, Any] | None:
+    """Accept a live native failure without requiring successful provider output.
+
+    Session status errors can precede every assistant/tool item. The live edge,
+    matching session, latest marked user message, and absence of an active
+    response own this failure together; a replayed edge or unrelated turn does
+    not. Preserve the error even if a later idle projection already erased it.
+    """
+    error = event.get("error")
+    if (
+        not arrived_after_message_post
+        or event.get("type") != "session.status"
+        or event.get("status") != "failed"
+        or event.get("conversation_id") != session_id
+        or not isinstance(error, Mapping)
+        or not isinstance(error.get("message"), str)
+        or not error["message"].strip()
+        or _snapshot_projects_active_response(snapshot)
+    ):
+        return None
+    items = snapshot.get("items")
+    if not isinstance(items, list):
+        return None
+    latest_user = next(
+        (
+            item
+            for item in reversed(items)
+            if isinstance(item, Mapping)
+            and item.get("type") == "message"
+            and isinstance(item.get("data"), Mapping)
+            and item["data"].get("role") == "user"
+        ),
+        None,
+    )
+    if latest_user is None or not _nested_value_contains_text(
+        latest_user, needle=marker
+    ):
+        return None
+    safe_error = redact_raw_events([dict(error)])[0]
+    return {
+        **snapshot,
+        "status": "failed",
+        "last_task_error": safe_error,
+        "summary": safe_error["message"],
+        "providerErrorCode": safe_error.get("code"),
+    }
+
+
 async def _unsupported_bundle_upload(bundle_ref: str) -> dict[str, Any]:
     raise OmnigentContractError(
         f"Omnigent bundleRef cannot be resolved by this activity: {bundle_ref}"
@@ -2802,6 +2857,13 @@ async def run_omnigent_execution(
                 ).strip()
                 if durable_summary:
                     terminal_snapshot_override["summary"] = durable_summary
+                if durable_terminal_status == "failed":
+                    # A later interactive turn's snapshot cannot replace the
+                    # already committed failure of this execution attempt.
+                    terminal_snapshot_override.pop("last_task_error", None)
+                    terminal_snapshot_override["providerErrorCode"] = (
+                        durable_terminal_refs.get("failureCode")
+                    )
                 external_state["terminalReconciliation"] = {
                     "source": "durable_bridge_terminal",
                     "status": durable_terminal_status,
@@ -3053,7 +3115,39 @@ async def run_omnigent_execution(
                         terminal_event_status = (
                             "completed" if normalized == "idle" else normalized
                         )
+                        terminal_observed_at = asyncio.get_running_loop().time()
                         terminal_snapshot = await client.get_session(session_id)
+                        failed_snapshot = _marked_turn_failure_snapshot(
+                            event,
+                            terminal_snapshot,
+                            session_id=session_id,
+                            marker=marker,
+                            arrived_after_message_post=arrived_after_message_post,
+                        )
+                        if failed_snapshot is not None:
+                            terminal_status = "failed"
+                            terminal_snapshot_override = failed_snapshot
+                            heartbeat_status["value"] = terminal_status
+                            break
+                        terminal_turn_state = _marked_turn_item_state(
+                            terminal_snapshot,
+                            marker=marker,
+                            baseline_item_ids=pre_dispatch_item_ids,
+                        )
+                        if (
+                            terminal_event_status == "completed"
+                            and isinstance(terminal_snapshot.get("items"), list)
+                            and not terminal_turn_state["progress"]
+                        ):
+                            # Message injection can complete before the native
+                            # harness starts. Keep consuming live failures and
+                            # progress; the shared watchdog still bounds silence.
+                            start_watchdog.observe(
+                                terminal_snapshot,
+                                terminal_turn_state,
+                                observation_started_at=terminal_observed_at,
+                            )
+                            continue
                         current_turn_progress = (
                             _snapshot_confirms_current_turn_terminal(
                                 terminal_snapshot,
