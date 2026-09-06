@@ -1729,6 +1729,9 @@ class OmnigentProfileBoundExecutionCoordinator:
                                         (request.parameters or {}).get("repository") or ""
                                     ).strip(),
                                     github_token=github_token,
+                                    accepted_published_head=(
+                                        request.parameters or {}
+                                    ).get("acceptedPublishedHead"),
                                 )
                         except Exception as exc:
                             code = str(

@@ -305,12 +305,17 @@ async def test_pr_publication_projects_existing_remote_pull_request(
     monkeypatch.setattr(
         "moonmind.publish.service.resolve_high_security_mode", lambda *a, **k: False
     )
-    resolved_selectors: list[tuple[str, str, str | None]] = []
+    resolved_selectors: list[tuple[str, str, str | None, str | None]] = []
 
     async def resolve_pull_request_selector(
-        _self, *, repo: str, selector: str, github_token: str | None = None
+        _self,
+        *,
+        repo: str,
+        selector: str,
+        github_token: str | None = None,
+        expected_head_sha: str | None = None,
     ):
-        resolved_selectors.append((repo, selector, github_token))
+        resolved_selectors.append((repo, selector, github_token, expected_head_sha))
         return SimpleNamespace(
             resolved=True,
             pr_url="https://github.com/MoonLadderStudios/MoonMind/pull/3652",
@@ -361,6 +366,7 @@ async def test_pr_publication_projects_existing_remote_pull_request(
             "MoonLadderStudios/MoonMind",
             result["push_branch"],
             "test-token",
+            result["push_head_sha"],
         )
     ]
 

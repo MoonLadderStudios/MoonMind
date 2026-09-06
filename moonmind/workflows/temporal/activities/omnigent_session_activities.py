@@ -4846,6 +4846,9 @@ async def omnigent_publish_workspace_activity(
                     (agent_request.parameters or {}).get("repository") or ""
                 ).strip(),
                 github_token=github_token,
+                accepted_published_head=(agent_request.parameters or {}).get(
+                    "acceptedPublishedHead"
+                ),
             )
         finally:
             await http_client.aclose()

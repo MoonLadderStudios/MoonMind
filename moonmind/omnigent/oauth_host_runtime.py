@@ -947,6 +947,7 @@ class OmnigentOAuthHostRuntime:
         base_branch: str | None,
         repository: str,
         github_token: str | None,
+        accepted_published_head: Mapping[str, Any] | None = None,
     ) -> dict[str, Any]:
         """Publish through the shared harness-neutral workspace boundary."""
 
@@ -965,6 +966,7 @@ class OmnigentOAuthHostRuntime:
             base_branch=base_branch,
             repository=repository,
             github_token=github_token,
+            accepted_published_head=accepted_published_head,
         )
 
     async def inspect_session_completion(self, session_id: str) -> dict[str, Any]:
