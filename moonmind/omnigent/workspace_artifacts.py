@@ -25,6 +25,7 @@ MoonLadderStudios/MoonMind#4014 (CONTRACT-002, CONTRACT-011, INV-005, INV-006):
 
 from __future__ import annotations
 
+import configparser
 import hashlib
 import os
 import shutil
@@ -142,6 +143,27 @@ def _redaction_level(artifact: Any) -> str | None:
     if level is None:
         return None
     return str(getattr(level, "value", level)).upper()
+
+
+def _is_quarantined(artifact: Any) -> bool:
+    """Return whether the artifact is explicitly quarantined.
+
+    A top-level quarantine flag is distinct from the redaction level: either
+    one fail-closes a generic restore, which never releases protected raw
+    content into an agent workspace without its own explicit policy.
+    """
+
+    for attr in ("quarantine", "quarantined"):
+        value = getattr(artifact, attr, None)
+        if isinstance(value, str):
+            if value.strip().lower() in {"true", "yes", "1", "quarantined"}:
+                return True
+        elif bool(value):
+            return True
+    metadata = getattr(artifact, "metadata_json", None)
+    if isinstance(metadata, dict) and bool(metadata.get("quarantine")):
+        return True
+    return False
 
 
 def _artifact_digest(artifact: Any) -> str | None:
@@ -353,6 +375,17 @@ class WorkspaceArtifactProjector:
         os.close(descriptor)
         archive_path = Path(temporary_name)
         staging = workspace.parent / f"{STAGING_PREFIX}{uuid.uuid4().hex}"
+        # No concurrent agent may mutate the extraction tree: the import lock
+        # is held from staging creation through promotion. A retry reconciles
+        # the same import token; a foreign in-flight import fails closed
+        # instead of mutating another attempt's tree.
+        import_token = f"{artifact_ref}:{expected_digest or ''}"
+        import_lock = self._import_lock_path(workspace)
+        try:
+            self._acquire_import_lock(import_lock, token=import_token)
+        except WorkspaceArtifactProjectionError:
+            archive_path.unlink(missing_ok=True)
+            raise
         try:
             await self._write_payload(
                 service,
@@ -371,7 +404,21 @@ class WorkspaceArtifactProjector:
             # promoted evidence manifest is built after it runs.
             self._verify_materialized_manifest(staging, expanded=expanded)
             neutralized = self._neutralize_imported_workspace(staging)
+            # Thin bundles, missing LFS/submodule objects, and external
+            # baselines are incomplete unless independently admitted and
+            # resolved: fail closed with no ready marker rather than
+            # restoring a silently partial tree.
+            incomplete = self._assess_completeness(staging)
+            if incomplete:
+                raise WorkspaceArtifactProjectionError(
+                    "workspace checkpoint is incomplete: " + "; ".join(incomplete),
+                    code="OMNIGENT_WORKSPACE_MATERIALIZATION_FAILED",
+                )
             manifest = self._verify_materialized_manifest(staging)
+            # Re-verify every staged link against the materialized tree: a
+            # link that was safe at write time must still resolve inside the
+            # staging area after neutralization removed entries around it.
+            self._verify_staged_links(staging)
             if overlay_policy == OVERLAY_ADDITIVE:
                 self._promote_additive_overlay(workspace, staging)
             else:
@@ -386,6 +433,7 @@ class WorkspaceArtifactProjector:
                 code="OMNIGENT_WORKSPACE_MATERIALIZATION_FAILED",
             ) from exc
         finally:
+            self._release_import_lock(import_lock, token=import_token)
             archive_path.unlink(missing_ok=True)
             # Late cleanup removes only the import-owned staging generation;
             # a crash before/after promotion can never expose partial content
@@ -397,6 +445,132 @@ class WorkspaceArtifactProjector:
                     shutil.rmtree(staging, ignore_errors=True)
             except OSError:
                 pass
+
+    @staticmethod
+    def _import_lock_path(workspace: Path) -> Path:
+        return workspace.parent / f".moonmind-import-{workspace.name}.lock"
+
+    @staticmethod
+    def _acquire_import_lock(lock: Path, *, token: str) -> None:
+        try:
+            descriptor = os.open(lock, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+        except FileExistsError as exc:
+            try:
+                recorded = lock.read_text(encoding="utf-8")
+            except OSError:
+                recorded = ""
+            if recorded.strip() == str(token):
+                return
+            raise WorkspaceArtifactProjectionError(
+                "another workspace import is already in flight",
+                code="WORKSPACE_IMPORT_CONFLICT",
+            ) from exc
+        with os.fdopen(descriptor, "w", encoding="utf-8") as stream:
+            stream.write(str(token))
+
+    @staticmethod
+    def _release_import_lock(lock: Path, *, token: str) -> None:
+        try:
+            if lock.read_text(encoding="utf-8").strip() == str(token):
+                lock.unlink()
+        except OSError:
+            pass
+
+    @staticmethod
+    def _assess_completeness(staging: Path) -> list[str]:
+        """Report incomplete restores that need independent admission."""
+
+        reasons: list[str] = []
+        git_dir = staging / ".git"
+        # An unresolved large-file pointer is a content stub wherever it
+        # appears; truthful completeness does not depend on `.git` presence.
+        reasons.extend(
+            WorkspaceArtifactProjector._find_unresolved_lfs(staging, git_dir)
+        )
+        if git_dir.is_dir() and not git_dir.is_symlink():
+            alternates = git_dir / "objects" / "info" / "alternates"
+            if alternates.is_file() and not alternates.is_symlink():
+                reasons.append("external object alternates require admission")
+            if list(git_dir.glob("objects/pack/*.thinpack")):
+                reasons.append("thin pack requires its external baseline")
+            gitmodules = staging / ".gitmodules"
+            if gitmodules.is_file() and not gitmodules.is_symlink():
+                try:
+                    parser = configparser.ConfigParser(interpolation=None)
+                    parser.read(gitmodules, encoding="utf-8")
+                except (configparser.Error, OSError, UnicodeDecodeError):
+                    reasons.append("submodule configuration is unreadable")
+                    parser = None
+                if parser is not None:
+                    modules_dir = git_dir / "modules"
+                    for section in parser.sections():
+                        try:
+                            sub_path = parser[section]["path"]
+                        except KeyError:
+                            reasons.append(
+                                f"submodule {section!r} path requires admission"
+                            )
+                            break
+                        worktree = staging / sub_path
+                        populated = worktree.is_dir() and any(worktree.iterdir())
+                        admitted = (modules_dir / section).is_dir()
+                        if not populated and not admitted:
+                            reasons.append(
+                                f"submodule {section!r} content requires admission"
+                            )
+                            break
+        return list(dict.fromkeys(reasons))
+
+    @staticmethod
+    def _find_unresolved_lfs(staging: Path, git_dir: Path) -> list[str]:
+        pointers: list[str] = []
+        for dirpath, dirnames, filenames in os.walk(staging, followlinks=False):
+            dirnames[:] = [d for d in dirnames if d != ".git"]
+            for filename in filenames:
+                candidate = Path(dirpath) / filename
+                try:
+                    if candidate.stat().st_size > 1024:
+                        continue
+                    head = candidate.read_bytes()[:256]
+                except OSError:
+                    continue
+                if b"version https://git-lfs.github.com/spec/" in head:
+                    pointers.append(os.path.relpath(candidate, staging))
+                    if len(pointers) >= 4:
+                        break
+            if len(pointers) >= 4:
+                break
+        if not pointers:
+            return []
+        objects_dir = git_dir / "lfs" / "objects"
+        if objects_dir.is_dir() and any(objects_dir.iterdir()):
+            return []
+        return ["large-file objects require independent admission"]
+
+    @staticmethod
+    def _verify_staged_links(staging: Path) -> None:
+        """Re-verify every staged link against the materialized tree."""
+
+        staging_root = staging.resolve()
+        for dirpath, dirnames, filenames in os.walk(staging, followlinks=False):
+            for name in (*dirnames, *filenames):
+                target = Path(dirpath) / name
+                if not target.is_symlink():
+                    continue
+                try:
+                    resolved = target.resolve()
+                except OSError as exc:
+                    raise WorkspaceArtifactProjectionError(
+                        "workspace checkpoint symlink is unresolvable",
+                        code="WORKSPACE_AUTHORITY_MISMATCH",
+                    ) from exc
+                if resolved != staging_root and not resolved.is_relative_to(
+                    staging_root
+                ):
+                    raise WorkspaceArtifactProjectionError(
+                        "workspace checkpoint symlink escapes workspace",
+                        code="WORKSPACE_AUTHORITY_MISMATCH",
+                    )
 
     @staticmethod
     def _extract_archive_safely(
@@ -1021,10 +1195,15 @@ class WorkspaceArtifactProjector:
 
         A full snapshot is authoritative: destination-only files from a prior
         clone or failed attempt are not silently retained. Only the
-        import-owned staging generation is moved; the live workspace directory
+        import-owned staging generation is moved; the         live workspace directory
         itself is never deleted, and nothing outside it is touched.
         """
 
+        if workspace.is_symlink():
+            raise WorkspaceArtifactProjectionError(
+                "authorized workspace must not be a symlink",
+                code="WORKSPACE_AUTHORITY_MISMATCH",
+            )
         workspace.mkdir(parents=True, exist_ok=True)
         # Remove destination-only files first so a retry reconciles the same
         # generation instead of layering a new snapshot over stale content.
@@ -1246,6 +1425,11 @@ class WorkspaceArtifactProjector:
         if redaction is not None and redaction not in {"NONE", "UNCLASSIFIED", ""}:
             raise WorkspaceArtifactProjectionError(
                 "source artifact is restricted and needs an explicit release policy",
+                code="WORKSPACE_AUTHORITY_MISMATCH",
+            )
+        if _is_quarantined(artifact):
+            raise WorkspaceArtifactProjectionError(
+                "source artifact is quarantined and cannot enter an agent workspace",
                 code="WORKSPACE_AUTHORITY_MISMATCH",
             )
         digest = _artifact_digest(artifact)

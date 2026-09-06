@@ -138,6 +138,131 @@ class SandboxWorkspaceRecordStore:
         if not self.is_materialized(workspace_id):
             self.mark_materialized(workspace_id)
 
+    def _claims_dir(self, workspace_id: str) -> Path:
+        candidate = (self.store_root / f"{workspace_id}.grants").resolve()
+        if candidate.parent != self.store_root.resolve():
+            raise WorkspaceLocatorResolutionError(
+                WORKSPACE_AUTHORITY_MISMATCH,
+                "sandbox workspace grant registry escapes its authority",
+            )
+        return candidate
+
+    @staticmethod
+    def _grant_claim_identity(grant: Any) -> tuple[str, str]:
+        """Derive a stable (claim_id, mode) pair from either grant model.
+
+        Supports the ``workspace_sources`` grant (workspace_id/owner/generation
+        based) and the HMAC grant shape (grant_id based) so both compilers
+        fence exclusive use through the same registry.
+        """
+
+        mode = str(getattr(grant, "mode", "") or "").strip()
+        grant_id = str(getattr(grant, "grant_id", "") or "").strip()
+        if not grant_id:
+            digest = str(getattr(grant, "grant_digest", "") or "").strip()
+            if digest:
+                grant_id = "digest_" + digest.replace(":", "_")
+            else:
+                workspace_id = str(
+                    getattr(grant, "workspace_id", "")
+                    or getattr(grant, "source_workspace_id", "")
+                ).strip()
+                owner = str(
+                    getattr(grant, "owner_workflow_id", "")
+                    or getattr(grant, "grantee_workflow_id", "")
+                ).strip()
+                generation = str(
+                    getattr(grant, "generation", "")
+                    or getattr(grant, "expected_generation", "")
+                ).strip()
+                grantee = str(getattr(grant, "grantee_workflow_id", "") or "").strip()
+                grant_id = f"{workspace_id}:{owner}:{generation}:{grantee}"
+        # The sharing mode is part of the claim identity so an exclusive
+        # grant and a read-only grant never collapse onto the same claim
+        # file: distinct grants must conflict, identical grants must be
+        # idempotent on reclaim.
+        return f"{grant_id}:{mode}", mode
+
+    def claim_existing_workspace(self, workspace_id: str, grant: Any) -> None:
+        """Record exclusive/read-only use of another workflow's workspace.
+
+        Existing-workspace grants declare exclusive writable use or explicitly
+        supported read-only sharing. An exclusive claim conflicts with any
+        other active claim; read-only claims coexist only with read-only
+        claims. Reclaiming the same grant is idempotent for retries.
+        """
+
+        claims = self._claims_dir(workspace_id)
+        claims.mkdir(mode=0o700, parents=True, exist_ok=True)
+        grant_id, mode = self._grant_claim_identity(grant)
+        if not grant_id or mode not in {"exclusive", "read_only"}:
+            raise WorkspaceLocatorResolutionError(
+                WORKSPACE_AUTHORITY_MISMATCH,
+                "existing-workspace grant claim is invalid",
+            )
+        safe_name = "".join(
+            ch if ch.isalnum() or ch in {"-", "_", "."} else "_"
+            for ch in grant_id
+        )[:128] or "grant"
+        for existing_path in sorted(claims.glob("*.json")):
+            if existing_path.name == f"{safe_name}.json":
+                continue
+            try:
+                existing = json.loads(existing_path.read_text(encoding="utf-8"))
+            except (OSError, ValueError, json.JSONDecodeError):
+                continue
+            if not isinstance(existing, dict):
+                continue
+            if mode == "exclusive" or existing.get("mode") == "exclusive":
+                raise WorkspaceLocatorResolutionError(
+                    WORKSPACE_IDENTITY_MISMATCH,
+                    "existing workspace is already granted to another execution",
+                )
+        claim_path = claims / f"{safe_name}.json"
+        payload = json.dumps(
+            {
+                "grantId": grant_id,
+                "mode": mode,
+                "granteeWorkflowId": str(
+                    getattr(grant, "grantee_workflow_id", "")
+                    or getattr(grant, "owner_workflow_id", "")
+                    or ""
+                ),
+                "expectedGeneration": int(
+                    getattr(grant, "expected_generation", None)
+                    if getattr(grant, "expected_generation", None) is not None
+                    else getattr(grant, "generation", 0) or 0
+                ),
+            },
+            sort_keys=True,
+        )
+        try:
+            descriptor = os.open(
+                claim_path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600
+            )
+        except FileExistsError:
+            return
+        with os.fdopen(descriptor, "w", encoding="utf-8") as stream:
+            stream.write(payload)
+
+    def release_existing_workspace(self, workspace_id: str, grant_id: str) -> None:
+        """Release ownership of a previously claimed existing workspace."""
+
+        safe_name = "".join(
+            ch if ch.isalnum() or ch in {"-", "_", "."} else "_"
+            for ch in str(grant_id or "")
+        )[:128] or "grant"
+        claim_path = self._claims_dir(workspace_id) / f"{safe_name}.json"
+        try:
+            claim_path.unlink()
+        except FileNotFoundError:
+            pass
+        except OSError as exc:
+            raise WorkspaceLocatorResolutionError(
+                WORKSPACE_AUTHORITY_MISMATCH,
+                "existing-workspace grant release failed",
+            ) from exc
+
     def load(self, workspace_id: str) -> SandboxWorkspaceRecord | None:
         path = self._record_path(workspace_id)
         if not path.is_file():
