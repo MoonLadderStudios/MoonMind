@@ -1,0 +1,113 @@
+{
+  "advisoryGaps": [
+    {
+      "acceptanceCriterion": "Browser evidence covers Chromium and Firefox through existing tooling across API/asset/transport boundaries",
+      "classification": "advisory (non-blocking per moonspec-verify controlling/advisory split)",
+      "evidence": "tests/unit/omnigent/test_workflow_chat_rendered_app_4013.py docstring explicitly scopes AC9/AC10 out: 'Browser (Chromium/Firefox) and deployment acceptance evidence (AC9/AC10) remain outstanding and are not claimed here.' Operator record limitation: 'The exact compiled Vite bundle was not executed in a browser by these targeted tests.' Fresh runtime has node v22.23.2 but no Playwright browser binaries (~/.cache/ms-playwright absent) and no pytest; browser execution requires excessive environment setup.",
+      "id": "browser-evidence-chromium-firefox",
+      "status": "NOT_RUN_ADVISORY",
+      "suggestedFollowUp": "Run npm run ui:test:browser suite plus a served coherent API/dashboard/Omnigent UI artifact pass in Chromium and Firefox before protected-live signoff; record revisions/digests."
+    },
+    {
+      "acceptanceCriterion": "Real deployment acceptance record identifies exact artifacts and distinguishes passed, failed, blocked and unexecuted scenarios",
+      "classification": "advisory (non-blocking: requires credentials and a protected live deployment unavailable to the verifier)",
+      "evidence": "Operator record limitation: 'Protected live deployment acceptance for issue 4013 was not run.' No deployment acceptance record exists in the checkout for this issue.",
+      "id": "deployment-acceptance-record",
+      "status": "NOT_RUN_ADVISORY",
+      "suggestedFollowUp": "Produce protected-live acceptance evidence (initial transcript, authorized continuation/send, streaming, reconnect, terminal read-only, failure diagnostics) with exact artifact revisions/digests; keep hermetic CI evidence distinct from credentialed live evidence."
+    }
+  ],
+  "assessmentVerdict": "PARTIALLY_IMPLEMENTED",
+  "candidateBranch": "moonmind-job-4022d2ba",
+  "candidateCommit": "d99cb120e38128e2195e37861658686986acd218",
+  "candidateMatchesOperatorRecord": true,
+  "confidence": "MEDIUM",
+  "decision": "FULLY_IMPLEMENTED at the hermetic controlling boundary. All repo-verifiable acceptance criteria (AC1-AC8 plus documentation) verify by direct production-code inspection against the exact candidate commit, supported by the recorded hermetic test runs executed on that identical commit with a clean tree. The two outstanding items (compiled-bundle browser execution across Chromium/Firefox, protected-live deployment acceptance) are advisory per the moonspec-verify controlling/advisory split: they require browser binaries, credentials, and a deployed environment unavailable in this runtime, and the implementation's own test docstrings scope them out of the hermetic claim rather than claiming them. Do not create a pull request on this verification alone until the workflow owner decides whether advisory browser/live signoff is required first; the controlling gate itself is satisfied.",
+  "issue": {
+    "number": 4013,
+    "repository": "MoonLadderStudios/MoonMind",
+    "title": "[Bug] Fix black Workflow Detail chat: WebSocket shim drops OPEN and native bootstrap failures stay invisible",
+    "url": "https://github.com/MoonLadderStudios/MoonMind/issues/4013"
+  },
+  "originalRequestSource": ".moonmind/attachments/d7203045c0a1951ed1712438 (issue brief) and task instruction issue_brief for MoonLadderStudios/MoonMind#4013",
+  "pinnedOmnigentCommit": "f04b0354fb5344c1ea8b92795ceb6760a9ad7595",
+  "recommendedNextAction": "advance",
+  "remainingWork": [],
+  "requirements": [
+    {
+      "evidence": "Production: moonmind/omnigent/native_ui.py:472-475 (EventSource) and 487-493 (WebSocket) add Object.setPrototypeOf(window.X, NativeX) after the prototype assignment, preserving CONNECTING/OPEN/CLOSING/CLOSED. Test: tests/unit/omnigent/test_native_ui.py::test_injected_adapter_preserves_transport_statics_and_sendwatch extracts the adapter from render_native_ui_document output and executes it under node against recording natives plus the exact pinned sendWatch guard (null/connecting/open/closing/closed, watch sends, stop/start/reconnect). Recorded: PASS as part of 41 passed.",
+      "id": "constructor-statics-regression",
+      "status": "VERIFIED"
+    },
+    {
+      "evidence": "tests/unit/omnigent/test_native_ui.py:708-731 renders the real document, extracts the injected adapter script by regex, and runs it in node (skips only if node is absent). tests/unit/omnigent/test_pinned_session_updates_socket_4013.py extracts the adapter the same way and executes the literal pinned omnigent/web/src/lib/sessionUpdatesSocket.ts (brace-counted extraction, exact sendWatch guard asserted present). Recorded run used ./tools/test_unit.sh --python-only in the dedicated test image: 41 passed.",
+      "id": "executes-actual-adapter-in-ci",
+      "status": "VERIFIED"
+    },
+    {
+      "evidence": "tests/unit/omnigent/test_workflow_chat_rendered_app_4013.py::test_embedded_document_renders_authorized_transcript_shell and ::test_full_page_document_renders_same_shell_with_deny_framing use the real render_native_ui_document plus the real facade allowlist/compat map in both presentations; tests/unit/omnigent/test_pinned_session_updates_socket_4013.py::test_pinned_socket_lifecycle_through_served_adapter runs the literal pinned consumer class through the served adapter (never-connected setWatched silent no-op, open-socket watch frame, dedupe, drop/reconnect, stop/start). Recorded: PASS.",
+      "id": "renders-transcript-no-sendwatch-crash",
+      "status": "VERIFIED"
+    },
+    {
+      "evidence": "Pinned-shape lifecycle in test_native_ui.py harness (lines 567-675): reconnect constructs a new socket and resends the watch exactly once with scoped wss:// URL and subprotocol forwarding; stop() closes/clears with terminal silence; start()/dispose() behave correctly; non-open states never send. Literal pinned class covered the same lifecycle in test_pinned_session_updates_socket_4013.py. Recorded: PASS.",
+      "id": "watch-reconnect-behavior",
+      "status": "VERIFIED"
+    },
+    {
+      "evidence": "Production: moonmind/omnigent/workflow_chat_facade.py:268-294 adds allowlisted GET operations list_harnesses, get_session_agent, get_session_environment, list_child_sessions; api_service/api/routers/omnigent_bridge.py serves them as bounded binding-local projections (empty non-enumerating lists; agent/environment projections carry only the opaque chatBindingId, reconnect state, readOnly, providerSessionAvailable; never forward upstream); moonmind/omnigent/native_ui_compat.py maps the four operations into the served compat map; moonmind/omnigent/native_ui.py scopes srcset candidates and CSS url() references so the root wordmark resolves through the scoped route. Tests: test_workflow_chat_boot_surface_4013.py (allowlist match, served-in-compat-map, binding-local-and-redacted, empty/non-enumerating catalogs). Recorded: PASS.",
+      "id": "boot-surface-four-routes-plus-asset",
+      "status": "VERIFIED"
+    },
+    {
+      "evidence": "Production: _dispatch_native_ui_http and _dispatch_workflow_chat_facade attach redacted public_details {requiredCapability, disabledReason} to 403 envelopes (never provider identity or transcript content); missing immutable authority still fails closed with disabledReason 'immutable_authority_missing'. Tests: test_denied_environment_read_explains_itself_without_leaking and test_missing_immutable_authority_still_denies_boot_read (added/fixed at candidate commit d99cb12). Recorded: PASS.",
+      "id": "essential-read-403s-resolved-or-explained",
+      "status": "VERIFIED"
+    },
+    {
+      "evidence": "Production: native_ui.py adapter announces moonmind.omnigent.chat.ready after first render and moonmind.omnigent.chat.fatal on error/unhandledrejection with binding-scoped payloads; frontend/src/entrypoints/WorkflowChatNative.tsx validates exact origin, iframe window, binding id, and mount generation, applies NATIVE_CHAT_READY_TIMEOUT_MS=15000, offers bounded Retry (remount with generation guard), and renders the legacy read-only children fallback below the frame on timeout/fatal. Tests: WorkflowChatNative.test.tsx signal-validation and readiness-containment suites (28 tests). Recorded frontend run: 28 passed.",
+      "id": "failure-containment-signal",
+      "status": "VERIFIED"
+    },
+    {
+      "evidence": "WorkflowChatNative keeps children (legacy read-only projection) rendered under the iframe on timeout/fatal; terminal workflow actions (View captured evidence, Continue with authored intent) covered by terminal-actions tests including keeps-terminal-actions-available-while-frame-times-out. No provider-session recreation or second composer in the recovery surface (Retry remounts the same binding). Recorded frontend run: 28 passed.",
+      "id": "terminal-evidence-continuation",
+      "status": "VERIFIED"
+    },
+    {
+      "evidence": "docs/Omnigent/OmnigentBridge.md §browser-transport-api-preservation documents exact CONNECTING/OPEN/CLOSING/CLOSED preservation; docs/UI/WorkflowChatPanel.md §§4.1/11/13 carry the readiness/failure-containment contract, essential-vs-optional split, and the explicit dashboard-stream 404 disposition (separate transport, owned by DashboardSPAArchitecture surface); docs/Development/FrontendDevelopment.md carries the rendered-bootstrap/browser regression recipe and blank-chat troubleshooting table. Present at HEAD (4027 ancestor of candidate); candidate adds the §11 dashboard-stream sentence. Declarative and scoped to existing owners; no new incident doc.",
+      "id": "documentation-owners",
+      "status": "VERIFIED"
+    }
+  ],
+  "schemaVersion": "moonspec-verify/v1",
+  "testResults": [
+    {
+      "command": "./tools/test_unit.sh --python-only --no-xdist tests/unit/omnigent/test_native_ui.py tests/unit/omnigent/test_workflow_chat_boot_surface_4013.py tests/unit/omnigent/test_workflow_chat_rendered_app_4013.py tests/unit/omnigent/test_pinned_session_updates_socket_4013.py",
+      "notes": "Recorded operator run on the exact candidate commit d99cb120e38128e2195e37861658686986acd218 in the dedicated Python test image with isolated Compose project and real upstream checkout; fresh runtime tree is clean at the same commit so the record applies. Fresh re-execution NOT RUN here: no pytest in this runtime and 'moonmind container python-tests' requires MOONMIND_RUNTIME_ID (managed workflow only). Independent fresh evidence substituted by direct inspection of all production code and test files at HEAD.",
+      "passed": 41,
+      "result": "PASS_RECORDED"
+    },
+    {
+      "command": "npm run ui:test -- frontend/src/entrypoints/WorkflowChatNative.test.tsx",
+      "notes": "Recorded operator run on the exact candidate commit after npm ci from package-lock.json; covers readiness/fatal signal validation, timeout/retry/remount, and terminal-action retention. Fresh re-execution NOT RUN here (node_modules present but verification step is read-only and the recorded run binds to the identical commit).",
+      "passed": 28,
+      "result": "PASS_RECORDED"
+    },
+    {
+      "command": "npm run ui:test:browser (Chromium/Firefox rendered bundle) + protected-live deployment acceptance",
+      "notes": "NOT RUN: no Playwright browser binaries in this runtime; protected-live acceptance needs credentials and a deployed environment. Advisory per skill; explicitly out of scope of the hermetic claim.",
+      "result": "NOT_RUN_ADVISORY"
+    }
+  ],
+  "upstreamCommit": "f04b0354fb5344c1ea8b92795ceb6760a9ad7595",
+  "verdict": "FULLY_IMPLEMENTED",
+  "verificationTarget": "issue_brief",
+  "workspacePreflight": {
+    "agentsSkillsSymlink": false,
+    "geminiSkillsSymlink": false,
+    "gitStatusClean": true,
+    "headCommit": "d99cb120e38128e2195e37861658686986acd218",
+    "skillsActiveOk": true
+  }
+}
