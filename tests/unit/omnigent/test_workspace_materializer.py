@@ -418,7 +418,7 @@ async def test_materializer_rejects_missing_authored_path_and_failed_clone(
         command_runner=None, workspace_root=tmp_path  # type: ignore[arg-type]
     )
 
-    # Authored absolute paths are preexisting authority: missing dir fails closed.
+    # Historical raw paths require a server-issued grant: missing dir fails closed.
     with pytest.raises(HarnessPlatformError):
         await materializer.materialize(_request({"workspacePath": "/tmp/nowhere"}))
 
