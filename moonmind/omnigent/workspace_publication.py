@@ -332,6 +332,8 @@ class OmnigentWorkspacePublicationService:
                 selector=result["push_branch"],
                 github_token=token,
                 expected_head_sha=result["push_head_sha"],
+                expected_base_branch=normalized_base,
+                expected_draft=False,
             )
             if pull_request.resolved and pull_request.pr_url:
                 result["pull_request_url"] = pull_request.pr_url

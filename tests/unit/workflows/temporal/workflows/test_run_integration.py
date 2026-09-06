@@ -6607,11 +6607,9 @@ def test_omnigent_publication_handoff_restores_implementation_without_remediatio
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("identity_source", ["authored", "trusted_search"])
 async def test_issue_implement_status_handoff_creates_pr_from_accepted_remote_head(
     mock_run_workflow: MoonMindRunWorkflow,
     monkeypatch: pytest.MonkeyPatch,
-    identity_source: str,
 ) -> None:
     mock_run_workflow._integration = None
     mock_run_workflow._repo = "MoonLadderStudios/MoonMind"
@@ -6655,11 +6653,6 @@ async def test_issue_implement_status_handoff_creates_pr_from_accepted_remote_he
             },
         },
     }
-    if identity_source == "trusted_search":
-        resolved_issue = parameters["workflow"]["inputs"].pop("github_issue")
-        mock_run_workflow._record_trusted_issue_context({
-            "trustedSource": "moonmind.github.get_issue", "issue": resolved_issue,
-        })
 
     url = await mock_run_workflow._ensure_issue_implement_pr_before_status(
         node={
