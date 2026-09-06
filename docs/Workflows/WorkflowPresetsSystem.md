@@ -252,6 +252,25 @@ The schema-form renderer uses a reusable widget registry. Initial widgets should
 
 Only widgets are allowed to have custom UI components. Presets consume widgets declaratively through schema metadata.
 
+## GitHub Issue Search
+
+The `github-issue-search-and-implement` preset resolves its optional repository
+input from the workflow repository during expansion. Its first typed
+`github.load_issue_preset_brief` operation accepts `issueSearch`: a nonempty
+query selects GitHub's best open issue match; an empty query scans open issues
+in descending creation order for the first candidate without blocker evidence.
+The scan is bounded to five pages of 100 candidates, excludes pull requests,
+and records pages and candidates examined. Missing, malformed, incomplete, or
+exhausted evidence stops the run before implementation or issue mutation.
+
+The selected issue and brief travel through the workflow's trusted issue
+context and durable brief attachment. Downstream blocker and status tools
+resolve the same issue from that context and reject conflicting identities.
+Tool instructions do not perform dynamic input binding or read agent-local
+files. Existing explicit `repository` / `issueNumber` tool inputs retain their
+direct lookup behavior. Preset changes apply to newly expanded runs; an old
+pinned plan must be resubmitted with the current preset to use search resolution.
+
 ## Jira Issue Input Pattern
 
 A Jira-driven preset should request a Jira issue as an input object rather than relying only on free-text instructions. This allows the Create page to display a picker, the backend to validate the issue reference, and the expansion layer to bind the issue fields into child steps.
