@@ -34,6 +34,7 @@ from moonmind.capacity import (
     OWNED_LAUNCH_CLASSES,
     STATE_ACTIVE,
     STATE_ADOPTED,
+    STATE_STORAGE_RETAINED,
     WORKLOAD_CLASS_CONTAINER_JOB,
     WORKLOAD_CLASS_GENERIC_HOST,
     MachineCapacityLedger,
@@ -1620,3 +1621,171 @@ async def test_a_job_whose_record_was_lost_reclaims_its_adopted_accounting(
     assert owner.state == STATE_ACTIVE
     assert owner.container_ref == container_ref
     assert orphan.state == "released"
+
+
+@pytest.mark.asyncio
+async def test_a_container_job_restarts_its_own_stopped_container(
+    session_factory, tmp_path
+) -> None:
+    """#3881 FINDING-D: the branch the container-job workflow actually takes.
+
+    ``reconcile_container`` reports the container exists and is *not* running,
+    and only then does the workflow call ``start_container``. The launch path
+    reconciles first, and a stopped container is correctly absent from an
+    enumeration of running owned containers, so this job's own reservation
+    legitimately loses its compute a moment before the job asks for it back.
+    Reporting that row as an admitted reuse left the pre-Docker fence refusing
+    a launch on a machine with nothing reserved, and ``start_container`` has no
+    retry, so a recoverable job was terminally failed.
+    """
+
+    ledger = MachineCapacityLedger(session_factory)
+    request = _small_container_job_request(tmp_path)
+    commands: list[tuple[str, ...]] = []
+    backend = _container_job_backend(
+        tmp_path, ledger=ledger, runner=_container_job_runner(request, commands)
+    )
+    await backend.start_container(request)
+    container_ref = backend._name(request)
+    reservation_id = machine_reservation_id(
+        backend_ref=BACKEND,
+        owner_kind="container_job",
+        owner_ref=request.job_id,
+        generation=1,
+    )
+
+    # The attempt runs again while its own container exists but is stopped, so
+    # the daemon reports no running owned container at all.
+    commands.clear()
+    backend = _container_job_backend(
+        tmp_path, ledger=ledger, runner=_container_job_runner(request, commands)
+    )
+
+    await backend.start_container(request)
+
+    assert ("start", container_ref) in commands
+    usage = await ledger.usage(backend_ref=BACKEND)
+    assert usage.reserved_memory_mib == 512
+    assert usage.reserved_cpu_millis == 250
+    assert usage.reserved_processes == 64
+    assert usage.reconciliation_faults == 0
+    async with session_factory() as session:
+        row = await session.get(MachineCapacityReservation, reservation_id)
+    assert row.state == STATE_ACTIVE
+    assert row.container_ref == container_ref
+
+
+@pytest.mark.asyncio
+async def test_a_stopped_container_jobs_retry_reports_the_resource_that_refused(
+    session_factory, tmp_path
+) -> None:
+    """#3881 FINDING-D: re-admission is a real admission, refused for a reason.
+
+    Reclaiming a stopped consumer's compute is correct, and so is refusing the
+    retry when other launches took the machine in the meantime. What the retry
+    must never get is the fixed "reservation no longer holds" fence failure,
+    which names no resource and tells an operator to wait for a managed launch
+    that is not the one holding the machine.
+    """
+
+    from moonmind.schemas.container_job_models import (
+        ContainerJobBackendError,
+        ContainerJobFailureClass,
+    )
+
+    ledger = MachineCapacityLedger(session_factory)
+    request = _container_job_request(tmp_path)
+    commands: list[tuple[str, ...]] = []
+    backend = _container_job_backend(
+        tmp_path, ledger=ledger, runner=_container_job_runner(request, commands)
+    )
+    await backend.start_container(request)
+    assert (await ledger.usage(backend_ref=BACKEND)).reserved_memory_mib == 3000
+
+    # The job's container stops, and the next reconciliation of this backend
+    # releases the compute it is provably no longer spending.
+    await ledger.reconcile(backend_ref=BACKEND, inventory=_owned_inventory({}))
+    assert (await ledger.usage(backend_ref=BACKEND)).reserved_memory_mib == 0
+    # Two cold host launches take the machine while it is stopped.
+    repository = _default_repository(session_factory, _admission(session_factory))
+    await _acquire(repository, "binding-a")
+    await _acquire(repository, "binding-b")
+
+    commands.clear()
+    backend = _container_job_backend(
+        tmp_path, ledger=ledger, runner=_container_job_runner(request, commands)
+    )
+    with pytest.raises(ContainerJobBackendError) as raised:
+        await backend.start_container(request)
+
+    assert (
+        raised.value.failure_class is ContainerJobFailureClass.RESOURCE_LIMIT_EXCEEDED
+    )
+    assert f"missing_condition={LIMITING_RESOURCE_MEMORY}" in str(raised.value)
+    assert "reservation no longer holds" not in str(raised.value)
+    assert not any(command[0] == "start" for command in commands)
+    async with session_factory() as session:
+        row = await session.get(
+            MachineCapacityReservation,
+            machine_reservation_id(
+                backend_ref=BACKEND,
+                owner_kind="container_job",
+                owner_ref=request.job_id,
+                generation=1,
+            ),
+        )
+    # A refusal frees nothing: the row keeps the state its own evidence set.
+    assert row.state == STATE_STORAGE_RETAINED
+
+
+@pytest.mark.asyncio
+async def test_a_host_lease_reacquires_the_reservation_its_cleanup_retained(
+    session_factory,
+) -> None:
+    """#3881 FINDING-D/FINDING-E: the same invariant at the other reserver.
+
+    Both reservers share ``reserve_within``. When a host's cleanup proved the
+    container gone while its state volume was deliberately retained, the
+    reservation accounts storage and no compute. The next allocation under that
+    exact lease ref must therefore be re-admitted against the machine, because
+    the realizer re-verifies the same fence before it mutates Docker.
+    """
+
+    from moonmind.omnigent.host_ports import host_correlation_identity
+
+    admission = _admission(session_factory)
+    repository = _repository(session_factory, admission)
+    realizer = _realizer(admission)
+    ledger = MachineCapacityLedger(session_factory)
+    lease = await _acquire(repository, "binding-a")
+    container_name = host_correlation_identity(lease.leaseRef)
+
+    await realizer._confirm_machine_reservation(lease.leaseRef, container_name)
+    await realizer._release_machine_reservation(
+        lease.leaseRef,
+        {"daemonObserved": True, "containerRemoved": True},
+    )
+    usage = await ledger.usage(backend_ref=BACKEND)
+    assert usage.reserved_memory_mib == 0
+    assert usage.reserved_temporary_storage_mib == 256
+
+    reservation, budget = await repository._machine_reservation(
+        lease_ref=lease.leaseRef,
+        execution_plan_ref="omnigent-execution-plan:sha256:" + "a" * 64,
+        host_class_ref="omnigent-opencode@1",
+        launch_policy_ref="omnigent-launch@1",
+        resource_limits=LAUNCH_POLICY_LIMITS,
+    )
+    async with session_factory() as session:
+        decision = await admission.evaluate_within(
+            session, reservation=reservation, budget=budget
+        )
+        await session.commit()
+
+    assert decision.admitted is True
+    # The fence the realizer takes before the Docker mutation must hold.
+    await realizer._assert_machine_reservation_holds(lease.leaseRef)
+    usage = await ledger.usage(backend_ref=BACKEND)
+    assert usage.reserved_memory_mib == 3000
+    # The storage the retained volume is still spending is counted once.
+    assert usage.reserved_temporary_storage_mib == 256

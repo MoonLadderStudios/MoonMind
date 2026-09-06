@@ -875,6 +875,46 @@ def release_state_for(evidence: ReleaseEvidence) -> str | None:
     return None
 
 
+def _usage_without_row(usage: MachineUsage, row: Any) -> MachineUsage:
+    """Return ``usage`` with one row's own already-counted demand removed.
+
+    Re-admitting a reservation weighs its demand against what *other* consumers
+    hold. A row that kept part of its accounting — ``storage_retained`` still
+    spends the volumes its consumer left behind — is about to be rewritten with
+    this attempt's full demand, so leaving its old contribution in the count
+    would refuse the attempt for capacity it already owns.
+
+    The subtraction mirrors ``usage_within`` per state rather than assuming
+    which one the caller holds: a row is only re-admitted from a state that
+    accounts something, and every such state must net out exactly.
+    """
+
+    state = str(row.state)
+    if state in COMPUTE_ACCOUNTED_STATES:
+        usage = replace(
+            usage,
+            reserved_cpu_millis=max(
+                0, usage.reserved_cpu_millis - int(row.cpu_millis or 0)
+            ),
+            reserved_memory_mib=max(
+                0, usage.reserved_memory_mib - int(row.memory_mib or 0)
+            ),
+            reserved_processes=max(
+                0, usage.reserved_processes - int(row.processes or 0)
+            ),
+        )
+    if state in STORAGE_ACCOUNTED_STATES:
+        usage = replace(
+            usage,
+            reserved_temporary_storage_mib=max(
+                0,
+                usage.reserved_temporary_storage_mib
+                - int(row.temporary_storage_mib or 0),
+            ),
+        )
+    return usage
+
+
 class MachineCapacityLedger:
     """Durable, backend-scoped machine accounting shared by managed launches.
 
@@ -1027,9 +1067,13 @@ class MachineCapacityLedger:
         exists to close.
 
         Three outcomes reconcile with existing accounting instead of taking a
-        second allocation: this attempt's own reservation, an adopted row for
-        the exact container this attempt names, and both at once. Everything
-        else is admitted or refused against the current usage.
+        second allocation: this attempt's own compute-accounting reservation, an
+        adopted row for the exact container this attempt names, and both at
+        once. Everything else is admitted or refused against the current usage,
+        including this attempt's own row when reconciliation has already
+        released its compute — an admitted outcome must always leave the
+        reservation in a state ``verify_within`` will still hold, or the fence
+        before the Docker mutation refuses a launch nothing is refusing.
         """
 
         from api_service.db.models import MachineCapacityReservation
@@ -1054,12 +1098,13 @@ class MachineCapacityLedger:
         # when reconciliation is the thing holding this exact container's CPU,
         # memory and processes the hand-off branch must run instead: releasing
         # the adopted row against a storage-only row would leave a live
-        # container unaccounted and read as free capacity.
-        reconciles_with_existing = existing is not None and (
-            str(existing.state) in COMPUTE_ACCOUNTED_STATES
-            or (adopted is None and str(existing.state) in ACCOUNTED_STATES)
+        # container unaccounted and read as free capacity. When no adopted row
+        # holds them either, nothing is accounting this attempt's compute at
+        # all, so it is re-admitted below rather than reported as reused.
+        holds_compute = (
+            existing is not None and str(existing.state) in COMPUTE_ACCOUNTED_STATES
         )
-        if reconciles_with_existing:
+        if holds_compute:
             # This attempt already holds its reservation. Reconcile the retry
             # with the existing allocation rather than taking a second one, and
             # extend the bounded prelaunch hand-off so a legitimate retry is
@@ -1131,9 +1176,19 @@ class MachineCapacityLedger:
                     retry_after_seconds=0,
                 ),
             )
+        # Whatever this attempt's row still accounts, it no longer accounts
+        # compute, so the demand is re-admitted against the machine rather than
+        # reported as an allocation this attempt already holds. A retained row
+        # keeps its own storage, so counting that storage a second time would
+        # refuse a retry for capacity the retry itself owns.
+        readmits_partial_row = (
+            existing is not None and str(existing.state) in ACCOUNTED_STATES
+        )
         usage = await self.usage_within(
             session, backend_ref=request.backend_ref, now=observed_at
         )
+        if readmits_partial_row:
+            usage = _usage_without_row(usage, existing)
         decision = evaluate_resource_admission(
             demand=request.demand,
             budget=budget,
@@ -1141,14 +1196,28 @@ class MachineCapacityLedger:
             workload_class=request.workload_class,
         )
         if decision.unsatisfiable:
-            # Never persist a waiter for a request that can never fit.
-            if existing is not None:
+            # Never persist a waiter for a request that can never fit. A row
+            # that is still accounting something keeps that accounting: the
+            # request being impossible does not make retained storage free.
+            if existing is not None and not readmits_partial_row:
                 existing.state = STATE_RELEASED
                 existing.updated_at = observed_at
             return ReservationOutcome(
                 admitted=False,
                 reservation_id=reservation_id,
-                state=STATE_RELEASED,
+                state=(str(existing.state) if readmits_partial_row else STATE_RELEASED),
+                decision=decision,
+            )
+        if not decision.admitted and readmits_partial_row:
+            # A waiter marker accounts nothing, so writing one over a row the
+            # machine is still spending would manufacture free capacity. The
+            # refusal carries the resource that actually refused it, which is
+            # what lets the caller wait or report the true cause instead of
+            # mutating Docker behind a fence that will not hold.
+            return ReservationOutcome(
+                admitted=False,
+                reservation_id=reservation_id,
+                state=str(existing.state),
                 decision=decision,
             )
         state = STATE_PRELAUNCH if decision.admitted else STATE_WAITING
