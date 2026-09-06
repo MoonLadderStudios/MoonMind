@@ -312,3 +312,227 @@ def test_freshness_probe_falls_through_a_lapsed_tier_like_admission(
     current = resolve_support_evidence_freshness(plan.supportIdentity)
     assert current.tier == "deployment_qualified"
     assert current.expired is False
+
+
+# ---------------------------------------------------------------------------
+# MoonLadderStudios/MoonMind#3885 — distinct non-pass rows and the concurrency
+# dimension of an exact combination.
+# ---------------------------------------------------------------------------
+
+
+def _concurrency_record(plan: SimpleNamespace, *, level: int) -> dict[str, object]:
+    """A concurrency record whose highest observed level is ``level``."""
+
+    from moonmind.omnigent.concurrency_qualification import (
+        ConcurrencyQualificationLayer,
+        ConcurrencyQualificationRecord,
+        ConcurrencyQualificationRow,
+        ConcurrencyRowStatus,
+        ConcurrencySupportIdentity,
+        ExecutionOverlapSample,
+        MachineResourceClass,
+        ObservedOverlapEvidence,
+        compute_concurrency_evidence_digest,
+    )
+
+    resource_class = MachineResourceClass(
+        resource_class_ref="ci-standard-4x8@1", cpu_cores=4, memory_gib=8
+    )
+    overlap = ObservedOverlapEvidence(
+        requested_level=level,
+        effective_limit=level,
+        barrier_synchronized=True,
+        samples=tuple(
+            ExecutionOverlapSample(
+                execution_ref=f"run-{index}", started_at=0.0, ended_at=5.0
+            )
+            for index in range(level)
+        ),
+    )
+    rows = tuple(
+        ConcurrencyQualificationRow(
+            layer=layer,
+            level=level,
+            status=ConcurrencyRowStatus.passed,
+            overlap=overlap,
+            evidence_ref=f"artifact://concurrency/{layer.value}/{level}",
+            evidence_digest=compute_concurrency_evidence_digest(
+                {"layer": layer.value, "level": level}
+            ),
+            resource_class=resource_class,
+        )
+        for layer in (
+            ConcurrencyQualificationLayer.hermetic,
+            ConcurrencyQualificationLayer.exact_docker,
+        )
+    )
+    record = ConcurrencyQualificationRecord(
+        identity=ConcurrencySupportIdentity(
+            supportCombinationKey=plan.supportCombinationKey,
+            moonmindCommit="abcdef1234567890",
+            workerBuildRef="moonmind-worker@test",
+            providerCapacityPolicyVersion="omnigent-provider-capacity@1",
+            hostCapacityPolicyVersion="omnigent-host-capacity@1",
+            transportPoolPolicyVersion="omnigent-transport-pool@1",
+            workerTopologyRef="single-replica@1",
+            resourceClass=resource_class,
+        ),
+        generatedAt=datetime.now(UTC),
+        rows=rows,
+    )
+    return record.as_payload()
+
+
+@pytest.mark.parametrize(
+    "status", ["failed", "skipped", "blocked", "unavailable", "partial"]
+)
+def test_a_non_pass_row_is_recordable_but_never_admissible(status: str) -> None:
+    """The index must be able to say what happened without granting authority."""
+
+    from moonmind.omnigent.execution_support_evidence import (
+        ExecutionSupportRowStatus,
+        ProtectedExecutionSupportEvidence,
+    )
+
+    plan = _plan()
+    payload = _evidence(plan)
+    payload["status"] = status
+    payload["policyQualified"] = False
+
+    parsed = ProtectedExecutionSupportEvidence.model_validate(payload)
+    assert parsed.status is ExecutionSupportRowStatus(status)
+
+    with pytest.raises(ValueError, match=f"did not pass \\(status={status}\\)"):
+        validate_protected_execution_support_evidence(payload)
+
+
+@pytest.mark.parametrize(
+    "status", ["failed", "skipped", "blocked", "unavailable", "partial"]
+)
+def test_a_non_pass_row_cannot_keep_its_policy_qualification(status: str) -> None:
+    """A reader that checks the flag must not be told a blocked row qualified."""
+
+    from moonmind.omnigent.execution_support_evidence import (
+        ProtectedExecutionSupportEvidence,
+    )
+
+    payload = _evidence(_plan())
+    payload["status"] = status
+    payload["policyQualified"] = True
+
+    with pytest.raises(ValueError, match="cannot claim policy qualification"):
+        ProtectedExecutionSupportEvidence.model_validate(payload)
+
+
+def test_an_absent_row_and_a_blocked_row_are_distinguishable(
+    tmp_path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Readiness must be able to say "blocked" instead of "never qualified"."""
+
+    from moonmind.omnigent.execution_support_evidence import (
+        ExecutionSupportRowStatus,
+        find_protected_evidence_entry,
+    )
+
+    plan = _plan()
+    payload = _evidence(plan)
+    payload["status"] = "blocked"
+    payload["policyQualified"] = False
+    path = tmp_path / "execution-support-evidence.json"
+    path.write_text(json.dumps({"entries": [payload]}), encoding="utf-8")
+    monkeypatch.setenv("MOONMIND_OMNIGENT_EXECUTION_SUPPORT_EVIDENCE", str(path))
+
+    entry = find_protected_evidence_entry(plan.supportCombinationKey)
+    assert entry is not None
+    assert entry.status is ExecutionSupportRowStatus.blocked
+    assert find_protected_evidence_entry("omnigent-support:sha256:" + "f" * 64) is None
+
+
+def test_a_blocked_row_never_admits_its_own_plan(
+    tmp_path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    plan = _plan()
+    payload = _evidence(plan)
+    payload["status"] = "unavailable"
+    payload["policyQualified"] = False
+    path = tmp_path / "execution-support-evidence.json"
+    path.write_text(json.dumps({"entries": [payload]}), encoding="utf-8")
+    monkeypatch.setenv("MOONMIND_OMNIGENT_EXECUTION_SUPPORT_EVIDENCE", str(path))
+    monkeypatch.setenv("MOONMIND_SOURCE_COMMIT", "abcdef1234567890")
+
+    with pytest.raises(ValueError, match="did not pass"):
+        load_protected_execution_support_evidence(plan)
+
+
+def test_concurrency_evidence_binds_to_its_own_support_combination() -> None:
+    """Evidence for one combination cannot be filed against another."""
+
+    from moonmind.omnigent.execution_support_evidence import (
+        ProtectedExecutionSupportEvidence,
+    )
+
+    plan = _plan()
+    other = _plan(_identity(model_digest="sha256:" + "d" * 64))
+    payload = _evidence(plan)
+    payload["concurrency"] = _concurrency_record(other, level=2)
+
+    with pytest.raises(ValueError, match="different support combination"):
+        ProtectedExecutionSupportEvidence.model_validate(payload)
+
+
+def test_the_advertised_ceiling_is_the_validated_level_or_lower() -> None:
+    from moonmind.omnigent.execution_support_evidence import (
+        ProtectedExecutionSupportEvidence,
+        advertised_concurrency_ceiling,
+    )
+
+    plan = _plan()
+    payload = _evidence(plan)
+    payload["concurrency"] = _concurrency_record(plan, level=4)
+    evidence = ProtectedExecutionSupportEvidence.model_validate(payload)
+
+    assert advertised_concurrency_ceiling(evidence) == 4
+    assert advertised_concurrency_ceiling(evidence, operator_ceiling=2) == 2
+    # A configured ceiling above the validated level is never advertised, and
+    # this call never rewrites the operator's configured value.
+    assert advertised_concurrency_ceiling(evidence, operator_ceiling=16) == 4
+
+
+def test_a_combination_without_concurrency_evidence_advertises_nothing() -> None:
+    """Unqualified is not implicitly one: nothing observed this combination."""
+
+    from moonmind.omnigent.execution_support_evidence import (
+        ProtectedExecutionSupportEvidence,
+        advertised_concurrency_ceiling,
+    )
+
+    evidence = ProtectedExecutionSupportEvidence.model_validate(_evidence(_plan()))
+
+    assert evidence.concurrency is None
+    assert advertised_concurrency_ceiling(evidence) == 0
+    assert advertised_concurrency_ceiling(None) == 0
+
+
+def test_a_non_pass_row_never_reports_usable_support_freshness(
+    tmp_path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The rollout probe must not claim support that admission will refuse."""
+
+    from moonmind.omnigent.evidence_resolver import resolve_support_evidence_freshness
+
+    plan = _plan()
+    payload = _evidence(plan)
+    payload["status"] = "blocked"
+    payload["policyQualified"] = False
+    path = tmp_path / "execution-support-evidence.json"
+    path.write_text(json.dumps({"entries": [payload]}), encoding="utf-8")
+    monkeypatch.setenv("MOONMIND_OMNIGENT_EXECUTION_SUPPORT_EVIDENCE", str(path))
+    monkeypatch.setenv("MOONMIND_OMNIGENT_EVIDENCE_POLICY", "protected")
+
+    freshness = resolve_support_evidence_freshness(plan.supportIdentity)
+
+    assert freshness.usable is False
+    assert freshness.status == "blocked"
+    # The row is still reported, so "blocked" is distinguishable from "absent".
+    assert freshness.tier == "supported"
+    assert freshness.expired is False

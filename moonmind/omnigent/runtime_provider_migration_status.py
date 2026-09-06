@@ -328,6 +328,7 @@ def _load_protected_entries() -> tuple[tuple[Any, ...], bool]:
     from pathlib import Path
 
     from moonmind.omnigent.execution_support_evidence import (
+        ExecutionSupportRowStatus,
         ProtectedExecutionSupportEvidence,
     )
 
@@ -351,9 +352,17 @@ def _load_protected_entries() -> tuple[tuple[Any, ...], bool]:
             # check so expired evidence is retained and reported as expired in
             # the projection instead of disappearing
             # (MoonLadderStudios/MoonMind#3988).
-            parsed.append(ProtectedExecutionSupportEvidence.model_validate(item))
+            entry = ProtectedExecutionSupportEvidence.model_validate(item)
         except Exception:
             continue
+        if entry.status is not ExecutionSupportRowStatus.passed:
+            # MoonLadderStudios/MoonMind#3885: the index now records failed,
+            # skipped, blocked, unavailable, and partial rows so an operator can
+            # see what happened. This projection reports what *backs* a rule, so
+            # a non-passing row is not evidence here — and, being the newest
+            # entry, it would otherwise displace the last real pass.
+            continue
+        parsed.append(entry)
     return (tuple(parsed), True)
 
 

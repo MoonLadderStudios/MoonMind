@@ -1,0 +1,152 @@
+name: Provider / Omnigent Concurrency Qualification
+
+# Source issue: MoonLadderStudios/MoonMind#3885.
+#
+# The hermetic layer of this program runs in required pull-request CI (the
+# unit shard owns `tests/unit/omnigent/test_generic_plane_n_way_concurrency.py`
+# and the integration-ci shard owns the exact-image row contract). This
+# workflow owns the two layers that cannot run on an untrusted PR runner: the
+# exact built artifacts under a real Docker daemon, and the bounded
+# protected-live route.
+#
+# Every job publishes a concurrency qualification record. A runner without the
+# exact images, without a daemon, or without protected-live admission emits
+# `unavailable`/`blocked` rows and fails its gate — it never reports a skip as
+# a pass.
+
+on:
+  schedule:
+    - cron: "17 5 * * 2"
+  workflow_dispatch:
+    inputs:
+      host_image:
+        description: "Digest-pinned exact Omnigent host image for the concurrency rows"
+        required: false
+        type: string
+      protected_live:
+        description: "Run the bounded protected-live OpenCode Zen concurrency rows"
+        required: false
+        default: false
+        type: boolean
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: omnigent-concurrency-qualification
+  cancel-in-progress: false
+
+jobs:
+  exact-docker:
+    name: Exact-image concurrency N=2,4,8
+    runs-on: [self-hosted, linux, omnigent-provider-verification]
+    environment: omnigent-provider-verification
+    timeout-minutes: 120
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v7
+      - name: Set up Python
+        uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+      - name: Install test dependencies
+        run: python -m pip install -e .[tests]
+      - name: Resolve the digest-pinned exact host image
+        id: images
+        shell: bash
+        env:
+          DISPATCH_HOST_IMAGE: ${{ inputs.host_image }}
+          DEFAULT_HOST_IMAGE: ${{ vars.OMNIGENT_CONFORMANCE_OPENCODE_HOST_IMAGE }}
+        run: |
+          host_image="${DISPATCH_HOST_IMAGE:-$DEFAULT_HOST_IMAGE}"
+          if [[ ! "$host_image" =~ @sha256:[0-9a-fA-F]{64}$ ]]; then
+            echo "::error::The exact host image must be configured by immutable digest"
+            exit 1
+          fi
+          echo "host=$host_image" >> "$GITHUB_OUTPUT"
+      - name: Run the exact-image concurrency rows
+        env:
+          MOONMIND_OMNIGENT_CONCURRENCY_HOST_IMAGE: ${{ steps.images.outputs.host }}
+          MOONMIND_OMNIGENT_SERVER_IMAGE: ${{ vars.OMNIGENT_CONFORMANCE_SERVER_IMAGE }}
+        run: |
+          python tools/run_omnigent_concurrency_qualification.py \
+            --layer exact_docker \
+            --levels 2,4,8 \
+            --support-combination-key "${{ vars.OMNIGENT_CONCURRENCY_SUPPORT_KEY }}" \
+            --moonmind-commit "${{ github.sha }}" \
+            --worker-build-ref "${{ vars.OMNIGENT_WORKER_BUILD_REF }}" \
+            --worker-topology-ref "${{ vars.OMNIGENT_WORKER_TOPOLOGY_REF }}" \
+            --resource-class "${{ vars.OMNIGENT_CONCURRENCY_RESOURCE_CLASS }}" \
+            --evidence-dir artifacts/omnigent-concurrency/evidence \
+            --output artifacts/omnigent-concurrency/exact-docker-record.json
+      - name: Upload the exact-image concurrency record
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: omnigent-concurrency-exact-docker-${{ github.run_id }}-${{ github.run_attempt }}
+          path: artifacts/omnigent-concurrency
+          if-no-files-found: error
+          retention-days: 90
+
+  protected-live:
+    name: Protected-live concurrency (credentialless OpenCode Zen)
+    needs: exact-docker
+    # Opt-in only. Protected-live concurrency puts real load on a shared free
+    # provider route, so it never runs by default and never runs from an
+    # untrusted fork.
+    if: ${{ inputs.protected_live == true && github.event_name == 'workflow_dispatch' }}
+    runs-on: [self-hosted, linux, omnigent-provider-verification]
+    environment: omnigent-provider-verification
+    timeout-minutes: 90
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v7
+      - name: Set up Python
+        uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+      - name: Install test dependencies
+        run: python -m pip install -e .[tests]
+      - name: Run the bounded protected-live concurrency rows
+        env:
+          # The protected admission boundary, not a fixture, authorizes this
+          # run. The route stays the credentialless Zen route: no paid key is
+          # substituted to make a level pass.
+          MOONMIND_OMNIGENT_PROTECTED_LIVE_CONCURRENCY: "1"
+          MOONMIND_OMNIGENT_PROVIDER_PROFILE_ID: ${{ vars.MOONMIND_OMNIGENT_PROVIDER_PROFILE_ID }}
+          OMNIGENT_SERVER_URL: ${{ vars.OMNIGENT_SERVER_URL }}
+          OMNIGENT_API_TOKEN: ${{ secrets.OMNIGENT_API_TOKEN }}
+        run: |
+          python tools/run_omnigent_concurrency_qualification.py \
+            --layer protected_live \
+            --levels "${{ vars.OMNIGENT_PROTECTED_LIVE_CONCURRENCY_LEVELS || '2' }}" \
+            --support-combination-key "${{ vars.OMNIGENT_CONCURRENCY_SUPPORT_KEY }}" \
+            --moonmind-commit "${{ github.sha }}" \
+            --worker-build-ref "${{ vars.OMNIGENT_WORKER_BUILD_REF }}" \
+            --worker-topology-ref "${{ vars.OMNIGENT_WORKER_TOPOLOGY_REF }}" \
+            --resource-class "${{ vars.OMNIGENT_CONCURRENCY_RESOURCE_CLASS }}" \
+            --evidence-dir artifacts/omnigent-concurrency/evidence \
+            --output artifacts/omnigent-concurrency/protected-live-record.json
+      - name: Scan the published record for secret-like material
+        if: always()
+        run: |
+          python - <<'PY'
+          import json
+          from pathlib import Path
+
+          from moonmind.omnigent.conformance import assert_secret_free
+
+          path = Path("artifacts/omnigent-concurrency/protected-live-record.json")
+          if path.exists():
+              assert_secret_free(json.loads(path.read_text(encoding="utf-8")))
+              print("protected-live concurrency record is secret-free")
+          PY
+      - name: Upload the protected-live concurrency record
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: omnigent-concurrency-protected-live-${{ github.run_id }}-${{ github.run_attempt }}
+          path: artifacts/omnigent-concurrency
+          if-no-files-found: error
+          retention-days: 90
