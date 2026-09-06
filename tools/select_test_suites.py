@@ -175,6 +175,7 @@ PROFILE_AUTHORING_EXACT = {
     "api_service/services/profile_execution_selection.py",
     "api_service/services/omnigent_agent_profile_selection.py",
     "api_service/services/omnigent_execution_plan_service.py",
+    "api_service/services/recurring_workflows_service.py",
     "moonmind/workflows/executions/runtime_target_selection.py",
     "tests/unit/api/routers/test_profile_first_authoring.py",
     "frontend/src/runtime/fixtures/profile-first-authoring.json",

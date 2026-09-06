@@ -11465,43 +11465,23 @@ async def _create_execution_from_workflow_request(
                 user=user,
             )
         from api_service.services.profile_execution_selection import (
-            validate_execution_configuration_expectation,
+            validate_omnigent_selection_agreement,
         )
 
-        validate_execution_configuration_expectation(
-            runtime_payload.get("executionConfiguration"), profile_snapshot
-        )
-        if (
-            raw_profile_id
-            and profile_snapshot.get("providerProfileRef") != raw_profile_id
-        ):
-            raise _invalid_workflow_request(
-                "The execution configuration must use the selected Profile."
-            )
-        authored_execution_target_ref = (
-            str(authored_omnigent.get("executionTargetRef") or "").strip()
+        # MoonLadderStudios/MoonMind#3833: new admission funnels through the
+        # shared intent/conflict boundary (no per-surface map). Preserve the
+        # boundary's 409/422 contracts verbatim; do not normalize them into
+        # invalid_execution_request.
+        validate_omnigent_selection_agreement(
+            expected_execution_configuration=runtime_payload.get(
+                "executionConfiguration"
+            ),
+            authored_omnigent=authored_omnigent
             if isinstance(authored_omnigent, Mapping)
-            else ""
+            else None,
+            profile_snapshot=profile_snapshot,
+            selected_provider_profile_id=raw_profile_id,
         )
-        resolved_execution_target_ref = str(
-            profile_snapshot.get("executionProfileRef") or ""
-        ).strip()
-        # Generic (v2) Agent Profiles advertise readiness targets as the
-        # profile identity (`profileId@version`), while their compiled plan
-        # carries the host realizer ref. Legacy profiles advertise the
-        # execution-profile ref directly. Both forms resolve unambiguously.
-        resolved_target_refs = {
-            resolved_execution_target_ref,
-            f"{profile_snapshot.get('profileId')}@{profile_snapshot.get('version')}",
-        }
-        if (
-            authored_execution_target_ref
-            and authored_execution_target_ref not in resolved_target_refs
-        ):
-            raise _invalid_workflow_request(
-                "omnigent.executionTargetRef must match the selected "
-                "Agent Profile executionProfileRef."
-            )
         selected_provider_profile = await session.get(
             ManagedAgentProviderProfile,
             str(profile_snapshot["providerProfileRef"]),
@@ -13593,6 +13573,21 @@ async def create_remediation_checkpoint_branch(
             session, provider_profile_ref=payload.provider_profile_ref,
             launch_policy_ref=None, consumer_type="checkpoint", consumer_id=branch_id, user=user,
         )
+    if agent_profile_snapshot is not None and payload.provider_profile_ref and (
+        agent_profile_snapshot.get("providerProfileRef")
+        != payload.provider_profile_ref
+    ):
+        # MoonLadderStudios/MoonMind#3833: remediation checkpoint branches
+        # use the shared new-admission agreement (no per-surface map).
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail={
+                "code": "invalid_execution_request",
+                "message": (
+                    "The execution configuration must use the selected Profile."
+                ),
+            },
+        )
     await _prepare_checkpoint_branch_launch(
         session=session,
         record=target_record,
@@ -15246,6 +15241,56 @@ async def create_checkpoint_branch(
         agent_profile_snapshot = await resolve_default_agent_profile_snapshot(
             session, provider_profile_ref=payload.provider_profile_ref,
             launch_policy_ref=None, consumer_type="checkpoint", consumer_id=branch_id, user=user,
+        )
+    if agent_profile_snapshot is not None:
+        # MoonLadderStudios/MoonMind#3833: checkpoint branches are new
+        # admission through the shared intent/conflict boundary, not a
+        # per-surface map. The explicit execution-profile ref must agree
+        # with the resolved snapshot instead of being stored silently.
+        from api_service.services.profile_execution_selection import (
+            resolved_execution_target_refs,
+        )
+
+        authored_execution_profile_ref = str(
+            payload.execution_profile_ref or ""
+        ).strip()
+        if authored_execution_profile_ref and (
+            authored_execution_profile_ref
+            not in resolved_execution_target_refs(agent_profile_snapshot)
+        ):
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+                detail={
+                    "code": "invalid_execution_request",
+                    "message": (
+                        "executionProfileRef must match the selected "
+                        "Agent Profile executionProfileRef."
+                    ),
+                },
+            )
+        if payload.provider_profile_ref and (
+            agent_profile_snapshot.get("providerProfileRef")
+            != payload.provider_profile_ref
+        ):
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+                detail={
+                    "code": "invalid_execution_request",
+                    "message": (
+                        "The execution configuration must use the selected Profile."
+                    ),
+                },
+            )
+    elif str(payload.execution_profile_ref or "").strip():
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail={
+                "code": "invalid_execution_request",
+                "message": (
+                    "executionProfileRef requires a selected Provider Profile "
+                    "and Agent Profile."
+                ),
+            },
         )
     await _prepare_checkpoint_branch_launch(
         session=session,

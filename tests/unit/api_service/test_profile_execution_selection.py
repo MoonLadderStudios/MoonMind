@@ -277,3 +277,97 @@ def test_configuration_expectation_rejects_changed_identity(changed):
     with pytest.raises(HTTPException) as error:
         validate_execution_configuration_expectation(expected, resolved)
     assert error.value.status_code == 409
+
+
+def _snapshot(**overrides):
+    base = {
+        "profileId": "behavior",
+        "version": 1,
+        "digest": "sha256:" + "a" * 64,
+        "providerProfileRef": "zen",
+        "executionProfileRef": "omnigent-opencode@1",
+    }
+    base.update(overrides)
+    return base
+
+
+def test_shared_boundary_accepts_matching_intent():
+    # MoonLadderStudios/MoonMind#3833: every new-admission consumer funnels
+    # through one boundary instead of a per-surface map.
+    from api_service.services.profile_execution_selection import (
+        validate_omnigent_selection_agreement,
+    )
+
+    snapshot = _snapshot()
+    validate_omnigent_selection_agreement(
+        expected_execution_configuration={
+            "profileId": "behavior",
+            "version": 1,
+            "digest": "sha256:" + "a" * 64,
+        },
+        authored_omnigent={"executionTargetRef": "omnigent-opencode@1"},
+        profile_snapshot=snapshot,
+        selected_provider_profile_id="zen",
+    )
+    # Legacy profileId@version form resolves unambiguously as well.
+    validate_omnigent_selection_agreement(
+        expected_execution_configuration=None,
+        authored_omnigent={"executionTargetRef": "behavior@1"},
+        profile_snapshot=snapshot,
+        selected_provider_profile_id="zen",
+    )
+    # Genuinely unauthored older clients omit every expectation.
+    validate_omnigent_selection_agreement(
+        expected_execution_configuration=None,
+        authored_omnigent=None,
+        profile_snapshot=snapshot,
+        selected_provider_profile_id=None,
+    )
+
+
+def test_shared_boundary_rejects_stale_configuration():
+    from api_service.services.profile_execution_selection import (
+        validate_omnigent_selection_agreement,
+    )
+
+    with pytest.raises(HTTPException) as error:
+        validate_omnigent_selection_agreement(
+            expected_execution_configuration={
+                "profileId": "other",
+                "version": 1,
+                "digest": "sha256:" + "a" * 64,
+            },
+            authored_omnigent=None,
+            profile_snapshot=_snapshot(),
+            selected_provider_profile_id="zen",
+        )
+    assert error.value.status_code == 409
+    assert (
+        error.value.detail["code"] == "profile_execution_configuration_changed"
+    )
+
+
+def test_shared_boundary_rejects_profile_and_target_conflicts():
+    from api_service.services.profile_execution_selection import (
+        validate_omnigent_selection_agreement,
+    )
+
+    with pytest.raises(HTTPException) as error:
+        validate_omnigent_selection_agreement(
+            expected_execution_configuration=None,
+            authored_omnigent=None,
+            profile_snapshot=_snapshot(),
+            selected_provider_profile_id="other-account",
+        )
+    assert error.value.status_code == 422
+    assert "must use the selected Profile" in str(error.value.detail)
+
+    with pytest.raises(HTTPException) as error:
+        validate_omnigent_selection_agreement(
+            expected_execution_configuration=None,
+            authored_omnigent={"executionTargetRef": "codex.legacy-other"},
+            profile_snapshot=_snapshot(),
+            selected_provider_profile_id="zen",
+        )
+    assert error.value.status_code == 422
+    assert "must match the selected" in str(error.value.detail)
