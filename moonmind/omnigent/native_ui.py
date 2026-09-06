@@ -337,6 +337,15 @@ def upstream_path_for(ui_path: str | None) -> str:
 # --- Bootstrap injection + scoped asset URL rewriting ------------------------
 
 _ROOT_ABSOLUTE_ATTR = re.compile(r"""\b(src|href)=(["'])/(?!/)""")
+# srcset carries comma-separated root-absolute candidates
+# (`srcset="/assets/a.png 1x, /assets/b.png 2x"`); each candidate must stay
+# scoped too or the browser fetches it unscoped and records a 404.
+_ROOT_ABSOLUTE_SRCSET_URL = re.compile(r"""(?<![\w/:-])/(?!/)(?=[\w\-.~]+/)""")
+# Inline CSS url() references (`url(/assets/wordmark.svg)`) ignore <base href>
+# the same way src/href do; the wordmark 404 in #4013 is this class of miss.
+# Only same-document single-quoted/unquoted root-absolute paths are rewritten;
+# absolute (https://) and protocol-relative (//host) URLs are untouched.
+_ROOT_ABSOLUTE_CSS_URL = re.compile(r"""url\(\s*(['"]?)/(?!/)""")
 _HEAD_OPEN = re.compile(r"<head[^>]*>", re.IGNORECASE)
 
 
@@ -349,10 +358,39 @@ def rewrite_asset_urls(html: str, *, scoped_base: str) -> str:
     and resolve back through the scoped serving route. Protocol-relative
     (``//host``) and absolute (``https://``) URLs are left untouched so a
     deliberate external resource is not silently rerouted.
+
+    ``srcset`` candidates and inline CSS ``url(/...)`` references are scoped
+    the same way: the missing root wordmark (``/assets/omnigent-wordmark-*.svg``,
+    MoonLadderStudios/MoonMind#4013) is a decorative nonfatal asset, but it must
+    still resolve through the scoped route rather than 404 at the origin root.
     """
 
     base = scoped_base.rstrip("/")
-    return _ROOT_ABSOLUTE_ATTR.sub(rf"\1=\g<2>{base}/", html)
+
+    def _scope_srcset(match: re.Match[str]) -> str:
+        tag = match.group(0)
+        # Only rewrite the srcset attribute value, leaving src/href (handled
+        # above) untouched within the same tag.
+        def _rewrite_value(value: re.Match[str]) -> str:
+            quote, candidates = value.group(1), value.group(2)
+            scoped = _ROOT_ABSOLUTE_SRCSET_URL.sub(f"{base}/", candidates)
+            return f"srcset={quote}{scoped}{quote}"
+
+        return re.sub(
+            r"""(?i)\bsrcset=(["'])(.*?)\1""",
+            _rewrite_value,
+            tag,
+            flags=re.DOTALL,
+        )
+
+    scoped = _ROOT_ABSOLUTE_ATTR.sub(rf"\1=\g<2>{base}/", html)
+    scoped = re.sub(
+        r"""<[^>]+\bsrcset=(["']).*?\1""",
+        _scope_srcset,
+        scoped,
+        flags=re.IGNORECASE | re.DOTALL,
+    )
+    return _ROOT_ABSOLUTE_CSS_URL.sub(rf"url(\1{base}/", scoped)
 
 
 def render_native_ui_document(
@@ -474,12 +512,14 @@ def render_native_ui_document(
     if (!root) return;
     if (root.hasChildNodes()) {
       restoreScopedDocumentUrl();
+      announceReady();
       return;
     }
     const observer = new MutationObserver(function () {
       if (!root.hasChildNodes()) return;
       observer.disconnect();
       restoreScopedDocumentUrl();
+      announceReady();
     });
     observer.observe(root, { childList: true });
     window.setTimeout(function () {
@@ -487,6 +527,41 @@ def render_native_ui_document(
       restoreScopedDocumentUrl();
     }, 5000);
   }
+  // Bounded readiness/fatal signaling for the embedding shell
+  // (MoonLadderStudios/MoonMind#4013 AC7/PLAN5). The shell validates exact
+  // origin, iframe window, binding id, and mount generation before trusting a
+  // signal, so a replaced frame can never mark the current mount. Payloads
+  // carry only presentation state and safe reason codes — never provider
+  // identity, transcript content, or credentials.
+  let readyAnnounced = false;
+  function announceReady() {
+    if (readyAnnounced) return;
+    readyAnnounced = true;
+    try {
+      window.parent.postMessage(
+        { type: "moonmind.omnigent.chat.ready", chatBindingId: binding.chatBindingId },
+        window.location.origin
+      );
+    } catch (err) {}
+  }
+  function announceFatal(reason) {
+    try {
+      window.parent.postMessage(
+        {
+          type: "moonmind.omnigent.chat.fatal",
+          chatBindingId: binding.chatBindingId,
+          reason: String(reason || "native_crash").slice(0, 128),
+        },
+        window.location.origin
+      );
+    } catch (err) {}
+  }
+  window.addEventListener("error", function () {
+    announceFatal("native_crash");
+  });
+  window.addEventListener("unhandledrejection", function () {
+    announceFatal("unhandled_rejection");
+  });
   if (document.readyState === "loading") {
     document.addEventListener("DOMContentLoaded", restoreAfterFirstRender, { once: true });
   } else {

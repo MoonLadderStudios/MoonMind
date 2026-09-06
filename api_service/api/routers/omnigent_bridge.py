@@ -4459,6 +4459,15 @@ async def _dispatch_native_ui_http(
             failure_class="user_error",
             status_code=403,
             code=CODE_OPERATION_DENIED,
+            public_details={
+                "requiredCapability": route.capability,
+                "disabledReason": str(
+                    capability_set.disabled_reasons.get(
+                        route.capability, "policy_or_capability_denied"
+                    )
+                    or "policy_or_capability_denied"
+                )[:256],
+            },
         )
     if route.mutation and is_read_only(session_status):
         raise WorkflowChatFacadeError(
@@ -4963,12 +4972,66 @@ async def _dispatch_workflow_chat_facade(
             user=user,
             reason="capability_denied",
         )
+        # AC6: a denied essential read must explain itself visibly instead of
+        # surfacing as an opaque 403. The envelope carries only the redacted
+        # capability reason (never provider identity or transcript content) so
+        # the native UI can render an access-denied state rather than a blank
+        # panel (MoonLadderStudios/MoonMind#4013).
         raise WorkflowChatFacadeError(
             "The requested operation is not permitted for this binding.",
             failure_class="user_error",
             status_code=status.HTTP_403_FORBIDDEN,
             code=CODE_OPERATION_DENIED,
+            public_details={
+                "requiredCapability": operation.capability,
+                "disabledReason": str(
+                    capability_set.disabled_reasons.get(
+                        operation.capability, "policy_or_capability_denied"
+                    )
+                    or "policy_or_capability_denied"
+                )[:256],
+            },
         )
+
+    # Stock native-app boot reads served as bounded binding-local projections
+    # (MoonLadderStudios/MoonMind#4013 AC5). They run before the facade-mode
+    # gate because they never forward upstream: no provider credential, host,
+    # or cross-binding enumeration is involved. Every identifier the browser
+    # sees is the opaque chatBindingId.
+    if operation.name == "list_harnesses":
+        return {
+            "object": "list",
+            "data": [],
+            "first_id": None,
+            "last_id": None,
+            "has_more": False,
+        }
+    if operation.name == "get_session_agent":
+        return {
+            "id": chat_binding_id,
+            "sessionId": chat_binding_id,
+            "session_id": chat_binding_id,
+            "chatBindingId": chat_binding_id,
+            "state": _facade_reconnect_state(row),
+            "readOnly": is_read_only(session_status),
+            "providerSessionAvailable": bool(provider_session_id),
+        }
+    if operation.name == "get_session_environment":
+        return {
+            "id": "default",
+            "chatBindingId": chat_binding_id,
+            "state": _facade_reconnect_state(row),
+            "readOnly": is_read_only(session_status),
+            "providerSessionAvailable": bool(provider_session_id),
+        }
+    if operation.name == "list_child_sessions":
+        return {
+            "object": "list",
+            "data": [],
+            "first_id": None,
+            "last_id": None,
+            "has_more": False,
+        }
 
     facade = (
         embedded_facade
@@ -5100,6 +5163,15 @@ async def _dispatch_workflow_chat_facade(
                 failure_class="user_error",
                 status_code=status.HTTP_403_FORBIDDEN,
                 code=CODE_OPERATION_DENIED,
+                public_details={
+                    "requiredCapability": required,
+                    "disabledReason": str(
+                        capability_set.disabled_reasons.get(
+                            required, "policy_or_capability_denied"
+                        )
+                        or "policy_or_capability_denied"
+                    )[:256],
+                },
             )
 
         # Idempotent submission: a caller-supplied ``Idempotency-Key`` makes a

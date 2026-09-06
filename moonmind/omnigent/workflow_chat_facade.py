@@ -259,6 +259,39 @@ FACADE_OPERATIONS: tuple[FacadeOperation, ...] = (
         references_session=False,
         requires_provider_session=False,
     ),
+    # Stock native-app boot metadata served as bounded binding-local
+    # projections (MoonLadderStudios/MoonMind#4013 AC5). The pinned UI issues
+    # these four reads during bootstrap; none of them may enumerate unrelated
+    # provider authority (harnesses, hosts, sessions) or leak the provider
+    # session id. They are served locally from the durable binding and never
+    # forwarded upstream with provider credentials.
+    _op(
+        r"v1/harnesses",
+        name="list_harnesses",
+        method="GET",
+        capability=None,
+        references_session=False,
+        requires_provider_session=False,
+    ),
+    _op(
+        rf"v1/sessions/{_SESSION}/agent",
+        name="get_session_agent",
+        method="GET",
+        requires_provider_session=False,
+    ),
+    _op(
+        rf"v1/sessions/{_SESSION}/resources/environments/default",
+        name="get_session_environment",
+        method="GET",
+        capability=CAP_READ_RESOURCES,
+        requires_provider_session=False,
+    ),
+    _op(
+        rf"v1/sessions/{_SESSION}/child_sessions",
+        name="list_child_sessions",
+        method="GET",
+        requires_provider_session=False,
+    ),
     # Session snapshot / bootstrap / history.
     _op(rf"v1/sessions/{_SESSION}", name="get_session", method="GET"),
     # Live/replay stream (SSE) — served from the durable bridge journal so

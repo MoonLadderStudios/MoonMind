@@ -280,6 +280,63 @@ def test_rewrite_leaves_absolute_and_protocol_relative_urls() -> None:
     assert rewritten == html
 
 
+def test_rewrite_scopes_srcset_candidates() -> None:
+    # MoonLadderStudios/MoonMind#4013 AC5: srcset candidates ignore <base href>
+    # the same way src/href do; unscoped candidates 404 at the origin root.
+    base = scoped_ui_base(_BINDING)
+    html = (
+        '<img src="/assets/a.png" '
+        'srcset="/assets/a.png 1x, /assets/b.png 2x" alt="x">'
+    )
+    rewritten = rewrite_asset_urls(html, scoped_base=base)
+
+    assert f'srcset="{base}/assets/a.png 1x, {base}/assets/b.png 2x"' in rewritten
+    assert f'src="{base}/assets/a.png"' in rewritten
+
+
+def test_rewrite_scopes_css_url_references() -> None:
+    # The missing root wordmark (/assets/omnigent-wordmark-*.svg) is this class
+    # of miss: an inline CSS url() that never consults <base href>.
+    base = scoped_ui_base(_BINDING)
+    html = (
+        '<div style="background:url(/assets/omnigent-wordmark-x.svg)"></div>'
+        "<div style='background: url(\"/assets/b.png\")'></div>"
+    )
+    rewritten = rewrite_asset_urls(html, scoped_base=base)
+
+    assert f"url({base}/assets/omnigent-wordmark-x.svg)" in rewritten
+    assert f'url("{base}/assets/b.png")' in rewritten
+
+
+def test_rewrite_leaves_absolute_srcset_and_css_urls() -> None:
+    html = (
+        '<img srcset="https://cdn.example.test/a.png 1x, //cdn.example.test/b.png 2x">'
+        '<div style="background:url(https://cdn.example.test/c.png)"></div>'
+    )
+    rewritten = rewrite_asset_urls(html, scoped_base=scoped_ui_base(_BINDING))
+
+    assert rewritten == html
+
+
+def test_rendered_document_scopes_wordmark_asset() -> None:
+    base = scoped_ui_base(_BINDING)
+    bootstrap = build_chat_bootstrap(
+        chat_binding_id=_BINDING,
+        mode="embedded",
+        read_only=False,
+        capabilities=_capabilities(read_only=False),
+        state="available",
+    )
+    html = (
+        "<!doctype html><html><head></head><body>"
+        '<img src="/assets/omnigent-wordmark-x.svg" alt="w">'
+        "</body></html>"
+    )
+    document = render_native_ui_document(html, bootstrap=bootstrap, scoped_base=base)
+
+    assert f'src="{base}/assets/omnigent-wordmark-x.svg"' in document
+
+
 def test_render_document_injects_bootstrap_and_base() -> None:
     base = scoped_ui_base(_BINDING)
     bootstrap = build_chat_bootstrap(
@@ -417,6 +474,14 @@ globalThis.document = {
   getElementById: () => null,
   addEventListener: () => {},
 };
+globalThis.addEventListener = () => {};
+globalThis.removeEventListener = () => {};
+const addedWindowListeners = [];
+const _recordAddEventListener = globalThis.addEventListener;
+globalThis.addEventListener = (type, ...rest) => {
+  addedWindowListeners.push(String(type));
+  return _recordAddEventListener(type, ...rest);
+};
 globalThis.MutationObserver = class {
   constructor() {}
   observe() {}
@@ -472,6 +537,29 @@ assert.ok(
     '/api/workflow-chat-bindings/chatb_test123/omnigent/v1/sessions/chatb_test123/stream',
   ),
   `scoped EventSource url, got ${constructedEs[constructedEs.length - 1].url}`,
+);
+// Bounded readiness/fatal signaling for the embedding shell (#4013 AC7/PLAN5).
+assert.ok(
+  adapterSrc.includes('moonmind.omnigent.chat.ready'),
+  'adapter must announce readiness to the embedding shell',
+);
+assert.ok(
+  adapterSrc.includes('moonmind.omnigent.chat.fatal'),
+  'adapter must announce fatal failure to the embedding shell',
+);
+// Signals target the exact origin and carry no provider identity.
+assert.ok(
+  adapterSrc.includes('window.location.origin'),
+  'adapter signals must target the exact origin',
+);
+assert.ok(
+  !adapterSrc.includes('providerSession') && !adapterSrc.includes('provider_session'),
+  'adapter signals must not carry provider identity',
+);
+assert.ok(
+  addedWindowListeners.includes('error') &&
+    addedWindowListeners.includes('unhandledrejection'),
+  `adapter must subscribe to crash surfaces, got ${addedWindowListeners}`,
 );
 console.log('adapter transport regression passed');
 """
