@@ -12,6 +12,7 @@ nothing enforces nothing.
 
 from __future__ import annotations
 
+import ast
 import pathlib
 from datetime import UTC, datetime, timedelta
 from unittest.mock import AsyncMock
@@ -27,13 +28,16 @@ from api_service.db.models import (
 )
 from moonmind.capacity import (
     COVERED_WORKLOAD_CLASSES,
+    LIMITING_RESOURCE_CPU,
     LIMITING_RESOURCE_INITIALIZING,
     LIMITING_RESOURCE_MEMORY,
+    LIMITING_RESOURCE_PROCESSES,
     LIMITING_RESOURCE_RECONCILIATION,
     OWNED_CONTAINER_LABEL_FILTERS,
     OWNED_LAUNCH_CLASSES,
     STATE_ACTIVE,
     STATE_ADOPTED,
+    STATE_BLOCKED,
     STATE_STORAGE_RETAINED,
     STATE_WAITING,
     WORKLOAD_CLASS_CONTAINER_JOB,
@@ -830,50 +834,390 @@ async def test_an_unreadable_inventory_is_not_an_empty_inventory() -> None:
     assert await probe_owned_containers(runner) is None
 
 
+def _real_daemon_runner(lines: bytes, *, label_match: str, name: str):
+    """A runner shaped like the daemon: one owned container, one inspect line."""
+
+    async def runner(args):
+        args = tuple(args)
+        if args[0] == "ps":
+            label = args[args.index("--filter") + 1]
+            return 0, (name.encode() + b"\n") if label_match in label else b"", b""
+        return 0, lines, b""
+
+    return runner
+
+
+@pytest.mark.asyncio
+async def test_a_container_that_declared_no_limits_is_still_a_full_enumeration() -> (
+    None
+):
+    """#3881 FINDING-1: an unbounded container is not an unreadable daemon.
+
+    ``HostConfig.PidsLimit`` is a pointer, so any container created without
+    ``--pids-limit`` — an ordinary managed session, session Docker sidecar,
+    unprofiled workload or OAuth auth runner — renders as Go's nil placeholder
+    instead of a number. Parsing that as a failure discarded the whole
+    enumeration, which is the "daemon unreadable" value: every container job
+    then failed to start and reconciliation wrote the blocked marker that
+    refuses generic-host admission too.
+    """
+
+    for rendering in (b"<no value>", b"<nil>", b"", b"0", b"-1"):
+        runner = _real_daemon_runner(
+            b"/mm-session-1\t0\t0\t" + rendering + b"\n",
+            label_match="managed-session",
+            name="mm-session-1",
+        )
+
+        observed = await probe_owned_containers(runner)
+
+        assert observed is not None, rendering
+        # The enumeration still speaks for every launch class, so
+        # reconciliation may still release the accounting of a vanished
+        # consumer instead of stalling behind one unbounded container.
+        assert observed.covers_every_owned_launch_class is True
+        owned = observed.containers["mm-session-1"]
+        assert owned.launch_class.name == "managed_session"
+        assert owned.launch_class.reserves is False
+
+
+@pytest.mark.asyncio
+async def test_a_daemon_answer_that_is_not_a_limit_is_still_unreadable() -> None:
+    """The fix must not turn a garbled daemon into an empty machine.
+
+    "Declared no limit" and "answered something I cannot read" stay different
+    values: the first is an ordinary container, the second blocks admission.
+    """
+
+    runner = _real_daemon_runner(
+        b"/mm-session-1\t0\t0\tunexpected\n",
+        label_match="managed-session",
+        name="mm-session-1",
+    )
+
+    assert await probe_owned_containers(runner) is None
+
+
+@pytest.mark.asyncio
+async def test_an_owned_container_is_accounted_from_the_limits_it_declared() -> None:
+    """#3881 FINDING-1 (second point): pins the accounting that was chosen.
+
+    An observed container contributes the limits it declared, because a
+    resource it declared no bound for has no bound to subtract. That is
+    narrower than "the capacity they consume is subtracted", so the gap is
+    named on the container rather than silently read as zero, and both design
+    docs say so.
+    """
+
+    runner = _real_daemon_runner(
+        # Declares memory only: 512 MiB, no --cpus, no --pids-limit.
+        b"/mm-session-1\t536870912\t0\t<no value>\n",
+        label_match="managed-session",
+        name="mm-session-1",
+    )
+
+    observed = await probe_owned_containers(runner)
+
+    owned = observed.containers["mm-session-1"]
+    assert owned.demand == ResourceDemand(cpu_millis=0, memory_mib=512, processes=0)
+    assert owned.undeclared_limits == frozenset(
+        {LIMITING_RESOURCE_CPU, LIMITING_RESOURCE_PROCESSES}
+    )
+    assert owned.declares_every_limit is False
+    assert observed.undeclared_limit_containers == ("mm-session-1",)
+
+
+@pytest.mark.asyncio
+async def test_a_fully_bounded_container_declares_no_gap() -> None:
+    runner = _real_daemon_runner(
+        b"/mm-job-1\t1073741824\t1000000000\t128\n",
+        label_match="container_job",
+        name="mm-job-1",
+    )
+
+    observed = await probe_owned_containers(runner)
+
+    owned = observed.containers["mm-job-1"]
+    assert owned.demand == ResourceDemand(
+        cpu_millis=1000, memory_mib=1024, processes=128
+    )
+    assert owned.declares_every_limit is True
+    assert observed.undeclared_limit_containers == ()
+
+
 # ------------------------------------------- owned launch-class registry
 
 
-#: Label literals that name a MoonMind-owned **volume**, not a container. They
-#: consume no CPU, memory or processes, so machine accounting never enumerates
-#: them.
-NON_CONTAINER_OWNER_LABELS = frozenset(
+#: Static ``moonmind.*`` label literals the deployment attaches that name
+#: something other than a container launch class. Every entry is a decision:
+#: adding a label here says "this does not need a place in the registry", which
+#: is exactly the judgement the assertion below exists to force.
+NON_LAUNCH_CLASS_LABELS = frozenset(
     {
+        # MoonMind-owned **volumes**. They consume no CPU, memory or
+        # processes, so machine accounting never enumerates them.
         "moonmind.kind=container-job-cache",
+        "moonmind.kind=session-docker-sidecar-volume",
         "moonmind.owner=generic-omnigent-github-credential",
+        # Attributes of a container some other label on the same launch
+        # already classifies.
+        "moonmind.oauth_session_transport=tmate",
+        "moonmind.object_kind=container",
+        "moonmind.ownership_schema=container-job/v1",
+        "moonmind.workflow_id=activity-owned",
     }
 )
+
+#: ``moonmind.*`` label keys whose value is computed per container. A label
+#: whose value names one instance cannot name a class of containers, so it can
+#: never be a launch-class marker.
+INSTANCE_VALUED_LABEL_KEYS = frozenset(
+    {
+        "moonmind.agent_run_id",
+        "moonmind.attempt",
+        "moonmind.backend_ref",
+        "moonmind.cache_owner",
+        "moonmind.cache_ref",
+        "moonmind.capture_required",
+        "moonmind.capture_retention_days",
+        "moonmind.cleanup_mode",
+        "moonmind.control_capabilities",
+        "moonmind.correlation",
+        "moonmind.credential_generation",
+        "moonmind.credential_runtime_ref",
+        "moonmind.effective_launch_ref",
+        "moonmind.egress.applied_rule_digest",
+        "moonmind.egress.profile",
+        "moonmind.egress.profile_digest",
+        "moonmind.execution_plan_ref",
+        "moonmind.expires_at",
+        "moonmind.helper_ttl_seconds",
+        "moonmind.host_lease_generation",
+        "moonmind.host_lease_id",
+        "moonmind.host_lease_ref",
+        "moonmind.job_id",
+        "moonmind.oauth_session_id",
+        "moonmind.owner_digest",
+        "moonmind.ownership",
+        "moonmind.provider_lease_id",
+        "moonmind.provider_profile_id",
+        "moonmind.repository",
+        "moonmind.runtime_binding_id",
+        "moonmind.runtime_id",
+        "moonmind.session_epoch",
+        "moonmind.session_id",
+        "moonmind.step_id",
+        "moonmind.timeout_seconds",
+        "moonmind.tool_name",
+        "moonmind.volume_role",
+        "moonmind.workload_mode",
+        "moonmind.workload_profile",
+        # The one launch site that labels containers from a type rather than a
+        # literal. Every value the type admits is pinned separately by
+        # ``test_every_workload_ownership_kind_is_a_registered_launch_class``.
+        "moonmind.kind",
+    }
+)
+
+#: Stands in for a value the source computes at run time.
+_COMPUTED = "\x00"
+
+
+def _module_string_constants(tree: "ast.Module") -> dict[str, str]:
+    """Module-level ``NAME = "literal"`` bindings, so ``LABEL_*`` resolves."""
+
+    constants: dict[str, str] = {}
+    for node in tree.body:
+        if isinstance(node, ast.Assign):
+            targets = [t for t in node.targets if isinstance(t, ast.Name)]
+        elif isinstance(node, ast.AnnAssign) and isinstance(node.target, ast.Name):
+            targets = [node.target]
+        else:
+            continue
+        value = node.value
+        if targets and isinstance(value, ast.Constant) and isinstance(value.value, str):
+            for target in targets:
+                constants[target.id] = value.value
+    return constants
+
+
+def _render(node, constants: dict[str, str]) -> str | None:
+    """Render a string expression, marking computed pieces as ``_COMPUTED``."""
+
+    if isinstance(node, ast.Constant):
+        return node.value if isinstance(node.value, str) else None
+    if isinstance(node, ast.Name):
+        return constants.get(node.id)
+    if isinstance(node, ast.JoinedStr):
+        rendered: list[str] = []
+        for piece in node.values:
+            if isinstance(piece, ast.Constant) and isinstance(piece.value, str):
+                rendered.append(piece.value)
+            else:
+                inner = _render(getattr(piece, "value", None), constants)
+                rendered.append(inner if inner is not None else _COMPUTED)
+        return "".join(rendered)
+    return None
+
+
+def _names_a_label_mapping(node) -> bool:
+    identifier = getattr(node, "id", None) or getattr(node, "attr", None) or ""
+    return "label" in identifier.lower()
+
+
+def _label_mappings(tree: "ast.Module"):
+    """Dict literals a launch site expands into ``--label`` arguments.
+
+    Only mappings the source itself calls labels are read. Scanning every dict
+    literal instead would sweep in billing metrics and tool-name maps, whose
+    ``moonmind.*`` keys never reach a container.
+    """
+
+    def dicts(node):
+        if isinstance(node, ast.Dict):
+            yield node
+
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Assign):
+            if any(_names_a_label_mapping(t) for t in node.targets):
+                yield from dicts(node.value)
+        elif isinstance(node, ast.AnnAssign) and _names_a_label_mapping(node.target):
+            yield from dicts(node.value)
+        elif isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            if "label" in node.name.lower():
+                for inner in ast.walk(node):
+                    if isinstance(inner, ast.Return) and inner.value is not None:
+                        yield from dicts(inner.value)
+        elif isinstance(node, ast.Dict):
+            for key, value in zip(node.keys, node.values):
+                if (
+                    isinstance(key, ast.Constant)
+                    and isinstance(key.value, str)
+                    and "label" in key.value.lower()
+                ):
+                    yield from dicts(value)
+        elif isinstance(node, ast.Call):
+            for keyword in node.keywords:
+                if keyword.arg and "label" in keyword.arg.lower():
+                    yield from dicts(keyword.value)
+
+
+def _declared_container_labels(path: pathlib.Path) -> set[str]:
+    """Every ``moonmind.*`` label one production module attaches.
+
+    Two shapes reach a container: a value in the argument position right after
+    a literal ``--label``, and an entry in a label mapping the launch site
+    expands. Both are read here, because a launch class that used only the
+    second one would otherwise be invisible to this assertion.
+    """
+
+    tree = ast.parse(path.read_text(encoding="utf-8", errors="replace"))
+    constants = _module_string_constants(tree)
+    labels: set[str] = set()
+    for node in ast.walk(tree):
+        if isinstance(node, (ast.List, ast.Tuple, ast.Set)):
+            elements = node.elts
+        elif isinstance(node, ast.Call):
+            elements = node.args
+        else:
+            continue
+        for index, element in enumerate(elements[:-1]):
+            if _render(element, constants) != "--label":
+                continue
+            label = _render(elements[index + 1], constants)
+            if label and label.startswith("moonmind."):
+                labels.add(label)
+    for mapping in _label_mappings(tree):
+        for key, value in zip(mapping.keys, mapping.values):
+            rendered_key = _render(key, constants)
+            if not rendered_key or not rendered_key.startswith("moonmind."):
+                continue
+            rendered_value = _render(value, constants)
+            labels.add(
+                f"{rendered_key}="
+                f"{rendered_value if rendered_value is not None else _COMPUTED}"
+            )
+    return labels
 
 
 def test_every_owned_container_label_the_deployment_creates_is_classified() -> None:
     """#3881 FINDING-2: an unregistered launch class reads as free capacity.
 
-    Reconciliation only sees the owner labels the registry names. A launch
-    class that MoonMind can create but the registry does not know would spend
-    the machine invisibly, so every owner-label literal in production source
-    must be either a registered launch class or an explicitly named
-    non-container label.
+    Reconciliation only sees the owner labels the registry names, so a launch
+    class MoonMind can create but the registry does not know spends the machine
+    invisibly. The assertion this replaced matched the two literal keys
+    ``moonmind.kind`` and ``moonmind.owner``, which meant an owner label under
+    any other key — ``moonmind.oauth_session=true``, as it turned out — could
+    never fail it. Every ``moonmind.*`` label the deployment attaches is read
+    here instead, and each one must be explicitly classified: a registered
+    launch class, a named non-launch-class label, or a key whose value names
+    one instance rather than a class.
     """
 
-    import re
-
-    label_pattern = re.compile(
-        r'moonmind\.(kind|owner)(?:=|"\s*:\s*")([A-Za-z0-9_.\-]+)'
-    )
     root = pathlib.Path(__file__).resolve().parents[3] / "moonmind"
     registry = set(OWNED_CONTAINER_LABEL_FILTERS)
     unclassified: dict[str, str] = {}
     for path in sorted(root.rglob("*.py")):
         if path.parts[-2:] == ("capacity", "docker_inventory.py"):
             continue
-        for match in label_pattern.finditer(
-            path.read_text(encoding="utf-8", errors="replace")
-        ):
-            label = f"moonmind.{match.group(1)}={match.group(2)}"
-            if label in registry or label in NON_CONTAINER_OWNER_LABELS:
+        for label in _declared_container_labels(path):
+            key = label.split("=", 1)[0]
+            if _COMPUTED in key:
+                # The key itself is computed, so no static reading of this
+                # source can name the label. Nothing to classify.
                 continue
-            unclassified.setdefault(label, str(path))
+            if _COMPUTED in label:
+                classified = key in registry or key in INSTANCE_VALUED_LABEL_KEYS
+            else:
+                classified = label in registry or label in NON_LAUNCH_CLASS_LABELS
+            if not classified:
+                unclassified.setdefault(label, str(path))
 
     assert unclassified == {}
+
+
+def test_the_classification_cannot_be_evaded_by_an_unexpected_label_key(
+    tmp_path,
+) -> None:
+    """#3881 FINDING-2: the guard must fail on the label that got past it.
+
+    ``moonmind.oauth_session=true`` is a real owner label under neither of the
+    two keys the previous assertion matched, so it read as free capacity while
+    that assertion passed. This pins the reading, not the outcome: an owner
+    label under a novel key is seen, and it is only classified because the
+    registry now names it.
+    """
+
+    source = tmp_path / "launch_site.py"
+    source.write_text(
+        """
+LABEL_KEY = "moonmind.novel_owner"
+
+
+async def start() -> None:
+    await run(
+        "run",
+        "-d",
+        "--label",
+        "moonmind.novel_owner=true",
+        "--label",
+        f"{LABEL_KEY}_id={session_id}",
+        image,
+    )
+""",
+        encoding="utf-8",
+    )
+
+    declared = _declared_container_labels(source)
+
+    assert "moonmind.novel_owner=true" in declared
+    assert f"moonmind.novel_owner_id={_COMPUTED}" in declared
+    # Neither is registered nor named, so the assertion above would fail on it.
+    assert "moonmind.novel_owner=true" not in set(OWNED_CONTAINER_LABEL_FILTERS)
+    assert "moonmind.novel_owner=true" not in NON_LAUNCH_CLASS_LABELS
+    # The label that actually escaped is classified now, and only because the
+    # registry names it.
+    assert "moonmind.oauth_session=true" in set(OWNED_CONTAINER_LABEL_FILTERS)
 
 
 def test_every_workload_ownership_kind_is_a_registered_launch_class() -> None:
@@ -904,10 +1248,16 @@ def test_the_oauth_host_launch_classes_are_accounted_but_never_refused() -> None
     for selector in (
         "moonmind.kind=omnigent-oauth-host",
         "moonmind.kind=omnigent-oauth-credential-validator",
+        # #3881 FINDING-2: the terminal-bridge auth runner is the third
+        # credential-authority class. It is a live default-path launch
+        # (``oauth_session.start_auth_runner`` on both transports) that the
+        # registry did not name, so its capacity read as free.
+        "moonmind.oauth_session=true",
     ):
         launch_class = by_selector[selector]
         assert launch_class.reserves is False
         assert selector in OWNED_CONTAINER_LABEL_FILTERS
+    assert by_selector["moonmind.oauth_session=true"].name == "oauth_auth_runner"
     # Exactly the classes that reserve are the ones a caller may reserve as.
     assert {
         launch_class.workload_class
@@ -1043,6 +1393,151 @@ async def test_a_failing_inventory_blocks_admission_rather_than_freeing_it(
 
 
 @pytest.mark.asyncio
+async def test_the_janitor_reconciles_across_a_container_that_declared_no_limits(
+    session_factory,
+) -> None:
+    """#3881 FINDING-1 at the janitor boundary.
+
+    A managed session with no ``--pids-limit`` used to make the inventory
+    unreadable, so ``reconcile`` wrote the blocked marker and every generic
+    host was then refused with ``reconciliation_health`` until the session
+    ended. The daemon shape here is the real one.
+    """
+
+    ledger = MachineCapacityLedger(session_factory)
+    runtime_bindings = AsyncMock()
+    runtime_bindings.list_recoverable.return_value = ()
+    host_leases = AsyncMock()
+    host_leases.list_recoverable.return_value = ()
+
+    async def inventory():
+        return await probe_owned_containers(
+            _real_daemon_runner(
+                b"/mm-session-1\t0\t0\t<no value>\n",
+                label_match="managed-session",
+                name="mm-session-1",
+            )
+        )
+
+    blocked_id = machine_reservation_id(
+        backend_ref=BACKEND,
+        owner_kind="reconciliation",
+        owner_ref=BACKEND,
+        generation=1,
+    )
+    # Start from the state the defect produced: a genuinely unreadable pass has
+    # left the blocked marker behind, so the assertion below is about clearing
+    # it rather than about a row that was never written.
+    await ledger.reconcile(backend_ref=BACKEND, inventory=None)
+    async with session_factory() as session:
+        assert (
+            await session.get(MachineCapacityReservation, blocked_id)
+        ).state == STATE_BLOCKED
+
+    result = await GenericOmnigentHostJanitor(
+        host_leases=host_leases,
+        runtime_bindings=runtime_bindings,
+        realizer=AsyncMock(),
+        machine_capacity=ledger,
+        machine_backend_ref=BACKEND,
+        container_inventory=inventory,
+    ).run()
+
+    machine = result["machineCapacity"]
+    assert machine["backendObserved"] is True
+    assert machine["admissionBlocked"] is False
+    assert machine["scopeComplete"] is True
+    # Accounted by observation, never a fault: nothing was meant to reserve it.
+    assert machine["observed"] == 1
+    assert machine["reconciliationFaults"] == 0
+    # The accounting gap is reported rather than silently read as zero.
+    assert machine["undeclaredLimits"] == 1
+
+    async with session_factory() as session:
+        blocked = await session.get(MachineCapacityReservation, blocked_id)
+    assert blocked.state != STATE_BLOCKED
+
+    # Admission is decided on resources again, not on reconciliation health.
+    admission = _admission(session_factory)
+    decision = await admission.evaluate()
+    assert decision.admitted is True
+    assert decision.limiting_layer is None
+    assert decision.machine_usage is not None
+    assert decision.machine_usage.reconciliation_blocked is False
+    # And the durable allocation the advisory read stands in for completes.
+    lease = await _acquire(_repository(session_factory, admission), "binding-a")
+    assert lease is not None
+
+
+@pytest.mark.asyncio
+async def test_a_live_auth_runner_is_adopted_as_observed_capacity(
+    session_factory,
+) -> None:
+    """#3881 FINDING-2 at the janitor boundary.
+
+    The auth runner holds real CPU and memory for as long as an operator's
+    provider authentication lasts. Before it was registered, reconciliation
+    never enumerated it, so reserving launches read its capacity as free.
+    """
+
+    ledger = MachineCapacityLedger(session_factory)
+    runtime_bindings = AsyncMock()
+    runtime_bindings.list_recoverable.return_value = ()
+    host_leases = AsyncMock()
+    host_leases.list_recoverable.return_value = ()
+
+    async def inventory():
+        return await probe_owned_containers(
+            _real_daemon_runner(
+                # Bounded here so the adoption's effect on the shared budget is
+                # observable; the launch site itself declares no limits, which
+                # ``test_an_owned_container_is_accounted_from_the_limits_it_declared``
+                # pins separately.
+                b"/moonmind_auth_s1\t7130316800\t4000000000\t512\n",
+                label_match="oauth_session=true",
+                name="moonmind_auth_s1",
+            )
+        )
+
+    result = await GenericOmnigentHostJanitor(
+        host_leases=host_leases,
+        runtime_bindings=runtime_bindings,
+        realizer=AsyncMock(),
+        machine_capacity=ledger,
+        machine_backend_ref=BACKEND,
+        container_inventory=inventory,
+    ).run()
+
+    machine = result["machineCapacity"]
+    assert machine["observed"] == 1
+    assert machine["adopted"] == 0
+    assert machine["reconciliationFaults"] == 0
+
+    async with session_factory() as session:
+        row = await session.get(
+            MachineCapacityReservation,
+            machine_reservation_id(
+                backend_ref=BACKEND,
+                owner_kind="adopted_container",
+                owner_ref="moonmind_auth_s1",
+                generation=1,
+            ),
+        )
+    assert row.state == STATE_ADOPTED
+    assert row.memory_mib == 6800
+
+    # Its capacity is subtracted from what reserving launches may take.
+    admission = _admission(session_factory)
+    repository = _repository(session_factory, admission)
+    with pytest.raises(HarnessPlatformError) as raised:
+        await _acquire(repository, "binding-a")
+    assert (
+        raised.value.code
+        == HarnessPlatformFailure.OMNIGENT_HOST_CAPACITY_UNAVAILABLE.value
+    )
+
+
+@pytest.mark.asyncio
 async def test_the_janitor_is_unchanged_without_machine_accounting_wired(
     session_factory,
 ) -> None:
@@ -1129,6 +1624,60 @@ async def test_a_container_job_cannot_spend_a_generic_hosts_reservation(
     # The shared memory ceiling is what refused it, and the message says so.
     assert f"missing_condition={LIMITING_RESOURCE_MEMORY}" in str(raised.value)
     assert not any(command[0] == "start" for command in commands)
+
+
+@pytest.mark.asyncio
+async def test_a_container_job_starts_beside_a_container_that_declared_no_limits(
+    session_factory, tmp_path
+) -> None:
+    """#3881 FINDING-1 at the container-job launch boundary.
+
+    ``_reserve_machine_capacity`` awaits ``_owned_inventory`` unconditionally,
+    and an unreadable inventory raises ``INFRASTRUCTURE`` before the ledger is
+    consulted. With an ordinary managed session running — no ``--pids-limit``
+    — that made every container job unstartable on the default deployment
+    path. The runner here answers exactly as the daemon does.
+    """
+
+    import json as _json
+
+    from moonmind.schemas.container_job_models import ContainerJobBackendError
+    from moonmind.workflows.temporal.container_job_backend import LABEL_OWNERSHIP
+
+    ledger = MachineCapacityLedger(session_factory)
+    request = _container_job_request(tmp_path)
+    commands: list[tuple[str, ...]] = []
+
+    async def runner(args):
+        args = tuple(args)
+        commands.append(args)
+        if args[0] == "info":
+            return 0, f"{10000 * 1024 * 1024}\t16".encode(), b""
+        if args[0] == "ps":
+            label = args[args.index("--filter") + 1]
+            if "managed-session" in label:
+                return 0, b"mm-session-1\n", b""
+            return 0, b"", b""
+        if args[:3] == ("inspect", "--format", "{{json .Config.Labels}}"):
+            return (
+                0,
+                _json.dumps({LABEL_OWNERSHIP: request.ownership_token}).encode(),
+                b"",
+            )
+        if args[0] == "inspect" and "HostConfig" in args[2]:
+            return 0, b"/mm-session-1\t0\t0\t<no value>\n", b""
+        return 0, b"", b""
+
+    backend = _container_job_backend(tmp_path, ledger=ledger, runner=runner)
+
+    try:
+        await backend.start_container(request)
+    except ContainerJobBackendError as exc:  # pragma: no cover - regression guard
+        pytest.fail(f"the job was refused rather than admitted: {exc}")
+
+    assert any(command[0] == "start" for command in commands)
+    usage = await ledger.usage(backend_ref=BACKEND)
+    assert usage.reserved_memory_mib == 3000
 
 
 @pytest.mark.asyncio

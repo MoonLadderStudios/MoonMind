@@ -1514,10 +1514,13 @@ class MachineCapacityLedger:
         """Reconcile durable reservations against owned backend state.
 
         ``inventory`` reports the containers MoonMind owns on this backend, the
-        resources they are actually running with, and *which owner labels were
-        enumerated to produce it*. ``None`` means the backend could not be
-        read: admission is blocked rather than freed, because an unreadable
-        daemon is not an empty machine.
+        resources they *declared*, and *which owner labels were enumerated to
+        produce it*. ``None`` means the backend could not be read: admission is
+        blocked rather than freed, because an unreadable daemon is not an empty
+        machine. An owned container that declared no limit is an ordinary
+        container, not an unreadable backend; ``undeclaredLimits`` in the
+        result counts them, because their accounted demand is narrower than
+        what they may actually spend.
 
         Absence from the inventory only releases accounting when the
         enumeration covered every owned launch class. A partial enumeration may
@@ -1571,6 +1574,7 @@ class MachineCapacityLedger:
                     "observed": 0,
                     "computeReleased": 0,
                     "reconciliationFaults": 0,
+                    "undeclaredLimits": 0,
                 }
             scope_complete = inventory.covers_every_owned_launch_class
             if (
@@ -1708,6 +1712,12 @@ class MachineCapacityLedger:
             "observed": observed_rows,
             "computeReleased": compute_released,
             "reconciliationFaults": usage.reconciliation_faults,
+            # How many live owned containers declared no limit for at least one
+            # resource. They are accounted from what they declared, so this is
+            # the width of the gap between what the ledger subtracts and what
+            # the machine is actually carrying. Reported, never a fault: the
+            # documented utilization headroom is what covers them.
+            "undeclaredLimits": len(inventory.undeclared_limit_containers),
         }
 
 

@@ -717,6 +717,7 @@ invisibly.
 | Container job | `moonmind.container_job` | **Reserves** before launch; can be refused |
 | OAuth host | `moonmind.kind=omnigent-oauth-host` | Observed |
 | OAuth credential validator | `moonmind.kind=omnigent-oauth-credential-validator` | Observed |
+| OAuth auth runner (terminal bridge) | `moonmind.oauth_session=true` | Observed |
 | Managed session | `moonmind.kind=managed-session` | Observed |
 | Session Docker sidecar | `moonmind.kind=session-docker-sidecar` | Observed |
 | Workload / bounded service | `moonmind.kind=workload`, `moonmind.kind=bounded_service` | Observed |
@@ -729,10 +730,25 @@ no accounting record is a reconciliation fault.
 workload containers. Resource admission never refuses them: refusing an OAuth
 credential host would break authentication rather than protect the machine, and
 refusing a session container would fail a run that was already admitted.
-Instead, reconciliation enumerates their owner labels and accounts their real
-`--cpus`, `--memory` and `--pids-limit` from the daemon, so the capacity they
-consume is subtracted from what reserving launches may take. They are accounted,
-not faulted.
+Instead, reconciliation enumerates their owner labels and accounts the `--cpus`,
+`--memory` and `--pids-limit` each container **declared**, so those limits are
+subtracted from what reserving launches may take. They are accounted, not
+faulted.
+
+Managed sessions, session Docker sidecars, unprofiled workload containers and
+OAuth auth runners declare none of the three, and a profiled workload declares
+CPU and memory but still no process limit. Docker reports an undeclared
+`HostConfig` limit as a nil pointer. MoonMind reads that as *unset*, never as an
+unreadable daemon: discarding the enumeration over one ordinary unbounded
+container would block every container-job start with `INFRASTRUCTURE` and refuse
+every new reservation with `reconciliation_health`. An undeclared limit
+contributes nothing to that container's accounted demand, because there is no
+bound to subtract — the documented utilization headroom below is what covers
+what such a container actually spends. Reconciliation reports how many live
+owned containers are in that position (`undeclaredLimits` in the janitor's
+machine-capacity result), so the width of the gap is observable rather than
+silently read as zero. A daemon answer that is neither a number nor the nil
+rendering is still unreadable and still blocks admission.
 
 Reservations are scoped by exact Docker backend ref, so two independent
 backends have two independent budgets and are never pooled.
