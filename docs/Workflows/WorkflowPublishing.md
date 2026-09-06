@@ -108,6 +108,13 @@ After the agent completes, the infrastructure pushes the current work branch to 
 
 For new authored submissions, `branch` publish uses a single operator-selected `branch` field. That branch is the branch to update and push. MoonMind no longer exposes a separate "clone from X, push to Y" authoring model.
 
+The shared Omnigent publication boundary passes this resolved branch as the
+publication destination for every harness. It must not generate a replacement
+job branch in `branch` mode. Publication uses a fast-forward push and verifies
+the exact remote head; concurrent remote work must fail publication rather than
+be overwritten. A retry whose local head already equals the selected remote
+head returns verified no-change evidence for that same branch.
+
 Example:
 
 ```json
