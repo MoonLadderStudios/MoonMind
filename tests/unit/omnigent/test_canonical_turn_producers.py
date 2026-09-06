@@ -576,8 +576,8 @@ async def test_escaped_publication_base_survives_remediation_dispatch(
     """Replay the publication handoff that drifted from a job branch to main."""
     fixture = json.loads(
         (
-            Path(__file__).parents[2]
-            / "fixtures/reliability/remediation-branch-handoff.json"
+            Path(__file__).parent
+            / "fixtures/remediation-branch-handoff.json"
         ).read_text()
     )
     wf = _run_workflow(base_step_execution_id=BASE_STEP_EXECUTION_ID)
