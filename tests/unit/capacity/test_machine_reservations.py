@@ -185,6 +185,34 @@ def test_an_explicit_ceiling_within_the_daemon_capacity_is_honored() -> None:
     assert budget.cpu_millis == 8000 * 70 // 100
 
 
+@pytest.mark.parametrize(
+    "env_name, field",
+    [
+        ("MOONMIND_MACHINE_CPU_MILLIS", "cpu_millis"),
+        ("MOONMIND_MACHINE_MEMORY_MIB", "memory_mib"),
+        ("MOONMIND_MACHINE_PROCESSES", "processes"),
+        ("MOONMIND_MACHINE_TEMPORARY_STORAGE_MIB", "temporary_storage_mib"),
+    ],
+)
+def test_an_explicit_ceiling_may_only_lower_the_utilization_share(
+    env_name: str, field: str
+) -> None:
+    """AC8: no override may spend the control-plane and cleanup headroom.
+
+    ``MOONMIND_MACHINE_UTILIZATION_PERCENT=100`` is refused precisely to keep
+    that headroom, so a per-resource override equal to the daemon's own total
+    must not be the way around it.
+    """
+
+    total = getattr(TOTALS, field)
+    automatic = total * 70 // 100
+
+    budget = _budget(**{env_name: str(total)})
+
+    assert getattr(budget, field) == automatic
+    assert getattr(budget.headroom(), field) == total - automatic
+
+
 @pytest.mark.asyncio
 async def test_an_unreadable_daemon_is_not_an_empty_machine() -> None:
     """AC7: daemon uncertainty must not manufacture capacity."""
@@ -603,14 +631,18 @@ async def test_a_launch_that_outlived_its_window_still_confirms(ledger) -> None:
 
 
 @pytest.mark.asyncio
-async def test_a_reservation_released_mid_launch_is_restored_by_confirmation(
+async def test_a_reservation_reclaimed_mid_launch_is_restored_and_fenced(
     ledger,
 ) -> None:
-    """#3881 FINDING-3: a live consumer with no accounting is the worse outcome.
+    """A fenced attempt is re-accounted and refused, never silently restored.
 
     Reconciliation can release an expired prelaunch reservation whose container
-    was not running at the moment it looked. If the launch nevertheless
-    succeeds, confirming restores the accounting rather than failing the run.
+    was not running at the moment it looked, and an intervening launch may take
+    the capacity that freed. #3881 FINDING-3 still holds — a live consumer with
+    no accounting record is the worse outcome, so confirming restores the
+    accounting the running container now spends. It does not grant the fenced
+    attempt permission to keep it: confirmation refuses, so the caller tears the
+    consumer down instead of pushing accounted usage past every ceiling.
     """
 
     budget = _budget(MOONMIND_MACHINE_PRELAUNCH_TTL_SECONDS="60")
@@ -627,24 +659,67 @@ async def test_a_reservation_released_mid_launch_is_restored_by_confirmation(
     assert summary["computeReleased"] == 1
     assert (await ledger.usage(backend_ref=BACKEND, now=later)).reserved_memory_mib == 0
 
-    await ledger.confirm(
-        reservation_id=outcome.reservation_id,
-        generation=1,
-        container_ref="mm-host-slow",
-        now=later,
-    )
+    with pytest.raises(MachineCapacityConflict, match="reclaimed"):
+        await ledger.confirm(
+            reservation_id=outcome.reservation_id,
+            generation=1,
+            container_ref="mm-host-slow",
+            now=later,
+        )
 
+    # The live container is accounted again, so it can never read as free
+    # capacity while the fenced launch is being torn down.
     assert (
         await ledger.usage(backend_ref=BACKEND, now=later)
     ).reserved_memory_mib == 2048
+    async with ledger._factory()() as session:  # noqa: SLF001 - persisted contract
+        row = await session.get(MachineCapacityReservation, outcome.reservation_id)
+        assert row.state == STATE_ACTIVE
+        assert row.container_ref == "mm-host-slow"
     # A different attempt still cannot write through this reservation.
-    with pytest.raises(MachineCapacityConflict):
+    with pytest.raises(MachineCapacityConflict, match="fence does not match"):
         await ledger.confirm(
             reservation_id=outcome.reservation_id,
             generation=2,
             container_ref="mm-host-slow",
             now=later,
         )
+
+
+@pytest.mark.asyncio
+async def test_a_fenced_launchs_teardown_returns_the_accounting_it_restored(
+    ledger,
+) -> None:
+    """The fence self-heals: cleanup releases exactly what confirmation restored."""
+
+    budget = _budget(MOONMIND_MACHINE_PRELAUNCH_TTL_SECONDS="60")
+    started = datetime.now(UTC)
+    outcome = await ledger.reserve(
+        request=_request("lease-slow", container_ref="mm-host-slow"),
+        budget=budget,
+        now=started,
+    )
+    later = started + timedelta(seconds=400)
+    await ledger.reconcile(backend_ref=BACKEND, inventory=_inventory(), now=later)
+    with pytest.raises(MachineCapacityConflict):
+        await ledger.confirm(
+            reservation_id=outcome.reservation_id,
+            generation=1,
+            container_ref="mm-host-slow",
+            now=later,
+        )
+
+    state = await ledger.release(
+        reservation_id=outcome.reservation_id,
+        generation=1,
+        evidence=ReleaseEvidence(daemon_observed=True, consumer_removed=True),
+        now=later,
+    )
+
+    assert state == STATE_RELEASED
+    usage = await ledger.usage(backend_ref=BACKEND, now=later)
+    assert usage.reserved_memory_mib == 0
+    assert usage.reserved_temporary_storage_mib == 0
 
 
 @pytest.mark.asyncio
@@ -1226,6 +1301,67 @@ async def test_reservation_state_names_are_the_persisted_contract(ledger) -> Non
         # Which managed launch created it is not recoverable from the container
         # alone, so it is recorded as unattributed rather than misattributed.
         assert adopted.workload_class == WORKLOAD_CLASS_UNATTRIBUTED
+
+
+def test_the_reservation_columns_admit_the_identities_that_reach_them() -> None:
+    """A durable reservation must not be narrower than its own inputs.
+
+    ``backend_ref`` is selected by deployment code and already travels through
+    ``ResolvedContainerLaunchPlan`` and the ``container_jobs`` projection at the
+    existing contract width. A narrower column here would fail an already-valid
+    plan — including one an in-flight workflow is carrying — with a
+    value-too-long database error at its first durable reservation.
+    """
+
+    from moonmind.schemas.container_job_models import ResolvedContainerLaunchPlan
+
+    contract_width = max(
+        meta.max_length
+        for meta in ResolvedContainerLaunchPlan.model_fields["backend_ref"].metadata
+        if getattr(meta, "max_length", None) is not None
+    )
+    columns = MachineCapacityReservation.__table__.columns
+
+    assert columns["backend_ref"].type.length >= contract_width
+    assert columns["owner_ref"].type.length >= contract_width
+    assert columns["container_ref"].type.length >= contract_width
+
+
+def test_the_migration_creates_the_columns_the_model_declares() -> None:
+    """The durable width is whatever the migration actually created.
+
+    A model widened without its migration still fails the launch it was widened
+    for, because PostgreSQL enforces the column the migration created.
+    """
+
+    import ast
+    import pathlib
+
+    source = (
+        pathlib.Path(__file__).resolve().parents[3]
+        / "api_service"
+        / "migrations"
+        / "versions"
+        / "372_machine_reservations.py"
+    ).read_text()
+
+    created: dict[str, int] = {}
+    for node in ast.walk(ast.parse(source)):
+        if not isinstance(node, ast.Call):
+            continue
+        if getattr(node.func, "attr", None) != "Column" or not node.args:
+            continue
+        name = node.args[0]
+        column_type = node.args[1] if len(node.args) > 1 else None
+        if not isinstance(name, ast.Constant) or not isinstance(column_type, ast.Call):
+            continue
+        for keyword in column_type.keywords:
+            if keyword.arg == "length" and isinstance(keyword.value, ast.Constant):
+                created[name.value] = keyword.value.value
+
+    columns = MachineCapacityReservation.__table__.columns
+    for name, length in created.items():
+        assert columns[name].type.length == length, name
 
 
 @pytest.mark.asyncio

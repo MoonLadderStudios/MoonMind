@@ -189,15 +189,17 @@ def holds_initialization_permit(workload_class: object) -> bool:
     return True
 
 
-#: States a launch may confirm from. The released states are included because a
-#: launch that outlived its prelaunch window can still succeed, and a live
-#: consumer with no accounting record is worse than a restored reservation.
-CONFIRMABLE_STATES = (
-    STATE_PRELAUNCH,
-    STATE_ACTIVE,
-    STATE_STORAGE_RETAINED,
-    STATE_RELEASED,
-)
+#: States whose compute was already reclaimed. A launch that confirms from one
+#: of them was fenced while it was in flight: the capacity it held was released
+#: and may already have been admitted to another launch, so confirming restores
+#: the accounting the live consumer now spends but never grants the attempt
+#: permission to keep it (see ``MachineCapacityLedger.confirm``).
+RECLAIMED_STATES = (STATE_STORAGE_RETAINED, STATE_RELEASED)
+
+#: States a launch may confirm from. The reclaimed states are included because a
+#: live consumer with no accounting record is worse than a restored reservation,
+#: not because a fenced attempt may proceed.
+CONFIRMABLE_STATES = COMPUTE_ACCOUNTED_STATES + RECLAIMED_STATES
 
 #: Limiting-resource names are low-cardinality by construction: they never
 #: carry a plan, lease, host, job or credential identity (#3881 remaining
@@ -475,7 +477,13 @@ class MachineResourceBudget:
                     f"invalid {env_name} value {explicit!r}: exceeds the "
                     "machine capacity the container backend reports"
                 )
-            ceilings[field] = explicit
+            # Every explicit ceiling is documented as *lowering* the share
+            # managed launches may reserve, so it is clamped to the
+            # utilization-derived ceiling rather than substituted for it. A
+            # value between that share and the machine total would erode the
+            # same control-plane and cleanup headroom the utilization percent
+            # is refused above 99 to guarantee.
+            ceilings[field] = min(explicit, automatic)
         return cls(
             totals=totals,
             max_concurrent_initializing=_positive_int_env(
@@ -1385,14 +1393,19 @@ class MachineCapacityLedger:
 
         Once a container carries the reservation, the reservation stops being
         clock-reclaimable: a live consumer keeps its accounting even if the
-        workflow that asked for it died.
+        workflow that asked for it died. The generation fence refuses a stale
+        attempt outright.
 
-        A reservation whose accounting was already released while the launch
-        was in flight is restored rather than refused. The container provably
-        exists at this point, so refusing would fail a successful launch and
-        leave a live consumer with no accounting record — strictly worse than
-        re-accounting the reservation this exact owner and generation already
-        held. The generation fence still refuses a stale attempt.
+        A reservation whose compute was reclaimed while the launch was in
+        flight — by the bounded prelaunch clock or by reconciliation that
+        observed nothing running under the name it reserved — is restored *and*
+        refused. The container provably exists at this point, so leaving it with
+        no accounting record would read as free capacity; but the capacity it
+        held was released and an intervening launch may already have been
+        admitted against it, so restoring it silently would let accounted usage
+        exceed every configured ceiling. Confirming re-accounts the live
+        consumer and raises: the caller tears it down, and the evidence-driven
+        release that follows returns exactly the accounting this call restored.
         """
 
         from sqlalchemy import update
@@ -1400,27 +1413,42 @@ class MachineCapacityLedger:
         from api_service.db.models import MachineCapacityReservation
 
         observed_at = now or datetime.now(UTC)
-        async with self._factory()() as session:
-            result = await session.execute(
+        values = {
+            "state": STATE_ACTIVE,
+            "container_ref": str(container_ref),
+            "expires_at": None,
+            "updated_at": observed_at,
+        }
+
+        def _bind(states: Sequence[str]):
+            return (
                 update(MachineCapacityReservation)
                 .where(
                     MachineCapacityReservation.reservation_id == reservation_id,
                     MachineCapacityReservation.generation == int(generation),
-                    MachineCapacityReservation.state.in_(CONFIRMABLE_STATES),
+                    MachineCapacityReservation.state.in_(tuple(states)),
                 )
-                .values(
-                    state=STATE_ACTIVE,
-                    container_ref=str(container_ref),
-                    expires_at=None,
-                    updated_at=observed_at,
-                )
+                .values(**values)
             )
-            if result.rowcount != 1:
+
+        async with self._factory()() as session:
+            held = await session.execute(_bind(COMPUTE_ACCOUNTED_STATES))
+            if held.rowcount == 1:
+                await session.commit()
+                return
+            # Nothing this attempt still holds matched, so either the fence
+            # moved on or the compute was reclaimed underneath the launch.
+            reclaimed = await session.execute(_bind(RECLAIMED_STATES))
+            if reclaimed.rowcount != 1:
                 await session.rollback()
                 raise MachineCapacityConflict(
                     "machine reservation fence does not match at confirmation"
                 )
             await session.commit()
+        raise MachineCapacityConflict(
+            "machine reservation compute was reclaimed while the launch was in "
+            "flight; the consumer is accounted again and must be torn down"
+        )
 
     async def release(
         self,
@@ -1747,6 +1775,7 @@ __all__ = [
     "ACCOUNTED_STATES",
     "COMPUTE_ACCOUNTED_STATES",
     "CONFIRMABLE_STATES",
+    "RECLAIMED_STATES",
     "COVERED_WORKLOAD_CLASSES",
     "COVERED_WORKLOAD_CLASS_POLICY",
     "INITIALIZATION_PERMIT_WORKLOAD_CLASSES",

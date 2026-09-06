@@ -938,15 +938,22 @@ class GenericOmnigentHostRealizer:
                         prior_host_evidence,
                     ),
                 )
-            host_lease = await self._host_leases.mark_cleaned(
-                host_lease.leaseRef, expected_generation=host_lease.generation
-            )
             # Capacity accounting observes cleanup's evidence; it never performs
             # teardown and never asserts completion on cleanup's behalf. A
             # cleanup that could not read the daemon releases nothing, so a
             # failed teardown cannot manufacture free capacity (#3881 AC7).
+            #
+            # It runs before the lease becomes terminal on purpose: a lease that
+            # is already ``cleaned`` skips this whole block on the next attempt,
+            # so releasing after it would strand the capacity of any release
+            # that failed transiently — reconciliation only ever moves the
+            # absent consumer to ``storage_retained``, and that state is not
+            # revisited.
             await self._release_machine_reservation(
                 host_lease.leaseRef, cleanup_evidence.get("host")
+            )
+            host_lease = await self._host_leases.mark_cleaned(
+                host_lease.leaseRef, expected_generation=host_lease.generation
             )
         if prepared is not None:
             await self._host_runtime.cleanup_prepared(prepared)
@@ -1178,12 +1185,26 @@ class GenericOmnigentHostRealizer:
         resolved = self._machine_reservation_ref(host_lease_ref)
         if resolved is None:
             return
+        from moonmind.capacity import MachineCapacityConflict
+
         ledger, reservation_id = resolved
-        await ledger.confirm(
-            reservation_id=reservation_id,
-            generation=1,
-            container_ref=container_ref,
-        )
+        try:
+            await ledger.confirm(
+                reservation_id=reservation_id,
+                generation=1,
+                container_ref=container_ref,
+            )
+        except MachineCapacityConflict as exc:
+            # The ledger re-accounted the live container before refusing, so it
+            # can never read as free capacity. This launch is still fenced: the
+            # capacity it held was reclaimed and may already belong to another
+            # launch, so cleanup tears this host down instead of letting
+            # accounted usage exceed the machine ceiling.
+            raise HarnessPlatformError(
+                "machine capacity reservation no longer holds; "
+                "missing_condition=machine_resources.",
+                code=HarnessPlatformFailure.OMNIGENT_HOST_CAPACITY_UNAVAILABLE,
+            ) from exc
 
     async def _release_machine_reservation(
         self, host_lease_ref: str, host_evidence: Any

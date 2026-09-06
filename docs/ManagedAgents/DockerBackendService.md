@@ -762,15 +762,16 @@ makes count-and-reserve one operation across worker replicas.
 By default, managed launches may reserve at most 70 percent of the daemon's
 reported CPU and memory; the remainder is documented headroom for the MoonMind
 control plane, the janitors and Docker itself. Operators may lower any ceiling
-explicitly:
+explicitly; every one of these settings is clamped to that share, so none of them
+can raise a ceiling past the documented headroom:
 
 | Setting | Effect |
 | --- | --- |
 | `MOONMIND_MACHINE_UTILIZATION_PERCENT` | Share of the machine managed launches may reserve. Refused above 99: headroom is not optional. |
-| `MOONMIND_MACHINE_CPU_MILLIS` | Explicit CPU ceiling in millis. Refused above what the daemon reports. |
-| `MOONMIND_MACHINE_MEMORY_MIB` | Explicit memory ceiling. |
-| `MOONMIND_MACHINE_PROCESSES` | Explicit machine-wide process ceiling. Docker reports no such total, so the default derives it from CPU count. |
-| `MOONMIND_MACHINE_TEMPORARY_STORAGE_MIB` | Explicit temporary-storage ceiling. Defaults to the memory total because MoonMind temporary storage is RAM-backed tmpfs. |
+| `MOONMIND_MACHINE_CPU_MILLIS` | Explicit CPU ceiling in millis. Refused above what the daemon reports, and clamped to the utilization share above, so it can only lower the ceiling. |
+| `MOONMIND_MACHINE_MEMORY_MIB` | Explicit memory ceiling. Clamped like the CPU ceiling above. |
+| `MOONMIND_MACHINE_PROCESSES` | Explicit machine-wide process ceiling. Docker reports no such total, so the default derives it from CPU count. Clamped like the CPU ceiling above. |
+| `MOONMIND_MACHINE_TEMPORARY_STORAGE_MIB` | Explicit temporary-storage ceiling. Defaults to the memory total because MoonMind temporary storage is RAM-backed tmpfs, which is what a container job's `--shm-size` reserves. Clamped like the CPU ceiling above. |
 | `MOONMIND_MACHINE_MAX_CONCURRENT_INITIALIZING` | How many *cold host launches* may be initializing at once. Container jobs are exempt: see the permit scope below. |
 | `MOONMIND_MACHINE_PRELAUNCH_TTL_SECONDS` | How long a prelaunch reservation may be held before it is reclaimable as proven-unused. |
 | `MOONMIND_CONTAINER_BACKEND_MAX_ACTIVE_MEMORY_MIB` | Lowers this deployment's memory ceiling for the container-job path specifically. It is clamped to the utilization share above, so it can only lower the ceiling — never raise it past the documented headroom. |

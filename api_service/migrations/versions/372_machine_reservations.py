@@ -29,7 +29,7 @@ def upgrade() -> None:
     op.create_table(
         "machine_capacity_reservations",
         sa.Column("reservation_id", sa.String(length=255), primary_key=True),
-        sa.Column("backend_ref", sa.String(length=128), nullable=False),
+        sa.Column("backend_ref", sa.String(length=255), nullable=False),
         sa.Column("workload_class", sa.String(length=32), nullable=False),
         sa.Column("owner_kind", sa.String(length=32), nullable=False),
         sa.Column("owner_ref", sa.String(length=255), nullable=False),
