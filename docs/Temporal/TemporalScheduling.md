@@ -1,459 +1,225 @@
 # Temporal Scheduling
 
-**Implementation tracking:** Rollout and backlog notes live under `docs/tmp/` or in gitignored local-only handoffs (for example `artifacts/`), not as migration checklists in canonical `docs/`.
-
-**Status:** Active
-**Owner:** MoonMind Platform
-**Last Updated:** 2026-03-23
+**Document Class:** Canonical declarative  
+**Status:** Desired-state architecture  
+**Owner:** MoonMind Platform  
+**Last Updated:** 2026-09-06  
 **Audience:** Backend developers, UI developers, operators
+
+Implementation sequencing and rollout evidence belong in issues or `docs/tmp/`, not this canonical specification. New authoring semantics here describe the target, not support claimed for current deployed API/worker versions.
 
 ## 1. Purpose
 
-This document defines the **desired state** for all time-based scheduling in MoonMind using Temporal-native primitives. It covers:
+All time-based scheduling uses Temporal-native primitives: one-time deferred execution, cron-based recurring schedules, and reschedulable waits. MoonMind does not maintain a scheduler daemon, cron evaluation loop, or DB-backed dispatch queue.
 
-- **One-time deferred execution** — start a workflow at a specific future time
-- **Recurring schedules** — start workflows on a cron-based cadence
-- **Reschedulable execution** — change the target start time after creation
-
-All three patterns use Temporal's own scheduling mechanisms. MoonMind does not maintain a custom scheduler daemon, cron-evaluation loop, or DB-backed dispatch queue for scheduling.
+Every scheduled workflow uses the same single repository/source context, applicable branch, and publication intent as immediate Create. A schedule cannot introduce independent Skill/Preset publish overrides or reinterpret a coordinator's local None as the batch's authored policy.
 
 ## 2. Related Docs
 
-- [TemporalArchitecture.md](TemporalArchitecture.md) — platform foundation, migration phases, locked decisions
-- [WorkflowTypeCatalogAndLifecycle.md](WorkflowTypeCatalogAndLifecycle.md) — workflow types, state model, update/signal contracts
-- [ActivityCatalogAndWorkerTopology.md](ActivityCatalogAndWorkerTopology.md) — activity routing and worker fleet
-- [VisibilityAndUiQueryModel.md](VisibilityAndUiQueryModel.md) — search attributes, list/filter model
-
----
+- [Temporal Architecture](TemporalArchitecture.md)
+- [Workflow Type Catalog and Lifecycle](WorkflowTypeCatalogAndLifecycle.md)
+- [Activity Catalog and Worker Topology](ActivityCatalogAndWorkerTopology.md)
+- [Visibility and UI Query Model](VisibilityAndUiQueryModel.md)
+- [Workflow Publishing](../Workflows/WorkflowPublishing.md)
+- [Workflow Presets System](../Workflows/WorkflowPresetsSystem.md)
+- [Workflow Editing System](../Workflows/WorkflowEditingSystem.md)
+- [Executions API Contract](../Api/ExecutionsApiContract.md)
+- [Create Page](../UI/CreatePage.md)
 
 ## 3. Design Principles
 
-1. **Temporal owns time.** All time-based dispatch — delays, cron evaluation, timezone handling, overlap policies, backfill — is delegated to the Temporal server.
+Temporal owns delays, cron/timezone evaluation, overlap, catchup, and backfill. MoonMind owns schedule names, scope/authorization, target definitions, authored intent, and presentation. The Postgres definition is product-side desired state; Temporal is the execution-side authority for actual timing, pause state, and fired actions. Reconciliation exposes discrepancies rather than pretending an unapplied update succeeded.
 
-2. **MoonMind owns product semantics.** Schedule names, scope/authorization, target types, and UI presentation remain MoonMind domain concepts backed by Postgres.
-
-3. **Thin reconciliation, not dual state.** MoonMind's DB model for schedules mirrors Temporal Schedule state via a reconciliation pattern. Temporal is the source of truth for "when does the next run happen" and "is this schedule paused." MoonMind is the source of truth for "who owns this schedule" and "what target kind does it run."
-
-4. **Use the simplest Temporal primitive that fits.** `start_delay` for one-time delays. Temporal Schedules for recurring cadences. In-workflow timers + signals for reschedulable waits. Don't over-engineer.
-
----
+Use start_delay for an immutable one-time delay, workflow timers/signals for a reschedulable wait, and Temporal Schedules for recurring work. The same existing compiler and admission owners validate targets and publication. No second preset expander, repository selector, or publishing policy engine is introduced by scheduling.
 
 ## 4. One-Time Deferred Execution
 
-### 4.1 Mechanism: Temporal `start_delay`
+### 4.1 Mechanism: Temporal start_delay
 
-For "run this workflow once at time T," MoonMind uses the `start_delay` parameter on `client.start_workflow()`.
+For one execution at a future time, the adapter passes a validated delay to client.start_workflow. The execution is created/visible immediately while its first workflow task is deferred. Cancellation remains available under the lifecycle contract.
 
-```python
-await client.start_workflow(
- "MoonMind.UserWorkflow",
- args=[workflow_input],
- id=workflow_id,
- task_queue="mm.workflow",
- start_delay=scheduled_for - datetime.now(UTC),
-)
-```
+MoonMind records `mm_state=scheduled` and `mm_scheduled_for`, then transitions to initializing when dispatch begins. The UI displays the intended time and timezone clearly.
 
-**Temporal behavior:**
-- The workflow execution is created immediately and is visible in Temporal Visibility.
-- The first workflow task is not dispatched to the worker until `start_delay` elapses.
-- The workflow can be cancelled before it starts.
+### 4.2 Constraint: start_delay is immutable
 
-**MoonMind behavior:**
-- The execution record is created with `mm_state=scheduled` and `mm_scheduled_for` set.
-- `mm_state` transitions to `initializing` when the delay elapses and the workflow task dispatches.
-- The dashboard shows a "Scheduled for {time}" banner on the detail page.
+A started execution's start_delay is not an editable schedule field. A product requiring a movable start uses section 6's timer pattern. Changing the time does not itself authorize changing repository, publishing, or runtime intent.
 
-### 4.2 Constraint: start_delay Is Immutable
+### 4.3 API contract
 
-Once `start_workflow()` is called with `start_delay`, **the delay cannot be changed**. There is no Temporal API to adjust a pending workflow's dispatch time.
+The one-time create form expresses a schedule with mode once and scheduledFor through the existing execution admission path. Validate the future timestamp, compute the adapter delay, persist the scheduled metadata, and return the accepted scheduled execution identity.
 
-If the product requires the user to **change** the scheduled time after creation, use the reschedulable execution pattern (Section 6) instead.
-
-### 4.3 API Contract
-
-```json
-POST /api/executions
-{
- "workflowType": "MoonMind.UserWorkflow",
- "title": "Deploy staging at 2 AM",
- "initialParameters": { ... },
- "schedule": {
- "mode": "once",
- "scheduledFor": "2026-03-24T09:00:00Z"
- }
-}
-```
-
-**Backend:**
-1. Validate `scheduledFor` is a future UTC timestamp.
-2. Compute `start_delay = scheduledFor - now`.
-3. Call `TemporalClientAdapter.start_workflow(start_delay=start_delay)`.
-4. Set `mm_scheduled_for` search attribute.
-5. Return response with `state: "scheduled"`.
-
-**Response:**
-
-```json
-{
- "workflowId": "mm:01HX...",
- "runId": "temporal-run-uuid",
- "workflowType": "MoonMind.UserWorkflow",
- "state": "scheduled",
- "scheduledFor": "2026-03-24T09:00:00Z",
- "title": "Deploy staging at 2 AM"
-}
-```
-
----
+The authored input snapshot, selected definition evidence, repository/branch roles, and resolved publication scope are captured under normal admission. Delay does not mean the execution can silently pick up a different Auto default or credential route when it starts. Required current permissions/readiness are checked at use, without substituting another identity after denial.
 
 ## 5. Recurring Schedules
 
 ### 5.1 Mechanism: Temporal Schedules
 
-For recurring work, MoonMind uses **Temporal Schedules** — server-owned schedule objects that start workflow executions on a defined cadence.
+Temporal Schedule actions start the declared workflow type with the definition's approved authored input and artifact references. ScheduleSpec owns cron expressions, jitter, and time_zone_name; SchedulePolicy owns overlap and catchup; ScheduleState owns actual paused state. MoonMind's adapter translates validated product choices into those supported primitives.
 
-```python
-await client.create_schedule(
- id=f"mm-schedule:{definition_id}",
- schedule=Schedule(
- action=ScheduleActionStartWorkflow(
- "MoonMind.UserWorkflow",
- args=[workflow_input],
- id=f"mm:{definition_id}",
- task_queue="mm.workflow",
- memo={"title": schedule_name},
- search_attributes=TypedSearchAttributes([
- SearchAttributePair(SearchAttributeKey.for_keyword("mm_owner_id"), owner_id),
- SearchAttributePair(SearchAttributeKey.for_keyword("mm_state"), "initializing"),
- ]),
- ),
- spec=ScheduleSpec(
- cron_expressions=[cron_expression],
- jitter=timedelta(seconds=jitter_seconds),
- time_zone_name=timezone,
- ),
- policy=SchedulePolicy(
- overlap=ScheduleOverlapPolicy.SKIP,
- catchup_window=timedelta(minutes=15),
- ),
- state=ScheduleState(
- paused=not enabled,
- note=f"MoonMind schedule: {schedule_name}",
- ),
- ),
-)
-```
+### 5.2 What Temporal Schedules provide natively
 
-### 5.2 What Temporal Schedules Provide Natively
+Native operations cover cron/timezone evaluation, supported overlap modes, catchup windows, jitter, pause/unpause, trigger-now, bounded backfill, recent actions, upcoming action times, and schedule listing. The product uses the actual server result rather than reimplementing or guessing those operations.
 
-| Capability | Temporal Schedule Feature |
-|---|---|
-| Cron evaluation with timezone | `ScheduleSpec.cron_expressions` + `time_zone_name` |
-| Overlap policy | `ScheduleOverlapPolicy` enum: `SKIP`, `BUFFER_ONE`, `BUFFER_ALL`, `ALLOW_ALL`, `CANCEL_OTHER`, `TERMINATE_OTHER` |
-| Catchup / backfill | `SchedulePolicy.catchup_window` — runs missed during downtime up to this window |
-| Jitter | `ScheduleSpec.jitter` — random delay to spread load |
-| Pause / resume | `ScheduleHandle.pause()` / `ScheduleHandle.unpause()` |
-| Trigger immediately | `ScheduleHandle.trigger()` |
-| Backfill historical range | `ScheduleHandle.backfill()` |
-| Recent action list | `ScheduleHandle.describe()` → `info.recent_actions` |
-| Upcoming runs | `ScheduleHandle.describe()` → `info.next_action_times` |
-| Schedule visibility | Listed in Temporal UI and via `client.list_schedules()` |
+### 5.3 MoonMind domain model: RecurringWorkflowDefinition
 
-### 5.3 MoonMind Domain Model: RecurringWorkflowDefinition
+The existing definition owns name, description, principal/scope, authorization, target type and input refs, desired schedule settings, Temporal Schedule reference, and the selected definition/input evidence needed to reproduce authoring.
 
-MoonMind keeps a `RecurringWorkflowDefinition` row in Postgres for each recurring schedule. This row owns:
+It stores one authored workspace/repository context, one branch role, and one publishing selection. Compiler-bound Skill arguments and coordinator-local modes are not independent authored fields. Preset Run/filter inputs remain normal task inputs.
 
-- **Product semantics:** name, description, scope, owner, authorization
-- **Target specification:** what to run (workflow start, step template, manifest) and its payload
-- **Schedule policy preferences:** the MoonMind-level policy expressed by the user
-- **Temporal Schedule reference:** the Temporal Schedule ID this definition is reconciled with
+### 5.4 Reconciliation model
 
-The Temporal Schedule is the execution-side truth. The MoonMind definition is the product-side truth.
+Create/update/pause/resume/delete commit product desired state and reconcile the corresponding Temporal operation through the existing service/adapter. Trigger-now uses the approved current definition without silently rewriting it.
 
-### 5.4 Reconciliation Model
+When DB desired state and Temporal differ after failure, the next successful reconciliation reapplies the validated desired revision. Reconciliation is not allowed to invent new defaults or permission grants. Concurrent edits use expected revisions and stable request identity; a stale reconciliation cannot overwrite a newer approved definition. Report pending/failed reconciliation and actual observed pause/timing separately from desired settings.
 
-```
-User action MoonMind DB Temporal Schedule
-─────────────────────────────────────────────────────────────────────
-Create schedule → INSERT definition row → client.create_schedule()
-Update cron → UPDATE definition row → handle.update(spec=...)
-Pause → UPDATE enabled=false → handle.pause()
-Resume → UPDATE enabled=true → handle.unpause()
-Trigger now → (no DB change needed) → handle.trigger()
-Delete schedule → DELETE/soft-delete row → handle.delete()
-```
+### 5.5 Overlap policy mapping
 
-**Invariant:** If the Temporal Schedule and MoonMind DB disagree (e.g., after a failed update), the reconciliation favors the MoonMind DB — the next successful reconciliation pass re-applies the desired state to Temporal.
+| Product policy | Temporal equivalent |
+| --- | --- |
+| skip | SKIP |
+| allow | ALLOW_ALL |
+| buffer_one | BUFFER_ONE |
+| cancel_previous | CANCEL_OTHER |
 
-### 5.5 Overlap Policy Mapping
+Additional Temporal policies appear only when the product supports and documents them. A numeric model-capacity limit belongs to the existing execution admission owner, not a replacement schedule loop.
 
-| MoonMind Policy | Temporal Equivalent |
-|---|---|
-| `overlap.mode = "skip"` | `ScheduleOverlapPolicy.SKIP` |
-| `overlap.mode = "allow"` | `ScheduleOverlapPolicy.ALLOW_ALL` |
-| `overlap.mode = "buffer_one"` (new) | `ScheduleOverlapPolicy.BUFFER_ONE` |
-| `overlap.mode = "cancel_previous"` (new) | `ScheduleOverlapPolicy.CANCEL_OTHER` |
+Overlap controls scheduled parent occurrences. A fan-out coordinator may finish while its children remain active. SKIP therefore does not, by itself, serialize their shared-branch writes or protect against a later occurrence's children. Branch publication is rejected for such independent batches unless the publication contract provides a qualified cross-occurrence serialization/handoff. PR children retain isolated heads; PR-resolution deduplication remains target-based.
 
-> [!NOTE]
-> MoonMind's prior `maxConcurrentRuns` numeric cap does not have a direct Temporal equivalent. The overlap policy enum replaces the numeric model. If a numeric concurrency limit is needed in the future, it should be implemented as a workflow-level semaphore, not a scheduler feature.
+### 5.6 Catchup / backfill policy
 
-### 5.6 Catchup / Backfill Policy
+Catchup is expressed as a supported Temporal time window. Backfill is an explicit bounded operation through the existing schedule handle. Legacy none/last/all and misfire settings are normalized under their documented compatibility semantics, not presented as proof that a window always contains exactly one occurrence or all historical occurrences. Jitter maps to Temporal jitter.
 
-Temporal Schedules use a **catchup window** (`timedelta`) rather than MoonMind's `catchup.mode` enum:
+Catchup, manual triggers, and backfills use the approved definition and fresh occurrence admission. Historical nominal timestamps do not authorize replaying old credentials, old merges, or previously completed child effects. Existing target-level idempotency still applies.
 
-| MoonMind Mode | Temporal Equivalent |
-|---|---|
-| `catchup.mode = "none"` | `catchup_window=timedelta(0)` |
-| `catchup.mode = "last"` | `catchup_window=timedelta(minutes=15)` (short window catches only the most recent) |
-| `catchup.mode = "all"` | `catchup_window=timedelta(days=365)` (large window replays all missed) |
+### 5.7 Target resolution
 
-The `misfireGraceSeconds` concept is subsumed by `catchup_window`. The `jitterSeconds` maps directly to `ScheduleSpec.jitter`.
+The schedule stores a Temporal workflow-start target with workflowType, initialParameters, and artifact refs where needed. UserWorkflow and ManifestIngest use their normal input contracts. Queue dispatch is not a separate scheduling authority; any supported legacy transport is normalized at the versioned ingress before use.
 
-### 5.7 Target Resolution
+#### Authored policy and Auto
 
-Temporal Schedules start workflows directly. The schedule definition stores a
-Temporal workflow-start target with `target.workflowType` and
-`target.initialParameters`, plus artifact refs when needed. When the schedule
-fires, MoonMind passes that target through as the workflow input:
+New authored publication values are default, none, branch, pr, and pr_with_merge_automation. Omission/default is the one user-facing Auto choice. Runtime modes remain none/branch/pr/auto. The compiler never forwards unresolved default to a worker or helper.
 
-1. `MoonMind.UserWorkflow` receives `workflowType`,
-   `initialParameters`, and optional input or plan artifact refs.
-2. `MoonMind.ManifestIngest` receives the manifest artifact ref, action, and
-   options required by the manifest workflow.
+When saving a schedule, validate and record its selected preset/Skill definition evidence and the resolved recommendation for its authored task inputs. The default policy pins this meaning rather than adopting a changed catalog default on every firing. No silent change from verification to implementation, PR to merge, or no-publication to publishing is allowed.
 
-Queue-dispatch target kinds are not part of the Temporal-managed recurring
-schedule contract.
+An explicitly supported definition-update policy can govern future occurrences through the existing definition/version owner, but changes in target roles, publication/merge authority, or required handoffs require visible review and a new admitted definition revision. Merely selecting Auto is not consent to future authority expansion. Missing pinned evidence is a blocker, not permission to use the latest definition.
 
-### 5.8 Schedule ID Convention
+#### Per-occurrence admission
 
-```
-mm-schedule:{definition_uuid}
-```
+Each occurrence receives its own execution/scope identity and revalidates current authority/readiness. Dynamic Jira queries, issue ranges, Dependabot discovery, and PR head observations resolve at that occurrence through trusted operations. Pinning definition semantics does not freeze yesterday's target list or remote SHA.
 
-Workflow IDs spawned by the schedule use a deterministic base ID:
+The occurrence freezes its resolved scope before dispatch. Its children and nested coordinators inherit that intent, never the parent's local None, and do not re-evaluate later catalog defaults. The child API verifies authenticated lineage, target derivation, and policy. Runtime/Profile and repository credential material are governed by their own immutable binding and acquisition owners.
 
-```
-mm:{definition_uuid}
-```
+#### Definition edits and prior work
 
-Temporal appends the scheduled timestamp to the action ID for each fired
-workflow, producing concrete IDs such as:
+Editing the schedule changes future admitted occurrences only. It neither updates live parents/children nor changes old input/plan hashes. A running occurrence and its retries retain their original policy. Changing a child's authority requires an explicit supported new-admission/replacement action, not schedule reconciliation.
 
-```
-mm:{definition_uuid}-{scheduled_time_iso8601}
-```
+Historical parent None plus child PR values reconstruct to one PR/default scope only where provenance proves that meaning. Old literal Auto remains Skill-owned. Equal duplicate context values may collapse under the historical reader; conflicts and unknown origins require review. New definitions cannot persist duplicate repository/branch/publish overrides.
 
-This ensures idempotency — if the schedule fires twice for the same time slot,
-Temporal prevents a duplicate start. Do not include schedule-time template
-tokens in the action ID; Temporal treats them as literal ID text before adding
-its own scheduled-time suffix.
+#### Dependabot and resolver deduplication
 
-### 5.9 API Contract
+The existing Dependabot repository/PR/head key stays stable across occurrences. Reusing that key checks the admitted child's actual target/policy. A newly edited schedule does not spawn a concurrent conflicting resolver or report the old child as accepted under the new policy. Return an honest existing/skipped/conflict disposition and use normal execution controls for an explicitly authorized replacement.
 
-Recurring schedule management uses the existing `/api/recurring-workflows` endpoints. The API surface does not change — only the backend implementation shifts from DB-based dispatch to Temporal Schedule reconciliation.
+Dry run discovers/reports candidates without creating children. None is a publication policy, not dry run, and cannot make a push-requiring resolver compatible. Manual trigger and backfill preserve the same distinction.
 
-| Method | Path | Temporal Operation |
-|---|---|---|
-| `POST` | `/api/recurring-workflows` | `client.create_schedule()` |
-| `GET` | `/api/recurring-workflows/{id}` | DB lookup + `handle.describe()` for next runs |
-| `PATCH` | `/api/recurring-workflows/{id}` | DB update + `handle.update()` |
-| `POST` | `/api/recurring-workflows/{id}/run` | `handle.trigger()` |
-| `GET` | `/api/recurring-workflows/{id}/runs` | `handle.describe()` → `info.recent_actions` + Temporal Visibility query |
+### 5.8 Schedule ID convention
 
----
+The schedule ID is `mm-schedule:{definition_uuid}`. Its action uses the deterministic base workflow ID `mm:{definition_uuid}`; the Temporal action supplies its scheduled-time suffix for fired occurrences. Do not insert unexpanded schedule-time template tokens and assume the server interprets them.
+
+Occurrence start identity prevents duplicate starts for the same scheduled action. It does not replace child target/policy idempotency or exact push/PR reconciliation.
+
+### 5.9 API contract
+
+The existing `/api/recurring-workflows` family remains the schedule-management entry point:
+
+| Method/path | Purpose |
+| --- | --- |
+| POST collection | Create validated definition and reconcile schedule |
+| GET definition | Product metadata plus observed schedule state/upcoming times |
+| PATCH definition | Revision-checked desired-state update and reconciliation |
+| POST definition/run | Trigger approved definition now |
+| GET definition/runs | Recent actions and execution results from the existing read boundary |
+
+Pause/resume/delete use the existing authorized product actions and schedule adapter. Returned descriptions retain the single authored selection and effective explanation, not an editable local compiled mode.
 
 ## 6. Reschedulable Deferred Execution
 
-### 6.1 Use Case
+### 6.1 Use case
 
-When a user creates a deferred workflow execution and then needs to change the scheduled time before execution starts.
+An execution's intended start time must remain movable before active work begins.
 
-### 6.2 Mechanism: Updatable Timer Pattern
+### 6.2 Mechanism: updatable timer pattern
 
-Instead of `start_delay` (which is immutable), the workflow starts immediately and waits internally for the target time:
+Start the workflow, store target time in workflow state, and await a deterministic workflow timer/condition. An authorized reschedule signal changes that time and recomputes the wait using workflow.now. Cancellation remains interruptible. Record scheduled state and timing in Visibility, then transition to initializing when the gate clears.
 
-```python
-@workflow.defn(name="MoonMind.UserWorkflow")
-class MoonMindRun:
- def __init__(self):
- self._target_run_time: datetime | None = None
+The timer changes when admitted work begins, not what repository, profile, or publication authority it carries. An authority-bearing edit uses the normal authoring/admission lifecycle rather than a timing signal.
 
- @workflow.signal(name="reschedule")
- async def handle_reschedule(self, new_time: datetime) -> None:
- self._target_run_time = new_time
+### 6.3 API contract
 
- @workflow.run
- async def run(self, input: RunInput) -> RunResult:
- if input.scheduled_for is not None:
- self._target_run_time = input.scheduled_for
- workflow.upsert_search_attributes([
- SearchAttributePair(mm_state_key, "scheduled"),
- SearchAttributePair(mm_scheduled_for_key, input.scheduled_for),
- ])
-
- # Wait until target time or reschedule signal
- while self._target_run_time is not None:
- delay = (self._target_run_time - workflow.now()).total_seconds()
- if delay <= 0:
- break
- await workflow.wait_condition(
- lambda: self._target_run_time != input.scheduled_for,
- timeout=timedelta(seconds=delay),
- )
- if self._target_run_time != input.scheduled_for:
- input.scheduled_for = self._target_run_time
- continue
-
- workflow.upsert_search_attributes([
- SearchAttributePair(mm_state_key, "initializing"),
- ])
-
- # ... proceed to normal execution ...
-```
-
-**Key properties:**
-- The workflow is immediately visible in Temporal Visibility with `mm_state=scheduled`.
-- A `reschedule` signal updates the target time; the workflow re-evaluates the wait.
-- Cancellation works at any point.
-- The pattern is deterministic and replay-safe (uses `workflow.now()`, not wall clock).
-
-### 6.3 API Contract
-
-```json
-POST /api/executions/{workflowId}/reschedule
-{
- "scheduledFor": "2026-03-24T12:00:00Z"
-}
-```
-
-**Backend:** Sends a `reschedule` signal to the workflow with the new time.
-
----
+The supported reschedule endpoint sends the validated scheduledFor value to the owning workflow signal. The backend rejects wrong-owner, stale, unsupported, or already-started requests according to the lifecycle contract. A successful timing update is not an accepted publication-policy edit.
 
 ## 7. Search Attributes for Scheduling
 
-### 7.1 New Search Attribute
+`mm_scheduled_for` is a registered Datetime attribute for one-time delayed/timer work and schedule-spawned executions. Register it through the normal namespace-init job and typed search-attribute API. The attribute expresses nominal scheduled time, not proof of actual start or policy admission.
 
-| Attribute | Type | Purpose |
-|---|---|---|
-| `mm_scheduled_for` | `Datetime` | The nominal time a deferred execution is scheduled to start |
+Scope/policy/definition evidence stays in existing input/plan artifacts and bounded projections. Do not index complete child lists or secret-bearing configuration.
 
-This attribute is set when:
-- A one-time deferred execution is created (`start_delay` or updatable timer)
-- A schedule-spawned workflow starts (set to the schedule time)
+## 8. What MoonMind no longer implements
 
-### 7.2 Registration
+Temporal owns cron evaluation, next-run computation, due-definition scans, dispatch loops, overlap detection, catchup/backfill, misfire timing, and jitter. MoonMind retains the product definition, ownership, API routes, input validation, target compilation, and thin reconciliation.
 
-The `mm_scheduled_for` search attribute is registered by the namespace init job (`bootstrap-namespace.sh`) alongside the existing attributes:
-
-```bash
-temporal operator search-attribute create \
- --namespace "$TEMPORAL_NAMESPACE" \
- --name mm_scheduled_for \
- --type Datetime
-```
-
----
-
-## 8. What MoonMind No Longer Implements
-
-With Temporal Schedules as the execution backend, MoonMind removes the following from its scheduling codebase:
-
-| Removed Responsibility | Replaced By |
-|---|---|
-| Cron expression evaluation loop | `ScheduleSpec.cron_expressions` |
-| Next-run-at computation and DB updates | Temporal server-side schedule evaluation |
-| `schedule_due_definitions()` scan | Temporal schedule auto-dispatch |
-| `dispatch_pending_runs()` loop | Temporal schedule auto-dispatch |
-| `run_scheduler_tick()` background daemon | Temporal schedule auto-dispatch |
-| `RecurringWorkflowRun` dispatch tracking | `ScheduleHandle.describe()` + Temporal Visibility |
-| Custom overlap detection queries | `ScheduleOverlapPolicy` |
-| Custom catchup / backfill logic | `SchedulePolicy.catchup_window` |
-| Custom misfire grace computation | `SchedulePolicy.catchup_window` |
-| Custom jitter randomization | `ScheduleSpec.jitter` |
-
-**What MoonMind keeps:**
-- `RecurringWorkflowDefinition` model — product metadata, scope, authorization, target specification
-- `/api/recurring-workflows` API routes — API surface unchanged
-- Cron validation utilities — for user input validation before passing to Temporal
-- Timezone validation utilities — for user input validation
-
----
+Publication-scope validation is product admission, not a scheduler feature. No new daemon, global publication registry, or duplicated preset service is introduced.
 
 ## 9. Architecture Diagram
 
 ```mermaid
 flowchart TD
- subgraph "MoonMind dashboard"
- UI_SCHEDULE["Schedule panel<br/>(create/edit/pause)"]
- UI_DEFERRED["Deferred submit<br/>(schedule for later)"]
- end
-
- subgraph "MoonMind API"
- API_EXEC["/api/executions"]
- API_RECUR["/api/recurring-workflows"]
- end
-
- subgraph "MoonMind Backend"
- SVC_EXEC["TemporalExecutionService"]
- SVC_RECUR["RecurringWorkflowsService<br/>(product layer)"]
- ADAPTER["TemporalClientAdapter"]
- end
-
- subgraph "Temporal Server"
- T_WF["Workflow Execution<br/>(start_delay or updatable timer)"]
- T_SCHED["Temporal Schedule<br/>(cron + policy)"]
- T_VIS["Visibility<br/>(mm_state, mm_scheduled_for)"]
- end
-
- UI_DEFERRED --> API_EXEC
- UI_SCHEDULE --> API_RECUR
-
- API_EXEC -->|"mode=once"| SVC_EXEC
- API_RECUR --> SVC_RECUR
-
- SVC_EXEC -->|"start_workflow(start_delay=...)"| ADAPTER
- SVC_RECUR -->|"create_schedule() / update() / trigger()"| ADAPTER
-
- ADAPTER --> T_WF
- ADAPTER --> T_SCHED
- T_SCHED -->|"auto-dispatches at cron time"| T_WF
- T_WF --> T_VIS
+  UI[Shared authoring and schedule controls] --> API[Execution and recurring APIs]
+  API --> COMPILER[Existing context and publication compiler]
+  COMPILER --> EXEC[Execution service]
+  COMPILER --> RECUR[Recurring definition service]
+  EXEC --> ADAPTER[Temporal client adapter]
+  RECUR --> ADAPTER
+  ADAPTER --> SCHEDULE[Temporal Schedule]
+  ADAPTER --> RUN[UserWorkflow admission and execution]
+  SCHEDULE --> RUN
+  RUN --> CHILD[Scoped child admission]
+  RUN --> VIS[Visibility and artifact-backed results]
 ```
-
----
 
 ## 10. Scheduling implementation notes
 
-Phased work (adapter wiring, recurring dispatch reconciliation, search attributes) is tracked under `docs/tmp/` or in local-only planning notes when needed.
+Implementation sequencing, cutover and migration work, exact adapter support, and qualification evidence belong in existing issues or `docs/tmp/`. A saved definition or rendered form is not proof that the runtime honors its publication policy.
 
 ## 11. Canonical Scheduling Semantics
 
-MoonMind implements three distinct scheduling mechanisms, each suited for a specific lifecycle phase. This reference matrix defines when to use which mechanism.
+### 11.1 Mechanism matrix
 
-### 11.1 Mechanism Matrix
+| Mechanism | Use | Mutability | Execution visibility |
+| --- | --- | --- | --- |
+| start_delay | One immutable deferred start | Delay fixed after start request | Execution exists while first task is deferred |
+| Workflow timer | Reschedulable wait | Time changes by authorized signal | Execution exists in scheduled wait |
+| Temporal Schedule | Recurring cadence | Definition revision/update | Individual execution created by each action |
 
-| Feature | `start_delay` | In-Workflow Timer | Temporal Schedule |
-|---|---|---|---|
-| **Mechanism** | `client.start_workflow(start_delay=...)` | `await workflow.wait_condition(...)` | `client.create_schedule(...)` |
-| **Use Case** | One-time deferred start. | Reschedulable wait state. | Recurring background workflows. |
-| **Mutability** | **Immutable.** Cannot be changed after start. | **Mutable.** Can be changed via Signal. | **Mutable.** Can be updated via API. |
-| **Visibility State** | Workflow is `Running` (but the first Workflow Task is delayed). | Workflow is `Running` (blocked in execution). | Workflow doesn't exist until scheduled time. |
-| **Search Attribute**| Uses `mm_scheduled_for`. | Uses `mm_scheduled_for`. | Uses `mm_scheduled_for` when spawned. |
-| **Timezone Support**| Evaluated as absolute UTC offset at creation. | Evaluated as absolute UTC wait internally. | Full IANA Timezone & DST support. |
+### 11.2 Mechanism details and tradeoffs
 
-### 11.2 Mechanism Details & Tradeoffs
+The simplest supported timing primitive is preferred. All three retain one authored context/policy and use current permission checks without silently changing identity. Repeated or deferred starts cannot treat a current catalog default as historical intent.
 
-1. **`start_delay` (Deferred execution):** The simplest and most efficient mechanism for running a workflow in the future. Temporal holds the execution server-side without consuming a worker thread. However, because it's evaluated at submission time into an absolute wait, it cannot be modified if requirements change.
+### 11.3 DST and timezone guarantees
 
-2. **In-Workflow Timer (Reschedulable execution):** Best used when the start time is a tentative estimate that might shift. The workflow starts immediately but pauses execution at the first step. A Signal handler can interrupt the `wait_condition` to adjust the target time. This consumes slightly more Temporal history but offers full flexibility.
+One-time inputs resolve to explicit instants. Recurring inputs carry an approved IANA timezone. Temporal owns local-wall-clock and daylight-saving evaluation; the product displays actual upcoming action times and tested supported behavior rather than recreating timezone arithmetic or promising an unverified repeated/missing-hour rule.
 
-3. **Temporal Schedule (Recurring execution):** The only mechanism that natively supports Cron strings and Calendar expressions. Crucially, Temporal Schedules natively handle **Daylight Saving Time (DST)** boundaries by re-evaluating the Cron expression against the specified `time_zone_name` on each iteration, rather than using a fixed polling interval.
+### 11.4 Conformance
 
-### 11.3 DST and Timezone Guarantees
+Required production-boundary coverage includes ordinary scheduling, pause/resume, reconciliation failure, revision races, manual trigger/backfill, and deterministic replay. Publication cases include:
 
-MoonMind delegates all cron evaluation and timezone math to Temporal Schedules.
-- By providing an IANA timezone string (e.g., `US/Eastern`, `Europe/London`), Temporal ensures that schedules strictly follow local wall-clock rules.
-- During a Spring Forward (e.g., 2:00 AM becomes 3:00 AM), Temporal correctly skips the non-existent hour. If a schedule was set for 2:30 AM, it will next run on the following day (or transition to the offset equivalent, depending on exact Temporal core semantics, but strictly maintaining the intended cadence).
-- During a Fall Back (e.g., 2:00 AM happens twice), Temporal's standard Cron implementation evaluates the schedule natively, which results in the job running twice (once during the first occurrence, and again during the second occurrence) for the repeated hour.
+- Auto preserves the reviewed definition meaning across occurrences while dynamic targets refresh safely.
+- Explicit None remains None; resolver/dry-run incompatibilities fail before effects.
+- Coordinator-local None does not replace PR/Auto child intent through nested scheduling/fan-out.
+- Non-default implementation bases and distinct PR heads survive target resolution.
+- Schedule edits affect only future admitted scopes, not active children or historical hashes.
+- Parent overlap settings do not masquerade as cross-child shared-branch protection.
+- Dependabot cross-run deduplication and conflicting policy reuse cannot produce duplicate resolver effects.
+- Legacy copies and old literal Auto reconstruct honestly or require review.
+- Current authorization revocation blocks use without credential/default substitution.
+
+Hermetic boundary results and protected-live scheduling/provider qualification are reported separately.
