@@ -134,7 +134,9 @@ async def test_publish_clean_single_branch_candidate(
             ),
             "headSha": "1" * 40 if candidate_authority == "stale" else candidate_sha,
         }
-    if base_branch == "missing":
+    if base_branch == "missing" or (
+        candidate_authority == "other_branch" and publish_mode == "pr"
+    ):
         with pytest.raises(HarnessPlatformError):
             await publisher.publish_workspace(**args)
         assert git("rev-parse", "HEAD", cwd=workspace) == candidate_sha
@@ -149,6 +151,9 @@ async def test_publish_clean_single_branch_candidate(
     assert evidence["push_head_sha"] == candidate_sha
     assert evidence["push_commit_count"] == (0 if no_new_commits else 1)
     assert evidence["remote_verified"] is True
+    if publish_mode == "pr" and candidate_authority == "accepted" and not no_new_commits:
+        assert evidence["push_branch"] == "candidate"
+        assert "moonmind-job-" not in git("branch", cwd=origin)
     if publish_mode == "branch":
         assert evidence["push_branch"] == (base_branch or "main")
     elif not no_new_commits:
@@ -170,6 +175,8 @@ async def test_publish_clean_single_branch_candidate(
             selector=evidence["push_branch"],
             github_token="fixture-credential",
             expected_head_sha=candidate_sha,
+            expected_base_branch=base_branch or "main",
+            expected_draft=False,
         )
     else:
         assert "pull_request_url" not in evidence
