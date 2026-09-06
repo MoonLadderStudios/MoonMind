@@ -263,6 +263,16 @@ The scan is bounded to five pages of 100 candidates, excludes pull requests,
 and records pages and candidates examined. Missing, malformed, incomplete, or
 exhausted evidence stops the run before implementation or issue mutation.
 
+Explicit `Depends on`, `Completion depends on`, and `Integration prerequisites:`
+sentences contribute issue prerequisite evidence. Short issue references,
+qualified repository references, GitHub issue URLs, and inclusive numeric ranges
+are resolved through the selected repository's authorized GitHub access, with
+at most 100 declared prerequisites per candidate. An open prerequisite blocks
+selection; closed prerequisites do not. Parent and related links are not
+dependencies. The pre-implementation blocker check fetches current prerequisite
+state again, and unavailable or unknown evidence stops admission. These checks
+do not modify issue labels or issue content.
+
 The selected issue and brief travel through the workflow's trusted issue
 context and durable brief attachment. Downstream blocker and status tools
 resolve the same issue from that context and reject conflicting identities.
