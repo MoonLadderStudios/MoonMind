@@ -2911,6 +2911,11 @@ async def _build_runtime_activities(topology) -> tuple[AsyncExitStack, list[obje
                         reaped_volumes,
                     )
             container_backend_settings = resolve_container_backend_settings()
+            from api_service.db.base import (
+                async_session_maker as _capacity_session_maker,
+            )
+            from moonmind.capacity import MachineCapacityLedger
+
             _container_job_store = os.environ.get(
                 "MOONMIND_AGENT_RUNTIME_STORE", "/work/agent_jobs"
             )
@@ -2940,6 +2945,11 @@ async def _build_runtime_activities(topology) -> tuple[AsyncExitStack, list[obje
                     Path(_container_job_store).resolve().parent
                     / ".mm-container-job-logs"
                 ),
+                # MoonLadderStudios/MoonMind#3881: container jobs and
+                # generic Omnigent hosts share one machine budget. They must
+                # reserve in the same durable ledger or each spends the whole
+                # machine.
+                machine_capacity=MachineCapacityLedger(_capacity_session_maker),
             )
             if container_backend_settings.enabled:
                 # Fail fast at startup when the deployment-selected endpoint is

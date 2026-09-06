@@ -172,6 +172,11 @@ class DockerOmnigentHostCleanupService:
                     code=HarnessPlatformFailure.OMNIGENT_CLEANUP_DEFERRED,
                 )
         return {
+            # MoonLadderStudios/MoonMind#3881: capacity accounting releases on
+            # observed evidence only. Reaching here means every probe above
+            # answered, so the backend was genuinely readable; a deferred or
+            # failed teardown raises instead and releases nothing.
+            "daemonObserved": True,
             "containerRemoved": True,
             "stateVolumeRemoved": True,
             "controlVolumeRemoved": bool(control_volume_ref),
