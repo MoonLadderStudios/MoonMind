@@ -1,8 +1,9 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { MockInstance } from 'vitest';
 
-import { cleanup, fireEvent, renderWithClient, screen, waitFor } from '../../utils/test-utils';
+import { act, cleanup, fireEvent, renderWithClient, screen, waitFor } from '../../utils/test-utils';
 import { WorkflowNativeChatRoute } from './WorkflowNativeChatRoute';
+import { NATIVE_CHAT_READY_TIMEOUT_MS } from './nativeChatProtocol';
 import type { WorkflowChatBinding } from './chatBindingModel';
 
 const AVAILABLE: WorkflowChatBinding = {
@@ -78,6 +79,7 @@ describe('WorkflowNativeChatRoute', () => {
   afterEach(() => {
     cleanup();
     vi.restoreAllMocks();
+    vi.useRealTimers();
   });
 
   it('mounts the native application through the server scoped url without the legacy composer', async () => {
@@ -209,7 +211,7 @@ describe('WorkflowNativeChatRoute', () => {
     expect(await screen.findByText('Multiple active sessions')).toBeTruthy();
   });
 
-  it('falls back to an actionable state when the native app reports disconnected', async () => {
+  it('falls back to an actionable state when the native app reports a fatal error', async () => {
     mockBinding(() => ({ body: AVAILABLE }));
     renderRoute();
     const frame = (await screen.findByTitle(
@@ -219,10 +221,10 @@ describe('WorkflowNativeChatRoute', () => {
       new MessageEvent('message', {
         origin: window.location.origin,
         source: frame.contentWindow,
-        data: { type: 'moonmind:workflow-chat', status: 'disconnected' },
+        data: { type: 'moonmind.omnigent.chat.fatal', chatBindingId: 'cb-1', reason: 'native_crash' },
       }),
     );
-    expect(await screen.findByText('Chat disconnected')).toBeTruthy();
+    expect(await screen.findByText('Native chat could not load')).toBeTruthy();
     // The full-page native escape hatch stays available as a durable fallback
     // (offered both in the context bar and the fallback panel).
     expect(
@@ -240,7 +242,7 @@ describe('WorkflowNativeChatRoute', () => {
       new MessageEvent('message', {
         origin: window.location.origin,
         source: frame.contentWindow,
-        data: { type: 'moonmind:workflow-chat', status: 'incompatible' },
+        data: { type: 'moonmind.omnigent.chat.fatal', chatBindingId: 'cb-1', reason: 'essential_read_failed' },
       }),
     );
     expect(await screen.findByText('Native chat could not load')).toBeTruthy();
@@ -256,12 +258,69 @@ describe('WorkflowNativeChatRoute', () => {
       new MessageEvent('message', {
         origin: 'https://evil.example',
         source: frame.contentWindow,
-        data: { type: 'moonmind:workflow-chat', status: 'disconnected' },
+        data: { type: 'moonmind.omnigent.chat.fatal', chatBindingId: 'cb-1', reason: 'native_crash' },
       }),
     );
     // The frame stays mounted; a cross-origin message cannot force a fallback.
     expect(screen.getByTitle('Ship the thing — Omnigent chat')).toBeTruthy();
-    expect(screen.queryByText('Chat disconnected')).toBeNull();
+    expect(screen.queryByText('Native chat could not load')).toBeNull();
+  });
+
+  function signal(frame: HTMLIFrameElement, type: 'ready' | 'fatal', bindingId = 'cb-1', source = frame.contentWindow) {
+    fireEvent(window, new MessageEvent('message', {
+      origin: window.location.origin,
+      source,
+      data: { type: `moonmind.omnigent.chat.${type}`, chatBindingId: bindingId },
+    }));
+  }
+
+  async function renderWithClock() {
+    vi.useFakeTimers();
+    mockBinding(() => ({ body: AVAILABLE }));
+    renderRoute();
+    await act(async () => { await vi.advanceTimersByTimeAsync(100); });
+    return screen.getByTitle('Ship the thing — Omnigent chat') as HTMLIFrameElement;
+  }
+
+  it('keeps the production route loading after document load and times out with recovery actions', async () => {
+    const frame = await renderWithClock();
+    fireEvent.load(frame);
+    expect(screen.getByText('Loading conversation…')).toBeTruthy();
+    await act(async () => { await vi.advanceTimersByTimeAsync(NATIVE_CHAT_READY_TIMEOUT_MS); });
+    expect(screen.getByText('Native chat could not load')).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'Retry' })).toBeTruthy();
+    expect(screen.getAllByRole('link', { name: 'Open in Omnigent' }).length).toBeGreaterThan(0);
+    expect(screen.getAllByRole('link', { name: 'View captured evidence' }).length).toBeGreaterThan(0);
+  });
+
+  it('accepts delayed bound readiness and exposes a fatal failure after readiness', async () => {
+    const frame = await renderWithClock();
+    await act(async () => { await vi.advanceTimersByTimeAsync(8000); });
+    signal(frame, 'ready');
+    expect(screen.queryByText('Loading conversation…')).toBeNull();
+    await act(async () => { await vi.advanceTimersByTimeAsync(NATIVE_CHAT_READY_TIMEOUT_MS); });
+    expect(screen.queryByText('Native chat could not load')).toBeNull();
+    signal(frame, 'fatal');
+    expect(screen.getByText('Native chat could not load')).toBeTruthy();
+  });
+
+  it('rejects null sources, foreign frames and wrong bindings, and excludes the old frame after retry', async () => {
+    const oldFrame = await renderWithClock();
+    signal(oldFrame, 'ready', 'cb-1', null);
+    signal(oldFrame, 'ready', 'cb-1', window);
+    signal(oldFrame, 'ready', 'cb-other');
+    expect(screen.getByText('Loading conversation…')).toBeTruthy();
+    const oldWindow = oldFrame.contentWindow;
+    signal(oldFrame, 'fatal');
+    fireEvent.click(screen.getByRole('button', { name: 'Retry' }));
+    const newFrame = screen.getByTitle('Ship the thing — Omnigent chat') as HTMLIFrameElement;
+    expect(newFrame).not.toBe(oldFrame);
+    signal(newFrame, 'ready', 'cb-1', oldWindow);
+    signal(newFrame, 'fatal', 'cb-1', oldWindow);
+    expect(screen.getByText('Loading conversation…')).toBeTruthy();
+    expect(screen.queryByText('Native chat could not load')).toBeNull();
+    signal(newFrame, 'ready');
+    expect(screen.queryByText('Loading conversation…')).toBeNull();
   });
 
   it('shows a polite starting placeholder without mounting the frame', async () => {

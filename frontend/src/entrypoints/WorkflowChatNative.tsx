@@ -21,11 +21,12 @@
  * The browser only ever uses the server-generated `chatUrl`/`apiBase`; it never
  * authors an upstream endpoint, provider session id, credential, or source run.
  */
-import React from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 
 import type { components } from '../generated/openapi';
 import { WorkflowTerminalChatActions } from '../features/workflow-native-chat/WorkflowTerminalChatActions';
+import { isNativeChatReadySignal, nativeChatFatalReason, NATIVE_CHAT_READY_TIMEOUT_MS } from '../features/workflow-native-chat/nativeChatProtocol';
 
 export type WorkflowChatBinding = components['schemas']['WorkflowChatBinding'];
 
@@ -69,6 +70,8 @@ export function fullPageChatUrl(chatUrl: string): string {
   return rest ? `${path}?${rest}` : path;
 }
 
+type NativeChatStatus = 'loading' | 'ready' | 'timeout' | 'fatal';
+
 function hasLiveNativeChat(binding: WorkflowChatBinding | null | undefined): boolean {
   return Boolean(
     binding && binding.chatUrl && binding.state !== 'unavailable',
@@ -81,13 +84,65 @@ function NativeChatLive({
   apiBase,
   workflowId,
   terminal,
+  children,
 }: {
   binding: WorkflowChatBinding;
   apiBase: string;
   workflowId: string;
   terminal: boolean;
+  children?: React.ReactNode;
 }): React.ReactElement {
   const openUrl = fullPageChatUrl(binding.chatUrl);
+  const frameRef = useRef<HTMLIFrameElement | null>(null);
+  const generationRef = useRef(0);
+  const [status, setStatus] = useState<NativeChatStatus>('loading');
+  const [fatalReason, setFatalReason] = useState<string | null>(null);
+  // Remount the iframe on bounded retry so a crashed frame is replaced while
+  // the mount generation guard keeps stale signals from the old frame out.
+  const [retryCount, setRetryCount] = useState(0);
+
+  useEffect(() => {
+    generationRef.current += 1;
+    const generation = generationRef.current;
+    setStatus('loading');
+    setFatalReason(null);
+
+    const onMessage = (event: MessageEvent) => {
+      // Exact-origin check first: cross-origin frames can never mark chat
+      // ready or failed.
+      if (event.origin !== window.location.origin) return;
+      // The signal must come from the currently mounted iframe window.
+      const frameWindow = frameRef.current?.contentWindow;
+      if (!frameWindow || event.source !== frameWindow) {
+        return;
+      }
+      // Stale signals from a replaced binding/mount are ignored.
+      if (generationRef.current !== generation) return;
+      if (isNativeChatReadySignal(event.data, binding.chatBindingId)) {
+        // A late ready still clears a prior timeout: the application rendered.
+        setStatus('ready');
+        return;
+      }
+      const fatal = nativeChatFatalReason(event.data, binding.chatBindingId);
+      if (fatal !== null) {
+        setFatalReason(fatal);
+        setStatus('fatal');
+      }
+    };
+    window.addEventListener('message', onMessage);
+    const timer = window.setTimeout(() => {
+      if (generationRef.current !== generation) return;
+      setStatus((current) => (current === 'loading' ? 'timeout' : current));
+    }, NATIVE_CHAT_READY_TIMEOUT_MS);
+    return () => {
+      window.removeEventListener('message', onMessage);
+      window.clearTimeout(timer);
+    };
+    // Re-run only when the authorized binding (or a bounded retry) changes.
+  }, [binding.chatBindingId, binding.chatUrl, retryCount]);
+
+  const showRecovery = status === 'timeout' || status === 'fatal';
+  const reason = status === 'fatal' ? (fatalReason ?? 'native_crash') : 'native_chat_not_ready';
 
   return (
     <div className="stack td-native-chat" data-testid="workflow-native-chat">
@@ -110,12 +165,44 @@ function NativeChatLive({
       {terminal ? (
         <WorkflowTerminalChatActions apiBase={apiBase} workflowId={workflowId} />
       ) : null}
+      {showRecovery ? (
+        <div
+          className="td-native-chat-unavailable"
+          data-testid={
+            status === 'fatal'
+              ? 'workflow-native-chat-fatal'
+              : 'workflow-native-chat-timeout'
+          }
+        >
+          <p className="small">
+            {status === 'fatal'
+              ? `Native chat reported a failure: ${reason}.`
+              : 'Native chat is taking too long to become ready.'}{' '}
+            The conversation transcript below remains available.
+          </p>
+          <div className="button-group td-native-chat-actions">
+            <button
+              type="button"
+              className="secondary"
+              onClick={() => {
+                setRetryCount((count) => count + 1);
+              }}
+              data-testid="workflow-native-chat-retry"
+            >
+              Retry
+            </button>
+          </div>
+        </div>
+      ) : null}
       <iframe
+        ref={frameRef}
+        key={`${binding.chatBindingId}:${retryCount}`}
         title="Workflow chat"
         src={binding.chatUrl}
         className="td-native-chat-frame"
         data-testid="workflow-native-chat-frame"
       />
+      {showRecovery ? children : null}
     </div>
   );
 }
@@ -132,7 +219,9 @@ export interface WorkflowChatNativeProps {
    * availability, so a terminal workflow always exposes them (#3641 §9, §10).
    */
   terminal?: boolean;
-  /** Legacy read-only compatibility projection, shown only when no native UI. */
+  /** Legacy read-only compatibility projection: shown when no native UI is
+   * available, and again below the iframe when a live mount reports a timeout
+   * or fatal failure, so recovery never hides terminal evidence (#4013 AC8). */
   children?: React.ReactNode;
 }
 
@@ -166,7 +255,9 @@ export function WorkflowChatNative({
         apiBase={apiBase}
         workflowId={workflowId}
         terminal={terminal}
-      />
+      >
+        {children}
+      </NativeChatLive>
     );
   }
 
