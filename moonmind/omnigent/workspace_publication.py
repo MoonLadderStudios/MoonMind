@@ -209,12 +209,26 @@ class OmnigentWorkspacePublicationService:
                 returncode=code,
             )
 
+        normalized_base = str(base_branch or "main").strip() or "main"
+        # Candidate-only clones and restored checkpoints need not carry the
+        # authored base's remote-tracking ref. Fetch that exact authority with
+        # the publication credential before measuring or publishing commits;
+        # the repository's narrow fetch refspec must not select another base.
+        await run_command(
+            [
+                "git",
+                "fetch",
+                "--no-tags",
+                "origin",
+                f"+refs/heads/{normalized_base}:refs/remotes/origin/{normalized_base}",
+            ]
+        )
         published = await PublishService().publish(
             job_id=uuid5(NAMESPACE_URL, publication_identity),
             instruction="Publish completed Omnigent repository work",
             # PR creation remains owned by the durable parent workflow.
             publish_mode="branch",
-            publish_base_branch=str(base_branch or "main").strip() or "main",
+            publish_base_branch=normalized_base,
             runtime_mode="omnigent",
             repo_dir=safe_workspace,
             run_command=run_command,

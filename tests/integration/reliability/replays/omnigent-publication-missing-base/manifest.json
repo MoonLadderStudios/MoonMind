@@ -1,0 +1,11 @@
+{
+  "incidentWorkflowId": "mm:d51c5511-6a13-4a1e-9f85-90d1f5740b3b",
+  "correlationId": "mm-replay-publication-missing-base",
+  "repository": "MoonLadderStudios/MoonMind",
+  "startingBranch": "main",
+  "candidateBranch": "moonmind-job-541d3889",
+  "workspaceRelativePath": "repo",
+  "publishMode": "pr",
+  "failure": "could not measure repository commits over the authored publish base",
+  "cause": "The restored candidate checkout contained only its candidate remote-tracking ref; origin/main was absent at the publication boundary."
+}
