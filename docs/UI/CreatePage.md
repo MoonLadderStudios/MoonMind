@@ -71,18 +71,15 @@ A no-repository source does not render a dummy repository or branch. Genuinely s
 
 ## Step Authoring Model
 
-A draft contains ordered typed steps:
+A draft contains ordered typed steps. The canonical types remain those defined in [Step Types](../Steps/StepTypes.md):
 
 | Step type | Meaning |
 | --- | --- |
-| Instructions | Plain agent task instructions under the admitted workflow context |
+| Tool | Invoke a typed, bounded, policy-checked operation |
 | Skill | Invoke a resolved portable Skill bundle |
-| Script | Invoke a declared executable capability |
 | Preset | Expand a reusable composition |
-| External Agent | Delegate to a supported external provider/runtime |
-| Managed Agent | Use a supported managed execution capability |
 
-The canonical Step Types contract controls supported categories and normalization. Labels do not create alternate authoring authorities.
+Instructions, Managed Agent, and External Agent may be friendly shortcuts that normalize to Skill execution. A supported controlled script runner is a typed Tool, not another canonical Step Type. Runtime choice remains configuration under its existing owner. Labels do not create alternate authoring authorities or additional repository, branch, or publishing selectors.
 
 Example unexpanded preset:
 
