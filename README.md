@@ -11,6 +11,8 @@ MoonMind is an open-source framework that gives AI coding agents stronger **secu
 
 For now, MoonMind is focused on software engineering use cases, but it can be used for other use cases as well. Support for workflows that do not require a Git repository will become easier over time.
 
+The exact supported engineering journey — entrypoint, authorization boundary, terminal evidence, and recovery — is described in [Software-Engineering Adoption Journey](docs/Workflows/SoftwareEngineeringAdoptionJourney.md), which also records planned-vs-implemented-vs-qualified limits honestly.
+
 ## Runtime direction
 
 **Omnigent is to become MoonMind's primary runtime provider over time.** Codex, Claude Code, OpenCode, and future approved harnesses should converge on one generic Omnigent execution plane rather than accumulating separate MoonMind runtime architectures.
