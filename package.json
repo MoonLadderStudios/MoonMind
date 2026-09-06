@@ -47,7 +47,7 @@
     "@types/react": "^19.2.14",
     "@types/react-dom": "^19.2.3",
     "@vitejs/plugin-react": "^6.0.1",
-    "@vitest/browser-playwright": "^4.1.1",
+    "@vitest/browser-playwright": "^4.1.11",
     "autoprefixer": "^10.4.0",
     "eslint": "^10.1.0",
     "globals": "^17.4.0",
@@ -59,7 +59,10 @@
     "typescript": "^5.9.3",
     "typescript-eslint": "^8.57.2",
     "vite": "^8.0.16",
-    "vitest": "^4.1.1"
+    "vitest": "^4.1.11"
+  },
+  "overrides": {
+    "js-yaml": "^4.3.2"
   },
   "dependencies": {
     "@fontsource/ibm-plex-mono": "^5.2.7",

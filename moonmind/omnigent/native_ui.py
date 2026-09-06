@@ -35,6 +35,7 @@ API facade (MoonLadderStudios/MoonMind#3634).
 
 from __future__ import annotations
 
+import html
 import json
 import re
 from dataclasses import dataclass
@@ -71,6 +72,33 @@ CODE_NATIVE_CHAT_UNAVAILABLE = "omnigent_native_chat_unavailable"
 PresentationMode = Literal["embedded", "full_page"]
 
 _TRUE_QUERY_VALUES = {"1", "true", "yes", "on"}
+
+
+# Chat-binding ids are server-generated in two shapes, both validated by this
+# one allowlist before serving code reflects them into HTML, redirects, or
+# scoped routes:
+# - ``chatb_`` + urlsafe-base64 from the bridge store
+#   (``bridge_store._generate_chat_binding_id``): the browser-facing binding
+#   authority the canonical flow propagates as ``chat_binding_ref``; and
+# - ``omc_`` + 40 lowercase hex chars from the canonical control-plane
+#   resolver (deterministic session digest), which shares the
+#   ``chat_binding_id`` field as an internal dedup key.
+# Unifying the generators on a single format is out of scope for a serving
+# validator: the digest shape is load-bearing for idempotent session
+# establishment while the opaque shape is load-bearing for unguessable browser
+# handles. Anything outside both exact shapes still fails closed.
+_CHAT_BINDING_ID_PATTERN = re.compile(r"^chatb_[A-Za-z0-9_-]{1,128}$")
+_OMC_CHAT_BINDING_ID_PATTERN = re.compile(r"^omc_[0-9a-f]{40}$")
+
+
+def is_valid_chat_binding_id(value: Any) -> bool:
+    """Return whether an incoming binding id matches a server-generated shape."""
+
+    text = str(value or "").strip()
+    return bool(
+        _CHAT_BINDING_ID_PATTERN.fullmatch(text)
+        or _OMC_CHAT_BINDING_ID_PATTERN.fullmatch(text)
+    )
 
 
 def scoped_ui_base(chat_binding_id: str) -> str:
@@ -337,12 +365,57 @@ def upstream_path_for(ui_path: str | None) -> str:
 # --- Bootstrap injection + scoped asset URL rewriting ------------------------
 
 _ROOT_ABSOLUTE_ATTR = re.compile(r"""\b(src|href)=(["'])/(?!/)""")
+
+# Bound the `<head>` scan so a crafted upstream document cannot force
+# unbounded work. The opening `<head>` tag is always near the start of a real
+# SPA shell; searching only this prefix keeps injection O(1) in document size.
+_MAX_HEAD_SEARCH_BYTES = 256 * 1024
+
+
+def _ascii_lower(char: str) -> str:
+    """Length-preserving ASCII lowercase for offset-sensitive scans."""
+
+    code = ord(char)
+    if ord("A") <= code <= ord("Z"):
+        return chr(code + 32)
+    return char
+
+
+def _head_insert_position(document: str) -> int | None:
+    """Return the insert offset just after the opening `<head ...>` tag.
+
+    ASCII case-insensitive scan equivalent to ``<head[^>]*>``. ``str.lower()``
+    is not used because some characters (for example ``İ``) expand when
+    lowercased, shifting every later offset so the injection can land inside a
+    later element instead of right after the head tag. Comparing ASCII letters
+    with a length-preserving fold keeps match offsets identical to the input.
+    Returns ``None`` when no head tag closes inside the bounded search window,
+    in which case the caller prepends the injection.
+    """
+
+    window = document[:_MAX_HEAD_SEARCH_BYTES]
+    start = 0
+    while True:
+        idx = window.find("<", start)
+        if idx == -1:
+            return None
+        candidate = window[idx + 1 : idx + 5]
+        if len(candidate) == 4 and all(
+            _ascii_lower(char) == expected
+            for char, expected in zip(candidate, "head")
+        ):
+            end = window.find(">", idx + 5)
+            if end == -1:
+                return None
+            return end + 1
+        start = idx + 1
+
+
 # Inline CSS url() references (`url(/assets/wordmark.svg)`) ignore <base href>
 # the same way src/href do; the wordmark 404 in #4013 is this class of miss.
 # Only same-document single-quoted/unquoted root-absolute paths are rewritten;
 # absolute (https://) and protocol-relative (//host) URLs are untouched.
 _ROOT_ABSOLUTE_CSS_URL = re.compile(r"""url\(\s*(['"]?)/(?!/)""")
-_HEAD_OPEN = re.compile(r"<head[^>]*>", re.IGNORECASE)
 
 
 def _scope_srcset_candidates(candidates: str, base: str) -> str:
@@ -382,7 +455,7 @@ def _scope_srcset_candidates(candidates: str, base: str) -> str:
     return "".join(output)
 
 
-def rewrite_asset_urls(html: str, *, scoped_base: str) -> str:
+def rewrite_asset_urls(document: str, *, scoped_base: str) -> str:
     """Rewrite root-absolute asset URLs onto the binding-scoped route.
 
     A stock SPA build references hashed assets with root-absolute URLs such as
@@ -416,7 +489,7 @@ def rewrite_asset_urls(html: str, *, scoped_base: str) -> str:
             flags=re.DOTALL,
         )
 
-    scoped = _ROOT_ABSOLUTE_ATTR.sub(rf"\1=\g<2>{base}/", html)
+    scoped = _ROOT_ABSOLUTE_ATTR.sub(rf"\1=\g<2>{base}/", document)
     scoped = re.sub(
         r"""<[^<>]*>""",
         _scope_srcset,
@@ -656,16 +729,20 @@ def render_native_ui_document(
   }
 })();
 """.strip()
+    # ``base`` embeds the caller-supplied binding id, so HTML-escape it for the
+    # attribute context; otherwise a crafted id could break out of ``href``.
+    # The bootstrap JSON itself stays JSON-encoded (with ``</`` neutralized)
+    # for the script context.
+    escaped_base = html.escape(base, quote=True)
     injected = (
-        f'<base href="{base}/">'
+        f'<base href="{escaped_base}/">'
         f"<script>window.__MOONMIND_OMNIGENT_CHAT__={payload};\n{adapter}</script>"
     )
     rewritten = rewrite_asset_urls(upstream_html, scoped_base=base)
-    match = _HEAD_OPEN.search(rewritten)
-    if match is None:
+    insert_at = _head_insert_position(rewritten)
+    if insert_at is None:
         # No <head>: prepend the injection so the bootstrap still runs first.
         return injected + rewritten
-    insert_at = match.end()
     return rewritten[:insert_at] + injected + rewritten[insert_at:]
 
 
@@ -680,6 +757,7 @@ __all__ = [
     "build_chat_bootstrap",
     "evaluate_native_ui_compatibility",
     "is_document_request",
+    "is_valid_chat_binding_id",
     "native_ui_security_headers",
     "presentation_mode_from_query",
     "render_native_ui_document",

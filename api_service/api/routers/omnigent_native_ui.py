@@ -29,10 +29,11 @@ mechanics live in :mod:`moonmind.omnigent.native_ui`.
 
 from __future__ import annotations
 
+import html
 import logging
 import posixpath
 from typing import Any
-from urllib.parse import urlsplit
+from urllib.parse import unquote, urlsplit
 
 import httpx
 from fastapi import APIRouter, Depends, Query, status
@@ -56,6 +57,7 @@ from moonmind.omnigent.native_ui import (
     build_chat_bootstrap,
     evaluate_native_ui_compatibility,
     is_document_request,
+    is_valid_chat_binding_id,
     native_ui_security_headers,
     presentation_mode_from_query,
     render_native_ui_document,
@@ -214,12 +216,15 @@ def _native_chat_unavailable(
 
     headers = native_ui_security_headers(mode=mode, is_document=is_document)
     if is_document:
+        # ``reason`` is server-generated, but escape it for the HTML context so
+        # a future caller-supplied value can never break out of the element.
+        safe_reason = html.escape(reason, quote=True)
         body = (
             "<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\">"
             "<title>Workflow Chat unavailable</title></head><body>"
             "<main role=\"main\"><h1>Workflow chat is unavailable</h1>"
             "<p>The native Omnigent chat could not be served for this workflow.</p>"
-            f"<p data-reason=\"{reason}\">Reason: {reason}</p></body></html>"
+            f"<p data-reason=\"{safe_reason}\">Reason: {safe_reason}</p></body></html>"
         )
         return HTMLResponse(content=body, status_code=status_code, headers=headers)
     return JSONResponse(
@@ -229,6 +234,26 @@ def _native_chat_unavailable(
         status_code=status_code,
         headers=headers,
     )
+
+
+def _browser_canonical_path(path: str) -> str:
+    """Percent-decode a redirect path the way a browser resolves it.
+
+    ``urlsplit``/``posixpath.normpath`` do not decode percent-encoded dot
+    segments, but browsers treat ``/%2e%2e/`` as traversal when following a
+    ``Location``. Decoding (repeatedly, to also catch double-encoded
+    ``%252e``) before the prefix check keeps the allowlist decision aligned
+    with what the browser will actually navigate to. Only the path is
+    decoded; query and fragment cannot move the navigation off-path.
+    """
+
+    decoded = str(path or "")
+    for _ in range(4):
+        recoded = unquote(decoded)
+        if recoded == decoded:
+            break
+        decoded = recoded
+    return decoded
 
 
 def _rewrite_upstream_location(location: str, *, scoped_base: str) -> str:
@@ -245,6 +270,11 @@ def _rewrite_upstream_location(location: str, *, scoped_base: str) -> str:
     path the browser would otherwise collapse outside the scoped route — the
     rewrite fails closed to the scoped root instead of emitting the escaping
     segments verbatim.
+
+    Percent-encoded dot segments (``/%2e%2e/``) are browser-canonicalized
+    before the prefix check: ``urlsplit`` leaves them encoded while browsers
+    decode them into traversal, so an encoded escape would otherwise pass the
+    allowlist and resolve outside the binding-scoped route.
     """
 
     base = scoped_base.rstrip("/")
@@ -268,12 +298,34 @@ def _rewrite_upstream_location(location: str, *, scoped_base: str) -> str:
         # Relative redirect: resolve against the scoped base so parent segments
         # cannot walk above the binding mount.
         combined = f"{base}/{split.path}"
-    normalized = posixpath.normpath(combined)
+    normalized = posixpath.normpath(_browser_canonical_path(combined))
     if normalized != base and not normalized.startswith(base + "/"):
         # Traversal escaped the binding mount: never emit an out-of-scope
         # Location the browser would normalize to an arbitrary same-origin path.
         return base + "/"
     return normalized + suffix
+
+
+def _is_safe_scoped_redirect(target: str, *, scoped_base: str) -> bool:
+    """Return whether a rewritten redirect target is a safe same-origin scoped path.
+
+    Allowlist check applied at the redirect sink: no scheme/host, and the path
+    stays exactly on (or under) the binding-scoped base. Upstream ``Location``
+    values are untrusted, and the scoped base embeds the caller-supplied
+    binding id, so the sink re-validates instead of trusting the rewrite alone.
+    The path is browser-canonicalized first so percent-encoded traversal that
+    survived the rewrite still fails closed here.
+    """
+
+    base = scoped_base.rstrip("/")
+    split = urlsplit(str(target or ""))
+    if split.scheme or split.netloc:
+        return False
+    # Browser-canonicalize and normalize before the prefix check: a decoded
+    # `/..` still literally starts with the base prefix, so compare the same
+    # normalized form the rewrite layer emits.
+    path = posixpath.normpath(_browser_canonical_path(split.path or ""))
+    return path == base or path == base + "/" or path.startswith(base + "/")
 
 
 async def _serve_native_ui(
@@ -289,6 +341,17 @@ async def _serve_native_ui(
 ) -> Response:
     mode = presentation_mode_from_query(embedded)
     document = is_document_request(ui_path)
+
+    # 0. Reject malformed binding ids before any store lookup, redirect, or
+    #    HTML rendering reflects them. Server-generated ids are
+    #    ``chatb_`` + urlsafe-base64; anything else fails closed as unknown.
+    if not is_valid_chat_binding_id(chat_binding_id):
+        return _native_chat_unavailable(
+            mode=mode,
+            is_document=document,
+            reason="binding_unknown_or_unauthorized",
+            status_code=status.HTTP_404_NOT_FOUND,
+        )
 
     # 1. Authorize the caller against the durable binding before anything else,
     #    so an unauthorized caller cannot even probe whether assets exist.
@@ -343,10 +406,16 @@ async def _serve_native_ui(
     headers = native_ui_security_headers(mode=mode, is_document=document)
 
     if response.is_redirect and response.location is not None:
+        rewritten = _rewrite_upstream_location(
+            response.location, scoped_base=scoped_base
+        )
+        # Sink-side allowlist: only emit a same-origin path that stays on the
+        # binding-scoped base. Anything else fails closed to the scoped root
+        # so an upstream Location can never become an open redirect.
+        if not _is_safe_scoped_redirect(rewritten, scoped_base=scoped_base):
+            rewritten = scoped_base.rstrip("/") + "/"
         return RedirectResponse(
-            url=_rewrite_upstream_location(
-                response.location, scoped_base=scoped_base
-            ),
+            url=rewritten,
             status_code=response.status_code,
             headers=headers,
         )
