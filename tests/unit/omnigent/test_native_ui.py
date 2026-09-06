@@ -308,6 +308,27 @@ def test_rewrite_scopes_css_url_references() -> None:
     assert f'url("{base}/assets/b.png")' in rewritten
 
 
+def test_srcset_preserves_data_urls_and_candidate_descriptors() -> None:
+    base = scoped_ui_base(_BINDING)
+    html = (
+        '<img srcset="data:image/jpeg;base64,/9j/4AAQ/a,b 1x, '
+        '/wordmark.svg 2x, //cdn.test/a.png 3x, '
+        'data:image/png;base64,AAAA, /assets/b.png 4x">'
+    )
+    assert rewrite_asset_urls(html, scoped_base=base) == html.replace(
+        '/wordmark.svg', f'{base}/wordmark.svg'
+    ).replace('/assets/b.png', f'{base}/assets/b.png')
+
+
+def test_rewrite_handles_large_unterminated_tag_prefix() -> None:
+    # Minimized CodeQL incident: the old tag expression retried its entire
+    # suffix at every '<', making malformed upstream HTML polynomial work.
+    html = '<' * 100_000 + '<img srcset="/a.png 1x">'
+    assert rewrite_asset_urls(html, scoped_base='/scoped') == (
+        '<' * 100_000 + '<img srcset="/scoped/a.png 1x">'
+    )
+
+
 def test_rewrite_leaves_absolute_srcset_and_css_urls() -> None:
     html = (
         '<img srcset="https://cdn.example.test/a.png 1x, //cdn.example.test/b.png 2x">'
@@ -729,3 +750,30 @@ def test_injected_adapter_preserves_transport_statics_and_sendwatch(
         f"stdout: {completed.stdout}\n"
         f"stderr: {completed.stderr}"
     )
+
+
+def test_injected_adapter_waits_for_authorized_render_and_reports_handled_failures(
+    tmp_path,
+) -> None:
+    """Replay slow hydration and caught failures through the actual served adapter."""
+    from pathlib import Path
+
+    node = shutil.which("node")
+    assert node is not None, "node is required for native UI boundary regression coverage"
+    document = render_native_ui_document(
+        _INDEX_HTML,
+        bootstrap={
+            "chatBindingId": "cb-1",
+            "apiBase": "/api/workflow-chat-bindings/cb-1/omnigent",
+        },
+        scoped_base=scoped_ui_base("cb-1"),
+    )
+    match = _ADAPTER_SCRIPT_RE.search(document)
+    assert match is not None
+    adapter_path = tmp_path / "adapter.js"
+    adapter_path.write_text(match.group(1), encoding="utf-8")
+    harness = Path(__file__).parents[2] / "fixtures/omnigent/native_ui_readiness.cjs"
+    completed = subprocess.run(
+        [node, str(harness), str(adapter_path)], capture_output=True, text=True, timeout=15
+    )
+    assert completed.returncode == 0, completed.stdout + completed.stderr

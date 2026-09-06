@@ -337,16 +337,49 @@ def upstream_path_for(ui_path: str | None) -> str:
 # --- Bootstrap injection + scoped asset URL rewriting ------------------------
 
 _ROOT_ABSOLUTE_ATTR = re.compile(r"""\b(src|href)=(["'])/(?!/)""")
-# srcset carries comma-separated root-absolute candidates
-# (`srcset="/assets/a.png 1x, /assets/b.png 2x"`); each candidate must stay
-# scoped too or the browser fetches it unscoped and records a 404.
-_ROOT_ABSOLUTE_SRCSET_URL = re.compile(r"""(?<![\w/:-])/(?!/)(?=[\w\-.~]+/)""")
 # Inline CSS url() references (`url(/assets/wordmark.svg)`) ignore <base href>
 # the same way src/href do; the wordmark 404 in #4013 is this class of miss.
 # Only same-document single-quoted/unquoted root-absolute paths are rewritten;
 # absolute (https://) and protocol-relative (//host) URLs are untouched.
 _ROOT_ABSOLUTE_CSS_URL = re.compile(r"""url\(\s*(['"]?)/(?!/)""")
 _HEAD_OPEN = re.compile(r"<head[^>]*>", re.IGNORECASE)
+
+
+def _scope_srcset_candidates(candidates: str, base: str) -> str:
+    """Walk srcset URL/descriptor tokens without splitting data-URL commas."""
+
+    output: list[str] = []
+    position = 0
+    whitespace = " \t\n\r\f"
+    while position < len(candidates):
+        start = position
+        while position < len(candidates) and candidates[position] in whitespace + ",":
+            position += 1
+        output.append(candidates[start:position])
+        start = position
+        # Per the srcset tokenizer, a URL ends at whitespace; commas inside a
+        # URL (especially data:image/jpeg;base64,/9j/...) belong to that URL.
+        while position < len(candidates) and candidates[position] not in whitespace:
+            position += 1
+        url = candidates[start:position]
+        output.append(
+            base + url if url.startswith("/") and not url.startswith("//") else url
+        )
+        if url.endswith(","):
+            continue
+        start = position
+        parentheses = 0
+        while position < len(candidates):
+            char = candidates[position]
+            position += 1
+            if char == "(":
+                parentheses += 1
+            elif char == ")":
+                parentheses = max(0, parentheses - 1)
+            elif char == "," and parentheses == 0:
+                break
+        output.append(candidates[start:position])
+    return "".join(output)
 
 
 def rewrite_asset_urls(html: str, *, scoped_base: str) -> str:
@@ -373,7 +406,7 @@ def rewrite_asset_urls(html: str, *, scoped_base: str) -> str:
         # above) untouched within the same tag.
         def _rewrite_value(value: re.Match[str]) -> str:
             quote, candidates = value.group(1), value.group(2)
-            scoped = _ROOT_ABSOLUTE_SRCSET_URL.sub(f"{base}/", candidates)
+            scoped = _scope_srcset_candidates(candidates, base)
             return f"srcset={quote}{scoped}{quote}"
 
         return re.sub(
@@ -385,7 +418,7 @@ def rewrite_asset_urls(html: str, *, scoped_base: str) -> str:
 
     scoped = _ROOT_ABSOLUTE_ATTR.sub(rf"\1=\g<2>{base}/", html)
     scoped = re.sub(
-        r"""<[^>]+\bsrcset=(["']).*?\1""",
+        r"""<[^<>]*>""",
         _scope_srcset,
         scoped,
         flags=re.IGNORECASE | re.DOTALL,
@@ -427,6 +460,24 @@ def render_native_ui_document(
   const bindingId = encodeURIComponent(String(binding.chatBindingId));
   const scopedDocumentUrl = window.location.href;
   const sameOriginApiPath = /^\/(?:v1|api|health)(?:\/|$)/;
+  let sessionValidated = false;
+  let transcriptValidated = false;
+  let fatalAnnounced = false;
+  let readinessObserver = null;
+
+  function checkConversationRendered() {
+    // The pinned ChatPage renders Conversation (role=log) only beyond its
+    // loadingConversation/conversationLoadError gates. Require the successful
+    // bound reads as well: neither a shell nor an error rendered into #root
+    // is evidence of a readable transcript. This also covers empty/read-only
+    // conversations without depending on composer authority or message text.
+    const root = document.getElementById("root");
+    if (!fatalAnnounced && sessionValidated && transcriptValidated &&
+        root && root.querySelector('[role="log"]')) {
+      announceReady();
+      if (readinessObserver) readinessObserver.disconnect();
+    }
+  }
 
   function scopedHttpUrl(input) {
     const url = new URL(String(input), window.location.origin);
@@ -447,12 +498,40 @@ def render_native_ui_document(
   }
 
   const nativeFetch = window.fetch.bind(window);
-  window.fetch = function (input, init) {
+  window.fetch = async function (input, init) {
     const source = input instanceof Request ? input.url : input;
     const scoped = scopedHttpUrl(source);
-    if (!scoped) return nativeFetch(input, init);
-    const request = input instanceof Request ? new Request(scoped.href, input) : scoped.href;
-    return nativeFetch(request, init);
+    const url = scoped || new URL(String(source), window.location.origin);
+    const sessionPath = apiBase + "/v1/sessions/" + bindingId;
+    const method = String(init?.method || (input instanceof Request ? input.method : "GET")).toUpperCase();
+    const essential = method === "GET" && url.origin === window.location.origin &&
+      (url.pathname === sessionPath ||
+       (url.pathname === sessionPath + "/items" && !url.searchParams.has("after")));
+    const request = scoped
+      ? (input instanceof Request ? new Request(scoped.href, input) : scoped.href)
+      : input;
+    try {
+      const response = await nativeFetch(request, init);
+      if (essential) {
+        if (!response.ok) {
+          announceFatal("essential_read_failed");
+        } else {
+          const body = await response.clone().json();
+          if (url.pathname === sessionPath) {
+            sessionValidated = body?.id === binding.chatBindingId;
+            if (!sessionValidated) announceFatal("essential_read_invalid");
+          } else {
+            transcriptValidated = Array.isArray(body?.data) && typeof body.has_more === "boolean";
+            if (!transcriptValidated) announceFatal("essential_read_invalid");
+          }
+          checkConversationRendered();
+        }
+      }
+      return response;
+    } catch (error) {
+      if (essential) announceFatal("essential_read_failed");
+      throw error;
+    }
   };
 
   const nativeXhrOpen = XMLHttpRequest.prototype.open;
@@ -512,20 +591,26 @@ def render_native_ui_document(
     if (!root) return;
     if (root.hasChildNodes()) {
       restoreScopedDocumentUrl();
-      announceReady();
-      return;
+    } else {
+      const observer = new MutationObserver(function () {
+        if (!root.hasChildNodes()) return;
+        observer.disconnect();
+        restoreScopedDocumentUrl();
+      });
+      observer.observe(root, { childList: true });
+      window.setTimeout(function () {
+        observer.disconnect();
+        restoreScopedDocumentUrl();
+      }, 5000);
     }
-    const observer = new MutationObserver(function () {
-      if (!root.hasChildNodes()) return;
-      observer.disconnect();
-      restoreScopedDocumentUrl();
-      announceReady();
-    });
-    observer.observe(root, { childList: true });
-    window.setTimeout(function () {
-      observer.disconnect();
-      restoreScopedDocumentUrl();
-    }, 5000);
+    // URL restoration has a short fallback timer; readiness must keep
+    // observing throughout slow hydration and until the frame is disposed.
+    readinessObserver = new MutationObserver(checkConversationRendered);
+    readinessObserver.observe(root, { childList: true, subtree: true });
+    checkConversationRendered();
+    window.addEventListener("pagehide", function () {
+      readinessObserver.disconnect();
+    }, { once: true });
   }
   // Bounded readiness/fatal signaling for the embedding shell
   // (MoonLadderStudios/MoonMind#4013 AC7/PLAN5). The shell validates exact
@@ -545,6 +630,8 @@ def render_native_ui_document(
     } catch (err) {}
   }
   function announceFatal(reason) {
+    fatalAnnounced = true;
+    if (readinessObserver) readinessObserver.disconnect();
     try {
       window.parent.postMessage(
         {
