@@ -6,7 +6,7 @@ import json
 import os
 from dataclasses import asdict, dataclass
 from pathlib import Path
-from typing import Protocol
+from typing import Any, Protocol
 
 from moonmind.schemas.workspace_locator_models import (
     ManagedWorkspaceLocator,
@@ -62,19 +62,164 @@ class SandboxWorkspaceRecordStore:
         """
         path = self._completion_marker_path(workspace_id)
         try:
-            return path.read_text(encoding="utf-8") == "materialized-v2"
+            text = path.read_text(encoding="utf-8")
         except OSError:
             return False
+        if text == "materialized-v2":
+            return True
+        try:
+            payload = json.loads(text)
+        except (ValueError, json.JSONDecodeError):
+            return False
+        return (
+            isinstance(payload, dict) and payload.get("format") == "materialized-v3"
+        )
 
     def mark_materialized(self, workspace_id: str) -> None:
         """Record durable evidence that materialization completed."""
+        self.mark_materialized_for(workspace_id, binding=None)
+
+    def mark_materialized_for(
+        self, workspace_id: str, binding: dict[str, Any] | None
+    ) -> None:
+        """Record completion bound to source digest, contract, owner, attempt.
+
+        The ready marker binds the admitted source/digest, the restore
+        contract/version, the input-manifest digest, the target owner, and the
+        attempt/generation — not just a directory or a previous marker. A retry
+        reconciles the same generation; changed inputs require an explicit new
+        import with a different binding.
+        """
         self.store_root.mkdir(mode=0o700, parents=True, exist_ok=True)
         path = self._completion_marker_path(workspace_id)
-        if self.is_materialized(workspace_id):
+        if self.is_materialized(workspace_id) and binding is None:
             return
+        if binding is not None and self.is_materialized_for(workspace_id, binding):
+            return
+        payload = json.dumps(
+            {"format": "materialized-v3", "binding": binding or {"legacy": True}},
+            sort_keys=True,
+        )
         descriptor = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
         with os.fdopen(descriptor, "w", encoding="utf-8") as stream:
-            stream.write("materialized-v2")
+            stream.write(payload)
+
+    def load_materialized_binding(self, workspace_id: str) -> dict[str, Any] | None:
+        """Return the bound ready marker, or None when absent/legacy/unparseable."""
+        path = self._completion_marker_path(workspace_id)
+        try:
+            text = path.read_text(encoding="utf-8")
+        except OSError:
+            return None
+        if text == "materialized-v2":
+            return None
+        try:
+            payload = json.loads(text)
+        except (ValueError, json.JSONDecodeError):
+            return None
+        if not isinstance(payload, dict) or payload.get("format") != "materialized-v3":
+            return None
+        binding = payload.get("binding")
+        return binding if isinstance(binding, dict) else None
+
+    def is_materialized_for(self, workspace_id: str, binding: dict[str, Any]) -> bool:
+        """Return whether the recorded ready marker matches this exact binding."""
+        recorded = self.load_materialized_binding(workspace_id)
+        if recorded is None:
+            return False
+        if recorded.get("legacy"):
+            return False
+        for key in (
+            "sourceKind",
+            "sourceDigest",
+            "restoreContract",
+            "inputManifestDigest",
+            "targetOwner",
+            "attemptId",
+            "generation",
+            "overlay",
+        ):
+            if recorded.get(key) != binding.get(key):
+                return False
+        return True
+
+    def _claims_dir(self, workspace_id: str) -> Path:
+        candidate = (self.store_root / f"{workspace_id}.grants").resolve()
+        if candidate.parent != self.store_root.resolve():
+            raise WorkspaceLocatorResolutionError(
+                WORKSPACE_AUTHORITY_MISMATCH,
+                "sandbox workspace grant registry escapes its authority",
+            )
+        return candidate
+
+    def claim_existing_workspace(self, workspace_id: str, grant: Any) -> None:
+        """Record exclusive/read-only use of another workflow's workspace.
+
+        Existing-workspace grants declare exclusive writable use or explicitly
+        supported read-only sharing. An exclusive claim conflicts with any
+        other active claim; read-only claims coexist only with read-only
+        claims. Reclaiming the same grant is idempotent for retries.
+        """
+
+        claims = self._claims_dir(workspace_id)
+        claims.mkdir(mode=0o700, parents=True, exist_ok=True)
+        grant_id = str(getattr(grant, "grant_id", "") or "")
+        mode = str(getattr(grant, "mode", "") or "")
+        if not grant_id or mode not in {"exclusive", "read_only"}:
+            raise WorkspaceLocatorResolutionError(
+                WORKSPACE_AUTHORITY_MISMATCH,
+                "existing-workspace grant claim is invalid",
+            )
+        for existing_path in sorted(claims.glob("*.json")):
+            if existing_path.name == f"{grant_id}.json":
+                continue
+            try:
+                existing = json.loads(existing_path.read_text(encoding="utf-8"))
+            except (OSError, ValueError, json.JSONDecodeError):
+                continue
+            if not isinstance(existing, dict):
+                continue
+            if mode == "exclusive" or existing.get("mode") == "exclusive":
+                raise WorkspaceLocatorResolutionError(
+                    WORKSPACE_IDENTITY_MISMATCH,
+                    "existing workspace is already granted to another execution",
+                )
+        claim_path = claims / f"{grant_id}.json"
+        payload = json.dumps(
+            {
+                "grantId": grant_id,
+                "mode": mode,
+                "granteeWorkflowId": str(
+                    getattr(grant, "grantee_workflow_id", "") or ""
+                ),
+                "expectedGeneration": int(
+                    getattr(grant, "expected_generation", 0) or 0
+                ),
+            },
+            sort_keys=True,
+        )
+        try:
+            descriptor = os.open(
+                claim_path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600
+            )
+        except FileExistsError:
+            return
+        with os.fdopen(descriptor, "w", encoding="utf-8") as stream:
+            stream.write(payload)
+
+    def release_existing_workspace(self, workspace_id: str, grant_id: str) -> None:
+        """Release ownership of a previously claimed existing workspace."""
+
+        claim_path = self._claims_dir(workspace_id) / f"{grant_id}.json"
+        try:
+            claim_path.unlink()
+        except FileNotFoundError:
+            pass
+        except OSError as exc:
+            raise WorkspaceLocatorResolutionError(
+                WORKSPACE_AUTHORITY_MISMATCH,
+                "existing-workspace grant release failed",
+            ) from exc
 
     def load(self, workspace_id: str) -> SandboxWorkspaceRecord | None:
         path = self._record_path(workspace_id)
