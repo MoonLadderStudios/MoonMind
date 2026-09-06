@@ -9412,6 +9412,13 @@ def _normalize_task_tool(task_payload: dict[str, Any]) -> dict[str, Any] | None:
         inline_inputs = selected_payload.get("args")
     if isinstance(inline_inputs, dict) and inline_inputs:
         normalized["inputs"] = dict(inline_inputs)
+    raw_caps = selected_payload.get("requiredCapabilities")
+    if raw_caps is not None:
+        normalized_caps = _coerce_string_list(
+            raw_caps, field_name="payload.workflow.tool.requiredCapabilities"
+        )
+        if normalized_caps:
+            normalized["requiredCapabilities"] = normalized_caps
     _copy_skill_contract_metadata(source=selected_payload, target=normalized)
     return normalized
 

@@ -28,6 +28,7 @@ from moonmind.integrations.jira.tool import JiraToolService
 from moonmind.workflows.adapters.github_service import GitHubService
 from moonmind.workflows.skills.tool_plan_contracts import ToolResult
 from moonmind.workflows.temporal.github_issue_search import (
+    PrerequisiteLookup,
     check_prerequisites,
     is_complete_open_issue,
     resolve_issue,
@@ -4468,12 +4469,14 @@ async def load_github_issue_preset_brief(
     """Load a compact GitHub issue preset brief through trusted GitHub data."""
 
     search_evidence: dict[str, Any] = {}
+    prerequisite_lookup = PrerequisiteLookup()
 
     async def blockers_for_issue(issue: Mapping[str, Any]) -> list[dict[str, Any]]:
         return await _resolved_github_blockers(
             issue,
             repository=repository,
             github_service=github_service_factory(),
+            prerequisite_lookup=prerequisite_lookup,
         )
 
     if "issueSearch" in inputs:
@@ -4510,7 +4513,11 @@ async def load_github_issue_preset_brief(
         )
     try:
         selected_blockers = (
-            await blockers_for_issue(_github_issue_payload(issue_data, repository))
+            await _resolved_github_blockers(
+                _github_issue_payload(issue_data, repository),
+                repository=repository,
+                github_service=github_service_factory(),
+            )
             if search_evidence and not _string(inputs.get("issueSearch"))
             else []
         )
@@ -4579,12 +4586,14 @@ async def _resolved_github_blockers(
     *,
     repository: str,
     github_service: GitHubService,
+    prerequisite_lookup: PrerequisiteLookup | None = None,
 ) -> list[dict[str, Any]]:
     blockers = _github_blockers_from_issue(issue)
     return blockers or await check_prerequisites(
         issue=issue,
         repository=repository,
         github_service=github_service,
+        lookup=prerequisite_lookup,
     )
 
 

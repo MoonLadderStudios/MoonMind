@@ -4,11 +4,20 @@ from __future__ import annotations
 
 import re
 from collections.abc import Awaitable, Callable, Mapping
+from dataclasses import dataclass, field
 from typing import Any
 
 import httpx
 
 from moonmind.workflows.adapters.github_service import GitHubService
+
+
+@dataclass
+class PrerequisiteLookup:
+    """Bound and reuse validated prerequisite reads within one admission scan."""
+
+    states: dict[tuple[str, int], str] = field(default_factory=dict)
+    requests: int = 0
 
 
 def declared_prerequisites(body: str, repository: str) -> list[tuple[str, int]]:
@@ -27,10 +36,11 @@ def declared_prerequisites(body: str, repository: str) -> list[tuple[str, int]]:
             r"\1#\2",
             declaration.group(1),
         )
-        for match in re.finditer(
-            r"(?<![\w/])(?:([\w.-]+/[\w.-]+))?#([1-9]\d*)"
-            r"(?:\s*[-–—]\s*#?([1-9]\d*))?",
-            text,
+        # Consume only the leading reference list. Prose after the list can
+        # contain parent, related, or other contextual issue references.
+        text = re.sub(r"^issues?\s+", "", text, flags=re.IGNORECASE)
+        while match := re.match(
+            r"(?:([\w.-]+/[\w.-]+))?#([1-9]\d*)" r"(?:\s*[-–—]\s*#?([1-9]\d*))?", text
         ):
             start = int(match.group(2))
             end = int(match.group(3) or start)
@@ -42,6 +52,8 @@ def declared_prerequisites(body: str, repository: str) -> list[tuple[str, int]]:
                 (match.group(1) or repository, number)
                 for number in range(start, end + 1)
             )
+            text = text[match.end() :].lstrip(" \t,;")
+            text = re.sub(r"^(?:and\b|&)\s*", "", text, flags=re.IGNORECASE)
     refs = list(dict.fromkeys(refs))
     if len(refs) > 100:
         raise ValueError("GitHub prerequisite declaration exceeds 100 issues.")
@@ -53,18 +65,32 @@ async def check_prerequisites(
     issue: Mapping[str, Any],
     repository: str,
     github_service: GitHubService,
+    lookup: PrerequisiteLookup | None = None,
 ) -> list[dict[str, Any]]:
     """Resolve prerequisite state through authenticated GitHub reads only."""
     refs = declared_prerequisites(str(issue.get("body") or ""), repository)
     if not refs:
         return []
+    lookup = lookup if lookup is not None else PrerequisiteLookup()
     async with httpx.AsyncClient(timeout=30.0) as client:
         for dependency_repo, number in refs:
+            key = (dependency_repo.casefold(), number)
+            prerequisite_state = lookup.states.get(key)
+            if prerequisite_state == "closed":
+                continue
+            if prerequisite_state == "open":
+                return [_prerequisite_blocker(dependency_repo, number)]
+            if lookup.requests >= 100:
+                raise ValueError(
+                    "GitHub issue selection exceeded the 100-request prerequisite lookup budget; "
+                    "select an explicit issue or narrow the issue search."
+                )
             token, _error = await github_service.resolve_github_token(
                 repo=dependency_repo
             )
             if not token:
                 raise ValueError("GitHub prerequisite lookup is unavailable.")
+            lookup.requests += 1
             try:
                 response = await client.get(
                     f"https://api.github.com/repos/{dependency_repo}/issues/{number}",
@@ -83,17 +109,20 @@ async def check_prerequisites(
                 )
             ):
                 raise ValueError("GitHub prerequisite identity or state is invalid.")
+            lookup.states[key] = payload["state"]
             if payload["state"] == "open":
-                return [
-                    {
-                        "source": "prerequisite",
-                        "repository": dependency_repo,
-                        "number": number,
-                        "statusKnown": True,
-                        "done": False,
-                    }
-                ]
+                return [_prerequisite_blocker(dependency_repo, number)]
     return []
+
+
+def _prerequisite_blocker(repository: str, number: int) -> dict[str, Any]:
+    return {
+        "source": "prerequisite",
+        "repository": repository,
+        "number": number,
+        "statusKnown": True,
+        "done": False,
+    }
 
 
 def is_complete_open_issue(payload: Any, repository: str) -> bool:
