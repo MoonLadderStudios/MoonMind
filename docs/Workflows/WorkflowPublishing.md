@@ -1,12 +1,16 @@
 # Workflow Publishing
 
 **Document Class:** Canonical declarative  
-**Status:** Desired-state architecture  
+**Viewpoint:** Module Contract Specification  
+**Status:** Draft  
 **Owners:** MoonMind Engineering  
-**Last Updated:** 2026-09-06  
-**Canonical for:** workflow and batch publication intent, authoring Auto, compiled publication ownership, branch roles, and publication evidence.
+**Updated:** 2026-09-06  
+**Audience:** Workflow, runtime, API, and dashboard contributors and operators  
+**Authority:** Authored workflow/batch publication intent, context and branch roles, compiled effect ownership, and publication outcome semantics. The provider-neutral evidence schema is owned by Lore VCS Integration Design section 3.13.  
+**Owning Surface:** Workflow admission/compiler, publication orchestration, and repository publisher consumers  
+**Related Implementation:** `moonmind/workflows/executions/execution_contract.py`, `moonmind/publish/`, `.agents/skills/_shared/publish_evidence.py`; implementation tracking #1090 and #2619.
 
-Related: [Workflow Presets System](WorkflowPresetsSystem.md), [Create Page](../UI/CreatePage.md), [Input Schema Guidance](../Steps/InputSchemaGuidance.md), [Executions API Contract](../Api/ExecutionsApiContract.md), [Workflow Dependencies](WorkflowDependencies.md), [PR Merge Automation](PrMergeAutomation.md), [Repository Access and Workspace Design](../RepositoryAccessAndWorkspaceDesign.md).
+**Related Docs:** [Workflow Presets System](WorkflowPresetsSystem.md), [Create Page](../UI/CreatePage.md), [Input Schema Guidance](../Steps/InputSchemaGuidance.md), [Executions API Contract](../Api/ExecutionsApiContract.md), [Workflow Dependencies](WorkflowDependencies.md), [PR Merge Automation](PrMergeAutomation.md), [Repository Access and Workspace Design](../RepositoryAccessAndWorkspaceDesign.md), [Lore VCS Integration Design](LoreVcsIntegrationDesign.md), [Settings System](../Security/SettingsSystem.md), [Checkpoint Branch System](CheckpointBranchSystem.md).
 
 This document defines the long-term contract. It is not a claim that every current seed, helper, API, or runtime already implements it. Implementation sequencing and rollout evidence belong in issues or `docs/tmp/`, not in this specification.
 
@@ -20,7 +24,7 @@ The following invariants govern every entry point:
 
 - **PUBLISH-001:** One authored publishing selection governs the submission and the children created under its publication scope. No step, preset input, helper default, or agent prompt is a competing selection authority.
 - **PUBLISH-002:** A child inherits the scope's publication intent, never its coordinator's derived execution mode `none`. The intent survives every intermediate coordinator.
-- **PUBLISH-003:** User-facing Auto selects declared workflow behavior. Compiled execution `auto` remains the existing Skill-owned publishing protocol. They are different layers, not two user controls.
+- **PUBLISH-003:** User-facing Auto selects declared workflow behavior. Compiled execution `auto` remains the Skill-owned publishing protocol, using the same provider-neutral evidence contract as managed publication. These are different layers, not two user controls or two evidence formats.
 - **PUBLISH-004:** Explicit new `none` is never promoted to Auto. Unsupported combinations fail before mutation rather than weakening the selection or falsely reporting completion.
 - **PUBLISH-005:** Repository, branch, destination, and merge authority are validated through existing admission and connection owners. Publication metadata and a fan-out bearer are not permission to broaden those authorities.
 - **PUBLISH-006:** Outcomes come from exact-attempt evidence. A process exit, model claim, PR-shaped URL, or successful enqueue is not proof of publication or completed child work.
@@ -53,9 +57,23 @@ default | none | branch | pr | pr_with_merge_automation
 none | branch | pr | auto
 ```
 
-`pr_with_merge_automation` compiles to `pr` plus the existing merge-automation configuration. `default` never reaches a publisher or portable helper as an unresolved execution mode. The legacy authored literal `auto` is decoded under its recorded contract as Skill-owned publication, not silently reinterpreted as the new general default.
+`pr_with_merge_automation` compiles to `pr` plus the existing merge-automation configuration. `default` never reaches a publisher or portable helper as an unresolved execution mode. The legacy authored literal `auto` is decoded under its recorded contract as Skill-owned publication, not silently reinterpreted as the new general default. A fresh resolver request authors `default` or omits the selection and supplies its explicit target. Only trusted compilation emits worker-facing `publishMode = auto`.
 
 The authored snapshot must remain intact when a coordinator compiles to `publishMode = none`. A serialization round trip must not overwrite the authored `pr` or `default` with that local result. Direct execution-shaped requests, task-shaped requests, presets, schedules, and MCP use the same compiler. Public callers cannot bypass it by supplying worker-facing compiled fields.
+
+### Default Precedence and Retirement of the Workspace Fallback
+
+The target removes `workflow.default_publish_mode` from active new-authoring resolution. Its environment aliases `WORKFLOW_DEFAULT_PUBLISH_MODE` and `MOONMIND_DEFAULT_PUBLISH_MODE` are retired with it. It is not retained as a lower-priority fallback, renamed recommendation, or hidden source of an apparently explicit form value.
+
+There is one resolution rule:
+
+1. A scoped child consumes its authenticated parent's frozen scope intent. It cannot author an override or consult a workspace fallback.
+2. For a newly authored root, an explicit supported selection is preserved. Omission and `default` both resolve the reviewed composition's declared default from the same pinned metadata and task inputs.
+3. Deployment, repository, and approval policy validate the requested effects. They may reject an incompatible result, but do not substitute another selection. Missing or conflicting declared defaults are actionable errors, not a reason to consult the retired setting.
+
+Existing operator intent must not be silently discarded during this change. The [Settings System retirement contract](../Security/SettingsSystem.md#106-publication-default-ownership-and-retired-setting) records configured overrides and environment values through the existing settings migration/audit owner. A definition, draft, or saved input whose recorded legacy resolution proves that the workspace value supplied its publishing intent can be reconstructed with that value as an explicit selection, with provenance and normal compatibility validation. Existing explicitly authored choices remain unchanged. A configured fallback without sufficient per-input provenance requires visible operator review before affected new/defaulted or unattended launches use composition Auto. Clearing the retired override alone is not proof that existing schedules were reviewed.
+
+Recorded histories use their frozen old decoder and effective values, never the current workspace setting. No new request can claim to be historical to recover the old fallback. The coordinated implementation removes the active catalog descriptor, new-write setting/environment producers, UI hydration, API/preset/helper fallback readers, and tests of that superseded default together. Diagnostic historical rows may remain under the Settings System's bounded removal policy; they do not participate in new execution resolution.
 
 ### Execution Roles
 
@@ -86,7 +104,7 @@ Auto is deterministic, metadata-driven selection, not permission for a model to 
 
 A preset with an established merge-automation default retains that default and exposes its consequences. Auto is not an unconditional safe/read-only mode. The preview must say when the selected behavior can merge.
 
-Changing a controlling input such as Batch Jira's Run selection recomputes the recommendation only while Auto is selected. An explicit None, Branch, or PR choice survives a Run change and is validated against the new composition. Unknown or incompatible publication requirements produce an actionable error, not a most-permissive, last-step-wins, or silent-None fallback.
+Changing a controlling input such as Batch Jira's Run selection recomputes the recommendation only while Auto is selected. An explicit None, Branch, or PR choice survives a Run change and is validated against the new composition. Unknown or incompatible publication requirements produce an actionable error, not a most-permissive, last-step-wins, silent-None, or retired-workspace-default fallback.
 
 A resolved scope default is pinned before child creation. Children do not independently consult the latest catalog to reinterpret the ancestor's Auto. A new schedule occurrence may resolve a newly selected definition only through the schedule's declared definition-update policy; an in-flight occurrence and its retries remain pinned.
 
@@ -126,7 +144,7 @@ Binding declarations are semantic and type-checked as specified in [Input Schema
 | Existing-PR operation | Head and base are resolved from the selected PR target |
 | PR-resolution batch | Each child uses its own discovered PR head and base |
 
-A new request has one canonical authored branch in its repository/source target, not simultaneous `branch`, `startingBranch`, `targetBranch`, and Skill-input authorities. Legacy `task.git.branch` and older aliases are handled only by the versioned ingress/history boundary. They cannot compete with the canonical target in new authoring.
+A new request has one canonical authored branch in its repository/source target, not simultaneous `branch`, `startingBranch`, `targetBranch`, and Skill-input authorities. Legacy `task.git.branch` and older aliases are handled only by the versioned ingress/history boundary. They cannot compete with the canonical target in new authoring. The same rule applies to checkpoint creation, continuation, Edit/Rerun, and resolver target selection: [Checkpoint Branch System](CheckpointBranchSystem.md#89-execution-detail-output-branch) keeps source evidence, derived work branch, and verified output distinct; [PR Resolver integration](../Steps/SkillGithubPrResolver.md#41-inputs-skill-args) never treats the generic checkout branch as an implicit PR locator.
 
 An omitted repository branch is resolved through the selected repository's authoritative default branch, never an unconditional `main` fallback. An explicitly selected base survives target discovery and fan-out. Discovery cannot replace `release/1.2` with the remote default merely because it fetched repository metadata.
 
@@ -217,50 +235,57 @@ The compiler derives `repositoryOperation` and required capabilities for each ex
 
 One policy does not require one final push. A supported composition can include staged candidate publication, verification, an early PR handoff, and later tracker updates. Each effect has one declared owner and stable target. Arbitrary mixed publication owners, unrelated repositories, or incompatible outputs require a compatible declared composition or separate workflows, not user-authored per-step overrides.
 
+### One Provider-Neutral Evidence Contract
+
+All new managed and agent-owned repository publishers emit `moonmind.publish.repository.v1` as defined by [Lore VCS Integration Design section 3.13](LoreVcsIntegrationDesign.md#313-unified-repository-publication-evidence). That providing contract owns field names, provider-discriminated repository/branch/revision references, statuses/actions, `connectionRef`, `clientEvidence`, security scanning, and remote proof. This document consumes it and does not define a second payload shape.
+
+Managed publication sets `owner = moonmind`; Skill-owned publication sets `owner = agent` with compiled mode `auto`. Owner changes effect responsibility, not evidence strength. Resolved `none` emits no repository-publication evidence and is not forced to fabricate a remote no-op. Coordinator/other side-effect artifacts remain separate objective evidence.
+
+The unified artifact and its accepted result reference are bound through the existing terminal contract and artifact provenance to the exact workflow/run/Step Execution/attempt and immutable target. Validate that association before accepting the result. Restored or other-attempt artifacts are stale even if revision, Skill name, and remote state match. Do not recreate the retired schema's fields inside the new payload or let a self-asserted attempt identifier substitute for trusted artifact ownership.
+
+Git and Lore use their provider-specific revisions. Successful publication and no-op require the canonical exact remote proof; Lore Content-only revisions are not No Commit because a generated Git diff is empty. PR outcome additionally requires the exact confirmed native PR or the authoritative mapped projection. Pending Lore projection stays `awaiting_external`; it is not PR success. Protected Lore merges remain coordinator-owned, never a GitHub merge against generated refs.
+
+The shared portable writer, every built-in mutating Skill, managed publishers, terminal validators, workflow/gate/result consumers, and seeded connection/client evidence adopt this schema together. No producer can emit it without valid admitted `connectionRef` and `clientEvidence`. New writes of `moonmind.publish.auto.v1` and `acceptedRepositoryEvidence` are removed at that coordinated boundary. Frozen readers remain only for already-recorded histories and original digests, not as an alternate live fallback.
+
 ### Compiled `auto`: Skill-owned Publishing
 
-Repository auto-publish capability is declared by Skill metadata:
+Repository auto-publish capability is declared by resolved Skill metadata:
 
 ```yaml
 metadata:
+  repository:
+    supported-providers:
+      - git
   publish:
     mode: auto
     owner: agent
     requiresEvidence: true
+    evidence-schema: moonmind.publish.repository.v1
 ```
+
+A Lore-aware Skill declares Lore support only when qualified. A matching name or built-in origin cannot confer support on a different resolved bundle.
 
 The resolved Skill bundle is the semantic authority. Publishing mode never selects or authorizes a native substitute implementation. `pr-resolver` executes its resolved Skill bundle through the ordinary agent path. Native integration supplies substrate, policy, scheduling, and evidence validation, not a second resolver.
 
 Compiled `auto` is valid only for a capability with declared agent-owned publishing and a satisfiable evidence contract. Managed Branch/PR choices are incompatible unless the capability explicitly supports that owner and objective. Absence of capability evidence cannot be repaired by a name-based fallback in the new contract.
 
-Every successful auto run produces `artifacts/publish_result.json` with `schemaVersion = "moonmind.publish.auto.v1"`, `mode = "auto"`, `owner = "agent"`, selected Skill ID, current `executionRef`, status, action, repository, branch, local/remote head fields, remote verification, push/merge booleans, optional PR URL or blocked reason, and verification commands. The `executionRef` must exactly match the terminal contract. Restored or other-attempt evidence is stale even if Skill and head match.
+The portable `artifacts/publish_result.json` path may remain the Skill output location, but its new-write payload is the unified schema above. MoonMind-local workspace authority binds that output into the current terminal contract. External-provider workspaces use their qualified provider-owned handoff for the same evidence and never receive a workspace-file contract they cannot satisfy. Missing, malformed, or stale evidence receives bounded continuation in the same authoritative workspace and Skill snapshot. Exhaustion remains failure, with preservation through the admitted recovery/save contract before destructive cleanup.
 
-MoonMind-local workspace authority compiles that file into the terminal contract. External-provider workspaces use their qualified provider-owned result handoff and never receive a workspace-file contract they cannot satisfy. Missing, malformed, or stale evidence receives bounded continuation in the same authoritative workspace and Skill snapshot. Exhaustion remains failure, with preservation through the admitted recovery/save contract before destructive cleanup.
+The portable helper remains `$MOONMIND_ACTIVE_SKILLS_DIR/_shared/publish_evidence.py`, with `.agents/skills` as the outside-MoonMind fallback. Its existing semantic operations, such as write-pushed, write-merged, write-no-op, write-blocked, write-failed, and from-pr-resolver-result, project provider-qualified observations and admitted immutable repository/connection/client context into the one schema. It cannot write a compliant new result from only a repository string, branch string, or old merge/push booleans, invent a connection, or copy the legacy payload with a changed schema label. The portable interface remains independent of Temporal/database imports; MoonMind supplies its context at the adapter boundary.
 
-Portable evidence helper:
+The canonical schema owns the full allowed status/action vocabulary, including review-request actions. Success still requires the Skill's objective-specific evidence. A verified push alone does not complete a resolver whose finish is merge; fix-only requires its distinct verified no-merge result.
 
-```bash
-python3 "${MOONMIND_ACTIVE_SKILLS_DIR:-.agents/skills}/_shared/publish_evidence.py" write-pushed \
-  --skill-id <skill> \
-  --repo <owner/repo> \
-  --branch <branch>
-```
-
-The helper also supports `write-merged`, `write-no-op`, `write-blocked`, `write-failed`, and `from-pr-resolver-result`. It has no Temporal, database, or service-layer imports. Inside MoonMind the immutable active snapshot wins over a repository-owned path; `.agents/skills` is the portable outside-MoonMind fallback.
-
-Allowed statuses are `verified`, `no_op_verified`, `blocked`, and `failed`. Allowed actions are `none`, `commit`, `push`, `merge`, `commit_and_push`, and `push_and_merge`.
-
-Successful evidence proves the exact local HEAD is on the remote, the target PR was merged, or no repository change was needed and local HEAD was verified against the remote. The Skill's objective-specific terminal contract still applies: a verified push alone does not complete a resolver whose required finish is merge.
-
-| Evidence | Finish outcome |
+| Evidence and required external state | Finish outcome |
 | --- | --- |
-| Verified merge | `PUBLISHED_PR`, owner agent, execution mode auto |
-| Verified push | `PUBLISHED_BRANCH`, owner agent, execution mode auto |
-| Verified no-op | `NO_COMMIT`, not `PUBLISH_DISABLED` |
+| Authorized agent merge verified by the provider/Skill result and unified evidence | `PUBLISHED_PR`, owner agent, compiled mode auto |
+| Verified exact branch publication without a required PR/merge outstanding | `PUBLISHED_BRANCH` |
+| PR publication with confirmed exact native/mapped PR target | `PUBLISHED_PR` |
+| Exact Lore publication with required projection pending | `awaiting_external`, `LORE_PROJECTION_PENDING` |
+| Canonical `no_op_verified` and compatible completed objective | `NO_COMMIT`, not `PUBLISH_DISABLED` |
 | Blocked or failed evidence | Publish-stage block/failure |
-| Missing evidence | Publish-stage failure with `auto_publish_evidence_missing` |
+| Missing, invalid, or stale evidence | Publish-stage failure; `auto_publish_evidence_missing` remains applicable to missing required Skill-owned evidence, not a second schema |
 
-The parent loads `publishEvidence` from the child result or its `outputRefs` before deciding the outcome. Auxiliary terminal-projection lag cannot replace verified remote success with a finalization failure. The parent never repeats the Skill's commit, push, or merge.
+The parent loads the unified `publishEvidence` artifact reference from the child result or its `outputRefs` and validates it through the shared reader before deciding the outcome. Auxiliary terminal-projection lag cannot replace verified remote success with a finalization failure. The parent never repeats the Skill's commit, push, or merge.
 
 ### Coordinator and Other Non-Repository Outcomes
 
@@ -272,11 +297,11 @@ Display their objective outcome as children queued, verified no targets, partial
 
 Agents produce the candidate and semantic work description. The managed publisher performs authorized commit/push/PR mechanics deterministically, not through a prompt-only guarantee. The agent is not a second final publisher. Destination credentials are resolved through the admitted repository connection/role and are not recovered from ambient machine-level Git or `gh auth` state.
 
-After a successful push, including an already-current remote branch, the publisher emits `acceptedRepositoryEvidence`: work branch, original base, exact head commit, commits-ahead count, authorization/contamination disposition, and remote verification. Consumers use this typed envelope, not raw `push_*` metadata or agent prose.
+After successful provider-conditional publication, including an already-current remote revision, the publisher emits the same `moonmind.publish.repository.v1` artifact with owner moonmind. Its admitted target, original base revision, published revision, changes/scan refs, connection/client evidence, and exact remote proof are validated together. Consumers retain a run-owned reference to that accepted artifact and its target/candidate association, not a second `acceptedRepositoryEvidence` object or raw `push_*` metadata.
 
-Before comparison, refresh the exact remote base. After push, require the live remote head to equal the admitted candidate. An unavailable base, mismatching head, or indeterminate comparison cannot produce accepted evidence or allow PR creation. Reconcile a lost acknowledgement before repeating an effect. Persist candidate and branch identity so retries do not generate new commits or duplicate PRs.
+Before comparison, refresh the exact remote base. Use the provider's admitted compare-and-set or exact publication lease, then verify the live remote revision equals the candidate. An unavailable base, incompatible expected-tip movement, mismatching revision, or indeterminate comparison cannot produce accepted evidence or allow PR creation. Reconcile a lost acknowledgement before repeating an effect. Persist candidate and branch identity so retries do not generate new commits or duplicate PRs.
 
-Before pushing, reject hard-protected `main`, `master`, detached `HEAD`, and unknown branch states, as well as applicable repository protection. For PR mode the separate work branch is pushed, never the authored base. A refused push is an explicit publication blocker, not successful publication or a mere warning that permits downstream handoff.
+Before pushing, reject hard-protected `main`, `master`, detached `HEAD`, and unknown Git branch states, as well as applicable repository/provider protection. For PR mode the separate work branch is pushed, never the authored base. A refused push is an explicit publication blocker, not successful publication or a mere warning that permits downstream handoff.
 
 ## 8. Pull Request Creation and Metadata
 
@@ -320,13 +345,13 @@ A verified no-change implementation that explicitly establishes the authoritativ
 
 ## 10. MoonSpec Verification Gate
 
-Publication eligibility uses the latest structured verification verdict and accepted run-owned repository evidence.
+Publication eligibility uses the latest structured verification verdict and the run-owned accepted unified repository-publication artifact.
 
 `FULLY_IMPLEMENTED` permits the policy's PR publication and downstream trusted side effects. `ADDITIONAL_WORK_NEEDED` continues bounded remediation while budget remains. After exhaustion, a PR-authorized workflow may publish the prescribed draft handoff with remaining-work verdict/report, then fail with `attention_required: true` and skip promotion/trusted handoffs. A pushed branch or draft PR is not `no_commit` and does not make an incomplete objective successful.
 
-A read-only verification step has no accepted publication evidence of its own. Inconclusive evidence at the stopping step defers to the atomic run-owned branch/head established by the managed publisher. Raw `pushStatus`, `branch`, or `headSha` from step metadata does not substitute for `acceptedRepositoryEvidence`. A definitive authorization, contamination, or no-candidate refusal is not overridden by another projection.
+A read-only verification step has no accepted publication evidence of its own. Inconclusive evidence at the stopping step defers to the atomic run-owned reference to validated `moonmind.publish.repository.v1` evidence and its exact candidate/target. Raw `pushStatus`, `branch`, or `headSha` from step metadata is not that evidence. A definitive authorization, contamination, or no-candidate refusal is not overridden by another projection.
 
-The draft target is that same accepted published head. Do not decide feasibility from one head and create the PR from mutable later step metadata. Refresh and comparison retain the original authored base.
+The draft target is that same accepted published revision and, where applicable, its exact provider projection. Do not decide feasibility from one head and create the PR from mutable later step metadata. Refresh and comparison retain the original authored base.
 
 `NO_DETERMINATION`, `BLOCKED`, and `FAILED_UNRECOVERABLE` block publication unless the existing contract explicitly models recoverable missing evidence. Malformed verdict envelopes are distinct from verifier judgments: inject the canonical verdict/action contract, retain a drifting raw action as diagnostics, derive the canonical action from the verdict, and use bounded corrective verification attempts before spending implementation-remediation cycles. Contract-invalid evidence downgrades fail-closed with a `downgradeReason` identifying the violating field.
 
@@ -340,7 +365,7 @@ Instructions are derived from the compiled step role and policy. They explain au
 
 For Skill-owned auto:
 
-> Perform only the repository effects required by the resolved Skill and admitted finish policy. Produce current-attempt publish_result.json and the Skill's terminal evidence before reporting success.
+> Perform only the repository effects required by the resolved Skill and admitted finish policy. Produce current-attempt publish_result.json using moonmind.publish.repository.v1 and the Skill's objective-specific terminal evidence before reporting success.
 
 For an explicit non-publishing scope:
 
@@ -365,8 +390,10 @@ Persisted histories keep their original bytes, digests, compiled behavior, and r
 | Equal workflow and Skill repository/branch values | Collapse to the single context binding after validating equivalence. |
 | Conflicting copies | Preserve evidence and surface a conflict. Never choose a winner silently. |
 | Non-publishing batch parent plus child `pr` override | Reconstruct one authored PR intent with a derived non-publishing coordinator, when provenance proves that meaning. |
-| Historical literal `auto` | Preserve Skill-owned meaning, never reinterpret as generic default. |
+| Historical literal `auto` | Preserve Skill-owned meaning, never reinterpret as generic default. Fresh resolver authoring uses default/omission and an explicit PR target. |
 | Legacy explicit None promoted to Auto | Replay under the recorded old contract. A new draft requires an explicit reviewed choice under the new contract. |
+| Recorded omitted mode resolved through the old workspace fallback | Preserve the proven effective intent as an explicit new selection with provenance and validation; unknown origin requires review under the Settings retirement contract. |
+| `moonmind.publish.auto.v1` or `acceptedRepositoryEvidence` | Frozen readers for already-recorded histories only. No new producer, live dual-reader fallback, or relabeling old evidence as a new attempt. |
 | Mixed independent per-step publication policies | Preserve the historical execution. New authoring requires a compatible declared composition or separate workflows. |
 | Old starting/target branch pair | Reconstruct only when equivalent to one supported branch role; otherwise show an actionable reconstruction warning. |
 
@@ -377,14 +404,16 @@ Unknown provenance is not permission to infer intent. Read-only historical displ
 The production compiler, schema forms, preset expansion, child API, runtime adapters, and result projections must demonstrate the same behavior:
 
 - One editable repository/branch/publishing source across Create, Apply/Reapply, unexpanded Submit, API, MCP, schedules, Edit/Rerun, continuation, and remediation authoring.
-- Omission and explicit `default` produce equivalent admitted behavior and preview; authoring Auto never leaks as unresolved worker mode.
+- Omission and explicit `default` produce equivalent admitted behavior and preview; authoring Auto never leaks as unresolved worker mode. Retired workspace/environment defaults cannot alter either path.
+- Configured historical None/Branch/PR fallbacks retain proven effective intent or block for review, including unattended schedules and restored settings. Removal produces auditable disposition, not silent loss of operator choice.
 - Main issue batches, both breakdown families, document fan-out, both PR batches, direct resolvers, and the review loop satisfy the matrix using actual production boundaries.
 - A coordinator with a PR intent has local `none` and PR children, including through another coordinator. Explicit root None cannot be bypassed by a child or merge phase.
-- Non-default bases survive issue discovery. PR batches resolve distinct head/base targets. Cross-repository, conflicting, stale, fork-only, and ambiguous targets retain safe dispositions.
+- Non-default bases survive issue discovery. PR batches resolve distinct head/base targets. Cross-repository, conflicting, stale, fork-only, and ambiguous targets retain safe dispositions. Recovery/resolver new writes reject old branch aliases.
 - Read-only assessment/verification and tracker steps do not erase cumulative publication policy or candidate evidence. Conflicting publication owners fail before effects.
 - Parallel shared-branch publication is rejected unless the declared serial handoff is proven. Dependency completion alone never substitutes for required predecessor-code availability.
 - Retries, lost enqueue/push/PR acknowledgements, policy-conflicting idempotency reuse, and Dependabot schedule edits cannot duplicate effects or mislabel an existing child's authority.
-- Auto evidence is exact-attempt and objective-specific. Coordinator enqueue evidence is not remote-head evidence, and neither is fabricated to make a gate pass.
+- Git/Lore managed and Skill-owned publishers, shared helper, terminal validators, gate/result consumers, and connection/client bindings use the one new-write evidence schema. Old schemas are historical-only; missing connection/client/attempt/remote proof fails before acceptance.
+- Publication evidence is exact-attempt and objective-specific. Coordinator enqueue evidence is not remote-head evidence, and neither is fabricated to make a gate pass. Lore Content-only publication and pending projection cannot become a false no-op or PR success.
 - None, save failure, canceled/failed compute, and publication failure preserve the correct independent save/recovery outcome. No prohibited recovery push or destructive cleanup occurs.
 - Historical reconstruction, mixed API/worker versions, stale defaults, and changed definition digests cannot silently change authority.
 

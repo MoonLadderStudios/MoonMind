@@ -1,11 +1,16 @@
 # Input Schema Guidance
 
 **Document Class:** Canonical declarative  
-**Status:** Desired-state guidance  
+**Viewpoint:** Module Contract Specification  
+**Status:** Draft  
 **Owners:** MoonMind Engineering (Workflow Platform + UI)  
-**Last Updated:** 2026-09-06
+**Updated:** 2026-09-06  
+**Audience:** Skill, Preset, Tool, API, and schema-form contributors  
+**Authority:** Optional input-schema semantics, authoritative context-binding keys, input origin, and validation/portability rules shared by selectable step options.  
+**Owning Surface:** Shared capability input normalization and context-binding boundary  
+**Related Implementation:** `moonmind/services/skill_step_inputs.py`, `.agents/skills/`, and `api_service/data/presets/`.
 
-Related: [Step Types](StepTypes.md), [Skill System](SkillSystem.md), [Skill Input Schema UI Generation](SkillInputSchemaUIGeneration.md), [Workflow Presets System](../Workflows/WorkflowPresetsSystem.md), [Create Page](../UI/CreatePage.md), [Workflow Publishing](../Workflows/WorkflowPublishing.md).
+**Related Docs:** [Step Types](StepTypes.md), [Skill System](SkillSystem.md), [Skill Input Schema UI Generation](SkillInputSchemaUIGeneration.md), [Workflow Presets System](../Workflows/WorkflowPresetsSystem.md), [Create Page](../UI/CreatePage.md), [Workflow Publishing](../Workflows/WorkflowPublishing.md).
 
 ## Purpose
 
@@ -148,7 +153,7 @@ inputSchema:
 
 A preset declares publication roles, supported policies, and defaults through its workflow metadata as specified in [Workflow Presets System](../Workflows/WorkflowPresetsSystem.md). It does not expose a `publish_mode` input in addition to the workflow publishing control. An internal portable helper argument can remain, populated by the compiler/adapter.
 
-Defaults that influence authority or publication must be semantic catalog/compiler metadata, not presentation-only `uiSchema` expressions. Changing a task input can recompute the workflow's Auto recommendation, but cannot overwrite an explicit policy or alter an admitted descendant's frozen intent.
+Defaults that influence authority or publication must be semantic catalog/compiler metadata, not presentation-only `uiSchema` expressions. Changing a task input can recompute the workflow's Auto recommendation, but cannot overwrite an explicit policy or alter an admitted descendant's frozen intent. The retired workspace publish setting is not a source for a binding or another fallback; its historical operator-intent treatment is defined in [Settings System section 10.6](../Security/SettingsSystem.md#106-publication-default-ownership-and-retired-setting).
 
 ## UI Derivation Policy
 
@@ -225,7 +230,7 @@ The shared normalizer, renderer, preset expander, API, and runtime boundary must
 - Required bound inputs validate successfully when context supplies them, and missing context points to the actual editable source.
 - Conflicting duplicate values, unsupported projections, forged resolved provenance, and malformed binding metadata fail before mutation.
 - Existing-PR targets and genuine source/destination/comparison roles are not collapsed by field-name heuristics.
-- Publication binding forwards frozen scope intent, never a coordinator's local None or an unresolved authoring Auto.
+- Publication binding forwards frozen scope intent, never a coordinator's local None, retired workspace fallback, or unresolved authoring Auto.
 - Schema, binding, and context digests survive apply/reapply, unexpanded submit, API/MCP, schedules, edit/rerun, and recovery without changing admitted authority.
 - Harmless unknown hints degrade safely; authority-bearing unknowns do not.
 - No secrets enter defaults, input-contract metadata, provenance, or diagnostics.

@@ -1,10 +1,16 @@
 # Workflow Dependencies
 
 **Document Class:** Canonical declarative  
-**Status:** Desired-state architecture  
-**Updated:** 2026-09-06
+**Viewpoint:** Module Contract Specification  
+**Status:** Draft  
+**Owners:** MoonMind Engineering  
+**Updated:** 2026-09-06  
+**Audience:** Workflow lifecycle, API, orchestration, and dashboard contributors  
+**Authority:** Inter-UserWorkflow dependency declaration, successful-completion waiting, signaling, bypass, and durable outcome semantics. Publication inheritance and code-transfer proof remain with their providing owners.  
+**Owning Surface:** Workflow dependency admission and durable wait/notification boundary  
+**Related Implementation:** `MoonMind.UserWorkflow`, DependencyResolved, BypassDependencies, and the existing dependsOn execution contract.
 
-Related: `docs/Api/ExecutionsApiContract.md`, `docs/Workflows/WorkflowArchitecture.md`, `docs/Workflows/WorkflowCancellation.md`, `docs/Temporal/WorkflowTypeCatalogAndLifecycle.md`, `docs/UI/WorkflowConsoleArchitecture.md`, `docs/Workflows/WorkflowPublishing.md`, `docs/Workflows/PrMergeAutomation.md`
+**Related Docs:** `docs/Api/ExecutionsApiContract.md`, `docs/Workflows/WorkflowArchitecture.md`, `docs/Workflows/WorkflowCancellation.md`, `docs/Temporal/WorkflowTypeCatalogAndLifecycle.md`, `docs/UI/WorkflowConsoleArchitecture.md`, `docs/Workflows/WorkflowPublishing.md`, `docs/Workflows/PrMergeAutomation.md`
 
 ## 1. Purpose
 

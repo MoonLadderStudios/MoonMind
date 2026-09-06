@@ -1,13 +1,19 @@
 # Workflow Finish Summary System
 
 **Document Class:** Canonical declarative  
-**Status:** Desired-state contract  
+**Viewpoint:** Module Contract Specification  
+**Status:** Draft  
 **Owners:** MoonMind Engineering  
-**Last Updated:** 2026-09-06
+**Updated:** 2026-09-06  
+**Audience:** Workflow finalization, artifact, API, and dashboard contributors and operators  
+**Authority:** Canonical finish-summary outcomes, failure diagnostics, bounded side-effect/child projections, and redaction. Workflow Publishing and its provider evidence owner supply policy and proof; summaries do not replace them.  
+**Owning Surface:** UserWorkflow finalization, reports/run_summary.json, and terminal result projections  
+**Related Implementation:** `MoonMind.UserWorkflow`, `execution.record_terminal_state`, and existing finish_outcome_code/finish_summary_json consumers.
 
-Related: `docs/Workflows/WorkflowArchitecture.md`, `docs/Workflows/WorkflowPublishing.md`,
+**Related Docs:** `docs/Workflows/WorkflowArchitecture.md`, `docs/Workflows/WorkflowPublishing.md`,
 `docs/Temporal/ErrorTaxonomy.md`, `docs/Temporal/StepLedgerAndProgressModel.md`,
-`docs/Workflows/NoCommitStatus.md`, `docs/RepositoryAccessAndWorkspaceDesign.md`
+`docs/Workflows/NoCommitStatus.md`, `docs/RepositoryAccessAndWorkspaceDesign.md`,
+`docs/Workflows/LoreVcsIntegrationDesign.md`
 
 ---
 
@@ -110,11 +116,20 @@ explicit preservation/finalization failure, not a fabricated summary reference.
 }
 ```
 
-This existing summary example shows a compiled local result, not a complete new
-authored-input schema. Historical `jobId` naming in a summary is not a new
-queue identity; workflow/run and exact-attempt references follow their owning
-contracts. New projection fields evolve under the summary's versioning rules,
-not by silently reinterpreting old bytes or hashes.
+This existing summary example shows a compiled local result projection, not a
+complete new authored-input or repository-publication evidence schema. Historical
+jobId naming in a summary is not a new queue identity; workflow/run and
+exact-attempt references follow their owning contracts. New projection fields
+evolve under the summary's versioning rules, not by silently reinterpreting old
+bytes or hashes.
+
+New managed and agent-owned repository proof uses only
+`moonmind.publish.repository.v1` from LoreVcsIntegrationDesign section 3.13. The
+summary consumes an accepted artifact ref and exact-attempt/target association;
+its status/booleans/URLs are display projections, not replacements for provider
+revision, admitted connection/client, scan, and remote proof. None has no
+repository-publication evidence requirement. Frozen old-schema readers are only
+for recorded histories, never live alternate producers.
 
 The `sideEffects` block is optional and bounded, but it is the preferred way to
 make side effects visible when a run has no repository commit. A Jira Implement
@@ -271,10 +286,13 @@ states that the coordinator completed dispatch and children are separately
 inspectable. Partial dispatch includes every accepted child and the unresolved
 errors; it is not a fabricated rollback or whole-batch success.
 
-Skill-owned Auto consumes exact current-attempt publish and objective evidence.
-A verified push does not complete a merge-required resolver. `fix_only` can
-produce review_clean with pushed changes but must never report merged. Missing,
-malformed, or stale evidence is not No Commit or PUBLISH_DISABLED.
+Skill-owned Auto consumes exact current-attempt unified publication and objective
+evidence. A verified push does not complete a merge-required resolver. `fix_only`
+can produce review_clean with pushed changes but must never report merged.
+Missing, malformed, or stale evidence is not No Commit or PUBLISH_DISABLED.
+Lore Content-only publication is not a no-op because a generated Git diff is
+empty; a pending required projection remains awaiting_external rather than PR
+success.
 
 Compute, artifact saving, local repository publication, merge automation, and
 cleanup results remain independent. A saved result after publication failure is
@@ -342,5 +360,7 @@ explicit None from coordinator None, dry run from no-publication, actual enqueue
 from descendant success, verified no-op from missing evidence, and saved work
 from successful publication. They preserve root-cause diagnostics, first-failure
 capture, exact-attempt identities, secret redaction, historical aliases, and
-verified partial results through reporting failure. A rendered label or a
-summary-shaped object alone is not proof of those guarantees.
+verified partial results through reporting failure. New managed/agent evidence
+uses one provider schema with its actual connection/client/remote proof rather
+than treating summary booleans as evidence. A rendered label or a summary-shaped
+object alone is not proof of those guarantees.

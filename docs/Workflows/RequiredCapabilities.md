@@ -2,12 +2,15 @@
 
 **Document Class:** Canonical declarative  
 **Viewpoint:** Module Contract Specification  
-**Status:** Desired State  
+**Status:** Draft  
 **Owners:** MoonMind Engineering  
-**Last Updated:** 2026-09-06  
-**Canonical for:** requiredCapabilities declaration, derivation, normalization, readiness checks, and failure semantics
+**Updated:** 2026-09-06  
+**Audience:** Workflow, runtime, integration, and admission contributors and operators  
+**Authority:** requiredCapabilities declaration, derivation, normalization, readiness checks, provenance, and failure semantics. Capability requirements do not grant repository or publication authority.  
+**Owning Surface:** Shared execution requirement compiler and pre-launch readiness boundary  
+**Related Implementation:** `moonmind/workflows/executions/execution_contract.py`, resolved Skill metadata, and the existing runtime admission owners.
 
-Related: `docs/Workflows/WorkflowArchitecture.md`, `docs/Steps/StepTypes.md`, `docs/Steps/SkillSystem.md`, `docs/Workflows/SkillAndPlanContracts.md`, `docs/Temporal/ManagedAndExternalAgentExecutionModel.md`, `docs/Workflows/WorkflowPublishing.md`, `docs/RepositoryAccessAndWorkspaceDesign.md`
+**Related Docs:** `docs/Workflows/WorkflowArchitecture.md`, `docs/Steps/StepTypes.md`, `docs/Steps/SkillSystem.md`, `docs/Workflows/SkillAndPlanContracts.md`, `docs/Temporal/ManagedAndExternalAgentExecutionModel.md`, `docs/Workflows/WorkflowPublishing.md`, `docs/RepositoryAccessAndWorkspaceDesign.md`, `docs/Workflows/LoreVcsIntegrationDesign.md`
 
 ## 1. Purpose
 
@@ -92,6 +95,8 @@ Publication requirements come from the shared compiler's **resolved execution ro
 | Scratch/report or anonymous source | Only supported source/output capabilities, not a hypothetical future publisher. |
 
 Runtime mode contributes the qualified runtime requirement; container operations contribute docker where needed. A PR-capable external provider can satisfy declared publishing mechanics only through its qualified adapter. It cannot implement None or Branch by silently creating a PR.
+
+Repository provider support and evidence are part of that qualification. Managed and agent-owned new results both use `moonmind.publish.repository.v1` with the provider's actual admitted connection/client and revision proof. A GitHub projection does not make a Git-only publisher eligible for a Lore-authoritative target. The retired workspace publish default cannot influence new role/capability derivation.
 
 ## 6. Normalization and merge rules
 
@@ -206,12 +211,13 @@ Publication-specific coverage proves:
 - Static incompatible branch/dependency handoffs fail before effects; dynamic failures remain truthful and bounded.
 - Fan-out capability provenance, missing/forged attestation, expired bearer, idempotency conflicts, and unrelated API operations cannot broaden scope.
 - Mixed-version replay and edited admission preserve historical evidence and current authorization separately.
+- New publication writers/readers share the provider-neutral evidence contract; old workspace defaults and legacy evidence formats cannot supply new authority or missing proof.
 
 Required hermetic tests and protected-live/runtime conformance are identified separately. A parser or UI result alone does not qualify execution.
 
 ## 17. Documentation boundaries
 
-Workflow Publishing owns authored policy and compiled publication roles. Repository Access and Workspace Design owns source/access/save separation. Step Types owns selectable categories, Skill System owns resolution/materialization, SkillAndPlanContracts owns executable Tool/plan interfaces, and managed/external runtime docs own their substrate. This document owns requirement derivation and readiness, not a second implementation of those domains.
+Workflow Publishing owns authored policy and compiled publication roles. Repository Access and Workspace Design owns source/access/save separation. LoreVcsIntegrationDesign owns provider compatibility and the shared repository evidence schema. Step Types owns selectable categories, Skill System owns resolution/materialization, SkillAndPlanContracts owns executable Tool/plan interfaces, and managed/external runtime docs own their substrate. This document owns requirement derivation and readiness, not a second implementation of those domains.
 
 ## 18. Summary
 

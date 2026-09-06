@@ -1,9 +1,15 @@
 # Workflow Architecture (Control Plane)
 
 **Document Class:** Canonical declarative  
-**Status:** Desired-state architecture  
+**Viewpoint:** Module Architecture View  
+**Status:** Draft  
 **Owners:** MoonMind Engineering  
-**Last updated:** 2026-09-06
+**Updated:** 2026-09-06  
+**Audience:** Workflow, API, runtime, recovery, and dashboard contributors  
+**Authority:** Workflow control-plane component responsibilities, authored snapshots, compilation, attachment targeting, and execution/recovery handoffs. Providing subsystem documents own their detailed schemas and policy contracts.  
+**Owning Surface:** Workflow admission/control plane and MoonMind.UserWorkflow integration  
+**Related Docs:** [Workflow Publishing](WorkflowPublishing.md), [Workflow Presets System](WorkflowPresetsSystem.md), [Create Page](../UI/CreatePage.md), [Input Schema Guidance](../Steps/InputSchemaGuidance.md), [Repository Access and Workspace Design](../RepositoryAccessAndWorkspaceDesign.md), [Lore VCS Integration Design](LoreVcsIntegrationDesign.md)  
+**Related Implementation:** `moonmind/workflows/executions/`, `moonmind/services/skill_step_inputs.py`, and `MoonMind.UserWorkflow`.
 
 ## 1. Purpose
 
@@ -53,9 +59,11 @@ Resume retries the failed step with original inputs and proven completed prior w
 
 ### 3.7 One authored publication scope
 
-One selection governs a workflow and its declared children. User-facing Auto/default resolves declared workflow behavior. Compiled Skill-owned Auto remains the existing evidence protocol. Explicit None is never promoted in new authoring.
+One selection governs a workflow and its declared children. User-facing Auto/default resolves declared workflow behavior. Compiled Skill-owned Auto remains the agent-owned execution protocol, consuming the same provider-neutral publication evidence as managed publishing. Explicit None is never promoted in new authoring.
 
 The scope's intent survives every coordinator. The coordinator may have no deliverable and compile to local None, while implementation children publish PRs and resolver children execute Skill-owned Auto. Independent dependency links do not establish inheritance. One policy does not require one final push or identical actions everywhere; supported compositions declare staged effects and one owner per effect.
+
+The retired `workflow.default_publish_mode` and its environment aliases are not a second omission/default path. WorkflowPublishing and SettingsSystem section 10.6 own removal and preservation of configured operator intent. Unknown old effective origin requires review rather than silent adoption of a different default.
 
 ## 4. High-level architecture
 
@@ -161,9 +169,9 @@ Canonical Step Types and their Tool/Skill/Preset inputs come from StepTypes. Rep
 
 Objective attachments are task.inputAttachments; step attachments are task.steps[n].inputAttachments. task.authoredPresets and step source/provenance retain selected definitions, include path, task input mappings, and detachment evidence. These are durable contract fields, not incidental UI state.
 
-Authored task.publish.mode accepts default/omission as Auto. The compiled mode is resolved before execution; compound PR-and-merge becomes PR plus existing automation configuration. Historical literal auto retains its Skill-owned meaning under the recorded contract.
+Authored task.publish.mode accepts default/omission as Auto. The compiled mode is resolved before execution; compound PR-and-merge becomes PR plus existing automation configuration. Historical literal auto retains its Skill-owned meaning under the recorded contract, while fresh resolver requests use default/omission and their explicit target.
 
-New requests have one branch role in the canonical repository/source target. Legacy task.git.branch, startingBranch, and targetBranch are decoded only through supported ingress/history rules and cannot compete with that target. PR mode uses the authored base plus a stable generated/provider head. Branch mode updates the authored branch. Existing-PR operations derive actual head/base from their target rather than copying the coordinator's branch.
+New requests have one branch role in the canonical repository/source target. Legacy task.git.branch, startingBranch, and targetBranch are decoded only through supported history rules and cannot compete with that target. This also applies to Checkpoint Branch and resolver authoring. PR mode uses the authored base plus a stable generated/provider head. Branch mode updates the authored branch. Existing-PR operations derive actual head/base from an explicit locator, not the coordinator's checkout branch.
 
 Recovery provenance always includes exact source workflow/run. Checkpoint refs are execution-state evidence, not user-editable branch or publication overrides.
 
@@ -201,7 +209,7 @@ Prepare creates the contained source workspace, downloads authorized attachments
 
 ### 8.3 Step execution responsibilities
 
-Consume relevant objective context plus only the current step's scoped attachments by default. Preserve semantic outputs and candidate identity. Read-only step metadata cannot overwrite cumulative accepted publication evidence.
+Consume relevant objective context plus only the current step's scoped attachments by default. Preserve semantic outputs and candidate identity. Read-only step metadata cannot overwrite the run-owned reference to accepted unified repository-publication evidence or its exact candidate association.
 
 ### 8.4 Child workflow responsibilities
 
@@ -221,7 +229,7 @@ Validate exact source snapshot/plan and checkpoint, restore safely, inject prese
 
 ### 8.7 Publication and code handoffs
 
-Managed publishers own admitted branch/PR mechanics and acceptedRepositoryEvidence. Portable Skills own compiled Auto effects and exact current-attempt terminal evidence. The parent consumes verified results and never duplicates Skill publishing.
+Managed publishers own admitted branch/PR mechanics. Portable Skills own compiled Auto effects. Both emit `moonmind.publish.repository.v1` under the providing repository contract, with actual connection/client evidence and exact provider revision proof. The existing terminal contract and trusted artifact ownership bind accepted results to the current attempt and target. UserWorkflow retains the accepted artifact reference and never duplicates Skill publishing or reconstructs proof from raw metadata. New writers and consumers do not retain `acceptedRepositoryEvidence` or `moonmind.publish.auto.v1` as live alternatives; those are frozen historical-read surfaces only.
 
 Parallel independent children cannot all update the same branch absent a qualified serial handoff. A successful prerequisite is not proof its code is on the next base: the composition needs verified merge, candidate/checkpoint transfer, or qualified shared-branch progression. PR-only, None, or fix-only choices must preserve that requirement or fail before known effects.
 
@@ -243,7 +251,7 @@ The system preserves binary-free histories, explicit attachment targets, no sile
 
 Recovery remains explicit: exact full retry, edited retry, and failed-step Resume are different intents. Resume keeps original input, requires durable prior work, never silently reexecutes preserved steps, and pins exact source workflow/run.
 
-Publication adds the following architectural invariants: one authored context/policy; default Auto distinct from Skill-owned Auto; explicit None preserved; nested coordinators forward frozen scope rather than local None; per-role authority and one effect owner; exact candidate/result evidence; code handoffs separate from dependency completion; and save-before-cleanup without a prohibited recovery push.
+Publication adds the following architectural invariants: one authored context/policy; default Auto distinct from Skill-owned Auto; explicit None preserved; nested coordinators forward frozen scope rather than local None; per-role authority and one effect owner; one new-write provider evidence schema with exact candidate/attempt proof; code handoffs separate from dependency completion; and save-before-cleanup without a prohibited recovery push.
 
 ## 12. Workload-specific behavior
 
@@ -267,7 +275,7 @@ A resumed execution shows reused prior steps. A batch shows actual queued childr
 
 ## 14. Boundary with page-level and subsystem docs
 
-CreatePage owns controls and validation UX; WorkflowDetailsPage owns results/actions; ImageSystem owns attachment preparation; SkillSystem owns portable resolution; StepTypes and InputSchemaGuidance own task inputs/bindings; WorkflowPublishing owns policy/effects; RepositoryAccessAndWorkspaceDesign owns source/credential/save roles; Temporal lifecycle/run-history and StepLedgerAndProgressModel own run/recovery identity and progress.
+CreatePage owns controls and validation UX; WorkflowDetailsPage owns results/actions; ImageSystem owns attachment preparation; SkillSystem owns portable resolution; StepTypes and InputSchemaGuidance own task inputs/bindings; WorkflowPublishing owns policy/effects; RepositoryAccessAndWorkspaceDesign owns source/credential/save roles; LoreVcsIntegrationDesign owns the unified provider evidence schema; Temporal lifecycle/run-history and StepLedgerAndProgressModel own run/recovery identity and progress.
 
 These remain providing owners. This architecture does not create parallel APIs, stores, publishers, or migration ledgers. Implementation sequencing and evidence stay in issues or temporary plans.
 
@@ -275,4 +283,4 @@ These remain providing owners. This architecture does not create parallel APIs, 
 
 MoonMind's control plane is workflow-first, artifact-first, target-aware, and single-context. All producers pass the same definition/binding/publication compiler. Execution realizes role-appropriate actions without requiring duplicate user settings.
 
-Conformance exercises actual Create/Apply/Reapply/Submit/API/MCP/schedule/edit/rerun/Resume and child boundaries. It covers attachment targeting, pinned definitions, contextual versus authored inputs, explicit None, Auto resolution, non-publishing parents with publishing descendants, non-default bases and per-PR heads, candidate handoffs, idempotent effects, safe preservation, and honest historical reconstruction. A form or documentation update alone is not runtime or deployment conformance.
+Conformance exercises actual Create/Apply/Reapply/Submit/API/MCP/schedule/edit/rerun/Resume and child boundaries. It covers attachment targeting, pinned definitions, contextual versus authored inputs, explicit None, Auto resolution and retired fallback handling, non-publishing parents with publishing descendants, non-default bases and per-PR heads, unified provider evidence, candidate handoffs, idempotent effects, safe preservation, and honest historical reconstruction. A form or documentation update alone is not runtime or deployment conformance.

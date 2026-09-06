@@ -3,10 +3,14 @@
 **Document Class:** Canonical declarative  
 **Viewpoint:** Module Contract Specification  
 **Project:** MoonMind  
-**Status:** Desired-state API contract  
+**Status:** Draft  
 **Owner:** MoonMind Platform  
-**Last updated:** 2026-09-06  
-**Audience:** backend, dashboard, integrations
+**Updated:** 2026-09-06  
+**Audience:** backend, dashboard, integrations  
+**Authority:** Execution lifecycle HTTP operations, request admission, response projections, ownership, fan-out, and update/reconstruction semantics. Workflow Publishing owns publication intent and the repository-provider contract owns publication evidence.  
+**Owning Surface:** /api/executions and its Temporal execution service boundary  
+**Related Docs:** [Workflow Publishing](../Workflows/WorkflowPublishing.md), [Settings System](../Security/SettingsSystem.md), [Workflow Architecture](../Workflows/WorkflowArchitecture.md), [Lore VCS Integration Design](../Workflows/LoreVcsIntegrationDesign.md); additional owners are listed in section 3.  
+**Related Implementation:** `moonmind/workflows/executions/execution_contract.py`, `TemporalExecutionService`, and the existing execution API router.
 
 Implementation sequencing, rollout status, and backlog notes live in issues or `docs/tmp/`, not as the primary story of this contract. The single-context/publication rules below are long-term target semantics, not evidence that current API/worker deployments already accept the new authoring values.
 
@@ -28,7 +32,7 @@ In scope are authenticated lifecycle operations, create/describe/list/update/sig
 
 The current `TemporalExecutionService`/`TemporalExecutionRecord` projection is an implementation owner, not a permanent public storage abstraction. Public semantics survive a change to Visibility-backed or mixed reads.
 
-## 3. Related Documents
+## 3. Related docs
 
 - `docs/Temporal/TemporalArchitecture.md`
 - `docs/Temporal/TemporalPlatformFoundation.md`
@@ -46,6 +50,9 @@ The current `TemporalExecutionService`/`TemporalExecutionRecord` projection is a
 - `docs/Workflows/WorkflowPresetsSystem.md`
 - `docs/Workflows/WorkflowEditingSystem.md`
 - `docs/RepositoryAccessAndWorkspaceDesign.md`
+- `docs/Security/SettingsSystem.md`
+- `docs/Steps/SkillGithubPrResolver.md`
+- `docs/Workflows/CheckpointBranchSystem.md`
 
 ## 4. Vocabulary and Identifiers
 
@@ -175,6 +182,8 @@ Use the existing input artifacts, plan, result objects, and bounded detail proje
 
 The projection supplies a safe effective explanation for Create/Details. It does not expose another editable policy. Clients cannot infer descendant prohibition from local None, child completion from enqueue success, or merge authority from a label. Missing evidence is reported as unavailable, not reconstructed from current catalog defaults.
 
+New managed and agent-owned publication results are derived from accepted `moonmind.publish.repository.v1` artifacts under the providing repository contract. The API preserves their exact attempt/target ownership and safe references, not a second acceptedRepositoryEvidence or Auto-specific schema. Legacy payloads are decoded only for recorded histories. A provider projection pending mapping remains awaiting_external rather than false PR success.
+
 ## 9. Create Execution
 
 ### 9.1 Endpoint and Direct Request
@@ -210,9 +219,11 @@ In direct requests the authored selection is under `initialParameters.task.publi
 default | none | branch | pr | pr_with_merge_automation
 ```
 
-Omission and `default` are equivalent user-facing Auto. Compiled execution `publishMode` remains `none | branch | pr | auto`. The compiler resolves `default` and the compound PR-and-merge selection before workers or helpers execute. Literal historical `auto` retains its Skill-owned meaning under its recorded ingress/history contract, never the meaning of generic default.
+Omission and `default` are equivalent user-facing Auto. Compiled execution `publishMode` remains `none | branch | pr | auto`. The compiler resolves `default` and the compound PR-and-merge selection before workers or helpers execute. Literal historical `auto` retains its Skill-owned meaning only for already-recorded input/history decoding, never the meaning of generic default. Fresh PR Resolver authoring uses default/omission with its explicit PR locator, as shown in the [resolver integration contract](../Steps/SkillGithubPrResolver.md#91-new-authored-userworkflow-request); a caller cannot select a legacy decoder to bypass new validation.
 
-Context bindings are resolved before required-field validation and preset expansion. Bound fields are execution projections, not authored duplicates. Conflicting or redundant caller-owned copies in the new contract are rejected with an actionable path; a supported legacy decoder may collapse proven equivalent historical values.
+The removed workspace setting `workflow.default_publish_mode` and its environment aliases are not fallback sources here. [Workflow Publishing](../Workflows/WorkflowPublishing.md) owns the one precedence rule, and [Settings System section 10.6](../Security/SettingsSystem.md#106-publication-default-ownership-and-retired-setting) defines audited preservation/review of configured historical intent. New omitted and explicit-default requests use the same composition rule, including through schedules and helper submissions.
+
+Context bindings are resolved before required-field validation and preset expansion. Bound fields are execution projections, not authored duplicates. Conflicting or redundant caller-owned copies in the new contract are rejected with an actionable path; a supported legacy decoder may collapse proven equivalent historical values when reconstructing recorded input.
 
 The compiler pins selected definitions, context/target identity, authored intent, resolved default behavior, child requirements, and effect owners in existing snapshot/plan evidence. It validates known composition conflicts before parent launch or tracker mutation. Unknown future targets are validated at the declared child boundary.
 
@@ -367,11 +378,11 @@ Errors are safe and bounded. They do not contain credentials, unrestricted paren
 
 The task-shaped transport may map to Temporal work, but it is not an alternate policy compiler. WorkflowId remains canonical; compatibility taskId equals workflowId. Supported `task.tool`/`step.tool` selectors and older Skill aliases use the established selector normalization, with `type: skill` where required by that transport.
 
-New authoring has one repository/source target, one applicable branch, and one publication selection. It cannot use old Skill args, preset `publish_mode`, `startingBranch`, `targetBranch`, or a worker-facing mode to create another authority.
+New authoring has one repository/source target, one applicable branch, and one publication selection. It cannot use old Skill args, preset `publish_mode`, `startingBranch`, `targetBranch`, or a worker-facing mode to create another authority. Checkpoint operations and resolver inputs follow the same restriction, not independent legacy fallback chains.
 
-Historical decoding is versioned and evidence-preserving. Old literal Auto stays Skill-owned; old None-to-Auto coercion is confined to recorded old execution semantics. A coordinator's old local None and explicit child PR policy reconstruct as one PR intent only when provenance proves that meaning. Conflicts and unknown origins require review, not inference.
+Historical decoding is versioned and evidence-preserving. Old literal Auto stays Skill-owned; old None-to-Auto coercion is confined to recorded old execution semantics. A coordinator's old local None and explicit child PR policy reconstruct as one PR intent only when provenance proves that meaning. Conflicts and unknown origins require review, not inference. Recorded effective workspace-fallback values follow the Settings retirement contract rather than consulting current configuration.
 
-Replay and supported resets retain original bytes/digests and workflow command semantics. New drafts and schedule occurrences cross current admission. Mixed API/worker versions cannot receive a new authoring value they would reinterpret or default. The rollout boundary rejects incompatible consumers before launch without rewriting historical hashes.
+Replay and supported resets retain original bytes/digests and workflow command semantics. New drafts and schedule occurrences cross current admission. Mixed API/worker versions cannot receive a new authoring value they would reinterpret or default. The rollout boundary rejects incompatible consumers before launch without rewriting historical hashes. Fresh callers and outputs cannot opt into a historical decoder by supplying an old label or schemaVersion.
 
 ## 17. Implementation Boundary Notes
 
@@ -379,7 +390,7 @@ The current projection row can materialize identifiers, lifecycle state, attribu
 
 Continue-As-New/rerun uses stable workflowId with a new runId and refreshed lifecycle where supported. Projection/Visibility-backed list implementations preserve successful pages when bounded count enrichment fails. Current pagination/filter error naming is not a reason to change input authority or silently report empty work.
 
-The new authoring/compiler rules require coordinated schemas, generated clients, preset/helper consumers, and compatible workers. This documentation-only specification does not implement or qualify that cutover.
+The new authoring/compiler rules require coordinated schemas, generated clients, preset/helper consumers, retired workspace-default readers, unified publication writers/validators, and compatible workers. This documentation-only specification does not implement or qualify that cutover.
 
 ## 18. Change Rules and Conformance
 
@@ -389,13 +400,14 @@ Conformance exercises actual API/compiler/preset/fan-out boundaries for:
 
 - equivalent direct/task-shaped/UI/MCP authoring;
 - omission versus explicit default and the distinct compiled Auto protocol;
+- retired workspace/default/environment settings cannot change new resolution, while configured historical intent is preserved or reviewed;
 - one context binding with required-input validation and conflicting-copy rejection;
 - non-publishing coordinators with inherited PR/Auto children through nesting;
 - explicit None, existing-PR target derivation, non-default bases, branch collision prevention, and required code handoffs;
 - partial fan-out, lost acknowledgement, equivalent retry, and policy-conflicting idempotency reuse;
 - immutable admitted intent across update, schedule, rerun, recovery, and mixed-version history decoding;
-- truthful authored/local/child/result projections without treating enqueue or process exit as publication evidence;
-- ownership, bearer scope, stale parent/run identity, and attempts to bypass inheritance through raw payloads.
+- truthful authored/local/child/result projections using the one new-write publication evidence schema, without treating enqueue or process exit as proof;
+- ownership, bearer scope, stale parent/run identity, and attempts to bypass inheritance or invoke historical decoding through raw new payloads.
 
 Use existing selected suites and release qualification. A documentation edit or isolated schema test is not a passed deployment journey.
 

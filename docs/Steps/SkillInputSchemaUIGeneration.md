@@ -1,11 +1,16 @@
 # Skill Input Schema UI Generation Design
 
 **Document Class:** Canonical declarative  
-**Status:** Desired-state design  
+**Viewpoint:** System / Feature Design View  
+**Status:** Proposed  
 **Owners:** MoonMind Engineering (Workflow Platform + UI)  
-**Last Updated:** 2026-09-06
+**Updated:** 2026-09-06  
+**Audience:** Skill/catalog, schema-form, API, and runtime contributors  
+**Authority:** Shared Skill schema ingestion, form generation, validation handoff, and staleness behavior. Input Schema Guidance owns binding-key semantics and Workflow Publishing owns publication policy.  
+**Owning Surface:** Skill input-contract source adapters and shared schema renderer  
+**Related Implementation:** `moonmind/services/skill_step_inputs.py`, `.agents/skills/`, and the existing Skill catalog and Create form.
 
-Related: [Input Schema Guidance](InputSchemaGuidance.md), [Skill System](SkillSystem.md), [Step Types](StepTypes.md), [Workflow Presets System](../Workflows/WorkflowPresetsSystem.md), [Create Page](../UI/CreatePage.md), [Workflow Publishing](../Workflows/WorkflowPublishing.md).
+**Related Docs:** [Input Schema Guidance](InputSchemaGuidance.md), [Skill System](SkillSystem.md), [Step Types](StepTypes.md), [Workflow Presets System](../Workflows/WorkflowPresetsSystem.md), [Create Page](../UI/CreatePage.md), [Workflow Publishing](../Workflows/WorkflowPublishing.md).
 
 ## Purpose and Goals
 
@@ -212,7 +217,7 @@ For **bound inputs**, resolve authoritative context first and reject caller-owne
 
 Do not use examples such as `defaults.branch: main` for workflow branch selection. An omitted repository branch is resolved through the canonical repository contract, and an explicit base is retained. Changing the workflow context rebinds all consumers.
 
-Publication defaulting belongs to the workflow compiler. New authoring Auto is `default` or omission. Runtime `auto` is the distinct Skill-owned evidence protocol. Adding a Skill with such a requirement must update the shared compatibility preview, not silently rewrite an explicit None.
+Publication defaulting belongs to the workflow compiler. New authoring Auto is `default` or omission. Runtime `auto` is the distinct Skill-owned execution protocol using the unified repository-publication evidence contract. Adding a Skill with such a requirement updates the shared compatibility preview, not an explicit None. The retired workspace publish fallback cannot supply a hidden bound/defaulted value; its operator-intent migration follows Settings System section 10.6.
 
 ## Backend Validation
 
