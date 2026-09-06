@@ -35,6 +35,7 @@ from moonmind.capacity import (
     STATE_ACTIVE,
     STATE_ADOPTED,
     STATE_STORAGE_RETAINED,
+    STATE_WAITING,
     WORKLOAD_CLASS_CONTAINER_JOB,
     WORKLOAD_CLASS_GENERIC_HOST,
     MachineCapacityLedger,
@@ -164,6 +165,31 @@ async def _acquire(repository, binding_id: str):
     )
 
 
+def _host_reservation_id(binding_id: str) -> str:
+    """Return the machine reservation id one host allocation owns.
+
+    Derived exactly the way the allocation derives it, so the row this names
+    is the row ``DbOmnigentHostLeaseRepository.acquire`` writes rather than a
+    test-local identity that happens to look similar.
+    """
+
+    return machine_reservation_id(
+        backend_ref=BACKEND,
+        owner_kind="omnigent_host_lease",
+        owner_ref=generic_host_lease_ref(
+            runtime_binding_id=binding_id, host_class_ref="omnigent-opencode@1"
+        ),
+        generation=1,
+    )
+
+
+async def _reservation_row(session_factory, binding_id: str):
+    async with session_factory() as session:
+        return await session.get(
+            MachineCapacityReservation, _host_reservation_id(binding_id)
+        )
+
+
 # ------------------------------------------------- host allocation boundary
 
 
@@ -209,6 +235,128 @@ async def test_the_machine_budget_refuses_a_host_the_host_count_would_admit(
         == HarnessPlatformFailure.OMNIGENT_HOST_CAPACITY_UNAVAILABLE.value
     )
     assert "missing_condition=machine_memory" in str(raised.value)
+
+
+@pytest.mark.asyncio
+async def test_a_machine_refused_host_allocation_persists_its_waiter(
+    session_factory,
+) -> None:
+    """Implementation 8: host contention has to reach oldest-waiter age.
+
+    The waiter marker is written inside the allocating transaction, and that
+    transaction unwinds when the machine layer refuses. Unwinding the refused
+    *reservation* is what protects the machine; unwinding the marker with it
+    made oldest waiter age structurally zero for the generic-host class, the
+    only class whose durable wait this layer exists to report.
+    """
+
+    admission = _admission(session_factory, host_capacity=8)
+    repository = _repository(session_factory, admission)
+    for index in range(2):
+        await _acquire(repository, f"binding-{index}")
+
+    refused_at = datetime.now(UTC)
+    with pytest.raises(HarnessPlatformError) as raised:
+        await _acquire(repository, "binding-2")
+
+    assert (
+        raised.value.code
+        == HarnessPlatformFailure.OMNIGENT_HOST_CAPACITY_UNAVAILABLE.value
+    )
+    ledger = MachineCapacityLedger(session_factory)
+    usage = await ledger.usage(
+        backend_ref=BACKEND, now=refused_at + timedelta(seconds=45)
+    )
+    assert usage.waiting == 1
+    assert usage.oldest_waiter_age_seconds >= 30
+    # The recorded wait is the marker's own age, so it advances with the clock
+    # rather than being re-stamped by whatever last read it.
+    later = await ledger.usage(
+        backend_ref=BACKEND, now=refused_at + timedelta(seconds=105)
+    )
+    assert later.oldest_waiter_age_seconds - usage.oldest_waiter_age_seconds == 60
+    # The refusal still takes nothing: only the two admitted hosts account.
+    assert usage.reserved_memory_mib == 6000
+    # The operator-facing advisory precheck reads the same durable marker, so
+    # the contention a healthy host count hides is now visible there too.
+    advisory = await admission.evaluate(now=refused_at + timedelta(seconds=45))
+    assert advisory.as_payload()["oldestWaiterAgeSeconds"] >= 30
+    refused = await _reservation_row(session_factory, "binding-2")
+    assert refused is not None
+    assert refused.state == STATE_WAITING
+    # A waiter marker is an observation, never an allocation: the refused
+    # attempt must not leave a prelaunch reservation or a lease behind.
+    async with session_factory() as session:
+        lease = await session.get(
+            OmnigentHostLeaseRecordV2,
+            generic_host_lease_ref(
+                runtime_binding_id="binding-2",
+                host_class_ref="omnigent-opencode@1",
+            ),
+        )
+    assert lease is None
+
+
+@pytest.mark.asyncio
+async def test_a_host_refused_at_the_host_count_layer_records_no_waiter(
+    session_factory,
+) -> None:
+    """A layer that never reached the machine must not fabricate a waiter.
+
+    The waiter marker names a wait on machine resources. Writing one for a
+    refusal the host-count ceiling produced would report machine contention
+    that never happened.
+    """
+
+    admission = _admission(session_factory, host_capacity=1)
+    repository = _repository(session_factory, admission)
+    await _acquire(repository, "binding-a")
+
+    with pytest.raises(HarnessPlatformError):
+        await _acquire(repository, "binding-b")
+
+    usage = await MachineCapacityLedger(session_factory).usage(backend_ref=BACKEND)
+    assert usage.waiting == 0
+    assert await _reservation_row(session_factory, "binding-b") is None
+
+
+@pytest.mark.asyncio
+async def test_an_unreadable_machine_budget_refuses_with_a_typed_code(
+    session_factory,
+) -> None:
+    """Implementation 6: an unreadable daemon is a typed, routable refusal.
+
+    ``machine_budget_from_runner`` is the exact provider production wires at
+    ``moonmind/omnigent/production.py``, so this drives the real probe over a
+    daemon that cannot be read rather than a stand-in that raises on cue.
+    """
+
+    from moonmind.capacity import machine_budget_from_runner
+
+    async def runner(argv):
+        assert tuple(argv)[0] == "info"
+        return 1, b"", b"Cannot connect to the Docker daemon"
+
+    async def budget():
+        return await machine_budget_from_runner(runner)
+
+    repository = DbOmnigentHostLeaseRepository(
+        session_factory,
+        capacity_admission=_admission(session_factory),
+        machine_budget_provider=budget,
+    )
+
+    with pytest.raises(HarnessPlatformError) as raised:
+        await _acquire(repository, "binding-a")
+
+    assert (
+        raised.value.code
+        == HarnessPlatformFailure.OMNIGENT_HOST_CAPACITY_UNAVAILABLE.value
+    )
+    assert "Cannot connect to the Docker daemon" in str(raised.value)
+    usage = await MachineCapacityLedger(session_factory).usage(backend_ref=BACKEND)
+    assert usage.reserved_memory_mib == 0
+    assert usage.waiting == 0
 
 
 @pytest.mark.asyncio
@@ -600,6 +748,31 @@ async def test_the_durable_allocation_records_the_machine_capacity_view(
     assert refused["limiting_resource"] in vocabulary
     assert refused["limiting_resource"] == LIMITING_LAYER_HOST_CAPACITY
     assert refused["oldest_waiter_age_seconds"] is not None
+
+    # A machine-layer refusal is the case oldest waiter age exists to report,
+    # so the emitted view has to carry a real wait rather than the structural
+    # zero a rolled-back marker used to guarantee. The first refusal persists
+    # the marker; back-dating it advances the durable clock without sleeping.
+    machine_admission = _admission(session_factory, host_capacity=8)
+    machine_repository = _repository(session_factory, machine_admission)
+    await _acquire(machine_repository, "binding-c")
+    with pytest.raises(HarnessPlatformError):
+        await _acquire(machine_repository, "binding-d")
+
+    async with session_factory() as session:
+        marker = await session.get(
+            MachineCapacityReservation, _host_reservation_id("binding-d")
+        )
+        assert marker.state == STATE_WAITING
+        marker.created_at = datetime.now(UTC) - timedelta(seconds=120)
+        await session.commit()
+
+    with pytest.raises(HarnessPlatformError):
+        await _acquire(machine_repository, "binding-d")
+
+    waiting = recorded[-1]
+    assert waiting["limiting_resource"] == LIMITING_RESOURCE_MEMORY
+    assert waiting["oldest_waiter_age_seconds"] >= 120
 
 
 # ------------------------------------------------------ inventory boundary
