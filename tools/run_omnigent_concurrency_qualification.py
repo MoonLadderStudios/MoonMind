@@ -10,11 +10,13 @@ layer's owning tests, converts each (layer, level) outcome into one
 and writes the record.
 
 The behaviour that matters is what happens when a layer cannot run. A runner
-that cannot reach the Docker daemon, the built images, the hermetic layer's
-database, or the protected live route emits an ``unavailable`` or ``blocked``
-row — never a silent skip and never an omitted row — so the missing level is
-visible in the record and the validated level does not rise past what was
-actually observed.
+that cannot reach the Docker daemon, the built images, the PostgreSQL cluster a
+layer's owners require, or the protected live route emits an ``unavailable`` or
+``blocked`` row — never a silent skip and never an omitted row — so the missing
+level is visible in the record and the validated level does not rise past what
+was actually observed. Each layer's precondition is composed from that layer's
+own catalog owners by :func:`layer_preconditions`, so an owner cannot bring an
+environment its layer never checks.
 
 The exit code answers for *this invocation*: zero only when every requested
 ``(layer, level)`` row passed, and a requested row that was never produced
@@ -56,7 +58,7 @@ import os
 import shutil
 import subprocess
 import sys
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -71,6 +73,8 @@ from moonmind.omnigent.concurrency_qualification import (  # noqa: E402
     CONCURRENCY_SCENARIO_CATALOG_VERSION,
     EXACT_DOCKER_LEVELS,
     HERMETIC_LEVELS,
+    PROTECTED_LIVE_ADMISSION_ENV,
+    PROTECTED_LIVE_PROVIDER_PROFILE_ENV,
     ConcurrencyQualificationLayer,
     ConcurrencyQualificationRecord,
     ConcurrencyQualificationRow,
@@ -78,10 +82,12 @@ from moonmind.omnigent.concurrency_qualification import (  # noqa: E402
     ConcurrencySupportIdentity,
     MachineResourceClass,
     compute_concurrency_evidence_digest,
+    layer_requires_postgres,
     load_observed_overlap,
     observed_overlap_evidence_path,
-    scenario_owners,
+    owning_test_files,
     unowned_scenarios,
+    unsatisfied_protected_live_environment,
 )
 
 DEFAULT_LEVELS = {
@@ -171,15 +177,16 @@ def _docker_available() -> None:
         raise LayerUnavailable("the Docker daemon did not report a server version")
 
 
-def _hermetic_database_available() -> None:
-    """Raise unless the hermetic layer's real database constraints can run.
+def _database_available() -> None:
+    """Raise unless the PostgreSQL cluster a layer's owners require is reachable.
 
-    The hermetic layer's declared environment includes real database
-    constraints: one of its owners races two independent PostgreSQL
-    transactions for the final slot. A runner without a cluster has *not*
-    exercised that constraint, so the layer reports ``unavailable`` and names
-    the missing dependency rather than entering and recording the resulting
-    fixture error as a concurrency failure.
+    Several owning tests decide their invariant with real database
+    constraints — one races two independent PostgreSQL transactions for the
+    final slot — and their fixture fails closed rather than skipping when no
+    cluster is reachable. A runner without one has *not* exercised those
+    constraints, so the layer reports ``unavailable`` and names the missing
+    dependency instead of entering and recording the fixture error as a
+    concurrency failure.
     """
 
     if os.getenv("MOONMIND_TEST_POSTGRES_URL", "").strip():
@@ -189,23 +196,59 @@ def _hermetic_database_available() -> None:
     if sorted(Path("/usr/lib/postgresql").glob("*/bin/initdb")):
         return
     raise LayerUnavailable(
-        "no PostgreSQL cluster is available for the hermetic layer's database "
+        "no PostgreSQL cluster is available for this layer's database "
         "constraints; set MOONMIND_TEST_POSTGRES_URL or install the PostgreSQL "
         "binaries (./tools/test_integration.sh provides both)"
     )
 
 
 def _protected_live_admitted() -> None:
-    """Raise unless the protected release admission boundary authorized this run."""
+    """Raise unless the release boundary admitted this run *and* the route exists.
 
-    if os.getenv("MOONMIND_OMNIGENT_PROTECTED_LIVE_CONCURRENCY", "").strip() != "1":
+    Admission and configuration are answered here, before the layer is
+    entered, because the owning test hard-requires the same values and fails
+    rather than skips: checking a different pair here is what turns an
+    unconfigured repository into a ``failed`` row that reads like a
+    concurrency defect. Admission stays a separate ``blocked`` outcome — a
+    refusal to admit and a missing credential are different operator actions.
+    """
+
+    if os.getenv(PROTECTED_LIVE_ADMISSION_ENV, "").strip() != "1":
         raise LayerBlocked(
             "protected-live concurrency is opt-in and was not admitted for this run"
         )
-    if not os.getenv("MOONMIND_OMNIGENT_PROVIDER_PROFILE_ID", "").strip():
+    if not os.getenv(PROTECTED_LIVE_PROVIDER_PROFILE_ENV, "").strip():
         raise LayerUnavailable(
             "no credentialless provider route is configured for protected live"
         )
+    unsatisfied = unsatisfied_protected_live_environment()
+    if unsatisfied:
+        raise LayerUnavailable(
+            "the protected-live provider route is not configured: "
+            + ", ".join(unsatisfied)
+        )
+
+
+def layer_preconditions(
+    layer: ConcurrencyQualificationLayer,
+) -> tuple[Callable[[], None], ...]:
+    """Return the environment checks ``layer`` must pass before it is entered.
+
+    The database check is *derived* from the layer's own catalog owners rather
+    than listed against a layer name, so a PostgreSQL-dependent owner added to
+    any layer brings the precondition with it. That is the whole contract this
+    program advertises: a missing dependency is recorded as ``unavailable``
+    naming what was absent, never as a ``failed`` row.
+    """
+
+    checks: list[Callable[[], None]] = []
+    if layer is ConcurrencyQualificationLayer.exact_docker:
+        checks.append(_docker_available)
+    elif layer is ConcurrencyQualificationLayer.protected_live:
+        checks.append(_protected_live_admitted)
+    if layer_requires_postgres(layer):
+        checks.append(_database_available)
+    return tuple(checks)
 
 
 class MachineNotObservable(RuntimeError):
@@ -425,8 +468,9 @@ def _run_owning_tests(
 ) -> int:
     """Execute the layer's owning tests for one level and return the exit code."""
 
-    targets = sorted({owner.owning_test.split("::")[0] for owner in scenario_owners(layer=layer)})
-    targets = [target for target in targets if Path(target).exists()]
+    # The same resolution the layer's precondition read, so the files whose
+    # environment was checked are exactly the files that run.
+    targets = [str(path) for path in owning_test_files(layer)]
     if not targets:
         raise LayerUnavailable(f"no owning test resolves for layer {layer.value}")
     env = dict(os.environ)
@@ -450,12 +494,8 @@ def build_rows(
     """Return one honest row per requested level for ``layer``."""
 
     try:
-        if layer is ConcurrencyQualificationLayer.hermetic:
-            _hermetic_database_available()
-        elif layer is ConcurrencyQualificationLayer.exact_docker:
-            _docker_available()
-        elif layer is ConcurrencyQualificationLayer.protected_live:
-            _protected_live_admitted()
+        for precondition in layer_preconditions(layer):
+            precondition()
     except LayerUnavailable as exc:
         return [
             ConcurrencyQualificationRow(

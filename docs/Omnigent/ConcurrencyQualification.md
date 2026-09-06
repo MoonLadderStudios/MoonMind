@@ -125,7 +125,11 @@ production identity derivations (correlation name, state-volume digest,
 expected Omnigent host id). No host is torn down until every host has been
 observed `running`, so the recorded windows overlap rather than merely abut, and
 the post-run scan is a real `docker inspect` of every container and volume the
-wave owned.
+wave owned. Four of its owners — the capacity-admission fence, the control
+plane, the machine-capacity reservations and the provider-lease incremental
+contract — also decide their invariant against real PostgreSQL, so
+`--layer exact_docker` needs the same cluster the hermetic layer does; the
+scheduled job supplies one as a service container.
 
 ## Authority handoffs under concurrency
 
@@ -300,6 +304,29 @@ an empty string, which `argparse` accepts *over* the flag's default.
 | `OMNIGENT_WORKER_TOPOLOGY_REF` | `--worker-topology-ref` | The worker replica/task-queue topology and concurrency settings. |
 | `OMNIGENT_CONCURRENCY_RESOURCE_CLASS` | `--resource-class` | The machine class the exact-image rows are filed under. A ref carrying `<cores>x<gib>` dimensions must be one the runner's measured machine satisfies. |
 
+### The environment each layer's owners require
+
+The identity arguments above build the record; these values let a layer's
+owning tests run at all. A layer whose environment is incomplete records
+`unavailable` rows naming what was absent, so a misconfigured repository is
+never reported as a concurrency defect — but it also never produces a row, so
+the job cannot pass until they are set.
+
+| Layer | Value | Source | Why the layer needs it |
+| --- | --- | --- | --- |
+| exact-image | `MOONMIND_TEST_POSTGRES_URL` | The job's PostgreSQL service container | Four of this layer's owners decide their invariant with real PostgreSQL constraints, and their fixture fails closed without a cluster. |
+| protected-live | `OMNIGENT_ENABLED` | `vars.OMNIGENT_ENABLED` | The owning test refuses to open a session unless the Omnigent gate is on. |
+| protected-live | `OMNIGENT_SERVER_URL` | `vars.OMNIGENT_SERVER_URL` | The server the live sessions are created against. |
+| protected-live | `OMNIGENT_API_TOKEN` | `secrets.OMNIGENT_API_TOKEN` | The bearer token for that server. |
+| protected-live | `OMNIGENT_DEFAULT_AGENT_NAME` | `vars.OMNIGENT_DEFAULT_AGENT_NAME` | The agent each concurrent session binds. |
+| protected-live | `MOONMIND_OMNIGENT_PROVIDER_PROFILE_ID` | `vars.MOONMIND_OMNIGENT_PROVIDER_PROFILE_ID` | The credentialless Zen route the bounded load is placed on. |
+| protected-live | `MOONMIND_OMNIGENT_PROTECTED_LIVE_CONCURRENCY` | The job, on opt-in dispatch only | Release admission. Its absence is `blocked`, not `unavailable`: refusing to admit is a different operator action from a missing credential. |
+
+The four protected-live variables are `PROTECTED_LIVE_REQUIRED_ENV`. The
+runner's precondition, the owning test and the workflow job all read that one
+tuple — a GitHub `environment:` cannot inject them into the test process, so
+the job passes each one explicitly.
+
 The runner resolves the **whole support identity before it runs any layer**. A
 blank or malformed value fails immediately, naming the flag and the repository
 variable behind it, so a completed exact-image wave — hours of real hosts on a
@@ -312,15 +339,24 @@ A valid invocation always writes its record, including when rows failed,
 evidence and survives the gate.
 
 The runner converts each (layer, level) outcome into one row. A missing daemon,
-missing exact image, missing host server endpoint, or missing PostgreSQL
-cluster for the hermetic layer produces `unavailable` rows; a protected-live
-run that was not admitted produces `blocked` rows; owning tests that pass
-without publishing an observation produce `partial` rows. In every case the
-rows are written to the record and the command exits non-zero.
+missing exact image, missing host server endpoint, missing PostgreSQL cluster
+for a layer whose owners need one, or an unconfigured protected-live route
+produces `unavailable` rows; a protected-live run that was not admitted
+produces `blocked` rows; owning tests that pass without publishing an
+observation produce `partial` rows. In every case the rows are written to the
+record and the command exits non-zero.
 
 Every layer's environment precondition is checked *before* its owning tests
 run, so a missing dependency is recorded as `unavailable` naming what was
 absent rather than as a `failed` row that reads like a concurrency defect.
+`layer_preconditions(layer)` composes that check from the layer's own catalog
+owners rather than from a list kept beside a layer name: `owning_test_files`
+resolves exactly the files the runner will spawn, and any layer owning a test
+that requests the `control_plane_postgres_url` fixture gets the database check
+automatically. A PostgreSQL-dependent owner added to a layer therefore cannot
+outrun that layer's precondition. The protected-live precondition checks the
+same `PROTECTED_LIVE_REQUIRED_ENV` its owning test reads, so the layer is never
+entered on an environment its own owner will reject.
 
 **The exit gate is per invocation.** The command exits zero only when every
 requested `(layer, level)` row passed, and a requested row that was never

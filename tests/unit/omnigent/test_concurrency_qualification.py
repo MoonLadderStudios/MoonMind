@@ -11,6 +11,7 @@ is not a zero-leak scan.
 from __future__ import annotations
 
 import argparse
+import importlib.util
 import json
 import os
 from datetime import UTC, datetime
@@ -27,6 +28,10 @@ from moonmind.omnigent.concurrency_qualification import (
     EXACT_DOCKER_LEVELS,
     EXACT_DOCKER_REPEATED_WAVE_THRESHOLDS,
     HERMETIC_LEVELS,
+    POSTGRES_FIXTURE_NAME,
+    PROTECTED_LIVE_ADMISSION_ENV,
+    PROTECTED_LIVE_PROVIDER_PROFILE_ENV,
+    PROTECTED_LIVE_REQUIRED_ENV,
     REPEATED_WAVE_THRESHOLDS,
     REQUIRED_QUALIFICATION_LAYERS,
     CleanupScanEntry,
@@ -45,16 +50,20 @@ from moonmind.omnigent.concurrency_qualification import (
     WaveObservation,
     build_row_for_unavailable_environment,
     compute_concurrency_evidence_digest,
+    layer_requires_postgres,
     load_observed_overlap,
     nominal_memory_band_mib,
     observed_overlap_evidence_path,
     observed_peak_overlap,
+    owning_test_files,
     publish_observed_overlap,
     repeated_wave_thresholds,
     requested_concurrency_level,
     scenario_owners,
     unowned_scenarios,
+    unsatisfied_protected_live_environment,
 )
+from moonmind.omnigent.conformance import assert_secret_free
 from tools import run_omnigent_concurrency_qualification as runner
 
 SUPPORT_KEY = "omnigent-support:sha256:" + "a" * 64
@@ -692,8 +701,8 @@ def test_the_requested_level_comes_from_the_runner_or_the_default(
 
 
 @pytest.fixture
-def hermetic_database(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Satisfy the hermetic layer's database precondition for row tests.
+def postgres_cluster(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Satisfy the database precondition of any layer whose owners need one.
 
     These tests are about the row contract, not about provisioning a cluster,
     so they declare the environment the layer requires and replace the owning
@@ -724,6 +733,22 @@ def _runner_args(
     )
 
 
+def _admit_protected_live(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Give the protected-live layer everything its precondition requires.
+
+    Admission, the credentialless route, and every name in
+    :data:`PROTECTED_LIVE_REQUIRED_ENV` — the complete environment the job is
+    expected to supply, so a test that removes one value is testing that value.
+    """
+
+    monkeypatch.setenv(PROTECTED_LIVE_ADMISSION_ENV, "1")
+    monkeypatch.setenv(PROTECTED_LIVE_PROVIDER_PROFILE_ENV, "opencode-zen-free")
+    monkeypatch.setenv("OMNIGENT_ENABLED", "true")
+    monkeypatch.setenv("OMNIGENT_SERVER_URL", "https://omnigent.invalid")
+    monkeypatch.setenv("OMNIGENT_API_TOKEN", "not-a-real-token")
+    monkeypatch.setenv("OMNIGENT_DEFAULT_AGENT_NAME", "moonmind-concurrency")
+
+
 def _identity_argv(**overrides: str) -> list[str]:
     """Return the scheduled exact-image job's own argv, minus the paths."""
 
@@ -742,7 +767,7 @@ def _identity_argv(**overrides: str) -> list[str]:
 
 
 def test_an_owning_test_that_published_its_observation_records_a_pass(
-    tmp_path, monkeypatch: pytest.MonkeyPatch, hermetic_database
+    tmp_path, monkeypatch: pytest.MonkeyPatch, postgres_cluster
 ) -> None:
     """The producing half of the row contract: published evidence -> passed."""
 
@@ -768,7 +793,7 @@ def test_an_owning_test_that_published_its_observation_records_a_pass(
 
 
 def test_an_owning_test_that_published_nothing_stays_partial(
-    tmp_path, monkeypatch: pytest.MonkeyPatch, hermetic_database
+    tmp_path, monkeypatch: pytest.MonkeyPatch, postgres_cluster
 ) -> None:
     """Green tests that observed nothing are honest about it, not a pass."""
 
@@ -786,7 +811,7 @@ def test_an_owning_test_that_published_nothing_stays_partial(
 
 
 def test_a_failing_owning_test_records_a_failed_row(
-    tmp_path, monkeypatch: pytest.MonkeyPatch, hermetic_database
+    tmp_path, monkeypatch: pytest.MonkeyPatch, postgres_cluster
 ) -> None:
     monkeypatch.setattr(
         runner, "_run_owning_tests", lambda _layer, _level, _dir: 1
@@ -853,7 +878,7 @@ def test_a_hermetic_layer_without_a_database_records_unavailable_rows(
 
 
 def test_a_configured_database_url_admits_the_hermetic_layer(
-    tmp_path, monkeypatch: pytest.MonkeyPatch, hermetic_database
+    tmp_path, monkeypatch: pytest.MonkeyPatch, postgres_cluster
 ) -> None:
     """A configured cluster is enough; no local binaries are required."""
 
@@ -868,14 +893,85 @@ def test_a_configured_database_url_admits_the_hermetic_layer(
     assert rows[0].status is ConcurrencyRowStatus.partial
 
 
+def test_an_exact_docker_layer_without_a_database_records_unavailable_rows(
+    tmp_path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The exact-image layer's owners need a cluster, so its layer does too.
+
+    A runner carrying Docker and the digest-pinned images but no PostgreSQL
+    has not observed anything about concurrency: four of this layer's owners
+    fail closed in their fixture. Recording that as ``failed`` would publish a
+    concurrency defect nobody saw.
+    """
+
+    monkeypatch.setenv(
+        "MOONMIND_OMNIGENT_CONCURRENCY_HOST_IMAGE", "host@sha256:" + "e" * 64
+    )
+    monkeypatch.setenv(
+        "MOONMIND_OMNIGENT_HOST_SERVER_URL", "https://omnigent.invalid"
+    )
+    monkeypatch.setattr(runner, "_docker_available", lambda: None)
+    monkeypatch.delenv("MOONMIND_TEST_POSTGRES_URL", raising=False)
+    monkeypatch.setattr(runner.shutil, "which", lambda _name: None)
+    monkeypatch.setattr(runner.Path, "glob", lambda _self, _pattern: iter(()))
+    monkeypatch.setattr(
+        runner,
+        "_run_owning_tests",
+        lambda *_a: pytest.fail("the layer was entered without its database"),
+    )
+
+    rows = runner.build_rows(
+        _runner_args(tmp_path),
+        ConcurrencyQualificationLayer.exact_docker,
+        EXACT_DOCKER_LEVELS,
+    )
+
+    assert [row.status for row in rows] == [ConcurrencyRowStatus.unavailable] * len(
+        EXACT_DOCKER_LEVELS
+    )
+    assert "PostgreSQL" in rows[0].diagnostics[0]
+
+
+def test_every_layer_precondition_covers_the_environment_its_owners_require() -> None:
+    """A layer's precondition is composed from that layer's own owners.
+
+    The catalog decides which layers need a cluster, so a PostgreSQL-dependent
+    owner added to a layer brings the check with it instead of silently
+    outrunning a hand-maintained list.
+    """
+
+    repo_root = Path(__file__).resolve().parents[3]
+    for layer in ConcurrencyQualificationLayer:
+        needs_database = any(
+            POSTGRES_FIXTURE_NAME in path.read_text(encoding="utf-8")
+            for path in owning_test_files(layer, root=repo_root)
+        )
+        assert layer_requires_postgres(layer, root=repo_root) is needs_database
+        covered = runner._database_available in runner.layer_preconditions(layer)
+        assert covered is needs_database, (
+            f"{layer.value} owners need a database: {needs_database}, "
+            f"precondition covers it: {covered}"
+        )
+
+    # The catalog this program ships with: both required layers race real
+    # PostgreSQL transactions, and the live route does not.
+    assert layer_requires_postgres(
+        ConcurrencyQualificationLayer.exact_docker, root=repo_root
+    )
+    assert layer_requires_postgres(
+        ConcurrencyQualificationLayer.hermetic, root=repo_root
+    )
+    assert not layer_requires_postgres(
+        ConcurrencyQualificationLayer.protected_live, root=repo_root
+    )
+
+
 def test_an_unadmitted_protected_live_layer_records_blocked_rows(
     tmp_path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """Opt-in refusal is a policy outcome, not a missing environment."""
 
-    monkeypatch.delenv(
-        "MOONMIND_OMNIGENT_PROTECTED_LIVE_CONCURRENCY", raising=False
-    )
+    monkeypatch.delenv(PROTECTED_LIVE_ADMISSION_ENV, raising=False)
 
     rows = runner.build_rows(
         _runner_args(tmp_path), ConcurrencyQualificationLayer.protected_live, (2,)
@@ -883,6 +979,131 @@ def test_an_unadmitted_protected_live_layer_records_blocked_rows(
 
     assert rows[0].status is ConcurrencyRowStatus.blocked
     assert not rows[0].qualifies
+
+
+@pytest.mark.parametrize("missing", PROTECTED_LIVE_REQUIRED_ENV)
+def test_an_admitted_protected_live_layer_without_its_route_is_unavailable(
+    tmp_path, monkeypatch: pytest.MonkeyPatch, missing: str
+) -> None:
+    """A missing credential is an environment gap, not a concurrency defect.
+
+    This is the case the layer used to enter and then fail: admission checked
+    one pair of variables while the owning test hard-required another, so an
+    unconfigured repository published a ``failed`` row that reads exactly like
+    N sessions colliding on the live route.
+    """
+
+    _admit_protected_live(monkeypatch)
+    monkeypatch.delenv(missing, raising=False)
+    monkeypatch.setattr(
+        runner,
+        "_run_owning_tests",
+        lambda *_a: pytest.fail("the layer was entered without its credentials"),
+    )
+
+    rows = runner.build_rows(
+        _runner_args(tmp_path), ConcurrencyQualificationLayer.protected_live, (2,)
+    )
+
+    assert rows[0].status is ConcurrencyRowStatus.unavailable
+    assert not rows[0].qualifies
+    # Exactly the absent variable: an operator reading the record acts on the
+    # one value they have to set, not on a list of everything it depends on.
+    assert rows[0].diagnostics[0].endswith(f": {missing}")
+    # The diagnostic names the variable, never its value: the job publishes
+    # this record as an artifact and scans it for secret-like material.
+    assert_secret_free(rows[0].model_dump(mode="json", by_alias=True))
+
+
+def test_a_protected_live_gate_turned_off_names_the_variable_that_refused(
+    tmp_path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """``OMNIGENT_ENABLED=false`` is set and still refuses the route."""
+
+    _admit_protected_live(monkeypatch)
+    monkeypatch.setenv("OMNIGENT_ENABLED", "false")
+
+    rows = runner.build_rows(
+        _runner_args(tmp_path), ConcurrencyQualificationLayer.protected_live, (2,)
+    )
+
+    assert rows[0].status is ConcurrencyRowStatus.unavailable
+    assert "OMNIGENT_ENABLED" in rows[0].diagnostics[0]
+
+
+def test_an_admitted_and_configured_protected_live_layer_runs_its_owner(
+    tmp_path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The other direction: a complete environment produces a real row.
+
+    Without this the precondition could be satisfied by refusing every run.
+    """
+
+    _admit_protected_live(monkeypatch)
+
+    def _publish(layer, level, _evidence_dir) -> int:
+        publish_observed_overlap(layer, _overlap(level), evidence_dir=tmp_path)
+        return 0
+
+    monkeypatch.setattr(runner, "_run_owning_tests", _publish)
+
+    rows = runner.build_rows(
+        _runner_args(tmp_path), ConcurrencyQualificationLayer.protected_live, (2,)
+    )
+
+    assert rows[0].status is ConcurrencyRowStatus.passed
+    assert rows[0].qualifies
+
+
+@pytest.fixture(scope="module")
+def protected_live_owner():
+    """Load the protected-live owning test module without collecting it.
+
+    The credentialed provider suite does not run here, but its environment
+    check is pure — it reads variables and fails — so the real function can be
+    exercised against the runner's precondition instead of being described.
+    """
+
+    path = (
+        Path(__file__).resolve().parents[3]
+        / "tests/provider/omnigent/test_omnigent_concurrency.py"
+    )
+    spec = importlib.util.spec_from_file_location(
+        "moonmind_tests.protected_live_concurrency_owner", path
+    )
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+@pytest.mark.parametrize("missing", PROTECTED_LIVE_REQUIRED_ENV)
+def test_the_runner_and_the_owning_test_agree_on_the_live_environment(
+    monkeypatch: pytest.MonkeyPatch, protected_live_owner, missing: str
+) -> None:
+    """The layer is never admitted on an environment its own owner rejects.
+
+    Both directions against the real ``_live_env`` the provider suite runs: an
+    environment the runner refuses is refused there too, naming the same
+    variable, and the environment the job supplies is accepted. Checking a
+    different pair in the two places is the whole of CQ-15.
+    """
+
+    _admit_protected_live(monkeypatch)
+    monkeypatch.delenv(missing, raising=False)
+
+    with pytest.raises(pytest.fail.Exception) as refused:
+        protected_live_owner._live_env()
+
+    assert missing in str(refused.value)
+    assert missing in unsatisfied_protected_live_environment()
+
+    monkeypatch.setenv(missing, "restored")
+    if missing == "OMNIGENT_ENABLED":
+        monkeypatch.setenv(missing, "true")
+    assert unsatisfied_protected_live_environment() == ()
+    assert sorted(protected_live_owner._live_env()) == sorted(
+        PROTECTED_LIVE_REQUIRED_ENV
+    )
 
 
 def test_an_unavailable_required_layer_never_raises_the_validated_level(
@@ -1370,6 +1591,9 @@ def test_a_passing_exact_docker_row_carries_the_measured_machine(
         "MOONMIND_OMNIGENT_HOST_SERVER_URL", "https://omnigent.invalid"
     )
     monkeypatch.setattr(runner, "_docker_available", lambda: None)
+    monkeypatch.setenv(
+        "MOONMIND_TEST_POSTGRES_URL", "postgresql://postgres@127.0.0.1:5432/postgres"
+    )
     _measure_machine(monkeypatch, cores=32, mem_total_kib=131_600_000)
 
     def _publish(layer, level, _evidence_dir) -> int:

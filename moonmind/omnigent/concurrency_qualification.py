@@ -42,6 +42,7 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 from pydantic.alias_generators import to_camel
 
 from moonmind.omnigent.conformance import assert_secret_free
+from moonmind.omnigent.settings import is_omnigent_enabled
 
 #: Bumped whenever the required scenario families, their layer requirements, or
 #: the owning-test bindings below change. Evidence produced against an older
@@ -59,6 +60,34 @@ CONCURRENCY_QUALIFICATION_RECORD_VERSION = (
 HERMETIC_LEVELS: tuple[int, ...] = (1, 2, 4, 8, 16)
 EXACT_DOCKER_LEVELS: tuple[int, ...] = (2, 4, 8)
 PROTECTED_LIVE_MINIMUM_LEVEL = 2
+
+#: The pytest fixture that provisions an owning test's PostgreSQL cluster. It
+#: fails closed rather than skipping when no cluster is reachable
+#: (``tests/integration/omnigent/conftest.py``), so a layer owning a test that
+#: requests it carries PostgreSQL in its declared environment and the runner's
+#: precondition for that layer has to cover it.
+POSTGRES_FIXTURE_NAME = "control_plane_postgres_url"
+
+#: The protected release flag that admits the live layer. A refusal to admit is
+#: an operator decision rather than a missing environment, so it stays separate
+#: from :data:`PROTECTED_LIVE_REQUIRED_ENV`: one records a ``blocked`` row, the
+#: other an ``unavailable`` one, and they call for different operator actions.
+PROTECTED_LIVE_ADMISSION_ENV = "MOONMIND_OMNIGENT_PROTECTED_LIVE_CONCURRENCY"
+
+#: The credentialless provider route the protected-live layer runs against.
+PROTECTED_LIVE_PROVIDER_PROFILE_ENV = "MOONMIND_OMNIGENT_PROVIDER_PROFILE_ID"
+
+#: Everything the protected-live owning test reads before it opens a single
+#: session. The runner checks this same tuple before it enters the layer and
+#: the scheduled job's env block is asserted against it, so the job, the
+#: precondition and the owning test cannot drift into a layer that is admitted
+#: and then fails on its own configuration.
+PROTECTED_LIVE_REQUIRED_ENV: tuple[str, ...] = (
+    "OMNIGENT_ENABLED",
+    "OMNIGENT_SERVER_URL",
+    "OMNIGENT_API_TOKEN",
+    "OMNIGENT_DEFAULT_AGENT_NAME",
+)
 
 #: One published casing for every model in this record. The document is read by
 #: CI jobs and operators alongside the protected support index, so it uses the
@@ -346,6 +375,76 @@ def scenario_owners(
         if (layer is None or entry.layer is layer)
         and (family is None or entry.family is family)
     )
+
+
+#: The checkout this module was loaded from. Catalog owning tests are paths
+#: relative to it, so the runner resolves the same files whatever directory it
+#: was invoked from.
+REPOSITORY_ROOT = Path(__file__).resolve().parents[2]
+
+
+def owning_test_files(
+    layer: ConcurrencyQualificationLayer, *, root: Path | None = None
+) -> tuple[Path, ...]:
+    """Return the distinct files that execute ``layer``'s owning tests.
+
+    This is the one resolution of a layer's owners into paths: the runner
+    spawns exactly these files, and :func:`layer_requires_postgres` reads
+    exactly these files to decide what environment the layer needs. A file the
+    catalog names but the checkout does not carry is dropped here, so a caller
+    never has to distinguish "no owner" from "an owner that cannot be read".
+    """
+
+    base = REPOSITORY_ROOT if root is None else Path(root)
+    named = sorted(
+        {owner.owning_test.split("::")[0] for owner in scenario_owners(layer=layer)}
+    )
+    return tuple(path for path in (base / name for name in named) if path.is_file())
+
+
+def layer_requires_postgres(
+    layer: ConcurrencyQualificationLayer, *, root: Path | None = None
+) -> bool:
+    """Return whether any of ``layer``'s owners needs a PostgreSQL cluster.
+
+    Derived from the catalog instead of listed per layer. An owner brings its
+    environment with it, so a PostgreSQL-dependent test added to a layer cannot
+    outrun that layer's precondition and turn a missing cluster into a row that
+    reads like a concurrency defect.
+    """
+
+    for path in owning_test_files(layer, root=root):
+        try:
+            source = path.read_text(encoding="utf-8")
+        except OSError:  # pragma: no cover - unreadable owner is not a claim
+            continue
+        if POSTGRES_FIXTURE_NAME in source:
+            return True
+    return False
+
+
+def unsatisfied_protected_live_environment(
+    env: Mapping[str, Any] | None = None,
+) -> tuple[str, ...]:
+    """Return the protected-live variables that are absent or refuse the route.
+
+    Both the qualification runner's precondition and the owning test read this
+    one answer, so the layer is never entered on an environment its own owner
+    will reject. A value that is present but turns Omnigent off is reported the
+    same way an absent one is — either way no session can be opened, and naming
+    the variable is what makes the row actionable — but only once everything
+    else is set, so an absent server URL is not reported as a disabled gate.
+    """
+
+    source: Mapping[str, Any] = os.environ if env is None else env
+    missing = [
+        name
+        for name in PROTECTED_LIVE_REQUIRED_ENV
+        if not str(source.get(name) or "").strip()
+    ]
+    if not missing and not is_omnigent_enabled(env=source):
+        missing.append("OMNIGENT_ENABLED")
+    return tuple(sorted(missing))
 
 
 def unowned_scenarios() -> tuple[tuple[ConcurrencyScenarioFamily, ConcurrencyQualificationLayer], ...]:
@@ -1091,8 +1190,13 @@ __all__ = [
     "MAX_DIAGNOSTIC_ENTRIES",
     "MAX_DIAGNOSTIC_LENGTH",
     "PASSING_ROW_STATUSES",
+    "POSTGRES_FIXTURE_NAME",
+    "PROTECTED_LIVE_ADMISSION_ENV",
     "PROTECTED_LIVE_MINIMUM_LEVEL",
+    "PROTECTED_LIVE_PROVIDER_PROFILE_ENV",
+    "PROTECTED_LIVE_REQUIRED_ENV",
     "REPEATED_WAVE_THRESHOLDS",
+    "REPOSITORY_ROOT",
     "REQUIRED_QUALIFICATION_LAYERS",
     "CleanupScanEntry",
     "CleanupScanReport",
@@ -1111,13 +1215,16 @@ __all__ = [
     "WaveObservation",
     "build_row_for_unavailable_environment",
     "compute_concurrency_evidence_digest",
+    "layer_requires_postgres",
     "load_observed_overlap",
     "nominal_memory_band_mib",
     "observed_overlap_evidence_path",
     "observed_peak_overlap",
+    "owning_test_files",
     "publish_observed_overlap",
     "repeated_wave_thresholds",
     "requested_concurrency_level",
     "scenario_owners",
     "unowned_scenarios",
+    "unsatisfied_protected_live_environment",
 ]
