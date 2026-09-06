@@ -12,7 +12,8 @@ nothing enforces nothing.
 
 from __future__ import annotations
 
-from datetime import UTC, datetime
+import pathlib
+from datetime import UTC, datetime, timedelta
 from unittest.mock import AsyncMock
 
 import pytest
@@ -25,13 +26,21 @@ from api_service.db.models import (
     OmnigentHostLeaseRecordV2,
 )
 from moonmind.capacity import (
+    COVERED_WORKLOAD_CLASSES,
     LIMITING_RESOURCE_MEMORY,
     LIMITING_RESOURCE_RECONCILIATION,
+    OWNED_CONTAINER_LABEL_FILTERS,
+    OWNED_LAUNCH_CLASSES,
+    STATE_ACTIVE,
     STATE_ADOPTED,
+    WORKLOAD_CLASS_CONTAINER_JOB,
     WORKLOAD_CLASS_GENERIC_HOST,
     MachineCapacityLedger,
     MachineResourceBudget,
     MachineTotals,
+    OwnedContainer,
+    OwnedContainerInventory,
+    OwnedLaunchClass,
     ReservationRequest,
     ResourceDemand,
     machine_reservation_id,
@@ -67,6 +76,30 @@ LAUNCH_POLICY_LIMITS = {
     "timeoutSeconds": 1800,
     "temporaryStorageMiB": 256,
 }
+
+
+HOST_LAUNCH_CLASS = OwnedLaunchClass(
+    "generic_omnigent_host",
+    "moonmind.owner=generic-omnigent-host",
+    WORKLOAD_CLASS_GENERIC_HOST,
+)
+JOB_LAUNCH_CLASS = OwnedLaunchClass(
+    "container_job", "moonmind.container_job", WORKLOAD_CLASS_CONTAINER_JOB
+)
+
+
+def _owned_inventory(
+    containers: dict[str, ResourceDemand] | None = None,
+    *,
+    launch_class: OwnedLaunchClass = HOST_LAUNCH_CLASS,
+) -> OwnedContainerInventory:
+    return OwnedContainerInventory(
+        containers={
+            ref: OwnedContainer(demand=demand, launch_class=launch_class)
+            for ref, demand in (containers or {}).items()
+        },
+        label_selectors=OWNED_CONTAINER_LABEL_FILTERS,
+    )
 
 
 def _budget(**env: str) -> MachineResourceBudget:
@@ -281,7 +314,7 @@ async def test_the_advisory_precheck_refuses_an_unprovable_backend(
     """AC7: daemon uncertainty must not read as free capacity anywhere."""
 
     await MachineCapacityLedger(session_factory).reconcile(
-        backend_ref=BACKEND, live_containers=None
+        backend_ref=BACKEND, inventory=None
     )
     admission = _admission(session_factory)
 
@@ -336,7 +369,7 @@ async def test_the_durable_allocation_refuses_an_unprovable_backend(
     """AC7: the enforcing path, not only the advisory read, blocks."""
 
     await MachineCapacityLedger(session_factory).reconcile(
-        backend_ref=BACKEND, live_containers=None
+        backend_ref=BACKEND, inventory=None
     )
     admission = _admission(session_factory)
     repository = _repository(session_factory, admission)
@@ -438,6 +471,61 @@ async def test_the_realizer_confirms_and_releases_on_cleanup_evidence(
 
 
 @pytest.mark.asyncio
+async def test_the_realizer_does_not_fail_a_launch_that_outlived_its_window(
+    session_factory,
+) -> None:
+    """#3881 FINDING-3: a slow cold launch must still confirm.
+
+    ``realize()`` pulls the image, creates the container and then polls for
+    registration, which can outlast the prelaunch window. The allocation named
+    its container before mutating Docker, so the fence still holds and the
+    successful launch confirms instead of failing.
+    """
+
+    from moonmind.omnigent.host_ports import host_correlation_identity
+
+    admission = _admission(session_factory)
+    repository = _repository(session_factory, admission)
+    lease = await _acquire(repository, "binding-a")
+    realizer = _realizer(admission)
+    ledger = MachineCapacityLedger(session_factory)
+    container_name = host_correlation_identity(lease.leaseRef)
+
+    async with session_factory() as session:
+        row = await session.get(
+            MachineCapacityReservation,
+            machine_reservation_id(
+                backend_ref=BACKEND,
+                owner_kind="omnigent_host_lease",
+                owner_ref=lease.leaseRef,
+                generation=1,
+            ),
+        )
+        row.expires_at = datetime.now(UTC) - timedelta(seconds=1)
+        await session.commit()
+    # Another admission sweeps expiries long after the prelaunch TTL elapsed.
+    await _acquire(repository, "binding-b")
+
+    await realizer._assert_machine_reservation_holds(lease.leaseRef)
+    await realizer._confirm_machine_reservation(lease.leaseRef, container_name)
+
+    usage = await ledger.usage(backend_ref=BACKEND)
+    assert usage.reserved_memory_mib == 6000
+    async with session_factory() as session:
+        row = await session.get(
+            MachineCapacityReservation,
+            machine_reservation_id(
+                backend_ref=BACKEND,
+                owner_kind="omnigent_host_lease",
+                owner_ref=lease.leaseRef,
+                generation=1,
+            ),
+        )
+    assert row.state == STATE_ACTIVE
+    assert row.container_ref == container_name
+
+
+@pytest.mark.asyncio
 async def test_a_retained_state_volume_keeps_storage_accounted(
     session_factory,
 ) -> None:
@@ -468,6 +556,50 @@ async def test_the_realizer_is_inert_without_machine_accounting_wired() -> None:
     await realizer._release_machine_reservation("lease-a", {"containerRemoved": True})
 
 
+@pytest.mark.asyncio
+async def test_the_durable_allocation_records_the_machine_capacity_view(
+    session_factory, monkeypatch
+) -> None:
+    """#3881 FINDING-5, implementation 8: the observation must actually emit.
+
+    The metric family's label vocabulary is covered elsewhere; what was missing
+    is evidence that the enforcing allocation path emits it at all, on both the
+    admitted and the refused outcome.
+    """
+
+    from moonmind.omnigent.control_plane import metrics as control_plane_metrics
+
+    recorded: list[dict[str, object]] = []
+    monkeypatch.setattr(
+        control_plane_metrics,
+        "record_machine_capacity",
+        lambda **kwargs: recorded.append(kwargs),
+    )
+    vocabulary = control_plane_metrics.BOUNDED_LABEL_VALUES["limiting_resource"]
+    admission = _admission(session_factory, host_capacity=1)
+    repository = _repository(session_factory, admission)
+
+    await _acquire(repository, "binding-a")
+
+    assert len(recorded) == 1
+    admitted = recorded[-1]
+    assert admitted["reconciliation_health"] == "healthy"
+    assert admitted["ceilings"]["memoryMiB"] == 7000
+    assert admitted["utilization_percent"]["memory"] == 0
+    # ``None`` is the admitted outcome's limiting resource; the recorder maps
+    # it onto the bounded ``none`` label.
+    assert admitted["limiting_resource"] is None
+
+    with pytest.raises(HarnessPlatformError):
+        await _acquire(repository, "binding-b")
+
+    assert len(recorded) == 2
+    refused = recorded[-1]
+    assert refused["limiting_resource"] in vocabulary
+    assert refused["limiting_resource"] == LIMITING_LAYER_HOST_CAPACITY
+    assert refused["oldest_waiter_age_seconds"] is not None
+
+
 # ------------------------------------------------------ inventory boundary
 
 
@@ -492,12 +624,19 @@ async def test_the_inventory_reports_only_moonmind_owned_running_containers() ->
 
     observed = await probe_owned_containers(runner)
 
-    assert observed == {
+    assert {ref: owned.demand for ref, owned in observed.containers.items()} == {
         "mm-omnigent-host-1": ResourceDemand(
             cpu_millis=1500, memory_mib=2048, processes=256
         ),
         "mm-job-1": ResourceDemand(cpu_millis=1000, memory_mib=1024, processes=128),
     }
+    # The scope travels with the result: a full enumeration is what makes
+    # absence from it evidence that a consumer is gone.
+    assert observed.covers_every_owned_launch_class is True
+    assert (
+        observed.containers["mm-omnigent-host-1"].launch_class.workload_class
+        == WORKLOAD_CLASS_GENERIC_HOST
+    )
     # Only MoonMind's own owner labels are ever queried, so a foreign container
     # can never appear in the inventory or be acted on.
     assert all(
@@ -516,6 +655,142 @@ async def test_an_unreadable_inventory_is_not_an_empty_inventory() -> None:
     assert await probe_owned_containers(runner) is None
 
 
+# ------------------------------------------- owned launch-class registry
+
+
+#: Label literals that name a MoonMind-owned **volume**, not a container. They
+#: consume no CPU, memory or processes, so machine accounting never enumerates
+#: them.
+NON_CONTAINER_OWNER_LABELS = frozenset(
+    {
+        "moonmind.kind=container-job-cache",
+        "moonmind.owner=generic-omnigent-github-credential",
+    }
+)
+
+
+def test_every_owned_container_label_the_deployment_creates_is_classified() -> None:
+    """#3881 FINDING-2: an unregistered launch class reads as free capacity.
+
+    Reconciliation only sees the owner labels the registry names. A launch
+    class that MoonMind can create but the registry does not know would spend
+    the machine invisibly, so every owner-label literal in production source
+    must be either a registered launch class or an explicitly named
+    non-container label.
+    """
+
+    import re
+
+    label_pattern = re.compile(
+        r'moonmind\.(kind|owner)(?:=|"\s*:\s*")([A-Za-z0-9_.\-]+)'
+    )
+    root = pathlib.Path(__file__).resolve().parents[3] / "moonmind"
+    registry = set(OWNED_CONTAINER_LABEL_FILTERS)
+    unclassified: dict[str, str] = {}
+    for path in sorted(root.rglob("*.py")):
+        if path.parts[-2:] == ("capacity", "docker_inventory.py"):
+            continue
+        for match in label_pattern.finditer(
+            path.read_text(encoding="utf-8", errors="replace")
+        ):
+            label = f"moonmind.{match.group(1)}={match.group(2)}"
+            if label in registry or label in NON_CONTAINER_OWNER_LABELS:
+                continue
+            unclassified.setdefault(label, str(path))
+
+    assert unclassified == {}
+
+
+def test_every_workload_ownership_kind_is_a_registered_launch_class() -> None:
+    """The one launch site that labels containers from a type, not a literal."""
+
+    from typing import get_args
+
+    from moonmind.schemas.workload_models import WorkloadOwnershipKind
+
+    registry = set(OWNED_CONTAINER_LABEL_FILTERS)
+    for kind in get_args(WorkloadOwnershipKind):
+        assert f"moonmind.kind={kind}" in registry
+
+
+def test_the_oauth_host_launch_classes_are_accounted_but_never_refused() -> None:
+    """#3881 FINDING-2: the documented policy and the inventory must agree.
+
+    OAuth credential-authority hosts do not reserve: refusing one on resource
+    grounds would break authentication rather than protect the machine. The
+    policy is only honest if reconciliation still enumerates them, so their
+    capacity is subtracted from what reserving launches may take.
+    """
+
+    by_selector = {
+        launch_class.label_selector: launch_class
+        for launch_class in OWNED_LAUNCH_CLASSES
+    }
+    for selector in (
+        "moonmind.kind=omnigent-oauth-host",
+        "moonmind.kind=omnigent-oauth-credential-validator",
+    ):
+        launch_class = by_selector[selector]
+        assert launch_class.reserves is False
+        assert selector in OWNED_CONTAINER_LABEL_FILTERS
+    # Exactly the classes that reserve are the ones a caller may reserve as.
+    assert {
+        launch_class.workload_class
+        for launch_class in OWNED_LAUNCH_CLASSES
+        if launch_class.reserves
+    } == set(COVERED_WORKLOAD_CLASSES)
+
+
+@pytest.mark.asyncio
+async def test_a_live_oauth_host_reduces_what_reserving_launches_may_take(
+    session_factory,
+) -> None:
+    """#3881 FINDING-2, AC3: an unreserved owned host is not free capacity."""
+
+    ledger = MachineCapacityLedger(session_factory)
+    oauth_class = OwnedLaunchClass(
+        "omnigent_oauth_host", "moonmind.kind=omnigent-oauth-host"
+    )
+    runtime_bindings = AsyncMock()
+    runtime_bindings.list_recoverable.return_value = ()
+    host_leases = AsyncMock()
+    host_leases.list_recoverable.return_value = ()
+
+    async def inventory():
+        return _owned_inventory(
+            {
+                "mm-oauth-host-a": ResourceDemand(
+                    cpu_millis=4000, memory_mib=6800, processes=512
+                )
+            },
+            launch_class=oauth_class,
+        )
+
+    result = await GenericOmnigentHostJanitor(
+        host_leases=host_leases,
+        runtime_bindings=runtime_bindings,
+        realizer=AsyncMock(),
+        machine_capacity=ledger,
+        machine_backend_ref=BACKEND,
+        container_inventory=inventory,
+    ).run()
+
+    # Accounted, but not a reconciliation fault: nothing was meant to reserve it.
+    assert result["machineCapacity"]["observed"] == 1
+    assert result["machineCapacity"]["adopted"] == 0
+    assert result["machineCapacity"]["reconciliationFaults"] == 0
+
+    admission = _admission(session_factory)
+    repository = _repository(session_factory, admission)
+    with pytest.raises(HarnessPlatformError) as raised:
+        await _acquire(repository, "binding-a")
+
+    assert (
+        raised.value.code
+        == HarnessPlatformFailure.OMNIGENT_HOST_CAPACITY_UNAVAILABLE.value
+    )
+
+
 # --------------------------------------------------------- janitor boundary
 
 
@@ -532,7 +807,10 @@ async def test_the_janitor_adopts_an_unaccounted_owned_live_container(
     host_leases.list_recoverable.return_value = ()
 
     async def inventory():
-        return {"mm-job-orphan": ResourceDemand(cpu_millis=500, memory_mib=1024)}
+        return _owned_inventory(
+            {"mm-job-orphan": ResourceDemand(cpu_millis=500, memory_mib=1024)},
+            launch_class=JOB_LAUNCH_CLASS,
+        )
 
     result = await GenericOmnigentHostJanitor(
         host_leases=host_leases,
@@ -717,6 +995,129 @@ async def test_a_container_job_reserves_and_confirms_in_the_shared_ledger(
     await backend.remove_container(request)
 
     assert (await ledger.usage(backend_ref=BACKEND)).reserved_memory_mib == 0
+
+
+@pytest.mark.asyncio
+async def test_a_container_job_start_keeps_a_confirmed_hosts_accounting(
+    session_factory, tmp_path
+) -> None:
+    """#3881 FINDING-1: a job start must not free a live host's compute.
+
+    The container-job path reconciles before it reserves. Feeding that
+    reconciliation a container-job-label-only inventory made every live generic
+    Omnigent host look like a vanished consumer, so its CPU, memory and
+    processes were released on every job start and the machine was
+    oversubscribed by a whole live host.
+    """
+
+    import json as _json
+
+    from moonmind.omnigent.host_ports import host_correlation_identity
+    from moonmind.workflows.temporal.container_job_backend import LABEL_OWNERSHIP
+
+    ledger = MachineCapacityLedger(session_factory)
+    admission = _admission(session_factory)
+    repository = _repository(session_factory, admission)
+    lease = await _acquire(repository, "binding-a")
+    host_container = host_correlation_identity(lease.leaseRef)
+    host_reservation = machine_reservation_id(
+        backend_ref=BACKEND,
+        owner_kind="omnigent_host_lease",
+        owner_ref=lease.leaseRef,
+        generation=1,
+    )
+    await ledger.confirm(
+        reservation_id=host_reservation,
+        generation=1,
+        container_ref=host_container,
+    )
+    assert (await ledger.usage(backend_ref=BACKEND)).reserved_memory_mib == 3000
+
+    request = _container_job_request(tmp_path)
+    commands: list[tuple[str, ...]] = []
+
+    async def runner(args):
+        args = tuple(args)
+        commands.append(args)
+        if args[0] == "info":
+            return 0, f"{10000 * 1024 * 1024}\t16".encode(), b""
+        if args[0] == "ps":
+            label = args[args.index("--filter") + 1]
+            # The host carries only its own owner label; a container-job-scoped
+            # enumeration would never see it.
+            if "generic-omnigent-host" in label:
+                return 0, f"{host_container}\n".encode(), b""
+            return 0, b"", b""
+        if args[:2] == ("inspect", "--format") and args[2].startswith("{{.Name}}"):
+            return (
+                0,
+                f"/{host_container}\t{3000 * 1024 * 1024}\t1000000000\t256\n".encode(),
+                b"",
+            )
+        if args[:3] == ("inspect", "--format", "{{json .Config.Labels}}"):
+            return (
+                0,
+                _json.dumps({LABEL_OWNERSHIP: request.ownership_token}).encode(),
+                b"",
+            )
+        return 0, b"", b""
+
+    backend = _container_job_backend(tmp_path, ledger=ledger, runner=runner)
+
+    await backend.start_container(request)
+
+    assert any(command[0] == "start" for command in commands)
+    usage = await ledger.usage(backend_ref=BACKEND)
+    # The live host kept every unit it was accounted for, and the job added its
+    # own on top rather than replacing it.
+    assert usage.reserved_memory_mib == 6000
+    assert usage.reserved_cpu_millis == 2000
+    assert usage.reserved_processes == 512
+    # The live host was already accounted, so it is not a reconciliation fault.
+    assert usage.reconciliation_faults == 0
+    async with session_factory() as session:
+        row = await session.get(MachineCapacityReservation, host_reservation)
+    assert row.state == STATE_ACTIVE
+
+
+@pytest.mark.asyncio
+async def test_the_container_job_memory_override_only_lowers_the_ceiling(
+    tmp_path,
+) -> None:
+    """#3881 FINDING-4: a setting documented as lowering may not raise."""
+
+    from moonmind.config.container_backend_settings import (
+        resolve_container_backend_settings,
+    )
+    from moonmind.workflows.temporal.container_job_backend import (
+        DockerContainerJobBackend,
+    )
+
+    async def runner(args):
+        argv = tuple(args)
+        if argv and argv[0] == "info":
+            return 0, f"{10000 * 1024 * 1024}\t16".encode(), b""
+        return 0, b"", b""
+
+    def _backend(configured: str) -> DockerContainerJobBackend:
+        settings = resolve_container_backend_settings(
+            {"MOONMIND_CONTAINER_BACKEND_MAX_ACTIVE_MEMORY_MIB": configured}
+        )
+        return DockerContainerJobBackend(
+            workspace_root=tmp_path,
+            command_runner=runner,
+            backend_ref=BACKEND,
+            settings=settings,
+        )
+
+    # Above the 70% share: clamped, so the documented control-plane and cleanup
+    # headroom survives an operator setting that promises to lower the ceiling.
+    raised = await _backend("9500")._machine_budget()
+    assert raised.memory_mib == 7000
+    assert raised.headroom().memory_mib == 3000
+    # Below the share: still honored, because lowering is what it is for.
+    lowered = await _backend("2048")._machine_budget()
+    assert lowered.memory_mib == 2048
 
 
 @pytest.mark.asyncio

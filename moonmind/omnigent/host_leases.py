@@ -477,6 +477,7 @@ class DbOmnigentHostLeaseRepository:
             ReservationRequest,
             ResourceDemand,
         )
+        from moonmind.omnigent.host_ports import host_correlation_identity
 
         budget = await self._machine_budget_provider()
         reservation = ReservationRequest(
@@ -491,6 +492,12 @@ class DbOmnigentHostLeaseRepository:
             plan_ref=execution_plan_ref,
             host_class_ref=host_class_ref,
             launch_policy_ref=launch_policy_ref,
+            # The host container's name is derived from this exact lease ref
+            # before anything mutates Docker, so the reservation names its
+            # consumer from the start. A launch slower than the prelaunch
+            # window is then reclaimable only on daemon evidence, never on the
+            # clock alone (#3881 remaining implementation 4 and 5).
+            container_ref=host_correlation_identity(lease_ref),
         )
         return reservation, budget
 

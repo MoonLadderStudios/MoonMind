@@ -8,14 +8,22 @@ demand, and it says nothing about the container jobs spending the same physical
 budget from a different code path. This module is the one deployment-owned
 accounting authority those demands are reserved in:
 
-* generic Omnigent hosts and validation hosts reserve through the existing
-  host-lease allocation transaction (``moonmind.omnigent.host_leases``), and
+* generic Omnigent hosts reserve through the existing host-lease allocation
+  transaction (``moonmind.omnigent.host_leases``), and
 * container jobs reserve through the container-job backend's launch boundary,
 
-so the two cannot each spend the machine independently. It adds no lifecycle
-owner and no always-on service: the rows live in the control-plane database the
-callers already write, the existing cleanup services still perform teardown,
-and this module only observes their evidence.
+so the two cannot each spend the machine independently.
+
+Every other MoonMind-owned container launch class — OAuth credential-authority
+hosts, credential validators, managed sessions and workload containers — is
+accounted from daemon evidence instead of reserving, because resource admission
+must never refuse a credential-authority launch or an already-admitted run.
+Their observed demand still reduces what reserving launches may take; the exact
+registry is ``moonmind.capacity.docker_inventory``.
+
+It adds no lifecycle owner and no always-on service: the rows live in the
+control-plane database the callers already write, the existing cleanup services
+still perform teardown, and this module only observes their evidence.
 
 Layering, kept deliberately distinct:
 
@@ -39,34 +47,44 @@ import hashlib
 import os
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime, timedelta
-from typing import Any, Awaitable, Callable, Mapping, Sequence
+from typing import TYPE_CHECKING, Any, Awaitable, Callable, Mapping, Sequence
+
+if TYPE_CHECKING:  # pragma: no cover - typing only, avoids an import cycle
+    from moonmind.capacity.docker_inventory import OwnedContainerInventory
 
 #: Serializes count-and-reserve for *every* covered workload class. Generic
-#: hosts, validation hosts and container jobs must block on the same key or the
-#: shared budget is not actually shared: each class would observe free capacity
-#: the other is about to take. The key is a fixed constant naming the
-#: machine-wide accounting domain; it never carries a plan, lease, host, job or
-#: credential identity.
+#: hosts and container jobs must block on the same key or the shared budget is
+#: not actually shared: each class would observe free capacity the other is
+#: about to take. The key is a fixed constant naming the machine-wide
+#: accounting domain; it never carries a plan, lease, host, job or credential
+#: identity.
 MACHINE_CAPACITY_ADMISSION_LOCK_KEY = 3881001
 
 WORKLOAD_CLASS_GENERIC_HOST = "generic_host"
-WORKLOAD_CLASS_VALIDATION_HOST = "validation_host"
 WORKLOAD_CLASS_CONTAINER_JOB = "container_job"
-#: Every managed launch class that spends the machine budget. A launch class
-#: missing from this tuple would spend the budget without reserving it.
+#: Every managed launch class that reserves the machine budget before it
+#: launches. A launch class missing from this tuple would spend the budget
+#: without reserving it, so it must instead be accounted from daemon evidence
+#: as ``WORKLOAD_CLASS_OBSERVED`` (see ``moonmind.capacity.docker_inventory``).
 COVERED_WORKLOAD_CLASSES = (
     WORKLOAD_CLASS_GENERIC_HOST,
-    WORKLOAD_CLASS_VALIDATION_HOST,
     WORKLOAD_CLASS_CONTAINER_JOB,
 )
 #: Rows reconciliation writes on its own behalf. They are deliberately not in
 #: ``COVERED_WORKLOAD_CLASSES``: no caller may reserve as one, and recording a
 #: reconciliation marker under a real launch class would misattribute it.
 WORKLOAD_CLASS_RECONCILIATION = "reconciliation"
-#: An owned live container adopted without its accounting record. Which managed
-#: launch created it is not recoverable from the container alone, and guessing
-#: would be worse than saying so.
+#: An owned live container adopted without its accounting record, from a launch
+#: class that was supposed to reserve. Which managed launch created it is not
+#: recoverable from the container alone, and guessing would be worse than
+#: saying so. This is a reconciliation fault.
 WORKLOAD_CLASS_UNATTRIBUTED = "unattributed"
+#: An owned live container from a launch class the deployment's documented
+#: resource-class policy accounts by observation rather than reservation. Its
+#: demand is spent exactly like an active reservation's, so it reduces what
+#: reserving launches may take; it is not a fault, because nothing was supposed
+#: to reserve it.
+WORKLOAD_CLASS_OBSERVED = "observed"
 
 #: A waiter marker: the owner asked and was refused. It reserves nothing; it
 #: exists so ``oldest waiter age`` is observable without a second ledger.
@@ -78,8 +96,9 @@ STATE_PRELAUNCH = "prelaunch"
 #: The consumer exists on the backend. Fully accounted, never clock-reclaimed.
 STATE_ACTIVE = "active"
 #: Reconciliation found an owned live container with no accounting record. It
-#: is accounted exactly like ``active`` so the fault can never read as free
-#: capacity, and it is counted separately as a reconciliation fault.
+#: is accounted exactly like ``active`` so it can never read as free capacity.
+#: A row adopted for a *reserving* launch class is additionally counted as a
+#: reconciliation fault; one adopted for an observed launch class is not.
 STATE_ADOPTED = "adopted"
 #: Compute is released because the consumer is proven stopped or removed, but
 #: retained volumes still consume storage.
@@ -102,6 +121,15 @@ ACCOUNTED_STATES = STORAGE_ACCOUNTED_STATES
 #: actual launch state, not a clock: a launch that is still initializing after
 #: several rate windows still holds exactly one permit.
 INITIALIZING_STATES = (STATE_PRELAUNCH,)
+#: States a launch may confirm from. The released states are included because a
+#: launch that outlived its prelaunch window can still succeed, and a live
+#: consumer with no accounting record is worse than a restored reservation.
+CONFIRMABLE_STATES = (
+    STATE_PRELAUNCH,
+    STATE_ACTIVE,
+    STATE_STORAGE_RETAINED,
+    STATE_RELEASED,
+)
 
 #: Limiting-resource names are low-cardinality by construction: they never
 #: carry a plan, lease, host, job or credential identity (#3881 remaining
@@ -630,6 +658,12 @@ class ReservationRequest:
     plan_ref: str | None = None
     host_class_ref: str | None = None
     launch_policy_ref: str | None = None
+    #: The deterministic container identity this launch will create. Both
+    #: production callers know it before they mutate Docker, and binding it at
+    #: reservation time is what keeps a slow launch out of the clock-reclaim
+    #: path: expiry may only reclaim a reservation that never named a consumer
+    #: (#3881 remaining implementation 4 and 5).
+    container_ref: str | None = None
 
     def __post_init__(self) -> None:
         if not str(self.backend_ref).strip():
@@ -824,7 +858,13 @@ class MachineCapacityLedger:
                 )
             if state in INITIALIZING_STATES:
                 usage = replace(usage, initializing=usage.initializing + 1)
-            if state == STATE_ADOPTED:
+            if (
+                state == STATE_ADOPTED
+                and str(row.workload_class) == WORKLOAD_CLASS_UNATTRIBUTED
+            ):
+                # A launch class that was supposed to reserve and did not is a
+                # fault. A class the policy accounts by observation is not: it
+                # is spending the machine exactly as designed.
                 usage = replace(
                     usage, reconciliation_faults=usage.reconciliation_faults + 1
                 )
@@ -880,6 +920,8 @@ class MachineCapacityLedger:
                 existing.expires_at = observed_at + timedelta(
                     seconds=budget.prelaunch_ttl_seconds
                 )
+                if request.container_ref and not str(existing.container_ref or ""):
+                    existing.container_ref = str(request.container_ref)
             usage = await self.usage_within(
                 session, backend_ref=request.backend_ref, now=observed_at
             )
@@ -936,6 +978,7 @@ class MachineCapacityLedger:
                     memory_mib=request.demand.memory_mib,
                     processes=request.demand.processes,
                     temporary_storage_mib=request.demand.temporary_storage_mib,
+                    container_ref=request.container_ref,
                     created_at=observed_at,
                     expires_at=expires_at,
                     updated_at=observed_at,
@@ -953,6 +996,7 @@ class MachineCapacityLedger:
             existing.memory_mib = request.demand.memory_mib
             existing.processes = request.demand.processes
             existing.temporary_storage_mib = request.demand.temporary_storage_mib
+            existing.container_ref = request.container_ref
             existing.expires_at = expires_at
             existing.updated_at = observed_at
         await session.flush()
@@ -1037,6 +1081,13 @@ class MachineCapacityLedger:
         Once a container carries the reservation, the reservation stops being
         clock-reclaimable: a live consumer keeps its accounting even if the
         workflow that asked for it died.
+
+        A reservation whose accounting was already released while the launch
+        was in flight is restored rather than refused. The container provably
+        exists at this point, so refusing would fail a successful launch and
+        leave a live consumer with no accounting record — strictly worse than
+        re-accounting the reservation this exact owner and generation already
+        held. The generation fence still refuses a stale attempt.
         """
 
         from sqlalchemy import update
@@ -1050,9 +1101,7 @@ class MachineCapacityLedger:
                 .where(
                     MachineCapacityReservation.reservation_id == reservation_id,
                     MachineCapacityReservation.generation == int(generation),
-                    MachineCapacityReservation.state.in_(
-                        (STATE_PRELAUNCH, STATE_ACTIVE)
-                    ),
+                    MachineCapacityReservation.state.in_(CONFIRMABLE_STATES),
                 )
                 .values(
                     state=STATE_ACTIVE,
@@ -1117,21 +1166,33 @@ class MachineCapacityLedger:
     ) -> int:
         """Reclaim expired reservations that provably never launched."""
 
-        from sqlalchemy import or_, update
+        from sqlalchemy import and_, or_, update
 
         from api_service.db.models import MachineCapacityReservation
 
+        never_named_a_consumer = or_(
+            MachineCapacityReservation.container_ref.is_(None),
+            MachineCapacityReservation.container_ref == "",
+        )
         result = await session.execute(
             update(MachineCapacityReservation)
             .where(
                 MachineCapacityReservation.backend_ref == backend_ref,
-                MachineCapacityReservation.state.in_((STATE_PRELAUNCH, STATE_WAITING)),
                 MachineCapacityReservation.expires_at.is_not(None),
                 MachineCapacityReservation.expires_at <= now,
-                # Proven no launch: nothing was ever bound to this reservation.
                 or_(
-                    MachineCapacityReservation.container_ref.is_(None),
-                    MachineCapacityReservation.container_ref == "",
+                    # A waiter reserves nothing, so an abandoned one is only
+                    # noise in the oldest-waiter age and always expires.
+                    MachineCapacityReservation.state == STATE_WAITING,
+                    # Proven no launch: nothing was ever bound to this
+                    # reservation. A reservation that named its container
+                    # before mutating Docker is never reclaimed by the clock —
+                    # the container may already be running, and only daemon
+                    # evidence can prove otherwise (see ``reconcile``).
+                    and_(
+                        MachineCapacityReservation.state == STATE_PRELAUNCH,
+                        never_named_a_consumer,
+                    ),
                 ),
             )
             .values(state=STATE_RELEASED, expires_at=None, updated_at=now)
@@ -1142,17 +1203,24 @@ class MachineCapacityLedger:
         self,
         *,
         backend_ref: str,
-        live_containers: Mapping[str, ResourceDemand] | None,
+        inventory: OwnedContainerInventory | None,
         now: datetime | None = None,
     ) -> dict[str, Any]:
         """Reconcile durable reservations against owned backend state.
 
-        ``live_containers`` maps the container refs MoonMind owns on this
-        backend to the resources they are actually running with. ``None`` means
-        the backend could not be read: admission is blocked rather than freed,
-        because an unreadable daemon is not an empty machine.
+        ``inventory`` reports the containers MoonMind owns on this backend, the
+        resources they are actually running with, and *which owner labels were
+        enumerated to produce it*. ``None`` means the backend could not be
+        read: admission is blocked rather than freed, because an unreadable
+        daemon is not an empty machine.
 
-        Foreign containers are never in this mapping and are never touched:
+        Absence from the inventory only releases accounting when the
+        enumeration covered every owned launch class. A partial enumeration may
+        still adopt what it saw — adding accounting is always safe — but it may
+        not release anything, because a launch class it never queried would
+        look identical to a consumer that vanished.
+
+        Foreign containers are never in this inventory and are never touched:
         this method only writes MoonMind's own accounting rows.
         """
 
@@ -1170,7 +1238,7 @@ class MachineCapacityLedger:
                 generation=1,
             )
             blocked_row = await session.get(MachineCapacityReservation, blocked_id)
-            if live_containers is None:
+            if inventory is None:
                 if blocked_row is None:
                     session.add(
                         MachineCapacityReservation(
@@ -1191,13 +1259,22 @@ class MachineCapacityLedger:
                 await session.commit()
                 return {
                     "backendObserved": False,
+                    "scopeComplete": False,
                     "admissionBlocked": True,
                     "expired": 0,
                     "adopted": 0,
+                    "observed": 0,
                     "computeReleased": 0,
                     "reconciliationFaults": 0,
                 }
-            if blocked_row is not None and str(blocked_row.state) == STATE_BLOCKED:
+            scope_complete = inventory.covers_every_owned_launch_class
+            if (
+                scope_complete
+                and blocked_row is not None
+                and str(blocked_row.state) == STATE_BLOCKED
+            ):
+                # Only a complete enumeration re-establishes the backend. A
+                # partial read proves nothing about the classes it skipped.
                 blocked_row.state = STATE_RELEASED
                 blocked_row.updated_at = observed_at
             expired = await self._expire_within(
@@ -1217,16 +1294,36 @@ class MachineCapacityLedger:
                 .scalars()
                 .all()
             )
+            live_containers = inventory.containers
+            may_release = scope_complete
             accounted_refs = set()
             compute_released = 0
             for row in rows:
                 container_ref = str(row.container_ref or "")
                 if not container_ref:
-                    # Still initializing and not yet expired: its permit is held
-                    # by actual state, so leave it alone.
+                    # Never named a consumer. The bounded clock path owns it.
                     continue
                 accounted_refs.add(container_ref)
                 if container_ref in live_containers:
+                    continue
+                if not may_release:
+                    # This enumeration did not cover every owned launch class,
+                    # so absence from it proves nothing about this consumer.
+                    continue
+                if str(row.state) == STATE_PRELAUNCH:
+                    expires_at = _as_aware(row.expires_at)
+                    if expires_at is None or expires_at > observed_at:
+                        # Still inside its bounded launch window: the container
+                        # it named may not be running yet, so absence is not
+                        # evidence of a vanished consumer. Its initialization
+                        # permit follows that actual state.
+                        continue
+                    # The whole window elapsed and the daemon proves nothing is
+                    # running under the name it reserved, so nothing is spent.
+                    row.state = STATE_RELEASED
+                    row.expires_at = None
+                    row.updated_at = observed_at
+                    compute_released += 1
                     continue
                 # The consumer is gone from the backend, so its compute is
                 # provably free. Storage stays accounted until cleanup proves
@@ -1240,12 +1337,19 @@ class MachineCapacityLedger:
                 row.updated_at = observed_at
                 compute_released += 1
             adopted = 0
-            for container_ref, demand in sorted(live_containers.items()):
+            observed_rows = 0
+            for container_ref, owned in sorted(live_containers.items()):
                 if container_ref in accounted_refs:
                     continue
-                # An owned live container with no accounting record is a
-                # reconciliation fault, not free capacity. Adopt it so its real
-                # demand is counted, and surface it as a fault.
+                # An owned live container with no accounting record is never
+                # free capacity. A reserving launch class that has no record is
+                # a reconciliation fault; a class the documented policy accounts
+                # by observation is simply accounted.
+                is_fault = owned.launch_class.reserves
+                workload_class = (
+                    WORKLOAD_CLASS_UNATTRIBUTED if is_fault else WORKLOAD_CLASS_OBSERVED
+                )
+                demand = owned.demand
                 adopted_id = machine_reservation_id(
                     backend_ref=backend_ref,
                     owner_kind="adopted_container",
@@ -1258,7 +1362,7 @@ class MachineCapacityLedger:
                         MachineCapacityReservation(
                             reservation_id=adopted_id,
                             backend_ref=backend_ref,
-                            workload_class=WORKLOAD_CLASS_UNATTRIBUTED,
+                            workload_class=workload_class,
                             owner_kind="adopted_container",
                             owner_ref=container_ref,
                             generation=1,
@@ -1272,20 +1376,31 @@ class MachineCapacityLedger:
                             updated_at=observed_at,
                         )
                     )
-                    adopted += 1
                 elif str(existing.state) not in ACCOUNTED_STATES:
                     existing.state = STATE_ADOPTED
+                    existing.workload_class = workload_class
+                    existing.cpu_millis = demand.cpu_millis
+                    existing.memory_mib = demand.memory_mib
+                    existing.processes = demand.processes
+                    existing.temporary_storage_mib = demand.temporary_storage_mib
                     existing.updated_at = observed_at
+                else:
+                    continue
+                if is_fault:
                     adopted += 1
+                else:
+                    observed_rows += 1
             await session.commit()
             usage = await self.usage_within(
                 session, backend_ref=backend_ref, now=observed_at
             )
         return {
             "backendObserved": True,
+            "scopeComplete": may_release,
             "admissionBlocked": usage.reconciliation_blocked,
             "expired": expired,
             "adopted": adopted,
+            "observed": observed_rows,
             "computeReleased": compute_released,
             "reconciliationFaults": usage.reconciliation_faults,
         }
@@ -1316,6 +1431,7 @@ def _as_aware(value: datetime | None) -> datetime | None:
 __all__ = [
     "ACCOUNTED_STATES",
     "COMPUTE_ACCOUNTED_STATES",
+    "CONFIRMABLE_STATES",
     "COVERED_WORKLOAD_CLASSES",
     "INITIALIZING_STATES",
     "LIMITING_RESOURCE_CPU",
@@ -1335,9 +1451,9 @@ __all__ = [
     "STORAGE_ACCOUNTED_STATES",
     "WORKLOAD_CLASS_CONTAINER_JOB",
     "WORKLOAD_CLASS_GENERIC_HOST",
+    "WORKLOAD_CLASS_OBSERVED",
     "WORKLOAD_CLASS_RECONCILIATION",
     "WORKLOAD_CLASS_UNATTRIBUTED",
-    "WORKLOAD_CLASS_VALIDATION_HOST",
     "MachineCapacityConflict",
     "MachineCapacityLedger",
     "MachineCapacityUnavailable",

@@ -4676,8 +4676,11 @@ class MachineCapacityReservation(Base):
     Counting host rows bounds how many containers exist; it says nothing about
     whether the machine can carry their CPU, memory, process and temporary
     storage demand. This is the one deployment-owned accounting ledger those
-    demands are reserved in, so generic hosts, validation hosts and container
-    jobs cannot each spend the same physical budget independently.
+    demands are reserved in, so generic Omnigent hosts and container jobs
+    cannot each spend the same physical budget independently. Owned launch
+    classes that do not reserve — OAuth credential-authority hosts, credential
+    validators, managed sessions and workload containers — are accounted here
+    too, from observed daemon state rather than from a reservation.
 
     Rows are scoped by ``backend_ref``: two independent Docker backends have
     two independent budgets and are never pooled.

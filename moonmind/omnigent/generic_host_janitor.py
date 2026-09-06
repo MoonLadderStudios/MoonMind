@@ -37,9 +37,10 @@ class GenericOmnigentHostJanitor:
         self._stale_after = stale_after_seconds
         self._machine_capacity = machine_capacity
         self._machine_backend_ref = str(machine_backend_ref or "").strip() or None
-        # Returns the owned running containers, or ``None`` when the backend
-        # could not be read. "Nothing is running" and "I could not look" must
-        # never be the same value here.
+        # Returns the owned running containers with the exact owner labels that
+        # were enumerated, or ``None`` when the backend could not be read.
+        # "Nothing is running" and "I could not look" must never be the same
+        # value here.
         self._container_inventory = container_inventory
 
     async def _reconcile_machine_capacity(self) -> dict[str, Any] | None:
@@ -61,7 +62,7 @@ class GenericOmnigentHostJanitor:
             )
             live = None
         return await self._machine_capacity.reconcile(
-            backend_ref=self._machine_backend_ref, live_containers=live
+            backend_ref=self._machine_backend_ref, inventory=live
         )
 
     async def run(self) -> dict[str, Any]:

@@ -31,14 +31,17 @@ from sqlalchemy.orm import sessionmaker
 from api_service.db.models import MachineCapacityReservation
 from moonmind.capacity import (
     LIMITING_RESOURCE_MEMORY,
+    OWNED_CONTAINER_LABEL_FILTERS,
     STATE_PRELAUNCH,
     STATE_WAITING,
     WORKLOAD_CLASS_CONTAINER_JOB,
     WORKLOAD_CLASS_GENERIC_HOST,
-    WORKLOAD_CLASS_VALIDATION_HOST,
     MachineCapacityLedger,
     MachineResourceBudget,
     MachineTotals,
+    OwnedContainer,
+    OwnedContainerInventory,
+    OwnedLaunchClass,
     ReleaseEvidence,
     ReservationRequest,
     ResourceDemand,
@@ -84,6 +87,7 @@ def _request(
     workload_class: str = WORKLOAD_CLASS_GENERIC_HOST,
     owner_kind: str = "omnigent_host_lease",
     demand: ResourceDemand = DEMAND,
+    container_ref: str | None = None,
 ) -> ReservationRequest:
     return ReservationRequest(
         backend_ref=backend,
@@ -93,6 +97,32 @@ def _request(
         demand=demand,
         host_class_ref="omnigent-opencode@1",
         launch_policy_ref="omnigent-launch@1",
+        container_ref=container_ref,
+    )
+
+
+HOST_LAUNCH_CLASS = OwnedLaunchClass(
+    "generic_omnigent_host",
+    "moonmind.owner=generic-omnigent-host",
+    WORKLOAD_CLASS_GENERIC_HOST,
+)
+JOB_LAUNCH_CLASS = OwnedLaunchClass(
+    "container_job", "moonmind.container_job", WORKLOAD_CLASS_CONTAINER_JOB
+)
+
+
+def _inventory(
+    containers: dict[str, ResourceDemand] | None = None,
+    *,
+    launch_class: OwnedLaunchClass = HOST_LAUNCH_CLASS,
+    label_selectors: tuple[str, ...] = OWNED_CONTAINER_LABEL_FILTERS,
+) -> OwnedContainerInventory:
+    return OwnedContainerInventory(
+        containers={
+            ref: OwnedContainer(demand=demand, launch_class=launch_class)
+            for ref, demand in (containers or {}).items()
+        },
+        label_selectors=label_selectors,
     )
 
 
@@ -257,22 +287,85 @@ async def test_a_container_job_and_a_host_cannot_both_take_the_last_slot(
 
 
 @pytest.mark.asyncio
-async def test_a_validation_host_shares_the_same_budget(machine_ledger) -> None:
+async def test_a_confirmed_host_survives_a_container_job_admission_pass(
+    machine_ledger,
+) -> None:
+    """AC3, #3881 FINDING-1: a job start must not free a live host's compute.
+
+    Reconciliation releases the accounting of consumers absent from the
+    inventory it is given. The container-job launch path must therefore supply
+    the full MoonMind-owned enumeration, not a container-job-scoped one, or
+    every live generic host on the same daemon reads as a vanished consumer.
+    """
+
     ledger, _maker = machine_ledger
     budget = _budget()
-    await ledger.reserve(request=_request("lease-a"), budget=budget)
-    await ledger.reserve(
+    host = await ledger.reserve(
+        request=_request("lease-live", container_ref="mm-omnigent-live"),
+        budget=budget,
+    )
+    await ledger.confirm(
+        reservation_id=host.reservation_id,
+        generation=1,
+        container_ref="mm-omnigent-live",
+    )
+
+    # The container-job launch path reconciles with the canonical owned
+    # inventory before it reserves.
+    summary = await ledger.reconcile(
+        backend_ref=BACKEND,
+        inventory=_inventory({"mm-omnigent-live": DEMAND}),
+    )
+    assert summary["scopeComplete"] is True
+    assert summary["computeReleased"] == 0
+    job = await ledger.reserve(
         request=_request(
-            "probe-1",
-            workload_class=WORKLOAD_CLASS_VALIDATION_HOST,
-            owner_kind="validation_host",
+            "job-1",
+            workload_class=WORKLOAD_CLASS_CONTAINER_JOB,
+            owner_kind="container_job",
+            container_ref="mm-job-1",
         ),
         budget=budget,
     )
 
+    assert job.admitted is True
+    usage = await ledger.usage(backend_ref=BACKEND)
+    assert usage.reserved_memory_mib == 6000
+    assert usage.reconciliation_faults == 0
+    # A third launch is refused: hosts and jobs spend one shared budget.
     third = await ledger.reserve(request=_request("lease-b"), budget=budget)
-
     assert third.admitted is False
+
+
+@pytest.mark.asyncio
+async def test_a_container_job_scoped_inventory_never_releases_a_host(
+    machine_ledger,
+) -> None:
+    """#3881 FINDING-1: a partial enumeration may adopt but never release."""
+
+    ledger, _maker = machine_ledger
+    budget = _budget()
+    host = await ledger.reserve(
+        request=_request("lease-live", container_ref="mm-omnigent-live"),
+        budget=budget,
+    )
+    await ledger.confirm(
+        reservation_id=host.reservation_id,
+        generation=1,
+        container_ref="mm-omnigent-live",
+    )
+
+    summary = await ledger.reconcile(
+        backend_ref=BACKEND,
+        inventory=_inventory(
+            launch_class=JOB_LAUNCH_CLASS,
+            label_selectors=("moonmind.container_job",),
+        ),
+    )
+
+    assert summary["scopeComplete"] is False
+    assert summary["computeReleased"] == 0
+    assert (await ledger.usage(backend_ref=BACKEND)).reserved_memory_mib == 3000
 
 
 @pytest.mark.asyncio
@@ -369,7 +462,7 @@ async def test_worker_loss_after_container_creation_preserves_ownership(
     much_later = started + timedelta(hours=6)
     summary = await ledger.reconcile(
         backend_ref=BACKEND,
-        live_containers={"mm-omnigent-live": DEMAND},
+        inventory=_inventory({"mm-omnigent-live": DEMAND}),
         now=much_later,
     )
     assert summary["adopted"] == 0
@@ -406,12 +499,12 @@ async def test_an_unreadable_backend_blocks_new_admission_on_postgres(
     """AC7: daemon uncertainty blocks admission instead of freeing capacity."""
 
     ledger, _maker = machine_ledger
-    await ledger.reconcile(backend_ref=BACKEND, live_containers=None)
+    await ledger.reconcile(backend_ref=BACKEND, inventory=None)
 
     blocked = await ledger.reserve(request=_request("lease-a"), budget=_budget())
     assert blocked.admitted is False
 
-    await ledger.reconcile(backend_ref=BACKEND, live_containers={})
+    await ledger.reconcile(backend_ref=BACKEND, inventory=_inventory())
     assert (
         await ledger.reserve(request=_request("lease-a"), budget=_budget())
     ).admitted is True

@@ -34,14 +34,18 @@ from moonmind.capacity import (
     STATE_WAITING,
     WORKLOAD_CLASS_CONTAINER_JOB,
     WORKLOAD_CLASS_GENERIC_HOST,
+    WORKLOAD_CLASS_OBSERVED,
     WORKLOAD_CLASS_RECONCILIATION,
     WORKLOAD_CLASS_UNATTRIBUTED,
-    WORKLOAD_CLASS_VALIDATION_HOST,
+    MachineCapacityConflict,
     MachineCapacityLedger,
     MachineCapacityUnavailable,
     MachineResourceBudget,
     MachineTotals,
     MachineUsage,
+    OwnedContainer,
+    OwnedContainerInventory,
+    OwnedLaunchClass,
     ReleaseEvidence,
     ReservationRequest,
     ResourceDemand,
@@ -50,6 +54,7 @@ from moonmind.capacity import (
     probe_machine_totals,
     release_state_for,
 )
+from moonmind.capacity.docker_inventory import OWNED_CONTAINER_LABEL_FILTERS
 
 BACKEND = "system"
 OTHER_BACKEND = "second-daemon"
@@ -82,6 +87,7 @@ def _request(
     workload_class: str = WORKLOAD_CLASS_GENERIC_HOST,
     demand: ResourceDemand | None = None,
     generation: int = 1,
+    container_ref: str | None = None,
 ) -> ReservationRequest:
     return ReservationRequest(
         backend_ref=backend,
@@ -93,6 +99,36 @@ def _request(
         plan_ref="omnigent-execution-plan:sha256:" + "a" * 64,
         host_class_ref="omnigent-opencode@1",
         launch_policy_ref="omnigent-launch@1",
+        container_ref=container_ref,
+    )
+
+
+#: The generic-host launch class every reserving production caller belongs to.
+HOST_LAUNCH_CLASS = OwnedLaunchClass(
+    "generic_omnigent_host",
+    "moonmind.owner=generic-omnigent-host",
+    WORKLOAD_CLASS_GENERIC_HOST,
+)
+#: A launch class the documented policy accounts by observation, not reservation.
+OBSERVED_LAUNCH_CLASS = OwnedLaunchClass(
+    "omnigent_oauth_host", "moonmind.kind=omnigent-oauth-host"
+)
+
+
+def _inventory(
+    containers: dict[str, ResourceDemand] | None = None,
+    *,
+    launch_class: OwnedLaunchClass = HOST_LAUNCH_CLASS,
+    label_selectors: tuple[str, ...] = OWNED_CONTAINER_LABEL_FILTERS,
+) -> OwnedContainerInventory:
+    """Return a full-scope owned inventory of ``containers``."""
+
+    return OwnedContainerInventory(
+        containers={
+            ref: OwnedContainer(demand=demand, launch_class=launch_class)
+            for ref, demand in (containers or {}).items()
+        },
+        label_selectors=label_selectors,
     )
 
 
@@ -413,6 +449,150 @@ async def test_a_slow_launch_holds_exactly_one_initialization_permit(
 
 
 @pytest.mark.asyncio
+async def test_a_launch_slower_than_its_prelaunch_window_keeps_its_permit(
+    ledger,
+) -> None:
+    """#3881 FINDING-3: a slow launch loses its permit to state, not the clock.
+
+    A cold generic-host launch pulls an image, creates the container and then
+    polls for registration. That can outlast the prelaunch TTL. Because the
+    reservation named its container before mutating Docker, the clock cannot
+    reclaim it; the permit is still held because the launch is still
+    initializing.
+    """
+
+    budget = _budget(
+        MOONMIND_MACHINE_MAX_CONCURRENT_INITIALIZING="1",
+        MOONMIND_MACHINE_PRELAUNCH_TTL_SECONDS="300",
+    )
+    demand = _demand(cpu=10, memory=16, procs=8, storage=8)
+    started = datetime.now(UTC)
+    slow = await ledger.reserve(
+        request=_request("lease-slow", demand=demand, container_ref="mm-host-slow"),
+        budget=budget,
+        now=started,
+    )
+
+    # Well past the 300s window, the container is still coming up.
+    later = started + timedelta(seconds=400)
+    blocked = await ledger.reserve(
+        request=_request("lease-next", demand=demand, container_ref="mm-host-next"),
+        budget=budget,
+        now=later,
+    )
+
+    assert blocked.admitted is False
+    assert blocked.decision.limiting_resource == LIMITING_RESOURCE_INITIALIZING
+    # The slow launch still holds its fence, so it may still mutate Docker.
+    assert await ledger.verify(
+        reservation_id=slow.reservation_id, generation=1, now=later
+    )
+    usage = await ledger.usage(backend_ref=BACKEND, now=later)
+    assert usage.reserved_memory_mib == 16
+
+
+@pytest.mark.asyncio
+async def test_a_launch_that_outlived_its_window_still_confirms(ledger) -> None:
+    """#3881 FINDING-3: a successful launch is never failed at confirmation."""
+
+    budget = _budget(MOONMIND_MACHINE_PRELAUNCH_TTL_SECONDS="60")
+    started = datetime.now(UTC)
+    outcome = await ledger.reserve(
+        request=_request("lease-slow", container_ref="mm-host-slow"),
+        budget=budget,
+        now=started,
+    )
+
+    later = started + timedelta(seconds=400)
+    # Another admission runs the expiry sweep while the launch is in flight.
+    await ledger.reserve(
+        request=_request("lease-other", container_ref="mm-host-other"),
+        budget=budget,
+        now=later,
+    )
+    await ledger.confirm(
+        reservation_id=outcome.reservation_id,
+        generation=1,
+        container_ref="mm-host-slow",
+        now=later,
+    )
+
+    usage = await ledger.usage(backend_ref=BACKEND, now=later)
+    assert usage.reserved_memory_mib == 2048 * 2
+    async with ledger._factory()() as session:  # noqa: SLF001 - persisted contract
+        row = await session.get(MachineCapacityReservation, outcome.reservation_id)
+        assert row.state == STATE_ACTIVE
+        assert row.expires_at is None
+
+
+@pytest.mark.asyncio
+async def test_a_reservation_released_mid_launch_is_restored_by_confirmation(
+    ledger,
+) -> None:
+    """#3881 FINDING-3: a live consumer with no accounting is the worse outcome.
+
+    Reconciliation can release an expired prelaunch reservation whose container
+    was not running at the moment it looked. If the launch nevertheless
+    succeeds, confirming restores the accounting rather than failing the run.
+    """
+
+    budget = _budget(MOONMIND_MACHINE_PRELAUNCH_TTL_SECONDS="60")
+    started = datetime.now(UTC)
+    outcome = await ledger.reserve(
+        request=_request("lease-slow", container_ref="mm-host-slow"),
+        budget=budget,
+        now=started,
+    )
+    later = started + timedelta(seconds=400)
+    summary = await ledger.reconcile(
+        backend_ref=BACKEND, inventory=_inventory(), now=later
+    )
+    assert summary["computeReleased"] == 1
+    assert (await ledger.usage(backend_ref=BACKEND, now=later)).reserved_memory_mib == 0
+
+    await ledger.confirm(
+        reservation_id=outcome.reservation_id,
+        generation=1,
+        container_ref="mm-host-slow",
+        now=later,
+    )
+
+    assert (
+        await ledger.usage(backend_ref=BACKEND, now=later)
+    ).reserved_memory_mib == 2048
+    # A different attempt still cannot write through this reservation.
+    with pytest.raises(MachineCapacityConflict):
+        await ledger.confirm(
+            reservation_id=outcome.reservation_id,
+            generation=2,
+            container_ref="mm-host-slow",
+            now=later,
+        )
+
+
+@pytest.mark.asyncio
+async def test_reconciliation_leaves_an_in_flight_launch_alone(ledger) -> None:
+    """A named container inside its launch window is not a vanished consumer."""
+
+    budget = _budget(MOONMIND_MACHINE_PRELAUNCH_TTL_SECONDS="300")
+    started = datetime.now(UTC)
+    outcome = await ledger.reserve(
+        request=_request("lease-slow", container_ref="mm-host-slow"),
+        budget=budget,
+        now=started,
+    )
+
+    summary = await ledger.reconcile(
+        backend_ref=BACKEND,
+        inventory=_inventory(),
+        now=started + timedelta(seconds=120),
+    )
+
+    assert summary["computeReleased"] == 0
+    assert await ledger.verify(reservation_id=outcome.reservation_id, generation=1)
+
+
+@pytest.mark.asyncio
 async def test_confirming_a_launch_releases_its_initialization_permit(
     ledger,
 ) -> None:
@@ -666,7 +846,9 @@ async def test_an_owned_live_container_without_a_record_is_a_fault_not_capacity(
 
     summary = await ledger.reconcile(
         backend_ref=BACKEND,
-        live_containers={"mm-job-orphan": _demand(cpu=500, memory=1024, procs=64)},
+        inventory=_inventory(
+            {"mm-job-orphan": _demand(cpu=500, memory=1024, procs=64)}
+        ),
     )
 
     assert summary["adopted"] == 1
@@ -682,7 +864,7 @@ async def test_an_unreadable_backend_blocks_admission_rather_than_freeing_it(
 ) -> None:
     """AC7: unknown daemon state blocks unsafe new admission."""
 
-    summary = await ledger.reconcile(backend_ref=BACKEND, live_containers=None)
+    summary = await ledger.reconcile(backend_ref=BACKEND, inventory=None)
 
     async with ledger._factory()() as session:  # persisted contract
         marker = await session.get(
@@ -705,8 +887,8 @@ async def test_an_unreadable_backend_blocks_admission_rather_than_freeing_it(
 
 @pytest.mark.asyncio
 async def test_a_readable_backend_clears_the_admission_block(ledger) -> None:
-    await ledger.reconcile(backend_ref=BACKEND, live_containers=None)
-    await ledger.reconcile(backend_ref=BACKEND, live_containers={})
+    await ledger.reconcile(backend_ref=BACKEND, inventory=None)
+    await ledger.reconcile(backend_ref=BACKEND, inventory=_inventory())
 
     outcome = await ledger.reserve(request=_request("lease-a"), budget=_budget())
 
@@ -723,7 +905,7 @@ async def test_reconciliation_releases_compute_for_a_vanished_consumer(
         reservation_id=outcome.reservation_id, generation=1, container_ref="mm-a"
     )
 
-    summary = await ledger.reconcile(backend_ref=BACKEND, live_containers={})
+    summary = await ledger.reconcile(backend_ref=BACKEND, inventory=_inventory())
 
     assert summary["computeReleased"] == 1
     usage = await ledger.usage(backend_ref=BACKEND)
@@ -741,7 +923,7 @@ async def test_reconciliation_never_touches_an_initializing_reservation(
     budget = _budget()
     outcome = await ledger.reserve(request=_request("lease-a"), budget=budget)
 
-    summary = await ledger.reconcile(backend_ref=BACKEND, live_containers={})
+    summary = await ledger.reconcile(backend_ref=BACKEND, inventory=_inventory())
 
     assert summary["adopted"] == 0
     assert summary["computeReleased"] == 0
@@ -758,22 +940,22 @@ async def test_reconciliation_is_scoped_to_one_backend(ledger) -> None:
         reservation_id=outcome.reservation_id, generation=1, container_ref="mm-a"
     )
 
-    await ledger.reconcile(backend_ref=BACKEND, live_containers={})
+    await ledger.reconcile(backend_ref=BACKEND, inventory=_inventory())
 
     usage = await ledger.usage(backend_ref=OTHER_BACKEND)
     assert usage.reserved_memory_mib == 2048
 
 
 @pytest.mark.asyncio
-async def test_a_validation_host_reserves_from_the_same_budget(ledger) -> None:
+async def test_a_container_job_spends_the_same_budget_as_a_host(ledger) -> None:
     budget = _budget(MOONMIND_MACHINE_MEMORY_MIB="4096")
     demand = _demand(memory=3000, cpu=100, procs=16, storage=16)
     await ledger.reserve(
         request=ReservationRequest(
             backend_ref=BACKEND,
-            workload_class=WORKLOAD_CLASS_VALIDATION_HOST,
-            owner_kind="validation_host",
-            owner_ref="probe-a",
+            workload_class=WORKLOAD_CLASS_CONTAINER_JOB,
+            owner_kind="container_job",
+            owner_ref="job-a",
             demand=demand,
         ),
         budget=budget,
@@ -784,6 +966,85 @@ async def test_a_validation_host_reserves_from_the_same_budget(ledger) -> None:
     )
 
     assert blocked.admitted is False
+
+
+@pytest.mark.asyncio
+async def test_an_observed_launch_class_spends_the_budget_without_faulting(
+    ledger,
+) -> None:
+    """#3881 FINDING-2: an OAuth host reserves nothing but is not free capacity.
+
+    Resource admission must never refuse a credential-authority launch, so that
+    launch class is accounted from daemon evidence instead. Its demand still
+    reduces what reserving launches may take, and it is not a reconciliation
+    fault, because nothing was ever supposed to reserve it.
+    """
+
+    budget = _budget(MOONMIND_MACHINE_MEMORY_MIB="4096")
+    demand = _demand(memory=3000, cpu=100, procs=16, storage=0)
+
+    await ledger.reconcile(
+        backend_ref=BACKEND,
+        inventory=_inventory(
+            {"mm-oauth-host-a": demand}, launch_class=OBSERVED_LAUNCH_CLASS
+        ),
+    )
+
+    usage = await ledger.usage(backend_ref=BACKEND)
+    assert usage.reserved_memory_mib == 3000
+    # Accounted, but not a fault: the policy never asked it to reserve.
+    assert usage.reconciliation_faults == 0
+    async with ledger._factory()() as session:  # noqa: SLF001 - persisted contract
+        row = await session.get(
+            MachineCapacityReservation,
+            machine_reservation_id(
+                backend_ref=BACKEND,
+                owner_kind="adopted_container",
+                owner_ref="mm-oauth-host-a",
+                generation=1,
+            ),
+        )
+    assert row.workload_class == WORKLOAD_CLASS_OBSERVED
+    blocked = await ledger.reserve(
+        request=_request("lease-a", demand=demand), budget=budget
+    )
+    assert blocked.admitted is False
+
+
+@pytest.mark.asyncio
+async def test_a_partial_inventory_may_adopt_but_never_release(ledger) -> None:
+    """#3881 FINDING-1: absence from an unenumerated scope proves nothing.
+
+    A caller that enumerated only its own launch class must not release the
+    accounting of a launch class it never looked for.
+    """
+
+    budget = _budget()
+    outcome = await ledger.reserve(request=_request("lease-live"), budget=budget)
+    await ledger.confirm(
+        reservation_id=outcome.reservation_id,
+        generation=1,
+        container_ref="mm-host-live",
+    )
+
+    summary = await ledger.reconcile(
+        backend_ref=BACKEND,
+        inventory=_inventory(
+            {"mm-job-orphan": _demand(cpu=10, memory=64, procs=8, storage=0)},
+            launch_class=OwnedLaunchClass(
+                "container_job", "moonmind.container_job", WORKLOAD_CLASS_CONTAINER_JOB
+            ),
+            label_selectors=("moonmind.container_job",),
+        ),
+    )
+
+    assert summary["scopeComplete"] is False
+    assert summary["computeReleased"] == 0
+    # The unaccounted container it *did* see is still adopted: adding
+    # accounting is always safe.
+    assert summary["adopted"] == 1
+    usage = await ledger.usage(backend_ref=BACKEND)
+    assert usage.reserved_memory_mib == 2048 + 64
 
 
 @pytest.mark.asyncio
@@ -808,7 +1069,7 @@ async def test_reservation_state_names_are_the_persisted_contract(ledger) -> Non
         assert row.generation == 1
 
     await ledger.reconcile(
-        backend_ref=BACKEND, live_containers={"mm-orphan": _demand()}
+        backend_ref=BACKEND, inventory=_inventory({"mm-orphan": _demand()})
     )
     async with ledger._factory()() as session:  # noqa: SLF001 - persisted contract
         adopted = await session.get(

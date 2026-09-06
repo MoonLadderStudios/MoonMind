@@ -2955,9 +2955,10 @@ async def _build_runtime_activities(topology) -> tuple[AsyncExitStack, list[obje
                     Path(_container_job_store).resolve().parent
                     / ".mm-container-job-logs"
                 ),
-                # MoonLadderStudios/MoonMind#3881: container jobs and generic /
-                # validation hosts share one machine budget. They must reserve
-                # in the same durable ledger or each spends the whole machine.
+                # MoonLadderStudios/MoonMind#3881: container jobs and
+                # generic Omnigent hosts share one machine budget. They must
+                # reserve in the same durable ledger or each spends the whole
+                # machine.
                 machine_capacity=MachineCapacityLedger(_capacity_session_maker),
             )
             if container_backend_settings.enabled:
