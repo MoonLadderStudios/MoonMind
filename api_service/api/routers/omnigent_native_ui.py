@@ -33,7 +33,7 @@ import html
 import logging
 import posixpath
 from typing import Any
-from urllib.parse import urlsplit
+from urllib.parse import unquote, urlsplit
 
 import httpx
 from fastapi import APIRouter, Depends, Query, status
@@ -236,6 +236,26 @@ def _native_chat_unavailable(
     )
 
 
+def _browser_canonical_path(path: str) -> str:
+    """Percent-decode a redirect path the way a browser resolves it.
+
+    ``urlsplit``/``posixpath.normpath`` do not decode percent-encoded dot
+    segments, but browsers treat ``/%2e%2e/`` as traversal when following a
+    ``Location``. Decoding (repeatedly, to also catch double-encoded
+    ``%252e``) before the prefix check keeps the allowlist decision aligned
+    with what the browser will actually navigate to. Only the path is
+    decoded; query and fragment cannot move the navigation off-path.
+    """
+
+    decoded = str(path or "")
+    for _ in range(4):
+        recoded = unquote(decoded)
+        if recoded == decoded:
+            break
+        decoded = recoded
+    return decoded
+
+
 def _rewrite_upstream_location(location: str, *, scoped_base: str) -> str:
     """Keep an upstream redirect inside the binding-scoped route.
 
@@ -250,6 +270,11 @@ def _rewrite_upstream_location(location: str, *, scoped_base: str) -> str:
     path the browser would otherwise collapse outside the scoped route — the
     rewrite fails closed to the scoped root instead of emitting the escaping
     segments verbatim.
+
+    Percent-encoded dot segments (``/%2e%2e/``) are browser-canonicalized
+    before the prefix check: ``urlsplit`` leaves them encoded while browsers
+    decode them into traversal, so an encoded escape would otherwise pass the
+    allowlist and resolve outside the binding-scoped route.
     """
 
     base = scoped_base.rstrip("/")
@@ -273,7 +298,7 @@ def _rewrite_upstream_location(location: str, *, scoped_base: str) -> str:
         # Relative redirect: resolve against the scoped base so parent segments
         # cannot walk above the binding mount.
         combined = f"{base}/{split.path}"
-    normalized = posixpath.normpath(combined)
+    normalized = posixpath.normpath(_browser_canonical_path(combined))
     if normalized != base and not normalized.startswith(base + "/"):
         # Traversal escaped the binding mount: never emit an out-of-scope
         # Location the browser would normalize to an arbitrary same-origin path.
@@ -288,13 +313,18 @@ def _is_safe_scoped_redirect(target: str, *, scoped_base: str) -> bool:
     stays exactly on (or under) the binding-scoped base. Upstream ``Location``
     values are untrusted, and the scoped base embeds the caller-supplied
     binding id, so the sink re-validates instead of trusting the rewrite alone.
+    The path is browser-canonicalized first so percent-encoded traversal that
+    survived the rewrite still fails closed here.
     """
 
     base = scoped_base.rstrip("/")
     split = urlsplit(str(target or ""))
     if split.scheme or split.netloc:
         return False
-    path = split.path or ""
+    # Browser-canonicalize and normalize before the prefix check: a decoded
+    # `/..` still literally starts with the base prefix, so compare the same
+    # normalized form the rewrite layer emits.
+    path = posixpath.normpath(_browser_canonical_path(split.path or ""))
     return path == base or path == base + "/" or path.startswith(base + "/")
 
 
