@@ -3987,32 +3987,39 @@ def test_list_executions_allows_explicit_user_owner_type_for_non_admin() -> None
     assert kwargs["owner_id"] == str(mock_user.id)
     assert kwargs["owner_type"] == "user"
 
-def test_create_task_shaped_execution_rejects_invalid_required_capabilities() -> None:
+@pytest.mark.parametrize("capability_location", ["root", "tool", "skill"])
+def test_create_task_shaped_execution_rejects_invalid_required_capabilities(
+    capability_location: str,
+) -> None:
     app = FastAPI()
     app.include_router(router)
     mock_service = AsyncMock()
     app.dependency_overrides[_get_service] = lambda: mock_service
     _override_temporal_client(app)
     _override_user_dependencies(app, is_superuser=False)
+    workflow_payload = {"instructions": "Ship the Temporal integration."}
+    payload = {"workflow": workflow_payload}
+    if capability_location == "root":
+        payload["requiredCapabilities"] = 1
+    else:
+        workflow_payload[capability_location] = {
+            "name": "auto",
+            "requiredCapabilities": 1,
+        }
 
     with TestClient(app) as test_client:
         response = test_client.post(
             "/api/executions",
             json={
                 "type": "workflow",
-                "payload": {
-                    "requiredCapabilities": 1,
-                    "workflow": {
-                        "instructions": "Ship the Temporal integration.",
-                    },
-                },
+                "payload": payload,
             },
         )
 
     assert response.status_code == 422
-    assert (
-        response.json()["detail"]["message"]
-        == "payload.requiredCapabilities must be a JSON array of strings."
+    field = "payload" if capability_location == "root" else "payload.workflow.tool"
+    assert response.json()["detail"]["message"] == (
+        f"{field}.requiredCapabilities must be a JSON array of strings."
     )
     mock_service.create_execution.assert_not_awaited()
 
@@ -4707,8 +4714,10 @@ def test_create_task_shaped_execution_rejects_missing_default_provider_profile(
 
 
 @pytest.mark.parametrize("root_capabilities", [None, [], ["git", "gh"]])
+@pytest.mark.parametrize("capability_location", ["steps", "tool", "skill"])
 def test_create_execution_keeps_resolved_agent_profile_out_of_authored_omnigent(
     root_capabilities,
+    capability_location,
     client: tuple[TestClient, AsyncMock, SimpleNamespace],
 ) -> None:
     test_client, service, _user = client
@@ -4774,6 +4783,24 @@ def test_create_execution_keeps_resolved_agent_profile_out_of_authored_omnigent(
         resolved_skillset_ref="art_skills_1",
         runtime_provider_rollout=rollout_record.model_dump(mode="json", by_alias=True),
     )
+    capability_contract = (
+        {
+            "steps": [
+                {
+                    "id": "implement",
+                    "skill": {"id": "auto", "requiredCapabilities": ["git"]},
+                },
+                {
+                    "id": "publish",
+                    "skill": {"id": "auto", "requiredCapabilities": ["git", "gh"]},
+                },
+            ]
+        }
+        if capability_location == "steps"
+        else {
+            capability_location: {"name": "auto", "requiredCapabilities": ["git", "gh"]}
+        }
+    )
     with (
         patch(
             "api_service.api.routers.executions.resolve_agent_profile_snapshot",
@@ -4809,22 +4836,7 @@ def test_create_execution_keeps_resolved_agent_profile_out_of_authored_omnigent(
                     },
                     "workflow": {
                         "instructions": "Run the selected agent profile.",
-                        "steps": [
-                            {
-                                "id": "implement",
-                                "skill": {
-                                    "id": "auto",
-                                    "requiredCapabilities": ["git"],
-                                },
-                            },
-                            {
-                                "id": "publish",
-                                "skill": {
-                                    "id": "auto",
-                                    "requiredCapabilities": ["git", "gh"],
-                                },
-                            },
-                        ],
+                        **capability_contract,
                         "runtime": {"mode": "omnigent"},
                     },
                 },
