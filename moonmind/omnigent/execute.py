@@ -1725,9 +1725,13 @@ async def _enqueue_stream_events(
     session_id: str,
     queue: asyncio.Queue[tuple[dict[str, Any], bool] | BaseException | None],
     message_posted: asyncio.Event,
+    admitted: asyncio.Event | None = None,
 ) -> None:
     try:
-        async for event in client.stream_events(session_id):
+        async for event in client.stream_events(
+            session_id,
+            on_admitted=(admitted.set if admitted is not None else None),
+        ):
             await queue.put((event, message_posted.is_set()))
     except asyncio.CancelledError:
         raise
@@ -2628,15 +2632,49 @@ async def run_omnigent_execution(
                 )
                 external_state["firstMessage"]["state"] = "posted"
             if not first_message_posted:
+                from moonmind.workflows.adapters.omnigent_client import (
+                    stream_admission_timeout_seconds,
+                )
+
                 stream_queue = asyncio.Queue()
+                stream_admitted = asyncio.Event()
                 stream_task = asyncio.create_task(
                     _enqueue_stream_events(
                         client=client,
                         session_id=session_id,
                         queue=stream_queue,
                         message_posted=message_posted_gate,
+                        admitted=stream_admitted,
                     )
                 )
+                # Reserve observation capacity before mutating provider
+                # state: when streams are saturated the admission timeout is
+                # dequeued here and the run fails before the first message is
+                # posted (safe retry, first_message_posted stays False)
+                # instead of reporting failure after provider work started.
+                admission_deadline = (
+                    asyncio.get_running_loop().time()
+                    + stream_admission_timeout_seconds()
+                )
+                while not stream_admitted.is_set() and not stream_task.done():
+                    if asyncio.get_running_loop().time() >= admission_deadline:
+                        break
+                    await asyncio.sleep(0.01)
+                if not stream_admitted.is_set():
+                    await _cancel_task(stream_task)
+                    queued: Any = None
+                    while not stream_queue.empty():
+                        item = stream_queue.get_nowait()
+                        if isinstance(item, BaseException):
+                            queued = item
+                            break
+                    if isinstance(queued, OmnigentClientError):
+                        raise queued
+                    raise OmnigentClientError(
+                        "Omnigent stream admission exhausted; control and "
+                        "cleanup operations remain available",
+                        failure_class="integration_error",
+                    )
                 await asyncio.sleep(0)
                 if run_store is not None:
                     await run_store.mark_posting(request.idempotency_key)
