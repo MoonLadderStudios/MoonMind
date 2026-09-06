@@ -16,6 +16,7 @@ import json
 import os
 from datetime import UTC, datetime
 from pathlib import Path
+from urllib.parse import unquote, urlparse
 
 import pytest
 
@@ -26,6 +27,7 @@ from moonmind.omnigent.concurrency_qualification import (
     CONCURRENCY_SCENARIO_CATALOG_VERSION,
     DEFAULT_REPEATED_WAVE_THRESHOLDS,
     EXACT_DOCKER_LEVELS,
+    EXACT_HOST_IMAGE_ENV,
     EXACT_DOCKER_REPEATED_WAVE_THRESHOLDS,
     HERMETIC_LEVELS,
     POSTGRES_FIXTURE_NAME,
@@ -48,6 +50,7 @@ from moonmind.omnigent.concurrency_qualification import (
     ObservedOverlapEvidence,
     RepeatedWaveReport,
     ScenarioOwner,
+    allowed_concurrency_levels,
     WaveObservation,
     build_row_for_unavailable_environment,
     compute_concurrency_evidence_digest,
@@ -69,6 +72,11 @@ from tools import run_omnigent_concurrency_qualification as runner
 
 SUPPORT_KEY = "omnigent-support:sha256:" + "a" * 64
 OTHER_SUPPORT_KEY = "omnigent-support:sha256:" + "b" * 64
+
+#: The exact host artifact a record is filed against. Digest-pinned, because a
+#: tag names whatever the registry points at today rather than the image a level
+#: was observed on.
+HOST_IMAGE_REF = "ghcr.io/example/opencode-host@sha256:" + "d" * 64
 
 #: What a real 4-core/8-GiB machine measures: MemTotal 8,138,000 kB, which is
 #: physical RAM minus the kernel's reservation. The class it is filed under
@@ -125,6 +133,7 @@ def _identity(key: str = SUPPORT_KEY) -> ConcurrencySupportIdentity:
     return ConcurrencySupportIdentity(
         supportCombinationKey=key,
         moonmindCommit="0" * 40,
+        hostImageRef=HOST_IMAGE_REF,
         workerBuildRef="moonmind-worker@test",
         providerCapacityPolicyVersion="omnigent-provider-capacity@1",
         hostCapacityPolicyVersion="omnigent-host-capacity@1",
@@ -797,6 +806,8 @@ def _runner_args(
     evidence_dir,
     *,
     resource_class: str = "local-deterministic@1",
+    evidence_base_ref: str = "",
+    evidence_artifact: str = "",
 ) -> argparse.Namespace:
     """Return runner arguments for the row tests.
 
@@ -809,6 +820,8 @@ def _runner_args(
     return argparse.Namespace(
         evidence_dir=str(evidence_dir),
         resource_class=resource_class,
+        evidence_base_ref=evidence_base_ref,
+        evidence_artifact=evidence_artifact,
     )
 
 
@@ -834,6 +847,7 @@ def _identity_argv(**overrides: str) -> list[str]:
     supplied = {
         "--support-combination-key": SUPPORT_KEY,
         "--moonmind-commit": "0" * 40,
+        "--host-image-ref": HOST_IMAGE_REF,
         "--worker-build-ref": "moonmind-worker@ci",
         "--worker-topology-ref": "single-replica@1",
         # A dimensionless class, so the argv is self-consistent on whatever
@@ -865,9 +879,14 @@ def test_an_owning_test_that_published_its_observation_records_a_pass(
         assert row.qualifies
         assert row.overlap is not None
         assert row.overlap.observed_peak == row.level
-        assert Path(row.evidence_ref).exists(), "a passing row must resolve"
+        # No durable publication context here, so the ref names the file this
+        # invocation wrote — explicitly, as a ``file:`` URI the publisher
+        # refuses rather than as a bare path it could mistake for an artifact.
+        published = Path(unquote(urlparse(row.evidence_ref).path))
+        assert row.evidence_ref.startswith("file://")
+        assert published.exists(), "a passing row must resolve"
         assert row.evidence_digest == compute_concurrency_evidence_digest(
-            json.loads(Path(row.evidence_ref).read_text(encoding="utf-8"))
+            json.loads(published.read_text(encoding="utf-8"))
         )
 
 
@@ -1233,6 +1252,8 @@ def _run_main(tmp_path, layer: str, levels: str, rows) -> int:
                 SUPPORT_KEY,
                 "--moonmind-commit",
                 "0" * 40,
+                "--host-image-ref",
+                HOST_IMAGE_REF,
                 "--evidence-dir",
                 str(tmp_path / "evidence"),
                 "--output",
@@ -1341,6 +1362,8 @@ def test_the_requested_matrix_defaults_to_each_layers_declared_levels() -> None:
             SUPPORT_KEY,
             "--moonmind-commit",
             "0" * 40,
+            "--host-image-ref",
+            HOST_IMAGE_REF,
         ]
     )
 
@@ -1404,6 +1427,7 @@ def never_spawned(monkeypatch: pytest.MonkeyPatch) -> list[tuple]:
     ("flag", "variable"),
     [
         ("--support-combination-key", "OMNIGENT_CONCURRENCY_SUPPORT_KEY"),
+        ("--host-image-ref", "OMNIGENT_CONFORMANCE_OPENCODE_HOST_IMAGE"),
         ("--worker-build-ref", "OMNIGENT_WORKER_BUILD_REF"),
         ("--worker-topology-ref", "OMNIGENT_WORKER_TOPOLOGY_REF"),
         ("--resource-class", "OMNIGENT_CONCURRENCY_RESOURCE_CLASS"),
@@ -1828,3 +1852,168 @@ def test_the_exact_image_budget_widens_only_the_control_latency() -> None:
         == deterministic.max_registration_requests_per_execution
     )
     assert exact.max_transport_pool_peak == deterministic.max_transport_pool_peak
+
+
+# ---------------------------------------------------------------------------
+# Bounded load, exercised artifacts, and evidence that survives the runner.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("layer", "levels"),
+    (
+        ("exact_docker", "10000"),
+        ("exact_docker", "3"),
+        ("protected_live", "8"),
+        ("hermetic", "32"),
+    ),
+)
+def test_a_level_outside_the_layers_matrix_is_refused_before_anything_runs(
+    layer: str, levels: str
+) -> None:
+    """``--levels 10000`` must not become ten thousand real containers.
+
+    The program advertises a bounded load, so a level with no declared matrix
+    entry has no budget, no owning row and no bounded-load contract. It is
+    refused while the argument is still an argument.
+    """
+
+    args = runner._parse_args(_identity_argv() + ["--layer", layer, "--levels", levels])
+
+    with pytest.raises(SystemExit) as raised:
+        runner.requested_matrix(args)
+
+    message = str(raised.value.code)
+    assert levels in message
+    assert "no layer was run" in message
+
+
+def test_the_declared_levels_of_every_layer_are_accepted() -> None:
+    """The bound refuses only what the layer never declared."""
+
+    for layer in ConcurrencyQualificationLayer:
+        declared = allowed_concurrency_levels(layer)
+        args = runner._parse_args(
+            _identity_argv()
+            + [
+                "--layer",
+                layer.value,
+                "--levels",
+                ",".join(str(level) for level in declared),
+            ]
+        )
+        assert dict(runner.requested_matrix(args))[layer] == declared
+
+
+def test_a_substituted_host_image_is_refused_before_the_matrix_is_spent(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The support key is a digest and cannot be recomputed from another image.
+
+    A dispatch that points the job at a different digest while the declared ref
+    still names the previous combination would file rows under an identity
+    whose host artifacts were never exercised.
+    """
+
+    monkeypatch.setenv(
+        EXACT_HOST_IMAGE_ENV, "ghcr.io/example/opencode-host@sha256:" + "e" * 64
+    )
+
+    with pytest.raises(SystemExit) as raised:
+        runner.build_identity(runner._parse_args(_identity_argv()))
+
+    message = str(raised.value.code)
+    assert HOST_IMAGE_REF in message
+    assert EXACT_HOST_IMAGE_ENV in message
+    assert "no layer was run" in message
+
+
+def test_the_identity_records_the_image_the_layer_actually_launched(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Agreement is the ordinary path, and it is what the record carries."""
+
+    monkeypatch.setenv(EXACT_HOST_IMAGE_ENV, HOST_IMAGE_REF)
+
+    identity = runner.build_identity(runner._parse_args(_identity_argv()))
+
+    assert identity.host_image_ref == HOST_IMAGE_REF
+
+
+def test_a_tagged_host_image_is_not_an_exact_artifact() -> None:
+    """A tag names whatever the registry points at today."""
+
+    with pytest.raises(ValueError, match="digest-pinned"):
+        ConcurrencySupportIdentity(
+            supportCombinationKey=SUPPORT_KEY,
+            moonmindCommit="0" * 40,
+            hostImageRef="ghcr.io/example/opencode-host:latest",
+            workerBuildRef="moonmind-worker@test",
+            providerCapacityPolicyVersion="omnigent-provider-capacity@1",
+            hostCapacityPolicyVersion="omnigent-host-capacity@1",
+            transportPoolPolicyVersion="omnigent-transport-pool@1",
+            workerTopologyRef="single-replica@1",
+            resourceClass=RESOURCE_CLASS,
+        )
+
+
+def test_a_row_never_inherits_the_previous_invocations_observation(
+    tmp_path, monkeypatch: pytest.MonkeyPatch, postgres_cluster
+) -> None:
+    """A reused evidence directory must not qualify a row that observed nothing.
+
+    The evidence path is fixed per ``(layer, level)``. Without clearing it, a
+    newly passing owner that published nothing — or one that was skipped
+    entirely — reads back the previous run's JSON and is recorded ``passed``
+    instead of ``partial``.
+    """
+
+    stale = _overlap(2)
+    publish_observed_overlap(
+        ConcurrencyQualificationLayer.hermetic, stale, evidence_dir=tmp_path
+    )
+    monkeypatch.setattr(
+        runner, "_run_owning_tests", lambda _layer, _level, _dir: 0
+    )
+
+    rows = runner.build_rows(
+        _runner_args(tmp_path), ConcurrencyQualificationLayer.hermetic, (2,)
+    )
+
+    assert rows[0].status is ConcurrencyRowStatus.partial
+    assert not observed_overlap_evidence_path(
+        tmp_path, ConcurrencyQualificationLayer.hermetic, 2
+    ).exists()
+
+
+def test_a_published_row_references_the_run_that_produced_it(
+    tmp_path, monkeypatch: pytest.MonkeyPatch, postgres_cluster
+) -> None:
+    """The ref has to resolve once the record leaves this workspace.
+
+    ``artifacts/omnigent-concurrency/evidence/hermetic-2.json`` identifies no
+    workflow artifact and does not survive the runner, so a durable publication
+    context supplies the immutable run/artifact reference instead.
+    """
+
+    def _publish(layer, level, _evidence_dir) -> int:
+        publish_observed_overlap(layer, _overlap(level), evidence_dir=tmp_path)
+        return 0
+
+    monkeypatch.setattr(runner, "_run_owning_tests", _publish)
+    monkeypatch.setenv("GITHUB_SERVER_URL", "https://github.example")
+    monkeypatch.setenv("GITHUB_REPOSITORY", "MoonLadderStudios/MoonMind")
+    monkeypatch.setenv("GITHUB_RUN_ID", "4242")
+    monkeypatch.setenv("GITHUB_RUN_ATTEMPT", "2")
+
+    rows = runner.build_rows(
+        _runner_args(tmp_path, evidence_artifact="omnigent-concurrency-4242-2"),
+        ConcurrencyQualificationLayer.hermetic,
+        (2,),
+    )
+
+    assert rows[0].evidence_ref == (
+        "https://github.example/MoonLadderStudios/MoonMind/actions/runs/4242"
+        "/attempts/2#artifact=omnigent-concurrency-4242-2/hermetic-2.json"
+    )
+    assert str(tmp_path) not in rows[0].evidence_ref

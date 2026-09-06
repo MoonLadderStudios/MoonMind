@@ -7,7 +7,7 @@ This module owns *how* the index is derived from that run's acceptance manifest
 so the derivation is a production contract with tests rather than a script
 embedded in a workflow file.
 
-Two properties are structural here:
+Three properties are structural here:
 
 * **A combination that did not pass is recorded, not omitted.** An operator
   reading the index must be able to tell a combination that failed from one
@@ -20,6 +20,13 @@ Two properties are structural here:
   record is attached to the entry whose ``supportCombinationKey`` it names and
   to no other, so the combined exact-support matrix is the existing index plus
   one field rather than a second registry.
+* **A concurrency record has to have qualified the row it lands on.** The
+  support key is a digest of the substrate, not of the MoonMind revision or of
+  the artifact a given qualification run launched, so
+  :func:`_reject_unattachable_record` compares the record's commit, host image
+  and evidence resolvability against the entry before attaching it. Evidence
+  earned on another revision, on other exact artifacts, or resolvable only from
+  the qualification runner's own workspace is refused rather than published.
 
 Which outcomes reach this module is the caller's decision, not this module's.
 The protected live-conformance publish job validates the acceptance manifest
@@ -49,6 +56,11 @@ from moonmind.omnigent.execution_support_evidence import (
 EXECUTION_SUPPORT_INDEX_VERSION = (
     "moonmind.omnigent-protected-execution-support-index/v1"
 )
+
+#: A concurrency observation referenced only by the workspace the qualification
+#: runner wrote it in. That path names no workflow artifact and does not survive
+#: the runner, so the index never carries one.
+WORKSPACE_EVIDENCE_SCHEME = "file:"
 
 #: The exact support-identity fields a published row carries. Declared here so
 #: the publisher and the schema cannot drift into disagreeing about what an
@@ -83,6 +95,67 @@ def _row_status(combination: Mapping[str, Any]) -> ExecutionSupportRowStatus:
         return ExecutionSupportRowStatus(raw)
     except ValueError:
         return ExecutionSupportRowStatus.failed
+
+
+def _same_commit(left: str, right: str) -> bool:
+    """Return whether two commit refs name the same revision.
+
+    Git abbreviations are legitimate on both sides — a workflow may stage a
+    short SHA while the manifest carries the full one — so a prefix match is
+    the comparison, not string equality. An empty ref matches nothing.
+    """
+
+    first, second = left.strip().lower(), right.strip().lower()
+    if not first or not second:
+        return False
+    return first.startswith(second) or second.startswith(first)
+
+
+def _reject_unattachable_record(
+    record: ConcurrencyQualificationRecord,
+    combination: Mapping[str, Any],
+    *,
+    source_commit: str,
+) -> None:
+    """Refuse a concurrency record that did not qualify *this* combination.
+
+    ``supportCombinationKey`` is a digest of the exact substrate, but it is not
+    a digest of the MoonMind revision, and it does not travel with the artifact
+    the wave actually launched. A code-only change leaves the key untouched, and
+    a manual dispatch can point the qualification job at a different host image
+    while the key still names the previous combination. Either way the record
+    would advertise a concurrency level for artifacts and a revision that were
+    never exercised, so both are compared here before the record is attached.
+    """
+
+    identity = record.identity
+    if not _same_commit(identity.moonmind_commit, source_commit):
+        raise ValueError(
+            "concurrency evidence was observed on MoonMind commit "
+            f"{identity.moonmind_commit} but this run publishes "
+            f"{source_commit}; a level observed on another revision does not "
+            "qualify this one"
+        )
+    host_image_ref = str(combination.get("hostImageRef") or "").strip()
+    if identity.host_image_ref != host_image_ref:
+        raise ValueError(
+            "concurrency evidence was observed on host image "
+            f"{identity.host_image_ref} but this combination names "
+            f"{host_image_ref or 'no host image'}; a level observed on other "
+            "exact artifacts does not qualify these"
+        )
+    workspace_local = sorted(
+        {
+            row.evidence_ref
+            for row in record.rows
+            if row.qualifies and row.evidence_ref.startswith(WORKSPACE_EVIDENCE_SCHEME)
+        }
+    )
+    if workspace_local:
+        raise ValueError(
+            "concurrency evidence is referenced by workspace-local path and "
+            "cannot be resolved once published: " + ", ".join(workspace_local)
+        )
 
 
 def _support_combination_key(combination: Mapping[str, Any]) -> str:
@@ -242,6 +315,9 @@ def build_protected_support_index(
         # The concurrency dimension is admission-relevant, so it is published
         # only on a row that itself carries admission authority.
         if concurrency is not None and status is ExecutionSupportRowStatus.passed:
+            _reject_unattachable_record(
+                concurrency, combination, source_commit=source_commit
+            )
             candidate["concurrency"] = concurrency.as_payload()
         entries.append(
             ProtectedExecutionSupportEvidence.model_validate(candidate).model_dump(
@@ -292,6 +368,7 @@ def published_statuses(index: Mapping[str, Any]) -> dict[str, str]:
 
 __all__ = [
     "EXECUTION_SUPPORT_INDEX_VERSION",
+    "WORKSPACE_EVIDENCE_SCHEME",
     "SUPPORT_IDENTITY_FIELDS",
     "build_protected_support_index",
     "load_concurrency_records",

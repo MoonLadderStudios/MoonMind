@@ -37,6 +37,7 @@ Usage::
         --layer exact_docker --levels 2,4,8 \\
         --support-combination-key omnigent-support:sha256:... \\
         --moonmind-commit "$GITHUB_SHA" \\
+        --host-image-ref ghcr.io/example/opencode-host@sha256:... \\
         --worker-build-ref moonmind-worker@2026.09 \\
         --worker-topology-ref single-replica@1 \\
         --resource-class ci-standard-4x8@1 \\
@@ -47,7 +48,13 @@ memory this process may actually use — affinity mask, CPU quota, memory limit 
 so the published resource class describes the machine that actually ran the
 level. ``--resource-class`` names the class the rows are filed under, and a ref
 that carries its own ``<cores>x<gib>`` dimensions has to agree with that
-measurement or the identity is refused before a layer runs.
+measurement or the identity is refused before a layer runs. ``--host-image-ref``
+is held to the image the layer will actually launch for the same reason: the
+support key is a digest and cannot be recomputed from a substituted artifact.
+
+``--levels`` is bounded by the layer's own declared matrix. This program spends
+real containers and a shared provider route, so a level nobody declared is
+refused before anything is launched rather than after.
 """
 
 from __future__ import annotations
@@ -72,6 +79,7 @@ from moonmind.omnigent.concurrency_qualification import (  # noqa: E402
     CONCURRENCY_LEVEL_ENV,
     CONCURRENCY_SCENARIO_CATALOG_VERSION,
     EXACT_DOCKER_LEVELS,
+    EXACT_HOST_IMAGE_ENV,
     HERMETIC_LEVELS,
     PROTECTED_LIVE_ADMISSION_ENV,
     PROTECTED_LIVE_PROVIDER_PROFILE_ENV,
@@ -81,12 +89,14 @@ from moonmind.omnigent.concurrency_qualification import (  # noqa: E402
     ConcurrencyRowStatus,
     ConcurrencySupportIdentity,
     MachineResourceClass,
+    allowed_concurrency_levels,
     compute_concurrency_evidence_digest,
     layer_requires_postgres,
     load_observed_overlap,
     observed_overlap_evidence_path,
     owning_test_files,
     unowned_scenarios,
+    unsatisfied_exact_docker_environment,
     unsatisfied_protected_live_environment,
 )
 
@@ -108,6 +118,10 @@ IDENTITY_ARGUMENT_SOURCES: dict[str, tuple[str, str]] = {
         "OMNIGENT_CONCURRENCY_SUPPORT_KEY",
     ),
     "moonmind_commit": ("--moonmind-commit", "github.sha"),
+    "host_image_ref": (
+        "--host-image-ref",
+        "OMNIGENT_CONFORMANCE_OPENCODE_HOST_IMAGE",
+    ),
     "worker_build_ref": ("--worker-build-ref", "OMNIGENT_WORKER_BUILD_REF"),
     "provider_capacity_policy_version": (
         "--provider-capacity-policy-version",
@@ -129,6 +143,7 @@ _FLAGS_BY_FIELD: dict[str, str] = {
     **{field: flag for field, (flag, _) in IDENTITY_ARGUMENT_SOURCES.items()},
     "supportCombinationKey": "--support-combination-key",
     "moonmindCommit": "--moonmind-commit",
+    "hostImageRef": "--host-image-ref",
     "workerBuildRef": "--worker-build-ref",
     "providerCapacityPolicyVersion": "--provider-capacity-policy-version",
     "hostCapacityPolicyVersion": "--host-capacity-policy-version",
@@ -149,19 +164,18 @@ class LayerBlocked(RuntimeError):
 def _docker_available() -> None:
     """Raise unless a usable Docker daemon and the exact images are present.
 
-    The checks here mirror the exact-Docker owning test's own environment
-    preconditions, so a runner missing one of them records an ``unavailable``
-    row naming what was absent instead of entering the layer and recording a
-    ``partial`` row whose diagnostic is only "nothing was observed".
+    The environment names come from
+    :data:`~moonmind.omnigent.concurrency_qualification.EXACT_DOCKER_REQUIRED_ENV`,
+    the same tuple the exact-Docker owning test reads, so a runner missing one
+    of them records an ``unavailable`` row naming what was absent instead of
+    entering the layer and recording a ``partial`` row whose diagnostic is only
+    "nothing was observed".
     """
 
-    if os.getenv("MOONMIND_OMNIGENT_CONCURRENCY_HOST_IMAGE", "").strip() == "":
+    unsatisfied = unsatisfied_exact_docker_environment()
+    if unsatisfied:
         raise LayerUnavailable(
-            "MOONMIND_OMNIGENT_CONCURRENCY_HOST_IMAGE is not a digest-pinned image"
-        )
-    if os.getenv("MOONMIND_OMNIGENT_HOST_SERVER_URL", "").strip() == "":
-        raise LayerUnavailable(
-            "MOONMIND_OMNIGENT_HOST_SERVER_URL names no host server endpoint"
+            "the exact-image layer is not configured: " + ", ".join(unsatisfied)
         )
     try:
         completed = subprocess.run(
@@ -409,6 +423,32 @@ def _named_arguments(exc: ValidationError, *, fallback: str) -> str:
     return "; ".join(details)
 
 
+def _exercised_host_image(args: argparse.Namespace) -> str:
+    """Return the exact host image this invocation runs under.
+
+    The support key is a digest of the whole exact combination, so it cannot be
+    inverted back into the artifacts it was built from: an operator who
+    dispatches a different host image while a repository variable still names
+    the previous combination would otherwise file rows under an identity whose
+    host artifacts were never exercised. The declared ref is therefore held to
+    the image the layer will actually launch — the one the owning tests read
+    from :data:`EXACT_HOST_IMAGE_ENV` — and a disagreement is refused here, before
+    the matrix is spent.
+    """
+
+    declared = str(getattr(args, "host_image_ref", "") or "").strip()
+    observed = os.getenv(EXACT_HOST_IMAGE_ENV, "").strip()
+    if observed and observed != declared:
+        raise SystemExit(
+            "the declared host image does not match the image this run would "
+            f"launch: --host-image-ref names {declared!r} while {EXACT_HOST_IMAGE_ENV} "
+            f"names {observed!r}; the support combination key is a digest of the "
+            "exact artifacts and cannot be recomputed from a substituted image, "
+            "so no layer was run"
+        )
+    return declared
+
+
 def build_identity(args: argparse.Namespace) -> ConcurrencySupportIdentity:
     """Validate the support identity before any layer spends its matrix.
 
@@ -448,6 +488,7 @@ def build_identity(args: argparse.Namespace) -> ConcurrencySupportIdentity:
         return ConcurrencySupportIdentity(
             supportCombinationKey=args.support_combination_key,
             moonmindCommit=args.moonmind_commit,
+            hostImageRef=_exercised_host_image(args),
             workerBuildRef=args.worker_build_ref,
             providerCapacityPolicyVersion=args.provider_capacity_policy_version,
             hostCapacityPolicyVersion=args.host_capacity_policy_version,
@@ -486,6 +527,56 @@ def _run_owning_tests(
     return completed.returncode
 
 
+def _discard_stale_evidence(
+    evidence_dir: str,
+    layer: ConcurrencyQualificationLayer,
+    level: int,
+) -> None:
+    """Remove any observation left at this row's evidence path by an earlier run."""
+
+    try:
+        observed_overlap_evidence_path(evidence_dir, layer, level).unlink()
+    except FileNotFoundError:
+        return
+    except OSError as exc:
+        # An evidence slot that cannot be emptied cannot be trusted, and
+        # continuing would file the previous run's observation under this one.
+        raise SystemExit(
+            "the observed-overlap evidence slot for "
+            f"{layer.value} N={level} could not be cleared before the row ran: "
+            f"{exc}"
+        ) from exc
+
+
+def durable_evidence_ref(args: argparse.Namespace, path: Path) -> str:
+    """Return the reference a reader can resolve this observation from.
+
+    The workspace path the file was written to is meaningless once the record
+    is downloaded into the protected publish run and embedded in the index: it
+    names no workflow artifact and does not survive the runner. When a durable
+    publication context exists — a GitHub run, or an explicit
+    ``--evidence-base-ref`` — the row carries the immutable run/artifact
+    reference instead. Outside one, the ref is an explicit ``file:`` URI, which
+    the publisher refuses to admit, so a workspace-local observation can never
+    reach the published index while pretending to be resolvable.
+    """
+
+    base = str(getattr(args, "evidence_base_ref", "") or "").strip().rstrip("/")
+    if not base:
+        server = os.getenv("GITHUB_SERVER_URL", "").strip().rstrip("/")
+        repository = os.getenv("GITHUB_REPOSITORY", "").strip()
+        run_id = os.getenv("GITHUB_RUN_ID", "").strip()
+        attempt = os.getenv("GITHUB_RUN_ATTEMPT", "").strip() or "1"
+        if server and repository and run_id:
+            base = f"{server}/{repository}/actions/runs/{run_id}/attempts/{attempt}"
+    if not base:
+        return path.resolve().as_uri()
+    artifact = str(getattr(args, "evidence_artifact", "") or "").strip()
+    if artifact:
+        return f"{base}#artifact={artifact}/{path.name}"
+    return f"{base}#{path.name}"
+
+
 def build_rows(
     args: argparse.Namespace,
     layer: ConcurrencyQualificationLayer,
@@ -519,6 +610,13 @@ def build_rows(
 
     rows: list[ConcurrencyQualificationRow] = []
     for level in levels:
+        # The evidence path is fixed per (layer, level), so a file left by an
+        # earlier invocation against the same directory — a local rerun, a
+        # persistent self-hosted workspace — would be read back as *this*
+        # invocation's observation. A row that observed nothing has to come out
+        # ``partial``, so the slot is emptied before the owners are spawned
+        # rather than trusted afterwards.
+        _discard_stale_evidence(args.evidence_dir, layer, level)
         code = _run_owning_tests(layer, level, args.evidence_dir)
         if code != 0:
             rows.append(
@@ -556,7 +654,7 @@ def build_rows(
                 level=level,
                 status=ConcurrencyRowStatus.passed,
                 overlap=overlap,
-                evidence_ref=str(evidence_path),
+                evidence_ref=durable_evidence_ref(args, evidence_path),
                 evidence_digest=compute_concurrency_evidence_digest(payload),
                 resource_class=_resource_class(args),
             )
@@ -574,6 +672,12 @@ def requested_matrix(
     answerable for that layer's rows; the cross-layer validated level is an
     advertisement computed from the whole record, and it can only be reached by
     combining records from several jobs.
+
+    A requested level outside the layer's declared matrix is refused here,
+    before anything is launched. This program advertises a *bounded* load, and
+    an unbounded ``--levels`` would let one invocation ask a trusted
+    qualification runner for an arbitrary number of real containers or provider
+    sessions.
     """
 
     layers = (
@@ -585,13 +689,51 @@ def requested_matrix(
         (
             layer,
             (
-                tuple(int(item) for item in args.levels.split(",") if item.strip())
+                _bounded_levels(layer, args.levels)
                 if args.levels and args.layer != "all"
                 else DEFAULT_LEVELS[layer]
             ),
         )
         for layer in layers
     )
+
+
+def _bounded_levels(
+    layer: ConcurrencyQualificationLayer, raw: str
+) -> tuple[int, ...]:
+    """Return the requested levels, refusing any the layer does not declare."""
+
+    allowed = allowed_concurrency_levels(layer)
+    requested: list[int] = []
+    refused: list[str] = []
+    for item in raw.split(","):
+        entry = item.strip()
+        if not entry:
+            continue
+        try:
+            level = int(entry)
+        except ValueError:
+            refused.append(entry)
+            continue
+        if level not in allowed:
+            refused.append(entry)
+            continue
+        requested.append(level)
+    if refused:
+        raise SystemExit(
+            f"--levels asked layer {layer.value} for "
+            + ", ".join(refused)
+            + "; that layer declares "
+            + ", ".join(str(level) for level in allowed)
+            + ", and a level with no declared matrix entry has no bounded-load "
+            "contract, so no layer was run"
+        )
+    if not requested:
+        raise SystemExit(
+            f"--levels selected no level for layer {layer.value}; it declares "
+            + ", ".join(str(level) for level in allowed)
+        )
+    return tuple(requested)
 
 
 def requested_rows_that_did_not_pass(
@@ -649,6 +791,9 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--levels", default="")
     parser.add_argument("--support-combination-key", required=True)
     parser.add_argument("--moonmind-commit", required=True)
+    # The exact host artifact the rows are earned on. Held to the image the
+    # layer will actually launch; see :func:`_exercised_host_image`.
+    parser.add_argument("--host-image-ref", required=True)
     parser.add_argument("--worker-build-ref", default="moonmind-worker@local")
     parser.add_argument(
         "--provider-capacity-policy-version", default="omnigent-provider-capacity@1"
@@ -667,6 +812,11 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument(
         "--evidence-dir", default="artifacts/omnigent-concurrency/evidence"
     )
+    # How a reader resolves an observation once the record has left this
+    # workspace. Defaults to this GitHub run/attempt when one is in scope; see
+    # :func:`durable_evidence_ref`.
+    parser.add_argument("--evidence-base-ref", default="")
+    parser.add_argument("--evidence-artifact", default="")
     parser.add_argument(
         "--output", default="artifacts/omnigent-concurrency/record.json"
     )

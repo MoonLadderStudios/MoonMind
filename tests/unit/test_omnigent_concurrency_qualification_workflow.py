@@ -23,6 +23,7 @@ from pathlib import Path
 import yaml
 
 from moonmind.omnigent.concurrency_qualification import (
+    EXACT_DOCKER_REQUIRED_ENV,
     HERMETIC_LEVELS,
     PROTECTED_LIVE_ADMISSION_ENV,
     PROTECTED_LIVE_PROVIDER_PROFILE_ENV,
@@ -137,13 +138,90 @@ def test_the_exact_image_job_pins_the_images_and_the_identity() -> None:
     )
     assert "--layer exact_docker" in step["run"]
     assert "--levels 2,4,8" in step["run"]
-    for flag, variable in (
-        ("--support-combination-key", "vars.OMNIGENT_CONCURRENCY_SUPPORT_KEY"),
+    for flag, expression in (
+        # The key and the image are resolved together in one step, so a
+        # dispatched image can never be filed under the repository variable
+        # that names the previous combination.
+        ("--support-combination-key", "steps.images.outputs.support_key"),
+        ("--host-image-ref", "steps.images.outputs.host"),
         ("--worker-build-ref", "vars.OMNIGENT_WORKER_BUILD_REF"),
         ("--worker-topology-ref", "vars.OMNIGENT_WORKER_TOPOLOGY_REF"),
         ("--resource-class", "vars.OMNIGENT_CONCURRENCY_RESOURCE_CLASS"),
     ):
-        assert f'{flag} "${{{{ {variable} }}}}"' in step["run"]
+        assert f'{flag} "${{{{ {expression} }}}}"' in step["run"]
+
+
+def test_the_exact_image_job_supplies_every_value_its_owner_requires() -> None:
+    """A launched container is only an execution once it has registered.
+
+    The owning test proves that boundary through the production registration
+    authority, which needs the control-plane endpoint, its token and the owner
+    it must match. A job that passes only the host-facing endpoint would admit
+    the layer and then fail inside it.
+    """
+
+    step = _run_step("exact-docker", "Run the exact-image concurrency rows")
+
+    for name in EXACT_DOCKER_REQUIRED_ENV:
+        assert name in step["env"], f"the exact-image job never passes {name}"
+        assert str(step["env"][name]).strip(), f"{name} is wired to nothing"
+    assert step["env"]["OMNIGENT_API_TOKEN"] == "${{ secrets.OMNIGENT_API_TOKEN }}"
+
+
+def test_a_dispatched_host_image_must_bring_its_own_support_key() -> None:
+    """The key is a digest of the exact artifacts and cannot be recomputed.
+
+    An operator who dispatches a different host image while the repository
+    variable still names the previous combination would otherwise publish rows
+    under an identity whose artifacts were never exercised. Both jobs resolve
+    the pair in one step and refuse the mismatch before the matrix.
+    """
+
+    # YAML resolves a bare ``on:`` key to the boolean, so the trigger block is
+    # reached by the value the parser produced rather than by the word.
+    triggers = _workflow()[True]
+    assert "support_combination_key" in triggers["workflow_dispatch"]["inputs"]
+
+    for job in ("exact-docker", "protected-live"):
+        resolve = _run_step(job, "Resolve the digest-pinned exact host image")
+        assert resolve["env"]["DISPATCH_SUPPORT_KEY"] == (
+            "${{ inputs.support_combination_key }}"
+        )
+        assert 'host_image" != "$DEFAULT_HOST_IMAGE"' in resolve["run"]
+        assert "-z \"$DISPATCH_SUPPORT_KEY\"" in resolve["run"]
+        assert "exit 1" in resolve["run"]
+
+
+def test_every_record_carries_a_durable_evidence_reference() -> None:
+    """The published ref has to resolve after it leaves this runner.
+
+    A workspace path names no workflow artifact, so every invocation names the
+    artifact its evidence is uploaded under and the publisher can refuse a
+    record that only resolves inside the qualification runner.
+    """
+
+    for job, run_step, upload_step in (
+        (
+            "exact-docker",
+            "Run the exact-image concurrency rows",
+            "Upload the required-layer concurrency records",
+        ),
+        (
+            "exact-docker",
+            "Run the hermetic concurrency rows",
+            "Upload the required-layer concurrency records",
+        ),
+        (
+            "protected-live",
+            "Run the bounded protected-live concurrency rows",
+            "Upload the protected-live concurrency record",
+        ),
+    ):
+        step = _run_step(job, run_step)
+        upload = _run_step(job, upload_step)
+        assert _flag_value(step["run"], "--evidence-artifact") == (
+            upload["with"]["name"]
+        )
 
 
 def test_every_record_is_uploaded_even_when_the_gate_failed() -> None:
@@ -196,6 +274,7 @@ def test_the_hermetic_rows_are_recorded_under_the_same_identity() -> None:
     for flag in (
         "--support-combination-key",
         "--moonmind-commit",
+        "--host-image-ref",
         "--worker-build-ref",
         "--worker-topology-ref",
         "--resource-class",

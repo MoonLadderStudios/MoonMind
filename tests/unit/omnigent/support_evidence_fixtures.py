@@ -166,6 +166,9 @@ def concurrency_record(
         identity=ConcurrencySupportIdentity(
             supportCombinationKey=plan.supportCombinationKey,
             moonmindCommit="abcdef1234567890",
+            # The exact artifact the level was observed on. The publisher
+            # refuses a record whose image is not the one the entry names.
+            hostImageRef=plan.hostImageRef,
             workerBuildRef="moonmind-worker@test",
             providerCapacityPolicyVersion="omnigent-provider-capacity@1",
             hostCapacityPolicyVersion="omnigent-host-capacity@1",

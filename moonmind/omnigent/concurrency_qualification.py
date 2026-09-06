@@ -63,6 +63,9 @@ CONCURRENCY_QUALIFICATION_RECORD_VERSION = (
 HERMETIC_LEVELS: tuple[int, ...] = (1, 2, 4, 8, 16)
 EXACT_DOCKER_LEVELS: tuple[int, ...] = (2, 4, 8)
 PROTECTED_LIVE_MINIMUM_LEVEL = 2
+#: The provider-safe ceiling for the shared credentialless route. Release policy
+#: may select a lower level; nothing may select a higher one.
+PROTECTED_LIVE_MAX_LEVEL = 4
 
 #: The pytest fixture that provisions an owning test's PostgreSQL cluster. It
 #: fails closed rather than skipping when no cluster is reachable
@@ -70,6 +73,25 @@ PROTECTED_LIVE_MINIMUM_LEVEL = 2
 #: requests it carries PostgreSQL in its declared environment and the runner's
 #: precondition for that layer has to cover it.
 POSTGRES_FIXTURE_NAME = "control_plane_postgres_url"
+
+#: The digest-pinned exact host image the exact-Docker layer launches from.
+EXACT_HOST_IMAGE_ENV = "MOONMIND_OMNIGENT_CONCURRENCY_HOST_IMAGE"
+
+#: Everything the exact-Docker owning test reads before it launches a single
+#: host. The first two name the artifacts and the endpoint the hosts are given;
+#: the last three are the production registration authority's own inputs, and
+#: without them a launched container can never be proven to have crossed the
+#: registration boundary — it would only be observed alive. The runner checks
+#: this same tuple before it enters the layer and the scheduled job's env block
+#: is asserted against it, so the job, the precondition and the owning test
+#: cannot drift into a layer that is entered and then cannot produce a row.
+EXACT_DOCKER_REQUIRED_ENV: tuple[str, ...] = (
+    EXACT_HOST_IMAGE_ENV,
+    "MOONMIND_OMNIGENT_HOST_SERVER_URL",
+    "OMNIGENT_SERVER_URL",
+    "OMNIGENT_API_TOKEN",
+    "MOONMIND_OMNIGENT_EXPECTED_HOST_OWNER",
+)
 
 #: The protected release flag that admits the live layer. A refusal to admit is
 #: an operator decision rather than a missing environment, so it stays separate
@@ -139,6 +161,27 @@ REQUIRED_QUALIFICATION_LAYERS: frozenset[ConcurrencyQualificationLayer] = frozen
         ConcurrencyQualificationLayer.exact_docker,
     }
 )
+
+
+#: The only levels a layer may be asked to run. A level outside this set has no
+#: declared budget, no owning matrix entry and — for the two layers that spend
+#: real containers or a shared provider route — no bounded-load contract, so it
+#: is refused before anything is launched rather than after.
+ALLOWED_CONCURRENCY_LEVELS: Mapping[ConcurrencyQualificationLayer, tuple[int, ...]] = {
+    ConcurrencyQualificationLayer.hermetic: HERMETIC_LEVELS,
+    ConcurrencyQualificationLayer.exact_docker: EXACT_DOCKER_LEVELS,
+    ConcurrencyQualificationLayer.protected_live: tuple(
+        range(PROTECTED_LIVE_MINIMUM_LEVEL, PROTECTED_LIVE_MAX_LEVEL + 1)
+    ),
+}
+
+
+def allowed_concurrency_levels(
+    layer: ConcurrencyQualificationLayer,
+) -> tuple[int, ...]:
+    """Return the levels ``layer`` is declared to run."""
+
+    return ALLOWED_CONCURRENCY_LEVELS[layer]
 
 
 class ConcurrencyScenarioFamily(StrEnum):
@@ -426,6 +469,23 @@ def layer_requires_postgres(
     return False
 
 
+def unsatisfied_exact_docker_environment(
+    env: Mapping[str, Any] | None = None,
+) -> tuple[str, ...]:
+    """Return the exact-Docker variables that are absent, in declared order.
+
+    One answer shared by the runner's precondition and the owning test, so the
+    layer is never entered on an environment its own owner will refuse.
+    """
+
+    source: Mapping[str, Any] = os.environ if env is None else env
+    return tuple(
+        name
+        for name in EXACT_DOCKER_REQUIRED_ENV
+        if not str(source.get(name) or "").strip()
+    )
+
+
 def unsatisfied_protected_live_environment(
     env: Mapping[str, Any] | None = None,
 ) -> tuple[str, ...]:
@@ -604,6 +664,11 @@ class ObservedOverlapEvidence(BaseModel):
 #: row's thresholds or a level exception mean anything.
 _RESOURCE_CLASS_DIMENSIONS = re.compile(r"(?<![0-9A-Za-z])(\d+)x(\d+)(?![0-9A-Za-z])")
 
+#: An exact artifact is named by immutable digest. The same expression the
+#: scheduled workflow applies to the resolved host image, so a ref this program
+#: records is a ref that job would also accept.
+_DIGEST_PINNED_IMAGE = re.compile(r"@sha256:[0-9a-fA-F]{64}$")
+
 #: No machine measures the size its class names. The kernel reserves firmware,
 #: memmap and crashkernel pages before ``MemTotal`` is computed, so a nominal
 #: 8-GiB VM measures about 7.8 GiB and a 16-GiB CI runner about 15.6 GiB.
@@ -743,6 +808,13 @@ class ConcurrencySupportIdentity(BaseModel):
 
     support_combination_key: str = Field(min_length=1, max_length=255)
     moonmind_commit: str = Field(pattern=r"^[0-9a-f]{7,64}$")
+    #: The exact host image the run actually launched its hosts from. The
+    #: support key is an opaque digest, so it cannot be inverted back into the
+    #: artifacts it was built from; carrying the exercised image alongside it is
+    #: what lets the publisher refuse a record whose artifacts are not the ones
+    #: the combination it is being filed under names. Digest-pinned, because a
+    #: tag is not an exact artifact.
+    host_image_ref: str = Field(min_length=1, max_length=512)
     worker_build_ref: str = Field(min_length=1, max_length=255)
     provider_capacity_policy_version: str = Field(min_length=1, max_length=128)
     host_capacity_policy_version: str = Field(min_length=1, max_length=128)
@@ -752,6 +824,16 @@ class ConcurrencySupportIdentity(BaseModel):
     scenario_catalog_version: Literal[CONCURRENCY_SCENARIO_CATALOG_VERSION] = (
         CONCURRENCY_SCENARIO_CATALOG_VERSION
     )
+
+    @model_validator(mode="after")
+    def validate_identity(self) -> "ConcurrencySupportIdentity":
+        if not _DIGEST_PINNED_IMAGE.search(self.host_image_ref):
+            raise ValueError(
+                "the exercised host image must be digest-pinned; a tag names "
+                "whatever the registry points at today, not the artifact the "
+                "level was observed on"
+            )
+        return self
 
 
 class ConcurrencyQualificationRecord(BaseModel):
@@ -1220,7 +1302,10 @@ __all__ = [
     "CONCURRENCY_SCENARIO_CATALOG",
     "CONCURRENCY_SCENARIO_CATALOG_VERSION",
     "DEFAULT_REPEATED_WAVE_THRESHOLDS",
+    "ALLOWED_CONCURRENCY_LEVELS",
     "EXACT_DOCKER_LEVELS",
+    "EXACT_DOCKER_REQUIRED_ENV",
+    "EXACT_HOST_IMAGE_ENV",
     "EXACT_DOCKER_REPEATED_WAVE_THRESHOLDS",
     "HERMETIC_LEVELS",
     "MACHINE_MEMORY_TOLERANCE",
@@ -1229,6 +1314,7 @@ __all__ = [
     "PASSING_ROW_STATUSES",
     "POSTGRES_FIXTURE_NAME",
     "PROTECTED_LIVE_ADMISSION_ENV",
+    "PROTECTED_LIVE_MAX_LEVEL",
     "PROTECTED_LIVE_MINIMUM_LEVEL",
     "PROTECTED_LIVE_PROVIDER_PROFILE_ENV",
     "PROTECTED_LIVE_REQUIRED_ENV",
@@ -1260,9 +1346,11 @@ __all__ = [
     "observed_peak_overlap",
     "owning_test_files",
     "publish_observed_overlap",
+    "allowed_concurrency_levels",
     "repeated_wave_thresholds",
     "requested_concurrency_level",
     "scenario_owners",
     "unowned_scenarios",
+    "unsatisfied_exact_docker_environment",
     "unsatisfied_protected_live_environment",
 ]

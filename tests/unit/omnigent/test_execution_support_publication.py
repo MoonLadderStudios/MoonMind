@@ -360,3 +360,96 @@ def test_the_written_index_round_trips_through_admission(tmp_path) -> None:
     reloaded = json.loads(path.read_text(encoding="utf-8"))
     assert reloaded == index
     validate_protected_execution_support_evidence(reloaded["entries"][0])
+
+
+def test_concurrency_evidence_from_another_commit_is_refused() -> None:
+    """A code-only change leaves the support key untouched.
+
+    The key digests the substrate, not the revision, so a record earned before
+    that change would otherwise advertise a concurrency level for a MoonMind
+    this run never observed.
+    """
+
+    from moonmind.omnigent.concurrency_qualification import (
+        ConcurrencyQualificationRecord,
+    )
+
+    plan = support_plan()
+    payload = concurrency_record(plan, level=4)
+    payload["identity"]["moonmindCommit"] = "0" * 40
+    record = ConcurrencyQualificationRecord.model_validate(payload)
+
+    with pytest.raises(ValueError, match="observed on MoonMind commit"):
+        _build(
+            _manifest({"codex-primary": _combination(plan)}),
+            concurrency_records=[record],
+        )
+
+
+def test_concurrency_evidence_from_another_host_image_is_refused() -> None:
+    """A dispatch may point the qualification job at any digest.
+
+    The support key still names the previous combination, so the record has to
+    carry the image the wave actually launched and be held to the image this
+    entry names.
+    """
+
+    from moonmind.omnigent.concurrency_qualification import (
+        ConcurrencyQualificationRecord,
+    )
+
+    plan = support_plan()
+    payload = concurrency_record(plan, level=4)
+    payload["identity"]["hostImageRef"] = (
+        "ghcr.io/example/opencode@sha256:" + "f" * 64
+    )
+    record = ConcurrencyQualificationRecord.model_validate(payload)
+
+    with pytest.raises(ValueError, match="observed on host image"):
+        _build(
+            _manifest({"codex-primary": _combination(plan)}),
+            concurrency_records=[record],
+        )
+
+
+def test_workspace_local_concurrency_evidence_is_never_published() -> None:
+    """The published index carries no ref that dies with the runner."""
+
+    from moonmind.omnigent.concurrency_qualification import (
+        ConcurrencyQualificationRecord,
+    )
+
+    plan = support_plan()
+    payload = concurrency_record(plan, level=4)
+    for row in payload["rows"]:
+        row["evidenceRef"] = (
+            "file:///runner/_work/artifacts/omnigent-concurrency/evidence/"
+            f"{row['layer']}-{row['level']}.json"
+        )
+    record = ConcurrencyQualificationRecord.model_validate(payload)
+
+    with pytest.raises(ValueError, match="workspace-local"):
+        _build(
+            _manifest({"codex-primary": _combination(plan)}),
+            concurrency_records=[record],
+        )
+
+
+def test_an_abbreviated_commit_still_names_the_same_revision() -> None:
+    """A workflow may stage a short SHA while the manifest carries the full one."""
+
+    from moonmind.omnigent.concurrency_qualification import (
+        ConcurrencyQualificationRecord,
+    )
+
+    plan = support_plan()
+    payload = concurrency_record(plan, level=4)
+    payload["identity"]["moonmindCommit"] = _SOURCE_COMMIT[:7]
+    record = ConcurrencyQualificationRecord.model_validate(payload)
+
+    index = _build(
+        _manifest({"codex-primary": _combination(plan)}),
+        concurrency_records=[record],
+    )
+
+    assert "concurrency" in index["entries"][0]
