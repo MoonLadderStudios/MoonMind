@@ -29,6 +29,7 @@ mechanics live in :mod:`moonmind.omnigent.native_ui`.
 
 from __future__ import annotations
 
+import html
 import logging
 import posixpath
 from typing import Any
@@ -56,6 +57,7 @@ from moonmind.omnigent.native_ui import (
     build_chat_bootstrap,
     evaluate_native_ui_compatibility,
     is_document_request,
+    is_valid_chat_binding_id,
     native_ui_security_headers,
     presentation_mode_from_query,
     render_native_ui_document,
@@ -214,12 +216,15 @@ def _native_chat_unavailable(
 
     headers = native_ui_security_headers(mode=mode, is_document=is_document)
     if is_document:
+        # ``reason`` is server-generated, but escape it for the HTML context so
+        # a future caller-supplied value can never break out of the element.
+        safe_reason = html.escape(reason, quote=True)
         body = (
             "<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\">"
             "<title>Workflow Chat unavailable</title></head><body>"
             "<main role=\"main\"><h1>Workflow chat is unavailable</h1>"
             "<p>The native Omnigent chat could not be served for this workflow.</p>"
-            f"<p data-reason=\"{reason}\">Reason: {reason}</p></body></html>"
+            f"<p data-reason=\"{safe_reason}\">Reason: {safe_reason}</p></body></html>"
         )
         return HTMLResponse(content=body, status_code=status_code, headers=headers)
     return JSONResponse(
@@ -276,6 +281,23 @@ def _rewrite_upstream_location(location: str, *, scoped_base: str) -> str:
     return normalized + suffix
 
 
+def _is_safe_scoped_redirect(target: str, *, scoped_base: str) -> bool:
+    """Return whether a rewritten redirect target is a safe same-origin scoped path.
+
+    Allowlist check applied at the redirect sink: no scheme/host, and the path
+    stays exactly on (or under) the binding-scoped base. Upstream ``Location``
+    values are untrusted, and the scoped base embeds the caller-supplied
+    binding id, so the sink re-validates instead of trusting the rewrite alone.
+    """
+
+    base = scoped_base.rstrip("/")
+    split = urlsplit(str(target or ""))
+    if split.scheme or split.netloc:
+        return False
+    path = split.path or ""
+    return path == base or path == base + "/" or path.startswith(base + "/")
+
+
 async def _serve_native_ui(
     *,
     chat_binding_id: str,
@@ -289,6 +311,17 @@ async def _serve_native_ui(
 ) -> Response:
     mode = presentation_mode_from_query(embedded)
     document = is_document_request(ui_path)
+
+    # 0. Reject malformed binding ids before any store lookup, redirect, or
+    #    HTML rendering reflects them. Server-generated ids are
+    #    ``chatb_`` + urlsafe-base64; anything else fails closed as unknown.
+    if not is_valid_chat_binding_id(chat_binding_id):
+        return _native_chat_unavailable(
+            mode=mode,
+            is_document=document,
+            reason="binding_unknown_or_unauthorized",
+            status_code=status.HTTP_404_NOT_FOUND,
+        )
 
     # 1. Authorize the caller against the durable binding before anything else,
     #    so an unauthorized caller cannot even probe whether assets exist.
@@ -343,10 +376,16 @@ async def _serve_native_ui(
     headers = native_ui_security_headers(mode=mode, is_document=document)
 
     if response.is_redirect and response.location is not None:
+        rewritten = _rewrite_upstream_location(
+            response.location, scoped_base=scoped_base
+        )
+        # Sink-side allowlist: only emit a same-origin path that stays on the
+        # binding-scoped base. Anything else fails closed to the scoped root
+        # so an upstream Location can never become an open redirect.
+        if not _is_safe_scoped_redirect(rewritten, scoped_base=scoped_base):
+            rewritten = scoped_base.rstrip("/") + "/"
         return RedirectResponse(
-            url=_rewrite_upstream_location(
-                response.location, scoped_base=scoped_base
-            ),
+            url=rewritten,
             status_code=response.status_code,
             headers=headers,
         )
