@@ -57,7 +57,7 @@ async def test_publish_clean_single_branch_candidate(
     monkeypatch.setenv("GIT_COMMITTER_NAME", "Test")
     monkeypatch.setenv("GIT_COMMITTER_EMAIL", "test@example.invalid")
     origin = tmp_path / "origin.git"
-    git("init", "--bare", str(origin), cwd=tmp_path)
+    git("init", "--bare", "--initial-branch=main", str(origin), cwd=tmp_path)
     source = tmp_path / "source"
     source.mkdir()
     git("init", "--initial-branch=main", cwd=source)
@@ -190,7 +190,7 @@ async def test_unchanged_shared_base_cannot_supply_an_unrelated_pr(
         monkeypatch.setenv(f"GIT_{prefix}_EMAIL", "test@example.invalid")
     branch = base_branch or "main"
     origin = tmp_path / "origin.git"
-    git("init", "--bare", str(origin), cwd=tmp_path)
+    git("init", "--bare", f"--initial-branch={branch}", str(origin), cwd=tmp_path)
     workflow_id, step_id = "workflow", "unchanged"
     workspace_id = hashlib.sha256(f"{workflow_id}:{step_id}".encode()).hexdigest()[:24]
     workspace = tmp_path / "temporal_sandbox" / workspace_id / "repo"
@@ -269,7 +269,7 @@ async def test_selected_branch_publication_replay(
     )
     branch = authored_branch or "main"
     origin = tmp_path / "origin.git"
-    git("init", "--bare", str(origin), cwd=tmp_path)
+    git("init", "--bare", f"--initial-branch={branch}", str(origin), cwd=tmp_path)
     workflow_id, step_id = replay["workflowId"], replay["stepExecutionId"]
     workspace_id = hashlib.sha256(f"{workflow_id}:{step_id}".encode()).hexdigest()[:24]
     workspace = tmp_path / "temporal_sandbox" / workspace_id / "repo"
@@ -337,8 +337,12 @@ async def test_selected_branch_publication_replay(
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("race_during_push", [False, True])
-async def test_selected_branch_rejects_remote_divergence(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, race_during_push: bool
+@pytest.mark.parametrize("remote_change", ["diverge", "delete"])
+async def test_selected_branch_rejects_remote_changes(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    race_during_push: bool,
+    remote_change: str,
 ) -> None:
     """An authored PR branch must never be force-replaced with a stale checkout."""
     monkeypatch.setattr(settings.security, "high_security_mode", False)
@@ -361,15 +365,22 @@ async def test_selected_branch_rejects_remote_divergence(
     git("add", ".", cwd=peer)
     git("commit", "-m", "concurrent work", cwd=peer)
     peer_sha = git("rev-parse", "HEAD", cwd=peer)
+
+    def change_remote():
+        if remote_change == "diverge":
+            git("push", "origin", "selected", cwd=peer)
+        else:
+            git("push", "origin", "--delete", "selected", cwd=peer)
+
     if not race_during_push:
-        git("push", "origin", "selected", cwd=peer)
+        change_remote()
     (workspace / "work.txt").write_text("agent work\n")
     git("commit", "-am", "agent work", cwd=workspace)
     agent_sha = git("rev-parse", "HEAD", cwd=workspace)
 
     async def run_command(command, *, cwd, check=True, **_kwargs):
         if command[:2] == ["git", "push"] and race_during_push:
-            git("push", "origin", "selected", cwd=peer)
+            change_remote()
         result = subprocess.run(command, cwd=cwd, capture_output=True, text=True)
         if check and result.returncode:
             raise RuntimeError(result.stderr)
@@ -388,5 +399,100 @@ async def test_selected_branch_rejects_remote_divergence(
             publish_existing_commits=True,
             verify_remote=True,
         )
-    assert git("rev-parse", "selected", cwd=origin) == peer_sha
+    if remote_change == "diverge":
+        assert git("rev-parse", "selected", cwd=origin) == peer_sha
+    else:
+        assert git("for-each-ref", "refs/heads/selected", cwd=origin) == ""
     assert git("rev-parse", "HEAD", cwd=workspace) == agent_sha
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("publish_mode", ["branch", "pr"])
+@pytest.mark.parametrize("main_exists", [False, True])
+@pytest.mark.parametrize("default_source", ["clone", "remote", "unavailable"])
+async def test_omitted_branch_uses_repository_default(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    publish_mode: str,
+    main_exists: bool,
+    default_source: str,
+) -> None:
+    """An omitted branch follows the cloned default, including across retries."""
+    monkeypatch.setattr(settings.security, "high_security_mode", False)
+    for prefix in ("AUTHOR", "COMMITTER"):
+        monkeypatch.setenv(f"GIT_{prefix}_NAME", "Test")
+        monkeypatch.setenv(f"GIT_{prefix}_EMAIL", "test@example.invalid")
+    origin = tmp_path / "origin.git"
+    git("init", "--bare", "--initial-branch=develop", str(origin), cwd=tmp_path)
+    source = tmp_path / "source"
+    source.mkdir()
+    git("init", "--initial-branch=develop", cwd=source)
+    (source / "work.txt").write_text("base\n")
+    git("add", ".", cwd=source)
+    git("commit", "-m", "base", cwd=source)
+    original_sha = git("rev-parse", "HEAD", cwd=source)
+    git("remote", "add", "origin", str(origin), cwd=source)
+    git("push", "origin", "develop", cwd=source)
+    if main_exists:
+        git("push", "origin", "HEAD:refs/heads/main", cwd=source)
+
+    workflow_id, step_id = "default-branch", "execution-1"
+    workspace_id = hashlib.sha256(f"{workflow_id}:{step_id}".encode()).hexdigest()[:24]
+    workspace = tmp_path / "temporal_sandbox" / workspace_id / "repo"
+    workspace.parent.mkdir(parents=True)
+    git("clone", str(origin), str(workspace), cwd=tmp_path)
+    assert git("branch", "--show-current", cwd=workspace) == "develop"
+    if default_source != "clone":
+        git("symbolic-ref", "--delete", "refs/remotes/origin/HEAD", cwd=workspace)
+    if default_source == "unavailable":
+        git("symbolic-ref", "HEAD", "refs/heads/missing", cwd=origin)
+    (workspace / "work.txt").write_text("agent work\n")
+    git("commit", "-am", "agent work", cwd=workspace)
+    head_sha = git("rev-parse", "HEAD", cwd=workspace)
+    SandboxWorkspaceRecordStore(tmp_path).ensure(
+        SandboxWorkspaceRecord(workspace_id, workflow_id, step_id, "repo")
+    )
+    publisher = OmnigentWorkspacePublicationService(tmp_path)
+    args = dict(
+        workspace_locator={
+            "kind": "sandbox",
+            "workspaceId": workspace_id,
+            "relativePath": "repo",
+        },
+        current_workflow_id=workflow_id,
+        current_step_execution_id=step_id,
+        publication_identity="default-branch-replay",
+        publish_mode=publish_mode,
+        base_branch=None,
+        repository="",
+        github_token=None,
+    )
+    if default_source == "unavailable":
+        with pytest.raises(
+            HarnessPlatformError, match="default branch could not be resolved"
+        ):
+            await publisher.publish_workspace(**args)
+        assert git("rev-parse", "develop", cwd=origin) == original_sha
+        assert git("rev-parse", "HEAD", cwd=workspace) == head_sha
+        assert "moonmind-job-" not in git("branch", cwd=origin)
+        return
+    result = await publisher.publish_workspace(**args)
+    assert result["push_status"] == "pushed"
+    assert result["push_base_branch"] == "develop"
+    assert result["push_head_sha"] == head_sha
+    assert result["remote_verified"] is True
+    assert (result["push_branch"] == "develop") == (publish_mode == "branch")
+    assert (
+        git("symbolic-ref", "refs/remotes/origin/HEAD", cwd=workspace)
+        == "refs/remotes/origin/develop"
+    )
+    if main_exists:
+        assert git("rev-parse", "main", cwd=origin) == original_sha
+
+    # A change to the remote default cannot retarget publication on retry.
+    git("symbolic-ref", "HEAD", "refs/heads/main", cwd=origin)
+    retry = await publisher.publish_workspace(**args)
+    assert retry["push_base_branch"] == "develop"
+    assert retry["push_branch"] == result["push_branch"]
+    assert retry["push_head_sha"] == head_sha
+    assert retry["remote_verified"] is True
