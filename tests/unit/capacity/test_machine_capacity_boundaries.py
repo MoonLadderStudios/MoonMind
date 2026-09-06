@@ -680,6 +680,70 @@ async def test_the_realizer_does_not_fail_a_launch_that_outlived_its_window(
 
 
 @pytest.mark.asyncio
+async def test_the_realizer_is_fenced_when_its_capacity_was_reclaimed(
+    session_factory,
+) -> None:
+    """A reclaimed reservation may not be restored into an over-committed machine.
+
+    ``realize()`` can outlive the prelaunch window, and reconciliation that
+    observes nothing running under the reserved name releases its compute. An
+    intervening launch may then be admitted against exactly that capacity, so a
+    silent restore at confirmation would push accounted usage past every
+    configured ceiling. The live container is accounted again — it is running,
+    and free capacity is the worse lie — and the fenced launch is refused with
+    the waitable capacity code so cleanup tears it down.
+    """
+
+    from moonmind.omnigent.host_ports import host_correlation_identity
+
+    admission = _admission(session_factory)
+    repository = _repository(session_factory, admission)
+    lease = await _acquire(repository, "binding-a")
+    realizer = _realizer(admission)
+    ledger = MachineCapacityLedger(session_factory)
+    container_name = host_correlation_identity(lease.leaseRef)
+
+    async with session_factory() as session:
+        row = await session.get(
+            MachineCapacityReservation, _host_reservation_id("binding-a")
+        )
+        row.expires_at = datetime.now(UTC) - timedelta(seconds=1)
+        row.container_ref = container_name
+        await session.commit()
+    # The janitor sees nothing running under the reserved name and reclaims it.
+    await ledger.reconcile(backend_ref=BACKEND, inventory=_owned_inventory())
+    assert (await ledger.usage(backend_ref=BACKEND)).reserved_memory_mib == 0
+    # Another launch takes the capacity that freed.
+    await _acquire(repository, "binding-b")
+
+    with pytest.raises(HarnessPlatformError) as raised:
+        await realizer._confirm_machine_reservation(lease.leaseRef, container_name)
+
+    assert (
+        raised.value.code
+        == HarnessPlatformFailure.OMNIGENT_HOST_CAPACITY_UNAVAILABLE.value
+    )
+    # The container that did start is accounted, so it never reads as free.
+    async with session_factory() as session:
+        row = await session.get(
+            MachineCapacityReservation, _host_reservation_id("binding-a")
+        )
+    assert row.state == STATE_ACTIVE
+    assert row.container_ref == container_name
+
+    # Cleanup returns exactly what confirmation restored.
+    await realizer._release_machine_reservation(
+        lease.leaseRef,
+        {
+            "daemonObserved": True,
+            "containerRemoved": True,
+            "stateVolumeRemoved": True,
+        },
+    )
+    assert (await ledger.usage(backend_ref=BACKEND)).reserved_memory_mib == 3000
+
+
+@pytest.mark.asyncio
 async def test_a_retained_state_volume_keeps_storage_accounted(
     session_factory,
 ) -> None:
@@ -1724,6 +1788,164 @@ async def test_a_container_job_reserves_and_confirms_in_the_shared_ledger(
 
 
 @pytest.mark.asyncio
+async def test_a_container_job_reserves_the_shared_memory_it_will_realize(
+    session_factory, tmp_path
+) -> None:
+    """Every container job gets ``--shm-size``, and that is RAM-backed tmpfs.
+
+    The machine temporary-storage budget exists for exactly that resource, so a
+    job whose reservation left it at zero could pass the ceiling no matter how
+    much shared memory it asked for.
+    """
+
+    import json as _json
+
+    from moonmind.workflows.temporal.container_job_backend import LABEL_OWNERSHIP
+    from tests.unit.workflows.temporal.test_container_job_backend import _request
+
+    ledger = MachineCapacityLedger(session_factory)
+    commands: list[tuple[str, ...]] = []
+    request = _request(
+        tmp_path,
+        resources={
+            "cpuMillis": 1000,
+            "memoryMiB": 3000,
+            "pids": 256,
+            "shmSize": "2048m",
+        },
+    )
+
+    async def runner(args):
+        args = tuple(args)
+        commands.append(args)
+        if args[0] == "info":
+            return 0, f"{10000 * 1024 * 1024}\t16".encode(), b""
+        if args[0] == "ps":
+            return 0, b"", b""
+        if args[:3] == ("inspect", "--format", "{{json .Config.Labels}}"):
+            return (
+                0,
+                _json.dumps({LABEL_OWNERSHIP: request.ownership_token}).encode(),
+                b"",
+            )
+        return 0, b"", b""
+
+    backend = _container_job_backend(tmp_path, ledger=ledger, runner=runner)
+
+    await backend.start_container(request)
+
+    assert any(command[0] == "start" for command in commands)
+    usage = await ledger.usage(backend_ref=BACKEND)
+    assert usage.reserved_temporary_storage_mib == 2048
+
+    await backend.remove_container(request)
+    assert (await ledger.usage(backend_ref=BACKEND)).reserved_temporary_storage_mib == 0
+
+
+@pytest.mark.asyncio
+async def test_a_container_job_reserves_the_deployment_default_shared_memory(
+    session_factory, tmp_path
+) -> None:
+    """An omitted ``shmSize`` still gets one, so it is still accounted."""
+
+    import json as _json
+
+    from moonmind.config.container_backend_settings import (
+        resolve_container_backend_settings,
+    )
+    from moonmind.workflows.temporal.container_job_backend import LABEL_OWNERSHIP
+
+    ledger = MachineCapacityLedger(session_factory)
+    request = _container_job_request(tmp_path)
+
+    async def runner(args):
+        args = tuple(args)
+        if args[0] == "info":
+            return 0, f"{10000 * 1024 * 1024}\t16".encode(), b""
+        if args[0] == "ps":
+            return 0, b"", b""
+        if args[:3] == ("inspect", "--format", "{{json .Config.Labels}}"):
+            return (
+                0,
+                _json.dumps({LABEL_OWNERSHIP: request.ownership_token}).encode(),
+                b"",
+            )
+        return 0, b"", b""
+
+    backend = _container_job_backend(tmp_path, ledger=ledger, runner=runner)
+
+    await backend.start_container(request)
+
+    default_shm = resolve_container_backend_settings({}).shm_size_mib
+    usage = await ledger.usage(backend_ref=BACKEND)
+    assert usage.reserved_temporary_storage_mib == default_shm
+
+
+@pytest.mark.asyncio
+async def test_an_unreadable_daemon_never_releases_a_container_jobs_accounting(
+    session_factory, tmp_path
+) -> None:
+    """AC7: a daemon that did not answer is not proof the container is gone.
+
+    ``remove_container`` releases the machine accounting on the evidence that
+    the container is absent. A connection failure or timeout on the ownership
+    inspect proves nothing about the container, so it must fail closed rather
+    than free capacity a live job is still spending.
+    """
+
+    import json as _json
+
+    from moonmind.schemas.container_job_models import (
+        ContainerJobBackendError,
+        ContainerJobFailureClass,
+    )
+    from moonmind.workflows.temporal.container_job_backend import LABEL_OWNERSHIP
+
+    ledger = MachineCapacityLedger(session_factory)
+    request = _container_job_request(tmp_path)
+    daemon_reachable = True
+
+    async def runner(args):
+        args = tuple(args)
+        if args[0] == "info":
+            return 0, f"{10000 * 1024 * 1024}\t16".encode(), b""
+        if args[0] == "ps":
+            return 0, b"", b""
+        if args[:3] == ("inspect", "--format", "{{json .Config.Labels}}"):
+            if not daemon_reachable:
+                return (
+                    1,
+                    b"",
+                    b"Cannot connect to the Docker daemon at unix:///var/run/"
+                    b"docker.sock. Is the docker daemon running?",
+                )
+            return (
+                0,
+                _json.dumps({LABEL_OWNERSHIP: request.ownership_token}).encode(),
+                b"",
+            )
+        return 0, b"", b""
+
+    backend = _container_job_backend(tmp_path, ledger=ledger, runner=runner)
+    await backend.start_container(request)
+    assert (await ledger.usage(backend_ref=BACKEND)).reserved_memory_mib == 3000
+
+    daemon_reachable = False
+    with pytest.raises(ContainerJobBackendError) as raised:
+        await backend.remove_container(request)
+
+    assert raised.value.failure_class is ContainerJobFailureClass.INFRASTRUCTURE
+    # The live job keeps its accounting, so the next admission cannot spend it
+    # a second time.
+    assert (await ledger.usage(backend_ref=BACKEND)).reserved_memory_mib == 3000
+
+    # Once the daemon answers again, the same removal releases exactly once.
+    daemon_reachable = True
+    await backend.remove_container(request)
+    assert (await ledger.usage(backend_ref=BACKEND)).reserved_memory_mib == 0
+
+
+@pytest.mark.asyncio
 async def test_a_container_job_start_keeps_a_confirmed_hosts_accounting(
     session_factory, tmp_path
 ) -> None:
@@ -2511,3 +2733,139 @@ async def test_a_host_lease_reacquires_the_reservation_its_cleanup_retained(
     assert usage.reserved_memory_mib == 3000
     # The storage the retained volume is still spending is counted once.
     assert usage.reserved_temporary_storage_mib == 256
+
+
+# --------------------------------------------- realizer cleanup ordering
+
+
+class _FlakyReleaseLedger:
+    """The real ledger with a bounded transient failure on the release write."""
+
+    def __init__(self, ledger, *, failures: int = 1) -> None:
+        self._ledger = ledger
+        self._failures = failures
+        self.release_attempts = 0
+
+    def __getattr__(self, name):
+        return getattr(self._ledger, name)
+
+    async def release(self, **kwargs):
+        self.release_attempts += 1
+        if self.release_attempts <= self._failures:
+            raise RuntimeError("capacity ledger write failed transiently")
+        return await self._ledger.release(**kwargs)
+
+
+def _cleanup_realizer(*, admission, host_leases, host_runtime, bindings):
+    from moonmind.omnigent.realizers.generic_host import (
+        GenericOmnigentHostRealizer,
+    )
+
+    async def _unused(*_args, **_kwargs):  # pragma: no cover - never invoked
+        raise AssertionError("realizer dependency was not expected to run")
+
+    credentials = AsyncMock()
+    credentials.cleanup_all.return_value = []
+    return GenericOmnigentHostRealizer(
+        runtime_binding_store=bindings,
+        provider_lease_coordinator=AsyncMock(),
+        credential_provisioning_service=credentials,
+        host_lease_repository=host_leases,
+        host_runtime=host_runtime,
+        planned_host_resolver=_unused,
+        session_driver=_unused,
+        session_cleanup_service=AsyncMock(),
+        workspace_publisher=object(),
+        host_capacity_admission=admission,
+        deployment_validator=lambda _payload: None,
+    )
+
+
+@pytest.mark.asyncio
+async def test_a_failed_capacity_release_leaves_the_lease_retryable(
+    session_factory,
+) -> None:
+    """Cleanup evidence is consumed before the lease becomes terminal.
+
+    A lease that is already ``cleaned`` skips the whole host-cleanup block on
+    the next attempt, so releasing the machine accounting after ``mark_cleaned``
+    committed made a transient ledger failure permanent: reconciliation only
+    ever moves the absent consumer to ``storage_retained``, and that state is
+    not revisited, so the temporary-storage capacity leaked even though cleanup
+    had proved the volumes were removed.
+    """
+
+    import types
+
+    from moonmind.omnigent.runtime_bindings import (
+        InMemoryStableRuntimeBindingStore,
+        RuntimeBindingState,
+    )
+    from moonmind.schemas.agent_runtime_models import AgentExecutionRequest
+
+    ledger = MachineCapacityLedger(session_factory)
+    admission = _admission(session_factory)
+    repository = _repository(session_factory, admission)
+    lease = await _acquire(repository, "binding-a")
+    assert (await ledger.usage(backend_ref=BACKEND)).reserved_memory_mib == 3000
+
+    flaky = _FlakyReleaseLedger(ledger)
+    host_runtime = AsyncMock()
+    host_runtime.cleanup.return_value = {
+        "daemonObserved": True,
+        "containerRemoved": True,
+        "stateVolumeRemoved": True,
+    }
+    bindings = InMemoryStableRuntimeBindingStore()
+    binding = await bindings.create_initial(
+        execution_plan_ref="omnigent-execution-plan:sha256:" + "a" * 64,
+        idempotency_key="idem-1",
+        provider_leases={},
+    )
+    binding = await bindings.update(
+        binding.bindingId,
+        expected_revision=binding.revision,
+        expected_fencing_generation=binding.fencingGeneration,
+        state=RuntimeBindingState.credentials_acquired,
+    )
+    realizer = _cleanup_realizer(
+        admission=types.SimpleNamespace(machine_capacity=flaky, backend_ref=BACKEND),
+        host_leases=repository,
+        host_runtime=host_runtime,
+        bindings=bindings,
+    )
+    request = AgentExecutionRequest(
+        agentKind="external",
+        agentId="omnigent",
+        executionProfileRef="profile:test",
+        correlationId="corr-1",
+        idempotencyKey="idem-1",
+    )
+    cleanup_kwargs = dict(
+        request=request,
+        binding=binding,
+        host_context={"containerName": "mm-omnigent-host-a"},
+        prepared=None,
+        credential_handles=(),
+        acquired=(),
+    )
+
+    with pytest.raises(RuntimeError, match="transiently"):
+        await realizer._cleanup(host_lease=lease, **cleanup_kwargs)
+
+    # The lease is still claimable, so the release is still reachable.
+    retried_lease = await repository.get(lease.leaseRef)
+    assert retried_lease.status != "cleaned"
+    assert (await ledger.usage(backend_ref=BACKEND)).reserved_memory_mib == 3000
+
+    cleanup_kwargs["binding"] = await bindings.get(binding.bindingId)
+    binding, retried_lease = await realizer._cleanup(
+        host_lease=retried_lease, **cleanup_kwargs
+    )
+
+    assert flaky.release_attempts == 2
+    assert retried_lease.status == "cleaned"
+    assert binding.state is RuntimeBindingState.cleaned
+    usage = await ledger.usage(backend_ref=BACKEND)
+    assert usage.reserved_memory_mib == 0
+    assert usage.reserved_temporary_storage_mib == 0

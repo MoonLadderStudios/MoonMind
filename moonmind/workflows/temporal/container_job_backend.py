@@ -41,6 +41,7 @@ from typing import Awaitable, Callable, Protocol, Sequence, runtime_checkable
 
 from moonmind.capacity import (
     WORKLOAD_CLASS_CONTAINER_JOB,
+    MachineCapacityConflict,
     MachineCapacityLedger,
     MachineCapacityUnavailable,
     MachineResourceBudget,
@@ -74,6 +75,7 @@ from moonmind.schemas.container_job_models import (
     ContainerJobBackendError,
     ContainerJobState,
     ContainerJobLogEntry,
+    ContainerJobSpec,
     MAX_LOG_PAGE_ENTRIES,
     RegistryAuthorization,
     ContainerJobFailureClass,
@@ -211,6 +213,10 @@ _GPU_LAUNCH_FAILURE_CLASSES: dict[
 }
 _CAPACITY_LOCK_WAIT_SECONDS = 45.0
 _CAPACITY_LOCK_POLL_SECONDS = 0.1
+_MIB = 1024 * 1024
+#: Docker's answer when the object an ``inspect`` names does not exist. Any
+#: other failure means the daemon did not answer the question at all.
+_DOCKER_NOT_FOUND_MARKERS = ("no such object", "no such container")
 
 
 @dataclass(frozen=True)
@@ -629,15 +635,28 @@ class DockerContainerJobBackend:
     async def _owned_ownership_label(self, name: str) -> str | None:
         """Return the ownership label of an existing container, or ``None``.
 
-        A missing container yields ``None``. A container that exists but carries
-        no MoonMind ownership label yields an empty string so callers can treat
-        it as a foreign collision.
+        A container the daemon confirms does not exist yields ``None``. A
+        container that exists but carries no MoonMind ownership label yields an
+        empty string so callers can treat it as a foreign collision.
+
+        Only a confirmed not-found answer is absence. An unreachable daemon, a
+        timeout, or any other ``inspect`` failure proves nothing about the
+        container, and callers release machine accounting on this answer, so
+        those fail closed instead of reading as a vanished consumer.
         """
 
-        code, stdout, _ = await self._runner(
+        code, stdout, stderr = await self._runner(
             ("inspect", "--format", "{{json .Config.Labels}}", name)
         )
         if code:
+            detail = stderr.decode(errors="replace").strip()
+            lowered = detail.lower()
+            if not any(marker in lowered for marker in _DOCKER_NOT_FOUND_MARKERS):
+                raise ContainerJobBackendError(
+                    ContainerJobFailureClass.INFRASTRUCTURE,
+                    "container ownership could not be read from the container "
+                    "backend",
+                )
             return None
         try:
             labels = json.loads(stdout.decode(errors="replace").strip())
@@ -867,10 +886,25 @@ class DockerContainerJobBackend:
             )
         return inventory
 
+    def _resolved_shm_size_mib(self, spec: ContainerJobSpec) -> int:
+        """Return the shared-memory size ``create_container`` will realize.
+
+        Every container job gets ``--shm-size``: the caller's value once the
+        deployment ceiling has admitted it, otherwise the deployment default.
+        """
+
+        requested = spec.resources.shm_size
+        if requested:
+            size_bytes = parse_size_bytes(requested)
+        else:
+            size_bytes = int(self._settings.shm_size_mib) * _MIB
+        return (int(size_bytes) + _MIB - 1) // _MIB
+
     def _machine_reservation(
         self, request: ContainerJobActivityRequest, *, container_name: str | None = None
     ) -> ReservationRequest:
-        resources = request.request.spec.resources
+        spec = request.request.spec
+        resources = spec.resources
         return ReservationRequest(
             backend_ref=self._backend_ref,
             workload_class=WORKLOAD_CLASS_CONTAINER_JOB,
@@ -884,6 +918,12 @@ class DockerContainerJobBackend:
                 cpu_millis=int(resources.cpu_millis),
                 memory_mib=int(resources.memory_mib),
                 processes=int(resources.pids),
+                # MoonLadderStudios/MoonMind#3881: ``--shm-size`` is RAM-backed
+                # tmpfs, which is exactly what the machine temporary-storage
+                # budget accounts. Leaving it at zero would let arbitrarily many
+                # container jobs pass that ceiling without ever contributing to
+                # it.
+                temporary_storage_mib=self._resolved_shm_size_mib(spec),
             ),
             # Naming the container before the Docker mutation keeps a launch
             # that outlives its prelaunch window out of the clock-reclaim path.
@@ -2262,12 +2302,24 @@ class DockerContainerJobBackend:
                 raise RuntimeError(f"docker start failed: {detail}")
             if reservation is not None and self._machine_capacity is not None:
                 # The consumer now exists, so the reservation stops being
-                # clock-reclaimable and is discoverable from the container.
-                await self._machine_capacity.confirm(
-                    reservation_id=reservation.reservation_id,
-                    generation=reservation.generation,
-                    container_ref=container_name,
-                )
+                # clock-reclaimable and is discoverable from the container. A
+                # reservation whose compute was reclaimed mid-launch is
+                # re-accounted and refused: the container is running and must be
+                # accounted, but the capacity it held may already belong to
+                # another launch, so this one is torn down rather than allowed
+                # to push accounted usage past the machine ceiling.
+                try:
+                    await self._machine_capacity.confirm(
+                        reservation_id=reservation.reservation_id,
+                        generation=reservation.generation,
+                        container_ref=container_name,
+                    )
+                except MachineCapacityConflict as exc:
+                    raise ContainerJobBackendError(
+                        ContainerJobFailureClass.RESOURCE_LIMIT_EXCEEDED,
+                        "container-job machine reservation no longer holds; "
+                        "retry after another managed launch finishes",
+                    ) from exc
         finally:
             try:
                 await self._capacity_lock.release(capacity_lease)

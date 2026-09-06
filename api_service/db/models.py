@@ -4700,8 +4700,12 @@ class MachineCapacityReservation(Base):
     )
 
     reservation_id: Mapped[str] = mapped_column(String(255), primary_key=True)
-    #: Exact Docker backend identity. Reservations never cross backends.
-    backend_ref: Mapped[str] = mapped_column(String(128), nullable=False)
+    #: Exact Docker backend identity. Reservations never cross backends. The
+    #: width is the existing backend-ref contract width — ``ContainerJob`` and
+    #: ``ResolvedContainerLaunchPlan`` both admit 255 characters, so a narrower
+    #: column here would fail an already-valid launch plan at its first durable
+    #: reservation.
+    backend_ref: Mapped[str] = mapped_column(String(255), nullable=False)
     workload_class: Mapped[str] = mapped_column(String(32), nullable=False)
     owner_kind: Mapped[str] = mapped_column(String(32), nullable=False)
     owner_ref: Mapped[str] = mapped_column(String(255), nullable=False)
