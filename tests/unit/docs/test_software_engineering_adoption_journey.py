@@ -42,6 +42,11 @@ def test_journey_doc_preserves_local_first_and_honest_limitations() -> None:
     assert "repository-independent" in text.lower()
     assert "Planned, implemented, and qualified" in text or "planned-vs-implemented" in text.lower()
     assert "no_eligible_free_model" in text
+    # Phrasing precision (child #3968): the user-facing explanation above maps
+    # to these product-code gate reasons, not to a separate free-model string.
+    assert "no_eligible_profile" in text
+    assert "no_eligible_codex_oauth_profile" in text
+    assert "api_service/api/routers/omnigent_catalog.py" in text
 
 
 def test_journey_doc_traces_readme_pillars_to_code() -> None:
