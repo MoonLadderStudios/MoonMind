@@ -313,7 +313,11 @@ async def test_pr_publication_projects_existing_remote_pull_request(
         selector: str,
         github_token: str | None = None,
         expected_head_sha: str | None = None,
+        expected_base_branch: str | None = None,
+        expected_draft: bool | None = None,
     ):
+        assert expected_base_branch == "main"
+        assert expected_draft is False
         resolved_selectors.append((repo, selector, github_token, expected_head_sha))
         return SimpleNamespace(
             resolved=True,
