@@ -263,6 +263,9 @@ async def test_materializer_projects_checkpoint_and_declared_inputs_before_mount
         member = tarfile.TarInfo("candidate.txt")
         member.size = len(added)
         bundle.addfile(member, io.BytesIO(added))
+        git_info = tarfile.TarInfo(".git/info")
+        git_info.type = tarfile.DIRTYPE
+        bundle.addfile(git_info)
         stale = b"prior verifier context"
         member = tarfile.TarInfo(".moonmind/attachments/stale-verifier")
         member.size = len(stale)
@@ -287,14 +290,26 @@ async def test_materializer_projects_checkpoint_and_declared_inputs_before_mount
 
         async def get_metadata(self, *, artifact_id, principal):
             self.reads.append((artifact_id, principal))
-            artifact = SimpleNamespace(size_bytes=len(self.payloads[artifact_id]))
+            artifact = SimpleNamespace(
+                artifact_id=artifact_id,
+                status="COMPLETE",
+                size_bytes=len(self.payloads[artifact_id]),
+                sha256=hashlib.sha256(self.payloads[artifact_id]).hexdigest(),
+                redaction_level=SimpleNamespace(value="NONE"),
+                quarantined=False,
+                expires_at=None,
+                created_by_principal="owner-1",
+                metadata_json={},
+            )
             links = [SimpleNamespace(workflow_id="workflow-1")]
-            return artifact, links
+            return artifact, links, False, SimpleNamespace(raw_access_allowed=True)
 
         async def read_chunks(
             self, *, artifact_id, principal, allow_restricted_raw, chunk_size
         ):
-            assert allow_restricted_raw is True
+            # Generic restore never releases protected raw content
+            # implicitly; the explicit policy stays False here.
+            assert allow_restricted_raw is False
             self.reads.append((artifact_id, principal))
             return SimpleNamespace(), iter((self.payloads[artifact_id],))
 
@@ -310,8 +325,8 @@ async def test_materializer_projects_checkpoint_and_declared_inputs_before_mount
                 "workspaceId": workspace_id,
                 "relativePath": "repo",
             },
-            "repository": "MoonLadderStudios/MoonMind",
-            "branch": "main",
+            # Checkpoint restores are self-contained: exactly one source is
+            # active and no repository clone is a prerequisite.
             "workspaceCheckpointRestoreRef": checkpoint_ref,
             "restoreInputRefs": [restore_ref],
         }
