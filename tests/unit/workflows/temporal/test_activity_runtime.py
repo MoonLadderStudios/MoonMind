@@ -3833,7 +3833,10 @@ async def test_agent_runtime_publish_artifacts_resolves_omnigent_sandbox_workspa
             assert persisted["issue_ref"] == "MoonLadderStudios/MoonMind#3620"
 
 
-@pytest.mark.parametrize("runtime", ["omnigent", "codex_cli", "claude_code"])
+@pytest.mark.parametrize(
+    "runtime",
+    ["omnigent", "codex_cli", "claude_code", "jules", "openclaw"],
+)
 @pytest.mark.parametrize("consumer_handoff", [True, False])
 async def test_assessment_consumer_dispatch_to_publication_regression(
     tmp_path: Path,
@@ -3886,7 +3889,7 @@ async def test_assessment_consumer_dispatch_to_publication_regression(
         node_id=fixture["logicalStepId"],
         tool_name=runtime,
     )
-    if runtime == "omnigent":
+    if request.agent_kind == "external":
         assert request.input_refs == ["artifact://art_assessment", "artifact://art_brief"]
     assert "NOT_IMPLEMENTED" in request.instruction_ref
     assert parent._assessment_context == fixture["assessmentContext"]
