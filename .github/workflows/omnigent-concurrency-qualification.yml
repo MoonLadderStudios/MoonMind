@@ -13,6 +13,11 @@ name: Provider / Omnigent Concurrency Qualification
 # exact images, without a daemon, or without protected-live admission emits
 # `unavailable`/`blocked` rows and fails its gate — it never reports a skip as
 # a pass.
+#
+# Each job is answerable for the rows it requested: the runner exits zero only
+# when every requested (layer, level) row passed. The cross-layer validated
+# level is an advertisement computed from a record that carries both required
+# layers, so a single-layer job reports it but is never gated on it.
 
 on:
   schedule:
@@ -69,6 +74,11 @@ jobs:
         env:
           MOONMIND_OMNIGENT_CONCURRENCY_HOST_IMAGE: ${{ steps.images.outputs.host }}
           MOONMIND_OMNIGENT_SERVER_IMAGE: ${{ vars.OMNIGENT_CONFORMANCE_SERVER_IMAGE }}
+          # The exact hosts register against the deployment's own Omnigent
+          # server endpoint. Without it the layer publishes `unavailable` rows
+          # rather than launching hosts that can never register.
+          MOONMIND_OMNIGENT_HOST_SERVER_URL: ${{ vars.OMNIGENT_SERVER_URL }}
+          MOONMIND_OMNIGENT_CONCURRENCY_NETWORK: ${{ vars.OMNIGENT_CONCURRENCY_NETWORK }}
         run: |
           python tools/run_omnigent_concurrency_qualification.py \
             --layer exact_docker \

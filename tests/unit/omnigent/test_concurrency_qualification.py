@@ -10,12 +10,16 @@ is not a zero-leak scan.
 
 from __future__ import annotations
 
+import argparse
+import json
 from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
 
 from moonmind.omnigent.concurrency_qualification import (
+    CONCURRENCY_EVIDENCE_DIR_ENV,
+    CONCURRENCY_LEVEL_ENV,
     CONCURRENCY_SCENARIO_CATALOG,
     CONCURRENCY_SCENARIO_CATALOG_VERSION,
     DEFAULT_REPEATED_WAVE_THRESHOLDS,
@@ -38,10 +42,15 @@ from moonmind.omnigent.concurrency_qualification import (
     WaveObservation,
     build_row_for_unavailable_environment,
     compute_concurrency_evidence_digest,
+    load_observed_overlap,
+    observed_overlap_evidence_path,
     observed_peak_overlap,
+    publish_observed_overlap,
+    requested_concurrency_level,
     scenario_owners,
     unowned_scenarios,
 )
+from tools import run_omnigent_concurrency_qualification as runner
 
 SUPPORT_KEY = "omnigent-support:sha256:" + "a" * 64
 OTHER_SUPPORT_KEY = "omnigent-support:sha256:" + "b" * 64
@@ -517,7 +526,28 @@ def test_a_control_latency_budget_breach_is_a_violation() -> None:
         thresholds=DEFAULT_REPEATED_WAVE_THRESHOLDS,
         waves=(_wave(0), _wave(1, control_seconds=120.0)),
     )
-    assert "control latency" in " ".join(report.violations)
+    assert "control control latency" in " ".join(report.violations)
+
+
+@pytest.mark.parametrize(
+    "phase", ["wait", "launch", "registration", "cleanup"]
+)
+def test_one_stalled_control_operation_breaches_the_budget(phase: str) -> None:
+    """A stall in any single control phase fails the wave on its own.
+
+    A saturated deployment does not slow every phase evenly: cancellation or
+    teardown stalls behind the event stream while the rest stays fast. A budget
+    that only bound the wave total would report that wave as healthy.
+    """
+
+    report = RepeatedWaveReport(
+        level=4,
+        thresholds=DEFAULT_REPEATED_WAVE_THRESHOLDS,
+        waves=(_wave(0), _wave(1, **{f"{phase}_seconds": 120.0})),
+    )
+
+    assert not report.bounded
+    assert f"{phase} control latency 120.0s" in " ".join(report.violations)
 
 
 def test_bounded_growth_needs_more_than_one_wave() -> None:
@@ -526,4 +556,443 @@ def test_bounded_growth_needs_more_than_one_wave() -> None:
             level=4,
             thresholds=DEFAULT_REPEATED_WAVE_THRESHOLDS,
             waves=(_wave(0),),
+        )
+
+
+# ---------------------------------------------------------------------------
+# Published observations: the runner reads exactly what an owning test wrote.
+# ---------------------------------------------------------------------------
+
+
+def test_a_published_observation_round_trips_through_the_runner_path(tmp_path) -> None:
+    """The publisher and the loader are one contract, not two conventions."""
+
+    overlap = _overlap(4)
+
+    published = publish_observed_overlap(
+        ConcurrencyQualificationLayer.hermetic, overlap, evidence_dir=tmp_path
+    )
+
+    assert published == observed_overlap_evidence_path(
+        tmp_path, ConcurrencyQualificationLayer.hermetic, 4
+    )
+    loaded = load_observed_overlap(
+        tmp_path, ConcurrencyQualificationLayer.hermetic, 4
+    )
+    assert loaded is not None
+    assert loaded.observed_peak == 4
+    assert loaded.barrier_synchronized is True
+
+
+def test_publishing_is_a_no_op_without_a_requested_evidence_directory(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A developer running an owning test directly writes nothing."""
+
+    monkeypatch.delenv(CONCURRENCY_EVIDENCE_DIR_ENV, raising=False)
+
+    assert (
+        publish_observed_overlap(
+            ConcurrencyQualificationLayer.hermetic, _overlap(2)
+        )
+        is None
+    )
+
+
+def test_an_observation_of_another_level_cannot_be_filed_under_this_one(
+    tmp_path,
+) -> None:
+    """Stale evidence from an earlier level never qualifies a later one."""
+
+    publish_observed_overlap(
+        ConcurrencyQualificationLayer.hermetic, _overlap(2), evidence_dir=tmp_path
+    )
+    stale = observed_overlap_evidence_path(
+        tmp_path, ConcurrencyQualificationLayer.hermetic, 2
+    )
+    stale.rename(
+        observed_overlap_evidence_path(
+            tmp_path, ConcurrencyQualificationLayer.hermetic, 8
+        )
+    )
+
+    with pytest.raises(ValueError, match="observed level 2, not 8"):
+        load_observed_overlap(tmp_path, ConcurrencyQualificationLayer.hermetic, 8)
+
+
+def test_the_requested_level_comes_from_the_runner_or_the_default(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv(CONCURRENCY_LEVEL_ENV, raising=False)
+    assert requested_concurrency_level(default=2) == 2
+
+    monkeypatch.setenv(CONCURRENCY_LEVEL_ENV, "8")
+    assert requested_concurrency_level(default=2) == 8
+
+    monkeypatch.setenv(CONCURRENCY_LEVEL_ENV, "eight")
+    with pytest.raises(ValueError, match="positive integer"):
+        requested_concurrency_level(default=2)
+
+
+# ---------------------------------------------------------------------------
+# The runner's rows: a pass needs an observation, and a missing environment is
+# recorded rather than skipped.
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture
+def hermetic_database(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Satisfy the hermetic layer's database precondition for row tests.
+
+    These tests are about the row contract, not about provisioning a cluster,
+    so they declare the environment the layer requires and replace the owning
+    tests themselves.
+    """
+
+    monkeypatch.setenv(
+        "MOONMIND_TEST_POSTGRES_URL", "postgresql://postgres@127.0.0.1:5432/postgres"
+    )
+
+
+def _runner_args(evidence_dir) -> argparse.Namespace:
+    return argparse.Namespace(
+        evidence_dir=str(evidence_dir),
+        resource_class="ci-standard-4x8@1",
+        cpu_cores=4,
+        memory_gib=8,
+    )
+
+
+def test_an_owning_test_that_published_its_observation_records_a_pass(
+    tmp_path, monkeypatch: pytest.MonkeyPatch, hermetic_database
+) -> None:
+    """The producing half of the row contract: published evidence -> passed."""
+
+    def _publish(layer, level, _evidence_dir) -> int:
+        publish_observed_overlap(layer, _overlap(level), evidence_dir=tmp_path)
+        return 0
+
+    monkeypatch.setattr(runner, "_run_owning_tests", _publish)
+
+    rows = runner.build_rows(
+        _runner_args(tmp_path), ConcurrencyQualificationLayer.hermetic, (2, 4)
+    )
+
+    assert [row.status for row in rows] == [ConcurrencyRowStatus.passed] * 2
+    for row in rows:
+        assert row.qualifies
+        assert row.overlap is not None
+        assert row.overlap.observed_peak == row.level
+        assert Path(row.evidence_ref).exists(), "a passing row must resolve"
+        assert row.evidence_digest == compute_concurrency_evidence_digest(
+            json.loads(Path(row.evidence_ref).read_text(encoding="utf-8"))
+        )
+
+
+def test_an_owning_test_that_published_nothing_stays_partial(
+    tmp_path, monkeypatch: pytest.MonkeyPatch, hermetic_database
+) -> None:
+    """Green tests that observed nothing are honest about it, not a pass."""
+
+    monkeypatch.setattr(
+        runner, "_run_owning_tests", lambda _layer, _level, _dir: 0
+    )
+
+    rows = runner.build_rows(
+        _runner_args(tmp_path), ConcurrencyQualificationLayer.hermetic, (2,)
+    )
+
+    assert rows[0].status is ConcurrencyRowStatus.partial
+    assert not rows[0].qualifies
+    assert "no observed-overlap evidence" in rows[0].diagnostics[0]
+
+
+def test_a_failing_owning_test_records_a_failed_row(
+    tmp_path, monkeypatch: pytest.MonkeyPatch, hermetic_database
+) -> None:
+    monkeypatch.setattr(
+        runner, "_run_owning_tests", lambda _layer, _level, _dir: 1
+    )
+
+    rows = runner.build_rows(
+        _runner_args(tmp_path), ConcurrencyQualificationLayer.hermetic, (2,)
+    )
+
+    assert rows[0].status is ConcurrencyRowStatus.failed
+    assert rows[0].overlap is None
+
+
+@pytest.mark.parametrize(
+    "missing",
+    [
+        "MOONMIND_OMNIGENT_CONCURRENCY_HOST_IMAGE",
+        "MOONMIND_OMNIGENT_HOST_SERVER_URL",
+    ],
+)
+def test_an_absent_exact_image_environment_records_unavailable_rows(
+    tmp_path, monkeypatch: pytest.MonkeyPatch, missing: str
+) -> None:
+    """A runner missing any exact-image precondition publishes rows, not silence."""
+
+    monkeypatch.setenv("MOONMIND_OMNIGENT_CONCURRENCY_HOST_IMAGE", "image@sha256:x")
+    monkeypatch.setenv("MOONMIND_OMNIGENT_HOST_SERVER_URL", "http://omnigent:8000")
+    monkeypatch.delenv(missing, raising=False)
+
+    rows = runner.build_rows(
+        _runner_args(tmp_path),
+        ConcurrencyQualificationLayer.exact_docker,
+        EXACT_DOCKER_LEVELS,
+    )
+
+    assert [row.level for row in rows] == list(EXACT_DOCKER_LEVELS)
+    for row in rows:
+        assert row.status is ConcurrencyRowStatus.unavailable
+        assert not row.qualifies
+        assert row.overlap is None
+        assert row.diagnostics, "an unavailable row must name what was missing"
+
+
+def test_a_hermetic_layer_without_a_database_records_unavailable_rows(
+    tmp_path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The layer's real database constraints are an environment, not a test.
+
+    Without a cluster the final-slot race never ran, so recording the fixture
+    error as ``failed`` would report a concurrency defect that was never
+    observed. The row names the missing dependency instead.
+    """
+
+    monkeypatch.delenv("MOONMIND_TEST_POSTGRES_URL", raising=False)
+    monkeypatch.setattr(runner.shutil, "which", lambda _name: None)
+    monkeypatch.setattr(runner.Path, "glob", lambda _self, _pattern: iter(()))
+
+    rows = runner.build_rows(
+        _runner_args(tmp_path), ConcurrencyQualificationLayer.hermetic, (2, 4)
+    )
+
+    assert [row.status for row in rows] == [ConcurrencyRowStatus.unavailable] * 2
+    assert "PostgreSQL" in rows[0].diagnostics[0]
+
+
+def test_a_configured_database_url_admits_the_hermetic_layer(
+    tmp_path, monkeypatch: pytest.MonkeyPatch, hermetic_database
+) -> None:
+    """A configured cluster is enough; no local binaries are required."""
+
+    monkeypatch.setattr(runner.shutil, "which", lambda _name: None)
+    monkeypatch.setattr(runner.Path, "glob", lambda _self, _pattern: iter(()))
+    monkeypatch.setattr(runner, "_run_owning_tests", lambda _l, _lv, _d: 0)
+
+    rows = runner.build_rows(
+        _runner_args(tmp_path), ConcurrencyQualificationLayer.hermetic, (2,)
+    )
+
+    assert rows[0].status is ConcurrencyRowStatus.partial
+
+
+def test_an_unadmitted_protected_live_layer_records_blocked_rows(
+    tmp_path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Opt-in refusal is a policy outcome, not a missing environment."""
+
+    monkeypatch.delenv(
+        "MOONMIND_OMNIGENT_PROTECTED_LIVE_CONCURRENCY", raising=False
+    )
+
+    rows = runner.build_rows(
+        _runner_args(tmp_path), ConcurrencyQualificationLayer.protected_live, (2,)
+    )
+
+    assert rows[0].status is ConcurrencyRowStatus.blocked
+    assert not rows[0].qualifies
+
+
+def test_an_unavailable_required_layer_never_raises_the_validated_level(
+    tmp_path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Hermetic passes alone cannot qualify a level the images never ran.
+
+    This is the exact confusion the issue forbids: a green hermetic suite plus
+    a skipped exact-image row reads like a passing matrix unless the record
+    refuses to count the missing layer.
+    """
+
+    monkeypatch.delenv("MOONMIND_OMNIGENT_CONCURRENCY_HOST_IMAGE", raising=False)
+    monkeypatch.delenv("MOONMIND_OMNIGENT_HOST_SERVER_URL", raising=False)
+
+    exact_rows = runner.build_rows(
+        _runner_args(tmp_path),
+        ConcurrencyQualificationLayer.exact_docker,
+        EXACT_DOCKER_LEVELS,
+    )
+    record = _record(exact_rows)
+
+    assert record.validated_concurrency_level == 0
+    assert record.advertised_concurrency_level(operator_ceiling=8) == 0
+    assert len(record.unqualified_rows) == len(EXACT_DOCKER_LEVELS)
+
+
+# ---------------------------------------------------------------------------
+# The invocation gate: a single-layer job is answerable for its own rows.
+# ---------------------------------------------------------------------------
+
+
+def _run_main(tmp_path, layer: str, levels: str, rows) -> int:
+    """Invoke the runner CLI with ``build_rows`` replaced by fixed outcomes."""
+
+    import unittest.mock
+
+    with unittest.mock.patch.object(
+        runner, "build_rows", lambda _args, _layer, _levels: list(rows)
+    ):
+        return runner.main(
+            [
+                "--layer",
+                layer,
+                "--levels",
+                levels,
+                "--support-combination-key",
+                SUPPORT_KEY,
+                "--moonmind-commit",
+                "0" * 40,
+                "--evidence-dir",
+                str(tmp_path / "evidence"),
+                "--output",
+                str(tmp_path / "record.json"),
+            ]
+        )
+
+
+def test_a_single_layer_invocation_passes_on_its_own_requested_rows(
+    tmp_path,
+) -> None:
+    """Both CI jobs run one layer, so one layer has to be able to succeed."""
+
+    protected_only = _run_main(
+        tmp_path,
+        "protected_live",
+        "2",
+        [_passing_row(ConcurrencyQualificationLayer.protected_live, 2)],
+    )
+    assert protected_only == 0
+
+    hermetic_only = _run_main(
+        tmp_path,
+        "hermetic",
+        "1,2",
+        [
+            _passing_row(ConcurrencyQualificationLayer.hermetic, 1),
+            _passing_row(ConcurrencyQualificationLayer.hermetic, 2),
+        ],
+    )
+    assert hermetic_only == 0
+
+
+@pytest.mark.parametrize(
+    "status",
+    [
+        ConcurrencyRowStatus.failed,
+        ConcurrencyRowStatus.skipped,
+        ConcurrencyRowStatus.blocked,
+        ConcurrencyRowStatus.unavailable,
+        ConcurrencyRowStatus.partial,
+    ],
+)
+def test_any_non_passing_requested_row_fails_the_invocation(
+    tmp_path, status
+) -> None:
+    code = _run_main(
+        tmp_path,
+        "exact_docker",
+        "2,4",
+        [
+            _passing_row(ConcurrencyQualificationLayer.exact_docker, 2),
+            ConcurrencyQualificationRow(
+                layer=ConcurrencyQualificationLayer.exact_docker,
+                level=4,
+                status=status,
+                diagnostics=("the exact images were not present",),
+            ),
+        ],
+    )
+    assert code == 1
+
+
+def test_a_requested_row_that_was_never_produced_fails_the_invocation(
+    tmp_path,
+) -> None:
+    """Silence about a requested level is a failure, not an omission."""
+
+    code = _run_main(
+        tmp_path,
+        "exact_docker",
+        "2,4,8",
+        [_passing_row(ConcurrencyQualificationLayer.exact_docker, 2)],
+    )
+    assert code == 1
+
+
+def test_the_invocation_gate_is_not_the_cross_layer_validated_level(
+    tmp_path,
+) -> None:
+    """A passing single-layer job still advertises nothing on its own."""
+
+    code = _run_main(
+        tmp_path,
+        "hermetic",
+        "2",
+        [_passing_row(ConcurrencyQualificationLayer.hermetic, 2)],
+    )
+    record = json.loads((tmp_path / "record.json").read_text(encoding="utf-8"))
+
+    assert code == 0
+    assert (
+        ConcurrencyQualificationRecord.model_validate(
+            record
+        ).validated_concurrency_level
+        == 0
+    )
+
+
+def test_the_requested_matrix_defaults_to_each_layers_declared_levels() -> None:
+    args = runner._parse_args(
+        [
+            "--layer",
+            "all",
+            "--support-combination-key",
+            SUPPORT_KEY,
+            "--moonmind-commit",
+            "0" * 40,
+        ]
+    )
+
+    matrix = dict(runner.requested_matrix(args))
+
+    assert matrix[ConcurrencyQualificationLayer.hermetic] == HERMETIC_LEVELS
+    assert matrix[ConcurrencyQualificationLayer.exact_docker] == EXACT_DOCKER_LEVELS
+
+
+# ---------------------------------------------------------------------------
+# Re-entry: the runner never executes a test that runs the runner.
+# ---------------------------------------------------------------------------
+
+
+def test_no_owning_test_re_enters_the_qualification_runner() -> None:
+    """An owning test that called ``build_rows`` would recurse without bound.
+
+    ``_run_owning_tests`` spawns pytest over every owning test for the layer
+    with the layer's environment still set. If one of those files asked the
+    runner to build the same layer's rows, the environment check would pass
+    again and the runner would spawn itself for as long as the machine lasted.
+    The record contract is therefore asserted here, in a file the catalog does
+    not own.
+    """
+
+    repo_root = Path(__file__).resolve().parents[3]
+    for owner in CONCURRENCY_SCENARIO_CATALOG:
+        target = repo_root / owner.owning_test.split("::")[0]
+        source = target.read_text(encoding="utf-8")
+        assert "run_omnigent_concurrency_qualification" not in source, (
+            f"{owner.owning_test} re-enters the qualification runner; move the "
+            "record-contract assertions out of the owning-test set"
         )
