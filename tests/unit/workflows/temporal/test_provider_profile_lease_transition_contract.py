@@ -42,6 +42,7 @@ from moonmind.workflows.temporal.workflows.provider_profile_manager import (
     MoonMindProviderProfileManagerWorkflow,
     PendingRequest,
     ProfileSlotState,
+    _LEASE_CLEANUP_ESCALATION_SECONDS,
 )
 
 NOW = datetime(2026, 9, 6, 12, 0, tzinfo=timezone.utc)
@@ -324,6 +325,34 @@ async def test_a_rolled_back_reservation_is_not_left_marked_pending() -> None:
 # ---------------------------------------------------------------------------
 
 
+def _committed_row(**overrides: Any) -> dict[str, Any]:
+    """The complete durable identity of the grant the manager attempted.
+
+    A reconciliation that compares fewer fields than this would accept a
+    migrated or conflicting row that merely shares the lease ID, profile,
+    state and generation.
+    """
+
+    row = {
+        "lease_id": "agent-run-1",
+        "workflow_id": "agent-run-1",
+        "profile_id": PROFILE_ID,
+        "owner_id": "agent-run-1",
+        "owner_kind": "workflow",
+        "purpose": "execution_direct",
+        "compatibility_class": CredentialLeaseMode.SHARED_EXECUTION.value,
+        "capacity_scope_ref": SCOPE_REF,
+        "scope_generation": 1,
+        "credential_generation": None,
+        "execution_plan_ref": None,
+        "evidence_identity": "",
+        "lease_state": DurableLeaseState.HELD.value,
+        "fencing_generation": 5,
+    }
+    row.update(overrides)
+    return row
+
+
 @pytest.mark.asyncio
 async def test_a_lost_commit_acknowledgment_is_reconciled_as_committed() -> None:
     """A timeout after commit must not abandon a live grant."""
@@ -331,15 +360,7 @@ async def test_a_lost_commit_acknowledgment_is_reconciled_as_committed() -> None
     ledger = _Ledger(
         {
             "grant": RuntimeError("database timeout"),
-            "describe": {
-                "found": True,
-                "lease": {
-                    "lease_id": "agent-run-1",
-                    "profile_id": PROFILE_ID,
-                    "lease_state": DurableLeaseState.HELD.value,
-                    "fencing_generation": 5,
-                },
-            },
+            "describe": {"found": True, "lease": _committed_row()},
         }
     )
     wf = _manager()
@@ -364,12 +385,9 @@ async def test_reconciliation_refuses_a_row_the_ledger_does_not_hold() -> None:
     """A different fence, profile or state is not this caller's grant."""
 
     for lease in (
-        {"lease_id": "agent-run-1", "profile_id": PROFILE_ID,
-         "lease_state": DurableLeaseState.HELD.value, "fencing_generation": 4},
-        {"lease_id": "agent-run-1", "profile_id": "other",
-         "lease_state": DurableLeaseState.HELD.value, "fencing_generation": 5},
-        {"lease_id": "agent-run-1", "profile_id": PROFILE_ID,
-         "lease_state": DurableLeaseState.RELEASED.value, "fencing_generation": 5},
+        _committed_row(fencing_generation=4),
+        _committed_row(profile_id="other"),
+        _committed_row(lease_state=DurableLeaseState.RELEASED.value),
     ):
         ledger = _Ledger(
             {
@@ -390,6 +408,57 @@ async def test_reconciliation_refuses_a_row_the_ledger_does_not_hold() -> None:
                 await wf._persist_lease_grant(profile, "agent-run-1", metadata=metadata)
                 is False
             )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "difference",
+    [
+        {"owner_id": "someone-else"},
+        {"owner_kind": "activity"},
+        {"purpose": "credential_validation"},
+        {"compatibility_class": CredentialLeaseMode.EXCLUSIVE_MAINTENANCE.value},
+        {"capacity_scope_ref": "provider-scope:other"},
+        {"scope_generation": 9},
+        {"credential_generation": 4},
+        {"execution_plan_ref": "omnigent-execution-plan:sha256:other"},
+        {"evidence_identity": "evidence-other"},
+    ],
+)
+async def test_reconciliation_refuses_a_row_with_another_grant_identity(
+    difference: dict[str, Any],
+) -> None:
+    """A migrated or conflicting row can share the lease ID, fence and state.
+
+    MoonLadderStudios/MoonMind#3883: inheriting it would hand the caller
+    authority — an owner, a purpose, a plan, a credential generation — that the
+    ledger never granted, so every immutable grant field has to agree.
+    """
+
+    ledger = _Ledger(
+        {
+            "grant": RuntimeError("database timeout"),
+            "describe": {"found": True, "lease": _committed_row(**difference)},
+        }
+    )
+    wf = _manager()
+    profile = wf._profiles[PROFILE_ID]
+    metadata = wf._grant_metadata(
+        {
+            "credentialGeneration": None,
+            "executionPlanRef": None,
+        },
+        fencing_generation=5,
+        profile=profile,
+        lease_mode=CredentialLeaseMode.SHARED_EXECUTION,
+    )
+    profile.reserve("agent-run-1", NOW, purpose="execution_direct", metadata=metadata)
+
+    with _patched(ledger):
+        assert (
+            await wf._persist_lease_grant(profile, "agent-run-1", metadata=metadata)
+            is False
+        )
 
 
 @pytest.mark.asyncio
@@ -856,6 +925,272 @@ async def test_a_pre_contract_re_signal_drain_still_blocks_on_a_failed_save() ->
 
 
 # ---------------------------------------------------------------------------
+# A retained reservation is not authority until its grant commits
+# ---------------------------------------------------------------------------
+
+
+def _new_request_manager() -> MoonMindProviderProfileManagerWorkflow:
+    """A manager with free capacity and one queued signal-based requester."""
+
+    wf = _manager()
+    wf._pending_requests = [
+        PendingRequest(requester_workflow_id="agent-run-1", runtime_id="opencode")
+    ]
+    return wf
+
+
+@pytest.mark.asyncio
+async def test_a_failed_signal_grant_is_retried_before_its_slot_is_announced() -> None:
+    """The drain keeps the reservation to retry persistence — so it must retry.
+
+    MoonLadderStudios/MoonMind#3883: the next pass sees a held lease and takes
+    the re-signal branch, which deliberately writes nothing. Without the retry
+    it would hand a signal-based AgentRun a slot that has no durable lease row,
+    and a manager restart could grant the same capacity again.
+    """
+
+    ledger = _Ledger(
+        {
+            "grant": [RuntimeError("database timeout"), {"granted": True}],
+            "describe": {"found": False},
+        }
+    )
+    wf = _new_request_manager()
+    signals = _Signals()
+
+    with _patched(ledger), patch(
+        "temporalio.workflow.get_external_workflow_handle",
+        side_effect=signals.handle_for,
+    ):
+        await wf._drain_queue()
+
+    assert signals.sent == [], "a slot was announced before its row existed"
+    assert wf._profiles[PROFILE_ID].current_leases == ["agent-run-1"]
+    assert "agent-run-1" in wf._uncommitted_lease_grants
+    assert [req.requester_workflow_id for req in wf._pending_requests] == [
+        "agent-run-1"
+    ]
+
+    with _patched(ledger), patch(
+        "temporalio.workflow.get_external_workflow_handle",
+        side_effect=signals.handle_for,
+    ):
+        await wf._drain_queue()
+
+    assert ledger.actions() == ["grant", "describe", "grant"]
+    assert wf._uncommitted_lease_grants == {}
+    assert [name for _, name, _ in signals.sent] == ["slot_assigned"]
+    assert wf._pending_requests == []
+
+
+@pytest.mark.asyncio
+async def test_a_grant_that_keeps_failing_never_announces_its_slot() -> None:
+    ledger = _Ledger(
+        {
+            "grant": RuntimeError("database timeout"),
+            "describe": {"found": False},
+        }
+    )
+    wf = _new_request_manager()
+    signals = _Signals()
+
+    for _ in range(3):
+        with _patched(ledger), patch(
+            "temporalio.workflow.get_external_workflow_handle",
+            side_effect=signals.handle_for,
+        ):
+            await wf._drain_queue()
+
+    assert signals.sent == []
+    assert "save" not in ledger.actions()
+    assert wf._uncommitted_lease_grants["agent-run-1"]["profile_id"] == PROFILE_ID
+    assert [req.requester_workflow_id for req in wf._pending_requests] == [
+        "agent-run-1"
+    ]
+
+
+@pytest.mark.asyncio
+async def test_a_committed_signal_grant_is_never_re_persisted() -> None:
+    """The ordinary re-signal path still costs no durable write."""
+
+    ledger = _Ledger({"grant": {"granted": True}})
+    wf = _new_request_manager()
+    signals = _Signals()
+
+    with _patched(ledger), patch(
+        "temporalio.workflow.get_external_workflow_handle",
+        side_effect=signals.handle_for,
+    ):
+        await wf._drain_queue()
+    wf._pending_requests = [
+        PendingRequest(requester_workflow_id="agent-run-1", runtime_id="opencode")
+    ]
+    with _patched(ledger), patch(
+        "temporalio.workflow.get_external_workflow_handle",
+        side_effect=signals.handle_for,
+    ):
+        await wf._drain_queue()
+
+    assert ledger.actions() == ["grant"]
+    assert [name for _, name, _ in signals.sent] == ["slot_assigned", "slot_assigned"]
+
+
+# ---------------------------------------------------------------------------
+# Continue-As-New carries the obligations attached to the lease snapshot
+# ---------------------------------------------------------------------------
+
+
+def _manager_with_obligations() -> MoonMindProviderProfileManagerWorkflow:
+    wf = _held_manager(ledger_generation=6)
+    wf._unresolved_releases = {
+        "agent-run-9": {
+            "profile_id": PROFILE_ID,
+            "fencing_generation": 4,
+            "outcome": LeaseTransitionOutcome.RETRYABLE.value,
+            "retryable": True,
+        }
+    }
+    wf._cleanup_requested_leases = {"agent-run-1"}
+    wf._uncommitted_lease_grants = {
+        "agent-run-2": {
+            "profile_id": PROFILE_ID,
+            "purpose": "execution_direct",
+            "metadata": {"fencingGeneration": 7},
+        }
+    }
+    return wf
+
+
+def test_a_rollover_carries_every_obligation_on_the_lease_snapshot() -> None:
+    """MoonLadderStudios/MoonMind#3883: the successor inherits the debts too.
+
+    A continued run keeps the in-memory lease snapshot and deliberately does
+    not reload the durable ledger, so an obligation left only in memory would
+    disappear at the history rollover: the successor would advertise an
+    ``already_held`` lease whose row is released, strand capacity behind a
+    release nobody retries, or announce a reservation that never committed.
+    """
+
+    wf = _manager_with_obligations()
+    payload = wf._build_continue_as_new_input()
+
+    successor = _manager()
+    successor._restore_lease_obligations(payload)
+
+    assert successor._unresolved_releases == wf._unresolved_releases
+    assert successor._cleanup_requested_leases == {"agent-run-1"}
+    assert successor._uncommitted_lease_grants == wf._uncommitted_lease_grants
+
+
+def test_a_pre_contract_rollover_payload_is_unchanged() -> None:
+    """Replay safety: an older history keeps the exact command it recorded."""
+
+    wf = _manager_with_obligations()
+    wf._lease_transition_contract = False
+    payload = wf._build_continue_as_new_input()
+
+    assert "unresolved_releases" not in payload
+    assert "cleanup_requested_leases" not in payload
+    assert "uncommitted_lease_grants" not in payload
+
+
+@pytest.mark.asyncio
+async def test_a_restored_release_obligation_is_retried_after_rollover() -> None:
+    ledger = _Ledger(
+        {"release_one": {"released": True, "outcome": LeaseTransitionOutcome.RELEASED.value}}
+    )
+    wf = _manager_with_obligations()
+    successor = _held_manager(ledger_generation=6)
+    successor._restore_lease_obligations(wf._build_continue_as_new_input())
+
+    with _patched(ledger):
+        await successor._retry_unresolved_releases()
+
+    assert ledger.rows_for("release_one")[0]["lease_id"] == "agent-run-9"
+    assert successor._unresolved_releases == {}
+
+
+# ---------------------------------------------------------------------------
+# A cleanup request nobody can resolve becomes actionable evidence
+# ---------------------------------------------------------------------------
+
+
+def _expired_cleanup_manager(
+    *, owner_is_workflow: bool = True
+) -> MoonMindProviderProfileManagerWorkflow:
+    wf = _held_manager()
+    profile = wf._profiles[PROFILE_ID]
+    profile.max_lease_duration_seconds = 60
+    metadata = dict(profile.lease_metadata.get("agent-run-1") or {})
+    if not owner_is_workflow:
+        metadata["ownerIsWorkflow"] = False
+        metadata.pop("workflowId", None)
+    profile.lease_metadata["agent-run-1"] = metadata
+    profile.lease_granted_at["agent-run-1"] = (NOW - timedelta(hours=3)).isoformat()
+    return wf
+
+
+@pytest.mark.asyncio
+async def test_a_cleanup_request_no_owner_resolves_becomes_evidence() -> None:
+    """The slot stays spent, but the stuck request stops looking handled.
+
+    MoonLadderStudios/MoonMind#1089: the durable owner of a cleanup request is
+    the terminal-ownership release. Once the request has outlived its
+    escalation deadline with the holder still live, the manager publishes the
+    stuck slot instead of skipping it on every later pass.
+    """
+
+    ledger = _Ledger(
+        {
+            "request_cleanup": {
+                "outcome": LeaseTransitionOutcome.CLEANUP_REQUESTED.value
+            }
+        }
+    )
+    wf = _expired_cleanup_manager()
+
+    with _patched(ledger):
+        await wf._request_cleanup_for_expired_leases()
+    assert wf._lease_index_conflicts == []
+
+    later = NOW + timedelta(seconds=_LEASE_CLEANUP_ESCALATION_SECONDS + 60)
+    with _patched(ledger, now=later):
+        await wf._request_cleanup_for_expired_leases()
+
+    assert ledger.actions() == ["request_cleanup"], "cleanup was re-requested"
+    assert wf._profiles[PROFILE_ID].current_leases == ["agent-run-1"]
+    assert [entry["kind"] for entry in wf._lease_index_conflicts] == [
+        "cleanup_unresolved"
+    ]
+    assert wf.get_state()["cleanup_requested_leases"] == ["agent-run-1"]
+
+
+@pytest.mark.asyncio
+async def test_a_cleanup_request_with_no_verifiable_owner_is_named_as_such() -> None:
+    """An Activity-owned lease with no owning workflow can never be verified."""
+
+    ledger = _Ledger(
+        {
+            "request_cleanup": {
+                "outcome": LeaseTransitionOutcome.CLEANUP_REQUESTED.value
+            }
+        }
+    )
+    wf = _expired_cleanup_manager(owner_is_workflow=False)
+
+    with _patched(ledger):
+        await wf._request_cleanup_for_expired_leases()
+    later = NOW + timedelta(seconds=_LEASE_CLEANUP_ESCALATION_SECONDS + 60)
+    with _patched(ledger, now=later):
+        await wf._request_cleanup_for_expired_leases()
+
+    assert [entry["kind"] for entry in wf._lease_index_conflicts] == [
+        "cleanup_owner_unverifiable"
+    ]
+    assert wf._profiles[PROFILE_ID].current_leases == ["agent-run-1"]
+
+
+# ---------------------------------------------------------------------------
 # Item 7: the index is a complete conflict and performance boundary
 # ---------------------------------------------------------------------------
 
@@ -1035,13 +1370,13 @@ async def test_an_unknown_lease_state_blocks_new_admission() -> None:
 
 
 @pytest.mark.asyncio
-async def test_two_durable_leases_sharing_a_workflow_id_block_admission() -> None:
+async def test_two_durable_leases_sharing_an_owner_block_admission() -> None:
     ledger = _restore_ledger(
         {
             "leases": [],
             "max_fencing_generation": 3,
             "conflicts": [
-                {"field": "workflow_id", "value": "agent-run-1", "leases": []}
+                {"field": "owner_id", "value": "agent-run-1", "leases": []}
             ],
         }
     )

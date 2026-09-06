@@ -7,8 +7,10 @@ Create Date: 2026-09-04
 Extends provider_profile_slot_leases with a versioned incremental contract
 (state, fencing, scope, credential generation, compatibility, plan ref,
 owner kind, heartbeat/release times, bounded metadata) plus indexes for
-lease/owner/profile/scope lookups. Existing rows remain readable; new
-non-null lease_ids are unique (nulls allowed for pre-contract rows).
+lease/owner/profile/scope lookups. Existing rows remain readable and keep the
+lease identity their holders already quote; non-null lease_ids are unique
+within a runtime (nulls allowed for pre-contract rows), and owning-workflow
+uniqueness narrows to workflow-owned rows.
 """
 
 from __future__ import annotations
@@ -77,22 +79,6 @@ def upgrade() -> None:
         "UPDATE provider_profile_slot_leases SET lease_id = workflow_id "
         "WHERE lease_id IS NULL"
     )
-    # Existing rows are unique per (runtime_id, workflow_id), so backfilling
-    # lease_id from workflow_id can collide across runtime families. A lease ID
-    # is the stable identity every fenced transition quotes, so the collision is
-    # broken deterministically instead of failing the migration or merging two
-    # leases into one: the oldest row keeps the exact identity its holder
-    # already quotes, and each later duplicate is disambiguated by its own row
-    # id (MoonLadderStudios/MoonMind#3883).
-    op.execute(
-        "UPDATE provider_profile_slot_leases "
-        "SET lease_id = lease_id || '#' || id "
-        "WHERE EXISTS ("
-        "  SELECT 1 FROM provider_profile_slot_leases AS other"
-        "  WHERE other.lease_id = provider_profile_slot_leases.lease_id"
-        "    AND other.id < provider_profile_slot_leases.id"
-        ")"
-    )
     with op.batch_alter_table("provider_profile_slot_leases") as batch:
         batch.alter_column("owner_kind", existing_type=sa.String(32), nullable=False)
         batch.alter_column(
@@ -103,18 +89,44 @@ def upgrade() -> None:
         batch.alter_column(
             "fencing_generation", existing_type=sa.Integer(), nullable=False
         )
+        # The owning workflow identifies a workflow-owned lease only. One
+        # Activity-owned step can bind several Provider Profiles from the same
+        # runtime, each with its own owner ID but the same owning workflow
+        # recorded for liveness verification, so the full-table constraint is
+        # replaced by a partial unique index over workflow-owned rows
+        # (MoonLadderStudios/MoonMind#3883).
+        batch.drop_constraint(
+            "uq_provider_slot_lease_runtime_workflow", type_="unique"
+        )
+        batch.create_index(
+            "uq_provider_slot_lease_runtime_workflow",
+            ["runtime_id", "workflow_id"],
+            unique=True,
+            postgresql_where=sa.text("owner_is_workflow"),
+            sqlite_where=sa.text("owner_is_workflow"),
+        )
         batch.create_index("ix_provider_slot_leases_lease", ["lease_id"])
         batch.create_index("ix_provider_slot_leases_owner", ["owner_id"])
         batch.create_index("ix_provider_slot_leases_profile", ["profile_id"])
         batch.create_index("ix_provider_slot_leases_scope", ["capacity_scope_ref"])
+        # Existing rows are unique per (runtime_id, workflow_id), so
+        # backfilling lease_id from workflow_id can repeat one ID across
+        # runtime families. Uniqueness is therefore runtime-scoped: rewriting
+        # the later row's lease_id would break the identity its holder already
+        # quotes on release, leaving that row permanently active
+        # (MoonLadderStudios/MoonMind#3883).
         batch.create_unique_constraint(
-            "uq_provider_slot_lease_lease_id", ["lease_id"]
+            "uq_provider_slot_lease_lease_id", ["runtime_id", "lease_id"]
         )
 
 
 def downgrade() -> None:
     with op.batch_alter_table("provider_profile_slot_leases") as batch:
         batch.drop_constraint("uq_provider_slot_lease_lease_id", type_="unique")
+        batch.drop_index("uq_provider_slot_lease_runtime_workflow")
+        batch.create_unique_constraint(
+            "uq_provider_slot_lease_runtime_workflow", ["runtime_id", "workflow_id"]
+        )
         batch.drop_index("ix_provider_slot_leases_scope")
         batch.drop_index("ix_provider_slot_leases_profile")
         batch.drop_index("ix_provider_slot_leases_owner")

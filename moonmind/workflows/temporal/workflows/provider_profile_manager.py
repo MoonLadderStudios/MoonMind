@@ -327,6 +327,14 @@ _LEASE_TOMBSTONE_RETENTION_SECONDS = 30 * 24 * 3600
 # Purge tombstones at most this often, keyed off the monotonically increasing
 # event count so the cadence is deterministic on replay.
 _LEASE_TOMBSTONE_PURGE_EVENT_INTERVAL = 60
+# MoonLadderStudios/MoonMind#1089: a requested cleanup keeps spending its slot
+# until the owner is proven terminal, which is the only evidence that the
+# credential consumer stopped. That wait is deliberately unbounded for safety,
+# so it needs a bounded *escalation*: once a cleanup request has gone this long
+# past the lease's own expiry with the holder still reported live, the stuck
+# slot is published as actionable reconciliation evidence instead of quietly
+# consuming capacity nobody is watching.
+_LEASE_CLEANUP_ESCALATION_SECONDS = 3600
 
 
 @dataclass
@@ -1024,6 +1032,13 @@ class MoonMindProviderProfileManagerWorkflow:
         # (MoonLadderStudios/MoonMind#1089), so expiry never frees a
         # credential consumer that may still be running.
         self._cleanup_requested_leases: set[str] = set()
+        # Reservations the signal drain holds in memory whose durable grant
+        # never committed, keyed by lease ID. The drain deliberately keeps the
+        # reservation so persistence can be retried; without this record the
+        # next pass would see a held lease, skip persistence and signal a
+        # consumer a slot the ledger never granted
+        # (MoonLadderStudios/MoonMind#3883).
+        self._uncommitted_lease_grants: dict[str, dict[str, Any]] = {}
         # Cache of resolved scheduled/created ordering keyed by queue-order
         # workflow id. Workflow creation/scheduled times are immutable, so a
         # resolved entry never has to be re-queried; this keeps the
@@ -2759,8 +2774,65 @@ class MoonMindProviderProfileManagerWorkflow:
                         configured_limit=profile.max_parallel_runs,
                         effective_limit=profile.effective_limit or profile.max_parallel_runs,
                     )
+        self._restore_lease_obligations(input_payload)
         self._absorb_fencing_generations()
         self._rebuild_lease_indexes()
+
+    def _restore_lease_obligations(self, input_payload: dict[str, Any]) -> None:
+        """Restore the obligations attached to the restored lease snapshot.
+
+        MoonLadderStudios/MoonMind#3883: a continued run deliberately does not
+        reload the durable ledger, so an obligation left only in memory would
+        be dropped at the history rollover. The successor keeps owing every
+        unresolved release, every requested cleanup and every reservation whose
+        grant never committed.
+        """
+
+        self._unresolved_releases = {}
+        releases = input_payload.get("unresolved_releases")
+        if isinstance(releases, dict):
+            for lease_id, details in releases.items():
+                normalized = self._normalize_optional_string(lease_id)
+                if not normalized or not isinstance(details, dict):
+                    continue
+                self._unresolved_releases[normalized] = {
+                    "profile_id": str(details.get("profile_id") or ""),
+                    "fencing_generation": self._normalize_sequence(
+                        details.get("fencing_generation")
+                    ),
+                    "outcome": str(
+                        details.get("outcome")
+                        or LeaseTransitionOutcome.RETRYABLE.value
+                    ),
+                    "retryable": details.get("retryable", True) is not False,
+                }
+
+        cleanup = input_payload.get("cleanup_requested_leases")
+        self._cleanup_requested_leases = {
+            normalized
+            for normalized in (
+                self._normalize_optional_string(entry)
+                for entry in (cleanup if isinstance(cleanup, list) else [])
+            )
+            if normalized
+        }
+
+        self._uncommitted_lease_grants = {}
+        uncommitted = input_payload.get("uncommitted_lease_grants")
+        if isinstance(uncommitted, dict):
+            for lease_id, details in uncommitted.items():
+                normalized = self._normalize_optional_string(lease_id)
+                if not normalized or not isinstance(details, dict):
+                    continue
+                metadata = details.get("metadata")
+                self._uncommitted_lease_grants[normalized] = {
+                    "profile_id": str(details.get("profile_id") or ""),
+                    "purpose": str(
+                        details.get("purpose")
+                        or CredentialLeasePurpose.EXECUTION_DIRECT.value
+                    ),
+                    "metadata": dict(metadata) if isinstance(metadata, dict) else {},
+                }
 
     def _apply_profile_sync(
         self,
@@ -3160,6 +3232,9 @@ class MoonMindProviderProfileManagerWorkflow:
             self._lease_owner_index[lease_id] = owner
 
     def _unindex_lease(self, lease_id: str) -> None:
+        # A lease that leaves the in-memory ledger takes its uncommitted grant
+        # record with it: there is no reservation left to make durable.
+        self._uncommitted_lease_grants.pop(lease_id, None)
         self._lease_profile_index.pop(lease_id, None)
         owner = self._lease_owner_index.pop(lease_id, None)
         if owner is not None:
@@ -3288,6 +3363,19 @@ class MoonMindProviderProfileManagerWorkflow:
                 ):
                     remaining.append(req)
                     continue
+                if (
+                    durable_grants
+                    and self._lease_transition_contract
+                    and not await self._commit_retained_lease_grant(
+                        existing_profile_id, req.requester_workflow_id
+                    )
+                ):
+                    # This reservation is held in memory precisely because its
+                    # grant never committed. Signalling it now would announce a
+                    # slot the ledger does not hold, and a manager restart
+                    # could then grant the same capacity a second time.
+                    remaining.append(req)
+                    continue
                 try:
                     existing_generation: int | None = None
                     if self._durable_maintenance_queue:
@@ -3376,8 +3464,17 @@ class MoonMindProviderProfileManagerWorkflow:
                         # Hold the in-memory reservation and retry persistence on
                         # the next loop. Never signal a consumer before its lease
                         # is durable.
+                        self._record_uncommitted_lease_grant(
+                            req.requester_workflow_id,
+                            profile_id=profile.profile_id,
+                            purpose=req.purpose,
+                            metadata=grant_metadata,
+                        )
                         remaining.append(req)
                         continue
+                    self._uncommitted_lease_grants.pop(
+                        req.requester_workflow_id, None
+                    )
                 try:
                     if grant_generation is not None:
                         await self._signal_slot_assigned(
@@ -3756,6 +3853,33 @@ class MoonMindProviderProfileManagerWorkflow:
                     expired.append((profile.profile_id, lease_id))
         return expired
 
+    @staticmethod
+    def _lease_duration_limit(
+        profile: ProfileSlotState, lease_id: str, max_duration_seconds: int
+    ) -> int:
+        return (
+            min(max_duration_seconds, profile.lease_max_duration_seconds(lease_id))
+            if profile.purpose_aware_capacity
+            else max_duration_seconds
+        )
+
+    @staticmethod
+    def _lease_age_seconds(
+        profile: ProfileSlotState, lease_id: str, now: datetime
+    ) -> float | None:
+        """Seconds since this lease was granted, or ``None`` if unknowable."""
+
+        granted_str = profile.lease_granted_at.get(lease_id)
+        if granted_str is None:
+            return None
+        try:
+            granted_dt = datetime.fromisoformat(granted_str)
+        except (ValueError, TypeError):
+            return None
+        if granted_dt.tzinfo is None:
+            granted_dt = granted_dt.replace(tzinfo=timezone.utc)
+        return (now - granted_dt).total_seconds()
+
     def _lease_is_expired(
         self,
         profile: ProfileSlotState,
@@ -3763,21 +3887,118 @@ class MoonMindProviderProfileManagerWorkflow:
         now: datetime,
         max_duration_seconds: int,
     ) -> bool:
-        granted_str = profile.lease_granted_at.get(lease_id)
-        limit = (
-            min(max_duration_seconds, profile.lease_max_duration_seconds(lease_id))
-            if profile.purpose_aware_capacity
-            else max_duration_seconds
+        age = self._lease_age_seconds(profile, lease_id, now)
+        if age is None:
+            return True
+        return age > self._lease_duration_limit(
+            profile, lease_id, max_duration_seconds
         )
-        if granted_str is None:
+
+    def _escalate_unowned_cleanup(
+        self, profile: ProfileSlotState, lease_id: str
+    ) -> None:
+        """Publish a cleanup request that no owner has resolved in time.
+
+        The slot stays spent — freeing it would authorize a second credential
+        consumer while the first may still be running — but the manager stops
+        treating the request as handled. Recording it as reconciliation
+        evidence gives the stuck slot a named owner: the same operator
+        reconciliation path that already consumes ``lease_index_conflicts``.
+        """
+
+        age = self._lease_age_seconds(profile, lease_id, workflow.now())
+        if age is not None:
+            deadline = (
+                self._lease_duration_limit(
+                    profile,
+                    lease_id,
+                    getattr(profile, "max_lease_duration_seconds", None)
+                    or _MAX_LEASE_DURATION_SECONDS,
+                )
+                + _LEASE_CLEANUP_ESCALATION_SECONDS
+            )
+            if age <= deadline:
+                return
+        if not self._verifiable_lease_owner(profile, lease_id):
+            # Nothing can ever prove this holder terminal, so the durable
+            # release owner will never fire for it. That is the strongest form
+            # of the same stuck slot.
+            self._record_lease_index_conflict(
+                "cleanup_owner_unverifiable",
+                lease_id=lease_id,
+                profile_id=profile.profile_id,
+                existing="cleanup_requested",
+            )
+            return
+        self._record_lease_index_conflict(
+            "cleanup_unresolved",
+            lease_id=lease_id,
+            profile_id=profile.profile_id,
+            existing="cleanup_requested",
+        )
+
+    @staticmethod
+    def _verifiable_lease_owner(profile: ProfileSlotState, lease_id: str) -> bool:
+        """Whether terminal evidence can ever be collected for this holder."""
+
+        metadata = profile.lease_metadata.get(lease_id) or {}
+        if metadata.get("ownerIsWorkflow") is not False:
             return True
-        try:
-            granted_dt = datetime.fromisoformat(granted_str)
-        except (ValueError, TypeError):
+        return bool(str(metadata.get("workflowId") or "").strip())
+
+    def _record_uncommitted_lease_grant(
+        self,
+        lease_id: str,
+        *,
+        profile_id: str,
+        purpose: str,
+        metadata: dict[str, Any] | None,
+    ) -> None:
+        """Remember that one retained reservation has no durable row yet."""
+
+        self._uncommitted_lease_grants[lease_id] = {
+            "profile_id": profile_id,
+            "purpose": purpose,
+            "metadata": dict(metadata or {}),
+        }
+        self._get_logger().warning(
+            "Provider profile lease grant for %s on profile %s is not durable "
+            "yet; the reservation is retained for another persistence attempt",
+            lease_id,
+            profile_id,
+        )
+
+    async def _commit_retained_lease_grant(
+        self, profile_id: str, lease_id: str
+    ) -> bool:
+        """Persist a retained reservation before its slot is announced.
+
+        MoonLadderStudios/MoonMind#3883: the drain keeps an in-memory
+        reservation whose grant failed so persistence can be retried. The next
+        pass sees a held lease, so without this retry it would take the
+        re-signal branch — which deliberately writes nothing — and hand a
+        signal-based consumer a slot with no durable lease row. Returns whether
+        the ledger now holds this grant.
+        """
+
+        pending = self._uncommitted_lease_grants.get(lease_id)
+        if pending is None:
             return True
-        if granted_dt.tzinfo is None:
-            granted_dt = granted_dt.replace(tzinfo=timezone.utc)
-        return (now - granted_dt).total_seconds() > limit
+        profile = self._profiles.get(profile_id)
+        if profile is None:
+            # The profile disappeared under the reservation. The lease is not
+            # durable and cannot be made durable, so it is not announced.
+            return False
+        persisted = await self._persist_lease_grant(
+            profile,
+            lease_id,
+            purpose=str(pending.get("purpose") or "execution_direct"),
+            metadata=dict(pending.get("metadata") or {}),
+        )
+        if not persisted:
+            return False
+        self._uncommitted_lease_grants.pop(lease_id, None)
+        return True
 
     async def _request_cleanup_for_expired_leases(self) -> None:
         """Ask for resource cleanup on every expired lease, bounded per lease.
@@ -3786,13 +4007,20 @@ class MoonMindProviderProfileManagerWorkflow:
         here: :meth:`_reclaim_terminal_leases` releases it once the owner is
         verified terminal, which is the only evidence that the credential
         consumer actually stopped.
+
+        That release is the durable owner of the request, and it can only fire
+        while the holder is being verified. A cleanup request that outlives its
+        escalation deadline is therefore published as actionable reconciliation
+        evidence rather than left as an inert row flag on a slot that never
+        comes back (MoonLadderStudios/MoonMind#1089).
         """
 
         for profile_id, lease_id in self._expired_lease_candidates():
-            if lease_id in self._cleanup_requested_leases:
-                continue
             profile = self._profiles.get(profile_id)
             if profile is None:
+                continue
+            if lease_id in self._cleanup_requested_leases:
+                self._escalate_unowned_cleanup(profile, lease_id)
                 continue
             outcome = await self._request_lease_cleanup(
                 lease_id,
@@ -4407,6 +4635,31 @@ class MoonMindProviderProfileManagerWorkflow:
                 if self._durable_maintenance_queue
                 else {}
             ),
+            **(
+                {
+                    # MoonLadderStudios/MoonMind#3883: the successor inherits
+                    # the in-memory lease snapshot, so it must inherit every
+                    # obligation attached to it. A release that never resolved,
+                    # a slot whose cleanup was requested and a reservation whose
+                    # grant never committed are all authority the successor
+                    # would otherwise advertise without owing anything for it.
+                    "unresolved_releases": {
+                        lease_id: dict(details)
+                        for lease_id, details in self._unresolved_releases.items()
+                    },
+                    "cleanup_requested_leases": sorted(
+                        self._cleanup_requested_leases
+                    ),
+                    "uncommitted_lease_grants": {
+                        lease_id: dict(details)
+                        for lease_id, details in (
+                            self._uncommitted_lease_grants.items()
+                        )
+                    },
+                }
+                if self._lease_transition_contract
+                else {}
+            ),
         }
 
     async def _load_profiles_from_db(
@@ -4792,16 +5045,75 @@ class MoonMindProviderProfileManagerWorkflow:
             # the ledger what it actually holds.
             return await self._grant_committed_after_ambiguous_write(
                 lease_id=lease_id,
-                profile_id=profile.profile_id,
-                fencing_generation=fencing_generation or 1,
+                attempted={
+                    "profile_id": profile.profile_id,
+                    "owner_id": owner_id,
+                    "owner_kind": "workflow" if owner_is_workflow else "activity",
+                    "purpose": purpose,
+                    "compatibility_class": compatibility_class,
+                    "capacity_scope_ref": capacity_scope_ref,
+                    "scope_generation": scope_generation,
+                    "credential_generation": safe.get("credentialGeneration"),
+                    "execution_plan_ref": safe.get("executionPlanRef"),
+                    "evidence_identity": (
+                        str(evidence_identity) if evidence_identity else ""
+                    ),
+                    "fencing_generation": fencing_generation or 1,
+                },
             )
+
+    #: Every immutable field of one grant identity, paired with how the two
+    #: sides are compared. A row that matches on lease ID, profile, state and
+    #: fence can still describe a different owner, purpose, compatibility
+    #: class, capacity scope, credential generation, execution plan or
+    #: evidence identity — especially a migrated generation-1 row — so an
+    #: ambiguous write is only treated as committed when every one of them
+    #: agrees (MoonLadderStudios/MoonMind#3883).
+    _GRANT_IDENTITY_FIELDS: tuple[tuple[str, str], ...] = (
+        ("profile_id", "text"),
+        ("owner_id", "text"),
+        ("owner_kind", "text"),
+        ("purpose", "text"),
+        ("compatibility_class", "text"),
+        ("capacity_scope_ref", "text"),
+        ("execution_plan_ref", "text"),
+        ("evidence_identity", "text"),
+        ("scope_generation", "number"),
+        ("credential_generation", "number"),
+        ("fencing_generation", "number"),
+    )
+
+    @staticmethod
+    def _grant_identity_matches(row: dict[str, Any], attempted: dict[str, Any]) -> bool:
+        """Whether a described row is the exact grant this manager attempted."""
+
+        for field, kind in (
+            MoonMindProviderProfileManagerWorkflow._GRANT_IDENTITY_FIELDS
+        ):
+            expected = attempted.get(field)
+            if kind == "number":
+                actual = row.get(field)
+                if expected is None or actual is None:
+                    # A grant that named no generation would have written none.
+                    # A row that carries one is a different unit of authority.
+                    if expected is not None or actual is not None:
+                        return False
+                    continue
+                try:
+                    if int(actual) != int(expected):
+                        return False
+                except (TypeError, ValueError):
+                    return False
+                continue
+            if str(row.get(field) or "") != str(expected or ""):
+                return False
+        return True
 
     async def _grant_committed_after_ambiguous_write(
         self,
         *,
         lease_id: str,
-        profile_id: str,
-        fencing_generation: int,
+        attempted: dict[str, Any],
     ) -> bool:
         """Whether the ledger already holds the grant this write may have made."""
 
@@ -4832,21 +5144,23 @@ class MoonMindProviderProfileManagerWorkflow:
         if not isinstance(result, dict) or not result.get("found"):
             return False
         row = result.get("lease") or {}
-        if str(row.get("profile_id") or "") != str(profile_id):
-            return False
         if str(row.get("lease_state") or "") != DurableLeaseState.HELD.value:
             return False
-        try:
-            recorded_generation = int(row.get("fencing_generation") or 0)
-        except (TypeError, ValueError):
-            recorded_generation = 0
-        if recorded_generation != int(fencing_generation):
+        if not self._grant_identity_matches(row, attempted):
+            # The ledger holds a different unit of authority under this lease
+            # ID. Inheriting it would hand the caller a grant the ledger never
+            # made, so the write stays unresolved and capacity stays blocked.
+            self._get_logger().warning(
+                "An ambiguous lease write for %s names a different durable "
+                "identity than the attempted grant; capacity stays blocked",
+                lease_id,
+            )
             return False
         self._get_logger().info(
             "Reconciled an ambiguous lease grant for %s: the ledger already "
             "holds generation %s",
             lease_id,
-            recorded_generation,
+            row.get("fencing_generation"),
         )
         return True
 
