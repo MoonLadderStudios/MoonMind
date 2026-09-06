@@ -7,46 +7,37 @@
 // the legacy composer), and reports native-application load/liveness failures up
 // so the route can offer an explicit, actionable fallback.
 import { useEffect, useRef, useState } from 'react';
+import { isNativeChatReadySignal, nativeChatFatalReason, NATIVE_CHAT_READY_TIMEOUT_MS } from './nativeChatProtocol';
 
 export type NativeChatFrameSignal = 'ready' | 'disconnected' | 'incompatible';
 
-/** Message shape the embedded native application posts to the host frame. */
-const NATIVE_CHAT_MESSAGE_TYPE = 'moonmind:workflow-chat';
-
 interface NativeChatFrameProps {
+  chatBindingId: string;
   /** Same-origin, MoonMind-scoped embedded chat URL from the binding. */
   src: string;
   /** Accessible name for the iframe (screen-reader and focus target). */
   title: string;
   readOnly?: boolean;
-  /** Time to wait for the frame to load before treating it as incompatible. */
+  /** Time to wait for authorized conversation rendering. */
   loadTimeoutMs?: number;
   onSignal?: (signal: NativeChatFrameSignal) => void;
 }
 
-function isNativeChatSignal(value: unknown): value is NativeChatFrameSignal {
-  return value === 'ready' || value === 'disconnected' || value === 'incompatible';
-}
-
 export function NativeChatFrame({
+  chatBindingId,
   src,
   title,
   readOnly = false,
-  loadTimeoutMs = 20000,
+  loadTimeoutMs = NATIVE_CHAT_READY_TIMEOUT_MS,
   onSignal,
 }: NativeChatFrameProps) {
   const iframeRef = useRef<HTMLIFrameElement | null>(null);
   const loadedRef = useRef(false);
   const [loaded, setLoaded] = useState(false);
 
-  const markLoaded = () => {
-    loadedRef.current = true;
-    setLoaded(true);
-  };
-
-  // A load timeout is treated as a native UI compatibility/version failure so
+  // A readiness timeout is treated as a native UI compatibility failure so
   // the route surfaces the full-page escape hatch instead of hanging on the
-  // placeholder forever. A frame that has already loaded is left alone.
+  // placeholder forever. Only an authorized conversation render satisfies it.
   useEffect(() => {
     loadedRef.current = false;
     setLoaded(false);
@@ -58,7 +49,7 @@ export function NativeChatFrame({
     }, loadTimeoutMs);
     return () => window.clearTimeout(timer);
     // Reset whenever the mounted session changes.
-  }, [src, loadTimeoutMs, onSignal]);
+  }, [src, chatBindingId, loadTimeoutMs, onSignal]);
 
   // Liveness and compatibility signals from the same-origin native application.
   useEffect(() => {
@@ -67,24 +58,20 @@ export function NativeChatFrame({
         return;
       }
       const frameWindow = iframeRef.current?.contentWindow;
-      if (frameWindow && event.source !== frameWindow) {
+      if (!frameWindow || event.source !== frameWindow) {
         return;
       }
-      const data = event.data as { type?: unknown; status?: unknown } | null;
-      if (!data || data.type !== NATIVE_CHAT_MESSAGE_TYPE) {
-        return;
-      }
-      if (isNativeChatSignal(data.status)) {
-        if (data.status === 'ready') {
-          loadedRef.current = true;
-          setLoaded(true);
-        }
-        onSignal?.(data.status);
+      if (isNativeChatReadySignal(event.data, chatBindingId)) {
+        loadedRef.current = true;
+        setLoaded(true);
+        onSignal?.('ready');
+      } else if (nativeChatFatalReason(event.data, chatBindingId) !== null) {
+        onSignal?.('incompatible');
       }
     }
     window.addEventListener('message', handleMessage);
     return () => window.removeEventListener('message', handleMessage);
-  }, [onSignal]);
+  }, [chatBindingId, src, onSignal]);
 
   return (
     <div className="wf-native-chat__frame" data-loaded={loaded ? 'true' : 'false'}>
@@ -102,10 +89,6 @@ export function NativeChatFrame({
         data-readonly={readOnly ? 'true' : 'false'}
         referrerPolicy="same-origin"
         allow="clipboard-read; clipboard-write"
-        onLoad={() => {
-          markLoaded();
-          onSignal?.('ready');
-        }}
         onError={() => onSignal?.('incompatible')}
       />
     </div>
