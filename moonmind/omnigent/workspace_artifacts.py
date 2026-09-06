@@ -9,6 +9,7 @@ import tarfile
 import tempfile
 import time
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
 
 
@@ -406,9 +407,17 @@ class WorkspaceArtifactProjector:
         be inferred from a service principal, and restricted/quarantined bytes
         require an explicit policy — generic restore never releases protected
         raw content automatically.
-        """
 
-        from types import SimpleNamespace
+        Quarantine note: the TemporalArtifact ORM row
+        (api_service/db/models.py) carries no quarantined/quarantine column;
+        quarantine-style protection on the real service is expressed through
+        redaction_level == RESTRICTED plus the artifact-service read policy
+        (see moonmind/workflows/temporal/artifacts.py::_assert_artifact_raw_access).
+        The getattr checks below are intentionally defensive: they keep
+        generic restore from silently releasing protected raw content if a
+        future artifact-service field (or a test double modeling one) marks
+        a row quarantined, without inventing a column that does not exist.
+        """
 
         get_metadata = getattr(service, "get_metadata", None)
         if get_metadata is None:
@@ -437,14 +446,24 @@ class WorkspaceArtifactProjector:
                 code="WORKSPACE_AUTHORITY_MISMATCH",
             )
         status = getattr(artifact, "status", None)
-        status_text = str(status or getattr(artifact, "lifecycle_status", "") or "")
+        # Normalize str-mixin enums via their .value ("complete"), and also
+        # tolerate legacy str(status) rendering ("TemporalArtifactStatus.COMPLETE")
+        # by taking the segment after the final dot.
+        raw_status = getattr(status, "value", status)
+        if raw_status is None:
+            raw_status = getattr(artifact, "lifecycle_status", "")
+            raw_status = getattr(raw_status, "value", raw_status)
+        status_text = str(raw_status or "").strip()
+        if "." in status_text:
+            status_text = status_text.rsplit(".", 1)[-1]
         if status_text and status_text.upper().replace("-", "_") not in {
             "COMPLETE",
             "COMPLETED",
-        } and not isinstance(status, SimpleNamespace):
-            # Real TemporalArtifact rows carry an enum; SimpleNamespace test
-            # doubles without a status are treated as complete only when they
-            # also carry size/digest evidence below.
+        }:
+            # A missing/empty status is admitted only for historical doubles
+            # that still carry size/digest evidence below; any explicit
+            # non-complete status (PENDING_UPLOAD, FAILED, DELETED, ...) fails
+            # closed regardless of the artifact's Python type.
             raise WorkspaceArtifactProjectionError(
                 f"{noun} artifact is not complete",
                 code="WORKSPACE_AUTHORITY_MISMATCH",
@@ -479,9 +498,12 @@ class WorkspaceArtifactProjector:
                 f"{noun} exceeds the authorized workspace bound",
                 code="OMNIGENT_WORKSPACE_MATERIALIZATION_FAILED",
             )
-        redaction = str(
-            getattr(artifact, "redaction_level", "") or ""
-        ).upper()
+        raw_redaction = getattr(artifact, "redaction_level", "")
+        raw_redaction = getattr(raw_redaction, "value", raw_redaction)
+        redaction = str(raw_redaction or "").strip()
+        if "." in redaction:
+            redaction = redaction.rsplit(".", 1)[-1]
+        redaction = redaction.upper()
         quarantined = bool(
             getattr(artifact, "quarantined", False)
             or getattr(artifact, "quarantine", False)
