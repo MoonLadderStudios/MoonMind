@@ -45,8 +45,7 @@ class OmnigentWorkspacePublicationService:
 
     def __init__(self, workspace_root: str | Path | None = None) -> None:
         self._workspace_root = Path(
-            workspace_root
-            or os.getenv("WORKFLOW_WORKSPACE_ROOT", "/work/agent_jobs")
+            workspace_root or os.getenv("WORKFLOW_WORKSPACE_ROOT", "/work/agent_jobs")
         ).resolve()
 
     @staticmethod
@@ -209,12 +208,26 @@ class OmnigentWorkspacePublicationService:
                 returncode=code,
             )
 
+        # Remediation workspaces may be single-branch clones of the candidate.
+        # Materialize the authored comparison ref through the same repository
+        # credential before the publisher measures or mutates that candidate.
+        normalized_base = str(base_branch or "main").strip() or "main"
+        await run_command(["git", "check-ref-format", "--branch", normalized_base])
+        await run_command(
+            [
+                "git",
+                "fetch",
+                "--no-tags",
+                "origin",
+                f"+refs/heads/{normalized_base}:refs/remotes/origin/{normalized_base}",
+            ]
+        )
         published = await PublishService().publish(
             job_id=uuid5(NAMESPACE_URL, publication_identity),
             instruction="Publish completed Omnigent repository work",
             # PR creation remains owned by the durable parent workflow.
             publish_mode="branch",
-            publish_base_branch=str(base_branch or "main").strip() or "main",
+            publish_base_branch=normalized_base,
             runtime_mode="omnigent",
             repo_dir=safe_workspace,
             run_command=run_command,
