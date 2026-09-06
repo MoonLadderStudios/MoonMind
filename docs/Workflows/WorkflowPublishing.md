@@ -131,6 +131,12 @@ from that verified candidate head but continues to compare and publish against
 the original authored base branch; the candidate branch must never become its
 own publication base.
 
+An Omnigent publication resolves the authored base from the remote with its
+publication credential before measuring candidate commits. Candidate-only clones
+and restored checkpoints need not contain the base's remote-tracking ref; their
+narrow fetch configuration must not substitute a different publication base.
+An unavailable remote base fails before a push.
+
 When merge automation is explicitly enabled for a PR-publishing Workflow Execution, successful PR publication starts a parent-owned `MoonMind.MergeAutomation` child workflow. The original `MoonMind.UserWorkflow` remains in `awaiting_external` while merge automation waits for configured external readiness signals and runs `pr-resolver` with publish mode `auto`; downstream dependencies on the original Workflow Execution are satisfied only after merge automation succeeds.
 
 Operator-facing detail payloads present PR publishing with merge automation as the single publish mode value `pr_with_merge_automation`. Worker-bound execution input remains normalized as `publishMode = "pr"` plus merge automation configuration, because merge automation is an orchestration extension of PR publishing rather than a separate repository publish primitive. Details must not expose a second selection flag such as `mergeAutomationSelected`; active or terminal merge automation state belongs under the `mergeAutomation` status object.
