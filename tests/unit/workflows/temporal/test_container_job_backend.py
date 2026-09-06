@@ -349,7 +349,9 @@ async def test_bridge_start_publishes_exact_running_attachment_authority(
         if args[:3] == ("image", "inspect", "--format"):
             return 0, b'"amd64"', b""
         if args[:2] == ("info", "--format"):
-            return 0, str(8 * 1024**3).encode(), b""
+            # MoonLadderStudios/MoonMind#3881: the shared machine budget is
+            # probed from memory *and* CPU, not memory alone.
+            return 0, f"{8 * 1024**3}\t8".encode(), b""
         if args[:2] == ("ps", "--all"):
             return 0, b"", b""
         return 0, b"", b""
@@ -998,11 +1000,12 @@ async def test_start_rejects_aggregate_memory_overcommit_before_launch(
         args = tuple(args)
         commands.append(args)
         if args[0] == "info":
-            return 0, str(10 * 1024**3).encode(), b""
+            return 0, f"{10 * 1024**3}\t8".encode(), b""
         if args[0] == "ps":
             return 0, b"existing-container\n", b""
         if args[0] == "inspect":
-            return 0, str(4 * 1024**3).encode(), b""
+            # name<TAB>memory bytes<TAB>nano cpus<TAB>pids limit
+            return 0, f"/existing-container\t{4 * 1024**3}\t2000000000\t512".encode(), b""
         return 0, b"", b""
 
     backend = DockerContainerJobBackend(
@@ -1044,11 +1047,11 @@ async def test_start_serializes_and_admits_within_active_memory_budget(
         args = tuple(args)
         commands.append(args)
         if args[0] == "info":
-            return 0, str(10 * 1024**3).encode(), b""
+            return 0, f"{10 * 1024**3}\t8".encode(), b""
         if args[0] == "ps":
             return 0, b"existing-container\n", b""
         if args[0] == "inspect":
-            return 0, str(2 * 1024**3).encode(), b""
+            return 0, f"/existing-container\t{2 * 1024**3}\t1000000000\t256".encode(), b""
         return 0, b"", b""
 
     backend = DockerContainerJobBackend(

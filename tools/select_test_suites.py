@@ -115,6 +115,10 @@ INTEGRATION_CI_PREFIXES = (
     "api_service/migrations/",
     "migrations/",
     "alembic/",
+    # The shared machine-capacity ledger's decisive coverage is a real
+    # two-transaction PostgreSQL race (MoonLadderStudios/MoonMind#3881 AC2),
+    # which SQLite cannot prove. A change here must run it.
+    "moonmind/capacity/",
 )
 
 INTEGRATION_CI_EXCLUDED_PREFIXES = ("tests/integration/reliability/",)
@@ -206,6 +210,10 @@ OMNIGENT_CONTRACT_EXACT = {
 
 OMNIGENT_CONTRACT_PREFIXES = (
     "moonmind/omnigent/",
+    # Generic and validation hosts reserve their machine resources here, so a
+    # change to the shared ledger changes the Omnigent admission contract
+    # (MoonLadderStudios/MoonMind#3881).
+    "moonmind/capacity/",
     "api_service/services/omnigent",
     "api_service/api/routers/omnigent",
     "tests/integration/omnigent/",

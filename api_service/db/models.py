@@ -4668,6 +4668,83 @@ class OmnigentHostLeaseRecordV2(Base):
     )
 
 
+class MachineCapacityReservation(Base):
+    """Durable machine resource reservation shared by every managed launch.
+
+    Source issue: MoonLadderStudios/MoonMind#3881.
+
+    Counting host rows bounds how many containers exist; it says nothing about
+    whether the machine can carry their CPU, memory, process and temporary
+    storage demand. This is the one deployment-owned accounting ledger those
+    demands are reserved in, so generic hosts, validation hosts and container
+    jobs cannot each spend the same physical budget independently.
+
+    Rows are scoped by ``backend_ref``: two independent Docker backends have
+    two independent budgets and are never pooled.
+    """
+
+    __tablename__ = "machine_capacity_reservations"
+    __table_args__ = (
+        UniqueConstraint(
+            "backend_ref",
+            "owner_kind",
+            "owner_ref",
+            "generation",
+            name="uq_machine_capacity_reservation_owner",
+        ),
+        Index("ix_machine_capacity_reservations_state", "backend_ref", "state"),
+        Index("ix_machine_capacity_reservations_expiry", "expires_at"),
+    )
+
+    reservation_id: Mapped[str] = mapped_column(String(255), primary_key=True)
+    #: Exact Docker backend identity. Reservations never cross backends.
+    backend_ref: Mapped[str] = mapped_column(String(128), nullable=False)
+    workload_class: Mapped[str] = mapped_column(String(32), nullable=False)
+    owner_kind: Mapped[str] = mapped_column(String(32), nullable=False)
+    owner_ref: Mapped[str] = mapped_column(String(255), nullable=False)
+    #: Exact fence: a late readiness or cleanup for an older generation must
+    #: never write through the reservation a newer attempt owns.
+    generation: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=1, server_default=text("1")
+    )
+    state: Mapped[str] = mapped_column(String(32), nullable=False)
+    plan_ref: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    host_class_ref: Mapped[Optional[str]] = mapped_column(String(128), nullable=True)
+    launch_policy_ref: Mapped[Optional[str]] = mapped_column(
+        String(128), nullable=True
+    )
+    #: Integer units only. Fractional CPU is expressed in millis.
+    cpu_millis: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=0, server_default=text("0")
+    )
+    memory_mib: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=0, server_default=text("0")
+    )
+    processes: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=0, server_default=text("0")
+    )
+    temporary_storage_mib: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=0, server_default=text("0")
+    )
+    #: Set once the reservation's consumer exists on the backend, so an owned
+    #: live container is always discoverable from its accounting record.
+    container_ref: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+    #: Bound on a provisional prelaunch reservation or a waiter marker. A live
+    #: consumer is never reclaimed by this clock.
+    expires_at: Mapped[Optional[datetime]] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=func.now(),
+        onupdate=func.now(),
+    )
+
+
 class OmnigentCredentialRuntimeRecord(Base):
     """Durable credential materialization evidence (secret-free)."""
 

@@ -630,29 +630,37 @@ A generation mismatch after binding produces a typed fenced outcome and reconcil
 
 ### 11.5 Capacity
 
-#### Four independently governed layers
+#### Independently governed layers
 
-Operators reason about four distinct limits. They are named separately because they are owned by different parties, changed for different reasons, and surfaced separately when a run waits:
+Operators reason about these limits separately because they are owned by different parties, changed for different reasons, and surfaced separately when a run waits:
 
 | Layer | Owner | What it means | Where it is set |
 | --- | --- | --- | --- |
 | **Configured profile capacity** | Operator | The ceiling this Provider Profile may ever admit. Never lowered by runtime behavior. | `max_parallel_runs` on the Provider Profile |
 | **Effective provider capacity** | Runtime | The limit currently applied, at or below the ceiling. Lowered by adaptive rate-limit backpressure or operator policy, and restored toward the ceiling as the provider recovers. | Derived; reported as `effective_capacity` |
-| **Host capacity** | Deployment | How many on-demand generic hosts the machine may carry at once, plus a separately bounded cold-launch rate. | `MOONMIND_OMNIGENT_GENERIC_HOST_CAPACITY`, `MOONMIND_OMNIGENT_GENERIC_HOST_COLD_LAUNCH_BURST`, `MOONMIND_OMNIGENT_GENERIC_HOST_COLD_LAUNCH_WINDOW_SECONDS` |
+| **Host capacity** | Deployment | How many on-demand generic hosts the machine may carry at once. | `MOONMIND_OMNIGENT_GENERIC_HOST_CAPACITY` |
+| **Cold-launch rate** | Deployment | How many host launches may *start* per window. | `MOONMIND_OMNIGENT_GENERIC_HOST_COLD_LAUNCH_BURST`, `MOONMIND_OMNIGENT_GENERIC_HOST_COLD_LAUNCH_WINDOW_SECONDS` |
+| **Machine resource budget** | Deployment | How much CPU, memory, process and temporary-storage demand may be reserved on one Docker backend at once, shared by generic hosts, validation hosts and container jobs. | `MOONMIND_MACHINE_UTILIZATION_PERCENT`, `MOONMIND_MACHINE_CPU_MILLIS`, `MOONMIND_MACHINE_MEMORY_MIB`, `MOONMIND_MACHINE_PROCESSES`, `MOONMIND_MACHINE_TEMPORARY_STORAGE_MIB` |
+| **Concurrent initialization permits** | Deployment | How many managed launches may be *initializing* at once. | `MOONMIND_MACHINE_MAX_CONCURRENT_INITIALIZING`, `MOONMIND_MACHINE_PRELAUNCH_TTL_SECONDS` |
 | **Worker capacity** | Deployment | How many Activities one worker fleet executes concurrently. | `TEMPORAL_AGENT_RUNTIME_WORKER_CONCURRENCY` |
 
-Effective concurrency is the minimum of all four:
+Effective concurrency is the minimum of all of them:
 
 ```text
 min(
   configured profile capacity,
   effective provider capacity,
   available generic-host capacity,
+  remaining cold-launch rate,
+  available machine resource budget,
+  available concurrent-initialization permits,
   available Temporal execution capacity
 )
 ```
 
-A configured ceiling of `N` is not a promise of `N` concurrent runs. It is a promise that nothing above `N` is admitted. Any of the other three layers may hold the run lower, and readiness must name which one did.
+A configured ceiling of `N` is not a promise of `N` concurrent runs. It is a promise that nothing above `N` is admitted. Any of the other layers may hold the run lower, and readiness must name which one did — the admission decision reports both the `limitingLayer` and, for the machine budget, the exact `limitingResource`.
+
+Host capacity, the cold-launch rate and the initialization permits are deliberately distinct. Host capacity bounds how many hosts exist; the cold-launch rate bounds how many launches *start* per window; the initialization permit bounds how many are *initializing* at once. A launch slow enough to span several rate windows is bounded only by the permit, and a permit is held for as long as the launch is actually initializing rather than for a fixed time.
 
 #### Configured versus effective
 
@@ -669,10 +677,13 @@ Provider capacity and host capacity are admitted in one documented order, by the
 1. **Request provider capacity.** The workflow queues with the ProviderProfileManager for the exact Provider Profile the committed plan selected, and waits as durable workflow state. The workflow — not the Activity — is the lease owner.
 
    The committed plan reference the whole hand-off is fenced on is read from the request's execution-plan binding — the same authority that selects this lane and that the Activity loads its plan from. An optional workflow-authored `executionPlanRef` parameter may also be present; when both are, they must name the same plan, and a disagreement is a plan-substitution conflict that fails closed rather than picking one.
-2. **Admit host capacity.** With provider capacity held, the workflow polls a short control Activity that evaluates the aggregate host ceiling and the cold-launch rate against the durable host-lease ledger, and it waits on a workflow timer between polls. The poll names the run's stable host-lease identity (execution plan, request idempotency key, Host Class), so whether this run already holds a reservation is read from the ledger rather than from a caller-supplied flag.
-3. **Release on failure.** If host capacity cannot be admitted, provider capacity is released immediately. Provisional ownership is bounded: a run never occupies a provider lease indefinitely while waiting for a machine.
-4. **Execute.** The Activity receives a compact, secret-free admitted-capacity ticket and *consumes* it by inspection. It never calls an acquiring client, so it can neither grant new capacity nor wait for a replacement inside the execution slot.
-5. **Release last.** Provider capacity is released by its owner after the Activity's host, session, credential, and workspace cleanup has completed.
+2. **Admit host capacity.** With provider capacity held, the workflow polls a short control Activity that evaluates the aggregate host ceiling and the cold-launch rate against the durable host-lease ledger, and it waits on a workflow timer between polls. The poll names the run's stable host-lease identity (execution plan, request idempotency key, Host Class), so whether this run already holds a reservation is read from the ledger rather than from a caller-supplied flag. A payload that cannot name its binding has no reservation to reuse: its own `alreadyAllocated` flag is not evidence and does not bypass accounting.
+
+   **This poll reserves nothing.** It is advisory: it reports the limiting layer so the run waits on the right one, and it refuses to report free capacity while the container backend's own state is unprovable. The durable machine reservation is taken in the allocating transaction, so a race the poll admitted may still be refused there and returned to durable waiting.
+3. **Reserve the machine, then launch.** The allocating transaction counts hosts and reserves the launch's CPU, memory, process and temporary-storage demand under one PostgreSQL advisory-lock order — the generic-host key first, then the shared machine key — so two worker replicas cannot both observe the same free capacity. The reservation is **prelaunch** and short lived: it is a bounded hand-off, never an indefinite hold on the machine. The exact reservation and generation are re-verified immediately before anything mutates Docker, and confirmed against the container once it exists.
+4. **Release on failure.** If host or machine capacity cannot be admitted, provider capacity is released immediately. Provisional ownership is bounded: a run never occupies a provider lease indefinitely while waiting for a machine. A request larger than the configured ceiling is **rejected**, not queued: waiting for it would wait forever, and clamping it would silently change a billing-relevant resource value.
+5. **Execute.** The Activity receives a compact, secret-free admitted-capacity ticket and *consumes* it by inspection. It never calls an acquiring client, so it can neither grant new capacity nor wait for a replacement inside the execution slot.
+6. **Release last.** Provider capacity is released by its owner after the Activity's host, session, credential, and workspace cleanup has completed.
 
 Three waits are bounded and reported separately, because they mean different things to an operator: the provider queue wait and the host wait are durable workflow state outside any Activity, and the hand-off from "admitted" to "an execution worker started this" gets its own allowance so worker-queue time is never charged to the run's execution budget. The hand-off is bounded as queue time, by ScheduleToStart: a start-to-close deadline never begins while an Activity waits for a free worker, so a total deadline alone would let a starved execution lane keep an admitted run queued for its whole execution budget while it holds the provider lease it was admitted for. A fleet with no worker for the run therefore surfaces as a bounded hand-off timeout instead of a lease held for hours.
 
@@ -687,6 +698,34 @@ A failure of this kind is recoverable, not terminal: the run returns to durable 
 Re-admission re-reads the admission authority before it builds the next ticket. The frozen decision names the generation and scope this attempt was already refused for, so re-admitting against it could only re-observe the same fence until the attempt budget was gone. Refreshing is a recovery, never a substitution: a plan whose execution realizer or capacity-acquisition owner changed while the run waited fails closed instead of executing somewhere else.
 
 The admission epoch is part of the attempt's identity. Retries of one admitted attempt share a runtime binding and its host reservation, which is what makes them idempotent; a deliberate re-admission is a new attempt, because the previous attempt's host, credentials and provider lease were already released and its aggregate is terminally cleaned. Reusing that identity would leave the recovery no state to advance and could only end as a binding conflict.
+
+#### Machine resource accounting
+
+One machine carries every managed launch, so one deployment-owned ledger accounts for all of them. Container jobs, generic Omnigent hosts and validation hosts reserve their CPU, memory, process and temporary-storage demand in the same `machine_capacity_reservations` table under the same PostgreSQL advisory lock. Without that, each class would enforce its own ceiling and two full classes would still oversubscribe the machine.
+
+**Scope.** Reservations are scoped by exact Docker backend identity (`MOONMIND_CONTAINER_BACKEND_DEFAULT_REF`). Two independent backends have two independent budgets and are never pooled.
+
+**Where demand comes from.** From the trusted Launch Policy limits for a host and from the validated job spec for a container job — never from a workflow argument. All units are integers; fractional CPU is expressed in millis.
+
+**Ceilings and headroom.** By default managed launches may reserve `MOONMIND_MACHINE_UTILIZATION_PERCENT` (70%) of what the daemon reports. The remainder is the documented control-plane and cleanup headroom: a saturated workload must still leave the worker, the janitors and Docker teardown room to run, so the utilization percent is refused above 99. Docker reports memory and CPU count; the machine process budget is derived from CPU count at a documented ratio, and the temporary-storage budget defaults to the memory total because MoonMind's temporary storage is RAM-backed tmpfs. Any of them can be pinned explicitly, and an explicit value above what the daemon reports is refused rather than accepted.
+
+**Reservation states and what each accounts for.**
+
+| State | CPU / memory / processes | Temporary storage | Initialization permit |
+| --- | --- | --- | --- |
+| `waiting` | – | – | – |
+| `prelaunch` | accounted | accounted | held |
+| `active` | accounted | accounted | – |
+| `adopted` | accounted | accounted | – |
+| `storage_retained` | – | accounted | – |
+| `released` | – | – | – |
+| `blocked` | – | – | blocks admission |
+
+**Release is driven by evidence, never by a clock or a caller's assertion.** The existing cleanup services perform teardown; capacity accounting only observes what they proved. A removed consumer whose storage is also gone releases fully; a removed or proven-stopped consumer whose volumes are retained releases compute and keeps storage accounted. An unreadable daemon or a still-running consumer releases nothing. Profile-owned credential homes and the sole recoverable workspace are owned by cleanup and are never deleted by accounting.
+
+**Reconciliation** runs inside the existing generic-host janitor rather than in a second coordinator. Expired reservations that provably never launched are reclaimed; a live consumer keeps its accounting even when the workflow that asked for it died; an owned live container with no accounting record is **adopted** as a reconciliation fault rather than read as free capacity; and an unreadable daemon writes a `blocked` marker that stops new admission until the backend can be established again. Only MoonMind's own owner labels are queried, so a foreign container is never inspected, adopted or removed.
+
+**Observability.** The admission decision and the `omnigent_machine_capacity_*` metric family report safe utilization per resource, the configured ceilings, the limiting resource, the oldest waiter's age and reconciliation health. Labels are drawn from fixed, low-cardinality vocabularies; plan, lease, host, job and credential identities never appear in a metric label.
 
 #### Multi-profile plans
 

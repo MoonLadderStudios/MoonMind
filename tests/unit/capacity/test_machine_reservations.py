@@ -1,0 +1,826 @@
+"""Machine resource reservation contract.
+
+Source: MoonLadderStudios/MoonMind#3881 (remaining implementation 1-7;
+AC1, AC3-AC8).
+
+Host counting bounds how many containers exist. These tests cover what it
+cannot express: the machine's own CPU/memory/process/temporary-storage budget,
+the concurrent-initialization permit, the durable prelaunch reservation and its
+bounded expiry, evidence-driven release by resource class, and reconciliation
+against owned container state.
+"""
+
+from __future__ import annotations
+
+from datetime import UTC, datetime, timedelta
+
+import pytest
+import pytest_asyncio
+from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
+
+from api_service.db.models import MachineCapacityReservation
+from moonmind.capacity import (
+    COVERED_WORKLOAD_CLASSES,
+    LIMITING_RESOURCE_CPU,
+    LIMITING_RESOURCE_INITIALIZING,
+    LIMITING_RESOURCE_MEMORY,
+    LIMITING_RESOURCE_RECONCILIATION,
+    LIMITING_RESOURCE_STORAGE,
+    STATE_ACTIVE,
+    STATE_ADOPTED,
+    STATE_PRELAUNCH,
+    STATE_RELEASED,
+    STATE_STORAGE_RETAINED,
+    STATE_WAITING,
+    WORKLOAD_CLASS_CONTAINER_JOB,
+    WORKLOAD_CLASS_GENERIC_HOST,
+    WORKLOAD_CLASS_RECONCILIATION,
+    WORKLOAD_CLASS_UNATTRIBUTED,
+    WORKLOAD_CLASS_VALIDATION_HOST,
+    MachineCapacityLedger,
+    MachineCapacityUnavailable,
+    MachineResourceBudget,
+    MachineTotals,
+    MachineUsage,
+    ReleaseEvidence,
+    ReservationRequest,
+    ResourceDemand,
+    evaluate_resource_admission,
+    machine_reservation_id,
+    probe_machine_totals,
+    release_state_for,
+)
+
+BACKEND = "system"
+OTHER_BACKEND = "second-daemon"
+
+TOTALS = MachineTotals(
+    cpu_millis=8000,
+    memory_mib=16384,
+    processes=8192,
+    temporary_storage_mib=16384,
+)
+
+
+def _budget(**env: str) -> MachineResourceBudget:
+    return MachineResourceBudget.from_totals(TOTALS, env=env)
+
+
+def _demand(cpu: int = 1000, memory: int = 2048, procs: int = 512, storage: int = 512):
+    return ResourceDemand(
+        cpu_millis=cpu,
+        memory_mib=memory,
+        processes=procs,
+        temporary_storage_mib=storage,
+    )
+
+
+def _request(
+    owner: str,
+    *,
+    backend: str = BACKEND,
+    workload_class: str = WORKLOAD_CLASS_GENERIC_HOST,
+    demand: ResourceDemand | None = None,
+    generation: int = 1,
+) -> ReservationRequest:
+    return ReservationRequest(
+        backend_ref=backend,
+        workload_class=workload_class,
+        owner_kind="omnigent_host_lease",
+        owner_ref=owner,
+        generation=generation,
+        demand=demand or _demand(),
+        plan_ref="omnigent-execution-plan:sha256:" + "a" * 64,
+        host_class_ref="omnigent-opencode@1",
+        launch_policy_ref="omnigent-launch@1",
+    )
+
+
+@pytest_asyncio.fixture()
+async def ledger(tmp_path):
+    engine = create_async_engine(f"sqlite+aiosqlite:///{tmp_path}/capacity.db")
+    async with engine.begin() as connection:
+        await connection.run_sync(
+            MachineCapacityReservation.__table__.create, checkfirst=True
+        )
+    maker = async_sessionmaker(engine, expire_on_commit=False)
+    try:
+        yield MachineCapacityLedger(maker)
+    finally:
+        await engine.dispose()
+
+
+# --------------------------------------------------------------- budget policy
+
+
+def test_headroom_is_reserved_for_the_control_plane_and_cleanup() -> None:
+    """AC8: a saturated workload still leaves documented headroom."""
+
+    budget = _budget()
+
+    assert budget.memory_mib == 16384 * 70 // 100
+    headroom = budget.headroom()
+    assert headroom.memory_mib == 16384 - budget.memory_mib
+    assert headroom.cpu_millis > 0
+    assert headroom.processes > 0
+    assert headroom.temporary_storage_mib > 0
+
+
+def test_managed_launches_may_never_reserve_the_whole_machine() -> None:
+    with pytest.raises(ValueError, match="whole machine"):
+        _budget(MOONMIND_MACHINE_UTILIZATION_PERCENT="100")
+
+
+def test_an_explicit_ceiling_above_the_daemon_capacity_is_refused() -> None:
+    """A configured ceiling the machine cannot honor is a configuration error."""
+
+    with pytest.raises(ValueError, match="exceeds the machine capacity"):
+        _budget(MOONMIND_MACHINE_MEMORY_MIB="99999")
+
+
+def test_an_explicit_ceiling_within_the_daemon_capacity_is_honored() -> None:
+    budget = _budget(MOONMIND_MACHINE_MEMORY_MIB="4096")
+
+    assert budget.memory_mib == 4096
+    # Unpinned resources still derive from the utilization share.
+    assert budget.cpu_millis == 8000 * 70 // 100
+
+
+@pytest.mark.asyncio
+async def test_an_unreadable_daemon_is_not_an_empty_machine() -> None:
+    """AC7: daemon uncertainty must not manufacture capacity."""
+
+    async def failing(_args):
+        return 1, b"", b"cannot connect to the docker daemon"
+
+    with pytest.raises(MachineCapacityUnavailable):
+        await probe_machine_totals(failing)
+
+
+@pytest.mark.asyncio
+async def test_machine_totals_are_probed_from_the_selected_daemon() -> None:
+    async def runner(args):
+        assert tuple(args)[0] == "info"
+        return 0, b"17179869184\t8", b""
+
+    totals = await probe_machine_totals(runner)
+
+    assert totals.cpu_millis == 8000
+    assert totals.memory_mib == 16384
+    # Temporary storage is RAM-backed tmpfs, so its total is the memory total.
+    assert totals.temporary_storage_mib == 16384
+
+
+# ------------------------------------------------------------ pure evaluation
+
+
+def test_each_resource_can_be_the_limiting_one() -> None:
+    """AC1: CPU, memory, processes and storage all participate in admission."""
+
+    budget = _budget()
+    for reserved, limiting in (
+        (MachineUsage(reserved_cpu_millis=budget.cpu_millis), LIMITING_RESOURCE_CPU),
+        (
+            MachineUsage(reserved_memory_mib=budget.memory_mib),
+            LIMITING_RESOURCE_MEMORY,
+        ),
+        (
+            MachineUsage(reserved_temporary_storage_mib=budget.temporary_storage_mib),
+            LIMITING_RESOURCE_STORAGE,
+        ),
+    ):
+        decision = evaluate_resource_admission(
+            demand=_demand(), budget=budget, usage=reserved
+        )
+        assert decision.admitted is False
+        assert decision.limiting_resource == limiting
+        assert decision.unsatisfiable is False
+        assert decision.retry_after_seconds > 0
+
+
+def test_a_request_larger_than_the_ceiling_is_rejected_not_queued() -> None:
+    """Queueing it would wait forever; clamping would change a billed value."""
+
+    budget = _budget()
+    decision = evaluate_resource_admission(
+        demand=_demand(memory=budget.memory_mib + 1),
+        budget=budget,
+        usage=MachineUsage(),
+    )
+
+    assert decision.admitted is False
+    assert decision.unsatisfiable is True
+    assert decision.retry_after_seconds == 0
+    assert "exceed the configured ceiling" in decision.reason
+
+
+def test_the_initialization_permit_is_separate_from_the_resource_ceiling() -> None:
+    """AC5: a machine with room but no permit reports the permit."""
+
+    budget = _budget(MOONMIND_MACHINE_MAX_CONCURRENT_INITIALIZING="2")
+    decision = evaluate_resource_admission(
+        demand=_demand(), budget=budget, usage=MachineUsage(initializing=2)
+    )
+
+    assert decision.admitted is False
+    assert decision.limiting_resource == LIMITING_RESOURCE_INITIALIZING
+
+
+def test_unprovable_reconciliation_blocks_before_any_count_is_trusted() -> None:
+    decision = evaluate_resource_admission(
+        demand=_demand(),
+        budget=_budget(),
+        usage=MachineUsage(reconciliation_blocked=True),
+    )
+
+    assert decision.admitted is False
+    assert decision.limiting_resource == LIMITING_RESOURCE_RECONCILIATION
+
+
+def test_the_decision_payload_carries_no_identity() -> None:
+    payload = evaluate_resource_admission(
+        demand=_demand(), budget=_budget(), usage=MachineUsage()
+    ).as_payload()
+
+    flattened = repr(payload)
+    assert "omnigent-execution-plan" not in flattened
+    assert "sha256" not in flattened
+    assert payload["utilizationPercent"] == {
+        "cpu": 0,
+        "memory": 0,
+        "processes": 0,
+        "temporaryStorage": 0,
+    }
+    assert payload["oldestWaiterAgeSeconds"] == 0
+
+
+def test_demand_is_resolved_from_the_trusted_launch_policy_limits() -> None:
+    demand = ResourceDemand.from_launch_policy_limits(
+        {
+            "cpuMillis": 2000,
+            "memoryMiB": 4096,
+            "processes": 256,
+            "timeoutSeconds": 3600,
+            "temporaryStorageMiB": 1024,
+        }
+    )
+
+    assert demand == ResourceDemand(2000, 4096, 256, 1024)
+
+
+def test_resource_units_are_integers() -> None:
+    with pytest.raises(TypeError):
+        ResourceDemand(cpu_millis=1.5)  # type: ignore[arg-type]
+    with pytest.raises(ValueError):
+        ResourceDemand(memory_mib=-1)
+
+
+def test_only_covered_workload_classes_may_reserve() -> None:
+    with pytest.raises(ValueError, match="covered managed launch class"):
+        ReservationRequest(
+            backend_ref=BACKEND,
+            workload_class="something_else",
+            owner_kind="k",
+            owner_ref="o",
+            demand=_demand(),
+        )
+
+
+# ------------------------------------------------------------------- reserving
+
+
+@pytest.mark.asyncio
+async def test_workload_classes_share_one_machine_budget(ledger) -> None:
+    """AC3: jobs and hosts cannot each spend the same physical budget."""
+
+    budget = _budget(MOONMIND_MACHINE_MEMORY_MIB="4096")
+    demand = _demand(memory=3000, cpu=100, procs=16, storage=16)
+
+    host = await ledger.reserve(
+        request=_request("lease-a", demand=demand), budget=budget
+    )
+    assert host.admitted is True
+
+    job = await ledger.reserve(
+        request=ReservationRequest(
+            backend_ref=BACKEND,
+            workload_class=WORKLOAD_CLASS_CONTAINER_JOB,
+            owner_kind="container_job",
+            owner_ref="job-a",
+            demand=demand,
+        ),
+        budget=budget,
+    )
+
+    assert job.admitted is False
+    assert job.decision.limiting_resource == LIMITING_RESOURCE_MEMORY
+
+
+@pytest.mark.asyncio
+async def test_independent_backends_are_not_pooled(ledger) -> None:
+    """AC3: a second daemon has its own budget."""
+
+    budget = _budget(MOONMIND_MACHINE_MEMORY_MIB="4096")
+    demand = _demand(memory=3000, cpu=100, procs=16, storage=16)
+
+    await ledger.reserve(request=_request("lease-a", demand=demand), budget=budget)
+    other = await ledger.reserve(
+        request=_request("lease-b", backend=OTHER_BACKEND, demand=demand),
+        budget=budget,
+    )
+
+    assert other.admitted is True
+
+
+@pytest.mark.asyncio
+async def test_a_retry_reconciles_with_its_existing_allocation(ledger) -> None:
+    """AC4: duplicate retry reuses its reservation instead of taking a second."""
+
+    budget = _budget(MOONMIND_MACHINE_MEMORY_MIB="4096")
+    demand = _demand(memory=3000, cpu=100, procs=16, storage=16)
+    request = _request("lease-a", demand=demand)
+
+    first = await ledger.reserve(request=request, budget=budget)
+    second = await ledger.reserve(request=request, budget=budget)
+
+    assert second.admitted is True
+    assert second.reused is True
+    assert second.reservation_id == first.reservation_id
+    usage = await ledger.usage(backend_ref=BACKEND)
+    assert usage.reserved_memory_mib == 3000
+
+
+@pytest.mark.asyncio
+async def test_a_refused_request_records_a_waiter_for_oldest_waiter_age(
+    ledger,
+) -> None:
+    budget = _budget(MOONMIND_MACHINE_MEMORY_MIB="4096")
+    demand = _demand(memory=3000, cpu=100, procs=16, storage=16)
+    started = datetime.now(UTC)
+
+    await ledger.reserve(
+        request=_request("lease-a", demand=demand), budget=budget, now=started
+    )
+    refused = await ledger.reserve(
+        request=_request("lease-b", demand=demand), budget=budget, now=started
+    )
+
+    assert refused.admitted is False
+    assert refused.state == STATE_WAITING
+    usage = await ledger.usage(backend_ref=BACKEND, now=started + timedelta(seconds=42))
+    assert usage.waiting == 1
+    assert usage.oldest_waiter_age_seconds == 42
+    # A waiter reserves nothing.
+    assert usage.reserved_memory_mib == 3000
+
+
+@pytest.mark.asyncio
+async def test_an_unsatisfiable_request_never_becomes_a_waiter(ledger) -> None:
+    budget = _budget()
+    outcome = await ledger.reserve(
+        request=_request("lease-a", demand=_demand(memory=budget.memory_mib + 1)),
+        budget=budget,
+    )
+
+    assert outcome.admitted is False
+    assert outcome.unsatisfiable is True
+    usage = await ledger.usage(backend_ref=BACKEND)
+    assert usage.waiting == 0
+
+
+@pytest.mark.asyncio
+async def test_a_slow_launch_holds_exactly_one_initialization_permit(
+    ledger,
+) -> None:
+    """AC5: the permit follows actual launch state, not the clock."""
+
+    budget = _budget(MOONMIND_MACHINE_MAX_CONCURRENT_INITIALIZING="1")
+    demand = _demand(cpu=10, memory=16, procs=8, storage=8)
+    started = datetime.now(UTC)
+
+    await ledger.reserve(
+        request=_request("lease-slow", demand=demand), budget=budget, now=started
+    )
+    # Several rate windows later the slow launch is still initializing, so the
+    # second launch is still refused for the permit rather than for resources.
+    later = started + timedelta(seconds=120)
+    blocked = await ledger.reserve(
+        request=_request("lease-next", demand=demand), budget=budget, now=later
+    )
+
+    assert blocked.admitted is False
+    assert blocked.decision.limiting_resource == LIMITING_RESOURCE_INITIALIZING
+
+
+@pytest.mark.asyncio
+async def test_confirming_a_launch_releases_its_initialization_permit(
+    ledger,
+) -> None:
+    budget = _budget(MOONMIND_MACHINE_MAX_CONCURRENT_INITIALIZING="1")
+    demand = _demand(cpu=10, memory=16, procs=8, storage=8)
+    first = await ledger.reserve(
+        request=_request("lease-a", demand=demand), budget=budget
+    )
+    await ledger.confirm(
+        reservation_id=first.reservation_id, generation=1, container_ref="mm-host-a"
+    )
+
+    second = await ledger.reserve(
+        request=_request("lease-b", demand=demand), budget=budget
+    )
+
+    assert second.admitted is True
+    usage = await ledger.usage(backend_ref=BACKEND)
+    # The confirmed launch still spends the machine; only its permit is back.
+    assert usage.initializing == 1
+    assert usage.reserved_memory_mib == 32
+
+
+# ----------------------------------------------------------- fence and expiry
+
+
+@pytest.mark.asyncio
+async def test_the_fence_is_reverifiable_before_a_docker_mutation(ledger) -> None:
+    budget = _budget()
+    outcome = await ledger.reserve(request=_request("lease-a"), budget=budget)
+
+    assert await ledger.verify(reservation_id=outcome.reservation_id, generation=1)
+    # A different generation is a different attempt and holds nothing.
+    assert not await ledger.verify(reservation_id=outcome.reservation_id, generation=2)
+    assert not await ledger.verify(reservation_id="not-a-reservation", generation=1)
+
+
+@pytest.mark.asyncio
+async def test_an_expired_unlaunched_reservation_stops_holding_the_fence(
+    ledger,
+) -> None:
+    """AC4: an expired prelaunch reservation must not gate a Docker mutation."""
+
+    budget = _budget(MOONMIND_MACHINE_PRELAUNCH_TTL_SECONDS="60")
+    started = datetime.now(UTC)
+    outcome = await ledger.reserve(
+        request=_request("lease-a"), budget=budget, now=started
+    )
+
+    assert not await ledger.verify(
+        reservation_id=outcome.reservation_id,
+        generation=1,
+        now=started + timedelta(seconds=61),
+    )
+
+
+@pytest.mark.asyncio
+async def test_an_expired_unlaunched_reservation_is_reclaimed_once(ledger) -> None:
+    """AC6: proven-unused resources are eventually released, exactly once."""
+
+    budget = _budget(
+        MOONMIND_MACHINE_MEMORY_MIB="4096", MOONMIND_MACHINE_PRELAUNCH_TTL_SECONDS="60"
+    )
+    demand = _demand(memory=3000, cpu=100, procs=16, storage=16)
+    started = datetime.now(UTC)
+    await ledger.reserve(
+        request=_request("lease-lost", demand=demand), budget=budget, now=started
+    )
+
+    # The worker holding it died. A later admission reclaims it and succeeds.
+    later = started + timedelta(seconds=120)
+    recovered = await ledger.reserve(
+        request=_request("lease-next", demand=demand), budget=budget, now=later
+    )
+
+    assert recovered.admitted is True
+    usage = await ledger.usage(backend_ref=BACKEND, now=later)
+    assert usage.reserved_memory_mib == 3000
+
+
+@pytest.mark.asyncio
+async def test_a_live_consumer_is_never_reclaimed_by_the_clock(ledger) -> None:
+    """AC6: a live consumer keeps its accounting even if its workflow died."""
+
+    budget = _budget(
+        MOONMIND_MACHINE_MEMORY_MIB="4096", MOONMIND_MACHINE_PRELAUNCH_TTL_SECONDS="60"
+    )
+    demand = _demand(memory=3000, cpu=100, procs=16, storage=16)
+    started = datetime.now(UTC)
+    outcome = await ledger.reserve(
+        request=_request("lease-live", demand=demand), budget=budget, now=started
+    )
+    await ledger.confirm(
+        reservation_id=outcome.reservation_id,
+        generation=1,
+        container_ref="mm-host-live",
+        now=started,
+    )
+
+    later = started + timedelta(hours=4)
+    blocked = await ledger.reserve(
+        request=_request("lease-next", demand=demand), budget=budget, now=later
+    )
+
+    assert blocked.admitted is False
+    assert await ledger.verify(
+        reservation_id=outcome.reservation_id, generation=1, now=later
+    )
+
+
+@pytest.mark.asyncio
+async def test_a_stale_generation_cannot_confirm_a_newer_attempt(ledger) -> None:
+    from moonmind.capacity import MachineCapacityConflict
+
+    budget = _budget()
+    outcome = await ledger.reserve(request=_request("lease-a"), budget=budget)
+
+    with pytest.raises(MachineCapacityConflict):
+        await ledger.confirm(
+            reservation_id=outcome.reservation_id,
+            generation=99,
+            container_ref="mm-host-a",
+        )
+
+
+# ---------------------------------------------------------------- release
+
+
+def test_release_conditions_are_defined_by_resource_class() -> None:
+    """Implementation 7: compute and storage release on different evidence."""
+
+    assert (
+        release_state_for(ReleaseEvidence(daemon_observed=True, consumer_removed=True))
+        == STATE_RELEASED
+    )
+    assert (
+        release_state_for(
+            ReleaseEvidence(
+                daemon_observed=True, consumer_removed=True, storage_retained=True
+            )
+        )
+        == STATE_STORAGE_RETAINED
+    )
+    assert (
+        release_state_for(ReleaseEvidence(daemon_observed=True, consumer_stopped=True))
+        == STATE_STORAGE_RETAINED
+    )
+    # Nothing proven: an unreadable daemon and a running consumer both retain.
+    assert release_state_for(ReleaseEvidence(daemon_observed=False)) is None
+    assert release_state_for(ReleaseEvidence(daemon_observed=True)) is None
+
+
+@pytest.mark.asyncio
+async def test_storage_remains_accounted_while_a_retained_volume_consumes_it(
+    ledger,
+) -> None:
+    budget = _budget()
+    outcome = await ledger.reserve(request=_request("lease-a"), budget=budget)
+    await ledger.confirm(
+        reservation_id=outcome.reservation_id, generation=1, container_ref="mm-a"
+    )
+
+    state = await ledger.release(
+        reservation_id=outcome.reservation_id,
+        generation=1,
+        evidence=ReleaseEvidence(
+            daemon_observed=True, consumer_removed=True, storage_retained=True
+        ),
+    )
+
+    assert state == STATE_STORAGE_RETAINED
+    usage = await ledger.usage(backend_ref=BACKEND)
+    assert usage.reserved_memory_mib == 0
+    assert usage.reserved_cpu_millis == 0
+    assert usage.reserved_temporary_storage_mib == 512
+
+
+@pytest.mark.asyncio
+async def test_a_cleanup_that_proved_nothing_releases_nothing(ledger) -> None:
+    """AC7: cleanup failure must not create phantom free capacity."""
+
+    budget = _budget()
+    outcome = await ledger.reserve(request=_request("lease-a"), budget=budget)
+    await ledger.confirm(
+        reservation_id=outcome.reservation_id, generation=1, container_ref="mm-a"
+    )
+
+    state = await ledger.release(
+        reservation_id=outcome.reservation_id,
+        generation=1,
+        evidence=ReleaseEvidence(daemon_observed=False, consumer_removed=True),
+    )
+
+    assert state is None
+    usage = await ledger.usage(backend_ref=BACKEND)
+    assert usage.reserved_memory_mib == 2048
+
+
+@pytest.mark.asyncio
+async def test_releasing_twice_releases_once(ledger) -> None:
+    """AC6: proven-unused resources are released once, not twice."""
+
+    budget = _budget()
+    outcome = await ledger.reserve(request=_request("lease-a"), budget=budget)
+    evidence = ReleaseEvidence(daemon_observed=True, consumer_removed=True)
+
+    assert (
+        await ledger.release(
+            reservation_id=outcome.reservation_id, generation=1, evidence=evidence
+        )
+        == STATE_RELEASED
+    )
+    assert (
+        await ledger.release(
+            reservation_id=outcome.reservation_id, generation=1, evidence=evidence
+        )
+        is None
+    )
+
+
+@pytest.mark.asyncio
+async def test_a_late_cleanup_cannot_release_a_newer_generation(ledger) -> None:
+    budget = _budget()
+    await ledger.reserve(request=_request("lease-a", generation=2), budget=budget)
+    stale_id = machine_reservation_id(
+        backend_ref=BACKEND,
+        owner_kind="omnigent_host_lease",
+        owner_ref="lease-a",
+        generation=1,
+    )
+
+    released = await ledger.release(
+        reservation_id=stale_id,
+        generation=1,
+        evidence=ReleaseEvidence(daemon_observed=True, consumer_removed=True),
+    )
+
+    assert released is None
+    usage = await ledger.usage(backend_ref=BACKEND)
+    assert usage.reserved_memory_mib == 2048
+
+
+# --------------------------------------------------------------- reconciling
+
+
+@pytest.mark.asyncio
+async def test_an_owned_live_container_without_a_record_is_a_fault_not_capacity(
+    ledger,
+) -> None:
+    """AC7: an unaccounted owned live container is never free capacity."""
+
+    summary = await ledger.reconcile(
+        backend_ref=BACKEND,
+        live_containers={"mm-job-orphan": _demand(cpu=500, memory=1024, procs=64)},
+    )
+
+    assert summary["adopted"] == 1
+    assert summary["reconciliationFaults"] == 1
+    usage = await ledger.usage(backend_ref=BACKEND)
+    assert usage.reserved_memory_mib == 1024
+    assert usage.reconciliation_faults == 1
+
+
+@pytest.mark.asyncio
+async def test_an_unreadable_backend_blocks_admission_rather_than_freeing_it(
+    ledger,
+) -> None:
+    """AC7: unknown daemon state blocks unsafe new admission."""
+
+    summary = await ledger.reconcile(backend_ref=BACKEND, live_containers=None)
+
+    async with ledger._factory()() as session:  # persisted contract
+        marker = await session.get(
+            MachineCapacityReservation,
+            machine_reservation_id(
+                backend_ref=BACKEND,
+                owner_kind="reconciliation",
+                owner_ref=BACKEND,
+                generation=1,
+            ),
+        )
+    assert marker.workload_class == WORKLOAD_CLASS_RECONCILIATION
+    assert WORKLOAD_CLASS_RECONCILIATION not in COVERED_WORKLOAD_CLASSES
+    assert summary["backendObserved"] is False
+    assert summary["admissionBlocked"] is True
+    outcome = await ledger.reserve(request=_request("lease-a"), budget=_budget())
+    assert outcome.admitted is False
+    assert outcome.decision.limiting_resource == LIMITING_RESOURCE_RECONCILIATION
+
+
+@pytest.mark.asyncio
+async def test_a_readable_backend_clears_the_admission_block(ledger) -> None:
+    await ledger.reconcile(backend_ref=BACKEND, live_containers=None)
+    await ledger.reconcile(backend_ref=BACKEND, live_containers={})
+
+    outcome = await ledger.reserve(request=_request("lease-a"), budget=_budget())
+
+    assert outcome.admitted is True
+
+
+@pytest.mark.asyncio
+async def test_reconciliation_releases_compute_for_a_vanished_consumer(
+    ledger,
+) -> None:
+    budget = _budget()
+    outcome = await ledger.reserve(request=_request("lease-a"), budget=budget)
+    await ledger.confirm(
+        reservation_id=outcome.reservation_id, generation=1, container_ref="mm-a"
+    )
+
+    summary = await ledger.reconcile(backend_ref=BACKEND, live_containers={})
+
+    assert summary["computeReleased"] == 1
+    usage = await ledger.usage(backend_ref=BACKEND)
+    assert usage.reserved_memory_mib == 0
+    # Storage stays accounted until cleanup proves the volume is gone.
+    assert usage.reserved_temporary_storage_mib == 512
+
+
+@pytest.mark.asyncio
+async def test_reconciliation_never_touches_an_initializing_reservation(
+    ledger,
+) -> None:
+    """A prelaunch reservation has no container yet; that is not a fault."""
+
+    budget = _budget()
+    outcome = await ledger.reserve(request=_request("lease-a"), budget=budget)
+
+    summary = await ledger.reconcile(backend_ref=BACKEND, live_containers={})
+
+    assert summary["adopted"] == 0
+    assert summary["computeReleased"] == 0
+    assert await ledger.verify(reservation_id=outcome.reservation_id, generation=1)
+
+
+@pytest.mark.asyncio
+async def test_reconciliation_is_scoped_to_one_backend(ledger) -> None:
+    budget = _budget()
+    outcome = await ledger.reserve(
+        request=_request("lease-a", backend=OTHER_BACKEND), budget=budget
+    )
+    await ledger.confirm(
+        reservation_id=outcome.reservation_id, generation=1, container_ref="mm-a"
+    )
+
+    await ledger.reconcile(backend_ref=BACKEND, live_containers={})
+
+    usage = await ledger.usage(backend_ref=OTHER_BACKEND)
+    assert usage.reserved_memory_mib == 2048
+
+
+@pytest.mark.asyncio
+async def test_a_validation_host_reserves_from_the_same_budget(ledger) -> None:
+    budget = _budget(MOONMIND_MACHINE_MEMORY_MIB="4096")
+    demand = _demand(memory=3000, cpu=100, procs=16, storage=16)
+    await ledger.reserve(
+        request=ReservationRequest(
+            backend_ref=BACKEND,
+            workload_class=WORKLOAD_CLASS_VALIDATION_HOST,
+            owner_kind="validation_host",
+            owner_ref="probe-a",
+            demand=demand,
+        ),
+        budget=budget,
+    )
+
+    blocked = await ledger.reserve(
+        request=_request("lease-a", demand=demand), budget=budget
+    )
+
+    assert blocked.admitted is False
+
+
+@pytest.mark.asyncio
+async def test_reservation_state_names_are_the_persisted_contract(ledger) -> None:
+    """The states admission counts on are the states actually written."""
+
+    budget = _budget()
+    outcome = await ledger.reserve(request=_request("lease-a"), budget=budget)
+    assert outcome.state == STATE_PRELAUNCH
+
+    await ledger.confirm(
+        reservation_id=outcome.reservation_id, generation=1, container_ref="mm-a"
+    )
+    async with ledger._factory()() as session:  # noqa: SLF001 - persisted contract
+        row = await session.get(MachineCapacityReservation, outcome.reservation_id)
+        assert row.state == STATE_ACTIVE
+        assert row.container_ref == "mm-a"
+        assert row.expires_at is None
+        assert row.backend_ref == BACKEND
+        assert row.host_class_ref == "omnigent-opencode@1"
+        assert row.launch_policy_ref == "omnigent-launch@1"
+        assert row.generation == 1
+
+    await ledger.reconcile(
+        backend_ref=BACKEND, live_containers={"mm-orphan": _demand()}
+    )
+    async with ledger._factory()() as session:  # noqa: SLF001 - persisted contract
+        adopted = await session.get(
+            MachineCapacityReservation,
+            machine_reservation_id(
+                backend_ref=BACKEND,
+                owner_kind="adopted_container",
+                owner_ref="mm-orphan",
+                generation=1,
+            ),
+        )
+        assert adopted.state == STATE_ADOPTED
+        # Which managed launch created it is not recoverable from the container
+        # alone, so it is recorded as unattributed rather than misattributed.
+        assert adopted.workload_class == WORKLOAD_CLASS_UNATTRIBUTED
