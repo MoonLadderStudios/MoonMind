@@ -239,42 +239,46 @@ class OmnigentWorkspacePublicationService:
         if published is None:
             return {"push_status": "skipped"}
         if published.status == "skipped":
-            return await self._verified_no_commit_publication(
+            result = await self._verified_no_commit_publication(
                 run_command=run_command,
                 base_branch=(
                     str(published.base_branch or base_branch or "main").strip()
                     or "main"
                 ),
             )
-        if (
-            published.status != "published"
-            or not published.branch_pushed
-            or not published.remote_verified
-            or not published.head_sha
-            or not published.branch_name
-            or not published.base_branch
-            or not published.commits_ahead_of_base
-        ):
-            raise HarnessPlatformError(
-                "repository publication did not produce authoritative remote evidence",
-                code="OMNIGENT_REPOSITORY_PUBLICATION_UNVERIFIED",
-            )
-        result: dict[str, Any] = {
-            "push_status": "pushed",
-            "push_branch": published.branch_name,
-            "push_base_branch": published.base_branch,
-            "push_head_sha": published.head_sha,
-            "push_commit_count": published.commits_ahead_of_base,
-            "remote_verified": True,
-            "pushRef": (
-                f"git://{str(repository or 'repository').strip()}"
-                f"/refs/heads/{published.branch_name}@{published.head_sha}"
-            ),
-        }
+        else:
+            if (
+                published.status != "published"
+                or not published.branch_pushed
+                or not published.remote_verified
+                or not published.head_sha
+                or not published.branch_name
+                or not published.base_branch
+                or not published.commits_ahead_of_base
+            ):
+                raise HarnessPlatformError(
+                    "repository publication did not produce authoritative remote evidence",
+                    code="OMNIGENT_REPOSITORY_PUBLICATION_UNVERIFIED",
+                )
+            result = {
+                "push_status": "pushed",
+                "push_branch": published.branch_name,
+                "push_base_branch": published.base_branch,
+                "push_head_sha": published.head_sha,
+                "push_commit_count": published.commits_ahead_of_base,
+                "remote_verified": True,
+                "pushRef": (
+                    f"git://{str(repository or 'repository').strip()}"
+                    f"/refs/heads/{published.branch_name}@{published.head_sha}"
+                ),
+            }
+        # A publication-only Skill may create a PR without adding commits.
+        # Resolve it from the branch whose exact remote head we just verified,
+        # so its URL survives the same durable handoff as a new push.
         if normalized_mode == "pr" and repository and token:
             pull_request = await GitHubService().resolve_pull_request_selector(
                 repo=str(repository).strip(),
-                selector=published.branch_name,
+                selector=result["push_branch"],
                 github_token=token,
             )
             if pull_request.resolved and pull_request.pr_url:
