@@ -1,0 +1,13 @@
+{
+  "failureShapeId": "deployment-update-windows-bind-source",
+  "incidentWorkflowId": "mm:fa00d758-3225-4109-ad27-03f4e88f8118",
+  "activityType": "mm.tool.execute",
+  "toolName": "deployment.update_compose_stack",
+  "hostProjectDir": "D:\\code\\MoonMind",
+  "daemonProjectDir": "/run/desktop/mnt/host/d/code/MoonMind",
+  "expectedBindSource": "/run/desktop/mnt/host/d/code/MoonMind/init_db",
+  "observedBindSource": "/mnt/d/code/MoonMind/init_db",
+  "observedExitCode": 2,
+  "observedFailure": "sh: 0: cannot open /app/init_db/init_db_entrypoint.sh: No such file",
+  "invariant": "The Linux deployment worker must use Docker Desktop daemon-visible checkout binds, execute init-db successfully, then reconcile and verify the stack. Missing checkout sources must not create empty host directories."
+}
