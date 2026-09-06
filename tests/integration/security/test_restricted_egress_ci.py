@@ -291,7 +291,9 @@ async def test_launch_and_lifecycle_evidence_is_digest_bound_and_resolvable(
         if args[:3] == ("image", "inspect", "--format"):
             return 0, b'"amd64"', b""
         if args[:2] == ("info", "--format"):
-            return 0, str(8 * 1024**3).encode(), b""
+            # MoonLadderStudios/MoonMind#3881: the shared machine budget is
+            # probed from the memory total *and* the CPU count.
+            return 0, f"{8 * 1024**3}\t8".encode(), b""
         if args[:2] == ("ps", "--all"):
             return 0, b"", b""
         if args[:2] == ("ps", "-aq"):

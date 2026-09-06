@@ -1,0 +1,23 @@
+{
+  "sourceWorkflowId": "mm:76e60e63-0819-4492-a860-acf94ee91638",
+  "publicationOutputs": {
+    "push_status": "pushed",
+    "push_branch": "moonmind-job-29907c08",
+    "push_base_branch": "main",
+    "push_head_sha": "1352615b79e06361b0de784fb362e9228999cb69",
+    "push_commit_count": 1,
+    "acceptedRepositoryEvidence": {
+      "schemaVersion": "accepted-repository-evidence/v1",
+      "pushStatus": "pushed",
+      "branch": "moonmind-job-29907c08",
+      "baseBranch": "main",
+      "headSha": "1352615b79e06361b0de784fb362e9228999cb69",
+      "commitsAheadOfBase": 1,
+      "repositoryChanged": true,
+      "publicationAuthorized": true,
+      "candidateContaminated": false,
+      "remoteVerified": true,
+      "authority": "omnigent.generic_host_execution"
+    }
+  }
+}

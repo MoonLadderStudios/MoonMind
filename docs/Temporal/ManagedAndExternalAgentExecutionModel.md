@@ -218,6 +218,11 @@ reject or hide any tool whose successful contract requires a later callback when
 the runtime has no durable same-session continuation owner. A tool's availability
 is not evidence that the selected execution lane can deliver its result.
 
+A provider response ending in matched tool output while its session remains
+active is not terminal evidence. The execution driver requests same-session
+continuation only when its caller explicitly owns that recovery. Other hosts
+keep polling within the existing turn deadline while retaining their leases.
+
 Direct Codex managed sessions remain compatibility substrate during the Codex-through-Omnigent cutover. They emit bridge-compatible evidence where required so Workflow Detail and downstream recovery do not depend on a permanent runtime-specific UI model.
 
 ---

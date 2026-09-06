@@ -19,6 +19,7 @@ from temporalio import activity
 from temporalio.testing import WorkflowEnvironment
 from temporalio.worker import UnsandboxedWorkflowRunner, Worker
 
+from moonmind.capacity import OWNED_LAUNCH_CLASSES
 from moonmind.config.settings import settings
 from moonmind.schemas.container_job_models import ContainerJobWorkflowInput
 from moonmind.workflows.temporal.activity_runtime import TemporalAgentRuntimeActivities
@@ -60,7 +61,9 @@ class _HermeticSystemDaemon:
         command = tuple(str(item) for item in raw)
         self.commands.append(command)
         if command[:2] == ("info", "--format"):
-            return 0, str(10 * 1024**3).encode(), b""
+            # MoonLadderStudios/MoonMind#3881: the shared machine budget is
+            # probed from the memory total *and* the CPU count.
+            return 0, f"{10 * 1024**3}\t8".encode(), b""
         if command[0] == "ps":
             return 0, b"", b""
         if command[:2] == ("image", "inspect"):
@@ -75,7 +78,7 @@ class _HermeticSystemDaemon:
             self.images.add(command[1])
             return 0, b"pulled", b""
         if command[:3] == ("inspect", "--format", "{{json .Config.Labels}}"):
-            return 1, b"", b"container absent"
+            return 1, b"", b"Error: No such object: moonmind-container-job"
         if command[:3] == ("inspect", "--format", "{{json .State}}"):
             return 0, json.dumps({"Running": False, "ExitCode": 0}).encode(), b""
         if command[0] == "logs":
@@ -230,8 +233,14 @@ async def test_public_and_dotnet_jobs_cross_one_authority_path_and_reuse_image(
     assert all("/var/run/docker.sock" not in " ".join(command) for command in creates)
     assert all("DOCKER_HOST" not in " ".join(command) for command in daemon.commands)
     assert not any(command[0] == "rmi" for command in daemon.commands)
+    # MoonLadderStudios/MoonMind#3881: each launch probes the machine once and
+    # enumerates the owned containers once. The enumeration queries every
+    # registered owner label, so its cost is the registry's size, not a
+    # per-launch constant that would drift silently as launch classes are added.
     assert sum(command[0] == "info" for command in daemon.commands) == 3
-    assert sum(command[0] == "ps" for command in daemon.commands) == 3
+    assert sum(command[0] == "ps" for command in daemon.commands) == 3 * len(
+        OWNED_LAUNCH_CLASSES
+    )
     assert {job_id for job_id, state in projected if state == "succeeded"} == {
         "container-job:" + "1" * 32,
         "container-job:" + "2" * 32,

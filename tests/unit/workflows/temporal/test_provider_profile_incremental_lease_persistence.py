@@ -194,6 +194,9 @@ class _Recorder:
             def first(self):
                 return None
 
+            def scalar(self):
+                return 0
+
         return _Result()
 
     def add(self, row):
@@ -259,8 +262,15 @@ async def test_grant_deletes_nothing_and_writes_one_row() -> None:
 
 
 @pytest.mark.asyncio
-async def test_save_still_replaces_the_whole_runtime_snapshot() -> None:
-    """Eviction and verification rely on snapshot semantics to drop stale rows."""
+async def test_save_replaces_only_the_rows_its_snapshot_restates() -> None:
+    """Eviction and verification rely on snapshot semantics to drop stale rows.
+
+    MoonLadderStudios/MoonMind#3883: a payload recorded before the incremental
+    contract carries no ``writer_generation``. That is a zero high-water mark,
+    so the delete is scoped to the rows the snapshot itself re-states plus
+    unfenced rows — never a runtime-wide wipe that could erase a newer writer's
+    authority.
+    """
 
     recorder = await _run_action(
         "save",
@@ -269,8 +279,10 @@ async def test_save_still_replaces_the_whole_runtime_snapshot() -> None:
 
     deletes = _delete_targets(recorder)
     assert len(deletes) == 1
-    assert "workflow_id IN" not in deletes[0]
     assert "runtime_id" in deletes[0]
+    assert "fencing_generation <=" in deletes[0]
+    assert "lease_id IN" in deletes[0] or "coalesce" in deletes[0].lower()
+    assert "workflow_id IN" in deletes[0]
 
 
 @pytest.mark.asyncio
@@ -293,6 +305,11 @@ class _LeaseRow:
         self.lease_id = fields.get("lease_id", "agent-run-3")
         self.owner_id = fields.get("owner_id", "agent-run-3")
         self.purpose = fields.get("purpose", "execution_direct")
+        self.compatibility_class = fields.get("compatibility_class")
+        self.capacity_scope_ref = fields.get("capacity_scope_ref")
+        self.scope_generation = fields.get("scope_generation")
+        self.owner_kind = fields.get("owner_kind", "workflow")
+        self.heartbeat_at = fields.get("heartbeat_at")
         self.owner_is_workflow = fields.get("owner_is_workflow", True)
         self.step_execution_id = fields.get("step_execution_id")
         self.oauth_session_id = fields.get("oauth_session_id")
@@ -450,6 +467,7 @@ async def test_a_stale_row_is_replaced_by_a_newer_grant() -> None:
         [_grant_payload(6)],
         [
             _LeaseRow(
+                purpose="execution_omnigent",
                 fencing_generation=5,
                 safe_metadata_json={"evidenceIdentity": "evidence-1"},
             )
@@ -492,7 +510,7 @@ async def test_a_release_tombstones_instead_of_deleting() -> None:
         [_LeaseRow(fencing_generation=5)],
     )
 
-    assert recorder.result == {"released": True}
+    assert recorder.result == {"released": True, "outcome": "released"}
     row = recorder.table["agent-run-3"]
     assert row.lease_state == "released"
     assert row.released_at is not None
@@ -523,7 +541,12 @@ async def test_load_excludes_tombstones_but_reports_the_high_water_mark() -> Non
     assert recorder.result["max_fencing_generation"] == 9
     load_statement = recorder.statements[0]
     assert "lease_state" in str(load_statement)
-    assert "held" in list(load_statement.compile().params.values())
+    # The live read is an indexed query narrowed to the states that still
+    # spend a slot, not a full scan filtered in Python.
+    assert list(load_statement.compile().params.values()) == [
+        "opencode",
+        ["cleanup_requested", "held"],
+    ]
 
 
 @pytest.mark.asyncio

@@ -1,5 +1,6 @@
 {
   "incidentWorkflowId": "mm:44e4f122-f9d9-4722-a03b-9a902864896b",
+  "relatedIncidentWorkflowIds": ["mm:ac86d9e8-5b07-4f45-8c36-b965daddaec8"],
   "failureShape": "a post-dispatch response.completed event was followed by a stable, fully matched tool-output transcript while the interactive session remained running",
   "sessionId": "replay-running-tool-output-session",
   "currentTurnMarker": "MoonMind-Omnigent-Run: replay-running-tool-output",

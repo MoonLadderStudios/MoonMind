@@ -1413,6 +1413,7 @@ async def _await_marked_turn_terminal(
     tool_only_quiet_period_seconds: float = (_MARKED_TOOL_ONLY_QUIET_PERIOD_SECONDS),
     turn_start_timeout_seconds: float = _MARKED_TURN_START_TIMEOUT_SECONDS,
     start_watchdog: _MarkedTurnStartWatchdog | None = None,
+    allow_same_session_continuation: bool = False,
 ) -> tuple[str, dict[str, Any]]:
     """Wait until a terminal event is stably projected into the marked turn.
 
@@ -1426,11 +1427,12 @@ async def _await_marked_turn_terminal(
     OpenCode can leave the interactive session status at ``running`` after a
     post-dispatch terminal event when the bounded transcript ends with a tool
     output instead of final assistant text. After the longer tool-only quiet
-    period, that shape raises
+    period, an explicitly supplied continuation owner can receive
     :class:`OmnigentSameSessionContinuationRequired`; elapsed time never turns
     an active provider projection into terminal success. A profile-bound owner
     can use the typed signal to continue the same session without releasing the
-    authoritative workspace.
+    authoritative workspace. Without that owner, polling continues under the
+    existing timeout until the provider projects a terminal turn.
 
     A turn that never starts is distinct from a turn that is slow. The
     :class:`_MarkedTurnStartWatchdog` (the caller's dispatch-scoped instance
@@ -1514,7 +1516,13 @@ async def _await_marked_turn_terminal(
         stable_candidate = bool(
             progress
             and not turn_state["unfinishedToolCall"]
-            and (inactive or terminal_event_tool_only_candidate)
+            and (
+                inactive
+                or (
+                    terminal_event_tool_only_candidate
+                    and allow_same_session_continuation
+                )
+            )
         )
         signature = turn_state["signature"]
         if stable_candidate and isinstance(signature, tuple):
@@ -1717,9 +1725,23 @@ async def _enqueue_stream_events(
     session_id: str,
     queue: asyncio.Queue[tuple[dict[str, Any], bool] | BaseException | None],
     message_posted: asyncio.Event,
+    admitted: asyncio.Event | None = None,
 ) -> None:
     try:
-        async for event in client.stream_events(session_id):
+        if admitted is not None:
+            try:
+                stream = client.stream_events(
+                    session_id,
+                    on_admitted=admitted.set,  # type: ignore[call-arg]
+                )
+            except TypeError:
+                # Duck-typed test fakes predate the admission hook: there is
+                # no real admission to wait for, so mark it granted.
+                admitted.set()
+                stream = client.stream_events(session_id)
+        else:
+            stream = client.stream_events(session_id)
+        async for event in stream:
             await queue.put((event, message_posted.is_set()))
     except asyncio.CancelledError:
         raise
@@ -2044,6 +2066,7 @@ async def run_omnigent_execution(
     resume_session_id: str | None = None,
     first_message_text: str | None = None,
     defer_bridge_terminal: bool = False,
+    allow_same_session_continuation: bool = False,
     session_authority_sink: Any | None = None,
     transport_pool: Any | None = None,
 ) -> AgentRunResult:
@@ -2619,15 +2642,49 @@ async def run_omnigent_execution(
                 )
                 external_state["firstMessage"]["state"] = "posted"
             if not first_message_posted:
+                from moonmind.workflows.adapters.omnigent_client import (
+                    stream_admission_timeout_seconds,
+                )
+
                 stream_queue = asyncio.Queue()
+                stream_admitted = asyncio.Event()
                 stream_task = asyncio.create_task(
                     _enqueue_stream_events(
                         client=client,
                         session_id=session_id,
                         queue=stream_queue,
                         message_posted=message_posted_gate,
+                        admitted=stream_admitted,
                     )
                 )
+                # Reserve observation capacity before mutating provider
+                # state: when streams are saturated the admission timeout is
+                # dequeued here and the run fails before the first message is
+                # posted (safe retry, first_message_posted stays False)
+                # instead of reporting failure after provider work started.
+                admission_deadline = (
+                    asyncio.get_running_loop().time()
+                    + stream_admission_timeout_seconds()
+                )
+                while not stream_admitted.is_set() and not stream_task.done():
+                    if asyncio.get_running_loop().time() >= admission_deadline:
+                        break
+                    await asyncio.sleep(0.01)
+                if not stream_admitted.is_set():
+                    await _cancel_task(stream_task)
+                    queued: Any = None
+                    while not stream_queue.empty():
+                        item = stream_queue.get_nowait()
+                        if isinstance(item, BaseException):
+                            queued = item
+                            break
+                    if isinstance(queued, OmnigentClientError):
+                        raise queued
+                    raise OmnigentClientError(
+                        "Omnigent stream admission exhausted; control and "
+                        "cleanup operations remain available",
+                        failure_class="integration_error",
+                    )
                 await asyncio.sleep(0)
                 if run_store is not None:
                     await run_store.mark_posting(request.idempotency_key)
@@ -3043,6 +3100,7 @@ async def run_omnigent_execution(
                             terminal_status=terminal_event_status,
                             timeout_seconds=marked_turn_timeout_seconds,
                             start_watchdog=start_watchdog,
+                            allow_same_session_continuation=allow_same_session_continuation,
                         )
                         if normalized == "idle" and terminal_status == "completed":
                             completed_snapshot = dict(
@@ -3151,11 +3209,13 @@ async def run_omnigent_execution(
                         event_count=event_count["value"],
                         terminal_status=(
                             normalized_snapshot
-                            if normalized_snapshot in {"failed", "canceled", "timed_out"}
+                            if normalized_snapshot
+                            in {"failed", "canceled", "timed_out"}
                             else "completed"
                         ),
                         timeout_seconds=marked_turn_timeout_seconds,
                         start_watchdog=start_watchdog,
+                        allow_same_session_continuation=allow_same_session_continuation,
                     )
                     external_state["terminalReconciliation"] = {
                         "source": "stream_closed_snapshot",
@@ -3199,6 +3259,7 @@ async def run_omnigent_execution(
                             terminal_status=normalized_snapshot,
                             timeout_seconds=marked_turn_timeout_seconds,
                             start_watchdog=start_watchdog,
+                            allow_same_session_continuation=allow_same_session_continuation,
                         )
                     else:
                         terminal_status = normalized_snapshot

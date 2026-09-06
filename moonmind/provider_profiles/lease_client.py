@@ -84,6 +84,69 @@ _MAX_MANAGER_UPDATE_ATTEMPTS = 3
 CREDENTIALLESS_CREDENTIAL_SOURCES = frozenset({"none"})
 
 
+class DurableLeaseState(str, Enum):
+    """The authoritative lifecycle state of one persisted lease row.
+
+    MoonLadderStudios/MoonMind#3883: the durable row — not an in-memory
+    reservation, a log line, or an activity exception — decides whether a
+    Provider Profile slot is spent. Every transition names one of these states
+    so the manager and the persistence Activity never disagree about whether
+    capacity is reusable.
+    """
+
+    #: The owner holds the slot and may consume the credential.
+    HELD = "held"
+    #: The owner's slot is still spent, but its resources are owed cleanup.
+    #: MoonLadderStudios/MoonMind#1089: expiry and terminal owner state request
+    #: cleanup rather than freeing a credential consumer that may still run.
+    CLEANUP_REQUESTED = "cleanup_requested"
+    #: A tombstone. The slot is free; the row survives as fencing evidence.
+    RELEASED = "released"
+
+
+#: States in which a row still spends a Provider Profile slot. A state outside
+#: :class:`DurableLeaseState` is *not* treated as free: it is unreconciled
+#: evidence that blocks new admission until an operator resolves it.
+ACTIVE_DURABLE_LEASE_STATES = frozenset(
+    {DurableLeaseState.HELD.value, DurableLeaseState.CLEANUP_REQUESTED.value}
+)
+
+#: Every state the durable contract can express.
+KNOWN_DURABLE_LEASE_STATES = frozenset(state.value for state in DurableLeaseState)
+
+
+class LeaseTransitionOutcome(str, Enum):
+    """The explicit result of one durable lease state transition.
+
+    A transition never reports success because a warning was logged. Each
+    outcome tells the caller exactly what the ledger now says, and only
+    ``RELEASED`` and ``ALREADY_RELEASED`` make capacity reusable.
+    """
+
+    #: This call moved a live row to the released tombstone.
+    RELEASED = "released"
+    #: The row was already released (or already absent). Capacity is free.
+    ALREADY_RELEASED = "already_released"
+    #: The row names a newer grant generation. This caller no longer owns it.
+    STALE = "stale"
+    #: The row names a different immutable identity. Fail closed.
+    CONFLICT = "conflict"
+    #: The ledger did not answer. Capacity stays unavailable and the caller
+    #: retries with the same stable lease identity.
+    RETRYABLE = "retryable"
+    #: Cleanup was requested; the slot stays spent until cleanup completes.
+    CLEANUP_REQUESTED = "cleanup_requested"
+
+
+#: Outcomes after which in-memory accounting may free the slot.
+RELEASING_LEASE_OUTCOMES = frozenset(
+    {
+        LeaseTransitionOutcome.RELEASED.value,
+        LeaseTransitionOutcome.ALREADY_RELEASED.value,
+    }
+)
+
+
 def credential_source_is_credentialless(credential_source: Any) -> bool:
     """Return whether a profile owns no shared mutable credential state."""
 

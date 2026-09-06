@@ -695,18 +695,166 @@ Structured jobs apply:
 Callers may request resources only within deployment ceilings. They may not
 weaken security defaults.
 
-The trusted Docker launch boundary also enforces an aggregate active-memory
-budget across running MoonMind container jobs. Starts are serialized under a
-backend-scoped OS advisory lock so concurrent workflows cannot both admit
-against the same capacity snapshot. The operating system releases the lock if a
-worker exits, so admission never depends on stale-lease reclamation. By default,
-jobs may consume at most 70 percent of the Docker daemon's reported memory; the
-remaining capacity is reserved for the MoonMind control plane and Docker itself.
-Operators may set
-`MOONMIND_CONTAINER_BACKEND_MAX_ACTIVE_MEMORY_MIB` to a lower explicit ceiling.
+### Shared machine resource budget
+
+The trusted Docker launch boundary enforces an aggregate machine resource
+budget before a container starts. That budget is **shared**: every MoonMind
+-owned container runs on the same daemon, so all of them are accounted in the
+same deployment-owned ledger (`machine_capacity_reservations`,
+`moonmind.capacity`). Enforcing a container-job-private ceiling would let two
+full workload classes still oversubscribe one machine.
+
+#### Accounting boundary: which launch classes reserve
+
+`moonmind.capacity.docker_inventory` holds the registry of every MoonMind-owned
+container launch class, split by how it is accounted. There is no third
+category: a launch class that is in neither column would spend the machine
+invisibly.
+
+| Launch class | Owner label | Accounting |
+| --- | --- | --- |
+| Generic Omnigent host | `moonmind.owner=generic-omnigent-host` | **Reserves** before launch; can be refused |
+| Container job | `moonmind.container_job` | **Reserves** before launch; can be refused |
+| OAuth host | `moonmind.kind=omnigent-oauth-host` | Observed |
+| OAuth credential validator | `moonmind.kind=omnigent-oauth-credential-validator` | Observed |
+| OAuth auth runner (terminal bridge) | `moonmind.oauth_session=true` | Observed |
+| Managed session | `moonmind.kind=managed-session` | Observed |
+| Session Docker sidecar | `moonmind.kind=session-docker-sidecar` | Observed |
+| Workload / bounded service | `moonmind.kind=workload`, `moonmind.kind=bounded_service` | Observed |
+
+**Reserving** classes take a durable reservation before they launch and are
+refused when the machine is full. A running container of a reserving class with
+no accounting record is a reconciliation fault.
+
+**Observed** classes are credential-authority, session and already-admitted
+workload containers. Resource admission never refuses them: refusing an OAuth
+credential host would break authentication rather than protect the machine, and
+refusing a session container would fail a run that was already admitted.
+Instead, reconciliation enumerates their owner labels and accounts the `--cpus`,
+`--memory` and `--pids-limit` each container **declared**, so those limits are
+subtracted from what reserving launches may take. They are accounted, not
+faulted.
+
+Managed sessions, session Docker sidecars, unprofiled workload containers and
+OAuth auth runners declare none of the three, and a profiled workload declares
+CPU and memory but still no process limit. Docker reports an undeclared
+`HostConfig` limit as a nil pointer. MoonMind reads that as *unset*, never as an
+unreadable daemon: discarding the enumeration over one ordinary unbounded
+container would block every container-job start with `INFRASTRUCTURE` and refuse
+every new reservation with `reconciliation_health`. An undeclared limit
+contributes nothing to that container's accounted demand, because there is no
+bound to subtract — the documented utilization headroom below is what covers
+what such a container actually spends. Reconciliation reports how many live
+owned containers are in that position (`undeclaredLimits` in the janitor's
+machine-capacity result), so the width of the gap is observable rather than
+silently read as zero. A daemon answer that is neither a number nor the nil
+rendering is still unreadable and still blocks admission.
+
+Reservations are scoped by exact Docker backend ref, so two independent
+backends have two independent budgets and are never pooled.
+
+Starts are serialized twice, in a fixed order that cannot deadlock: a
+backend-scoped OS advisory lock around the daemon probe (released by the
+operating system if a worker exits, so admission never depends on stale-lease
+reclamation), then the shared PostgreSQL transaction-scoped advisory lock that
+makes count-and-reserve one operation across worker replicas.
+
+By default, managed launches may reserve at most 70 percent of the daemon's
+reported CPU and memory; the remainder is documented headroom for the MoonMind
+control plane, the janitors and Docker itself. Operators may lower any ceiling
+explicitly; every one of these settings is clamped to that share, so none of them
+can raise a ceiling past the documented headroom:
+
+| Setting | Effect |
+| --- | --- |
+| `MOONMIND_MACHINE_UTILIZATION_PERCENT` | Share of the machine managed launches may reserve. Refused above 99: headroom is not optional. |
+| `MOONMIND_MACHINE_CPU_MILLIS` | Explicit CPU ceiling in millis. Refused above what the daemon reports, and clamped to the utilization share above, so it can only lower the ceiling. |
+| `MOONMIND_MACHINE_MEMORY_MIB` | Explicit memory ceiling. Clamped like the CPU ceiling above. |
+| `MOONMIND_MACHINE_PROCESSES` | Explicit machine-wide process ceiling. Docker reports no such total, so the default derives it from CPU count. Clamped like the CPU ceiling above. |
+| `MOONMIND_MACHINE_TEMPORARY_STORAGE_MIB` | Explicit temporary-storage ceiling. Defaults to the memory total because MoonMind temporary storage is RAM-backed tmpfs, which is what a container job's `--shm-size` reserves. Clamped like the CPU ceiling above. |
+| `MOONMIND_MACHINE_MAX_CONCURRENT_INITIALIZING` | How many *cold host launches* may be initializing at once. Container jobs are exempt: see the permit scope below. |
+| `MOONMIND_MACHINE_PRELAUNCH_TTL_SECONDS` | How long a prelaunch reservation may be held before it is reclaimable as proven-unused. |
+| `MOONMIND_CONTAINER_BACKEND_MAX_ACTIVE_MEMORY_MIB` | Lowers this deployment's memory ceiling for the container-job path specifically. It is clamped to the utilization share above, so it can only lower the ceiling — never raise it past the documented headroom. |
+
+Every value is optional. Omitting all of them exercises the same production
+path: the backend is probed and the documented share is applied.
+
+The reservation is taken before the container starts and re-verified against
+its exact generation immediately before the Docker mutation, because a
+read-only precheck is advisory — another worker may have won the machine in
+between. It names its container from the start, so a launch that outlives its
+prelaunch window is never reclaimed by the clock while its container may
+already be running; only daemon evidence that nothing is running under that
+name reclaims it. It is confirmed against the container once the container
+exists, and it is released only on observed evidence that the consumer is gone.
+An Activity retry of the same job reconciles with the reservation it already
+holds rather than taking a second one — while that reservation still accounts
+compute. A retry whose container exists but is **stopped** is the branch the
+container-job workflow actually takes, and by then reconciliation has correctly
+released that container's CPU, memory and processes, because a stopped
+container spends none. Its demand is therefore *re-admitted* against the
+current machine rather than reported as accounting nobody is holding: it is
+admitted only into a state the fence below still accepts, and when other
+launches took the machine meanwhile it is refused by the resource that is
+actually holding it rather than by the fence. The storage a retained volume is
+still spending is counted once, and a refusal never overwrites it.
+
+#### Permit scope: which launch classes the initialization permit bounds
+
+The concurrent-initialization permit and the resource ceilings answer different
+questions, and only the ceilings apply to every reserving class. The permit
+bounds *unserialized cold launches*: a generic Omnigent host holds its
+`prelaunch` reservation across an image pull, a container create/start and
+registration polling, and several of those can be in flight at once.
+
+A container job is exempt. Its image is already resolved and its container
+already created when it reserves, its `prelaunch` window is one `docker start`,
+and the backend-scoped OS advisory lock above already admits one container-job
+start at a time per backend. Charging it a permit would not protect the machine
+— the resource ceilings do that — it would only let a slow cold host launch
+refuse every container job on the daemon for minutes.
+
+The scope is a per-class policy in one registry
+(`COVERED_WORKLOAD_CLASS_POLICY` in `moonmind.capacity.machine_reservations`),
+not a caller-supplied flag, and it is restrictive by default: a launch class the
+registry does not classify holds a permit. `MOONMIND_MACHINE_MAX_CONCURRENT_INITIALIZING`
+therefore tunes cold host launches; lower it to smooth image-pull contention,
+and use the resource ceilings to bound container jobs.
+
 When admitting a job would exceed the budget, the job fails before start with
-`resource_limit_exceeded` and actionable retry guidance; an unbounded or
-unobservable active workload fails closed.
+`resource_limit_exceeded`, naming **the resource that actually refused it** —
+the decision's own `missing_condition` and current utilization, never a fixed
+guess at which ceiling was hit. The same admission emits the
+`omnigent_machine_capacity_*` observation on both the admitted and the refused
+outcome, so the limiting resource, safe utilization, configured ceilings,
+oldest-waiter age and reconciliation health are recoverable from telemetry as
+well as from the error. An unbounded or unobservable active workload fails
+closed: an unreadable daemon or an unreadable owned-container inventory is
+`infrastructure`, never free capacity.
+
+Reconciliation runs in the existing janitor, not a second coordinator. It
+reclaims reservations that provably never launched, keeps accounting for live
+consumers whose workflow died, adopts an owned live container that has no
+accounting record (a reconciliation fault for a reserving class; ordinary
+accounting for an observed one), and blocks new admission while the backend
+cannot be established. Only MoonMind's own owner labels are queried, so a
+foreign container is never inspected, adopted or removed.
+
+One live container is accounted exactly once. When the reservation that owns an
+adopted container next reserves, it takes that accounting over and the adopted
+row is released — never the other way round, and never while the reservation
+itself accounts only retained storage. Handing the accounting back to its real
+owner is the only release an adoption ever gets from a launch path; proving the
+container is gone remains reconciliation's job.
+
+Releasing accounting requires a **complete** enumeration. Absence from an
+inventory that never queried a launch class is not evidence that the class's
+consumers are gone, so a partial enumeration may add accounting but never
+remove it. That is structural rather than conventional: an inventory view that
+drops a running container drops the enumerated scope with it
+(`OwnedContainerInventory.excluding`), so a filtered view can never report
+complete coverage and can never be read as proof that the container it omitted
+vanished.
 
 Local image builds use separate deployment policy. Their Dockerfile, context,
 target, arguments, network access, timeout, output limit, and validation command
