@@ -4421,7 +4421,6 @@ class MoonMindAgentRun:
         self,
         *,
         parent_info: Any,
-        already_allocated: bool = False,
         host_binding: Mapping[str, Any] | None = None,
     ) -> None:
         """Wait durably for aggregate generic-host and cold-launch capacity.
@@ -4435,16 +4434,18 @@ class MoonMindAgentRun:
         reservation already exists from the authoritative ledger. A requeue
         after a lost slot therefore reuses that reservation instead of racing
         for a second host.
+
+        MoonLadderStudios/MoonMind#3881: the binding is the *only* thing that
+        establishes an existing reservation. The superseded caller-asserted
+        ``alreadyAllocated`` input is gone rather than deprecated: an ignored
+        input that looks authoritative is worse than no input at all.
         """
 
         waited_seconds = 0
         while True:
             decision = await self._execute_routed_activity(
                 "omnigent.admit_generic_host_capacity",
-                {
-                    "alreadyAllocated": already_allocated,
-                    **dict(host_binding or {}),
-                },
+                dict(host_binding or {}),
                 cancellation_type=ActivityCancellationType.TRY_CANCEL,
             )
             if not isinstance(decision, Mapping):
