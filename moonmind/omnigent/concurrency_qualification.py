@@ -31,8 +31,10 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 from datetime import UTC, datetime
 from enum import StrEnum
+from pathlib import Path
 from typing import Any, Iterable, Literal, Mapping, Sequence
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
@@ -43,7 +45,7 @@ from moonmind.omnigent.conformance import assert_secret_free
 #: Bumped whenever the required scenario families, their layer requirements, or
 #: the owning-test bindings below change. Evidence produced against an older
 #: catalog cannot qualify a deployment running a newer one.
-CONCURRENCY_SCENARIO_CATALOG_VERSION = "moonmind.omnigent-concurrency-scenarios/v1"
+CONCURRENCY_SCENARIO_CATALOG_VERSION = "moonmind.omnigent-concurrency-scenarios/v2"
 
 #: Bumped whenever the record schema below changes shape.
 CONCURRENCY_QUALIFICATION_RECORD_VERSION = (
@@ -71,6 +73,15 @@ _MODEL_CONFIG = ConfigDict(
 #: into a log sink.
 MAX_DIAGNOSTIC_ENTRIES = 8
 MAX_DIAGNOSTIC_LENGTH = 512
+
+#: The two names the qualification runner exports to a layer's owning tests:
+#: the level under test, and the directory that level's observation is
+#: published to. :func:`publish_observed_overlap` and
+#: :func:`load_observed_overlap` are the only reader/writer pair for that
+#: directory, so a layer cannot invent an evidence filename the runner will
+#: never find — which is exactly how a layer ends up permanently ``partial``.
+CONCURRENCY_LEVEL_ENV = "MOONMIND_OMNIGENT_CONCURRENCY_LEVEL"
+CONCURRENCY_EVIDENCE_DIR_ENV = "MOONMIND_OMNIGENT_CONCURRENCY_EVIDENCE_DIR"
 
 
 class ConcurrencyQualificationLayer(StrEnum):
@@ -192,6 +203,15 @@ CONCURRENCY_SCENARIO_CATALOG: tuple[ScenarioOwner, ...] = (
         "tests/unit/omnigent/test_generic_plane_n_way_concurrency.py",
         required_in_ci=True,
     ),
+    # The authoring boundary the realizer journey starts *after*: N
+    # simultaneous submissions compiled into N immutable plans that each
+    # select the generic Omnigent combination.
+    _owner(
+        _F.isolation_and_completion,
+        _L.hermetic,
+        "tests/unit/omnigent/test_generic_plane_production_boundary_concurrency.py",
+        required_in_ci=True,
+    ),
     _owner(
         _F.isolation_and_completion,
         _L.exact_docker,
@@ -202,6 +222,17 @@ CONCURRENCY_SCENARIO_CATALOG: tuple[ScenarioOwner, ...] = (
         _F.queue_and_dynamic_limits,
         _L.hermetic,
         "tests/unit/workflows/temporal/test_omnigent_capacity_matrix.py",
+        required_in_ci=True,
+    ),
+    # The manager ledger alone is not the dispatch boundary: this owner drives
+    # N+2 submissions through ``MoonMindAgentRun`` so admission, durable
+    # waiting, grant-on-release and queued cancellation are exercised where the
+    # workflow actually performs them.
+    _owner(
+        _F.queue_and_dynamic_limits,
+        _L.hermetic,
+        "tests/unit/omnigent/test_generic_plane_production_boundary_concurrency.py",
+        escaped_regressions=("MoonLadderStudios/MoonMind#3880",),
         required_in_ci=True,
     ),
     _owner(
@@ -233,6 +264,17 @@ CONCURRENCY_SCENARIO_CATALOG: tuple[ScenarioOwner, ...] = (
         "tests/unit/omnigent/test_generic_plane_n_way_concurrency.py",
         escaped_regressions=("MoonLadderStudios/MoonMind#3884",),
         required_in_ci=True,
+    ),
+    # The hermetic layer's declared environment includes real database
+    # constraints. The final-slot race is decided by two *independent*
+    # PostgreSQL transactions racing the same budget, which an in-memory
+    # ledger cannot reproduce: this owner holds one transaction open between
+    # the count and the commit and proves the second is serialized behind it.
+    _owner(
+        _F.host_and_transport_pressure,
+        _L.hermetic,
+        "tests/integration/omnigent/test_machine_capacity_reservations_postgres.py",
+        escaped_regressions=("MoonLadderStudios/MoonMind#3881",),
     ),
     _owner(
         _F.host_and_transport_pressure,
@@ -705,6 +747,10 @@ class RepeatedWaveThresholds(BaseModel):
     model_config = _MODEL_CONFIG
 
     resource_class_ref: str = Field(min_length=1, max_length=128)
+    #: One control-plane budget, applied to *every* control latency a wave
+    #: reports. A single stalled phase — a wait that never gets scheduled, a
+    #: teardown that hangs — breaches it on its own, so a wave cannot hide a
+    #: stalled control operation inside an otherwise fast total.
     max_control_seconds: float = Field(gt=0.0)
     max_lease_mutations_per_execution: int = Field(ge=1)
     max_registration_requests_per_execution: int = Field(ge=1)
@@ -758,11 +804,18 @@ class RepeatedWaveReport(BaseModel):
                     f"{label}: observed peak {wave.observed_peak} below level "
                     f"{self.level}"
                 )
-            if wave.control_seconds > self.thresholds.max_control_seconds:
-                found.append(
-                    f"{label}: control latency {wave.control_seconds}s exceeds "
-                    f"{self.thresholds.max_control_seconds}s"
-                )
+            for phase, seconds in (
+                ("wait", wave.wait_seconds),
+                ("launch", wave.launch_seconds),
+                ("registration", wave.registration_seconds),
+                ("control", wave.control_seconds),
+                ("cleanup", wave.cleanup_seconds),
+            ):
+                if seconds > self.thresholds.max_control_seconds:
+                    found.append(
+                        f"{label}: {phase} control latency {seconds}s exceeds "
+                        f"{self.thresholds.max_control_seconds}s"
+                    )
             if wave.lease_mutations > (
                 self.thresholds.max_lease_mutations_per_execution * self.level
             ):
@@ -835,7 +888,100 @@ def compute_concurrency_evidence_digest(payload: Mapping[str, Any]) -> str:
     return "sha256:" + hashlib.sha256(canonical.encode()).hexdigest()
 
 
+def requested_concurrency_level(*, default: int) -> int:
+    """Return the level the runner selected for this layer invocation.
+
+    A layer's owning tests are executed once per level, so the level arrives
+    through the environment rather than through pytest parametrization. An
+    unparsable value fails rather than silently collapsing to the default,
+    because a mistyped level would otherwise publish evidence for a level
+    nobody asked for.
+    """
+
+    raw = os.environ.get(CONCURRENCY_LEVEL_ENV, "").strip()
+    if not raw:
+        return default
+    if not raw.isdigit() or int(raw) < 1:
+        raise ValueError(
+            f"{CONCURRENCY_LEVEL_ENV} must be a positive integer, got {raw!r}"
+        )
+    return int(raw)
+
+
+def observed_overlap_evidence_path(
+    evidence_dir: str | Path,
+    layer: ConcurrencyQualificationLayer,
+    level: int,
+) -> Path:
+    """Return the one path a layer's observation for ``level`` lives at."""
+
+    return Path(evidence_dir) / f"{layer.value}-{level}.json"
+
+
+def publish_observed_overlap(
+    layer: ConcurrencyQualificationLayer,
+    overlap: ObservedOverlapEvidence,
+    *,
+    evidence_dir: str | Path | None = None,
+) -> Path | None:
+    """Publish one layer's observation where the runner reads it.
+
+    Returns ``None`` when no evidence directory was requested, which is the
+    ordinary case for a developer running the owning test directly. The file is
+    keyed by the observation's own ``requested_level``, so an observation can
+    never be filed under a level it did not measure.
+    """
+
+    directory = str(
+        evidence_dir
+        if evidence_dir is not None
+        else os.environ.get(CONCURRENCY_EVIDENCE_DIR_ENV, "")
+    ).strip()
+    if not directory:
+        return None
+    target = observed_overlap_evidence_path(
+        directory, layer, overlap.requested_level
+    )
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_text(
+        json.dumps(
+            overlap.model_dump(mode="json", by_alias=True), indent=2, sort_keys=True
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    return target
+
+
+def load_observed_overlap(
+    evidence_dir: str | Path,
+    layer: ConcurrencyQualificationLayer,
+    level: int,
+) -> ObservedOverlapEvidence | None:
+    """Return the published observation for ``(layer, level)``, if any.
+
+    ``None`` means the owning tests passed without observing anything, which
+    the runner records as ``partial`` rather than as a pass. Evidence that
+    measured a different level is refused outright: a stale file from an
+    earlier level would otherwise qualify a level that never ran.
+    """
+
+    path = observed_overlap_evidence_path(evidence_dir, layer, level)
+    if not path.exists():
+        return None
+    overlap = ObservedOverlapEvidence.model_validate_json(
+        path.read_text(encoding="utf-8")
+    )
+    if overlap.requested_level != level:
+        raise ValueError(
+            f"{path.name} observed level {overlap.requested_level}, not {level}"
+        )
+    return overlap
+
+
 __all__ = [
+    "CONCURRENCY_EVIDENCE_DIR_ENV",
+    "CONCURRENCY_LEVEL_ENV",
     "CONCURRENCY_QUALIFICATION_RECORD_VERSION",
     "CONCURRENCY_SCENARIO_CATALOG",
     "CONCURRENCY_SCENARIO_CATALOG_VERSION",
@@ -864,7 +1010,11 @@ __all__ = [
     "WaveObservation",
     "build_row_for_unavailable_environment",
     "compute_concurrency_evidence_digest",
+    "load_observed_overlap",
+    "observed_overlap_evidence_path",
     "observed_peak_overlap",
+    "publish_observed_overlap",
+    "requested_concurrency_level",
     "scenario_owners",
     "unowned_scenarios",
 ]
