@@ -24,7 +24,9 @@ from moonmind.omnigent.concurrency_qualification import (
     CONCURRENCY_SCENARIO_CATALOG_VERSION,
     DEFAULT_REPEATED_WAVE_THRESHOLDS,
     EXACT_DOCKER_LEVELS,
+    EXACT_DOCKER_REPEATED_WAVE_THRESHOLDS,
     HERMETIC_LEVELS,
+    REPEATED_WAVE_THRESHOLDS,
     REQUIRED_QUALIFICATION_LAYERS,
     CleanupScanEntry,
     CleanupScanReport,
@@ -46,6 +48,7 @@ from moonmind.omnigent.concurrency_qualification import (
     observed_overlap_evidence_path,
     observed_peak_overlap,
     publish_observed_overlap,
+    repeated_wave_thresholds,
     requested_concurrency_level,
     scenario_owners,
     unowned_scenarios,
@@ -654,13 +657,38 @@ def hermetic_database(monkeypatch: pytest.MonkeyPatch) -> None:
     )
 
 
-def _runner_args(evidence_dir) -> argparse.Namespace:
+def _runner_args(
+    evidence_dir,
+    *,
+    resource_class: str = "ci-standard-4x8@1",
+    cpu_cores: int | None = 4,
+    memory_gib: int | None = 8,
+) -> argparse.Namespace:
     return argparse.Namespace(
         evidence_dir=str(evidence_dir),
-        resource_class="ci-standard-4x8@1",
-        cpu_cores=4,
-        memory_gib=8,
+        resource_class=resource_class,
+        cpu_cores=cpu_cores,
+        memory_gib=memory_gib,
     )
+
+
+def _identity_argv(**overrides: str) -> list[str]:
+    """Return the scheduled exact-image job's own argv, minus the paths."""
+
+    supplied = {
+        "--support-combination-key": SUPPORT_KEY,
+        "--moonmind-commit": "0" * 40,
+        "--worker-build-ref": "moonmind-worker@ci",
+        "--worker-topology-ref": "single-replica@1",
+        # A declared machine, so the argv is self-consistent on whatever
+        # machine runs this suite and the assertion is about the flag under
+        # test rather than about this runner's core count.
+        "--resource-class": "ci-standard-4x8@1",
+        "--cpu-cores": "4",
+        "--memory-gib": "8",
+    }
+    supplied.update(overrides)
+    return [item for flag, value in supplied.items() for item in (flag, value)]
 
 
 def test_an_owning_test_that_published_its_observation_records_a_pass(
@@ -996,3 +1024,284 @@ def test_no_owning_test_re_enters_the_qualification_runner() -> None:
             f"{owner.owning_test} re-enters the qualification runner; move the "
             "record-contract assertions out of the owning-test set"
         )
+
+
+# ---------------------------------------------------------------------------
+# The support identity is resolved before a layer spends its matrix.
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture
+def never_spawned(monkeypatch: pytest.MonkeyPatch) -> list[tuple]:
+    """Fail the test if any owning test is spawned.
+
+    The whole point of resolving the identity first is that nothing is spent
+    before the record it would be filed under is known to be constructible, so
+    "it raised the right error" is only half the assertion.
+    """
+
+    spawned: list[tuple] = []
+
+    def _record_spawn(layer, level, evidence_dir) -> int:
+        spawned.append((layer, level, evidence_dir))
+        return 0
+
+    monkeypatch.setattr(runner, "_run_owning_tests", _record_spawn)
+    return spawned
+
+
+@pytest.mark.parametrize(
+    ("flag", "variable"),
+    [
+        ("--support-combination-key", "OMNIGENT_CONCURRENCY_SUPPORT_KEY"),
+        ("--worker-build-ref", "OMNIGENT_WORKER_BUILD_REF"),
+        ("--worker-topology-ref", "OMNIGENT_WORKER_TOPOLOGY_REF"),
+        ("--resource-class", "OMNIGENT_CONCURRENCY_RESOURCE_CLASS"),
+    ],
+)
+def test_a_blank_identity_argument_fails_before_the_matrix_is_spent(
+    tmp_path, never_spawned, flag, variable
+) -> None:
+    """An unset repository variable must not cost a completed wave.
+
+    The scheduled job passes each of these from ``${{ vars.* }}``. An unset
+    GitHub variable expands to the empty string, which argparse accepts *over*
+    the flag's default, so the failure has to land before ``build_rows`` runs
+    a single level — and it has to name the input the operator can change.
+    """
+
+    with pytest.raises(SystemExit) as raised:
+        runner.main(
+            [
+                "--layer",
+                "exact_docker",
+                "--levels",
+                "2,4,8",
+                *_identity_argv(**{flag: ""}),
+                "--evidence-dir",
+                str(tmp_path / "evidence"),
+                "--output",
+                str(tmp_path / "record.json"),
+            ]
+        )
+
+    message = str(raised.value.code)
+    assert flag in message, message
+    assert variable in message, message
+    assert never_spawned == [], "the matrix ran before the identity was resolved"
+    assert not (tmp_path / "record.json").exists()
+
+
+def test_a_malformed_identity_argument_names_the_flag_not_a_traceback(
+    tmp_path, never_spawned
+) -> None:
+    """A rejected value reports the argument, not a pydantic location."""
+
+    with pytest.raises(SystemExit) as raised:
+        runner.main(
+            [
+                "--layer",
+                "exact_docker",
+                "--levels",
+                "2",
+                *_identity_argv(**{"--moonmind-commit": "not-a-commit"}),
+                "--evidence-dir",
+                str(tmp_path / "evidence"),
+                "--output",
+                str(tmp_path / "record.json"),
+            ]
+        )
+
+    assert "--moonmind-commit" in str(raised.value.code)
+    assert never_spawned == []
+
+
+def test_a_valid_invocation_writes_its_record_even_when_no_row_passed(
+    tmp_path,
+) -> None:
+    """Evidence survives the gate: the record is written, then the gate fails.
+
+    A record that only exists when the gate passes cannot show an operator why
+    a level was not qualified, which is the one question the artifact is
+    uploaded to answer.
+    """
+
+    code = _run_main(
+        tmp_path,
+        "exact_docker",
+        "2,4",
+        [
+            ConcurrencyQualificationRow(
+                layer=ConcurrencyQualificationLayer.exact_docker,
+                level=level,
+                status=ConcurrencyRowStatus.failed,
+                diagnostics=("owning tests exited 1",),
+            )
+            for level in (2, 4)
+        ],
+    )
+
+    assert code == 1
+    record = ConcurrencyQualificationRecord.model_validate_json(
+        (tmp_path / "record.json").read_text(encoding="utf-8")
+    )
+    assert [row.status for row in record.rows] == [ConcurrencyRowStatus.failed] * 2
+    assert record.validated_concurrency_level == 0
+
+
+# ---------------------------------------------------------------------------
+# The declared machine is measured, not assumed.
+# ---------------------------------------------------------------------------
+
+
+def test_a_resource_class_ref_cannot_contradict_the_machine_it_names() -> None:
+    """``ci-standard-4x8@1`` on a 16x64 runner describes substrate that never ran."""
+
+    with pytest.raises(ValueError, match="names a 4-core/8-GiB machine"):
+        MachineResourceClass(
+            resource_class_ref="ci-standard-4x8@1", cpu_cores=16, memory_gib=64
+        )
+
+
+def test_a_class_ref_without_dimensions_claims_no_machine_size() -> None:
+    """``local-deterministic@1`` names no dimensions, so none are checked."""
+
+    resource_class = MachineResourceClass(
+        resource_class_ref="local-deterministic@1", cpu_cores=16, memory_gib=64
+    )
+
+    assert (resource_class.cpu_cores, resource_class.memory_gib) == (16, 64)
+
+
+def test_a_passing_exact_docker_row_carries_the_supplied_machine(
+    tmp_path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The row's class reflects the declared machine, not a CLI constant."""
+
+    monkeypatch.setenv(
+        "MOONMIND_OMNIGENT_CONCURRENCY_HOST_IMAGE", "host@sha256:" + "d" * 64
+    )
+    monkeypatch.setenv(
+        "MOONMIND_OMNIGENT_HOST_SERVER_URL", "https://omnigent.invalid"
+    )
+    monkeypatch.setattr(runner, "_docker_available", lambda: None)
+
+    def _publish(layer, level, _evidence_dir) -> int:
+        publish_observed_overlap(layer, _overlap(level), evidence_dir=tmp_path)
+        return 0
+
+    monkeypatch.setattr(runner, "_run_owning_tests", _publish)
+
+    rows = runner.build_rows(
+        _runner_args(
+            tmp_path,
+            resource_class="ci-large-32x128@1",
+            cpu_cores=32,
+            memory_gib=128,
+        ),
+        ConcurrencyQualificationLayer.exact_docker,
+        (2,),
+    )
+
+    assert rows[0].status is ConcurrencyRowStatus.passed
+    assert rows[0].resource_class is not None
+    assert rows[0].resource_class.cpu_cores == 32
+    assert rows[0].resource_class.memory_gib == 128
+
+
+def test_an_omitted_machine_is_measured_rather_than_defaulted(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Omitting the dimensions measures the runner; it never assumes 4x8.
+
+    The scheduled job passes only ``--resource-class``. When the numbers came
+    from CLI constants, every published exact-image row claimed a 4-core/8-GiB
+    machine no matter what actually ran the wave.
+    """
+
+    monkeypatch.setattr(runner, "observed_cpu_cores", lambda: 12)
+    monkeypatch.setattr(runner, "observed_memory_gib", lambda: 48)
+
+    args = runner._parse_args(
+        ["--support-combination-key", SUPPORT_KEY, "--moonmind-commit", "0" * 40]
+    )
+
+    assert (args.cpu_cores, args.memory_gib) == (None, None)
+    identity = runner.build_identity(args)
+    assert identity.resource_class.cpu_cores == 12
+    assert identity.resource_class.memory_gib == 48
+
+
+def test_an_unmeasurable_machine_names_the_override_instead_of_guessing(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A machine that cannot be measured fails with the flags that fix it."""
+
+    def _unobservable() -> int:
+        raise runner.MachineNotObservable("no affinity mask is exposed")
+
+    monkeypatch.setattr(runner, "observed_cpu_cores", _unobservable)
+
+    args = runner._parse_args(
+        ["--support-combination-key", SUPPORT_KEY, "--moonmind-commit", "0" * 40]
+    )
+
+    with pytest.raises(SystemExit) as raised:
+        runner.build_identity(args)
+
+    assert "--cpu-cores" in str(raised.value.code)
+
+
+def test_the_measured_machine_is_the_one_this_process_may_use() -> None:
+    """The observation is a measurement of this machine, not a constant."""
+
+    assert runner.observed_cpu_cores() >= 1
+    assert runner.observed_memory_gib() >= 1
+
+
+# ---------------------------------------------------------------------------
+# Repeated-wave budgets bind to the class the wave actually ran on.
+# ---------------------------------------------------------------------------
+
+
+def test_every_required_layer_has_a_declared_repeated_wave_budget() -> None:
+    """A budget exists for the deterministic *and* the exact-image class."""
+
+    assert repeated_wave_thresholds("local-deterministic@1") is (
+        DEFAULT_REPEATED_WAVE_THRESHOLDS
+    )
+    assert repeated_wave_thresholds("ci-standard-4x8@1") is (
+        EXACT_DOCKER_REPEATED_WAVE_THRESHOLDS
+    )
+    for ref, thresholds in REPEATED_WAVE_THRESHOLDS.items():
+        assert thresholds.resource_class_ref == ref
+
+
+def test_an_undeclared_resource_class_borrows_no_budget() -> None:
+    """An unbudgeted class has no verdict to offer, so it is refused."""
+
+    with pytest.raises(ValueError, match="no repeated-wave budget is declared"):
+        repeated_wave_thresholds("ci-mystery-machine@1")
+
+
+def test_the_exact_image_budget_widens_only_the_control_latency() -> None:
+    """Real containers are slower; per-execution control work is not.
+
+    A budget that scaled the mutation, registration or pool counts with the
+    machine would let an exact-image wave hide the per-execution growth the
+    repeated-wave program exists to catch.
+    """
+
+    deterministic = DEFAULT_REPEATED_WAVE_THRESHOLDS
+    exact = EXACT_DOCKER_REPEATED_WAVE_THRESHOLDS
+
+    assert exact.max_control_seconds > deterministic.max_control_seconds
+    assert (
+        exact.max_lease_mutations_per_execution
+        == deterministic.max_lease_mutations_per_execution
+    )
+    assert (
+        exact.max_registration_requests_per_execution
+        == deterministic.max_registration_requests_per_execution
+    )
+    assert exact.max_transport_pool_peak == deterministic.max_transport_pool_peak

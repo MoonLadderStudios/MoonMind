@@ -2,12 +2,26 @@ name: Provider / Omnigent Concurrency Qualification
 
 # Source issue: MoonLadderStudios/MoonMind#3885.
 #
-# The hermetic layer of this program runs in required pull-request CI (the
-# unit shard owns `tests/unit/omnigent/test_generic_plane_n_way_concurrency.py`
-# and the integration-ci shard owns the exact-image row contract). This
+# The hermetic layer of this program runs in required pull-request CI, and so
+# does the record contract itself: the unit shard owns both
+# `tests/unit/omnigent/test_generic_plane_n_way_concurrency.py` and the
+# exact-image row contract in
+# `tests/unit/omnigent/test_concurrency_qualification.py`. The exact-image
+# layer's own executor, `tests/integration/omnigent/test_exact_docker_n_way_concurrency.py`,
+# carries no `integration_ci` marker: it needs a real daemon and the
+# digest-pinned images, which is exactly what this workflow provides. This
 # workflow owns the two layers that cannot run on an untrusted PR runner: the
 # exact built artifacts under a real Docker daemon, and the bounded
 # protected-live route.
+#
+# The scheduled exact-image job reads four repository variables —
+# OMNIGENT_CONCURRENCY_SUPPORT_KEY, OMNIGENT_WORKER_BUILD_REF,
+# OMNIGENT_WORKER_TOPOLOGY_REF and OMNIGENT_CONCURRENCY_RESOURCE_CLASS. An
+# unset variable expands to an empty string, so the runner resolves the whole
+# support identity before it spends the matrix and names the missing variable
+# instead of discarding a completed wave. The machine dimensions are measured
+# on the runner, so the published resource class describes the machine that
+# actually ran the level.
 #
 # Every job publishes a concurrency qualification record. A runner without the
 # exact images, without a daemon, or without protected-live admission emits

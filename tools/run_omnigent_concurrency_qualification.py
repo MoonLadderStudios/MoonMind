@@ -24,13 +24,25 @@ and needs a record carrying every required layer at the same level. Each CI job
 runs one layer, so gating a job on the cross-layer level would make it
 impossible to pass.
 
+The support identity is resolved *before* any layer runs, and the record is
+written before the gate is evaluated. A wave is never spent under an identity
+that cannot be built, and evidence that was earned is never withheld because
+the gate failed.
+
 Usage::
 
     python tools/run_omnigent_concurrency_qualification.py \\
         --layer exact_docker --levels 2,4,8 \\
         --support-combination-key omnigent-support:sha256:... \\
         --moonmind-commit "$GITHUB_SHA" \\
+        --worker-build-ref moonmind-worker@2026.09 \\
+        --worker-topology-ref single-replica@1 \\
+        --resource-class ci-standard-4x8@1 \\
         --output artifacts/omnigent-concurrency/record.json
+
+``--cpu-cores`` and ``--memory-gib`` are overrides: omitted, the runner
+measures the machine it is running on, so the published resource class
+describes the machine that actually ran the level.
 """
 
 from __future__ import annotations
@@ -44,6 +56,8 @@ import sys
 from collections.abc import Sequence
 from datetime import UTC, datetime
 from pathlib import Path
+
+from pydantic import ValidationError
 
 # Allow execution as a script from a checkout without installation.
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
@@ -71,6 +85,49 @@ DEFAULT_LEVELS = {
     ConcurrencyQualificationLayer.hermetic: HERMETIC_LEVELS,
     ConcurrencyQualificationLayer.exact_docker: EXACT_DOCKER_LEVELS,
     ConcurrencyQualificationLayer.protected_live: (2,),
+}
+
+#: Every identity input, with the CLI flag that carries it and the scheduled
+#: workflow's repository variable behind that flag. An unset GitHub variable
+#: expands to the empty string, which argparse happily accepts *over* the
+#: default, so a blank value here is a misconfiguration rather than a request
+#: for a default — and it has to be caught before a layer spends its matrix,
+#: not after, or the run throws away the only evidence it earned.
+IDENTITY_ARGUMENT_SOURCES: dict[str, tuple[str, str]] = {
+    "support_combination_key": (
+        "--support-combination-key",
+        "OMNIGENT_CONCURRENCY_SUPPORT_KEY",
+    ),
+    "moonmind_commit": ("--moonmind-commit", "github.sha"),
+    "worker_build_ref": ("--worker-build-ref", "OMNIGENT_WORKER_BUILD_REF"),
+    "provider_capacity_policy_version": (
+        "--provider-capacity-policy-version",
+        "",
+    ),
+    "host_capacity_policy_version": ("--host-capacity-policy-version", ""),
+    "transport_pool_policy_version": ("--transport-pool-policy-version", ""),
+    "worker_topology_ref": ("--worker-topology-ref", "OMNIGENT_WORKER_TOPOLOGY_REF"),
+    "resource_class": (
+        "--resource-class",
+        "OMNIGENT_CONCURRENCY_RESOURCE_CLASS",
+    ),
+}
+
+#: Model field names — in either casing the models accept — mapped back to the
+#: flag an operator can actually change, so a rejected identity names an input
+#: instead of a pydantic location.
+_FLAGS_BY_FIELD: dict[str, str] = {
+    **{field: flag for field, (flag, _) in IDENTITY_ARGUMENT_SOURCES.items()},
+    "supportCombinationKey": "--support-combination-key",
+    "moonmindCommit": "--moonmind-commit",
+    "workerBuildRef": "--worker-build-ref",
+    "providerCapacityPolicyVersion": "--provider-capacity-policy-version",
+    "hostCapacityPolicyVersion": "--host-capacity-policy-version",
+    "transportPoolPolicyVersion": "--transport-pool-policy-version",
+    "workerTopologyRef": "--worker-topology-ref",
+    "resource_class_ref": "--resource-class",
+    "cpu_cores": "--cpu-cores",
+    "memory_gib": "--memory-gib",
 }
 
 
@@ -150,12 +207,137 @@ def _protected_live_admitted() -> None:
         )
 
 
+class MachineNotObservable(RuntimeError):
+    """The machine this invocation runs on cannot be measured."""
+
+
+def observed_cpu_cores() -> int:
+    """Return the CPU cores this process may actually run on.
+
+    The affinity mask, not :func:`os.cpu_count`, is what a cgroup-confined CI
+    runner is allowed to use, and the resource class has to name the machine
+    the wave really ran on.
+    """
+
+    if hasattr(os, "sched_getaffinity"):
+        cores = len(os.sched_getaffinity(0))
+    else:  # pragma: no cover - not reachable on the supported platforms
+        cores = os.cpu_count() or 0
+    if cores < 1:
+        raise MachineNotObservable(
+            "the CPU core count of this machine could not be observed"
+        )
+    return cores
+
+
+def observed_memory_gib() -> int:
+    """Return this machine's physical memory in whole GiB."""
+
+    try:
+        total_bytes = os.sysconf("SC_PAGE_SIZE") * os.sysconf("SC_PHYS_PAGES")
+    except (AttributeError, OSError, ValueError) as exc:  # pragma: no cover
+        raise MachineNotObservable(
+            f"the physical memory of this machine could not be observed: {exc}"
+        ) from exc
+    memory_gib = int(total_bytes // (1024**3))
+    if memory_gib < 1:
+        raise MachineNotObservable(
+            "this machine reports less than one GiB of physical memory"
+        )
+    return memory_gib
+
+
 def _resource_class(args: argparse.Namespace) -> MachineResourceClass:
+    """Return the machine this invocation ran on, measured unless declared.
+
+    ``--cpu-cores`` and ``--memory-gib`` are overrides, not defaults. Omitted,
+    the runner measures the machine, so a row cannot claim a machine size that
+    nobody observed just because the CLI carried a constant. A declared class
+    ref that names its own dimensions is checked against the measurement by
+    :class:`MachineResourceClass`, so a mismatch fails loudly instead of
+    publishing a row that contradicts itself.
+    """
+
+    cpu_cores = (
+        args.cpu_cores if args.cpu_cores is not None else observed_cpu_cores()
+    )
+    memory_gib = (
+        args.memory_gib if args.memory_gib is not None else observed_memory_gib()
+    )
     return MachineResourceClass(
         resource_class_ref=args.resource_class,
-        cpu_cores=args.cpu_cores,
-        memory_gib=args.memory_gib,
+        cpu_cores=cpu_cores,
+        memory_gib=memory_gib,
     )
+
+
+def _named_arguments(exc: ValidationError, *, fallback: str) -> str:
+    """Render a pydantic rejection as the flags an operator can actually set.
+
+    A whole-model validator carries no field location, so ``fallback`` names
+    the argument that owns the rejected model instead of leaving the operator
+    with a bare pydantic message.
+    """
+
+    details: list[str] = []
+    for error in exc.errors():
+        field = str(error["loc"][-1]) if error["loc"] else ""
+        flag = _FLAGS_BY_FIELD.get(field, field) or fallback
+        details.append(f"{flag}: {error['msg']}")
+    return "; ".join(details)
+
+
+def build_identity(args: argparse.Namespace) -> ConcurrencySupportIdentity:
+    """Validate the support identity before any layer spends its matrix.
+
+    The record is what an exact-image wave exists to produce, and it is built
+    from these arguments. Constructing the identity last meant a blank
+    repository variable threw away a completed exact-image matrix — hours of
+    real hosts on a real daemon — and handed the operator a pydantic traceback
+    instead of the name of the variable they had to set. So the identity is
+    resolved first: nothing is spent until the record it would be filed under
+    is known to be constructible.
+    """
+
+    blank = [
+        f"{flag} (repository variable {variable})" if variable else flag
+        for attribute, (flag, variable) in IDENTITY_ARGUMENT_SOURCES.items()
+        if not str(getattr(args, attribute, "") or "").strip()
+    ]
+    if blank:
+        raise SystemExit(
+            "the concurrency support identity is incomplete, so no layer was "
+            "run and no evidence was spent; supply " + ", ".join(blank)
+        )
+    try:
+        resource_class = _resource_class(args)
+    except MachineNotObservable as exc:
+        raise SystemExit(
+            "the machine resource class could not be resolved, so no layer was "
+            f"run: {exc}; declare it with --cpu-cores and --memory-gib"
+        ) from exc
+    except ValidationError as exc:
+        raise SystemExit(
+            "the machine resource class was refused, so no layer was run: "
+            + _named_arguments(exc, fallback="--resource-class")
+        ) from exc
+    try:
+        return ConcurrencySupportIdentity(
+            supportCombinationKey=args.support_combination_key,
+            moonmindCommit=args.moonmind_commit,
+            workerBuildRef=args.worker_build_ref,
+            providerCapacityPolicyVersion=args.provider_capacity_policy_version,
+            hostCapacityPolicyVersion=args.host_capacity_policy_version,
+            transportPoolPolicyVersion=args.transport_pool_policy_version,
+            workerTopologyRef=args.worker_topology_ref,
+            resourceClass=resource_class,
+            scenarioCatalogVersion=CONCURRENCY_SCENARIO_CATALOG_VERSION,
+        )
+    except ValidationError as exc:
+        raise SystemExit(
+            "the concurrency support identity was refused, so no layer was "
+            "run: " + _named_arguments(exc, fallback="--support-combination-key")
+        ) from exc
 
 
 def _run_owning_tests(
@@ -316,26 +498,20 @@ def requested_rows_that_did_not_pass(
 
 
 def build_record(args: argparse.Namespace) -> ConcurrencyQualificationRecord:
+    # Both preconditions are resolved before a single owning test is spawned:
+    # a catalog with an unowned family and an identity that cannot be built
+    # both make the record unpublishable, and discovering either one after the
+    # matrix has run destroys the evidence rather than reporting it.
     unowned = unowned_scenarios()
     if unowned:
         raise SystemExit(
             "concurrency scenario families without an owning test: "
             + ", ".join(f"{family.value}/{layer.value}" for family, layer in unowned)
         )
+    identity = build_identity(args)
     rows: list[ConcurrencyQualificationRow] = []
     for layer, levels in requested_matrix(args):
         rows.extend(build_rows(args, layer, levels))
-    identity = ConcurrencySupportIdentity(
-        supportCombinationKey=args.support_combination_key,
-        moonmindCommit=args.moonmind_commit,
-        workerBuildRef=args.worker_build_ref,
-        providerCapacityPolicyVersion=args.provider_capacity_policy_version,
-        hostCapacityPolicyVersion=args.host_capacity_policy_version,
-        transportPoolPolicyVersion=args.transport_pool_policy_version,
-        workerTopologyRef=args.worker_topology_ref,
-        resourceClass=_resource_class(args),
-        scenarioCatalogVersion=CONCURRENCY_SCENARIO_CATALOG_VERSION,
-    )
     return ConcurrencyQualificationRecord(
         identity=identity,
         generatedAt=datetime.now(UTC),
@@ -365,8 +541,10 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     )
     parser.add_argument("--worker-topology-ref", default="single-replica@1")
     parser.add_argument("--resource-class", default="local-deterministic@1")
-    parser.add_argument("--cpu-cores", type=int, default=4)
-    parser.add_argument("--memory-gib", type=int, default=8)
+    # Overrides, not defaults. Omitted, the runner measures the machine it is
+    # running on, so a published row never names a machine size nobody observed.
+    parser.add_argument("--cpu-cores", type=int, default=None)
+    parser.add_argument("--memory-gib", type=int, default=None)
     parser.add_argument(
         "--evidence-dir", default="artifacts/omnigent-concurrency/evidence"
     )
