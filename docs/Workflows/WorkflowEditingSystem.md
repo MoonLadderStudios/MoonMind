@@ -1,461 +1,260 @@
 # Workflow Editing System
 
-**Status:** Active
-**Owners:** MoonMind Engineering
-**Last Updated:** 2026-04-13
+**Document Class:** Canonical declarative  
+**Status:** Desired-state architecture  
+**Owners:** MoonMind Engineering  
+**Last Updated:** 2026-09-06
 
 ## 1. Purpose
 
-This document defines the canonical Workflow editing design for the Temporal era of MoonMind.
+Create, Edit, and Rerun use the same `/workflows/new` form and Temporal-backed execution contracts. Operators can reconstruct supported executions, change permitted task inputs, and request a newly admitted run without queue-era assumptions or rewriting historical artifacts.
 
-The legacy application allowed operators to open a Workflow Execution from the Workflow details page, edit its configuration, and resubmit the Workflow Execution. That behavior was lost during the migration away from queue-job-centric Workflow execution. The Temporal-native design restores that capability without reintroducing queue-era assumptions.
+Repository/source context, branch context, and publication are authored once under [Workflow Publishing](WorkflowPublishing.md) and [Create Page](../UI/CreatePage.md). Reconstruction preserves those choices separately from compiler-bound Skill arguments and per-execution publication modes.
 
-The core idea is simple:
-
-- `/workflows/new` remains the single Workflow Execution submission surface.
-- Existing Temporal executions become the editable object.
-- The Workflow details page regains an **Edit** action for executions that support in-place input updates.
-- Terminal executions, including failed and canceled executions, gain a **Rerun** action that reuses the same prefilled submit experience and allows the operator to edit the draft before submitting it again.
-
-This keeps create, edit, and rerun on one form while making Temporal the source of truth.
+This document defines target behavior, not a claim that every current lifecycle path already supports editing or terminal rerun.
 
 ## 2. Scope
 
-This design applies to:
+In scope are the shared submit page, detail/list entry points, reconstruction from execution inputs and artifacts, supported input updates, and explicit rerun requests. Recurring definition editing belongs to the schedule owner but uses the same authored-input/compiler contract.
 
-- the shared Workflow Execution submit page at `/workflows/new`
-- Temporal-backed Workflow detail surfaces in the dashboard
-- Temporal-backed list or card surfaces that may expose edit or rerun entry points
-- input reconstruction from Temporal execution details and referenced artifacts
-- submission through Temporal execution updates
-
-This design does **not** apply to:
-
-- legacy queue jobs
-- recurring schedule editing
-- inline edit modals on the detail page
-- direct mutation of previously stored artifacts
-- non-Temporal Workflow execution systems
+Out of scope are queue jobs, inline edit-only modals, historical artifact mutation, non-Temporal execution, and a second publishing or profile-selection surface.
 
 ## 3. Design goals
 
 ### 3.1 Temporal is the source of truth
 
-Workflow editing must operate on Temporal execution state, capabilities, and inputs. No queue-job payload should be required to support edit or rerun.
+Execution identity, capabilities, input evidence, and lifecycle state come from authoritative Temporal/execution contracts. No queue-job payload is required.
 
 ### 3.2 One submit experience
 
-Create, edit, and rerun should all reuse `/workflows/new` so operators do not learn separate flows.
+Create, Edit, and Rerun reuse the normal form, validation, context bindings, presets, attachments, Runtime/Profile selection, and publication explanation.
 
 ### 3.3 Preserve create-form ergonomics
 
-Editing should feel like reopening a familiar Workflow form with the same fields, validations, templates, and artifact behavior.
+The form reconstructs one source/repository, one applicable authored branch, and one publication selection. Historical starting/target branch pairs or duplicate Skill inputs are not silently reintroduced as ordinary controls.
 
 ### 3.4 Respect lifecycle correctness
 
-Active executions can be edited only when the backend exposes that capability. Terminal executions cannot be “edited in place”; they can only be rerun.
+Active executions accept updates only when the backend exposes and validates that capability. Terminal executions are not edited in place; supported reruns use the owning lifecycle path. Failed and canceled executions are first-class rerun candidates when `actions.canRerun` is true.
 
-Failed and canceled terminal executions are first-class rerun candidates. When the backend exposes rerun capability for one of these executions, the operator must be able to reopen its Workflow inputs as an editable draft, change the relevant fields, and submit the updated draft as a new rerun request.
+A closed Temporal run is not assumed to accept an Update merely because the UI calls the shared endpoint. Unsupported actions return explicit non-acceptance.
 
 ### 3.5 Preserve auditability
 
-The system must preserve operator-visible lineage between the original execution, any new artifacts created during editing, and any rerun request.
+Maintain original workflow/run, operator action, new input/plan artifacts, accepted update or rerun identity, and child/scope lineage. Definition updates and changed publishing choices are visible rather than inferred from current defaults.
 
 ### 3.6 Avoid in-place artifact mutation
 
-Editing a Workflow Execution must never rewrite historical artifacts. New artifacts are created for new input content.
+New authored content creates new artifact references. Original inputs, resolved plans, publication evidence, and saved work remain immutable.
 
 ### 3.7 Remove legacy coupling
 
-The canonical model must not rely on `editJobId`, queue resubmit semantics, or queue-first route structures.
+No editJobId, queue resubmit, queue-first route, or old input alias is a new-write authority.
 
 ## 4. Canonical model
 
 ### 4.1 Editable object
 
-The editable object is a Temporal execution identified by `workflowId`.
+The durable object is an execution identified by workflowId, with exact run/admission evidence where an action depends on it. A new run does not retrospectively change already-created children under a prior run's policy.
 
 ### 4.2 Supported workflow type
 
-The initial supported workflow type is:
-
-- `MoonMind.UserWorkflow`
-
-Any other workflow type is out of scope until explicitly added.
+The initial supported type is MoonMind.UserWorkflow. Other types require an explicitly added capability and lifecycle contract.
 
 ### 4.3 Modes
 
-`/workflows/new` supports three modes:
-
-| Mode | When used | Behavior |
-|---|---|---|
-| Create | No edit/rerun query parameter present | Starts a brand-new execution |
-| Edit | `editExecutionId` points to an active execution that supports updates | Sends `UpdateInputs` to the existing workflow |
-| Rerun | `rerunExecutionId` points to a terminal execution that supports rerun | Reconstructs an editable draft and sends `RequestRerun` |
+| Mode | Entry | Submission |
+| --- | --- | --- |
+| Create | No edit/rerun parameter | New execution |
+| Edit | editExecutionId names a supported active execution | Validated UpdateInputs |
+| Rerun | rerunExecutionId names a supported terminal execution | Validated RequestRerun through the lifecycle owner |
 
 ### 4.4 Lifecycle model
 
-- **Edit** is for non-terminal executions only.
-- **Rerun** is for terminal executions only.
-- Failed and canceled executions are terminal, but they must be eligible for rerun when `actions.canRerun` is `true`.
-- Rerun mode must allow the operator to edit reconstructed Workflow inputs before submitting the rerun request.
-- UI availability is determined by backend capability flags, not frontend guesses.
+UI availability follows backend capability flags, not inferred state alone. Rerun allows supported edits to a reconstructed draft, but is fresh admission of the submitted intent. It does not rewrite the original terminal result or restore prior credentials/approvals.
 
 ## 5. Route model
 
 ### 5.1 Canonical routes
 
-Create mode:
-
 ```text
 /workflows/new
-```
-
-Edit mode:
-
-```text
 /workflows/new?editExecutionId=<workflowId>
-```
-
-Rerun mode:
-
-```text
 /workflows/new?rerunExecutionId=<workflowId>
 ```
 
 ### 5.2 Deprecated routes and params
 
-The following are deprecated and must not be used by new UI or documentation:
-
-- `/tasks/queue/new`
-- `editJobId`
-- queue-job update flows
-- queue resubmit terminology when referring to Temporal reruns
+New authoring never uses `/tasks/queue/new`, editJobId, queue-job updates, or queue resubmit terminology.
 
 ### 5.3 Mode resolution order
 
-When `/workflows/new` loads, mode is resolved in this order:
-
-1. `rerunExecutionId`
-2. `editExecutionId`
-3. create mode
-
-This ensures rerun remains explicit and cannot be accidentally overridden by edit handling.
+Resolve rerunExecutionId, then editExecutionId, then Create. A malformed or unauthorized requested mode is reported, not silently downgraded to unrelated new work.
 
 ## 6. Entry points
 
 ### 6.1 Workflow detail page
 
-The Workflow details page is the primary place where editing becomes visible again.
-
-The detail page should:
-
-- show **Edit** when `actions.canUpdateInputs` is `true`
-- show **Rerun** when `actions.canRerun` is `true`
-- navigate to `/workflows/new` using the correct query parameter
-- avoid rendering actions that are not supported by the current execution
-
-Canonical navigation targets:
-
-```text
-Edit   -> /workflows/new?editExecutionId=<workflowId>
-Rerun  -> /workflows/new?rerunExecutionId=<workflowId>
-```
+Show Edit when actions.canUpdateInputs and Rerun when actions.canRerun. Navigate to the shared form. Failed/canceled work retains its saved outputs and original result while a rerun draft is reviewed.
 
 ### 6.2 Workflow list or card surfaces
 
-List and card surfaces may optionally expose the same actions, but the detail page is the canonical entry point that restores the lost edit behavior.
+Optional list/card actions use the same routes and backend capabilities; they do not maintain another reconstruction implementation.
 
 ## 7. Submit-page behavior
 
 ### 7.1 Shared page, mode-specific behavior
 
-`/workflows/new` remains a shared page, but mode changes:
-
-- the title
-- the primary CTA label
-- the data source for initial field values
-- the submit handler
-- some control visibility
+Mode changes title, CTA, data source, submission handler, and genuinely unsupported controls. It does not create another policy selector.
 
 ### 7.2 Mode-specific UI expectations
 
-| Mode | Page title | Primary CTA |
-|---|---|---|
+| Mode | Title | CTA |
+| --- | --- | --- |
 | Create | New Workflow | Create Workflow |
 | Edit | Edit Workflow | Save Changes |
 | Rerun | Rerun Workflow | Rerun Workflow |
 
 ### 7.3 Hidden or constrained controls
 
-In edit and rerun modes:
-
-- recurring schedule controls are hidden
-- queue-specific controls are absent
-- controls unsupported by the current workflow type are disabled or omitted
+Recurring controls and queue-era fields are absent in execution Edit/Rerun. Unsupported controls are disabled or omitted with a reason. Material context/policy conflicts are never hidden inside Advanced mode.
 
 ### 7.4 Loading behavior
 
-For edit and rerun:
-
-1. Parse the execution id from the route.
-2. Load Temporal execution detail.
-3. Validate workflow type and capabilities.
-4. Rebuild a standard submission draft from the execution and any referenced artifacts.
-5. Render the shared form with those prefilled values.
+Resolve the execution, validate visibility/type/action capabilities, load exact input and definition/plan references, reconstruct authored intent, validate context bindings and historical compatibility, then render. Partial or uncertain reconstruction is clearly labeled and blocks unsafe submission instead of presenting a misleading complete draft.
 
 ## 8. Prefill model
 
 ### 8.1 Draft reconstruction helper
 
-The canonical reconstruction entry point is:
-
-```ts
-buildTemporalSubmissionDraftFromExecution(execution)
-```
-
-This helper converts a Temporal execution detail payload into the same draft shape used by normal Workflow Execution creation.
+`buildTemporalSubmissionDraftFromExecution(execution)` remains the shared reconstruction entry point. It consumes safe authoritative evidence rather than current catalog defaults as a replacement for missing history.
 
 ### 8.2 Draft data sources
 
-Draft reconstruction may read from:
-
-- execution detail fields
-- execution input parameters
-- referenced input artifacts
-- template metadata that was applied during original submission
-- provider/runtime configuration stored on the execution
+Sources include execution details, original authored parameters, input artifacts, selected preset/Skill definition evidence, and admitted runtime configuration. Compiled plan projections explain what ran, but they are not automatically user-authored values.
 
 ### 8.3 Fields that should prefill
 
-The reconstructed draft should prefill, where available:
+Prefill Runtime/Profile, model/effort where authored, workspace source/repository and access intent, one applicable authored branch, authored publication selection, instructions, Skill/Preset selection, task-specific step inputs, expansion/provenance, dependencies, and attachments.
 
-- runtime
-- provider profile
-- model
-- effort
-- repository
-- starting branch
-- target branch
-- publish mode
-- Workflow instructions
-- primary skill
-- explicit steps or workflow options
-- applied template state
-- other standard create-form inputs already supported by `/workflows/new`
+New authored publication values are default, none, branch, pr, and pr_with_merge_automation. Auto is default or omission. The compiled modes none/branch/pr/auto are separate execution facts. A coordinator's local None must not prefill “Do not publish code” when its original scope requested PR children.
+
+A PR locator remains task input. Resolved PR head/base is read-only target evidence, not another branch override. Canonical source/destination roles remain distinct only where supported and explicitly named.
 
 ### 8.4 Instructions and artifacts
 
-Instructions may be stored inline or in artifacts.
-
-The submit page must reconstruct the operator-visible instruction text regardless of storage strategy. Operators should not have to reason about whether the prior Workflow Execution used inline text or artifact-backed content.
+Whether instructions were inline or artifact-backed, the form reconstructs their readable content without requiring the user to understand storage. Generated instructions retain provenance and are rebound/re-expanded as required after context changes; stale interpolated repository or branch values cannot remain authoritative.
 
 ### 8.5 Fallback behavior
 
-If an execution cannot fully reconstruct a draft:
+Missing evidence, unsupported historical mode, conflicting copies, or inaccessible artifacts produce explicit reconstruction diagnostics. Preserve safe task values, but do not permit a partially reconstructed authority-bearing request to submit as if it were exact.
 
-- the page must show a clear error state
-- partial, misleading prefills must be avoided
-- the operator must not be allowed to submit unsupported or malformed updates
+### 8.6 Authored, defaulted, bound, and derived values
+
+| Original evidence | Reconstruction rule |
+| --- | --- |
+| Explicit authored selection | Preserve it and validate under the supported new-admission contract. |
+| Auto with recorded definition/default resolution | Show Auto plus the recorded resolved behavior. Changes to definitions/defaults require visible review. |
+| Compiler-bound equivalent repository/branch argument | Rebind from the single context, not an editable copied value. |
+| Coordinator-local None with proven child PR intent | Reconstruct the one scope PR/default selection and explain the coordinator role. |
+| Historical literal auto | Preserve Skill-owned meaning, not generic Auto by string substitution. |
+| Historical None promoted to Auto | Preserve old execution history; require an explicit reviewed new selection rather than silently granting publication. |
+| Conflicting copies, mixed per-step policies, ambiguous two-branch authoring | Show conflict and require a compatible composition or separately authored workflows. |
+
+Unknown origin is not implicit user consent. Compatibility collapse requires proven equivalence. Raw JSON and old argument aliases cannot bypass the new one-context contract.
 
 ## 9. Submit semantics
 
 ### 9.1 Create mode
 
-Create mode continues to use the normal Workflow Execution creation path and is unchanged by this design.
+Normal creation resolves bindings/defaults, expands presets, compiles the single publication scope, validates targets/known child handoffs, and admits work. Other producers use this same compiler.
 
 ### 9.2 Edit mode
 
-Edit mode updates an existing Temporal execution in place.
-
-Flow:
-
-1. Validate the shared form.
-2. Externalize edited instructions or large inputs when required.
-3. Build a Temporal update payload.
-4. Submit the update to the existing workflow.
-
-Canonical request:
+Supported task input edits externalize new content as needed and send UpdateInputs to:
 
 ```http
 POST /api/executions/{workflowId}/update
 ```
 
-Canonical update name:
+The payload includes updateName, candidate refs and parametersPatch as supported. A helper such as buildTemporalArtifactEditUpdatePayload can assemble it but is not the authority.
 
-```json
-{ "updateName": "UpdateInputs" }
-```
-
-The payload should include the newly prepared input state, which may contain:
-
-- a new `inputArtifactRef` when the edited inputs are artifact-backed
-- a `parametersPatch` for structured values
-- any other update fields required by the backend contract
-
-A helper such as `buildTemporalArtifactEditUpdatePayload(...)` may be used to assemble this request.
+An unadmitted draft may change context and recompile normally. Once execution authority, candidate identity, or children are admitted, Edit cannot broaden the publication scope, replace repository/PR target, mutate already-created children, or patch worker-facing compiled modes at a nominal safe point. Such changes require the supported newly admitted run/continuation/rerun path with lineage. Non-authority task updates and title changes retain their declared lifecycle behavior.
 
 ### 9.3 Rerun mode
 
-Rerun mode uses the same prefilled form but requests a rerun instead of mutating the original terminal execution.
+RequestRerun uses confirmed or edited form values through normal admission. The original run remains immutable. A new run may preserve workflowId under the lifecycle contract but has distinct run/input/plan and publication-scope identity.
 
-For failed or canceled executions, rerun mode is the supported way to edit the prior Workflow Execution and submit it again. The original execution remains immutable and terminal; the shared form reconstructs the previous input state, allows the operator to change instructions, runtime options, repository or branch fields, skills, templates, and other supported inputs, and then sends those edited values through `RequestRerun`.
+A rerun changes neither historical child policy nor remote effects already performed. Reusing a logical child idempotency key with conflicting target/policy must produce an explicit conflict or existing-child disposition, not a duplicate launch or false acceptance of the new settings.
 
-Canonical request:
-
-```http
-POST /api/executions/{workflowId}/update
-```
-
-Canonical update name:
-
-```json
-{ "updateName": "RequestRerun" }
-```
-
-The rerun request uses the edited or confirmed form values and follows the same artifact rules as edit mode.
+The UI checks the actual accepted response. Terminal rerun support is supplied by the lifecycle owner, never assumed from a 200 response or implemented by a queue fallback.
 
 ### 9.4 No queue fallback
 
-There is no queue-era fallback path. If Temporal editing or rerun is unsupported, the UI must fail explicitly rather than silently routing through legacy queue logic.
+Unsupported Temporal update/rerun fails explicitly. It cannot silently create a queue job or another publishing path.
+
+### 9.5 Auto and explicit selections
+
+While editing task inputs, Auto recomputes its recommendation from the selected definition and current inputs under the draft's update policy. An explicit None/Branch/PR choice survives and is validated. Returning to Auto is a deliberate action.
+
+Before submission show the effective output, child scope, possible merge effects, and required branch/candidate handoff. A resolver requiring pushes is incompatible with None even in fix-only. A batch requiring predecessor code cannot silently lose its handoff when publication/merge is disabled.
 
 ## 10. Artifact rules
 
 ### 10.1 No historical mutation
 
-Previously stored input artifacts are immutable for the purpose of Workflow editing. An edit must create new artifact references instead of mutating old ones.
+Inputs, plans, Skill snapshots, saved work, and terminal evidence are immutable historical artifacts. A changed draft creates new refs.
 
 ### 10.2 Preserve lineage
 
-The system should preserve enough metadata to understand:
-
-- which execution was edited
-- which new artifacts were created for the edit
-- whether the action was an in-place input update or a rerun request
+Record the source workflow/run, operator action, definition/context changes, new artifacts, admitted scope, and actual update/rerun disposition. Restored workspace bytes are not old session, lease, approval, or publication authority.
 
 ### 10.3 Externalization policy
 
-Large instruction bodies or other large inputs should continue to use the platform’s normal artifact externalization rules.
+Large instructions and input evidence remain artifact-backed through existing storage rules. No second draft or publication database is needed.
 
 ## 11. API contract
 
 ### 11.1 Read contract requirements
 
-The Temporal execution read path must expose enough information to rebuild the submit-page draft and render correct actions.
-
-At minimum, the detail payload should make available:
-
-- `workflowId`
-- workflow type
-- current run identity as needed by the detail page
-- current input parameters
-- referenced input artifacts
-- capability flags such as `actions.canUpdateInputs` and `actions.canRerun`
-- any template, runtime, model, repository, and publish information required to reconstruct the form
-
-For failed and canceled `MoonMind.UserWorkflow` executions, the read contract must expose enough input state for the submit page to build an editable rerun draft whenever `actions.canRerun` is `true`.
+Describe supplies workflowId/type, exact current/source run identity, authored input refs/parameters, selected definition evidence, permitted actions, and enough safe runtime/context/publication information to reconstruct the form. It distinguishes authored policy from local compiled mode and observed effects.
 
 ### 11.2 Update contract requirements
 
-The update endpoint must support:
-
-- `updateName = "UpdateInputs"`
-- `updateName = "RequestRerun"`
-
-The contract should allow the frontend to send:
-
-- structured parameter patches
-- new artifact references for edited input content
-- enough context for the backend to validate the request against workflow state
+UpdateInputs and RequestRerun accept supported structured patches and refs, revalidate lifecycle/freshness and single-context semantics, and reject forged bound/compiled fields. Current authority is checked independently of historical evidence.
 
 ### 11.3 Response handling
 
-The frontend must handle accepted update responses and surface meaningful state to the operator.
-
-The backend may indicate outcomes such as:
-
-- applied immediately
-- scheduled for the next safe point
-- handled through continue-as-new
-
-Those states must be reflected in success messaging and redirect behavior.
+accepted and applied timing are explicit. Immediate, next_safe_point, and continue_as_new responses are shown accurately. A 200 non-accepted result is not success. Accepted task updates do not imply permission for an in-place authority change.
 
 ## 12. Redirect and refresh behavior
 
-After a successful edit or rerun request:
-
-- redirect back to the Temporal detail route for that workflow
-- refresh detail data so the operator sees the latest backend state
-- for rerun, land on the latest-run view when the detail experience supports it
-
-The operator should always return to the execution context they came from rather than being dropped into a generic queue or list page.
+After confirmed success, return to the original workflow's detail route or the returned newly admitted lineage target, using latest-run view where applicable. Refresh authoritative state. Do not redirect to a generic queue or infer a new run before the backend confirms it.
 
 ## 13. Validation and guardrails
 
-The submit page must block submission when any of the following is true:
+Block unsupported workflow types/actions, unavailable required artifacts, incomplete reconstruction, stale execution state, conflicting context copies, incompatible publishing/finish requirements, changed definition authority without review, or server-denied target/access.
 
-- the workflow type is unsupported
-- the requested mode is unsupported for the current execution
-- required fields cannot be reconstructed or are missing
-- required artifacts cannot be created
-- backend capability flags do not allow the requested action
-- the backend rejects the update because the workflow state changed
-
-Errors should be explicit and operator-readable. The frontend should not pretend a Workflow Execution is editable if Temporal says it is not.
+Errors point to the visible authored source control and consuming step, not an invisible bound Skill input. Safe task values survive. Changing context invalidates stale lookups/expansions rather than restoring them after a failed submit.
 
 ## 14. Observability and audit
 
-The system must preserve a clear audit trail across:
-
-- the original execution
-- the operator action taken from the detail page
-- any newly created artifacts
-- any backend update result, including deferred application semantics
-- any rerun instance created from a terminal execution
-
-Operator-visible detail views should make it possible to understand whether a change was applied immediately, scheduled for a safe point, or resulted in a rerun path.
+The original execution, operator action, new artifact identities, accepted/rejected/deferred result, rerun instance, and scoped child links remain traceable. Verified old publication and saved outputs survive failed rerun attempts. A child's local mode cannot rewrite the displayed ancestor policy.
 
 ## 15. Non-goals
 
-This design intentionally does not include:
-
-- a separate edit-only form distinct from `/workflows/new`
-- queue-first Workflow editing UX
-- manifest-run editing
-- recurring schedule editing
-- inline quick-edit controls on the detail page
-- direct mutation of historical artifacts
+No separate edit-only form, queue-first workflow, manifest-run editing, recurring-definition editing in this view, inline quick-edit authority bypass, historical artifact mutation, or generic per-step publication override.
 
 ## 16. Deprecated legacy references
 
-The following concepts should be removed from canonical docs and primary UI flows when describing Temporal Workflow editing:
-
-- `editJobId`
-- `/tasks/queue/new`
-- queue-job update behavior
-- queue resubmit language when the action is actually a Temporal rerun
+New UI/docs use workflow Edit/Rerun rather than editJobId, `/tasks/queue/new`, queue-job update, or queue resubmit. Read-only historical displays can show old values with clear provenance but never make them active new controls.
 
 ## 17. Completion criteria
 
-This design is considered implemented when all of the following are true:
+Conformance proves shared Create/Edit/Rerun UX through actual read/compiler/update boundaries; failed/canceled supported reruns; one authored context and policy; immutable artifacts; correct acceptance/redirect behavior; and preserved original-versus-new run lineage.
 
-1. The Workflow detail page once again exposes an **Edit** action for supported Temporal executions.
-2. `/workflows/new?editExecutionId=<workflowId>` opens with a prefilled draft reconstructed from Temporal execution data and artifacts.
-3. `/workflows/new?rerunExecutionId=<workflowId>` opens the same shared form in rerun mode.
-4. Edit submissions call `UpdateInputs`.
-5. Rerun submissions call `RequestRerun`.
-6. Failed and canceled executions with `actions.canRerun = true` open an editable prefilled rerun draft and can be submitted again with changed inputs.
-7. Edited input content creates new artifact refs rather than mutating old artifacts.
-8. Operators return to the Temporal detail experience after success.
-9. Canonical documentation and UI no longer rely on queue-era route params or terminology.
-10. Regression tests cover the detail-page entry point, prefill reconstruction, submit behavior, failed/canceled rerun editing, and redirect flow.
+Regression cases cover coordinator None with PR/Auto children, old None-to-Auto coercion, conflicting repository/branch copies, unchanged versus changed definition digests, explicit choices surviving Run changes, new-admission requirements for changed authority, stale lookups, and idempotency conflicts. UI-only prefill tests do not establish safe execution or replay.
 
 ## 18. Implementation tracking
 
-Implementation sequencing and migration details should be tracked in:
-
-```text
-docs/Workflows/WorkflowEditingSystem.md
-```
-
-That plan should remain an execution checklist. This document is the canonical target-state design.
+This document is the canonical target-state contract. Implementation sequencing, cutover constraints, and execution evidence belong in the existing issues or `docs/tmp/`. Historical support and deployed qualification are not inferred from documentation status.
