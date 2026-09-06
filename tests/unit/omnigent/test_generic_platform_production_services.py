@@ -74,6 +74,10 @@ from moonmind.omnigent.host_services.runtime_environment import (
     OmnigentRuntimeEnvironmentService,
 )
 from moonmind.omnigent.host_services.workspace import OmnigentWorkspaceMaterializer
+from moonmind.workflows.temporal.runtime.workspace_locators import (
+    SandboxWorkspaceRecord,
+    SandboxWorkspaceRecordStore,
+)
 from moonmind.omnigent.provider_leases import (
     AcquiredProviderLease,
     OmnigentProviderLeaseCoordinator,
@@ -2840,8 +2844,7 @@ async def test_workspace_attachment_translates_to_daemon_visible_volume_path(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     workspace_root = tmp_path / "worker"
-    workspace = workspace_root / "run-1"
-    workspace.mkdir(parents=True)
+    workspace_root.mkdir(parents=True)
     monkeypatch.setenv("WORKFLOW_WORKSPACE_ROOT", str(workspace_root))
     monkeypatch.setenv("WORKFLOW_DOCKER_DAEMON_MODE", "remote")
 
@@ -2849,21 +2852,56 @@ async def test_workspace_attachment_translates_to_daemon_visible_volume_path(
         assert argv[-1] == "agent-workspaces"
         return 0, "/daemon/agent_workspaces\n", ""
 
+    # MoonLadderStudios/MoonMind#4014 removed raw workspacePath precedence:
+    # an existing workspace needs a server-issued ownership/use grant. The
+    # daemon translation below exercises the granted path, not a raw mount.
+    workspace_id = "granted-ws-1"
+    granted = workspace_root / "temporal_sandbox" / workspace_id / "repo"
+    granted.mkdir(parents=True)
+    (granted / "KEEP").write_text("kept", encoding="utf-8")
+    SandboxWorkspaceRecordStore(workspace_root).ensure(
+        SandboxWorkspaceRecord(
+            workspace_id=workspace_id,
+            workflow_id="workflow-1",
+            step_execution_id="idem-1",
+            relative_path="repo",
+        )
+    )
+
     service = OmnigentWorkspaceMaterializer(
         command_runner=runner,
         workspace_root=workspace_root,
         workspace_volume="agent-workspaces",
     )
     request = _request().model_copy(
-        update={"workspace_spec": {"workspacePath": str(workspace)}}
+        update={
+            "workspace_spec": {
+                "workspaceSource": {
+                    "kind": "existing_workspace",
+                    "existingWorkspaceGrant": {
+                        "workspaceId": workspace_id,
+                        "ownerWorkflowId": "workflow-1",
+                        "ownerStepExecutionId": "idem-1",
+                        "generation": 1,
+                        "mode": "exclusive",
+                    },
+                }
+            }
+        }
     )
 
     attachment = await service.materialize(request)
 
-    assert attachment["sourceRef"] == "/daemon/agent_workspaces/run-1"
+    assert (
+        attachment["sourceRef"]
+        == "/daemon/agent_workspaces/temporal_sandbox/granted-ws-1/repo"
+    )
     assert attachment["accessMode"] == "read-write"
 
     read_only_attachment = await service.materialize(request, mutation="read_only")
 
-    assert read_only_attachment["sourceRef"] == "/daemon/agent_workspaces/run-1"
+    assert (
+        read_only_attachment["sourceRef"]
+        == "/daemon/agent_workspaces/temporal_sandbox/granted-ws-1/repo"
+    )
     assert read_only_attachment["accessMode"] == "read-only"
