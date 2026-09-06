@@ -1,0 +1,9 @@
+{
+  "source": "Minimized from workflow mm:311b5931-d107-445a-b821-f4fdc398e09d; provider failure reconstructed from server log and native status contract. Identifiers and workspace URL removed.",
+  "events": [
+    {"type": "response.in_progress", "response": {"id": "injection-response", "status": "in_progress"}},
+    {"type": "response.completed", "response": {"id": "injection-response", "status": "completed"}},
+    {"type": "session.status", "conversation_id": "session-1", "status": "failed", "error": {"code": "codex_reauth_required", "message": "This model collects data used to improve its quality and requires explicit opt in. OpenCode needs you to re-authenticate. Run opencode auth login and retry."}},
+    {"type": "session.status", "conversation_id": "session-1", "status": "idle", "error": null}
+  ]
+}
