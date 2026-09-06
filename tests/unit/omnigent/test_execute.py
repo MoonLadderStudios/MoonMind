@@ -32,6 +32,7 @@ from moonmind.omnigent.execute import (
     _agent_items,
     _await_marked_turn_terminal,
     _build_omnigent_first_message,
+    _build_capture_bundle,
     _durable_terminal_status_with_evidence,
     _enqueue_stream_events,
     _first_message_text,
@@ -1277,18 +1278,16 @@ async def test_provider_rejection_after_injection_completion(
     monkeypatch.setattr(
         "moonmind.omnigent.execute._MARKED_TURN_START_TIMEOUT_SECONDS", 0.05
     )
-    import moonmind.omnigent.execute as execute_module
-
-    capture = execute_module._build_capture_bundle
-
     async def capture_with_crash(**kwargs):
         nonlocal crashed
         if crash_at == "harvest" and not crashed and kwargs["harvest_resources"]:
             crashed = True
             raise WorkerCrash()
-        return await capture(**kwargs)
+        return await _build_capture_bundle(**kwargs)
 
-    monkeypatch.setattr(execute_module, "_build_capture_bundle", capture_with_crash)
+    monkeypatch.setattr(
+        "moonmind.omnigent.execute._build_capture_bundle", capture_with_crash
+    )
     request = _request().model_copy(
         update={
             "parameters": {
