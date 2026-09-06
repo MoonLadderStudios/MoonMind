@@ -598,10 +598,16 @@ async def test_a_released_host_lease_is_not_a_reservation(
 
 
 @pytest.mark.asyncio
-async def test_an_unnamed_binding_falls_back_to_the_caller_flag(
+async def test_an_unnamed_binding_cannot_claim_a_reservation(
     capacity_fence_session_maker,
 ) -> None:
-    """A caller that cannot name its binding has no reservation to reuse."""
+    """A caller that cannot name its binding has no reservation to reuse.
+
+    MoonLadderStudios/MoonMind#3881 closes the remaining gap: the shortcut is
+    derived from the exact persisted owner, so an unnamed caller's own
+    ``alreadyAllocated`` assertion is not evidence of a reservation and cannot
+    bypass either the host count or the machine accounting.
+    """
 
     assert await _run_already_holds_generic_host({}) is False
-    assert await _run_already_holds_generic_host({"alreadyAllocated": True}) is True
+    assert await _run_already_holds_generic_host({"alreadyAllocated": True}) is False

@@ -627,6 +627,7 @@ RUN_REPOSITORY_BOUND_NO_COMMIT_OUTCOME_PATCH = (
     "run-repository-bound-no-commit-outcome-v1"
 )
 RUN_PUBLISHED_BRANCH_HANDOFF_PATCH = "run-published-branch-handoff-v1"
+RUN_ACCEPTED_PUBLISHED_BRANCH_HANDOFF_PATCH = "run-accepted-published-branch-handoff-v1"
 # Preserve the authored PR/branch base when a downstream publishing step omits
 # repositoryOperation. Publishing itself is mutation authority, so current
 # executions compile that omission to ``write`` while older histories replay
@@ -4003,6 +4004,10 @@ class MoonMindRunWorkflow:
             self._remediation_workspace_head = RemediationWorkspaceHead.model_validate(
                 carried_head
             )
+        if workflow.patched(RUN_ACCEPTED_PUBLISHED_BRANCH_HANDOFF_PATCH):
+            published_head = continuation.get("acceptedPublishedHead")
+            if isinstance(published_head, Mapping):
+                self._publish_context["acceptedPublishedHead"] = dict(published_head)
         carried_session = continuation.get("managedSessionBinding")
         if isinstance(carried_session, Mapping) and workflow.patched(
             RUN_REMEDIATION_CONTINUE_MANAGED_SESSION_PATCH
@@ -4055,6 +4060,10 @@ class MoonMindRunWorkflow:
             # opted-in loop as headless and skip the head authority checks. The
             # key is additive, so histories written without it still restore.
             continuation["workspaceHead"] = head.model_dump(by_alias=True, mode="json")
+        if workflow.patched(RUN_ACCEPTED_PUBLISHED_BRANCH_HANDOFF_PATCH):
+            published_head = self._publish_context.get("acceptedPublishedHead")
+            if isinstance(published_head, Mapping):
+                continuation["acceptedPublishedHead"] = dict(published_head)
         binding = self._codex_session_binding
         if binding is not None and workflow.patched(
             RUN_REMEDIATION_CONTINUE_MANAGED_SESSION_PATCH
@@ -4230,13 +4239,15 @@ class MoonMindRunWorkflow:
     def _workflow_verified_published_head(self) -> tuple[str, str] | None:
         """Return the run-owned published ``(branch, headSha)`` when verified.
 
-        ``pushStatus`` only reaches ``pushed`` once a step produced
-        authoritative accepted repository evidence, so this projection is the
-        run's durable authority for "a verified remote head exists". Steps that
-        publish nothing -- read-only MoonSpec verification in particular --
-        report no push status and leave the projection untouched.
+        Current histories use the atomic accepted publication record. Raw
+        per-step metadata can mix heads and lose a prior push on ``no_commits``;
+        its projection is retained only for replay of older histories.
         """
 
+        if self._patched_or_false_outside_workflow(
+            RUN_ACCEPTED_PUBLISHED_BRANCH_HANDOFF_PATCH
+        ):
+            return self._accepted_published_head()
         if (
             str(self._publish_context.get("pushStatus") or "").strip().lower()
             != "pushed"
@@ -9691,6 +9702,12 @@ class MoonMindRunWorkflow:
         workspace_spec["repository"] = repository.strip()
         workspace_spec["repositoryTarget"] = repository_target
         base_branch = _normalize_git_branch_ref(self._publish_context.get("baseRef"))
+        if self._patched_or_false_outside_workflow(
+            RUN_ACCEPTED_PUBLISHED_BRANCH_HANDOFF_PATCH
+        ):
+            base_branch = self._accepted_published_base_branch()
+            if repository_operation == "write" and not base_branch:
+                raise ValueError("accepted published head is missing its base branch")
         workspace_spec["startingBranch"] = (
             base_branch if repository_operation == "write" and base_branch else branch
         )

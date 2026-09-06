@@ -152,7 +152,10 @@ async def omnigent_httpx_client(
     if pool is not None:
         yield pool.client()
         return
-    async with httpx.AsyncClient() as client:
+    # MoonLadderStudios/MoonMind#3884: the owned fallback is bounded by the
+    # same operator-governed limits as the pool. An unbounded default here
+    # would reintroduce the emergent connection count the pool governs.
+    async with httpx.AsyncClient(limits=resolved_transport_limits()) as client:
         yield client
 
 

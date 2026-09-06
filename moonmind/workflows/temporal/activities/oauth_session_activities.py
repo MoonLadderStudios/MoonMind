@@ -44,8 +44,6 @@ async def oauth_session_prepare_credential_maintenance(
 ) -> dict[str, Any]:
     """Drain stale profile-bound sessions/hosts before mutating OAuth state."""
 
-    import httpx
-
     from api_service.db.base import async_session_maker
     from moonmind.omnigent.oauth_host_runtime import OmnigentOAuthHostRuntime
     from moonmind.omnigent.oauth_hosts import OmnigentOAuthHostRepository
@@ -57,7 +55,10 @@ async def oauth_session_prepare_credential_maintenance(
     from moonmind.repositories.lore_runtime import (
         build_lore_repository_adapter_from_environment,
     )
-    from moonmind.workflows.adapters.omnigent_client import OmnigentHttpClient
+    from moonmind.workflows.adapters.omnigent_client import (
+        OmnigentHttpClient,
+        pooled_http_client,
+    )
 
     profile_id = str(request.get("profile_id") or "").strip()
     if not profile_id:
@@ -67,7 +68,7 @@ async def oauth_session_prepare_credential_maintenance(
     if binding is None:
         return {"profile_id": profile_id, "drained": 0}
     leases = await repository.list_active_host_leases_for_profile(profile_id)
-    async with httpx.AsyncClient() as http_client:
+    async with pooled_http_client() as http_client:
         client = OmnigentHttpClient(
             base_url=resolved_server_url(),
             api_token=resolved_api_token(),
@@ -107,8 +108,6 @@ async def oauth_session_revalidate_bound_host(
 ) -> dict[str, Any]:
     """Require matching-generation destination preflight after reconnect."""
 
-    import httpx
-
     from api_service.db.base import async_session_maker
     from moonmind.omnigent.oauth_host_runtime import OmnigentOAuthHostRuntime
     from moonmind.omnigent.host_failures import OmnigentOAuthHostError
@@ -121,7 +120,10 @@ async def oauth_session_revalidate_bound_host(
         resolved_proxy_forward_headers,
         resolved_server_url,
     )
-    from moonmind.workflows.adapters.omnigent_client import OmnigentHttpClient
+    from moonmind.workflows.adapters.omnigent_client import (
+        OmnigentHttpClient,
+        pooled_http_client,
+    )
 
     profile_id = str(request.get("profile_id") or "").strip()
     provider_lease_id = str(request.get("provider_lease_id") or "").strip()
@@ -151,7 +153,7 @@ async def oauth_session_revalidate_bound_host(
         )
     credential_validation_failed = False
     try:
-        async with httpx.AsyncClient() as http_client:
+        async with pooled_http_client() as http_client:
             client = OmnigentHttpClient(
                 base_url=resolved_server_url(),
                 api_token=resolved_api_token(),
