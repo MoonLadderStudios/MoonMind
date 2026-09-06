@@ -1,0 +1,17 @@
+{
+  "workflowId": "mm:312b27e5-3fc0-4bfa-a800-188a2ef98050",
+  "stepExecutionId": "node-1:execution:1",
+  "request": {
+    "agentKind": "external",
+    "agentId": "omnigent",
+    "correlationId": "mm:312b27e5-3fc0-4bfa-a800-188a2ef98050",
+    "idempotencyKey": "selected-branch-publication-replay",
+    "workspaceSpec": {
+      "repository": "MoonLadderStudios/MoonMind",
+      "branch": "moonmind-job-34d23444"
+    },
+    "parameters": {"publishMode": "branch"}
+  },
+  "expectedBranch": "moonmind-job-34d23444",
+  "observedIncorrectBranch": "moonmind-job-22c1dadb"
+}
