@@ -14,6 +14,15 @@ name: Provider / Omnigent Concurrency Qualification
 # exact built artifacts under a real Docker daemon, and the bounded
 # protected-live route.
 #
+# It also *records* the hermetic rows, in the same job as the exact-image rows.
+# The advertised level is cross-layer — a level is validated only when both
+# required layers passed it — and the two records merge only when they name one
+# substrate identity, whose resource class is measured on the runner rather than
+# declared. A hermetic record earned on a pull-request runner therefore could
+# never merge with this one, and the published index would carry an exact-image
+# record that validates nothing. Where the hermetic layer is *gated* does not
+# move: its owning tests remain required pull-request CI.
+#
 # The scheduled exact-image job reads four repository variables —
 # OMNIGENT_CONCURRENCY_SUPPORT_KEY, OMNIGENT_WORKER_BUILD_REF,
 # OMNIGENT_WORKER_TOPOLOGY_REF and OMNIGENT_CONCURRENCY_RESOURCE_CLASS. An
@@ -71,7 +80,7 @@ concurrency:
 
 jobs:
   exact-docker:
-    name: Exact-image concurrency N=2,4,8
+    name: Required-layer concurrency record (hermetic N=1..16, exact image N=2,4,8)
     runs-on: [self-hosted, linux, omnigent-provider-verification]
     environment: omnigent-provider-verification
     timeout-minutes: 120
@@ -142,11 +151,42 @@ jobs:
             --resource-class "${{ vars.OMNIGENT_CONCURRENCY_RESOURCE_CLASS }}" \
             --evidence-dir artifacts/omnigent-concurrency/evidence \
             --output artifacts/omnigent-concurrency/exact-docker-record.json
-      - name: Upload the exact-image concurrency record
+      # The cross-layer validated level needs a passing row in *both* required
+      # layers at the same level, and the two records only merge when they were
+      # measured on one machine: the resource class is measured, not declared,
+      # so a hermetic record earned on some other runner is a different
+      # substrate identity and the publisher refuses to merge it. Recording the
+      # hermetic rows here — on the same runner, in the same run, against the
+      # same PostgreSQL service — is what makes a validated level reachable at
+      # all (MoonLadderStudios/MoonMind#3885). The hermetic *tests* remain
+      # required pull-request CI; this step records their rows, it does not
+      # move where they are gated.
+      #
+      # It runs even when the exact-image rows failed, because a record that
+      # was earned is never withheld; it is skipped on cancellation, where
+      # nothing was observed.
+      - name: Run the hermetic concurrency rows
+        if: ${{ !cancelled() }}
+        env:
+          MOONMIND_TEST_POSTGRES_URL: postgresql://moonmind:moonmind@127.0.0.1:5432/postgres
+        run: |
+          python tools/run_omnigent_concurrency_qualification.py \
+            --layer hermetic \
+            --levels 1,2,4,8,16 \
+            --support-combination-key "${{ vars.OMNIGENT_CONCURRENCY_SUPPORT_KEY }}" \
+            --moonmind-commit "${{ github.sha }}" \
+            --worker-build-ref "${{ vars.OMNIGENT_WORKER_BUILD_REF }}" \
+            --worker-topology-ref "${{ vars.OMNIGENT_WORKER_TOPOLOGY_REF }}" \
+            --resource-class "${{ vars.OMNIGENT_CONCURRENCY_RESOURCE_CLASS }}" \
+            --evidence-dir artifacts/omnigent-concurrency/hermetic-evidence \
+            --output artifacts/omnigent-concurrency/hermetic-record.json
+      # One artifact carries both required-layer records, so the publisher
+      # downloads a complete record for this run rather than half of one.
+      - name: Upload the required-layer concurrency records
         if: always()
         uses: actions/upload-artifact@v7
         with:
-          name: omnigent-concurrency-exact-docker-${{ github.run_id }}-${{ github.run_attempt }}
+          name: omnigent-concurrency-required-layers-${{ github.run_id }}-${{ github.run_attempt }}
           path: artifacts/omnigent-concurrency
           if-no-files-found: error
           retention-days: 90

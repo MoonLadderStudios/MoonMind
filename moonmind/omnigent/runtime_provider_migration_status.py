@@ -20,7 +20,7 @@ from __future__ import annotations
 from datetime import UTC, datetime
 from typing import Any, Iterable, Mapping
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from moonmind.omnigent.control_plane import metrics as control_plane_metrics
 from moonmind.omnigent.runtime_provider_rollout import (
@@ -38,6 +38,7 @@ from moonmind.omnigent.runtime_provider_rollout import (
     state_admits_execution,
     state_admits_new_authoring,
 )
+from moonmind.omnigent.settings import generic_host_capacity
 
 RUNTIME_PROVIDER_MIGRATION_STATUS_VERSION = (
     "moonmind.omnigent-runtime-provider-migration-status.v1"
@@ -56,6 +57,52 @@ class MigrationEvidenceView(BaseModel):
     expires_at: datetime = Field(alias="expiresAt")
     age_seconds: int = Field(alias="ageSeconds", ge=0)
     expired: bool
+
+
+#: How the advertised concurrency peak was bounded. A closed, low-cardinality
+#: vocabulary so the operator view names the limit rather than a number alone.
+ADVERTISED_CONCURRENCY_LIMITS: tuple[str, ...] = (
+    "unqualified",
+    "qualified_level",
+    "operator_ceiling",
+)
+
+
+class AdvertisedConcurrencyView(BaseModel):
+    """The concurrency peak one exact combination may advertise.
+
+    MoonLadderStudios/MoonMind#3885: a deployment must not advertise a peak it
+    never validated. ``validatedLevel`` is the level the protected concurrency
+    record observed for *this* combination; ``advertisedLevel`` is that level
+    or the operator's lower configured ceiling, never more. A combination with
+    no current passing concurrency evidence advertises ``0`` -- unqualified is
+    not implicitly one, because nothing observed it.
+
+    This view never rewrites the configured ceiling: ``operatorCeiling`` is
+    reported as configured so the operator can see which of the two bounds is
+    binding.
+    """
+
+    model_config = ConfigDict(frozen=True, extra="forbid", populate_by_name=True)
+
+    advertised_level: int = Field(alias="advertisedLevel", ge=0)
+    validated_level: int = Field(alias="validatedLevel", ge=0)
+    operator_ceiling: int = Field(alias="operatorCeiling", ge=0)
+    limited_by: str = Field(alias="limitedBy")
+
+    @model_validator(mode="after")
+    def validate_bounds(self) -> "AdvertisedConcurrencyView":
+        if self.limited_by not in ADVERTISED_CONCURRENCY_LIMITS:
+            raise ValueError(f"unknown advertised concurrency limit: {self.limited_by}")
+        if self.advertised_level > self.validated_level:
+            raise ValueError(
+                "an advertised concurrency level cannot exceed the validated level"
+            )
+        if self.advertised_level > self.operator_ceiling:
+            raise ValueError(
+                "an advertised concurrency level cannot exceed the operator ceiling"
+            )
+        return self
 
 
 class MigrationOutcomeCounts(BaseModel):
@@ -113,6 +160,9 @@ class RuntimeProviderMigrationRow(BaseModel):
     )
     protected_evidence: MigrationEvidenceView | None = Field(
         default=None, alias="protectedEvidence"
+    )
+    advertised_concurrency: AdvertisedConcurrencyView = Field(
+        alias="advertisedConcurrency"
     )
     last_successful_canary_at: datetime | None = Field(
         default=None, alias="lastSuccessfulCanaryAt"
@@ -261,6 +311,47 @@ def _evidence_view(
         expiresAt=expires_at,
         ageSeconds=age,
         expired=expires_at <= now,
+    )
+
+
+def _advertised_concurrency(
+    *,
+    evidence: Any,
+    operator_ceiling: int,
+    now: datetime,
+) -> AdvertisedConcurrencyView:
+    """Report the peak this combination may advertise, bounded by its evidence.
+
+    This is the production consumer of
+    :func:`~moonmind.omnigent.execution_support_evidence.advertised_concurrency_ceiling`
+    (MoonLadderStudios/MoonMind#3885). Without one, a deployment configured for
+    ``N=16`` advertised sixteen while only ``N=2`` had ever been observed.
+
+    Freshness is not decided here. The ceiling helper asks admission whether the
+    row is still admissible, so an expired or over-age row advertises nothing
+    and this projection cannot drift into a more permissive rule than the
+    authority it is reporting on.
+    """
+
+    from moonmind.omnigent.execution_support_evidence import (
+        advertised_concurrency_ceiling,
+    )
+
+    validated = advertised_concurrency_ceiling(evidence, now=now)
+    advertised = advertised_concurrency_ceiling(
+        evidence, operator_ceiling=operator_ceiling, now=now
+    )
+    if validated == 0:
+        limited_by = "unqualified"
+    elif advertised < validated:
+        limited_by = "operator_ceiling"
+    else:
+        limited_by = "qualified_level"
+    return AdvertisedConcurrencyView(
+        advertisedLevel=advertised,
+        validatedLevel=validated,
+        operatorCeiling=operator_ceiling,
+        limitedBy=limited_by,
     )
 
 
@@ -487,6 +578,10 @@ def build_runtime_provider_migration_status(
     deterministic_entries, deterministic_available = _load_deterministic_entries()
     protected_entries, protected_available = _load_protected_entries()
     active_controls = tuple(str(item) for item in active.rollback_controls)
+    # The operator's configured aggregate ceiling, read once and never
+    # rewritten: this projection reports which bound is binding, it does not
+    # change a configured capacity value.
+    operator_ceiling = generic_host_capacity()
 
     rows: list[RuntimeProviderMigrationRow] = []
     for rule in active.rules:
@@ -570,6 +665,11 @@ def build_runtime_provider_migration_status(
                     if protected is not None
                     else None
                 ),
+                advertisedConcurrency=_advertised_concurrency(
+                    evidence=protected,
+                    operator_ceiling=operator_ceiling,
+                    now=observed_at,
+                ),
                 # A passing protected-live run *is* the canary evidence for a
                 # combination; there is no second canary log to reconcile.
                 lastSuccessfulCanaryAt=(
@@ -602,7 +702,9 @@ def build_runtime_provider_migration_status(
 
 
 __all__ = [
+    "ADVERTISED_CONCURRENCY_LIMITS",
     "RUNTIME_PROVIDER_MIGRATION_STATUS_VERSION",
+    "AdvertisedConcurrencyView",
     "MigrationEvidenceView",
     "MigrationOutcomeCounts",
     "RuntimeProviderMigrationRow",

@@ -5101,6 +5101,31 @@ export interface paths {
 export type webhooks = Record<string, never>;
 export interface components {
     schemas: {
+        /**
+         * AdvertisedConcurrencyView
+         * @description The concurrency peak one exact combination may advertise.
+         *
+         *     MoonLadderStudios/MoonMind#3885: a deployment must not advertise a peak it
+         *     never validated. ``validatedLevel`` is the level the protected concurrency
+         *     record observed for *this* combination; ``advertisedLevel`` is that level
+         *     or the operator's lower configured ceiling, never more. A combination with
+         *     no current passing concurrency evidence advertises ``0`` -- unqualified is
+         *     not implicitly one, because nothing observed it.
+         *
+         *     This view never rewrites the configured ceiling: ``operatorCeiling`` is
+         *     reported as configured so the operator can see which of the two bounds is
+         *     binding.
+         */
+        AdvertisedConcurrencyView: {
+            /** Advertisedlevel */
+            advertisedLevel: number;
+            /** Validatedlevel */
+            validatedLevel: number;
+            /** Operatorceiling */
+            operatorCeiling: number;
+            /** Limitedby */
+            limitedBy: string;
+        };
         /** AgentProfileDocument */
         AgentProfileDocument: {
             /**
@@ -12971,6 +12996,7 @@ export interface components {
             executionRealizerRef: string;
             deterministicEvidence?: components["schemas"]["MigrationEvidenceView"] | null;
             protectedEvidence?: components["schemas"]["MigrationEvidenceView"] | null;
+            advertisedConcurrency: components["schemas"]["AdvertisedConcurrencyView"];
             /** Lastsuccessfulcanaryat */
             lastSuccessfulCanaryAt?: string | null;
             recentOutcomes: components["schemas"]["MigrationOutcomeCounts"];

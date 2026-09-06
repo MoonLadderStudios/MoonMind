@@ -42,6 +42,7 @@ from moonmind.omnigent.concurrency_qualification import (
     ConcurrencyRowStatus,
     ConcurrencyScenarioFamily,
     ConcurrencySupportIdentity,
+    DurableWaitObservation,
     ExecutionOverlapSample,
     MachineResourceClass,
     ObservedOverlapEvidence,
@@ -150,7 +151,14 @@ def _overlap(level: int, *, effective_limit: int | None = None, waiters: int = 0
             )
             for index in range(observed)
         ),
-        durable_waiters=waiters,
+        durable_waiters=tuple(
+            DurableWaitObservation(
+                execution_ref=f"waiter-{index}",
+                queue_ref="omnigent-provider-capacity-queue",
+                waiting_state="awaiting_slot",
+            )
+            for index in range(waiters)
+        ),
     )
 
 
@@ -276,6 +284,77 @@ def test_work_above_the_effective_limit_must_be_observed_waiting() -> None:
     assert _overlap(6, effective_limit=4, waiters=2).observed_peak == 4
     with pytest.raises(ValueError, match="durable waiters"):
         _overlap(6, effective_limit=4, waiters=0)
+
+
+def test_a_durable_waiter_must_name_the_queue_that_preserved_it() -> None:
+    """A refusal holds no slot either, and is not a waiter.
+
+    MoonLadderStudios/MoonMind#3885: recording waiters as a bare count let a
+    capacity *refusal* be published as evidence that the surplus was preserved,
+    because the count was already determined by the requested level and the
+    effective limit. A waiter now has to name the durable queue it waited in
+    and the state it published, which a refused execution has neither of.
+    """
+
+    with pytest.raises(ValueError):
+        DurableWaitObservation(
+            execution_ref="run-4",
+            queue_ref="",
+            waiting_state="awaiting_slot",
+        )
+    with pytest.raises(ValueError):
+        DurableWaitObservation(
+            execution_ref="run-4",
+            queue_ref="omnigent-provider-capacity-queue",
+            waiting_state="",
+        )
+
+
+def test_an_admitted_execution_cannot_also_be_recorded_as_waiting() -> None:
+    """The peak and the waiters must describe disjoint work."""
+
+    with pytest.raises(ValueError, match="both admitted and waiting"):
+        ObservedOverlapEvidence(
+            requested_level=3,
+            effective_limit=2,
+            barrier_synchronized=True,
+            samples=tuple(
+                ExecutionOverlapSample(
+                    execution_ref=f"run-{index}", started_at=0.0, ended_at=1.0
+                )
+                for index in range(2)
+            ),
+            durable_waiters=(
+                DurableWaitObservation(
+                    execution_ref="run-0",
+                    queue_ref="omnigent-provider-capacity-queue",
+                    waiting_state="awaiting_slot",
+                ),
+            ),
+        )
+
+
+def test_two_waiters_cannot_be_the_same_execution() -> None:
+    with pytest.raises(ValueError, match="distinct executions"):
+        ObservedOverlapEvidence(
+            requested_level=4,
+            effective_limit=2,
+            barrier_synchronized=True,
+            samples=tuple(
+                ExecutionOverlapSample(
+                    execution_ref=f"run-{index}", started_at=0.0, ended_at=1.0
+                )
+                for index in range(2)
+            ),
+            durable_waiters=tuple(
+                DurableWaitObservation(
+                    execution_ref="run-9",
+                    queue_ref="omnigent-provider-capacity-queue",
+                    waiting_state="awaiting_slot",
+                )
+                for _ in range(2)
+            ),
+        )
 
 
 def test_duplicate_execution_refs_are_rejected() -> None:

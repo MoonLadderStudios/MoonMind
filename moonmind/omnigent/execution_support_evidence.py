@@ -227,10 +227,37 @@ def assert_protected_evidence_matches_plan(
         raise ValueError("protected support evidence conflicts with the execution plan")
 
 
+def protected_evidence_is_admissible(
+    evidence: ProtectedExecutionSupportEvidence | None,
+    *,
+    now: datetime | None = None,
+) -> bool:
+    """Whether this row still carries admission authority on its own terms.
+
+    Admission also matches a row against the plan it is admitting; this answers
+    only the half that is about the row itself — its recorded outcome and its
+    freshness window. It answers it by asking
+    :func:`validate_protected_execution_support_evidence`, so a consumer that
+    advertises something on the strength of a row cannot drift into a second,
+    more permissive freshness rule and advertise what admission will refuse.
+    """
+
+    if evidence is None:
+        return False
+    try:
+        validate_protected_execution_support_evidence(
+            evidence.model_dump(mode="json", by_alias=True), now=now
+        )
+    except ValueError:
+        return False
+    return True
+
+
 def advertised_concurrency_ceiling(
     evidence: ProtectedExecutionSupportEvidence | None,
     *,
     operator_ceiling: int | None = None,
+    now: datetime | None = None,
 ) -> int:
     """Return the concurrency level this exact combination may advertise.
 
@@ -239,11 +266,16 @@ def advertised_concurrency_ceiling(
     was never observed. Missing concurrency evidence advertises ``0``: an
     unqualified combination is not implicitly qualified at 1, because nothing
     observed it.
+
+    A row admission would refuse — a non-pass outcome, an expired document, or
+    one older than :data:`MAX_EXECUTION_SUPPORT_EVIDENCE_AGE` — advertises ``0``
+    for the same reason: the concurrency dimension inherits the authority of the
+    row that carries it and has none of its own.
     """
 
     if evidence is None or evidence.concurrency is None:
         return 0
-    if evidence.status is not ExecutionSupportRowStatus.passed:
+    if not protected_evidence_is_admissible(evidence, now=now):
         return 0
     return evidence.concurrency.advertised_concurrency_level(operator_ceiling)
 
@@ -336,6 +368,7 @@ __all__ = [
     "advertised_concurrency_ceiling",
     "assert_protected_evidence_matches_plan",
     "find_protected_evidence_entry",
+    "protected_evidence_is_admissible",
     "load_protected_execution_support_evidence",
     "validate_protected_execution_support_evidence",
 ]
