@@ -1226,3 +1226,160 @@ async def test_reservation_state_names_are_the_persisted_contract(ledger) -> Non
         # Which managed launch created it is not recoverable from the container
         # alone, so it is recorded as unattributed rather than misattributed.
         assert adopted.workload_class == WORKLOAD_CLASS_UNATTRIBUTED
+
+
+@pytest.mark.asyncio
+async def test_an_admitted_reservation_always_survives_its_own_fence(
+    ledger,
+) -> None:
+    """#3881 FINDING-D: reserve must never admit what verify then refuses.
+
+    ``reserve_within`` is advisory only in the sense that another worker may
+    win the machine between it and the Docker mutation. It is never allowed to
+    hand back an admitted outcome the very next ``verify_within`` refuses on
+    the same state: that failure has no waiting path, so the caller can only
+    fail a launch nothing is actually refusing.
+
+    Both reservers share this method, so the invariant covers the container-job
+    boundary and the generic-host lease boundary at once.
+    """
+
+    # The permit layer is raised out of the way: this test is about the
+    # reservation the fence sees, not about how many launches may initialize.
+    budget = _budget(MOONMIND_MACHINE_MAX_CONCURRENT_INITIALIZING="8")
+    states: list[str] = []
+    for owner, prepare in (
+        ("lease-fresh", None),
+        ("lease-retried", "retry"),
+        ("lease-storage-retained", "storage_retained"),
+        ("lease-expired", "expired"),
+    ):
+        request = _request(owner, container_ref=f"mm-{owner}")
+        outcome = await ledger.reserve(request=request, budget=budget)
+        if prepare == "storage_retained":
+            # Reconciliation proved the consumer is not running, so its compute
+            # was released while its retained storage stayed accounted.
+            await ledger.confirm(
+                reservation_id=outcome.reservation_id,
+                generation=1,
+                container_ref=f"mm-{owner}",
+            )
+            await ledger.release(
+                reservation_id=outcome.reservation_id,
+                generation=1,
+                evidence=ReleaseEvidence(
+                    daemon_observed=True,
+                    consumer_stopped=True,
+                    storage_retained=True,
+                ),
+            )
+        if prepare == "expired":
+            async with ledger._factory()() as session:  # noqa: SLF001 - persisted
+                row = await session.get(
+                    MachineCapacityReservation, outcome.reservation_id
+                )
+                row.expires_at = datetime.now(UTC) - timedelta(seconds=1)
+                await session.commit()
+        if prepare is not None:
+            outcome = await ledger.reserve(request=request, budget=budget)
+        states.append(outcome.state)
+        if outcome.admitted:
+            assert await ledger.verify(
+                reservation_id=outcome.reservation_id, generation=1
+            ), f"{owner} was admitted in state {outcome.state} the fence refuses"
+        else:
+            # A refusal must name the resource that refused it so the caller
+            # can wait or report the true cause.
+            assert outcome.decision.limiting_resource is not None
+
+    # The storage-retained retry is the case the container-job workflow takes,
+    # and it must come back holding compute again rather than storage only.
+    assert STATE_STORAGE_RETAINED not in states
+
+
+@pytest.mark.asyncio
+async def test_a_stopped_consumers_retry_is_readmitted_not_reported_reused(
+    ledger,
+) -> None:
+    """#3881 FINDING-D: the row a retry gets back must hold compute again.
+
+    Reconciliation is right to release the compute of a consumer the daemon
+    proves is not running. The retry that follows is therefore a real admission
+    against the machine, not a reuse of accounting nobody is holding.
+    """
+
+    budget = _budget()
+    request = _request("lease-a", container_ref="mm-host-a")
+    outcome = await ledger.reserve(request=request, budget=budget)
+    await ledger.confirm(
+        reservation_id=outcome.reservation_id, generation=1, container_ref="mm-host-a"
+    )
+    # The consumer exists but is stopped, so a complete enumeration of running
+    # owned containers does not list it.
+    await ledger.reconcile(backend_ref=BACKEND, inventory=_inventory({}))
+    async with ledger._factory()() as session:  # noqa: SLF001 - persisted contract
+        row = await session.get(MachineCapacityReservation, outcome.reservation_id)
+        assert row.state == STATE_STORAGE_RETAINED
+    assert (await ledger.usage(backend_ref=BACKEND)).reserved_memory_mib == 0
+
+    retried = await ledger.reserve(request=request, budget=budget)
+
+    assert retried.admitted is True
+    assert retried.state == STATE_PRELAUNCH
+    assert retried.reservation_id == outcome.reservation_id
+    assert await ledger.verify(reservation_id=outcome.reservation_id, generation=1)
+    usage = await ledger.usage(backend_ref=BACKEND)
+    assert usage.reserved_memory_mib == 2048
+    assert usage.reserved_cpu_millis == 1000
+    assert usage.reserved_processes == 512
+    # The retained storage this row already held is counted once, not twice.
+    assert usage.reserved_temporary_storage_mib == 512
+    async with ledger._factory()() as session:  # noqa: SLF001 - persisted contract
+        row = await session.get(MachineCapacityReservation, outcome.reservation_id)
+        assert row.container_ref == "mm-host-a"
+        assert row.expires_at is not None
+
+
+@pytest.mark.asyncio
+async def test_a_stopped_consumers_retry_is_refused_by_the_real_resource(
+    ledger,
+) -> None:
+    """#3881 FINDING-D: a genuinely full machine refuses with its own reason.
+
+    The retry's re-admission is a real admission, so when the machine filled up
+    while the consumer was stopped it must be refused by the resource that is
+    actually holding it — and it must not overwrite the storage the retained
+    row is still spending with a waiter marker that accounts nothing.
+    """
+
+    budget = _budget(
+        MOONMIND_MACHINE_MEMORY_MIB="5120",
+        MOONMIND_MACHINE_MAX_CONCURRENT_INITIALIZING="8",
+    )
+    request = _request("lease-a", container_ref="mm-host-a")
+    outcome = await ledger.reserve(request=request, budget=budget)
+    await ledger.confirm(
+        reservation_id=outcome.reservation_id, generation=1, container_ref="mm-host-a"
+    )
+    await ledger.reconcile(backend_ref=BACKEND, inventory=_inventory({}))
+    # Two other launches took the machine while this consumer was stopped.
+    for owner in ("lease-b", "lease-c"):
+        admitted = await ledger.reserve(
+            request=_request(owner, container_ref=f"mm-{owner}"), budget=budget
+        )
+        assert admitted.admitted is True
+
+    refused = await ledger.reserve(request=request, budget=budget)
+
+    assert refused.admitted is False
+    assert refused.decision.limiting_resource == LIMITING_RESOURCE_MEMORY
+    assert refused.decision.unsatisfiable is False
+    assert not await ledger.verify(reservation_id=outcome.reservation_id, generation=1)
+    async with ledger._factory()() as session:  # noqa: SLF001 - persisted contract
+        row = await session.get(MachineCapacityReservation, outcome.reservation_id)
+    # Still accounting the storage its consumer retained: a refusal frees
+    # nothing, and a waiter marker here would read as free capacity.
+    assert row.state == STATE_STORAGE_RETAINED
+    assert (
+        await ledger.usage(backend_ref=BACKEND)
+    ).reserved_temporary_storage_mib == 512 * 3

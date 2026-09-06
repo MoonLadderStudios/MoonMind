@@ -771,7 +771,16 @@ already be running; only daemon evidence that nothing is running under that
 name reclaims it. It is confirmed against the container once the container
 exists, and it is released only on observed evidence that the consumer is gone.
 An Activity retry of the same job reconciles with the reservation it already
-holds rather than taking a second one.
+holds rather than taking a second one — while that reservation still accounts
+compute. A retry whose container exists but is **stopped** is the branch the
+container-job workflow actually takes, and by then reconciliation has correctly
+released that container's CPU, memory and processes, because a stopped
+container spends none. Its demand is therefore *re-admitted* against the
+current machine rather than reported as accounting nobody is holding: it is
+admitted only into a state the fence below still accepts, and when other
+launches took the machine meanwhile it is refused by the resource that is
+actually holding it rather than by the fence. The storage a retained volume is
+still spending is counted once, and a refusal never overwrites it.
 
 #### Permit scope: which launch classes the initialization permit bounds
 
