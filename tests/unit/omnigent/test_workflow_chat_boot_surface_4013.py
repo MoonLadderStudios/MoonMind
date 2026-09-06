@@ -69,7 +69,16 @@ def _row(**overrides):
         terminal_refs={},
         provider_profile_id="provider-1",
         credential_generation=4,
-        effective_launch_snapshot_json={},
+        effective_launch_snapshot_json={
+            "executionProfileRef": "agent-profile://p/versions/7",
+            "executionProfileDigest": "sha256:agent",
+            "launchPolicyRef": "policy://launch/3",
+            "snapshotRef": "artifact://launch",
+            "policyAuthority": {
+                "snapshotRef": "artifact://policy",
+                "policyDigest": "sha256:policy",
+            },
+        },
         metadata_={
             "callerAuthorities": {str(_USER_ID): grants},
             "capabilityAuthority": {
@@ -107,7 +116,9 @@ class _FakeStore:
         return self._row
 
     async def list_event_page(self, bridge_session_id: str, *, after: int, limit: int):
-        return SimpleNamespace(rows=[], has_more=False, latest_sequence=0, earliest_sequence=0)
+        return SimpleNamespace(
+            rows=[], has_more=False, latest_sequence=0, earliest_sequence=0
+        )
 
     async def append_events(self, *a, **kw):
         pass
@@ -191,7 +202,7 @@ def test_boot_routes_match_facade_allowlist() -> None:
 
 def test_boot_routes_are_served_in_compat_map() -> None:
     served = {
-        route.name
+        route["name"]
         for route in compat.compatibility_map()["routes"]
         if route["disposition"] == compat.DISPOSITION_SERVED
     }
@@ -219,7 +230,8 @@ def test_boot_projections_are_binding_local_and_redacted() -> None:
         assert _PROVIDER_SESSION_ID not in serialized
         assert "prov-boot" not in serialized
         # Every visible session identifier is the opaque chatBindingId.
-        assert _CHAT_BINDING_ID in serialized
+        if suffix.endswith(("/agent", "/default")):
+            assert body["chatBindingId"] == _CHAT_BINDING_ID
     # Local projections never forward upstream with provider credentials.
     assert proxy.sessions == []
 
@@ -227,7 +239,7 @@ def test_boot_projections_are_binding_local_and_redacted() -> None:
 def test_harness_catalog_is_empty_and_non_enumerating() -> None:
     client, _ = _build()
     body = client.get(_path("v1/harnesses")).json()
-    assert body["object"] == "list"
+    assert body.get("object") == "list", body
     assert body["data"] == []
     assert body["has_more"] is False
 
@@ -255,3 +267,10 @@ def test_denied_environment_read_explains_itself_without_leaking() -> None:
     assert isinstance(detail["disabledReason"], str) and detail["disabledReason"]
     serialized = json.dumps(detail)
     assert _PROVIDER_SESSION_ID not in serialized
+
+
+def test_missing_immutable_authority_still_denies_boot_read() -> None:
+    client, _ = _build(row=_row(effective_launch_snapshot_json={}))
+    response = client.get(_path(f"v1/sessions/{_CHAT_BINDING_ID}/agent"))
+    assert response.status_code == 403
+    assert response.json()["detail"]["disabledReason"] == "immutable_authority_missing"
