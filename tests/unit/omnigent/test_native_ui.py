@@ -9,6 +9,9 @@ injection / scoped asset-URL rewriting.
 from __future__ import annotations
 
 import json
+import re
+import shutil
+import subprocess
 
 from moonmind.omnigent.host_auth_adapter import PINNED_OMNIGENT_COMMIT
 from moonmind.omnigent.native_ui import (
@@ -334,3 +337,194 @@ def test_render_document_escapes_closing_script_tag() -> None:
 
 def test_code_constant_is_stable() -> None:
     assert CODE_NATIVE_CHAT_UNAVAILABLE == "omnigent_native_chat_unavailable"
+
+
+# --- injected transport-adapter regression (MoonLadderStudios/MoonMind#4013) ---
+
+_ADAPTER_SCRIPT_RE = re.compile(
+    r"<script>window\.__MOONMIND_OMNIGENT_CHAT__=.*?;\n(.*?)</script>",
+    re.DOTALL,
+)
+
+# Node harness executing the ACTUAL injected adapter (extracted from the
+# rendered document, not a handwritten copy). It installs recording native
+# transports (no network), evals the adapter, then asserts:
+# * WebSocket CONNECTING/OPEN/CLOSING/CLOSED statics survive the shim;
+# * EventSource CONNECTING/OPEN/CLOSED statics survive the shim;
+# * the pinned upstream sendWatch guard (`ws?.readyState === WebSocket.OPEN`)
+#   no longer crashes on null and sends only on open sockets;
+# * construction still delegates to the native constructor with scoped URLs.
+_NODE_ADAPTER_HARNESS = r"""
+const assert = require('node:assert/strict');
+const fs = require('node:fs');
+const adapterSrc = fs.readFileSync(process.argv[2], 'utf8');
+assert.ok(
+  adapterSrc.includes('Object.setPrototypeOf(window.WebSocket, NativeWebSocket)'),
+  'adapter must preserve WebSocket constructor statics',
+);
+assert.ok(
+  adapterSrc.includes('Object.setPrototypeOf(window.EventSource, NativeEventSource)'),
+  'adapter must preserve EventSource constructor statics',
+);
+
+const constructedWs = [];
+class RecordingNativeWebSocket {
+  constructor(url, protocols) {
+    this.url = String(url);
+    this.protocols = protocols;
+    this.readyState = RecordingNativeWebSocket.OPEN;
+    constructedWs.push({ url: this.url, protocols });
+  }
+  send() {}
+}
+RecordingNativeWebSocket.CONNECTING = 0;
+RecordingNativeWebSocket.OPEN = 1;
+RecordingNativeWebSocket.CLOSING = 2;
+RecordingNativeWebSocket.CLOSED = 3;
+
+const constructedEs = [];
+class RecordingNativeEventSource {
+  constructor(url, config) {
+    this.url = String(url);
+    this.config = config;
+    constructedEs.push({ url: this.url });
+  }
+}
+RecordingNativeEventSource.CONNECTING = 0;
+RecordingNativeEventSource.OPEN = 1;
+RecordingNativeEventSource.CLOSED = 2;
+
+globalThis.window = globalThis;
+globalThis.__MOONMIND_OMNIGENT_CHAT__ = {
+  chatBindingId: 'chatb_test123',
+  apiBase: '/api/workflow-chat-bindings/chatb_test123/omnigent',
+};
+globalThis.location = {
+  href: 'https://moonmind.test/omnigent-ui/workflow-chat/chatb_test123/?embedded=1',
+  origin: 'https://moonmind.test',
+  protocol: 'https:',
+  host: 'moonmind.test',
+  search: '?embedded=1',
+  hash: '',
+};
+globalThis.history = { state: null, replaceState() {} };
+globalThis.WebSocket = RecordingNativeWebSocket;
+globalThis.EventSource = RecordingNativeEventSource;
+globalThis.fetch = () => { throw new Error('fetch must not be called here'); };
+globalThis.XMLHttpRequest = class { open() {} };
+globalThis.document = {
+  readyState: 'complete',
+  getElementById: () => null,
+  addEventListener: () => {},
+};
+globalThis.MutationObserver = class {
+  constructor() {}
+  observe() {}
+  disconnect() {}
+};
+
+eval(adapterSrc);
+
+const HostedWebSocket = globalThis.WebSocket;
+const HostedEventSource = globalThis.EventSource;
+assert.notEqual(HostedWebSocket, RecordingNativeWebSocket);
+assert.equal(HostedWebSocket.prototype, RecordingNativeWebSocket.prototype);
+assert.equal(Object.getPrototypeOf(HostedWebSocket), RecordingNativeWebSocket);
+for (const [name, value] of Object.entries({ CONNECTING: 0, OPEN: 1, CLOSING: 2, CLOSED: 3 })) {
+  assert.equal(HostedWebSocket[name], value, `WebSocket.${name}`);
+}
+assert.equal(Object.getPrototypeOf(HostedEventSource), RecordingNativeEventSource);
+for (const [name, value] of Object.entries({ CONNECTING: 0, OPEN: 1, CLOSED: 2 })) {
+  assert.equal(HostedEventSource[name], value, `EventSource.${name}`);
+}
+
+// Pinned upstream SessionUpdatesSocket.sendWatch shape.
+function sendWatch(ws) {
+  if (ws?.readyState === WebSocket.OPEN) {
+    ws.send(JSON.stringify({ type: 'watch', session_ids: ['chatb_test123'] }));
+  }
+}
+assert.doesNotThrow(() => sendWatch(null));
+assert.doesNotThrow(() => sendWatch(undefined));
+let sends = 0;
+for (const readyState of [0, 2, 3]) {
+  sendWatch({ readyState, send() { sends++; } });
+}
+assert.equal(sends, 0);
+sendWatch({ readyState: RecordingNativeWebSocket.OPEN, send() { sends++; } });
+assert.equal(sends, 1);
+
+// Scoped URL rewriting + constructor delegation still intact.
+const ws1 = new HostedWebSocket('/v1/sessions/updates');
+assert.ok(ws1 instanceof RecordingNativeWebSocket);
+assert.ok(
+  constructedWs[constructedWs.length - 1].url.includes(
+    '/api/workflow-chat-bindings/chatb_test123/omnigent/v1/sessions/updates',
+  ),
+  `scoped ws url, got ${constructedWs[constructedWs.length - 1].url}`,
+);
+assert.ok(constructedWs[constructedWs.length - 1].url.startsWith('wss://'));
+const ws2 = new HostedWebSocket('/v1/sessions/updates', 'omnigent.workflow-chat.v1');
+assert.equal(constructedWs[constructedWs.length - 1].protocols, 'omnigent.workflow-chat.v1');
+const es1 = new HostedEventSource('/v1/sessions/chatb_test123/stream');
+assert.ok(
+  constructedEs[constructedEs.length - 1].url.includes(
+    '/api/workflow-chat-bindings/chatb_test123/omnigent/v1/sessions/chatb_test123/stream',
+  ),
+  `scoped EventSource url, got ${constructedEs[constructedEs.length - 1].url}`,
+);
+console.log('adapter transport regression passed');
+"""
+
+
+def test_injected_adapter_preserves_transport_statics_and_sendwatch(
+    tmp_path,
+) -> None:
+    """Execute the actual injected adapter; the #4013 crash must be gone.
+
+    MoonLadderStudios/MoonMind#4013: the shim replaced ``window.WebSocket``
+    with only a prototype assignment, dropping ``WebSocket.OPEN`` (and the
+    other ready-state constants). The pinned upstream ``sendWatch`` guard then
+    treated a null socket as open (``undefined === undefined``) and crashed on
+    ``null.send``, while genuinely open sockets never sent. A string-contains
+    assertion cannot catch this; this test runs the real injected script.
+    """
+
+    node = shutil.which("node")
+    if node is None:  # pragma: no cover - CI provides node; local may not.
+        import pytest
+
+        pytest.skip("node is required to execute the injected adapter")
+
+    base = scoped_ui_base(_BINDING)
+    bootstrap = build_chat_bootstrap(
+        chat_binding_id=_BINDING,
+        mode="embedded",
+        read_only=False,
+        capabilities=_capabilities(read_only=False),
+        state="available",
+    )
+    document = render_native_ui_document(
+        _INDEX_HTML, bootstrap=bootstrap, scoped_base=base
+    )
+    match = _ADAPTER_SCRIPT_RE.search(document)
+    assert match is not None, "injected adapter script missing from document"
+    adapter_src = match.group(1)
+    assert "window.WebSocket =" in adapter_src
+
+    adapter_path = tmp_path / "adapter.js"
+    harness_path = tmp_path / "harness.js"
+    adapter_path.write_text(adapter_src, encoding="utf-8")
+    harness_path.write_text(_NODE_ADAPTER_HARNESS, encoding="utf-8")
+
+    completed = subprocess.run(
+        [node, str(harness_path), str(adapter_path)],
+        capture_output=True,
+        text=True,
+        timeout=60,
+    )
+    assert completed.returncode == 0, (
+        f"adapter transport regression failed:\n"
+        f"stdout: {completed.stdout}\n"
+        f"stderr: {completed.stderr}"
+    )

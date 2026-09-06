@@ -432,6 +432,9 @@ def render_native_ui_document(
       return new NativeEventSource(scoped ? scoped.href : url, config);
     };
     window.EventSource.prototype = NativeEventSource.prototype;
+    // Preserve constructor statics (CONNECTING/OPEN/CLOSED). Without this the
+    // replacement's constants are undefined (MoonLadderStudios/MoonMind#4013).
+    Object.setPrototypeOf(window.EventSource, NativeEventSource);
   }
 
   if (window.WebSocket) {
@@ -444,6 +447,12 @@ def render_native_ui_document(
         : new NativeWebSocket(scoped ? scoped.href : url, protocols);
     };
     window.WebSocket.prototype = NativeWebSocket.prototype;
+    // Preserve constructor statics (CONNECTING/OPEN/CLOSING/CLOSED). The
+    // pinned upstream SessionUpdatesSocket.sendWatch guards with
+    // `ws?.readyState === WebSocket.OPEN`; with OPEN undefined the guard
+    // passes for null sockets (null.send crash) and fails for open sockets
+    // (watch never sent). (MoonLadderStudios/MoonMind#4013).
+    Object.setPrototypeOf(window.WebSocket, NativeWebSocket);
   }
 
   // BrowserRouter must see the stock chat route at first render. The provider
