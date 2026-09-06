@@ -1085,6 +1085,7 @@ async def test_running_session_requests_continuation_after_quiet_tool_output() -
             interval_seconds=0.001,
             quiet_period_seconds=0.002,
             tool_only_quiet_period_seconds=0.002,
+            allow_same_session_continuation=True,
         )
 
     assert expected["acceptTerminalEventAfterToolOnlyQuietPeriod"] is False
@@ -1092,6 +1093,42 @@ async def test_running_session_requests_continuation_after_quiet_tool_output() -
     assert excinfo.value.code == expected["recoveryCode"]
     assert excinfo.value.session_id == manifest["sessionId"]
     assert excinfo.value.snapshot == terminal_snapshot
+
+
+@pytest.mark.parametrize(
+    "continuation_option", [{}, {"allow_same_session_continuation": False}]
+)
+async def test_running_session_without_continuation_owner_waits_for_terminal(
+    continuation_option: dict,
+) -> None:
+    """Replay mm:ac86d9e8: a tool-only response must not release its live host."""
+    manifest = load_replay("omnigent-running-tool-output-terminal", "manifest.json")
+    active = manifest["terminalSnapshot"]
+    inactive = {**active, "status": "idle", "active_response_id": None}
+
+    class Client:
+        calls = 0
+
+        async def get_session(self, _session_id):
+            self.calls += 1
+            return active if self.calls < 20 else inactive
+
+    client = Client()
+    status, snapshot = await _await_marked_turn_terminal(
+        client=client,
+        session_id=manifest["sessionId"],
+        marker=manifest["currentTurnMarker"],
+        baseline_item_ids=frozenset(manifest["preDispatchItemIds"]),
+        event_count=1,
+        terminal_status=manifest["terminalEventStatus"],
+        interval_seconds=0.001,
+        quiet_period_seconds=0.002,
+        tool_only_quiet_period_seconds=0.002,
+        **continuation_option,
+    )
+    assert status == "completed"
+    assert snapshot is inactive
+    assert client.calls >= 20
 
 
 async def test_pr_resolver_child_compiles_bindable_stock_agent_identity(
