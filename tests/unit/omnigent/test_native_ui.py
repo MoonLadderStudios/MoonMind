@@ -410,6 +410,9 @@ _ADAPTER_SCRIPT_RE = re.compile(
 # * EventSource CONNECTING/OPEN/CLOSED statics survive the shim;
 # * the pinned upstream sendWatch guard (`ws?.readyState === WebSocket.OPEN`)
 #   no longer crashes on null and sends only on open sockets;
+# * the pinned SessionUpdatesSocket lifecycle shape (connect / setWatched /
+#   reconnect / stop / start / dispose) behaves with the restored constants:
+#   every socket is constructed through the shimmed global WebSocket;
 # * construction still delegates to the native constructor with scoped URLs.
 _NODE_ADAPTER_HARNESS = r"""
 const assert = require('node:assert/strict');
@@ -561,6 +564,114 @@ assert.ok(
     addedWindowListeners.includes('unhandledrejection'),
   `adapter must subscribe to crash surfaces, got ${addedWindowListeners}`,
 );
+// Watch/reconnect/stop/start/disposal lifecycle of the pinned consumer shape
+// (MoonLadderStudios/MoonMind#4013 AC4). This mirrors
+// omnigent/web/src/lib/sessionUpdatesSocket.ts at the pinned commit: a
+// watch-set, one nullable socket, the exact sendWatch guard, and lifecycle
+// methods. Every socket is constructed through the shimmed global WebSocket,
+// so scoped URL rewriting, native delegation, subprotocol forwarding, and the
+// restored ready-state constants are all exercised — never stubbed around.
+class PinnedShapeSessionUpdatesSocket {
+  constructor(url) {
+    this.url = url;
+    this.ws = null;
+    this.watched = new Set();
+    this.disposed = false;
+    this.lastSent = undefined;
+  }
+  connect() {
+    if (this.disposed) return null;
+    const sock = new WebSocket(this.url, 'omnigent.workflow-chat.v1');
+    const self = this;
+    const nativeSend = sock.send.bind(sock);
+    sock.send = (data) => { self.lastSent = String(data); nativeSend(data); };
+    this.ws = sock;
+    return sock;
+  }
+  sendWatch() {
+    if (this.ws?.readyState === WebSocket.OPEN) {
+      this.ws.send(JSON.stringify({ type: 'watch', session_ids: [...this.watched] }));
+    }
+  }
+  setWatched(ids) {
+    if (this.disposed) return;
+    this.watched = new Set(ids);
+    this.sendWatch();
+  }
+  reconnect() {
+    if (this.disposed) return;
+    if (this.ws) this.ws.readyState = WebSocket.CLOSED;
+    this.connect();
+    this.sendWatch();
+  }
+  stop() {
+    if (this.ws) this.ws.readyState = WebSocket.CLOSED;
+    this.watched.clear();
+  }
+  start(ids) {
+    if (this.disposed) return;
+    this.connect();
+    this.setWatched(ids);
+  }
+  dispose() {
+    this.stop();
+    this.disposed = true;
+    this.ws = null;
+  }
+}
+
+// Lifecycle on a never-connected socket: the exact #4013 crash path must be a
+// silent no-op, never `null.send`.
+const lifecycle = new PinnedShapeSessionUpdatesSocket('/v1/sessions/updates');
+assert.doesNotThrow(() => lifecycle.setWatched(['chatb_test123']));
+assert.equal(lifecycle.lastSent, undefined);
+
+// Open socket: exactly one watch frame carrying the watch-set.
+lifecycle.connect();
+assert.ok(lifecycle.ws instanceof RecordingNativeWebSocket);
+lifecycle.setWatched(['chatb_test123']);
+assert.ok(lifecycle.lastSent, 'open socket must send watch');
+assert.deepEqual(JSON.parse(lifecycle.lastSent), { type: 'watch', session_ids: ['chatb_test123'] });
+
+// Non-open sockets never send.
+for (const state of [WebSocket.CONNECTING, WebSocket.CLOSING, WebSocket.CLOSED]) {
+  lifecycle.lastSent = undefined;
+  lifecycle.ws.readyState = state;
+  assert.doesNotThrow(() => lifecycle.sendWatch());
+  assert.equal(lifecycle.lastSent, undefined, `no send in state ${state}`);
+}
+
+// Reconnect replaces the socket and re-sends the watch once.
+lifecycle.ws.readyState = WebSocket.OPEN;
+const socketsBeforeReconnect = constructedWs.length;
+lifecycle.lastSent = undefined;
+lifecycle.reconnect();
+assert.equal(constructedWs.length, socketsBeforeReconnect + 1, 'reconnect must construct a new socket');
+assert.ok(lifecycle.lastSent, 'reconnect must re-send watch');
+assert.deepEqual(JSON.parse(lifecycle.lastSent).session_ids, ['chatb_test123']);
+assert.ok(constructedWs[constructedWs.length - 1].url.startsWith('wss://'));
+assert.equal(constructedWs[constructedWs.length - 1].protocols, 'omnigent.workflow-chat.v1');
+
+// stop() closes and clears: further watch attempts send nothing.
+lifecycle.stop();
+lifecycle.lastSent = undefined;
+assert.doesNotThrow(() => lifecycle.sendWatch());
+assert.equal(lifecycle.lastSent, undefined);
+
+// start() re-opens and watches again.
+lifecycle.lastSent = undefined;
+lifecycle.start(['chatb_test123']);
+assert.ok(lifecycle.lastSent, 'start must send watch');
+
+// dispose() is terminal: no throw, no send, no new socket.
+const socketsBeforeDispose = constructedWs.length;
+lifecycle.dispose();
+lifecycle.lastSent = undefined;
+assert.doesNotThrow(() => lifecycle.setWatched(['chatb_test123']));
+assert.doesNotThrow(() => lifecycle.connect());
+assert.equal(lifecycle.lastSent, undefined);
+assert.equal(constructedWs.length, socketsBeforeDispose, 'dispose must not construct sockets');
+
 console.log('adapter transport regression passed');
 """
 
@@ -575,7 +686,9 @@ def test_injected_adapter_preserves_transport_statics_and_sendwatch(
     other ready-state constants). The pinned upstream ``sendWatch`` guard then
     treated a null socket as open (``undefined === undefined``) and crashed on
     ``null.send``, while genuinely open sockets never sent. A string-contains
-    assertion cannot catch this; this test runs the real injected script.
+    assertion cannot catch this; this test runs the real injected script,
+    including the pinned connect/setWatched/reconnect/stop/start/dispose
+    lifecycle shape (AC4) with every socket constructed through the shim.
     """
 
     node = shutil.which("node")
