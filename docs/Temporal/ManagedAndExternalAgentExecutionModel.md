@@ -546,6 +546,13 @@ Every lane publishes as applicable:
 
 Artifact persistence is authoritative. Live publication is secondary and must not prevent terminal completion or durable capture when a subscriber transport fails.
 
+An accepted assessment artifact remains the controlling input for downstream
+issue steps. Implementation and publication steps consume its durable reference
+and the associated issue brief; their local assessment-path arguments do not
+declare new outputs or authorize replacement of that assessment. A fresh
+workspace need not reproduce the producer's local files. The initial assessment
+producer still must supply its declared verdict and brief before advancing.
+
 Terminal-contract validation occurs before MoonMind releases the workspace,
 retry budget, credential lease, or cleanup authority. A successful process exit
 with missing evidence is a recoverable execution failure, not completion. A

@@ -614,6 +614,7 @@ RUN_DURABLE_PUBLISH_CONTEXT_MERGE_HANDOFF_PATCH = (
 )
 RUN_DIRECT_TOOL_REPORT_OUTPUTS_PATCH = "run-direct-tool-report-outputs-v1"
 RUN_ASSESSMENT_PARAMETER_INJECTION_PATCH = "run-assessment-parameter-injection-v1"
+RUN_ASSESSMENT_CONSUMER_HANDOFF_PATCH = "run-assessment-consumer-handoff-v1"
 RUN_ASSESSMENT_ATTACHMENT_HANDOFF_PATCH = "run-assessment-attachment-handoff-v1"
 RUN_ISSUE_BRIEF_ATTACHMENT_HANDOFF_PATCH = "run-issue-brief-attachment-handoff-v1"
 RUN_MOONSPEC_VERIFY_ATTACHMENT_HANDOFF_PATCH = (
@@ -19372,10 +19373,18 @@ class MoonMindRunWorkflow:
         not depend on a shared filesystem (the assessment may run on an Omnigent
         host whose workspace the deterministic Jira tools cannot mount).
 
-        Unlike moonspec-verify this applies to any agent skill (the assessment
-        step runs as ``auto``); callers gate it away from moonspec-verify steps,
-        which merely READ the assessment path, so only the writer publishes.
+        Once the workflow has accepted a durable assessment, later steps consume
+        that controlling input. Their local path arguments do not declare a new
+        output or grant authority to replace the assessment.
         """
+        if self._patched_or_false_outside_workflow(
+            RUN_ASSESSMENT_CONSUMER_HANDOFF_PATCH
+        ) and self._coerce_text(
+            self._assessment_context.get("assessmentArtifactRef")
+            or self._assessment_context.get("assessment_artifact_ref"),
+            max_chars=400,
+        ):
+            return
         nested_inputs = node_inputs.get("inputs")
         skill_inputs = nested_inputs if isinstance(nested_inputs, Mapping) else {}
         if not parameters.get("assessment_artifact_path"):
