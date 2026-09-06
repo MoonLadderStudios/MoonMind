@@ -1,0 +1,482 @@
+{
+  "gate": "repository-access-conformance",
+  "issue": "MoonLadderStudios/MoonMind#4024",
+  "frozen_design_revision": "1dffb29c28de06775ee6028305222c73d911628b",
+  "frozen_design_status": "Proposed",
+  "frozen_plan_baseline": "63bce9852ffa33e33cb0b416bc24a654b1b6f92b",
+  "frozen_plan_status": "Proposed",
+  "design_doc": "docs/RepositoryAccessAndWorkspaceDesign.md",
+  "plan_doc": "docs/tmp/RepositoryAccessAndWorkspaceDecouplingPlan.md",
+  "note": "Gate scaffolding for #4024. Claims mapped to owners and exact gate entrypoints; implementation evidence is truthfully unimplemented/blocked until owning issues land. A design change requires a coverage-delta review, not reuse of the old claim count.",
+  "claims": [
+    {
+      "claim_id": "DOC-REQ-001",
+      "owner": "workflow-admission",
+      "test_entrypoint": "tests/fixtures/repository_access_gate/coverage_matrix.json#claims/DOC-REQ-001",
+      "support": "unimplemented",
+      "evidence_artifact": "pending: scratch-without-repository journey",
+      "design_authorization_ref": ""
+    },
+    {
+      "claim_id": "CONTRACT-001",
+      "owner": "workflow-contracts",
+      "test_entrypoint": "tests/fixtures/repository_access_gate/coverage_matrix.json#claims/CONTRACT-001",
+      "support": "unimplemented",
+      "evidence_artifact": "pending: responsibility boundary tests",
+      "design_authorization_ref": ""
+    },
+    {
+      "claim_id": "INV-001",
+      "owner": "workflow-admission",
+      "test_entrypoint": "tests/fixtures/repository_access_gate/coverage_matrix.json#claims/INV-001",
+      "support": "unimplemented",
+      "evidence_artifact": "pending: no-credential-shopping proof",
+      "design_authorization_ref": ""
+    },
+    {
+      "claim_id": "DOC-REQ-002",
+      "owner": "workflow-admission",
+      "test_entrypoint": "tests/fixtures/repository_access_gate/coverage_matrix.json#claims/DOC-REQ-002",
+      "support": "unimplemented",
+      "evidence_artifact": "pending: source/publication independence journey",
+      "design_authorization_ref": ""
+    },
+    {
+      "claim_id": "CONTRACT-002",
+      "owner": "workspace-intent",
+      "test_entrypoint": "tests/fixtures/repository_access_gate/coverage_matrix.json#claims/CONTRACT-002",
+      "support": "unimplemented",
+      "evidence_artifact": "pending: single-source authoring tests",
+      "design_authorization_ref": ""
+    },
+    {
+      "claim_id": "CONTRACT-003",
+      "owner": "workflow-admission",
+      "test_entrypoint": "tests/fixtures/repository_access_gate/coverage_matrix.json#claims/CONTRACT-003",
+      "support": "unimplemented",
+      "evidence_artifact": "pending: auth-intent-before-acquisition tests",
+      "design_authorization_ref": ""
+    },
+    {
+      "claim_id": "CONTRACT-004",
+      "owner": "workflow-admission",
+      "test_entrypoint": "tests/fixtures/repository_access_gate/coverage_matrix.json#claims/CONTRACT-004",
+      "support": "unimplemented",
+      "evidence_artifact": "pending: capability-compilation tests",
+      "design_authorization_ref": ""
+    },
+    {
+      "claim_id": "INV-002",
+      "owner": "workflow-admission",
+      "test_entrypoint": "tests/fixtures/repository_access_gate/coverage_matrix.json#claims/INV-002",
+      "support": "unimplemented",
+      "evidence_artifact": "pending: publication-intent preservation",
+      "design_authorization_ref": ""
+    },
+    {
+      "claim_id": "CONTRACT-005",
+      "owner": "repository-contracts",
+      "test_entrypoint": "tests/fixtures/repository_access_gate/coverage_matrix.json#claims/CONTRACT-005",
+      "support": "unimplemented",
+      "evidence_artifact": "pending: single-connection-domain tests",
+      "design_authorization_ref": ""
+    },
+    {
+      "claim_id": "CONTRACT-006",
+      "owner": "auth-acquisition",
+      "test_entrypoint": "tests/fixtures/repository_access_gate/coverage_matrix.json#claims/CONTRACT-006",
+      "support": "unimplemented",
+      "evidence_artifact": "pending: typed-acquisition adapter tests",
+      "design_authorization_ref": ""
+    },
+    {
+      "claim_id": "CONTRACT-007",
+      "owner": "repository-contracts",
+      "test_entrypoint": "tests/fixtures/repository_access_gate/coverage_matrix.json#claims/CONTRACT-007",
+      "support": "unimplemented",
+      "evidence_artifact": "pending: deterministic-selection tests",
+      "design_authorization_ref": ""
+    },
+    {
+      "claim_id": "QUALITY-001",
+      "owner": "auth-acquisition",
+      "test_entrypoint": "tests/fixtures/repository_access_gate/coverage_matrix.json#claims/QUALITY-001",
+      "support": "unimplemented",
+      "evidence_artifact": "pending: validation-vs-grant separation",
+      "design_authorization_ref": ""
+    },
+    {
+      "claim_id": "CONTRACT-008",
+      "owner": "execution-bindings",
+      "test_entrypoint": "tests/fixtures/repository_access_gate/coverage_matrix.json#claims/CONTRACT-008",
+      "support": "unimplemented",
+      "evidence_artifact": "pending: authority-binding tests",
+      "design_authorization_ref": ""
+    },
+    {
+      "claim_id": "CONTRACT-009",
+      "owner": "secrets-system",
+      "test_entrypoint": "tests/fixtures/repository_access_gate/coverage_matrix.json#claims/CONTRACT-009",
+      "support": "unimplemented",
+      "evidence_artifact": "pending: revision/issuance lifecycle tests",
+      "design_authorization_ref": ""
+    },
+    {
+      "claim_id": "INV-003",
+      "owner": "secrets-system",
+      "test_entrypoint": "tests/fixtures/repository_access_gate/coverage_matrix.json#claims/INV-003",
+      "support": "unimplemented",
+      "evidence_artifact": "pending: refresh/revocation proof",
+      "design_authorization_ref": ""
+    },
+    {
+      "claim_id": "QUALITY-002",
+      "owner": "hosting-adapters",
+      "test_entrypoint": "tests/fixtures/repository_access_gate/coverage_matrix.json#claims/QUALITY-002",
+      "support": "unimplemented",
+      "evidence_artifact": "pending: throttling-identity tests",
+      "design_authorization_ref": ""
+    },
+    {
+      "claim_id": "CONTRACT-010",
+      "owner": "runtime-delivery",
+      "test_entrypoint": "tests/fixtures/repository_access_gate/coverage_matrix.json#claims/CONTRACT-010",
+      "support": "unimplemented",
+      "evidence_artifact": "pending: bound-access-client tests",
+      "design_authorization_ref": ""
+    },
+    {
+      "claim_id": "INV-004",
+      "owner": "runtime-delivery",
+      "test_entrypoint": "tests/fixtures/repository_access_gate/coverage_matrix.json#claims/INV-004",
+      "support": "unimplemented",
+      "evidence_artifact": "pending: ambient-vs-admitted isolation",
+      "design_authorization_ref": ""
+    },
+    {
+      "claim_id": "QUALITY-003",
+      "owner": "runtime-delivery",
+      "test_entrypoint": "tests/fixtures/repository_access_gate/coverage_matrix.json#claims/QUALITY-003",
+      "support": "unimplemented",
+      "evidence_artifact": "pending: routing-vs-confinement proof",
+      "design_authorization_ref": ""
+    },
+    {
+      "claim_id": "INV-005",
+      "owner": "source-safety",
+      "test_entrypoint": "tests/fixtures/repository_access_gate/coverage_matrix.json#claims/INV-005",
+      "support": "unimplemented",
+      "evidence_artifact": "pending: anonymous-access safety tests",
+      "design_authorization_ref": ""
+    },
+    {
+      "claim_id": "CONTRACT-011",
+      "owner": "workspace-materializers",
+      "test_entrypoint": "tests/fixtures/repository_access_gate/coverage_matrix.json#claims/CONTRACT-011",
+      "support": "unimplemented",
+      "evidence_artifact": "pending: contained-lifecycle tests",
+      "design_authorization_ref": ""
+    },
+    {
+      "claim_id": "INV-006",
+      "owner": "workspace-materializers",
+      "test_entrypoint": "tests/fixtures/repository_access_gate/coverage_matrix.json#claims/INV-006",
+      "support": "unimplemented",
+      "evidence_artifact": "pending: restore-without-authority proof",
+      "design_authorization_ref": ""
+    },
+    {
+      "claim_id": "CONTRACT-012",
+      "owner": "artifact-checkpoint",
+      "test_entrypoint": "tests/fixtures/repository_access_gate/coverage_matrix.json#claims/CONTRACT-012",
+      "support": "unimplemented",
+      "evidence_artifact": "pending: immutable-saved-work tests",
+      "design_authorization_ref": ""
+    },
+    {
+      "claim_id": "QUALITY-004",
+      "owner": "artifact-checkpoint",
+      "test_entrypoint": "tests/fixtures/repository_access_gate/coverage_matrix.json#claims/QUALITY-004",
+      "support": "unimplemented",
+      "evidence_artifact": "pending: portable-output profile tests",
+      "design_authorization_ref": ""
+    },
+    {
+      "claim_id": "INV-007",
+      "owner": "artifact-checkpoint",
+      "test_entrypoint": "tests/fixtures/repository_access_gate/coverage_matrix.json#claims/INV-007",
+      "support": "unimplemented",
+      "evidence_artifact": "pending: save-before-cleanup proof",
+      "design_authorization_ref": ""
+    },
+    {
+      "claim_id": "QUALITY-005",
+      "owner": "artifact-checkpoint",
+      "test_entrypoint": "tests/fixtures/repository_access_gate/coverage_matrix.json#claims/QUALITY-005",
+      "support": "unimplemented",
+      "evidence_artifact": "pending: retention-ownership tests",
+      "design_authorization_ref": ""
+    },
+    {
+      "claim_id": "CONTRACT-013",
+      "owner": "publisher",
+      "test_entrypoint": "tests/fixtures/repository_access_gate/coverage_matrix.json#claims/CONTRACT-013",
+      "support": "unimplemented",
+      "evidence_artifact": "pending: publish-saved-work journey",
+      "design_authorization_ref": ""
+    },
+    {
+      "claim_id": "INV-008",
+      "owner": "publisher",
+      "test_entrypoint": "tests/fixtures/repository_access_gate/coverage_matrix.json#claims/INV-008",
+      "support": "unimplemented",
+      "evidence_artifact": "pending: destination-relationship tests",
+      "design_authorization_ref": ""
+    },
+    {
+      "claim_id": "QUALITY-006",
+      "owner": "publisher",
+      "test_entrypoint": "tests/fixtures/repository_access_gate/coverage_matrix.json#claims/QUALITY-006",
+      "support": "unimplemented",
+      "evidence_artifact": "pending: publication-recovery reconciliation",
+      "design_authorization_ref": ""
+    },
+    {
+      "claim_id": "CONTRACT-014",
+      "owner": "workflow-contracts",
+      "test_entrypoint": "tests/fixtures/repository_access_gate/coverage_matrix.json#claims/CONTRACT-014",
+      "support": "unimplemented",
+      "evidence_artifact": "pending: historical-interpretation tests",
+      "design_authorization_ref": ""
+    },
+    {
+      "claim_id": "QUALITY-007",
+      "owner": "observability",
+      "test_entrypoint": "tests/fixtures/repository_access_gate/coverage_matrix.json#claims/QUALITY-007",
+      "support": "unimplemented",
+      "evidence_artifact": "pending: boundary-diagnostics tests",
+      "design_authorization_ref": ""
+    },
+    {
+      "claim_id": "DOC-REQ-003",
+      "owner": "provider-profiles",
+      "test_entrypoint": "tests/fixtures/repository_access_gate/coverage_matrix.json#claims/DOC-REQ-003",
+      "support": "unimplemented",
+      "evidence_artifact": "pending: model-default independence",
+      "design_authorization_ref": ""
+    },
+    {
+      "claim_id": "INV-009",
+      "owner": "provider-profiles",
+      "test_entrypoint": "tests/fixtures/repository_access_gate/coverage_matrix.json#claims/INV-009",
+      "support": "unimplemented",
+      "evidence_artifact": "pending: free-model cost/privacy proof",
+      "design_authorization_ref": ""
+    },
+    {
+      "claim_id": "QUALITY-008",
+      "owner": "operator-ux",
+      "test_entrypoint": "tests/fixtures/repository_access_gate/coverage_matrix.json#claims/QUALITY-008",
+      "support": "unimplemented",
+      "evidence_artifact": "pending: zero-config honesty checks",
+      "design_authorization_ref": ""
+    },
+    {
+      "claim_id": "DOC-REQ-004",
+      "owner": "operator-ux",
+      "test_entrypoint": "tests/fixtures/repository_access_gate/coverage_matrix.json#claims/DOC-REQ-004",
+      "support": "unimplemented",
+      "evidence_artifact": "pending: setup-choice UX tests",
+      "design_authorization_ref": ""
+    },
+    {
+      "claim_id": "DOC-REQ-005",
+      "owner": "operator-ux",
+      "test_entrypoint": "tests/fixtures/repository_access_gate/coverage_matrix.json#claims/DOC-REQ-005",
+      "support": "unimplemented",
+      "evidence_artifact": "pending: save-vs-publish distinction",
+      "design_authorization_ref": ""
+    },
+    {
+      "claim_id": "TEST-001",
+      "owner": "gate-harness",
+      "test_entrypoint": "tests/unit/workflows/test_repository_access_gate.py",
+      "support": "supported",
+      "evidence_artifact": "gate-harness: risk-matrix + provenance + aggregate unit coverage",
+      "design_authorization_ref": ""
+    },
+    {
+      "claim_id": "TEST-002",
+      "owner": "gate-harness",
+      "test_entrypoint": "tests/unit/workflows/test_repository_access_gate.py",
+      "support": "unimplemented",
+      "evidence_artifact": "pending: credential-isolation conformance (ambient-A vs admitted-B, rotation/refresh/revocation)",
+      "design_authorization_ref": ""
+    },
+    {
+      "claim_id": "TEST-003",
+      "owner": "gate-harness",
+      "test_entrypoint": "tests/unit/workflows/test_repository_access_gate.py",
+      "support": "unimplemented",
+      "evidence_artifact": "pending: capture/restore at storage handoffs",
+      "design_authorization_ref": ""
+    },
+    {
+      "claim_id": "TEST-004",
+      "owner": "gate-harness",
+      "test_entrypoint": "tests/unit/workflows/test_repository_access_gate.py",
+      "support": "unimplemented",
+      "evidence_artifact": "pending: clean-install default-path journey (consumes #3938)",
+      "design_authorization_ref": ""
+    },
+    {
+      "claim_id": "NON-GOAL-001",
+      "owner": "gate-harness",
+      "test_entrypoint": "tests/fixtures/repository_access_gate/coverage_matrix.json#claims/NON-GOAL-001",
+      "support": "unsupported-design-authorized",
+      "evidence_artifact": "design Section 14: universal integrations explicitly out of scope",
+      "design_authorization_ref": "docs/RepositoryAccessAndWorkspaceDesign.md#NON-GOAL-001"
+    },
+    {
+      "claim_id": "QUALITY-009",
+      "owner": "gate-harness",
+      "test_entrypoint": "tests/unit/workflows/test_repository_access_gate.py",
+      "support": "supported",
+      "evidence_artifact": "gate-harness: single-connection-domain + single-publisher + artifact-first invariants",
+      "design_authorization_ref": ""
+    }
+  ],
+  "consumers": [
+    {
+      "boundary": "authoring/admission",
+      "owner": "workflow-contracts",
+      "test_entrypoint": "tests/fixtures/repository_access_gate/coverage_matrix.json#consumers/authoring-admission",
+      "support": "unimplemented",
+      "evidence_artifact": "pending: optional-source + explicit-intent cutover",
+      "design_authorization_ref": ""
+    },
+    {
+      "boundary": "secrets/settings",
+      "owner": "secrets-system",
+      "test_entrypoint": "tests/fixtures/repository_access_gate/coverage_matrix.json#consumers/secrets-settings",
+      "support": "unimplemented",
+      "evidence_artifact": "pending: persistence + revision lifecycle + probes",
+      "design_authorization_ref": ""
+    },
+    {
+      "boundary": "hosting-api-consumers",
+      "owner": "hosting-adapters",
+      "test_entrypoint": "tests/fixtures/repository_access_gate/coverage_matrix.json#consumers/hosting-api-consumers",
+      "support": "unimplemented",
+      "evidence_artifact": "pending: bound clients for PR/issue/readiness/review/story",
+      "design_authorization_ref": ""
+    },
+    {
+      "boundary": "managed-launch",
+      "owner": "managed-runtime",
+      "test_entrypoint": "tests/fixtures/repository_access_gate/coverage_matrix.json#consumers/managed-launch",
+      "support": "unimplemented",
+      "evidence_artifact": "pending: non-sensitive authority + no ambient discovery",
+      "design_authorization_ref": ""
+    },
+    {
+      "boundary": "omnigent-planning/acquisition",
+      "owner": "omnigent-harness",
+      "test_entrypoint": "tests/fixtures/repository_access_gate/coverage_matrix.json#consumers/omnigent-planning-acquisition",
+      "support": "unimplemented",
+      "evidence_artifact": "pending: typed authority dispatch",
+      "design_authorization_ref": ""
+    },
+    {
+      "boundary": "omnigent-host/workspace",
+      "owner": "omnigent-host",
+      "test_entrypoint": "tests/fixtures/repository_access_gate/coverage_matrix.json#consumers/omnigent-host-workspace",
+      "support": "unimplemented",
+      "evidence_artifact": "pending: source union + anonymous + bound materialization",
+      "design_authorization_ref": ""
+    },
+    {
+      "boundary": "publication/recovery",
+      "owner": "publisher",
+      "test_entrypoint": "tests/fixtures/repository_access_gate/coverage_matrix.json#consumers/publication-recovery",
+      "support": "unimplemented",
+      "evidence_artifact": "pending: destination authority + publication-only recovery",
+      "design_authorization_ref": ""
+    },
+    {
+      "boundary": "checkpoint/results",
+      "owner": "artifact-checkpoint",
+      "test_entrypoint": "tests/fixtures/repository_access_gate/coverage_matrix.json#consumers/checkpoint-results",
+      "support": "unimplemented",
+      "evidence_artifact": "pending: portable saved work + restore evidence",
+      "design_authorization_ref": ""
+    },
+    {
+      "boundary": "bootstrap/ui",
+      "owner": "operator-ux",
+      "test_entrypoint": "tests/fixtures/repository_access_gate/coverage_matrix.json#consumers/bootstrap-ui",
+      "support": "unimplemented",
+      "evidence_artifact": "pending: free-profile + no-key onboarding qualification",
+      "design_authorization_ref": ""
+    }
+  ],
+  "risk_matrix": [
+    {
+      "combination_id": "opencode/scratch/none/report",
+      "runtime": "opencode",
+      "source": "scratch",
+      "access_mode": "none",
+      "output_publication": "report",
+      "positive_journey": "pending: scratch report without PAT/model key",
+      "negative_recovery_owner": "pending: admission + workspace (workspace-preparation)",
+      "shared_substrate_justification": ""
+    },
+    {
+      "combination_id": "opencode/public-git/anonymous/report",
+      "runtime": "opencode",
+      "source": "public-git",
+      "access_mode": "anonymous",
+      "output_publication": "report",
+      "positive_journey": "pending: explicit anonymous public source journey",
+      "negative_recovery_owner": "pending: workspace + delivery (source-safety)",
+      "shared_substrate_justification": ""
+    },
+    {
+      "combination_id": "managed/private-git/connection-b/saved-work",
+      "runtime": "managed",
+      "source": "private-git",
+      "access_mode": "connection",
+      "output_publication": "saved-work",
+      "positive_journey": "pending: explicit B while ambient A exists (clone/API/CLI/publication/recovery use B)",
+      "negative_recovery_owner": "pending: credential-acquisition + result + cleanup",
+      "shared_substrate_justification": ""
+    },
+    {
+      "combination_id": "managed/saved-work/none/deferred-publication",
+      "runtime": "managed",
+      "source": "saved-work",
+      "access_mode": "none",
+      "output_publication": "deferred-publication",
+      "positive_journey": "pending: successful save then failed publication with publication-only recovery",
+      "negative_recovery_owner": "pending: capture-restore + publication (publisher)",
+      "shared_substrate_justification": ""
+    }
+  ],
+  "authority_handoffs": [
+    "admission",
+    "workspace",
+    "delivery",
+    "result",
+    "cleanup",
+    "credential-acquisition",
+    "capture-restore",
+    "publication"
+  ],
+  "gap_registry": {
+    "REQ-05-credential-authority": "unimplemented: ambient-A vs admitted-B, anonymous/no-repository, PAT + fake-expiring adapters, real App acquisition, scope/rotation/race/forgery/mismatch/precedence",
+    "REQ-06-capture-restore": "unimplemented: self-contained restore after host/credential removal, unsafe import, owner/digest, capture races, manifest/dependency handling, real DB/object-store ack races",
+    "REQ-07-publication": "unimplemented: exact-saved-candidate publication journeys and lost-response recovery with immutable originals",
+    "REQ-08-clean-install": "blocked: consumes #3938 ordinary clean-install evidence; no second first-run harness",
+    "REQ-09-source-scope": "blocked: TEST-001..TEST-004, 42 claims, slices 0-7, inventory, migration/rollback, deployment/recovery depend on #2615 #1090 #2619 #4004-#4012 #4014-#4023 #3938 #3940"
+  }
+}
