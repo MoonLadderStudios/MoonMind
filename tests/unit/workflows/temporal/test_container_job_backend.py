@@ -349,7 +349,9 @@ async def test_bridge_start_publishes_exact_running_attachment_authority(
         if args[:3] == ("image", "inspect", "--format"):
             return 0, b'"amd64"', b""
         if args[:2] == ("info", "--format"):
-            return 0, str(8 * 1024**3).encode(), b""
+            # MoonLadderStudios/MoonMind#3881: the shared machine budget is
+            # probed from memory *and* CPU, not memory alone.
+            return 0, f"{8 * 1024**3}\t8".encode(), b""
         if args[:2] == ("ps", "--all"):
             return 0, b"", b""
         return 0, b"", b""
@@ -745,6 +747,44 @@ async def test_remove_refuses_replacement_with_mismatched_ownership(tmp_path) ->
     assert not any(command[0] == "rm" for command in commands)
 
 
+@pytest.mark.parametrize("operation", ["stop_container", "remove_container"])
+@pytest.mark.asyncio
+async def test_an_unreachable_daemon_is_not_a_vanished_container(
+    tmp_path, operation: str
+) -> None:
+    """Only a confirmed not-found answer is absence.
+
+    ``stop`` reports the container is no longer running and ``remove`` releases
+    its machine accounting, both on the strength of this one read. A daemon
+    connection failure or timeout proves neither, so it fails closed instead of
+    reading as a container that is already gone.
+    """
+
+    commands: list[tuple[str, ...]] = []
+
+    async def runner(args):
+        args = tuple(args)
+        commands.append(args)
+        if args[:3] == ("inspect", "--format", "{{json .Config.Labels}}"):
+            return (
+                1,
+                b"",
+                b"Cannot connect to the Docker daemon at "
+                b"unix:///var/run/docker.sock. Is the docker daemon running?",
+            )
+        return 0, b"", b""
+
+    backend = DockerContainerJobBackend(
+        workspace_root=tmp_path, command_runner=runner
+    )
+
+    with pytest.raises(ContainerJobBackendError) as raised:
+        await getattr(backend, operation)(_request(tmp_path))
+
+    assert raised.value.failure_class is ContainerJobFailureClass.INFRASTRUCTURE
+    assert not any(command[0] in {"stop", "rm"} for command in commands)
+
+
 @pytest.mark.asyncio
 async def test_stop_refuses_replacement_with_mismatched_ownership(tmp_path) -> None:
     commands: list[tuple[str, ...]] = []
@@ -998,11 +1038,12 @@ async def test_start_rejects_aggregate_memory_overcommit_before_launch(
         args = tuple(args)
         commands.append(args)
         if args[0] == "info":
-            return 0, str(10 * 1024**3).encode(), b""
+            return 0, f"{10 * 1024**3}\t8".encode(), b""
         if args[0] == "ps":
             return 0, b"existing-container\n", b""
         if args[0] == "inspect":
-            return 0, str(4 * 1024**3).encode(), b""
+            # name<TAB>memory bytes<TAB>nano cpus<TAB>pids limit
+            return 0, f"/existing-container\t{4 * 1024**3}\t2000000000\t512".encode(), b""
         return 0, b"", b""
 
     backend = DockerContainerJobBackend(
@@ -1026,7 +1067,10 @@ async def test_start_rejects_aggregate_memory_overcommit_before_launch(
         raised.value.failure_class
         is ContainerJobFailureClass.RESOURCE_LIMIT_EXCEEDED
     )
-    assert "retry after" in str(raised.value)
+    # #3881 FINDING-A: the refusal names the resource that actually refused it
+    # and the utilization that established it, never a hardcoded guess.
+    assert "missing_condition=machine_memory" in str(raised.value)
+    assert "utilization_percent=" in str(raised.value)
     assert not any(command[0] == "start" for command in commands)
     lock.acquire.assert_awaited_once()
     lock.release.assert_awaited_once_with(lock.acquire.return_value)
@@ -1044,11 +1088,11 @@ async def test_start_serializes_and_admits_within_active_memory_budget(
         args = tuple(args)
         commands.append(args)
         if args[0] == "info":
-            return 0, str(10 * 1024**3).encode(), b""
+            return 0, f"{10 * 1024**3}\t8".encode(), b""
         if args[0] == "ps":
             return 0, b"existing-container\n", b""
         if args[0] == "inspect":
-            return 0, str(2 * 1024**3).encode(), b""
+            return 0, f"/existing-container\t{2 * 1024**3}\t1000000000\t256".encode(), b""
         return 0, b"", b""
 
     backend = DockerContainerJobBackend(
@@ -1415,7 +1459,7 @@ async def test_create_failure_does_not_expose_resolved_workspace(tmp_path) -> No
 
     async def runner(args):
         if args[:3] == ("inspect", "--format", "{{json .Config.Labels}}"):
-            return 1, b"", b"missing"
+            return 1, b"", b"Error: No such object: moonmind-container-job"
         if args[0] == "create":
             return 1, b"", f"invalid bind src={workspace}".encode()
         return 0, b"", b""
