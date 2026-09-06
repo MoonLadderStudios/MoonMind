@@ -76,12 +76,35 @@ class ReportCooldownSignal(BaseModel):
     """Payload for report_cooldown signals.
 
     Informs the manager that a profile is rate-limited and needs recovery time.
+    MoonLadderStudios/MoonMind#3882: the optional scope identity is validated
+    against the profile's admitted scope, never trusted. A repeated report
+    identity deduplicates the whole profile-and-scope transition.
     """
     model_config = ConfigDict(populate_by_name=True)
 
     requester_workflow_id: str = Field(..., alias="requesterWorkflowId")
     profile_id: str = Field(..., alias="profileId")
     cooldown_seconds: int = Field(..., alias="cooldownSeconds", ge=0)
+    retry_after_seconds: Optional[int] = Field(None, alias="retryAfterSeconds", ge=0)
+    failure_class: Optional[str] = Field(None, alias="failureClass")
+    capacity_scope_ref: Optional[str] = Field(None, alias="capacityScopeRef")
+    scope_generation: Optional[int] = Field(None, alias="scopeGeneration", ge=1)
+    report_id: Optional[str] = Field(None, alias="reportId")
+
+class ReportProviderSuccessSignal(BaseModel):
+    """Payload for report_provider_success signals.
+
+    MoonLadderStudios/MoonMind#3882: carries one explicitly classified
+    provider-success observation. Only validated observations become recovery
+    evidence; idle time and restarts never produce this signal.
+    """
+    model_config = ConfigDict(populate_by_name=True)
+
+    profile_id: Optional[str] = Field(None, alias="profileId")
+    capacity_scope_ref: Optional[str] = Field(None, alias="capacityScopeRef")
+    scope_generation: Optional[int] = Field(None, alias="scopeGeneration", ge=1)
+    observation_id: Optional[str] = Field(None, alias="observationId")
+    requester_workflow_id: Optional[str] = Field(None, alias="requesterWorkflowId")
 
 class SyncProfilesSignal(BaseModel):
     """Payload for sync_profiles signals.

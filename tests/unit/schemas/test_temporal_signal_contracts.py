@@ -11,6 +11,7 @@ from moonmind.schemas.temporal_signal_contracts import (
     ProfileAssignedSignal,
     ReleaseSlotSignal,
     ReportCooldownSignal,
+    ReportProviderSuccessSignal,
     RequestSlotSignal,
     RescheduleSignal,
     SlotAssignedSignal,
@@ -107,6 +108,53 @@ def test_report_cooldown_signal_invalid_negative_cooldown():
     }
     with pytest.raises(ValidationError):
         ReportCooldownSignal.model_validate(data)
+
+def test_report_cooldown_signal_scope_identity_optional():
+    # MoonLadderStudios/MoonMind#3882: the scope identity reporters attach is
+    # validated against the admitted scope, never trusted.
+    data = {
+        "requesterWorkflowId": "wf-123",
+        "profileId": "prof-1",
+        "cooldownSeconds": 60,
+        "retryAfterSeconds": 30,
+        "failureClass": "rate_limit",
+        "capacityScopeRef": "shared",
+        "scopeGeneration": 2,
+        "reportId": "attempt-1",
+    }
+    model = ReportCooldownSignal.model_validate(data)
+    assert model.capacity_scope_ref == "shared"
+    assert model.scope_generation == 2
+    assert model.report_id == "attempt-1"
+    bare = ReportCooldownSignal.model_validate(
+        {
+            "requesterWorkflowId": "wf-123",
+            "profileId": "prof-1",
+            "cooldownSeconds": 60,
+        }
+    )
+    assert bare.capacity_scope_ref is None
+    assert bare.report_id is None
+
+def test_report_provider_success_signal_valid():
+    # MoonLadderStudios/MoonMind#3882: explicit classified success is the
+    # only automatic-recovery input; every field beyond the scope identity
+    # stays optional so reporters send what they know.
+    model = ReportProviderSuccessSignal.model_validate(
+        {
+            "profileId": "prof-1",
+            "capacityScopeRef": "shared",
+            "scopeGeneration": 1,
+            "observationId": "obs-1",
+            "requesterWorkflowId": "wf-123",
+        }
+    )
+    assert model.capacity_scope_ref == "shared"
+    assert model.observation_id == "obs-1"
+    scope_only = ReportProviderSuccessSignal.model_validate(
+        {"capacityScopeRef": "shared"}
+    )
+    assert scope_only.profile_id is None
 
 def test_sync_profiles_signal_valid():
     model = SyncProfilesSignal.model_validate({})

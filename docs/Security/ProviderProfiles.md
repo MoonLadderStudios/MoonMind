@@ -1381,6 +1381,52 @@ is dropped instead of freeing the replacement holder. A release that carries no
 generation is still honoured, so callers whose handles predate fenced grants keep
 working.
 
+#### Shared-scope accounting
+
+A capacity scope is the **shared provider allowance** (route, account,
+deployment, model family, or provider/IP limit) that compatible profiles draw
+from. It is distinct from the other three capacity layers: **credential
+exclusivity** (who may touch shared credential state), **host resources**
+(machine budgets and prelaunch reservations), and **worker throughput**. One
+allocator admits against both the profile and the scope: execution leases
+count against both, validation and maintenance follow the trusted purpose
+classifier, and every acquisition, release, and recovery path uses the same
+unit count so the two limits cannot disagree.
+
+- **Bound leases.** Each grant stamps the admitted scope and scope generation
+  onto the lease. A profile scope reassignment applies to future grants
+  immediately, but active leases keep spending their admitted scope until
+  release — a move never transfers existing units to a new allowance.
+- **Idempotent backpressure.** Each 429 observation is normalized into a
+  bounded identity tied to the source attempt, the reporting profile, its
+  admitted scope, and the scope generation. The caller-supplied scope ref is
+  validated against the admitted scope, never trusted; wrong-scope,
+  wrong-generation, and out-of-order reports are ignored. A repeated identity
+  deduplicates the *whole* profile-and-scope transition — scope halving,
+  profile backpressure, both cooldown deadlines, and recovery markers — so
+  delivering the same 429 twice changes nothing the second time.
+- **Retry-After extends only.** A trustworthy Retry-After moves an applicable
+  cooldown deadline forward under a bounded policy, never backward.
+  Profile-credential errors cool the reporting profile only and never reduce
+  a shared scope.
+- **Evidence-driven recovery.** Reduced limits heal gradually — one slot per
+  versioned recovery interval, never above the configured ceiling — and only
+  from explicitly classified provider-success observations
+  (`report_provider_success`), terminal holders that ran to `COMPLETED`, or
+  releases carrying an explicitly successful `result_class`. Idle time, worker
+  restarts, host unavailability, and disabled state are not evidence; a
+  disabled scope stays disabled until an authorized change.
+- **Reconciliation-required gaps.** A missing authoritative scope while leases
+  are active is synthesized provisionally: limits floor at current usage so
+  existing work survives, new grants wait for the authoritative sync, and the
+  disagreement is published as reconciliation evidence. Fresh starts and
+  Continue-As-New restores adopt the authoritative configured limits,
+  adaptation, cooldown, and backpressure state before new grants.
+- **One safe view.** `get_state` exposes per-scope
+  configured/effective/active/queued/cooldown snapshots computed by the same
+  accounting owner that admits leases. Exact lease identities stay behind
+  authorized detail views and out of metric labels.
+
 #### The durable lease ledger owns whether a slot is spent
 
 The `provider_profile_slot_leases` row — not an in-memory reservation, a log
