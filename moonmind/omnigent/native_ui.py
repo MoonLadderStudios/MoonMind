@@ -35,6 +35,7 @@ API facade (MoonLadderStudios/MoonMind#3634).
 
 from __future__ import annotations
 
+import html
 import json
 import re
 from dataclasses import dataclass
@@ -71,6 +72,19 @@ CODE_NATIVE_CHAT_UNAVAILABLE = "omnigent_native_chat_unavailable"
 PresentationMode = Literal["embedded", "full_page"]
 
 _TRUE_QUERY_VALUES = {"1", "true", "yes", "on"}
+
+
+# Opaque chat-binding ids are server-generated as ``chatb_`` + urlsafe-base64
+# (``[A-Za-z0-9_-]``). Incoming path values are untrusted, so serving code
+# validates them against this allowlist and fails closed before reflecting
+# them into HTML, redirects, or scoped routes.
+_CHAT_BINDING_ID_PATTERN = re.compile(r"^chatb_[A-Za-z0-9_-]{1,128}$")
+
+
+def is_valid_chat_binding_id(value: Any) -> bool:
+    """Return whether an incoming binding id matches the server-generated shape."""
+
+    return bool(_CHAT_BINDING_ID_PATTERN.fullmatch(str(value or "").strip()))
 
 
 def scoped_ui_base(chat_binding_id: str) -> str:
@@ -337,10 +351,33 @@ def upstream_path_for(ui_path: str | None) -> str:
 # --- Bootstrap injection + scoped asset URL rewriting ------------------------
 
 _ROOT_ABSOLUTE_ATTR = re.compile(r"""\b(src|href)=(["'])/(?!/)""")
-_HEAD_OPEN = re.compile(r"<head[^>]*>", re.IGNORECASE)
+
+# Bound the `<head>` scan so a crafted upstream document cannot force
+# unbounded work. The opening `<head>` tag is always near the start of a real
+# SPA shell; searching only this prefix keeps injection O(1) in document size.
+_MAX_HEAD_SEARCH_BYTES = 256 * 1024
 
 
-def rewrite_asset_urls(html: str, *, scoped_base: str) -> str:
+def _head_insert_position(document: str) -> int | None:
+    """Return the insert offset just after the opening `<head ...>` tag.
+
+    Linear, backtracking-free scan equivalent to ``<head[^>]*>``
+    (case-insensitive). Returns ``None`` when no head tag closes inside the
+    bounded search window, in which case the caller prepends the injection.
+    """
+
+    window = document[:_MAX_HEAD_SEARCH_BYTES]
+    lowered = window.lower()
+    idx = lowered.find("<head")
+    if idx == -1:
+        return None
+    end = window.find(">", idx + len("<head"))
+    if end == -1:
+        return None
+    return end + 1
+
+
+def rewrite_asset_urls(document: str, *, scoped_base: str) -> str:
     """Rewrite root-absolute asset URLs onto the binding-scoped route.
 
     A stock SPA build references hashed assets with root-absolute URLs such as
@@ -352,7 +389,7 @@ def rewrite_asset_urls(html: str, *, scoped_base: str) -> str:
     """
 
     base = scoped_base.rstrip("/")
-    return _ROOT_ABSOLUTE_ATTR.sub(rf"\1=\g<2>{base}/", html)
+    return _ROOT_ABSOLUTE_ATTR.sub(rf"\1=\g<2>{base}/", document)
 
 
 def render_native_ui_document(
@@ -485,16 +522,20 @@ def render_native_ui_document(
   }
 })();
 """.strip()
+    # ``base`` embeds the caller-supplied binding id, so HTML-escape it for the
+    # attribute context; otherwise a crafted id could break out of ``href``.
+    # The bootstrap JSON itself stays JSON-encoded (with ``</`` neutralized)
+    # for the script context.
+    escaped_base = html.escape(base, quote=True)
     injected = (
-        f'<base href="{base}/">'
+        f'<base href="{escaped_base}/">'
         f"<script>window.__MOONMIND_OMNIGENT_CHAT__={payload};\n{adapter}</script>"
     )
     rewritten = rewrite_asset_urls(upstream_html, scoped_base=base)
-    match = _HEAD_OPEN.search(rewritten)
-    if match is None:
+    insert_at = _head_insert_position(rewritten)
+    if insert_at is None:
         # No <head>: prepend the injection so the bootstrap still runs first.
         return injected + rewritten
-    insert_at = match.end()
     return rewritten[:insert_at] + injected + rewritten[insert_at:]
 
 
@@ -509,6 +550,7 @@ __all__ = [
     "build_chat_bootstrap",
     "evaluate_native_ui_compatibility",
     "is_document_request",
+    "is_valid_chat_binding_id",
     "native_ui_security_headers",
     "presentation_mode_from_query",
     "render_native_ui_document",
