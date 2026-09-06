@@ -96,6 +96,7 @@ from moonmind.workflows.temporal.runtime.git_auth import (
 from moonmind.workflows.temporal.runtime.workspace_locators import (
     SandboxWorkspaceRecord,
     SandboxWorkspaceRecordStore,
+    build_materialization_fingerprint,
     daemon_visible_workspace_path,
     resolve_sandbox_workspace_locator,
 )
@@ -2763,8 +2764,33 @@ class OmnigentOAuthHostRuntime:
         #    pre-materialized by its external owner (for example a remediation
         #    workspace) and is reused as-is.
         already_materialized = workspace.is_dir()
-        materialization_complete = record_store.is_materialized(
-            locator.workspace_id
+        _manifest_parts = [
+            str(ref) for ref in list(restore_input_refs or ())
+        ] + [str(ref) for ref in list(attachment_refs or ())]
+        if workspace_checkpoint_restore_ref:
+            _manifest_parts.append(str(workspace_checkpoint_restore_ref))
+        import hashlib as _hashlib
+        import json as _json
+
+        _oauth_fingerprint = build_materialization_fingerprint(
+            source_kind="repository" if source else "existing",
+            source_digest=str(checkout_commit or "") or None,
+            restore_contract="workspace-snapshot-v1"
+            if workspace_checkpoint_restore_ref
+            else None,
+            restore_version="workspace-snapshot-v1"
+            if workspace_checkpoint_restore_ref
+            else None,
+            input_manifest_digest="sha256:"
+            + _hashlib.sha256(
+                _json.dumps(sorted(_manifest_parts)).encode("utf-8")
+            ).hexdigest(),
+            owner_workflow_id=current_workflow_id,
+            owner_step_execution_id=current_step_execution_id,
+            workspace_id=locator.workspace_id,
+        )
+        materialization_complete = record_store.is_materialized_for(
+            locator.workspace_id, _oauth_fingerprint
         )
         if (
             source
@@ -2831,7 +2857,9 @@ class OmnigentOAuthHostRuntime:
                 )
                 if attachment_evidence:
                     materialization["attachments"] = attachment_evidence
-                record_store.mark_materialized(locator.workspace_id)
+                record_store.mark_materialized_for(
+                    locator.workspace_id, _oauth_fingerprint
+                )
             except (Exception, asyncio.CancelledError) as exc:
                 denial = self._workspace_denial_evidence(
                     locator=locator,

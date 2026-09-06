@@ -6391,7 +6391,9 @@ async def test_prepare_workspace_records_denial_evidence_on_failure(tmp_path) ->
     # Because the completion marker was never written, a retry rebuilds the owned
     # partial workspace rather than reusing it.
     record_store = SandboxWorkspaceRecordStore(runtime._workspace_root)
-    assert record_store.is_materialized(workspace_id) is False
+    assert (
+        record_store._completion_marker_path(workspace_id).exists() is False
+    )
 
 
 class _StreamingArtifactService:
@@ -6610,9 +6612,12 @@ async def test_prepare_workspace_rebuilds_incomplete_workspace_on_retry(
     )
     partial.mkdir(parents=True, exist_ok=True)
     (partial / "partial-clone.txt").write_text("incomplete", encoding="utf-8")
-    assert not SandboxWorkspaceRecordStore(
-        tmp_path / "workspaces"
-    ).is_materialized(workspace_id)
+    assert (
+        SandboxWorkspaceRecordStore(
+            tmp_path / "workspaces"
+        )._completion_marker_path(workspace_id).exists()
+        is False
+    )
 
     resolved = await runtime._prepare_workspace(
         workspace_locator=locator,
@@ -6631,7 +6636,7 @@ async def test_prepare_workspace_rebuilds_incomplete_workspace_on_retry(
     )
     assert SandboxWorkspaceRecordStore(
         tmp_path / "workspaces"
-    ).is_materialized(workspace_id)
+    )._completion_marker_path(workspace_id).is_file()
 
 
 def test_normalize_repository_source_rejects_spoofed_github_host() -> None:

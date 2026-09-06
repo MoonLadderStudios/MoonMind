@@ -177,14 +177,34 @@ def test_daemon_visible_workspace_translation_is_deployment_owned(tmp_path, monk
 
 
 def test_old_materialization_marker_requires_upgrade(tmp_path):
+    from moonmind.workflows.temporal.runtime.workspace_locators import (
+        build_materialization_fingerprint,
+    )
+
     store = SandboxWorkspaceRecordStore(tmp_path)
     marker = store._completion_marker_path("owned")
     marker.parent.mkdir(parents=True)
     marker.write_text("materialized", encoding="utf-8")
 
-    assert store.is_materialized("owned") is False
-    store.mark_materialized("owned")
-    assert store.is_materialized("owned") is True
+    fingerprint = build_materialization_fingerprint(
+        source_kind="repository",
+        source_digest="abc",
+        restore_contract="",
+        restore_version="",
+        input_manifest_digest="sha256:x",
+        owner_workflow_id="workflow-1",
+        owner_step_execution_id="step-1",
+        workspace_id="owned",
+    )
+    # A legacy non-JSON marker never authorizes reuse.
+    assert store.is_materialized_for("owned", fingerprint) is False
+    store.mark_materialized_for("owned", fingerprint)
+    assert store.is_materialized_for("owned", fingerprint) is True
+    # Changed inputs require an explicit new import: a different digest does
+    # not observe the prior generation as ready.
+    other = dict(fingerprint)
+    other["sourceDigest"] = "different"
+    assert store.is_materialized_for("owned", other) is False
 
 
 def test_daemon_visible_workspace_local_mode_returns_worker_path(tmp_path, monkeypatch):

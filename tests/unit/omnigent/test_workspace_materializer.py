@@ -294,7 +294,7 @@ async def test_materializer_projects_checkpoint_and_declared_inputs_before_mount
         async def read_chunks(
             self, *, artifact_id, principal, allow_restricted_raw, chunk_size
         ):
-            assert allow_restricted_raw is True
+            assert allow_restricted_raw is False
             self.reads.append((artifact_id, principal))
             return SimpleNamespace(), iter((self.payloads[artifact_id],))
 
@@ -349,7 +349,16 @@ async def test_materializer_projects_checkpoint_and_declared_inputs_before_mount
     assert "/.moonmind/attachments/" in (
         existing / ".git" / "info" / "exclude"
     ).read_text()
-    assert SandboxWorkspaceRecordStore(tmp_path).is_materialized(workspace_id)
+    marker_path = SandboxWorkspaceRecordStore(tmp_path)._completion_marker_path(
+        workspace_id
+    )
+    assert marker_path.is_file()
+    import json as _json
+
+    marker = _json.loads(marker_path.read_text(encoding="utf-8"))
+    assert marker["version"] == "materialized-v3"
+    assert marker["fingerprint"]["workspaceId"] == workspace_id
+    assert marker["fingerprint"]["ownerWorkflowId"] == "workflow-1"
 
 
 def test_runtime_input_ownership_handoff_targets_selected_identity(
