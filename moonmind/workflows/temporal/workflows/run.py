@@ -1589,6 +1589,7 @@ class MoonMindRunWorkflow:
         # MM-880: compact reference to the versioned ResiliencePolicy envelope
         # compiled for this run, attached before step execution begins.
         self._resilience_policy_ref: Optional[dict[str, Any]] = None
+        self._resilience_policy_run_id: str | None = None
         # MM-880: provider profile id that governed the run-level policy, plus a
         # per-step / per-profile policy cache. Steps whose resolved provider
         # profile differs from the run-level one reference a policy compiled with
@@ -4109,7 +4110,7 @@ class MoonMindRunWorkflow:
         return materialize_attempt_nodes(
             spec=spec,
             workflow_id=info.workflow_id,
-            run_id=info.run_id,
+            run_id=self._resilience_policy_run_id or info.run_id,
             ordinal=ordinal,
             workspace_head_ref=state.workspace_head_ref,
             runtime=self._remediation_loop_runtime_block(),
@@ -4585,7 +4586,7 @@ class MoonMindRunWorkflow:
             remediation, verification = materialize_attempt_nodes(
                 spec=spec,
                 workflow_id=workflow.info().workflow_id,
-                run_id=workflow.info().run_id,
+                run_id=self._resilience_policy_run_id or workflow.info().run_id,
                 ordinal=state.attempt_ordinal,
                 workspace_head_ref=state.workspace_head_ref,
                 runtime=self._remediation_loop_runtime_block(),
@@ -11544,6 +11545,12 @@ class MoonMindRunWorkflow:
         if isinstance(envelope_payload, tuple) and envelope_payload:
             envelope_payload = envelope_payload[0]
         envelope = ResiliencePolicyEnvelope.model_validate(envelope_payload)
+
+        # A reset changes workflow.info().run_id while replaying the original
+        # Activity results. Dynamic child IDs must retain the identity already
+        # recorded in this history. A continued run compiles its own policy.
+        if self._resilience_policy_run_id is None:
+            self._resilience_policy_run_id = envelope.run_id
 
         # MM-884: capture the run-level cost-attribution settings once (the
         # run-level policy is compiled first) so the incident reconstruction

@@ -751,6 +751,11 @@ silently create a fresh checkout or switch source authority.
 
 Changes that add, remove, or reorder workflow commands use Temporal patch/version markers or Worker Versioning so in-flight histories replay to the recorded command path.
 
+Temporal resets preserve dynamic remediation child identities from the run
+identity recorded by the policy-compilation Activity. A new reset execution ID
+does not rename children already present in history. Continue-as-new executions
+retain their own recorded policy identity.
+
 ### 16.3 Rerun and re-resolution
 
 A rerun reuses the original immutable Skill and policy/profile snapshots by default. Explicit re-resolution is a distinct operator or workflow action.
