@@ -1,275 +1,118 @@
 # Workflow Dependencies
 
-Related: `docs/Api/ExecutionsApiContract.md`, `docs/Workflows/WorkflowArchitecture.md`, `docs/Workflows/WorkflowCancellation.md`, `docs/Temporal/WorkflowTypeCatalogAndLifecycle.md`, `docs/UI/WorkflowConsoleArchitecture.md`
+**Document Class:** Canonical declarative  
+**Status:** Desired-state architecture  
+**Updated:** 2026-09-06
 
----
+Related: `docs/Api/ExecutionsApiContract.md`, `docs/Workflows/WorkflowArchitecture.md`, `docs/Workflows/WorkflowCancellation.md`, `docs/Temporal/WorkflowTypeCatalogAndLifecycle.md`, `docs/UI/WorkflowConsoleArchitecture.md`, `docs/Workflows/WorkflowPublishing.md`, `docs/Workflows/PrMergeAutomation.md`
 
 ## 1. Purpose
 
-This document defines the desired-state contract for **Workflow Dependencies** in MoonMind.
+Workflow Dependencies let one MoonMind.UserWorkflow wait on another independently durable, visible, cancelable, rerunnable execution. They express ordering and successful prerequisite completion, not publication-policy inheritance or implicit transfer of code into a workspace.
 
-Workflow dependencies allow one `MoonMind.UserWorkflow` execution to wait on one or more other `MoonMind.UserWorkflow` executions before entering its own active work. This supports multi-stage orchestration across separate runs while keeping each execution independently durable, observable, cancelable, rerunnable, and separately inspectable.
-
----
+The single-policy batch contract is defined in [Workflow Publishing](WorkflowPublishing.md). A batch can create dependent workflows under its frozen publication scope, but a dependency edge alone never changes the policy of an independently authored workflow.
 
 ## 2. Contract Summary
 
-- A Workflow-Execution create request may declare prerequisite execution IDs in `payload.task.dependsOn`.
-- The executions API normalizes this into `initialParameters.task.dependsOn` for `MoonMind.UserWorkflow`.
-- Each `dependsOn` value is a `workflowId` for an existing `MoonMind.UserWorkflow` execution.
-- For Temporal-backed Workflow Execution surfaces, `taskId == workflowId`.
-- `runId` is diagnostic only and is never a valid dependency target.
-- A prerequisite is satisfied only when it reaches terminal MoonMind state `completed`.
-- Any other prerequisite terminal outcome — `failed`, `canceled`, `terminated`, `timed_out`, or runtime unresolvable — keeps the dependent run blocked in `waiting_on_dependencies` until the same prerequisite `workflowId` later reaches `completed`. The dependent never auto-fails on a prerequisite failure. The only way out without prerequisite success is for an operator to cancel the dependent run or bypass the dependency.
-- Dependencies are **non-transitive** at the contract level: if C depends on B and B depends on A, C waits on B only.
+Create requests may declare prerequisite workflow IDs in `payload.task.dependsOn`, normalized to `initialParameters.task.dependsOn`. Targets are existing MoonMind.UserWorkflow executions. WorkflowId is the durable target; runId is diagnostic/evidence identity, not a dependency target. Compatibility taskId equals workflowId for Temporal-backed work.
+
+A prerequisite is satisfied only when it reaches MoonMind terminal state completed. Failed, canceled, terminated, timed_out, or runtime-unresolvable outcomes keep the dependent in waiting_on_dependencies until that same workflowId later completes or an operator cancels/bypasses the wait. A prerequisite failure does not automatically fail the dependent.
+
+Dependencies are non-transitive at the contract level: C depending on B waits on B, not a separately expanded transitive graph.
 
 ### 2.1 Contract boundaries
 
-The current contract is intentionally narrow:
-
-- create-time dependency declaration only,
-- `MoonMind.UserWorkflow` → `MoonMind.UserWorkflow` dependencies only,
-- maximum of **10** direct dependency IDs,
-- no dependency editing after create,
-- no cross-workflow-type dependencies,
-- no template-instantiated dependency graphs.
-
----
+The contract supports create-time declaration, UserWorkflow-to-UserWorkflow edges, at most 10 direct IDs, no editing of admitted edges, and no cross-workflow-type or general template-instantiated graph model. A preset's trusted sequential child-submission operation may create each new execution against already-created predecessor IDs under the same ordinary API rules; it does not introduce a second graph engine.
 
 ## 3. API Contract
-
-Workflow dependencies are part of the Temporal-backed create flow through `/api/executions`.
-
-The user-facing request remains Workflow-Execution-shaped:
 
 ```json
 {
   "type": "task",
   "payload": {
-    "repository": "MoonLadderStudios/MoonMind",
     "task": {
       "instructions": "Run integration tests",
-      "dependsOn": [
-        "mm:01ABC...",
-        "mm:01DEF..."
-      ]
+      "dependsOn": ["mm:01ABC...", "mm:01DEF..."]
     }
   }
 }
-````
+```
 
-The router normalizes this into `initialParameters.task.dependsOn` for `MoonMind.UserWorkflow`.
+This fragment omits the independently validated source/runtime/publication context. A dependsOn list never supplies those authorities.
 
 ### 3.1 Normalization and validation
 
-At create time, the API must:
-
-1. treat `dependsOn` as optional,
-2. when present, require an array of strings,
-3. trim whitespace, remove blank entries, and deduplicate while preserving order,
-4. enforce the 10-item maximum after normalization,
-5. require each ID to resolve to an existing execution the caller is authorized to reference,
-6. require each target execution to be `MoonMind.UserWorkflow`,
-7. reject `runId` values or other non-`workflowId` identifiers,
-8. reject malformed self-reference if encountered,
-9. persist the normalized dependency IDs durably with the dependent execution.
+The API requires an optional array of strings, trims values, removes blanks and duplicates preserving order, enforces the post-normalization limit of 10, and verifies every referenced execution exists, is visible to the caller, and has the supported workflow type. Reject run IDs, malformed self-reference, and unauthorized targets. Persist normalized IDs with the new execution.
 
 ### 3.2 Acyclicity
 
-Under this contract, dependencies are create-time only and may target only already-existing executions. New edges therefore point from the newly created run to pre-existing runs, which keeps the dependency graph acyclic by construction.
-
-The core contract does not depend on deep transitive cycle walks. The API should defend against malformed self-reference and invalid targets, but acyclicity is primarily a property of the create-time-only design.
+New edges point only from a new execution to pre-existing executions. This create-time constraint supplies acyclicity without requiring arbitrary deep graph traversal. Self-reference and invalid targets still fail validation.
 
 ### 3.3 Durable dependency edge data
 
-The platform must persist dependency edge data in a form that supports:
-
-* forward lookup from a dependent run to its prerequisites,
-* reverse lookup from a prerequisite run to its downstream dependents,
-* startup status checks for dependent runs,
-* downstream notification when a prerequisite completes,
-* list/detail UI rendering for both prerequisites and dependents.
-
----
+Persist forward/reverse edges, startup resolution state, notification ownership, and safe list/detail metadata. Full edge details belong in existing read models/artifacts rather than unbounded indexed attributes.
 
 ## 4. Workflow Execution Behavior
 
-`MoonMind.UserWorkflow` enforces dependencies before it proceeds into its normal post-initialization work.
-
 ### 4.1 Lifecycle
 
-For dependency-aware runs, the relevant lifecycle is:
-
-1. `scheduled` *(when delayed start is used)*
-2. `initializing`
-3. `waiting_on_dependencies`
-4. normal post-initialization path (`planning`, `executing`, or other standard `MoonMind.UserWorkflow` flow)
-5. terminal state
-
-If `initialParameters.task.dependsOn` is absent or empty, the workflow skips `waiting_on_dependencies` and proceeds directly into its normal path.
+The normal order is scheduled when applicable, initializing, waiting_on_dependencies, then the ordinary planning/executing lifecycle. No declared dependencies means the gate is skipped.
 
 ### 4.2 Dependency resolution model
 
-The canonical mechanism for inter-run Workflow dependencies is **explicit dependency-resolution signaling**. Dependent runs do not treat direct waiting on external workflow results as the primary dependency contract.
+The canonical mechanism is explicit dependency-resolution signaling, not direct awaiting of an unrelated workflow result as the inter-workflow contract.
 
-When dependencies are present, the workflow must:
+After initialization, read declared IDs and durably record the gate. Perform an immediate authoritative status check. Already-completed prerequisites satisfy immediately; non-success terminal outcomes record waiting_for_successful_rerun. Wait for unresolved prerequisites through workflow-native deterministic waits, interruptible by cancellation.
 
-1. read `initialParameters.task.dependsOn` after initialization,
-2. transition `mm_state` to `waiting_on_dependencies`,
-3. initialize local dependency-tracking state for all declared prerequisite IDs,
-4. perform an immediate status check for each prerequisite using durable execution state,
-5. mark prerequisites already in `completed` as satisfied immediately,
-6. record any prerequisite already in a non-success terminal state as a retryable outcome (`waiting_for_successful_rerun`) and continue waiting,
-7. wait for explicit dependency-resolution notifications for the remaining unresolved prerequisites,
-8. proceed only after all declared prerequisites reach `completed` (possibly after one or more prerequisite reruns), or after an operator cancels the dependent run or bypasses the dependency.
+The gate clears when all prerequisites complete or an operator uses a supported bypass/skip. Missing source/code handoff is a separate requirement under section 7 and can still block active work.
 
 ### 4.3 Dependency resolution signals
 
-The platform must use callback-first notification for ongoing waits:
+A terminal prerequisite notifies dependents with an idempotent DependencyResolved signal carrying prerequisiteWorkflowId, terminalState, available Temporal close status, resolvedAt, and bounded message/failure context.
 
-* when a prerequisite reaches terminal state, the system emits a `DependencyResolved` signal to each dependent workflow,
-* the dependent workflow updates its local dependency state on receipt of that signal,
-* the dependent workflow advances only when all prerequisites are satisfied.
-
-The `DependencyResolved` signal must be structured and idempotent. At minimum it must include:
-
-* `prerequisiteWorkflowId`,
-* `terminalState`,
-* Temporal close status when available,
-* `resolvedAt`,
-* an optional compact message or failure category.
-
-Duplicate, stale, or unexpected signals must be ignored safely.
-
-Timer-based reconciliation may exist as a bounded repair path when signal delivery is uncertain, but indefinite polling is not part of the dependency contract.
+Duplicates, stale, and unexpected notifications are ignored safely. A bounded reconciliation path repairs uncertain delivery against durable state; an indefinite custom polling loop is not the primary design.
 
 ### 4.4 Waiting semantics
 
-A dependent workflow must wait on its **local dependency state** using Temporal workflow-native waiting primitives.
-
-Dependency waiting must be:
-
-* durable,
-* deterministic,
-* interruptible by cancel,
-* safe across replay,
-* safe across worker restarts.
-
-The workflow waits on dependency state transitions inside its own history. It does not rely on transient in-memory coordination outside workflow state.
+Waiting state is local to the dependent's durable workflow history, deterministic, cancellation-aware, and safe across worker restart/replay. Transient process memory is not the authority.
 
 ### 4.5 Control semantics
 
-Cancellation and pause behavior during dependency waiting is:
+Canceling or pausing a dependent does not cancel, terminate, or mutate its prerequisites. Pausing does not suppress notifications: outcomes continue to be recorded, but the dependent does not pass its gate or start active work until resumed.
 
-* canceling the dependent run cancels only that run,
-* dependency waiting never cancels, terminates, or mutates prerequisite runs,
-* pausing the dependent run does not stop prerequisite runs,
-* pausing the dependent run does not suppress receipt of dependency-resolution signals,
-* while paused, the workflow continues recording dependency outcomes, but it must not leave the dependency gate or enter active planning/execution until unpaused,
-* a prerequisite non-success terminal outcome while the dependent is paused does not fail the dependent; the outcome is recorded as `waiting_for_successful_rerun` and the dependent stays blocked until prerequisites complete, the dependent is canceled, or the dependency is bypassed,
-* scheduled runs do not begin dependency resolution until they leave `scheduled` and enter `initializing`.
+Non-success prerequisite results while paused retain waiting_for_successful_rerun. A scheduled execution begins dependency resolution only after leaving the scheduling gate. Ordinary workflow timeouts still apply to long waits.
 
 ### 4.6 Wait-through-rerun behavior
 
-A dependent run clears the dependency gate only when **every** declared prerequisite reaches MoonMind terminal state `completed`.
+Each non-success outcome records workflowId, current domain/Temporal close status, failure category/count, lastFailedAt, human-readable message, and waiting_for_successful_rerun. Failure count increments only for a distinct observed non-success outcome, not repeated delivery.
 
-A prerequisite non-success terminal outcome is **not** a dependency failure under the current contract. The following terminal outcomes keep the dependent in `waiting_on_dependencies`:
+If that workflowId later completes, mark satisfied_after_rerun and remove it from unresolved dependencies. Once all are satisfied, the dependency gate clears.
 
-* `failed`,
-* `canceled`,
-* `terminated`,
-* `timed_out`,
-* runtime inability to resolve a dependency.
+The only supported exits without prerequisite success are dependent cancellation, BypassDependencies, or SkipDependencyWait under the appropriate operator authority. Standard workflow timeout remains applicable.
 
-For each non-success terminal outcome the workflow records a structured per-dependency entry that surfaces:
+Resolution ratchets: duplicate completed observations do nothing; duplicate failures with the same resolvedAt do not increment counts; a later stale failure cannot revert satisfied, satisfied_after_rerun, or bypassed state.
 
-* `workflowId`,
-* latest prerequisite terminal MoonMind state,
-* latest prerequisite Temporal close status when available,
-* failure category,
-* `failureCount` — number of distinct non-success terminal observations for this prerequisite,
-* `lastFailedAt` — most recent non-success terminal timestamp,
-* human-readable message,
-* `resolution = "waiting_for_successful_rerun"`.
-
-If the same prerequisite later reaches `completed` (under the same `workflowId` after rerun), the per-dependency entry transitions to `resolution = "satisfied_after_rerun"` and the prerequisite is removed from the unresolved set. Once every prerequisite is satisfied, the gate clears.
-
-The only ways to leave the dependency gate without prerequisite success are:
-
-* an operator cancels the dependent run,
-* an operator bypasses the dependency wait (`BypassDependencies` signal),
-* an operator manually skips the wait (`SkipDependencyWait` update).
-
-A dependent run that has been waiting for a rerun and never receives one will stay in `waiting_on_dependencies` until standard workflow timeouts apply or an operator intervenes.
-
-Stale or duplicate dependency-resolution signals must be ignored:
-
-* a `completed` signal that arrives after the prerequisite is already recorded as `satisfied` or `satisfied_after_rerun` is a no-op,
-* a non-success terminal observation with the same `resolvedAt` as the prerequisite's already-recorded `lastFailedAt` does not increment `failureCount`,
-* a non-success terminal signal that arrives after the prerequisite is already recorded as `satisfied`, `satisfied_after_rerun`, or `bypassed` is a no-op and never reverts the prior resolution.
+A successful later run satisfies the ordering gate by workflowId, but required code evidence must still identify the actual successful run/candidate. Do not restore an older failed run's workspace simply because the durable ID matches.
 
 ### 4.7 Continue-As-New and replay compatibility
 
-Dependency behavior must be safe across replay and Continue-As-New.
+Preserve declared IDs, resolved/unresolved outcomes, wait start/accumulated duration, failure metadata, and operator dispositions across rollover. Workflow command changes use the existing Temporal version/replay contract.
 
-When a dependency-aware workflow continues as new, it must preserve:
-
-* declared dependency IDs,
-* already-resolved dependency outcomes,
-* unresolved dependency IDs,
-* dependency wait start time and accumulated wait duration,
-* any dependency failure metadata already determined.
-
-Changes to dependency orchestration logic must use Temporal-safe workflow versioning so in-flight workflow histories remain replayable.
-
----
+Publication scope, source bindings, and required handoff references are independently preserved by their owners. Rollover does not re-resolve a changed Auto default or change an independently authored prerequisite's policy.
 
 ## 5. Visibility, Metadata, and Artifacts
 
-Dependency metadata must be surfaced consistently across workflow state, execution serialization, read models, and terminal artifacts.
-
 ### 5.1 State and visibility
 
-* `mm_state` remains the canonical state field for list filtering.
-* `waiting_on_dependencies` is the canonical domain state for runs blocked on prerequisites.
-* Dependency-related Search Attributes, when used, must use typed Temporal Search Attribute APIs and schema-correct value types.
-* Indexed dependency metadata must remain bounded and filter-oriented, such as small flags, counts, or compact state markers.
-* Full dependency ID lists and richer per-dependency details belong in memo fields, read models, or artifacts rather than unbounded indexed fields.
+waiting_on_dependencies remains canonical domain state for this gate. Typed registered Search Attributes contain bounded flags/counts; full IDs/outcomes stay in memo, read models, or artifacts.
 
 ### 5.2 Read model requirements
 
-Execution serialization and list/detail read models must expose, at minimum:
-
-* declared prerequisite IDs,
-* current prerequisite statuses when known,
-* whether the run is currently blocked on dependencies,
-* downstream dependents for a prerequisite run,
-* compact linked-run titles or summaries when available.
+Expose declared prerequisites, known current statuses, whether this gate is blocking, reverse dependents, and compact authorized titles/links. Publication and code-handoff status is separately identified rather than folded into a generic dependency success label.
 
 ### 5.3 Terminal summary
 
-Typed run results and `reports/run_summary.json` must include a stable `dependencies` block for every `MoonMind.UserWorkflow`, including runs with no declared dependencies.
-
-At minimum, the `dependencies` block must include:
-
-* `declaredIds`,
-* `waited`,
-* `waitDurationMs`,
-* `resolution`,
-* `failedDependencyId`,
-* `outcomes`.
-
-Recommended top-level `resolution` values are:
-
-* `not_applicable` — no dependencies declared,
-* `satisfied` — every prerequisite cleared on its first observed terminal outcome,
-* `satisfied_after_rerun` — at least one prerequisite reached `completed` only after one or more prior non-success terminal outcomes,
-* `bypassed` — operator bypassed the dependency wait,
-* `manual_override` — operator manually skipped the dependency wait.
-
-Per-dependency outcomes carry their own `resolution` field that may also include the non-terminal marker `waiting_for_successful_rerun` while the workflow is still active.
-
-When no dependencies are declared, the stable empty shape is:
+Every UserWorkflow result and `reports/run_summary.json` contains a stable dependencies block with declaredIds, waited, waitDurationMs, resolution, failedDependencyId, and outcomes.
 
 ```json
 {
@@ -284,140 +127,64 @@ When no dependencies are declared, the stable empty shape is:
 }
 ```
 
-When dependencies are declared, the summary should capture per-dependency outcomes when known. Each per-dependency outcome carries `workflowId`, `terminalState`, `closeStatus`, `resolvedAt`, `resolution`, `failureCount`, `lastFailedAt`, `failureCategory`, and `message` fields when applicable.
+Top-level resolutions are not_applicable, satisfied, satisfied_after_rerun, bypassed, and manual_override. Active per-dependency outcomes may be waiting_for_successful_rerun. Applicable outcome fields include workflowId, terminalState, closeStatus, resolvedAt, resolution, failureCount, lastFailedAt, failureCategory, and message.
 
-Example: every prerequisite cleared on first observation.
-
-```json
-{
-  "dependencies": {
-    "declaredIds": ["mm:01ABC...", "mm:01DEF..."],
-    "waited": true,
-    "waitDurationMs": 18342,
-    "resolution": "satisfied",
-    "failedDependencyId": null,
-    "outcomes": [
-      {
-        "workflowId": "mm:01ABC...",
-        "terminalState": "completed",
-        "closeStatus": "completed",
-        "resolvedAt": "2026-04-03T17:24:16Z",
-        "resolution": "satisfied",
-        "failureCount": 0,
-        "lastFailedAt": null
-      },
-      {
-        "workflowId": "mm:01DEF...",
-        "terminalState": "completed",
-        "closeStatus": "completed",
-        "resolvedAt": "2026-04-03T17:24:18Z",
-        "resolution": "satisfied",
-        "failureCount": 0,
-        "lastFailedAt": null
-      }
-    ]
-  }
-}
-```
-
-Example: a prerequisite failed and was rerun to success.
-
-```json
-{
-  "dependencies": {
-    "declaredIds": ["mm:01ABC..."],
-    "waited": true,
-    "waitDurationMs": 945000,
-    "resolution": "satisfied_after_rerun",
-    "failedDependencyId": null,
-    "outcomes": [
-      {
-        "workflowId": "mm:01ABC...",
-        "terminalState": "completed",
-        "closeStatus": "completed",
-        "resolvedAt": "2026-04-03T17:39:18Z",
-        "resolution": "satisfied_after_rerun",
-        "failureCount": 1,
-        "lastFailedAt": "2026-04-03T17:24:16Z",
-        "message": "Prerequisite completed after rerun."
-      }
-    ]
-  }
-}
-```
-
-While the workflow is active and a prerequisite is currently failed, the per-dependency outcome carries the non-terminal marker `waiting_for_successful_rerun`:
-
-```json
-{
-  "workflowId": "mm:01ABC...",
-  "terminalState": "failed",
-  "closeStatus": "failed",
-  "resolvedAt": null,
-  "resolution": "waiting_for_successful_rerun",
-  "failureCount": 1,
-  "lastFailedAt": "2026-04-03T17:24:16Z",
-  "failureCategory": "dependency_failed",
-  "message": "Prerequisite execution 'mm:01ABC...' reached terminal state 'failed'; waiting for successful rerun."
-}
-```
-
----
+The summary never claims a merge or source transfer from terminal state alone. Those facts reference their owning publication/workspace evidence.
 
 ## 6. Dashboard Expectations
 
 ### 6.1 Create flow
 
-The dashboard should expose dependency configuration on `/workflows/new`.
+The shared Create form offers an authorized existing-UserWorkflow picker with duplicate prevention, the 10-ID limit, and field-addressable errors. It explains waiting through failed/canceled/timed-out prerequisites until a successful rerun or explicit cancellation/bypass.
 
-The create UX should provide:
-
-* a dependency picker for existing `MoonMind.UserWorkflow` executions,
-* client-side enforcement of the 10-item limit,
-* duplicate prevention,
-* clear validation messaging for invalid targets,
-* clear messaging that the new run stays blocked while a prerequisite is running, failed, canceled, terminated, timed out, or unresolvable, and unblocks once the prerequisite completes successfully — and that the only ways out without prerequisite success are canceling the dependent run or bypassing the dependency wait.
+Selecting a prerequisite may offer a verified candidate as a proposed source, but does not silently replace the visible repository, base branch, or publication selection. Any adopted source role uses normal validation and provenance.
 
 ### 6.2 List and detail surfaces
 
-* `waiting_on_dependencies` maps to dashboard status `waiting`.
-* Workflow detail shows a **Dependencies** panel with prerequisite links, titles, statuses, and terminal outcomes.
-* When a per-dependency outcome carries `resolution = "waiting_for_successful_rerun"`, the panel must surface a clear "Prerequisite failed; waiting for successful rerun" indicator alongside the failure count and last-failed timestamp.
-* Prerequisite detail shows a **Dependents** panel or equivalent reverse-lookup view.
-* List and quick-view surfaces may show a compact blocked-by summary when useful.
+Map waiting_on_dependencies to dashboard waiting. The Dependencies panel links titles/statuses/outcomes and shows “Prerequisite failed; waiting for successful rerun,” failure count, and last failure where applicable. Prerequisites expose reverse Dependents; compact lists may show blocked-by summaries.
 
----
+When ordering is satisfied but required code is unavailable, display that distinct source/handoff blocker. An open PR or review-clean outcome is not labeled merged. Bypassing the ordering wait does not grant missing repository authority or silently waive source-safety checks.
 
 ## 7. Boundary With Other Ordering Mechanisms
 
-Workflow dependencies are **inter-workflow** dependencies between separate top-level `MoonMind.UserWorkflow` executions.
+Dependencies are inter-workflow ordering for independently inspectable UserWorkflows. Plan-node/Skill ordering within a run belongs to the plan. Directly awaited parent-owned subordinate work uses child workflows.
 
-Use Workflow dependencies when the involved runs must remain:
+Dependencies do not import an upstream internal DAG, merge workspaces, combine branches, or establish publication inheritance.
 
-* independently visible,
-* independently durable,
-* independently cancelable,
-* independently rerunnable,
-* separately inspectable.
+### 7.1 Publication scopes and fan-out
 
-Do **not** use Workflow dependencies for:
+A batch's one authored publication intent follows its declared child-creation lineage and authenticated admission, not dependsOn edges. An intermediate coordinator preserves the frozen scope even when its own compiled mode is None.
 
-* plan-node or skill-node ordering inside a single run,
-* direct parent-owned subordinate work that should be awaited inside one orchestration history.
+Independently authored prerequisites keep their own policy. A caller cannot use a dependency link to change them or inherit more permissive credentials/publication rights. Created children can remain independently visible and durable while sharing the batch's admitted policy through recorded lineage.
 
-For parent-owned subordinate work that should be directly awaited, use **child workflows**.
+### 7.2 Code availability is a separate handoff
 
-Workflow dependencies block one workflow on the terminal outcome of another workflow. They do not import, merge, or replace the upstream run’s internal plan DAG.
+A workflow completing under PR-only can leave its changes on an unmerged head. A fix-only review loop can complete without merging. A None workflow can save local results without publishing. None of those outcomes alone places code on another child's selected base.
 
----
+A composition requiring predecessor code declares one supported handoff:
+
+| Handoff | Required evidence |
+| --- | --- |
+| Merge into the shared base | Verified merged PR/current applicable base under the publishing owner |
+| Candidate/checkpoint transfer | Exact successful run/candidate and authorized immutable saved-work/restore references |
+| Serialized shared-branch sequence | Qualified exclusive/ordered branch update, refreshed remote state, exact candidate expectation, and conflict handling |
+
+No new selector is required for routine presets; their metadata declares the handoff. Unsupported PR-only/None/fix-only combinations fail before known parent/issue/child effects. If dynamic evidence is unavailable later, expose a source/handoff blocker rather than running against stale code or silently changing policy.
+
+PR-and-merge parents remain awaiting_external until the required merge lifecycle finishes, so their completed objective can establish the intended merged prerequisite when validated. The original parent workflowId stays the dependency target. Coordinator enqueue completion, however, does not prove all descendants completed or merged; a dependent requiring those outputs must use the declared aggregation/handoff, not infer it from the coordinator's terminal state.
+
+### 7.3 Bypass boundaries
+
+Bypass or SkipDependencyWait changes the ordering disposition only. It does not authorize absent code, grant a new repository/branch, override explicit None, or approve unverified checkpoint content. A composition that can proceed without predecessor code must explicitly admit that different source/objective through the existing authoring path.
 
 ## 8. Edge Cases and Failure Modes
 
-* **Prerequisite already completed:** resolve immediately and continue if all prerequisites are satisfied.
-* **Prerequisite already terminal and non-successful:** record a `waiting_for_successful_rerun` outcome and keep the dependent blocked. The dependent does not auto-fail.
-* **Prerequisite cycles between failed and completed across reruns:** the gate ratchets — once a prerequisite is recorded as `satisfied` or `satisfied_after_rerun`, subsequent stale failure observations are ignored.
-* **Duplicate or stale notifications:** ignore idempotently. Duplicate non-success observations sharing the same `resolvedAt` do not increment `failureCount`.
-* **Missing runtime target after validation:** record `waiting_for_successful_rerun` with `failureCategory = "dependency_unresolved"`. The dependent stays blocked until the prerequisite resolves to a `completed` outcome, the dependent is canceled, or the dependency is bypassed.
-* **Signal delivery uncertainty:** use bounded reconciliation against durable execution state; do not rely on unbounded polling loops.
-* **Workflow timeout while waiting:** standard workflow timeout behavior still applies. A run that waits indefinitely can still be timed out by ordinary workflow timeouts or operator cancel.
-* **Long waits or long chains:** preserve dependency context across Continue-As-New; the direct-dependency limit remains 10 per run.
+Already-completed prerequisites resolve immediately. Already-failed prerequisites remain waiting for a successful rerun. Unknown runtime state is dependency_unresolved, not success. Duplicate notifications are idempotent, stale failures cannot reverse success, delivery uncertainty uses bounded reconciliation, and long waits preserve state across Continue-As-New and remain subject to normal timeout/cancel.
+
+Cross-run code handoffs, a changed repository base, unavailable saved artifacts, merged-versus-open PRs, partial child dispatch, and coordinator-only success retain their own explicit evidence and failure boundaries. Dependencies do not manufacture atomic batch behavior or rollback completed effects.
+
+### Conformance
+
+Tests use actual create/read/signal/workflow and workspace/publication boundaries to prove normalization, ownership, acyclicity, limit enforcement, wait-through-rerun, pause/cancel/bypass, stale-signal ratcheting, and rollover.
+
+Additional regressions prove that dependency edges do not change publication policy; nested coordinators retain scoped intent; PR-only, fix-only, and None do not imply predecessor code on the base; the exact successful run supplies restored candidate evidence; missing handoffs block safely; and operator bypass cannot bypass repository/source authorization. A successful ordering test alone is not code-transfer conformance.
