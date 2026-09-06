@@ -215,6 +215,30 @@ BOUNDED_LABEL_VALUES: dict[str, frozenset[str]] = {
             "stop_all_new_omnigent_work",
         }
     ),
+    #: Which registration lookup path served one wait
+    #: (MoonLadderStudios/MoonMind#3884). ``targeted`` is the exact-ID
+    #: get_host path new launches must use; ``compat`` is the retained
+    #: no-expected-ID list-and-filter path for old persisted launches.
+    "lookup_mode": frozenset({"targeted", "compat"}),
+    #: Which Omnigent operation class produced one transport outcome
+    #: (MoonLadderStudios/MoonMind#3884). Coarse classes only, never an
+    #: endpoint path, session, host, or workflow identity.
+    "operation_class": frozenset(
+        {
+            "registration",
+            "attestation",
+            "session",
+            "streaming",
+            "readiness",
+            "cleanup",
+            "catalog",
+        }
+    ),
+    #: Bounded outcome of one bounded Omnigent operation
+    #: (MoonLadderStudios/MoonMind#3884).
+    "operation_outcome": frozenset(
+        {"ok", "capacity_exhausted", "cancelled", "error"}
+    ),
 }
 
 #: Fallback label values emitted by :func:`_normalize_labels`: an
@@ -328,6 +352,24 @@ MACHINE_CAPACITY_OLDEST_WAITER_AGE = (
 MACHINE_CAPACITY_RECONCILIATION = "omnigent_machine_capacity_reconciliation"
 
 
+# --- Omnigent concurrency qualification (#3884) -------------------------------
+#
+# Bounded, low-cardinality registration/pool/stream signals for targeted
+# registration and pooled-transport qualification under concurrent load. No
+# workflow, host, session, repository, or credential identity may appear
+# (enforced by :data:`FORBIDDEN_LABEL_KEYS`); the only labels are the closed
+# lookup_mode / transport / operation_class / operation_outcome vocabularies.
+
+CONCURRENCY_REGISTRATION_ATTEMPTS = "omnigent_concurrency_registration_attempts"
+CONCURRENCY_REGISTRATION_LATENCY = (
+    "omnigent_concurrency_registration_latency_seconds"
+)
+CONCURRENCY_STREAM_ADMISSION_WAIT = (
+    "omnigent_concurrency_stream_admission_wait_seconds"
+)
+CONCURRENCY_OPERATION_ERRORS = "omnigent_concurrency_operation_errors"
+
+
 METRICS: dict[str, MetricDefinition] = {
     m.name: m
     for m in (
@@ -424,6 +466,20 @@ METRICS: dict[str, MetricDefinition] = {
             MACHINE_CAPACITY_RECONCILIATION,
             COUNTER,
             ("reconciliation_health",),
+        ),
+        # Omnigent concurrency qualification (#3884)
+        _def(CONCURRENCY_REGISTRATION_ATTEMPTS, COUNTER, ("lookup_mode",)),
+        _def(
+            CONCURRENCY_REGISTRATION_LATENCY,
+            OBSERVATION,
+            ("lookup_mode",),
+            "seconds",
+        ),
+        _def(CONCURRENCY_STREAM_ADMISSION_WAIT, OBSERVATION, (), "seconds"),
+        _def(
+            CONCURRENCY_OPERATION_ERRORS,
+            COUNTER,
+            ("operation_class", "operation_outcome"),
         ),
     )
 }
@@ -796,6 +852,50 @@ def record_rollback_activation(control: object) -> None:
     increment(MIGRATION_ROLLBACK_ACTIVATION, rollback_control=control)
 
 
+def record_concurrency_registration(
+    *, lookup_mode: object, latency_seconds: float
+) -> None:
+    """Record one completed host-registration wait (MoonLadderStudios/MoonMind#3884).
+
+    ``lookup_mode`` is ``"targeted"`` for the exact-ID path new launches use
+    or ``"compat"`` for the retained no-ID path; anything else collapses to
+    ``"other"``. Carries no host, workflow, or session identity.
+    """
+
+    increment(CONCURRENCY_REGISTRATION_ATTEMPTS, lookup_mode=lookup_mode)
+    observe(
+        CONCURRENCY_REGISTRATION_LATENCY,
+        max(0.0, float(latency_seconds)),
+        lookup_mode=lookup_mode,
+    )
+
+
+def record_concurrency_stream_admission_wait(wait_seconds: float) -> None:
+    """Record how long one SSE stream waited for admission (#3884)."""
+
+    observe(
+        CONCURRENCY_STREAM_ADMISSION_WAIT, max(0.0, float(wait_seconds))
+    )
+
+
+def record_concurrency_operation_error(
+    *, operation_class: object, operation_outcome: object
+) -> None:
+    """Record one bounded Omnigent operation outcome (#3884).
+
+    ``operation_outcome`` is one of ``ok`` (only recorded for stream/capacity
+    edges where success is the signal), ``capacity_exhausted``,
+    ``cancelled``, or ``error``. Out-of-vocabulary values collapse to
+    ``"other"`` rather than leaking endpoint or identity text.
+    """
+
+    increment(
+        CONCURRENCY_OPERATION_ERRORS,
+        operation_class=operation_class,
+        operation_outcome=operation_outcome,
+    )
+
+
 def reset() -> None:
     """Reset all aggregates. Test-only; production metrics are monotonic."""
 
@@ -861,6 +961,13 @@ __all__ = [
     "MACHINE_CAPACITY_LIMITING_RESOURCE",
     "MACHINE_CAPACITY_OLDEST_WAITER_AGE",
     "MACHINE_CAPACITY_RECONCILIATION",
+    "CONCURRENCY_REGISTRATION_ATTEMPTS",
+    "CONCURRENCY_REGISTRATION_LATENCY",
+    "CONCURRENCY_STREAM_ADMISSION_WAIT",
+    "CONCURRENCY_OPERATION_ERRORS",
+    "record_concurrency_registration",
+    "record_concurrency_stream_admission_wait",
+    "record_concurrency_operation_error",
     "record_machine_capacity",
     "harness_class_for",
     "record_safely",

@@ -2923,6 +2923,19 @@ async def omnigent_ensure_provider_profile_lease_activity(
     return settled
 
 
+class _SharedPoolClientCloser:
+    """No-op closer for the worker-owned shared pool client.
+
+    Call sites keep the ``(http_client, client)`` contract and still
+    ``await http_client.aclose()`` in a ``finally``; closing a worker-owned
+    pool per activity would break every concurrent run sharing it, so the
+    close is a no-op and the worker owns the lifecycle.
+    """
+
+    async def aclose(self) -> None:
+        return None
+
+
 async def _omnigent_client_context():
     import httpx
     from moonmind.omnigent.settings import (
@@ -2930,9 +2943,26 @@ async def _omnigent_client_context():
         resolved_proxy_forward_headers,
         resolved_server_url,
     )
-    from moonmind.workflows.adapters.omnigent_client import OmnigentHttpClient
+    from moonmind.workflows.adapters.omnigent_client import (
+        OmnigentHttpClient,
+        default_omnigent_pool_limits,
+        shared_pool_client,
+    )
 
-    http_client = httpx.AsyncClient()
+    # MoonLadderStudios/MoonMind#3884: resolve the worker-owned shared pool
+    # when present so concurrent runs share one bounded transport; otherwise
+    # fall back to one owned client with the same bounded limits for this
+    # activity composition (closed by the caller's existing finally).
+    pooled = shared_pool_client()
+    if pooled is not None:
+        client = OmnigentHttpClient(
+            base_url=resolved_server_url(),
+            api_token=resolved_api_token(),
+            client=pooled,
+            upstream_header_allowlist=resolved_proxy_forward_headers(),
+        )
+        return _SharedPoolClientCloser(), client
+    http_client = httpx.AsyncClient(limits=default_omnigent_pool_limits())
     client = OmnigentHttpClient(
         base_url=resolved_server_url(),
         api_token=resolved_api_token(),

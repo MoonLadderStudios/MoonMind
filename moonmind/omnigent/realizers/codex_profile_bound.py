@@ -84,7 +84,6 @@ class CodexProfileBoundRealizer:
             )
         # Delegate to existing coordinator (import lazily to avoid cycles)
         from api_service.db.base import async_session_maker
-        import httpx
 
         from moonmind.omnigent.bridge_artifacts import LocalOmnigentArtifactGateway
         from moonmind.omnigent.bridge_store import OmnigentBridgeSessionStore
@@ -99,7 +98,10 @@ class CodexProfileBoundRealizer:
             resolved_server_url,
         )
         from moonmind.provider_profiles.lease_client import ProviderProfileLeaseClient
-        from moonmind.workflows.adapters.omnigent_client import OmnigentHttpClient
+        from moonmind.workflows.adapters.omnigent_client import (
+            OmnigentHttpClient,
+            pooled_http_client,
+        )
         from moonmind.workflows.temporal.client import TemporalClientAdapter
         from moonmind.omnigent.execute import run_omnigent_execution
 
@@ -122,7 +124,7 @@ class CodexProfileBoundRealizer:
                 result=result,
             )
 
-        async with httpx.AsyncClient() as http_client:
+        async with pooled_http_client() as http_client:
             omnigent_client = OmnigentHttpClient(
                 base_url=resolved_server_url(),
                 api_token=resolved_api_token(),
