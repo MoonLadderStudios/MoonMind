@@ -27,6 +27,10 @@ from moonmind.integrations.jira.models import (
 from moonmind.integrations.jira.tool import JiraToolService
 from moonmind.workflows.adapters.github_service import GitHubService
 from moonmind.workflows.skills.tool_plan_contracts import ToolResult
+from moonmind.workflows.temporal.github_issue_search import (
+    is_complete_open_issue,
+    resolve_issue,
+)
 
 JIRA_CREATE_ISSUES_TOOL_NAME = "story.create_jira_issues"
 JIRA_ORCHESTRATE_TASKS_TOOL_NAME = "story.create_jira_orchestrate_tasks"
@@ -4359,12 +4363,21 @@ async def update_jira_issue_status(
 
 
 def _github_issue_inputs(inputs: Mapping[str, Any]) -> tuple[str, int]:
+    # Tool steps cannot execute prose instructions to recover an agent's file.
+    # Use the issue preserved by the workflow's trusted issue-context channel.
+    previous = _mapping(inputs.get("previousOutputs"))
+    resolved = (
+        _mapping(previous.get("issue"))
+        if previous.get("trustedSource") == "moonmind.github.get_issue"
+        else {}
+    )
     nested = _mapping(inputs.get("github") or inputs.get("issue"))
     repository = _string(
         inputs.get("repository")
         or inputs.get("repo")
         or nested.get("repository")
         or nested.get("repo")
+        or resolved.get("repository")
     )
     issue_number_raw = (
         inputs.get("issueNumber")
@@ -4373,6 +4386,7 @@ def _github_issue_inputs(inputs: Mapping[str, Any]) -> tuple[str, int]:
         or nested.get("issueNumber")
         or nested.get("issue_number")
         or nested.get("number")
+        or resolved.get("number")
     )
     try:
         issue_number = int(str(issue_number_raw).strip())
@@ -4380,6 +4394,11 @@ def _github_issue_inputs(inputs: Mapping[str, Any]) -> tuple[str, int]:
         issue_number = 0
     if not repository or issue_number <= 0:
         raise ValueError("repository and issueNumber are required for GitHub issue tools.")
+    if resolved and (
+        repository.casefold() != _string(resolved.get("repository")).casefold()
+        or issue_number != resolved.get("number")
+    ):
+        raise ValueError("GitHub issue inputs conflict with the resolved issue context.")
     return repository, issue_number
 
 
@@ -4447,7 +4466,22 @@ async def load_github_issue_preset_brief(
 ) -> ToolResult:
     """Load a compact GitHub issue preset brief through trusted GitHub data."""
 
-    repository, issue_number = _github_issue_inputs(inputs)
+    search_evidence: dict[str, Any] = {}
+    if "issueSearch" in inputs:
+        repository = _string(inputs.get("repository"))
+        issue_number, search_evidence = await resolve_issue(
+            repository=repository,
+            query=_string(inputs.get("issueSearch")),
+            github_service=github_service_factory(),
+            blockers_from_issue=_github_blockers_from_issue,
+        )
+        if issue_number is None:
+            return ToolResult(
+                status="FAILED",
+                outputs={"repository": repository, **search_evidence},
+            )
+    else:
+        repository, issue_number = _github_issue_inputs(inputs)
     issue_data, error = await _fetch_github_issue(
         repository=repository,
         issue_number=issue_number,
@@ -4460,6 +4494,21 @@ async def load_github_issue_preset_brief(
                 "error": error or "Could not load GitHub issue preset brief.",
                 "repository": repository,
                 "issueNumber": issue_number,
+            },
+        )
+    if search_evidence and (
+        not is_complete_open_issue(issue_data, repository)
+        or issue_data["number"] != issue_number
+        or (
+            not _string(inputs.get("issueSearch"))
+            and _github_blockers_from_issue(_github_issue_payload(issue_data, repository))
+        )
+    ):
+        return ToolResult(
+            status="FAILED",
+            outputs={
+                **search_evidence,
+                "error": "Selected GitHub issue changed or could not be confirmed before brief loading.",
             },
         )
     issue = _github_issue_payload(issue_data, repository)
@@ -4485,6 +4534,7 @@ async def load_github_issue_preset_brief(
         outputs={
             "trustedSource": "moonmind.github.get_issue",
             "issue": issue,
+            **search_evidence,
             "presetBrief": preset_brief,
             "artifactPath": artifact_path,
             "summary": f"Loaded GitHub issue preset brief for {issue_ref} from trusted GitHub data.",
