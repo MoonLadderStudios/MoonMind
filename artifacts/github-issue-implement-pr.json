@@ -1,0 +1,27 @@
+{
+  "issue_provider": "github",
+  "issue_ref": "MoonLadderStudios/MoonMind#4013",
+  "repository": "MoonLadderStudios/MoonMind",
+  "issue_number": 4013,
+  "pull_request_url": "https://github.com/MoonLadderStudios/MoonMind/pull/4042",
+  "pull_request_number": 4042,
+  "pull_request_state": "OPEN",
+  "pull_request_is_draft": false,
+  "head_branch": "moonmind-job-4022d2ba",
+  "head_sha": "d99cb120e38128e2195e37861658686986acd218",
+  "base_branch": "main",
+  "verification": {
+    "method": "authenticated gh pr view against remote; local checkout HEAD and clean-tree check",
+    "checkout_head": "d99cb120e38128e2195e37861658686986acd218",
+    "checkout_clean": true,
+    "remote_head_matches_checkout": true,
+    "remote_base_is_main": true,
+    "existing_pr_preserved": true,
+    "no_new_pr_created": true,
+    "no_repository_code_edited": true
+  },
+  "source_workflow": "mm:d2eee656-edd8-40a0-89c3-129856a0196a",
+  "controlling_verifier_artifact": "art_01M1V9ATQW0WH18K0K2P1JSP42",
+  "controlling_verdict": "FULLY_IMPLEMENTED",
+  "note": "Publication-only recovery. Issue status not mutated; the next registered Tool step owns it."
+}
