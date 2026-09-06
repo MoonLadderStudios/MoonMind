@@ -174,6 +174,10 @@ class NativeUiRouteMatch:
 _SERVED_OPERATION_CLASS: dict[str, tuple[str, str]] = {
     "liveness": (CLASS_LIVENESS, TRANSPORT_HTTP),
     "list_agents": (CLASS_SESSION_READ, TRANSPORT_HTTP),
+    "list_harnesses": (CLASS_SESSION_READ, TRANSPORT_HTTP),
+    "get_session_agent": (CLASS_SESSION_READ, TRANSPORT_HTTP),
+    "get_session_environment": (CLASS_RESOURCE_READ, TRANSPORT_HTTP),
+    "list_child_sessions": (CLASS_SUBAGENT, TRANSPORT_HTTP),
     "get_session": (CLASS_SESSION_READ, TRANSPORT_HTTP),
     "stream_events": (CLASS_STREAM, TRANSPORT_SSE),
     "stream_events_websocket": (CLASS_STREAM, TRANSPORT_WEBSOCKET),
