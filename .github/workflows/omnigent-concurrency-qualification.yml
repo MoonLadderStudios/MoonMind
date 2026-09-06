@@ -26,10 +26,20 @@ name: Provider / Omnigent Concurrency Qualification
 # this runner can satisfy: a ref carrying <cores>x<gib> dimensions is refused
 # before the matrix runs when the measurement disagrees with it.
 #
+# Every job also supplies the environment its layer's owning tests require, and
+# the runner checks that same environment before it enters the layer: the
+# exact-image job runs a PostgreSQL service for the owners that decide their
+# invariant with real database constraints, and the protected-live job passes
+# every name in PROTECTED_LIVE_REQUIRED_ENV, which a GitHub `environment:`
+# cannot inject. Both are asserted by
+# tests/unit/test_omnigent_concurrency_qualification_workflow.py so a job and
+# its layer cannot drift into an invocation that can never produce a row.
+#
 # Every job publishes a concurrency qualification record. A runner without the
-# exact images, without a daemon, or without protected-live admission emits
-# `unavailable`/`blocked` rows and fails its gate — it never reports a skip as
-# a pass.
+# exact images, without a daemon, without the cluster its owners require, or
+# without protected-live admission emits `unavailable`/`blocked` rows and fails
+# its gate — it never reports a skip as a pass, and never reports a missing
+# dependency as a concurrency failure.
 #
 # Each job is answerable for the rows it requested: the runner exits zero only
 # when every requested (layer, level) row passed. The cross-layer validated
@@ -65,6 +75,27 @@ jobs:
     runs-on: [self-hosted, linux, omnigent-provider-verification]
     environment: omnigent-provider-verification
     timeout-minutes: 120
+    # Four of this layer's owning tests decide their invariant with real
+    # PostgreSQL constraints and their fixture fails closed without a cluster,
+    # so the job supplies one. The runner still checks the precondition and
+    # would record `unavailable` naming the missing cluster; this is what lets
+    # the documented invocation actually produce a row. The job already
+    # requires a Docker daemon for the digest-pinned hosts, which is the same
+    # prerequisite a service container needs.
+    services:
+      postgres:
+        image: postgres:16@sha256:6efd0df010dc3cb40d5e33e3ef84acecc5e73161bd3df06029ee8698e5e12c60
+        env:
+          POSTGRES_USER: moonmind
+          POSTGRES_PASSWORD: moonmind
+          POSTGRES_DB: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U moonmind"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
     steps:
       - name: Checkout repository
         uses: actions/checkout@v7
@@ -96,6 +127,10 @@ jobs:
           # rather than launching hosts that can never register.
           MOONMIND_OMNIGENT_HOST_SERVER_URL: ${{ vars.OMNIGENT_SERVER_URL }}
           MOONMIND_OMNIGENT_CONCURRENCY_NETWORK: ${{ vars.OMNIGENT_CONCURRENCY_NETWORK }}
+          # The layer's PostgreSQL-dependent owners bind the service container
+          # above rather than provisioning a throwaway cluster with binaries
+          # this runner is not required to carry.
+          MOONMIND_TEST_POSTGRES_URL: postgresql://moonmind:moonmind@127.0.0.1:5432/postgres
         run: |
           python tools/run_omnigent_concurrency_qualification.py \
             --layer exact_docker \
@@ -142,8 +177,15 @@ jobs:
           # substituted to make a level pass.
           MOONMIND_OMNIGENT_PROTECTED_LIVE_CONCURRENCY: "1"
           MOONMIND_OMNIGENT_PROVIDER_PROFILE_ID: ${{ vars.MOONMIND_OMNIGENT_PROVIDER_PROFILE_ID }}
+          # Every name in PROTECTED_LIVE_REQUIRED_ENV. The owning test reads
+          # exactly these and fails rather than skips without them, and
+          # `environment:` cannot inject them, so the job passes all four
+          # explicitly — asserted by
+          # tests/unit/test_omnigent_concurrency_qualification_workflow.py.
+          OMNIGENT_ENABLED: ${{ vars.OMNIGENT_ENABLED }}
           OMNIGENT_SERVER_URL: ${{ vars.OMNIGENT_SERVER_URL }}
           OMNIGENT_API_TOKEN: ${{ secrets.OMNIGENT_API_TOKEN }}
+          OMNIGENT_DEFAULT_AGENT_NAME: ${{ vars.OMNIGENT_DEFAULT_AGENT_NAME }}
         run: |
           python tools/run_omnigent_concurrency_qualification.py \
             --layer protected_live \

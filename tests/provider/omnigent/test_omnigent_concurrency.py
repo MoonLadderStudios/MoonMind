@@ -11,8 +11,10 @@ control here is about keeping that load bounded and the evidence honest:
 * the run is opt-in — without ``MOONMIND_OMNIGENT_PROTECTED_LIVE_CONCURRENCY``
   it fails immediately rather than quietly exercising the provider;
 * missing credentials fail the test instead of skipping it, because a skipped
-  protected-live row is not a passing row (the qualification runner records it
-  as ``unavailable``);
+  protected-live row is not a passing row. The runner checks the same
+  :data:`~moonmind.omnigent.concurrency_qualification.PROTECTED_LIVE_REQUIRED_ENV`
+  *before* it enters the layer, so an unconfigured route is recorded as
+  ``unavailable`` naming the variable rather than reaching this failure;
 * the observed overlap is published as
   :class:`~moonmind.omnigent.concurrency_qualification.ObservedOverlapEvidence`,
   computed from the per-session start/end windows this run actually observed.
@@ -43,12 +45,14 @@ from moonmind.omnigent.bridge_proxy import (
 from moonmind.omnigent.bridge_store import OmnigentBridgeSessionStore
 from moonmind.omnigent.concurrency_qualification import (
     CONCURRENCY_LEVEL_ENV,
+    PROTECTED_LIVE_ADMISSION_ENV,
+    PROTECTED_LIVE_REQUIRED_ENV,
     ConcurrencyQualificationLayer,
     ExecutionOverlapSample,
     ObservedOverlapEvidence,
     publish_observed_overlap,
+    unsatisfied_protected_live_environment,
 )
-from moonmind.omnigent.settings import is_omnigent_enabled
 from moonmind.workflows.adapters.omnigent_client import OmnigentHttpClient
 
 pytestmark = [
@@ -88,27 +92,19 @@ def _live_env() -> dict[str, str]:
     misconfiguration. Skipping here would turn that into a silent pass.
     """
 
-    if os.environ.get("MOONMIND_OMNIGENT_PROTECTED_LIVE_CONCURRENCY") != "1":
+    if os.environ.get(PROTECTED_LIVE_ADMISSION_ENV) != "1":
         pytest.fail(
             "protected-live concurrency is opt-in; it was not admitted for this run"
         )
-    required = {
-        "OMNIGENT_ENABLED": os.environ.get("OMNIGENT_ENABLED", ""),
-        "OMNIGENT_SERVER_URL": os.environ.get("OMNIGENT_SERVER_URL", ""),
-        "OMNIGENT_API_TOKEN": os.environ.get("OMNIGENT_API_TOKEN", ""),
-        "OMNIGENT_DEFAULT_AGENT_NAME": os.environ.get(
-            "OMNIGENT_DEFAULT_AGENT_NAME", ""
-        ),
-    }
-    missing = sorted(key for key, value in required.items() if not value.strip())
-    if missing:
+    # One answer, shared with the runner's precondition, so the layer is never
+    # admitted on an environment this test then rejects.
+    unsatisfied = unsatisfied_protected_live_environment()
+    if unsatisfied:
         pytest.fail(
             "protected-live concurrency requires provider credentials: "
-            + ", ".join(missing)
+            + ", ".join(unsatisfied)
         )
-    if not is_omnigent_enabled(env=required):
-        pytest.fail("protected-live concurrency requires OMNIGENT_ENABLED=true")
-    return required
+    return {name: os.environ[name] for name in PROTECTED_LIVE_REQUIRED_ENV}
 
 
 def _message_event(text: str) -> BridgeSessionEventRequest:
