@@ -195,6 +195,15 @@ OMNIGENT_CONTRACT_GATE_KEYS = (
 OMNIGENT_CONTRACT_EXACT = {
     # Omnigent runtime schemas / compiled-intent contracts.
     "moonmind/schemas/workspace_intent.py",
+    # These modules launch MoonMind-owned containers on the same Docker backend
+    # the shared machine budget accounts. A new owner label here that the
+    # capacity registry does not know would read as free capacity, so their
+    # changes must run the registry's exhaustiveness coverage
+    # (MoonLadderStudios/MoonMind#3881).
+    "moonmind/workflows/temporal/container_job_backend.py",
+    "moonmind/workflows/temporal/runtime/managed_session_controller.py",
+    "moonmind/workloads/docker_launcher.py",
+    "moonmind/schemas/workload_models.py",
     # Omnigent Temporal activities and workflows.
     "moonmind/workflows/temporal/activities/omnigent_activities.py",
     # Frontend Workflow Detail / Workflow Chat integration entrypoints.
@@ -210,13 +219,14 @@ OMNIGENT_CONTRACT_EXACT = {
 
 OMNIGENT_CONTRACT_PREFIXES = (
     "moonmind/omnigent/",
-    # Generic and validation hosts reserve their machine resources here, so a
+    # Generic Omnigent hosts reserve their machine resources here, so a
     # change to the shared ledger changes the Omnigent admission contract
     # (MoonLadderStudios/MoonMind#3881).
     "moonmind/capacity/",
     "api_service/services/omnigent",
     "api_service/api/routers/omnigent",
     "tests/integration/omnigent/",
+    "tests/unit/capacity/",
     "tests/unit/omnigent/",
     "frontend/src/features/workflow-native-chat/",
 )

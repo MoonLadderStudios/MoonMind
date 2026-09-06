@@ -698,12 +698,41 @@ weaken security defaults.
 ### Shared machine resource budget
 
 The trusted Docker launch boundary enforces an aggregate machine resource
-budget before a container starts. That budget is **shared**: container jobs,
-generic Omnigent hosts and validation hosts all run on the same daemon, so they
-all reserve from the same deployment-owned ledger
-(`machine_capacity_reservations`, `moonmind.capacity`). Enforcing a
-container-job-private ceiling would let two full workload classes still
-oversubscribe one machine.
+budget before a container starts. That budget is **shared**: every MoonMind
+-owned container runs on the same daemon, so all of them are accounted in the
+same deployment-owned ledger (`machine_capacity_reservations`,
+`moonmind.capacity`). Enforcing a container-job-private ceiling would let two
+full workload classes still oversubscribe one machine.
+
+#### Accounting boundary: which launch classes reserve
+
+`moonmind.capacity.docker_inventory` holds the registry of every MoonMind-owned
+container launch class, split by how it is accounted. There is no third
+category: a launch class that is in neither column would spend the machine
+invisibly.
+
+| Launch class | Owner label | Accounting |
+| --- | --- | --- |
+| Generic Omnigent host | `moonmind.owner=generic-omnigent-host` | **Reserves** before launch; can be refused |
+| Container job | `moonmind.container_job` | **Reserves** before launch; can be refused |
+| OAuth host | `moonmind.kind=omnigent-oauth-host` | Observed |
+| OAuth credential validator | `moonmind.kind=omnigent-oauth-credential-validator` | Observed |
+| Managed session | `moonmind.kind=managed-session` | Observed |
+| Session Docker sidecar | `moonmind.kind=session-docker-sidecar` | Observed |
+| Workload / bounded service | `moonmind.kind=workload`, `moonmind.kind=bounded_service` | Observed |
+
+**Reserving** classes take a durable reservation before they launch and are
+refused when the machine is full. A running container of a reserving class with
+no accounting record is a reconciliation fault.
+
+**Observed** classes are credential-authority, session and already-admitted
+workload containers. Resource admission never refuses them: refusing an OAuth
+credential host would break authentication rather than protect the machine, and
+refusing a session container would fail a run that was already admitted.
+Instead, reconciliation enumerates their owner labels and accounts their real
+`--cpus`, `--memory` and `--pids-limit` from the daemon, so the capacity they
+consume is subtracted from what reserving launches may take. They are accounted,
+not faulted.
 
 Reservations are scoped by exact Docker backend ref, so two independent
 backends have two independent budgets and are never pooled.
@@ -728,7 +757,7 @@ explicitly:
 | `MOONMIND_MACHINE_TEMPORARY_STORAGE_MIB` | Explicit temporary-storage ceiling. Defaults to the memory total because MoonMind temporary storage is RAM-backed tmpfs. |
 | `MOONMIND_MACHINE_MAX_CONCURRENT_INITIALIZING` | How many managed launches may be initializing at once. |
 | `MOONMIND_MACHINE_PRELAUNCH_TTL_SECONDS` | How long a prelaunch reservation may be held before it is reclaimable as proven-unused. |
-| `MOONMIND_CONTAINER_BACKEND_MAX_ACTIVE_MEMORY_MIB` | Lowers this deployment's memory ceiling for the container-job path specifically. |
+| `MOONMIND_CONTAINER_BACKEND_MAX_ACTIVE_MEMORY_MIB` | Lowers this deployment's memory ceiling for the container-job path specifically. It is clamped to the utilization share above, so it can only lower the ceiling — never raise it past the documented headroom. |
 
 Every value is optional. Omitting all of them exercises the same production
 path: the backend is probed and the documented share is applied.
@@ -736,9 +765,12 @@ path: the backend is probed and the documented share is applied.
 The reservation is taken before the container starts and re-verified against
 its exact generation immediately before the Docker mutation, because a
 read-only precheck is advisory — another worker may have won the machine in
-between. It is confirmed against the container once the container exists, and
-it is released only on observed evidence that the consumer is gone. An
-Activity retry of the same job reconciles with the reservation it already
+between. It names its container from the start, so a launch that outlives its
+prelaunch window is never reclaimed by the clock while its container may
+already be running; only daemon evidence that nothing is running under that
+name reclaims it. It is confirmed against the container once the container
+exists, and it is released only on observed evidence that the consumer is gone.
+An Activity retry of the same job reconciles with the reservation it already
 holds rather than taking a second one.
 
 When admitting a job would exceed the budget, the job fails before start with
@@ -749,9 +781,15 @@ unreadable owned-container inventory is `infrastructure`, never free capacity.
 Reconciliation runs in the existing janitor, not a second coordinator. It
 reclaims reservations that provably never launched, keeps accounting for live
 consumers whose workflow died, adopts an owned live container that has no
-accounting record as a reconciliation fault, and blocks new admission while the
-backend cannot be established. Only MoonMind's own owner labels are queried, so
-a foreign container is never inspected, adopted or removed.
+accounting record (a reconciliation fault for a reserving class; ordinary
+accounting for an observed one), and blocks new admission while the backend
+cannot be established. Only MoonMind's own owner labels are queried, so a
+foreign container is never inspected, adopted or removed.
+
+Releasing accounting requires a **complete** enumeration. Absence from an
+inventory that never queried a launch class is not evidence that the class's
+consumers are gone, so a partial enumeration may add accounting but never
+remove it.
 
 Local image builds use separate deployment policy. Their Dockerfile, context,
 target, arguments, network access, timeout, output limit, and validation command

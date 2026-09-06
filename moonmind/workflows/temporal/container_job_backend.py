@@ -21,6 +21,7 @@ construction; it never crosses a public contract.
 from __future__ import annotations
 
 import asyncio
+import dataclasses
 import hashlib
 import json
 import mimetypes
@@ -39,17 +40,18 @@ from pathlib import Path
 from typing import Awaitable, Callable, Protocol, Sequence, runtime_checkable
 
 from moonmind.capacity import (
-    MACHINE_MEMORY_MIB_ENV,
     WORKLOAD_CLASS_CONTAINER_JOB,
     MachineCapacityLedger,
     MachineCapacityUnavailable,
     MachineResourceBudget,
     MachineUsage,
+    OwnedContainerInventory,
     ReleaseEvidence,
     ReservationRequest,
     ResourceDemand,
     evaluate_resource_admission,
     machine_budget_from_runner,
+    probe_owned_containers,
 )
 from moonmind.config.container_backend_settings import (
     ContainerBackendReadinessError,
@@ -205,7 +207,6 @@ _GPU_LAUNCH_FAILURE_CLASSES: dict[
     "device_request_unsupported": ContainerJobFailureClass.GPU_BACKEND_UNSUPPORTED,
     "gpu_device_request_rejected": ContainerJobFailureClass.GPU_BACKEND_UNSUPPORTED,
 }
-_MIB = 1024 * 1024
 _CAPACITY_LOCK_WAIT_SECONDS = 45.0
 _CAPACITY_LOCK_POLL_SECONDS = 0.1
 
@@ -536,9 +537,9 @@ class DockerContainerJobBackend:
             lock_root / "capacity"
         )
         # MoonLadderStudios/MoonMind#3881: the deployment-owned machine ledger
-        # generic and validation hosts also reserve in. Absent it, the ceiling
-        # is still enforced from directly observed running containers, but a
-        # host reservation that has not created its container yet is invisible.
+        # generic Omnigent hosts also reserve in. Absent it, the ceiling is
+        # still enforced from directly observed running containers, but a host
+        # reservation that has not created its container yet is invisible.
         self._machine_capacity = machine_capacity
         self._pull_lease_ttl_seconds = pull_lease_ttl_seconds
         self._pull_lock_poll_seconds = pull_lock_poll_seconds
@@ -810,18 +811,17 @@ class DockerContainerJobBackend:
         MoonLadderStudios/MoonMind#3881: the ceiling is the shared, deployment
         -owned one in ``moonmind.capacity``, not a container-job-private
         number, so execution hosts and container jobs cannot each spend the
-        whole machine. ``MOONMIND_CONTAINER_BACKEND_MAX_ACTIVE_MEMORY_MIB``
-        still lowers this deployment's memory ceiling further.
+        whole machine.
+
+        ``MOONMIND_CONTAINER_BACKEND_MAX_ACTIVE_MEMORY_MIB`` is documented as
+        *lowering* this deployment's container-job memory ceiling, so it is
+        clamped to the shared utilization share rather than substituted for it.
+        Letting it raise the ceiling would erode the documented control-plane
+        and cleanup headroom through a setting that promises the opposite.
         """
 
-        env: dict[str, str] = {}
-        configured = self._settings.max_active_memory_mib
-        if configured is not None:
-            env[MACHINE_MEMORY_MIB_ENV] = str(configured)
         try:
-            return await machine_budget_from_runner(
-                self._runner, env={**os.environ, **env}
-            )
+            budget = await machine_budget_from_runner(self._runner)
         except MachineCapacityUnavailable as exc:
             raise ContainerJobBackendError(
                 ContainerJobFailureClass.INFRASTRUCTURE,
@@ -830,80 +830,51 @@ class DockerContainerJobBackend:
         except ValueError as exc:
             raise ContainerJobBackendError(
                 ContainerJobFailureClass.RESOURCE_LIMIT_EXCEEDED,
-                "configured active container-job memory exceeds daemon capacity",
+                "configured machine capacity ceiling is not usable on this "
+                "container backend",
             ) from exc
+        configured = self._settings.max_active_memory_mib
+        if configured is None:
+            return budget
+        return dataclasses.replace(
+            budget, memory_mib=min(budget.memory_mib, int(configured))
+        )
 
-    async def _owned_running_demand(
-        self, *, exclude: str
-    ) -> dict[str, ResourceDemand]:
-        """Return the resources MoonMind's own running containers are using.
+    async def _owned_inventory(self, *, exclude: str) -> OwnedContainerInventory:
+        """Return every running MoonMind-owned container on this backend.
+
+        MoonLadderStudios/MoonMind#3881 (FINDING-1): reconciliation releases the
+        accounting of consumers that are absent from the inventory it is given,
+        so a container-job-label-only enumeration would release the accounting
+        of every live generic Omnigent host on the same daemon. The canonical
+        owned inventory in ``moonmind.capacity.docker_inventory`` is the one
+        answer both this path and the janitor use.
 
         Only running containers are reported: a created-but-unstarted container
         consumes no CPU, memory or processes. Foreign containers are never in
-        this inventory and are never touched.
+        this inventory and are never touched. An unreadable daemon fails closed
+        rather than reading as an empty machine.
         """
 
-        code, stdout, _ = await self._runner(
-            (
-                "ps",
-                "--all",
-                "--filter",
-                f"label={LABEL_CONTAINER_JOB}",
-                "--filter",
-                "status=running",
-                "--format",
-                "{{.Names}}",
-            )
-        )
-        if code:
+        inventory = await probe_owned_containers(self._runner)
+        if inventory is None:
             raise ContainerJobBackendError(
                 ContainerJobFailureClass.INFRASTRUCTURE,
-                "active container-job inventory is unavailable",
+                "owned container inventory is unavailable",
             )
-        names = tuple(
-            name
-            for name in stdout.decode(errors="replace").splitlines()
-            if name and name != exclude
+        # This job's own container may already exist from a prior attempt; its
+        # demand is accounted by its own reservation, not twice.
+        return dataclasses.replace(
+            inventory,
+            containers={
+                ref: owned
+                for ref, owned in inventory.containers.items()
+                if ref != exclude
+            },
         )
-        if not names:
-            return {}
-        code, stdout, _ = await self._runner(
-            (
-                "inspect",
-                "--format",
-                "{{.Name}}\t{{.HostConfig.Memory}}\t{{.HostConfig.NanoCpus}}"
-                "\t{{.HostConfig.PidsLimit}}",
-                *names,
-            )
-        )
-        if code:
-            raise ContainerJobBackendError(
-                ContainerJobFailureClass.INFRASTRUCTURE,
-                "active container-job memory limits are unavailable",
-            )
-        observed: dict[str, ResourceDemand] = {}
-        try:
-            for line in stdout.decode(errors="replace").splitlines():
-                if not line.strip():
-                    continue
-                name, raw_memory, raw_cpu, raw_pids = line.split("\t")
-                memory_bytes = int(raw_memory.strip())
-                if memory_bytes <= 0:
-                    raise ValueError("unbounded memory limit")
-                observed[name.strip().lstrip("/")] = ResourceDemand(
-                    cpu_millis=max(0, int(raw_cpu.strip() or 0) // 1_000_000),
-                    memory_mib=(memory_bytes + _MIB - 1) // _MIB,
-                    processes=max(0, int(raw_pids.strip() or 0)),
-                )
-        except ValueError as exc:
-            raise ContainerJobBackendError(
-                ContainerJobFailureClass.INFRASTRUCTURE,
-                "active container-job memory limits are invalid",
-            ) from exc
-        return observed
 
     def _machine_reservation(
-        self, request: ContainerJobActivityRequest
+        self, request: ContainerJobActivityRequest, *, container_name: str | None = None
     ) -> ReservationRequest:
         resources = request.request.spec.resources
         return ReservationRequest(
@@ -920,6 +891,11 @@ class DockerContainerJobBackend:
                 memory_mib=int(resources.memory_mib),
                 processes=int(resources.pids),
             ),
+            # Naming the container before the Docker mutation keeps a launch
+            # that outlives its prelaunch window out of the clock-reclaim path.
+            container_ref=(
+                container_name or request.container_ref or self._name(request)
+            ),
         )
 
     async def _reserve_machine_capacity(
@@ -933,13 +909,14 @@ class DockerContainerJobBackend:
         """
 
         budget = await self._machine_budget()
-        observed = await self._owned_running_demand(exclude=container_name)
-        reservation = self._machine_reservation(request)
+        inventory = await self._owned_inventory(exclude=container_name)
+        reservation = self._machine_reservation(request, container_name=container_name)
         if self._machine_capacity is None:
             # No durable ledger is wired: the ceiling is still enforced, but
             # only against directly observed running containers.
             usage = MachineUsage()
-            for demand in observed.values():
+            for owned in inventory.containers.values():
+                demand = owned.demand
                 usage = MachineUsage(
                     reserved_cpu_millis=usage.reserved_cpu_millis + demand.cpu_millis,
                     reserved_memory_mib=usage.reserved_memory_mib + demand.memory_mib,
@@ -958,7 +935,7 @@ class DockerContainerJobBackend:
         # An owned live container missing its accounting record is a
         # reconciliation fault, not free capacity, so adopt it before counting.
         await self._machine_capacity.reconcile(
-            backend_ref=self._backend_ref, live_containers=observed
+            backend_ref=self._backend_ref, inventory=inventory
         )
         outcome = await self._machine_capacity.reserve(
             request=reservation, budget=budget

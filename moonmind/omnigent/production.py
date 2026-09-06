@@ -345,7 +345,12 @@ def build_generic_omnigent_execution_services(
     registry.register(realizer)
 
     async def owned_container_inventory() -> Any:
-        """Return the owned running containers, or ``None`` if unreadable."""
+        """Return the owned running containers with the scope that was queried.
+
+        ``None`` means the backend could not be read. Reconciliation releases
+        accounting only for a complete enumeration, which is what this
+        canonical probe produces (#3881).
+        """
 
         from moonmind.capacity import probe_owned_containers
 
