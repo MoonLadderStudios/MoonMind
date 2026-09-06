@@ -226,6 +226,13 @@ Direct Codex managed sessions remain compatibility substrate during the Codex-th
 
 ### 7.1 Identity and topology
 
+Bootstrap and resolved-image evidence belongs to one deployment. Explicit
+`MOONMIND_OMNIGENT_BOOTSTRAP_STATE_PATH` and
+`MOONMIND_OMNIGENT_RESOLVED_IMAGES_PATH` values select the sole write destination;
+saves do not mirror evidence into another deployment path. Test containers mask
+repository runtime state with private storage so their startup probes cannot
+consume or replace live host compatibility evidence.
+
 The canonical request remains:
 
 ```text

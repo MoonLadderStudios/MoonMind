@@ -48,15 +48,6 @@ def _write_json(path: Path, payload: dict[str, Any]) -> None:
     tmp = path.with_suffix(".tmp")
     tmp.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
     tmp.replace(path)
-    # also write to alternate location for visibility
-    alt = _COMPOSE_RESOLVED if "resolved" in path.name else _COMPOSE_BOOTSTRAP
-    if alt != path:
-        try:
-            alt.parent.mkdir(parents=True, exist_ok=True)
-            alt.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
-        except OSError:
-            # Best-effort: alternate mount may be unavailable in hermetic tests
-            pass
 
 
 def load_bootstrap_record() -> BootstrapRecord | None:
