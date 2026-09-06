@@ -710,6 +710,7 @@ class _RestartedManager(MoonMindProviderProfileManagerWorkflow):
     def __init__(self) -> None:
         super().__init__()
         self.reconnected: list[tuple[str, str, int | None]] = []
+        self.ledger_actions: list[str] = []
 
     async def _signal_slot_assigned(
         self,
@@ -725,13 +726,22 @@ class _RestartedManager(MoonMindProviderProfileManagerWorkflow):
 
 async def _restore_manager(monkeypatch: pytest.MonkeyPatch) -> _RestartedManager:
     activity = _activity()
+    manager = _RestartedManager()
 
     async def _execute_activity(name: str, payload: Any, **_kwargs: Any) -> Any:
+        if name == "provider_profile.pending_request_order":
+            return {"orders": {owner: {} for owner in payload["workflow_ids"]}}
         assert name == "provider_profile.sync_slot_leases"
+        manager.ledger_actions.append(payload["action"])
         return await activity(**payload)
 
     monkeypatch.setattr(
         provider_profile_manager.workflow, "execute_activity", _execute_activity
+    )
+    monkeypatch.setattr(
+        provider_profile_manager.workflow,
+        "now",
+        lambda: datetime.now(timezone.utc),
     )
     monkeypatch.setattr(
         provider_profile_manager.workflow, "patched", lambda _patch_id: True
@@ -751,7 +761,6 @@ async def _restore_manager(monkeypatch: pytest.MonkeyPatch) -> _RestartedManager
         logging.getLogger("test.provider_profile_manager"),
     )
 
-    manager = _RestartedManager()
     manager._runtime_id = RUNTIME_ID
     manager._durable_maintenance_queue = True
     manager._lease_transition_contract = True
@@ -826,6 +835,135 @@ async def test_a_restart_restores_every_mode_owner_and_generation(
     assert manager._lease_grant_sequence == 13
     # Only the execution owner is reconnected; maintenance owners are not.
     assert manager.reconnected == [("agent-run-1", PROFILE_REF, 11)]
+
+
+def _durable_identity(row: ProviderProfileSlotLease) -> dict[str, Any]:
+    """Every field a runtime-wide snapshot rewrite would reset to a default."""
+
+    return {
+        "profile_id": row.profile_id,
+        "owner_kind": row.owner_kind,
+        "purpose": row.purpose,
+        "compatibility_class": row.compatibility_class,
+        "capacity_scope_ref": row.capacity_scope_ref,
+        "scope_generation": row.scope_generation,
+        "credential_generation": row.credential_generation,
+        "execution_plan_ref": row.execution_plan_ref,
+        "lease_state": row.lease_state,
+        "fencing_generation": row.fencing_generation,
+        "safe_metadata_json": row.safe_metadata_json,
+    }
+
+
+@pytest.mark.asyncio
+async def test_a_re_signal_drain_leaves_every_unrelated_row_intact(
+    lease_session_maker, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A held owner asking again re-signals without replacing runtime rows.
+
+    ``AgentRun._recover_and_request_slot`` re-sends ``request_slot`` when a
+    slot wait times out, so the drain reaches its existing-lease branch while
+    the manager still holds the lease. That branch used to rewrite the whole
+    runtime snapshot, which reset every unrelated row to the model defaults
+    and deleted the release tombstones the fencing high-water mark is read
+    from (MoonLadderStudios/MoonMind#3883).
+    """
+
+    expiry = (datetime.now(timezone.utc) + timedelta(hours=1)).isoformat()
+    await _run(
+        "grant",
+        [{**_grant("agent-run-1", fence=11, scope_generation=3), "expiresAt": expiry}],
+    )
+    # An unrelated maintenance lease on another profile, in another mode.
+    await _run(
+        "grant",
+        [
+            _grant(
+                "owner-maintenance",
+                fence=12,
+                profile_id=OTHER_PROFILE_REF,
+                purpose="credential_validation",
+                compatibility_class=(
+                    CredentialLeaseMode.SINGLE_FLIGHT_VALIDATION.value
+                ),
+                scope_generation=4,
+                credential_generation=9,
+                plan_ref=OTHER_PLAN_REF,
+                identity="evidence-maint",
+            )
+        ],
+    )
+    # An unrelated lease whose resources were already asked to clean up.
+    await _run("grant", [_grant("agent-run-2", fence=14, scope_generation=3)])
+    await _run(
+        "request_cleanup",
+        [
+            {
+                "lease_id": "agent-run-2",
+                "profile_id": PROFILE_REF,
+                "fencing_generation": 14,
+                "reason": "lease_expired",
+            }
+        ],
+    )
+    # A release tombstone: the durable evidence the high-water mark survives on.
+    await _run("grant", [_grant("agent-run-gone", fence=15)])
+    await _run(
+        "release_one", [{"lease_id": "agent-run-gone", "fencing_generation": 15}]
+    )
+
+    before = {
+        row.lease_id: _durable_identity(row) for row in await _rows(lease_session_maker)
+    }
+    assert set(before) == {
+        "agent-run-1",
+        "owner-maintenance",
+        "agent-run-2",
+        "agent-run-gone",
+    }
+
+    manager = await _restore_manager(monkeypatch)
+    assert await manager._load_leases_from_db() is True
+    manager.ledger_actions.clear()
+    manager.reconnected.clear()
+    manager._pending_requests = [
+        provider_profile_manager.PendingRequest(
+            requester_workflow_id="agent-run-1", runtime_id=RUNTIME_ID
+        )
+    ]
+
+    await manager._drain_queue()
+
+    # The held lease is re-announced with the generation the ledger recorded.
+    assert manager.reconnected == [("agent-run-1", PROFILE_REF, 11)]
+    assert manager._pending_requests == []
+    # And it cost no durable write at all, so nothing could be replaced.
+    assert manager.ledger_actions == []
+
+    after = {
+        row.lease_id: _durable_identity(row) for row in await _rows(lease_session_maker)
+    }
+    assert after == before
+    maintenance = after["owner-maintenance"]
+    assert maintenance["compatibility_class"] == (
+        CredentialLeaseMode.SINGLE_FLIGHT_VALIDATION.value
+    )
+    assert maintenance["scope_generation"] == 4
+    assert maintenance["capacity_scope_ref"] == SCOPE_REF
+    assert maintenance["execution_plan_ref"] == OTHER_PLAN_REF
+    assert after["agent-run-2"]["lease_state"] == (
+        DurableLeaseState.CLEANUP_REQUESTED.value
+    )
+    assert after["agent-run-gone"]["lease_state"] == DurableLeaseState.RELEASED.value
+
+    # The tombstone still carries the high-water mark a fresh manager reads.
+    loaded = await _run("load")
+    assert loaded["max_fencing_generation"] == 15
+    assert sorted(lease["leaseId"] for lease in loaded["leases"]) == [
+        "agent-run-1",
+        "agent-run-2",
+        "owner-maintenance",
+    ]
 
 
 @pytest.mark.asyncio

@@ -3271,7 +3271,21 @@ class MoonMindProviderProfileManagerWorkflow:
                 continue
 
             if existing_profile_id:
-                if durable_grants and not await self._sync_leases_to_db():
+                # MoonLadderStudios/MoonMind#3883: re-signalling a lease this
+                # manager already holds is not a lease change, so it must not
+                # cost a runtime-wide `action=save`. Under the transition
+                # contract the grant was committed before the lease became
+                # visible here, so the durable row is already authoritative;
+                # rewriting the snapshot would replace unrelated rows with
+                # model defaults and drop their compatibility class, scope
+                # generation, capacity scope and cleanup-requested state.
+                # Histories recorded before the contract keep the exact
+                # recorded command.
+                if (
+                    durable_grants
+                    and not self._lease_transition_contract
+                    and not await self._sync_leases_to_db()
+                ):
                     remaining.append(req)
                     continue
                 try:

@@ -40,6 +40,7 @@ from moonmind.workflows.temporal.workflows.provider_profile_manager import (
     PROVIDER_INCREMENTAL_LEASE_PATCH,
     CapacityScopeState,
     MoonMindProviderProfileManagerWorkflow,
+    PendingRequest,
     ProfileSlotState,
 )
 
@@ -734,6 +735,124 @@ async def test_the_retained_snapshot_writer_carries_its_own_generation() -> None
 
     assert ledger.calls[0]["action"] == "save"
     assert ledger.calls[0]["writer_generation"] == 4
+
+
+class _Signals:
+    """Records the external ``slot_assigned`` signals the drain sends."""
+
+    def __init__(self) -> None:
+        self.sent: list[tuple[str, str, dict[str, Any]]] = []
+
+    def handle_for(self, workflow_id: str, **_kwargs: Any) -> Any:
+        recorder = self
+
+        class _Handle:
+            async def signal(self, name: str, payload: dict[str, Any]) -> None:
+                recorder.sent.append((workflow_id, name, payload))
+
+        return _Handle()
+
+
+def _re_signal_manager() -> MoonMindProviderProfileManagerWorkflow:
+    """A manager holding a lease whose owner asked for its slot again.
+
+    This is the production shape of ``AgentRun._recover_and_request_slot``: a
+    slot wait times out and the run re-sends ``request_slot`` to a manager that
+    still holds its lease, so the next drain takes the existing-lease branch.
+    """
+
+    wf = _held_manager(ledger_generation=5)
+    wf._pending_requests = [
+        PendingRequest(requester_workflow_id="agent-run-1", runtime_id="opencode")
+    ]
+    return wf
+
+
+@pytest.mark.asyncio
+async def test_a_re_signal_drain_never_rewrites_the_runtime_wide_snapshot() -> None:
+    """Re-signalling a held lease is not a lease change, so it writes nothing.
+
+    The snapshot rewrite deletes and re-inserts every row for the runtime, so
+    an unrelated maintenance lease would come back with the model defaults and
+    lose its compatibility class, scope generation, capacity scope and any
+    requested cleanup.
+    """
+
+    ledger = _Ledger({"save": {"saved": 1}})
+    wf = _re_signal_manager()
+    signals = _Signals()
+
+    with _patched(ledger), patch(
+        "temporalio.workflow.get_external_workflow_handle",
+        side_effect=signals.handle_for,
+    ):
+        await wf._drain_queue()
+
+    assert ledger.actions() == [], "the ordinary drain touched the durable ledger"
+    assert signals.sent == [
+        (
+            "agent-run-1",
+            "slot_assigned",
+            {"profile_id": PROFILE_ID, "fencing_generation": 5},
+        )
+    ]
+    assert wf._pending_requests == []
+    assert wf._profiles[PROFILE_ID].current_leases == ["agent-run-1"]
+
+
+@pytest.mark.asyncio
+async def test_a_pre_contract_re_signal_drain_keeps_its_snapshot_save() -> None:
+    """Histories recorded before the contract keep the exact recorded command."""
+
+    ledger = _Ledger({"save": {"saved": 1}})
+    wf = _re_signal_manager()
+    wf._lease_transition_contract = False
+    signals = _Signals()
+
+    with _patched(
+        ledger,
+        enabled={
+            DB_LEASE_PERSISTENCE_PATCH,
+            DURABLE_LEASE_GRANT_PATCH,
+            PROVIDER_INCREMENTAL_LEASE_PATCH,
+        },
+    ), patch(
+        "temporalio.workflow.get_external_workflow_handle",
+        side_effect=signals.handle_for,
+    ):
+        await wf._drain_queue()
+
+    assert ledger.actions() == ["save"]
+    assert [name for _, name, _ in signals.sent] == ["slot_assigned"]
+
+
+@pytest.mark.asyncio
+async def test_a_pre_contract_re_signal_drain_still_blocks_on_a_failed_save() -> None:
+    """The retained branch keeps its guard: no signal without a durable write."""
+
+    ledger = _Ledger({"save": RuntimeError("artifacts worker unavailable")})
+    wf = _re_signal_manager()
+    wf._lease_transition_contract = False
+    signals = _Signals()
+
+    with _patched(
+        ledger,
+        enabled={
+            DB_LEASE_PERSISTENCE_PATCH,
+            DURABLE_LEASE_GRANT_PATCH,
+            PROVIDER_INCREMENTAL_LEASE_PATCH,
+        },
+    ), patch(
+        "temporalio.workflow.get_external_workflow_handle",
+        side_effect=signals.handle_for,
+    ):
+        await wf._drain_queue()
+
+    assert ledger.actions() == ["save"]
+    assert signals.sent == []
+    assert [req.requester_workflow_id for req in wf._pending_requests] == [
+        "agent-run-1"
+    ]
 
 
 # ---------------------------------------------------------------------------
