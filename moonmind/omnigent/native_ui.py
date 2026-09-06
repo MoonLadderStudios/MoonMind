@@ -377,6 +377,50 @@ def _head_insert_position(document: str) -> int | None:
     return end + 1
 
 
+# Inline CSS url() references (`url(/assets/wordmark.svg)`) ignore <base href>
+# the same way src/href do; the wordmark 404 in #4013 is this class of miss.
+# Only same-document single-quoted/unquoted root-absolute paths are rewritten;
+# absolute (https://) and protocol-relative (//host) URLs are untouched.
+_ROOT_ABSOLUTE_CSS_URL = re.compile(r"""url\(\s*(['"]?)/(?!/)""")
+
+
+def _scope_srcset_candidates(candidates: str, base: str) -> str:
+    """Walk srcset URL/descriptor tokens without splitting data-URL commas."""
+
+    output: list[str] = []
+    position = 0
+    whitespace = " \t\n\r\f"
+    while position < len(candidates):
+        start = position
+        while position < len(candidates) and candidates[position] in whitespace + ",":
+            position += 1
+        output.append(candidates[start:position])
+        start = position
+        # Per the srcset tokenizer, a URL ends at whitespace; commas inside a
+        # URL (especially data:image/jpeg;base64,/9j/...) belong to that URL.
+        while position < len(candidates) and candidates[position] not in whitespace:
+            position += 1
+        url = candidates[start:position]
+        output.append(
+            base + url if url.startswith("/") and not url.startswith("//") else url
+        )
+        if url.endswith(","):
+            continue
+        start = position
+        parentheses = 0
+        while position < len(candidates):
+            char = candidates[position]
+            position += 1
+            if char == "(":
+                parentheses += 1
+            elif char == ")":
+                parentheses = max(0, parentheses - 1)
+            elif char == "," and parentheses == 0:
+                break
+        output.append(candidates[start:position])
+    return "".join(output)
+
+
 def rewrite_asset_urls(document: str, *, scoped_base: str) -> str:
     """Rewrite root-absolute asset URLs onto the binding-scoped route.
 
@@ -386,10 +430,39 @@ def rewrite_asset_urls(document: str, *, scoped_base: str) -> str:
     and resolve back through the scoped serving route. Protocol-relative
     (``//host``) and absolute (``https://``) URLs are left untouched so a
     deliberate external resource is not silently rerouted.
+
+    ``srcset`` candidates and inline CSS ``url(/...)`` references are scoped
+    the same way: the missing root wordmark (``/assets/omnigent-wordmark-*.svg``,
+    MoonLadderStudios/MoonMind#4013) is a decorative nonfatal asset, but it must
+    still resolve through the scoped route rather than 404 at the origin root.
     """
 
     base = scoped_base.rstrip("/")
-    return _ROOT_ABSOLUTE_ATTR.sub(rf"\1=\g<2>{base}/", document)
+
+    def _scope_srcset(match: re.Match[str]) -> str:
+        tag = match.group(0)
+        # Only rewrite the srcset attribute value, leaving src/href (handled
+        # above) untouched within the same tag.
+        def _rewrite_value(value: re.Match[str]) -> str:
+            quote, candidates = value.group(1), value.group(2)
+            scoped = _scope_srcset_candidates(candidates, base)
+            return f"srcset={quote}{scoped}{quote}"
+
+        return re.sub(
+            r"""(?i)\bsrcset=(["'])(.*?)\1""",
+            _rewrite_value,
+            tag,
+            flags=re.DOTALL,
+        )
+
+    scoped = _ROOT_ABSOLUTE_ATTR.sub(rf"\1=\g<2>{base}/", document)
+    scoped = re.sub(
+        r"""<[^<>]*>""",
+        _scope_srcset,
+        scoped,
+        flags=re.IGNORECASE | re.DOTALL,
+    )
+    return _ROOT_ABSOLUTE_CSS_URL.sub(rf"url(\1{base}/", scoped)
 
 
 def render_native_ui_document(
@@ -426,6 +499,24 @@ def render_native_ui_document(
   const bindingId = encodeURIComponent(String(binding.chatBindingId));
   const scopedDocumentUrl = window.location.href;
   const sameOriginApiPath = /^\/(?:v1|api|health)(?:\/|$)/;
+  let sessionValidated = false;
+  let transcriptValidated = false;
+  let fatalAnnounced = false;
+  let readinessObserver = null;
+
+  function checkConversationRendered() {
+    // The pinned ChatPage renders Conversation (role=log) only beyond its
+    // loadingConversation/conversationLoadError gates. Require the successful
+    // bound reads as well: neither a shell nor an error rendered into #root
+    // is evidence of a readable transcript. This also covers empty/read-only
+    // conversations without depending on composer authority or message text.
+    const root = document.getElementById("root");
+    if (!fatalAnnounced && sessionValidated && transcriptValidated &&
+        root && root.querySelector('[role="log"]')) {
+      announceReady();
+      if (readinessObserver) readinessObserver.disconnect();
+    }
+  }
 
   function scopedHttpUrl(input) {
     const url = new URL(String(input), window.location.origin);
@@ -446,12 +537,40 @@ def render_native_ui_document(
   }
 
   const nativeFetch = window.fetch.bind(window);
-  window.fetch = function (input, init) {
+  window.fetch = async function (input, init) {
     const source = input instanceof Request ? input.url : input;
     const scoped = scopedHttpUrl(source);
-    if (!scoped) return nativeFetch(input, init);
-    const request = input instanceof Request ? new Request(scoped.href, input) : scoped.href;
-    return nativeFetch(request, init);
+    const url = scoped || new URL(String(source), window.location.origin);
+    const sessionPath = apiBase + "/v1/sessions/" + bindingId;
+    const method = String(init?.method || (input instanceof Request ? input.method : "GET")).toUpperCase();
+    const essential = method === "GET" && url.origin === window.location.origin &&
+      (url.pathname === sessionPath ||
+       (url.pathname === sessionPath + "/items" && !url.searchParams.has("after")));
+    const request = scoped
+      ? (input instanceof Request ? new Request(scoped.href, input) : scoped.href)
+      : input;
+    try {
+      const response = await nativeFetch(request, init);
+      if (essential) {
+        if (!response.ok) {
+          announceFatal("essential_read_failed");
+        } else {
+          const body = await response.clone().json();
+          if (url.pathname === sessionPath) {
+            sessionValidated = body?.id === binding.chatBindingId;
+            if (!sessionValidated) announceFatal("essential_read_invalid");
+          } else {
+            transcriptValidated = Array.isArray(body?.data) && typeof body.has_more === "boolean";
+            if (!transcriptValidated) announceFatal("essential_read_invalid");
+          }
+          checkConversationRendered();
+        }
+      }
+      return response;
+    } catch (error) {
+      if (essential) announceFatal("essential_read_failed");
+      throw error;
+    }
   };
 
   const nativeXhrOpen = XMLHttpRequest.prototype.open;
@@ -469,6 +588,9 @@ def render_native_ui_document(
       return new NativeEventSource(scoped ? scoped.href : url, config);
     };
     window.EventSource.prototype = NativeEventSource.prototype;
+    // Preserve constructor statics (CONNECTING/OPEN/CLOSED). Without this the
+    // replacement's constants are undefined (MoonLadderStudios/MoonMind#4013).
+    Object.setPrototypeOf(window.EventSource, NativeEventSource);
   }
 
   if (window.WebSocket) {
@@ -481,6 +603,12 @@ def render_native_ui_document(
         : new NativeWebSocket(scoped ? scoped.href : url, protocols);
     };
     window.WebSocket.prototype = NativeWebSocket.prototype;
+    // Preserve constructor statics (CONNECTING/OPEN/CLOSING/CLOSED). The
+    // pinned upstream SessionUpdatesSocket.sendWatch guards with
+    // `ws?.readyState === WebSocket.OPEN`; with OPEN undefined the guard
+    // passes for null sockets (null.send crash) and fails for open sockets
+    // (watch never sent). (MoonLadderStudios/MoonMind#4013).
+    Object.setPrototypeOf(window.WebSocket, NativeWebSocket);
   }
 
   // BrowserRouter must see the stock chat route at first render. The provider
@@ -502,19 +630,64 @@ def render_native_ui_document(
     if (!root) return;
     if (root.hasChildNodes()) {
       restoreScopedDocumentUrl();
-      return;
+    } else {
+      const observer = new MutationObserver(function () {
+        if (!root.hasChildNodes()) return;
+        observer.disconnect();
+        restoreScopedDocumentUrl();
+      });
+      observer.observe(root, { childList: true });
+      window.setTimeout(function () {
+        observer.disconnect();
+        restoreScopedDocumentUrl();
+      }, 5000);
     }
-    const observer = new MutationObserver(function () {
-      if (!root.hasChildNodes()) return;
-      observer.disconnect();
-      restoreScopedDocumentUrl();
-    });
-    observer.observe(root, { childList: true });
-    window.setTimeout(function () {
-      observer.disconnect();
-      restoreScopedDocumentUrl();
-    }, 5000);
+    // URL restoration has a short fallback timer; readiness must keep
+    // observing throughout slow hydration and until the frame is disposed.
+    readinessObserver = new MutationObserver(checkConversationRendered);
+    readinessObserver.observe(root, { childList: true, subtree: true });
+    checkConversationRendered();
+    window.addEventListener("pagehide", function () {
+      readinessObserver.disconnect();
+    }, { once: true });
   }
+  // Bounded readiness/fatal signaling for the embedding shell
+  // (MoonLadderStudios/MoonMind#4013 AC7/PLAN5). The shell validates exact
+  // origin, iframe window, binding id, and mount generation before trusting a
+  // signal, so a replaced frame can never mark the current mount. Payloads
+  // carry only presentation state and safe reason codes — never provider
+  // identity, transcript content, or credentials.
+  let readyAnnounced = false;
+  function announceReady() {
+    if (readyAnnounced) return;
+    readyAnnounced = true;
+    try {
+      window.parent.postMessage(
+        { type: "moonmind.omnigent.chat.ready", chatBindingId: binding.chatBindingId },
+        window.location.origin
+      );
+    } catch (err) {}
+  }
+  function announceFatal(reason) {
+    fatalAnnounced = true;
+    if (readinessObserver) readinessObserver.disconnect();
+    try {
+      window.parent.postMessage(
+        {
+          type: "moonmind.omnigent.chat.fatal",
+          chatBindingId: binding.chatBindingId,
+          reason: String(reason || "native_crash").slice(0, 128),
+        },
+        window.location.origin
+      );
+    } catch (err) {}
+  }
+  window.addEventListener("error", function () {
+    announceFatal("native_crash");
+  });
+  window.addEventListener("unhandledrejection", function () {
+    announceFatal("unhandled_rejection");
+  });
   if (document.readyState === "loading") {
     document.addEventListener("DOMContentLoaded", restoreAfterFirstRender, { once: true });
   } else {
