@@ -7857,7 +7857,7 @@ async def test_generic_omnigent_publication_materializes_resolved_github_auth(
         if "ls-remote" in command:
             ls_remote_calls += 1
             if ls_remote_calls == 1:
-                return 0, "", ""
+                return 0, f"{'b' * 40}\trefs/heads/{expected['pushBranch']}\n", ""
             return 0, f"{remote_head}\trefs/heads/{expected['pushBranch']}\n", ""
         if "rev-parse" in command:
             return 0, f"{remote_head}\n", ""
