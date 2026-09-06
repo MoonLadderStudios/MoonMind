@@ -707,6 +707,14 @@ with:
 - `MOONMIND_DEPLOYMENT_EXCLUDED_SERVICES` for runner services that must not be
   targeted by `docker compose up`
 
+On Windows Docker Desktop, the Linux worker resolves Compose files through its
+local checkout mount and maps checkout bind sources into the daemon's
+`/run/desktop/mnt/host/<drive>/...` namespace. WSL user-distro `/mnt/<drive>` paths
+are not daemon-visible host mounts. Rewritten checkout binds disable automatic
+host-directory creation, so an unavailable source fails instead of mounting an
+empty directory over application files. POSIX host paths retain their configured
+namespace.
+
 ## 11.2 Ephemeral updater container
 
 A privileged worker starts a one-shot updater container that mounts:
