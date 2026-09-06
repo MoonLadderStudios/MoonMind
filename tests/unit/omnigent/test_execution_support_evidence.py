@@ -336,7 +336,11 @@ def _concurrency_record(plan: SimpleNamespace, *, level: int) -> dict[str, objec
     )
 
     resource_class = MachineResourceClass(
-        resource_class_ref="ci-standard-4x8@1", cpu_cores=4, memory_gib=8
+        # What a real 4-core/8-GiB machine measures: MemTotal is physical RAM
+        # minus the kernel's reservation, so it never reports a whole 8 GiB.
+        resource_class_ref="ci-standard-4x8@1",
+        cpu_cores=4,
+        memory_mib=7947,
     )
     overlap = ObservedOverlapEvidence(
         requested_level=level,

@@ -48,25 +48,38 @@ binds a validated level to the substrate that produced it:
 | `hostCapacityPolicyVersion` | The aggregate host and machine-resource admission policy in force. |
 | `transportPoolPolicyVersion` | The pooled transport policy in force. |
 | `workerTopologyRef` | The worker replica/task-queue topology and concurrency settings. |
-| `resourceClass` | The measured machine (`cpuCores`, `memoryGib`) the exact-image rows ran on. |
+| `resourceClass` | The measured machine (`cpuCores`, `memoryMib`) the exact-image rows ran on. |
 | `scenarioCatalogVersion` | The scenario catalog the evidence was produced against. |
 
 Evidence produced against a different catalog version is refused. The identity
 is carried on `ProtectedExecutionSupportEvidence.concurrency`, and the record
 must name the same `supportCombinationKey` as the row it is filed under.
 
-`resourceClass` is **measured, not defaulted**. The runner reads the CPU
-affinity mask and the physical memory of the machine it is running on, so a row
-cannot claim a machine size that nobody observed. `--cpu-cores` and
-`--memory-gib` are overrides for a deployment that must declare a class it
-cannot measure, never a fallback the CLI supplies on its own.
+`resourceClass` is **measured, and there is no way to declare it**. The runner
+reads what this process may actually use — the CPU affinity mask, the CFS quota
+in `cpu.max`, the memory limit in `memory.max`, and `MemTotal` — and the smaller
+of host and cgroup wins, so a container-confined runner publishes the machine it
+was given rather than the machine around it. A machine that cannot be measured
+fails before any layer runs; it does not fall back to a declared size.
 
 A `resourceClassRef` may name the machine it stands for as
-`<cpuCores>x<memoryGib>` — `ci-standard-4x8@1`. When it does, the ref and the
-measured machine must agree: a `ci-standard-4x8@1` row produced on a sixteen-core
-runner is refused before the layer runs, rather than published as a row that
-contradicts itself. A ref without such a token (`local-deterministic@1`) carries
-no dimension claim and is not checked.
+`<cpuCores>x<memoryGib>` — `ci-standard-4x8@1`. When it does, the ref is a claim
+the measurement has to satisfy: a `ci-standard-4x8@1` row produced on a
+sixteen-core runner is refused before the layer runs, rather than published as a
+row that contradicts itself. A ref without such a token
+(`local-deterministic@1`) carries no dimension claim and is not checked.
+
+Memory is carried and compared in **MiB**, against a band rather than an exact
+size. No machine measures the size its class names: the kernel reserves
+firmware, memmap and crashkernel pages before `MemTotal` is computed, so a
+nominal 8-GiB VM measures about 7947 MiB and a 16-GiB CI runner about 15989 MiB.
+A measurement may land up to `MACHINE_MEMORY_TOLERANCE` (10%) below the size its
+class names and may never exceed it. The band is wide enough for every
+reservation a Linux host takes and far narrower than the gap to the next smaller
+whole-GiB class, so a genuine 7-GiB machine still cannot be filed under a 4x8
+class, and a machine with more memory than the class names cannot be either —
+thresholds calibrated for the smaller class would otherwise pass on headroom the
+class does not describe.
 
 ## Layers
 
@@ -85,9 +98,11 @@ The hermetic layer spans three production boundaries, each with its own owner:
 - **Authoring** — `N` simultaneous submissions compiled through the production
   `compile_execution_plan` behind `InMemoryExecutionPlanStore`, producing `N`
   immutable plans that each select the generic Omnigent combination.
-  `load_or_compile` idempotency is exercised there; the DB-backed
-  `DbExecutionPlanStore.persist` `IntegrityError` race is owned separately by
-  the plan-store tests, not by this layer.
+  `load_or_compile` idempotency is exercised there, scoped to that store. The
+  DB-backed `DbExecutionPlanStore.persist` `IntegrityError` race belongs to the
+  plan-store boundary and is outside this layer's scope; the plan-store contract
+  tests cover `persist` idempotency and the typed conflict, but no test yet
+  drives the concurrent-insert rollback-and-reload branch.
 - **Dispatch** — `N+2` submissions driven through
   `MoonMindAgentRun._admit_omnigent_capacity_before_execution` against a real
   `ProfileSlotState` ledger and the production `GenericHostCapacityAdmission`,
@@ -283,7 +298,7 @@ an empty string, which `argparse` accepts *over* the flag's default.
 | `OMNIGENT_CONCURRENCY_SUPPORT_KEY` | `--support-combination-key` | The exact support combination the level is claimed for. |
 | `OMNIGENT_WORKER_BUILD_REF` | `--worker-build-ref` | The worker build under test. |
 | `OMNIGENT_WORKER_TOPOLOGY_REF` | `--worker-topology-ref` | The worker replica/task-queue topology and concurrency settings. |
-| `OMNIGENT_CONCURRENCY_RESOURCE_CLASS` | `--resource-class` | The machine class the exact-image rows are filed under. |
+| `OMNIGENT_CONCURRENCY_RESOURCE_CLASS` | `--resource-class` | The machine class the exact-image rows are filed under. A ref carrying `<cores>x<gib>` dimensions must be one the runner's measured machine satisfies. |
 
 The runner resolves the **whole support identity before it runs any layer**. A
 blank or malformed value fails immediately, naming the flag and the repository

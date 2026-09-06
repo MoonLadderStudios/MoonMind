@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -45,6 +46,7 @@ from moonmind.omnigent.concurrency_qualification import (
     build_row_for_unavailable_environment,
     compute_concurrency_evidence_digest,
     load_observed_overlap,
+    nominal_memory_band_mib,
     observed_overlap_evidence_path,
     observed_peak_overlap,
     publish_observed_overlap,
@@ -58,9 +60,55 @@ from tools import run_omnigent_concurrency_qualification as runner
 SUPPORT_KEY = "omnigent-support:sha256:" + "a" * 64
 OTHER_SUPPORT_KEY = "omnigent-support:sha256:" + "b" * 64
 
+#: What a real 4-core/8-GiB machine measures: MemTotal 8,138,000 kB, which is
+#: physical RAM minus the kernel's reservation. The class it is filed under
+#: names 8 GiB, and no machine of that size ever measures 8192 MiB.
+EIGHT_GIB_MEMTOTAL_KIB = 8_138_000
+EIGHT_GIB_MEASURED_MIB = EIGHT_GIB_MEMTOTAL_KIB * 1024 // 1024**2
+
 RESOURCE_CLASS = MachineResourceClass(
-    resource_class_ref="ci-standard-4x8@1", cpu_cores=4, memory_gib=8
+    resource_class_ref="ci-standard-4x8@1",
+    cpu_cores=4,
+    memory_mib=EIGHT_GIB_MEASURED_MIB,
 )
+
+
+def _measure_machine(
+    monkeypatch: pytest.MonkeyPatch,
+    *,
+    cores: int,
+    mem_total_kib: int,
+) -> None:
+    """Make this process measure the machine a test is about.
+
+    The runner reads the affinity mask, the cgroup interface files and
+    ``MemTotal``. Pointing the cgroup paths at a path that does not exist makes
+    this machine unconfined through the production readers themselves, so the
+    assertion is about the machine under test rather than about whatever host
+    happens to run this suite.
+    """
+
+    real_sysconf = os.sysconf
+    page_size = 4096
+
+    def _sysconf(name):  # type: ignore[no-untyped-def]
+        if name == "SC_PAGE_SIZE":
+            return page_size
+        if name == "SC_PHYS_PAGES":
+            return mem_total_kib * 1024 // page_size
+        return real_sysconf(name)
+
+    monkeypatch.setattr(os, "sched_getaffinity", lambda _pid: set(range(cores)))
+    monkeypatch.setattr(os, "sysconf", _sysconf)
+    absent = Path("/nonexistent/moonmind-cgroup-absent")
+    for attribute in (
+        "CGROUP_V2_CPU_MAX",
+        "CGROUP_V1_CPU_QUOTA",
+        "CGROUP_V1_CPU_PERIOD",
+        "CGROUP_V2_MEMORY_MAX",
+        "CGROUP_V1_MEMORY_MAX",
+    ):
+        monkeypatch.setattr(runner, attribute, absent)
 
 
 def _identity(key: str = SUPPORT_KEY) -> ConcurrencySupportIdentity:
@@ -660,15 +708,19 @@ def hermetic_database(monkeypatch: pytest.MonkeyPatch) -> None:
 def _runner_args(
     evidence_dir,
     *,
-    resource_class: str = "ci-standard-4x8@1",
-    cpu_cores: int | None = 4,
-    memory_gib: int | None = 8,
+    resource_class: str = "local-deterministic@1",
 ) -> argparse.Namespace:
+    """Return runner arguments for the row tests.
+
+    The default class carries no ``<cores>x<gib>`` dimensions, so these tests
+    are about the row contract rather than about the dimensions of whatever
+    machine runs the suite. A test that *is* about the machine names a
+    dimensioned class and measures the machine it means.
+    """
+
     return argparse.Namespace(
         evidence_dir=str(evidence_dir),
         resource_class=resource_class,
-        cpu_cores=cpu_cores,
-        memory_gib=memory_gib,
     )
 
 
@@ -680,12 +732,10 @@ def _identity_argv(**overrides: str) -> list[str]:
         "--moonmind-commit": "0" * 40,
         "--worker-build-ref": "moonmind-worker@ci",
         "--worker-topology-ref": "single-replica@1",
-        # A declared machine, so the argv is self-consistent on whatever
+        # A dimensionless class, so the argv is self-consistent on whatever
         # machine runs this suite and the assertion is about the flag under
         # test rather than about this runner's core count.
-        "--resource-class": "ci-standard-4x8@1",
-        "--cpu-cores": "4",
-        "--memory-gib": "8",
+        "--resource-class": "local-deterministic@1",
     }
     supplied.update(overrides)
     return [item for flag, value in supplied.items() for item in (flag, value)]
@@ -1150,8 +1200,96 @@ def test_a_valid_invocation_writes_its_record_even_when_no_row_passed(
 
 
 # ---------------------------------------------------------------------------
-# The declared machine is measured, not assumed.
+# The published machine is measured, and the class it is filed under is a claim
+# that measurement has to satisfy.
 # ---------------------------------------------------------------------------
+
+
+def test_the_scheduled_exact_image_argv_publishes_a_real_eight_gib_machine(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The documented invocation must resolve on the machine it documents.
+
+    This is the scheduled job's own argv: the identity flags and
+    ``--resource-class ci-standard-4x8@1``, with no way to declare the machine.
+    Comparing whole floored GiB against the ref refused it on every honest
+    8-GiB host — ``MemTotal`` is physical RAM minus the kernel's reservation,
+    so the machine measured 7 GiB against a class naming 8 — and because the
+    refusal precedes the row loop the scheduled run produced neither a row nor
+    a record.
+    """
+
+    _measure_machine(monkeypatch, cores=4, mem_total_kib=EIGHT_GIB_MEMTOTAL_KIB)
+
+    identity = runner.build_identity(
+        runner._parse_args(_identity_argv(**{"--resource-class": "ci-standard-4x8@1"}))
+    )
+
+    assert identity.resource_class.resource_class_ref == "ci-standard-4x8@1"
+    assert identity.resource_class.cpu_cores == 4
+    # The published machine is the measurement, not the size the class names.
+    assert identity.resource_class.memory_mib == EIGHT_GIB_MEASURED_MIB
+    assert identity.resource_class.memory_mib < 8 * 1024
+
+
+def test_the_class_a_real_runner_publishes_resolves_a_repeated_wave_budget(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The only budgeted exact-image class must be one a real machine can publish.
+
+    ``EXACT_DOCKER_REPEATED_WAVE_THRESHOLDS`` is keyed to ``ci-standard-4x8@1``.
+    A budget bound to a class no honest machine could name would leave every
+    exact-image row without a repeated-wave verdict.
+    """
+
+    _measure_machine(monkeypatch, cores=4, mem_total_kib=EIGHT_GIB_MEMTOTAL_KIB)
+
+    identity = runner.build_identity(
+        runner._parse_args(_identity_argv(**{"--resource-class": "ci-standard-4x8@1"}))
+    )
+
+    assert repeated_wave_thresholds(identity.resource_class.resource_class_ref) is (
+        EXACT_DOCKER_REPEATED_WAVE_THRESHOLDS
+    )
+
+
+def test_a_class_ref_cannot_be_published_by_a_machine_it_does_not_name(
+    monkeypatch: pytest.MonkeyPatch, never_spawned: list[tuple]
+) -> None:
+    """A 4x8 row cannot be published from a sixteen-core host.
+
+    No flag can declare the machine, so this is the whole of the abuse surface:
+    the ref an operator sets is held to the measurement, and the refusal lands
+    before any layer spends its matrix.
+    """
+
+    _measure_machine(monkeypatch, cores=16, mem_total_kib=40_681_160)
+
+    with pytest.raises(SystemExit) as raised:
+        runner.build_identity(
+            runner._parse_args(
+                _identity_argv(**{"--resource-class": "ci-standard-4x8@1"})
+            )
+        )
+
+    message = str(raised.value.code)
+    assert "--resource-class" in message
+    assert "no layer was run" in message
+    assert never_spawned == []
+
+
+@pytest.mark.parametrize("flag", ("--cpu-cores", "--memory-gib"))
+def test_no_flag_can_declare_the_machine(flag: str) -> None:
+    """The declaration path is gone, not merely cross-checked.
+
+    While the dimensions were declarable, the invariant the class exists to
+    carry was opt-out on exactly the invocation an operator controls: supplying
+    ``--cpu-cores 4 --memory-gib 8`` published a ``ci-standard-4x8@1`` row from
+    a sixteen-core host without the measurement ever being consulted.
+    """
+
+    with pytest.raises(SystemExit):
+        runner._parse_args(_identity_argv() + [flag, "4"])
 
 
 def test_a_resource_class_ref_cannot_contradict_the_machine_it_names() -> None:
@@ -1159,24 +1297,71 @@ def test_a_resource_class_ref_cannot_contradict_the_machine_it_names() -> None:
 
     with pytest.raises(ValueError, match="names a 4-core/8-GiB machine"):
         MachineResourceClass(
-            resource_class_ref="ci-standard-4x8@1", cpu_cores=16, memory_gib=64
+            resource_class_ref="ci-standard-4x8@1",
+            cpu_cores=16,
+            memory_mib=64 * 1024,
         )
+
+
+def test_the_memory_band_refuses_the_next_smaller_machine() -> None:
+    """The near miss, not only the gross mismatch.
+
+    The band exists because no machine measures its nominal size. It is still
+    narrow enough that a genuine 7-GiB machine — which measures about 6.8 GiB —
+    cannot be filed under a class naming 8, and a machine with *more* memory
+    than the class names cannot be filed under it either, because thresholds
+    calibrated for the smaller class would pass on headroom it does not
+    describe.
+    """
+
+    floor_mib, ceiling_mib = nominal_memory_band_mib(8)
+    seven_gib_machine = 7 * 1024 * 97 // 100
+
+    assert floor_mib <= EIGHT_GIB_MEASURED_MIB <= ceiling_mib
+    for refused in (seven_gib_machine, ceiling_mib + 1):
+        with pytest.raises(ValueError, match="names a 4-core/8-GiB machine"):
+            MachineResourceClass(
+                resource_class_ref="ci-standard-4x8@1",
+                cpu_cores=4,
+                memory_mib=refused,
+            )
+
+
+def test_a_sixteen_gib_ci_runner_can_publish_its_own_class() -> None:
+    """The arithmetic has to hold at more than one nominal size.
+
+    A hosted 4-core/16-GiB runner reports ``MemTotal`` around 15.6 GiB. Under a
+    floored whole-GiB comparison it published 15 and could name no 16-GiB class
+    at all.
+    """
+
+    sixteen_gib_measured = 16_373_608 * 1024 // 1024**2
+
+    resource_class = MachineResourceClass(
+        resource_class_ref="ci-hosted-4x16@1",
+        cpu_cores=4,
+        memory_mib=sixteen_gib_measured,
+    )
+
+    assert resource_class.memory_mib == sixteen_gib_measured
 
 
 def test_a_class_ref_without_dimensions_claims_no_machine_size() -> None:
     """``local-deterministic@1`` names no dimensions, so none are checked."""
 
     resource_class = MachineResourceClass(
-        resource_class_ref="local-deterministic@1", cpu_cores=16, memory_gib=64
+        resource_class_ref="local-deterministic@1",
+        cpu_cores=16,
+        memory_mib=64 * 1024,
     )
 
-    assert (resource_class.cpu_cores, resource_class.memory_gib) == (16, 64)
+    assert (resource_class.cpu_cores, resource_class.memory_mib) == (16, 64 * 1024)
 
 
-def test_a_passing_exact_docker_row_carries_the_supplied_machine(
+def test_a_passing_exact_docker_row_carries_the_measured_machine(
     tmp_path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """The row's class reflects the declared machine, not a CLI constant."""
+    """The row's class reflects the machine that ran it, not a CLI constant."""
 
     monkeypatch.setenv(
         "MOONMIND_OMNIGENT_CONCURRENCY_HOST_IMAGE", "host@sha256:" + "d" * 64
@@ -1185,6 +1370,7 @@ def test_a_passing_exact_docker_row_carries_the_supplied_machine(
         "MOONMIND_OMNIGENT_HOST_SERVER_URL", "https://omnigent.invalid"
     )
     monkeypatch.setattr(runner, "_docker_available", lambda: None)
+    _measure_machine(monkeypatch, cores=32, mem_total_kib=131_600_000)
 
     def _publish(layer, level, _evidence_dir) -> int:
         publish_observed_overlap(layer, _overlap(level), evidence_dir=tmp_path)
@@ -1193,12 +1379,7 @@ def test_a_passing_exact_docker_row_carries_the_supplied_machine(
     monkeypatch.setattr(runner, "_run_owning_tests", _publish)
 
     rows = runner.build_rows(
-        _runner_args(
-            tmp_path,
-            resource_class="ci-large-32x128@1",
-            cpu_cores=32,
-            memory_gib=128,
-        ),
+        _runner_args(tmp_path, resource_class="ci-large-32x128@1"),
         ConcurrencyQualificationLayer.exact_docker,
         (2,),
     )
@@ -1206,57 +1387,96 @@ def test_a_passing_exact_docker_row_carries_the_supplied_machine(
     assert rows[0].status is ConcurrencyRowStatus.passed
     assert rows[0].resource_class is not None
     assert rows[0].resource_class.cpu_cores == 32
-    assert rows[0].resource_class.memory_gib == 128
+    assert rows[0].resource_class.memory_mib == 131_600_000 * 1024 // 1024**2
 
 
-def test_an_omitted_machine_is_measured_rather_than_defaulted(
-    monkeypatch: pytest.MonkeyPatch,
+def test_an_unmeasurable_machine_spends_nothing_and_says_why(
+    monkeypatch: pytest.MonkeyPatch, never_spawned: list[tuple]
 ) -> None:
-    """Omitting the dimensions measures the runner; it never assumes 4x8.
+    """A machine that cannot be measured cannot publish a class at all.
 
-    The scheduled job passes only ``--resource-class``. When the numbers came
-    from CLI constants, every published exact-image row claimed a 4-core/8-GiB
-    machine no matter what actually ran the wave.
+    There is no declaration to fall back to: the published class is a
+    measurement, so an unmeasurable machine fails before a layer runs rather
+    than filing rows under a machine nobody observed.
     """
-
-    monkeypatch.setattr(runner, "observed_cpu_cores", lambda: 12)
-    monkeypatch.setattr(runner, "observed_memory_gib", lambda: 48)
-
-    args = runner._parse_args(
-        ["--support-combination-key", SUPPORT_KEY, "--moonmind-commit", "0" * 40]
-    )
-
-    assert (args.cpu_cores, args.memory_gib) == (None, None)
-    identity = runner.build_identity(args)
-    assert identity.resource_class.cpu_cores == 12
-    assert identity.resource_class.memory_gib == 48
-
-
-def test_an_unmeasurable_machine_names_the_override_instead_of_guessing(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """A machine that cannot be measured fails with the flags that fix it."""
 
     def _unobservable() -> int:
         raise runner.MachineNotObservable("no affinity mask is exposed")
 
     monkeypatch.setattr(runner, "observed_cpu_cores", _unobservable)
 
-    args = runner._parse_args(
-        ["--support-combination-key", SUPPORT_KEY, "--moonmind-commit", "0" * 40]
-    )
-
     with pytest.raises(SystemExit) as raised:
-        runner.build_identity(args)
+        runner.build_identity(runner._parse_args(_identity_argv()))
 
-    assert "--cpu-cores" in str(raised.value.code)
+    message = str(raised.value.code)
+    assert "no affinity mask is exposed" in message
+    assert "no layer was run" in message
+    assert never_spawned == []
 
 
 def test_the_measured_machine_is_the_one_this_process_may_use() -> None:
     """The observation is a measurement of this machine, not a constant."""
 
     assert runner.observed_cpu_cores() >= 1
-    assert runner.observed_memory_gib() >= 1
+    assert runner.observed_memory_mib() >= 1
+
+
+def test_a_cgroup_confined_runner_publishes_its_own_limits(
+    tmp_path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A container-confined runner must not publish the host's dimensions.
+
+    A CFS quota never appears in the affinity mask and ``SC_PHYS_PAGES`` is
+    host physical memory, so a self-hosted runner inside a limited container
+    measured the machine around it rather than the machine it was given.
+    """
+
+    cpu_max = tmp_path / "cpu.max"
+    cpu_max.write_text("400000 100000\n", encoding="utf-8")
+    memory_max = tmp_path / "memory.max"
+    memory_max.write_text(f"{8 * 1024**3}\n", encoding="utf-8")
+    _measure_machine(monkeypatch, cores=64, mem_total_kib=264_000_000)
+    # The helper leaves this machine unconfined; this test is about confinement,
+    # so the same production readers are pointed at the files above.
+    monkeypatch.setattr(runner, "CGROUP_V2_CPU_MAX", cpu_max)
+    monkeypatch.setattr(runner, "CGROUP_V2_MEMORY_MAX", memory_max)
+
+    assert runner.cgroup_cpu_quota_cores() == 4
+    assert runner.cgroup_memory_limit_bytes() == 8 * 1024**3
+    assert runner.observed_cpu_cores() == 4
+    assert runner.observed_memory_mib() == 8 * 1024
+
+
+def test_an_unconfined_machine_reads_no_cgroup_ceiling(
+    tmp_path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """``max`` and an absent v1 hierarchy are not limits."""
+
+    cpu_max = tmp_path / "cpu.max"
+    cpu_max.write_text("max 100000\n", encoding="utf-8")
+    memory_max = tmp_path / "memory.max"
+    memory_max.write_text("max\n", encoding="utf-8")
+    monkeypatch.setattr(runner, "CGROUP_V2_CPU_MAX", cpu_max)
+    monkeypatch.setattr(runner, "CGROUP_V2_MEMORY_MAX", memory_max)
+    monkeypatch.setattr(runner, "CGROUP_V1_CPU_QUOTA", tmp_path / "absent")
+    monkeypatch.setattr(runner, "CGROUP_V1_CPU_PERIOD", tmp_path / "absent")
+    monkeypatch.setattr(runner, "CGROUP_V1_MEMORY_MAX", tmp_path / "absent")
+
+    assert runner.cgroup_cpu_quota_cores() is None
+    assert runner.cgroup_memory_limit_bytes() is None
+
+
+def test_a_cgroup_v1_unlimited_sentinel_is_not_a_limit(
+    tmp_path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """cgroup v1 spells "unlimited" as a saturated integer, not a word."""
+
+    memory_max = tmp_path / "memory.limit_in_bytes"
+    memory_max.write_text("9223372036854771712\n", encoding="utf-8")
+    monkeypatch.setattr(runner, "CGROUP_V2_MEMORY_MAX", tmp_path / "absent")
+    monkeypatch.setattr(runner, "CGROUP_V1_MEMORY_MAX", memory_max)
+
+    assert runner.cgroup_memory_limit_bytes() is None
 
 
 # ---------------------------------------------------------------------------

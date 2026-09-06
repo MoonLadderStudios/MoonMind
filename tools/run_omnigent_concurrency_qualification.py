@@ -40,9 +40,12 @@ Usage::
         --resource-class ci-standard-4x8@1 \\
         --output artifacts/omnigent-concurrency/record.json
 
-``--cpu-cores`` and ``--memory-gib`` are overrides: omitted, the runner
-measures the machine it is running on, so the published resource class
-describes the machine that actually ran the level.
+The machine dimensions are never arguments. The runner measures the cores and
+memory this process may actually use — affinity mask, CPU quota, memory limit —
+so the published resource class describes the machine that actually ran the
+level. ``--resource-class`` names the class the rows are filed under, and a ref
+that carries its own ``<cores>x<gib>`` dimensions has to agree with that
+measurement or the identity is refused before a layer runs.
 """
 
 from __future__ import annotations
@@ -126,8 +129,6 @@ _FLAGS_BY_FIELD: dict[str, str] = {
     "transportPoolPolicyVersion": "--transport-pool-policy-version",
     "workerTopologyRef": "--worker-topology-ref",
     "resource_class_ref": "--resource-class",
-    "cpu_cores": "--cpu-cores",
-    "memory_gib": "--memory-gib",
 }
 
 
@@ -211,18 +212,91 @@ class MachineNotObservable(RuntimeError):
     """The machine this invocation runs on cannot be measured."""
 
 
+#: The cgroup interface files that bound what this process may actually use.
+#: A container is namespaced onto the root of its own hierarchy, so these are
+#: the paths a confined runner reads; on an unconfined host they read ``max``
+#: (v2) or are absent (v1), and the host measurement stands.
+CGROUP_V2_CPU_MAX = Path("/sys/fs/cgroup/cpu.max")
+CGROUP_V1_CPU_QUOTA = Path("/sys/fs/cgroup/cpu/cpu.cfs_quota_us")
+CGROUP_V1_CPU_PERIOD = Path("/sys/fs/cgroup/cpu/cpu.cfs_period_us")
+CGROUP_V2_MEMORY_MAX = Path("/sys/fs/cgroup/memory.max")
+CGROUP_V1_MEMORY_MAX = Path("/sys/fs/cgroup/memory/memory.limit_in_bytes")
+
+#: cgroup v1 spells "unlimited" as a saturated 64-bit sentinel rather than a
+#: word, so any limit at or above this is no limit at all.
+_CGROUP_V1_UNLIMITED = 1 << 62
+
+
+def _cgroup_value(path: Path) -> str:
+    """Return one cgroup interface file's contents, or ``""`` when unreadable."""
+
+    try:
+        return path.read_text(encoding="utf-8").strip()
+    except OSError:
+        return ""
+
+
+def cgroup_cpu_quota_cores() -> int | None:
+    """Return the whole cores a CPU quota permits, or ``None`` when unconfined.
+
+    A cpuset shows up in the affinity mask; a CFS quota does not. A runner
+    confined to two cores by ``cpu.max`` still sees every host CPU in its mask,
+    so the quota is read separately. A fractional quota is floored: a row must
+    not claim more parallelism than the cgroup will actually schedule.
+    """
+
+    v2 = _cgroup_value(CGROUP_V2_CPU_MAX).split()
+    if len(v2) == 2 and v2[0] != "max":
+        quota, period = v2
+    else:
+        quota = _cgroup_value(CGROUP_V1_CPU_QUOTA)
+        period = _cgroup_value(CGROUP_V1_CPU_PERIOD)
+    try:
+        quota_us, period_us = int(quota), int(period)
+    except ValueError:
+        return None
+    if quota_us <= 0 or period_us <= 0:
+        return None
+    return max(1, quota_us // period_us)
+
+
+def cgroup_memory_limit_bytes() -> int | None:
+    """Return the memory a cgroup permits, or ``None`` when unconfined.
+
+    ``SC_PHYS_PAGES`` is host physical memory and ignores a cgroup limit
+    entirely, so a container-confined runner would otherwise publish the host's
+    memory as the machine that ran the level.
+    """
+
+    for path in (CGROUP_V2_MEMORY_MAX, CGROUP_V1_MEMORY_MAX):
+        raw = _cgroup_value(path)
+        if not raw or raw == "max":
+            continue
+        try:
+            limit = int(raw)
+        except ValueError:
+            continue
+        if 0 < limit < _CGROUP_V1_UNLIMITED:
+            return limit
+    return None
+
+
 def observed_cpu_cores() -> int:
     """Return the CPU cores this process may actually run on.
 
-    The affinity mask, not :func:`os.cpu_count`, is what a cgroup-confined CI
-    runner is allowed to use, and the resource class has to name the machine
-    the wave really ran on.
+    The affinity mask, not :func:`os.cpu_count`, is what a cpuset-confined CI
+    runner is allowed to use, and a CFS quota bounds it further without
+    changing the mask, so the smaller of the two wins. The resource class has
+    to name the machine the wave really ran on.
     """
 
     if hasattr(os, "sched_getaffinity"):
         cores = len(os.sched_getaffinity(0))
     else:  # pragma: no cover - not reachable on the supported platforms
         cores = os.cpu_count() or 0
+    quota_cores = cgroup_cpu_quota_cores()
+    if quota_cores is not None:
+        cores = min(cores, quota_cores)
     if cores < 1:
         raise MachineNotObservable(
             "the CPU core count of this machine could not be observed"
@@ -230,8 +304,15 @@ def observed_cpu_cores() -> int:
     return cores
 
 
-def observed_memory_gib() -> int:
-    """Return this machine's physical memory in whole GiB."""
+def observed_memory_mib() -> int:
+    """Return the memory this machine actually offers, in whole MiB.
+
+    Whole GiB cannot express this measurement: ``MemTotal`` is physical memory
+    minus the kernel's reservation, so a nominal 8-GiB machine reports about
+    7947 MiB and flooring it to 7 GiB would make it a machine no 8-GiB class
+    could ever name. A cgroup limit, when one is in force, is the real
+    ceiling and replaces the host's physical size.
+    """
 
     try:
         total_bytes = os.sysconf("SC_PAGE_SIZE") * os.sysconf("SC_PHYS_PAGES")
@@ -239,35 +320,33 @@ def observed_memory_gib() -> int:
         raise MachineNotObservable(
             f"the physical memory of this machine could not be observed: {exc}"
         ) from exc
-    memory_gib = int(total_bytes // (1024**3))
-    if memory_gib < 1:
+    limit = cgroup_memory_limit_bytes()
+    if limit is not None:
+        total_bytes = min(total_bytes, limit)
+    memory_mib = int(total_bytes // (1024**2))
+    if memory_mib < 1:
         raise MachineNotObservable(
-            "this machine reports less than one GiB of physical memory"
+            "this machine reports less than one MiB of usable memory"
         )
-    return memory_gib
+    return memory_mib
 
 
 def _resource_class(args: argparse.Namespace) -> MachineResourceClass:
-    """Return the machine this invocation ran on, measured unless declared.
+    """Return the machine this invocation ran on, always measured.
 
-    ``--cpu-cores`` and ``--memory-gib`` are overrides, not defaults. Omitted,
-    the runner measures the machine, so a row cannot claim a machine size that
-    nobody observed just because the CLI carried a constant. A declared class
-    ref that names its own dimensions is checked against the measurement by
-    :class:`MachineResourceClass`, so a mismatch fails loudly instead of
-    publishing a row that contradicts itself.
+    There is no declaration path. A flag that could name the machine was the
+    only way to publish a row for substrate that never ran the level, and it
+    made the invariant opt-out on exactly the invocation an operator controls.
+    ``--resource-class`` names the class the rows are filed under; when that
+    ref carries its own ``<cores>x<gib>`` dimensions,
+    :class:`MachineResourceClass` holds the measurement to them, so the ref is
+    a claim this machine has to satisfy rather than a label it may carry.
     """
 
-    cpu_cores = (
-        args.cpu_cores if args.cpu_cores is not None else observed_cpu_cores()
-    )
-    memory_gib = (
-        args.memory_gib if args.memory_gib is not None else observed_memory_gib()
-    )
     return MachineResourceClass(
         resource_class_ref=args.resource_class,
-        cpu_cores=cpu_cores,
-        memory_gib=memory_gib,
+        cpu_cores=observed_cpu_cores(),
+        memory_mib=observed_memory_mib(),
     )
 
 
@@ -314,7 +393,8 @@ def build_identity(args: argparse.Namespace) -> ConcurrencySupportIdentity:
     except MachineNotObservable as exc:
         raise SystemExit(
             "the machine resource class could not be resolved, so no layer was "
-            f"run: {exc}; declare it with --cpu-cores and --memory-gib"
+            f"run: {exc}; the qualification layers must run on a machine this "
+            "process can measure, because the published class is a measurement"
         ) from exc
     except ValidationError as exc:
         raise SystemExit(
@@ -540,11 +620,10 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         "--transport-pool-policy-version", default="omnigent-transport-pool@1"
     )
     parser.add_argument("--worker-topology-ref", default="single-replica@1")
+    # The class the rows are filed under. The machine behind it is measured,
+    # never declared: a flag that could name the dimensions was the only way to
+    # publish a row for substrate that never ran the level.
     parser.add_argument("--resource-class", default="local-deterministic@1")
-    # Overrides, not defaults. Omitted, the runner measures the machine it is
-    # running on, so a published row never names a machine size nobody observed.
-    parser.add_argument("--cpu-cores", type=int, default=None)
-    parser.add_argument("--memory-gib", type=int, default=None)
     parser.add_argument(
         "--evidence-dir", default="artifacts/omnigent-concurrency/evidence"
     )

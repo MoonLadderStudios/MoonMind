@@ -462,39 +462,68 @@ class ObservedOverlapEvidence(BaseModel):
 
 #: A resource-class ref may name the machine it stands for as
 #: ``<cpuCores>x<memoryGib>`` — ``ci-standard-4x8@1``. When it does, the
-#: declared numbers have to agree with it. A row that names a 4x8 class while
-#: the wave ran on a sixteen-core runner describes substrate that never ran the
-#: level, and the class is the only thing that makes that row's thresholds or a
-#: level exception mean anything.
+#: *measured* machine has to be the machine the ref names. A row that names a
+#: 4x8 class while the wave ran on a sixteen-core runner describes substrate
+#: that never ran the level, and the class is the only thing that makes that
+#: row's thresholds or a level exception mean anything.
 _RESOURCE_CLASS_DIMENSIONS = re.compile(r"(?<![0-9A-Za-z])(\d+)x(\d+)(?![0-9A-Za-z])")
+
+#: No machine measures the size its class names. The kernel reserves firmware,
+#: memmap and crashkernel pages before ``MemTotal`` is computed, so a nominal
+#: 8-GiB VM measures about 7.8 GiB and a 16-GiB CI runner about 15.6 GiB.
+#: Comparing whole floored GiB against the ref therefore refused every real
+#: machine — the documented ``ci-standard-4x8@1`` could not be published by any
+#: honest 8-GiB host. The agreement is a band around the nominal size instead: a
+#: measurement may land up to this fraction below the size its class names and
+#: may never exceed it. Ten percent covers every reservation a Linux host takes
+#: while staying far narrower than the gap to the next smaller whole-GiB class,
+#: so a genuine 7-GiB machine (~6.8 GiB measured) is still refused a 4x8 class.
+MACHINE_MEMORY_TOLERANCE = 0.10
+
+
+def nominal_memory_band_mib(nominal_gib: int) -> tuple[int, int]:
+    """Return the measured-memory band, in MiB, a ``nominal_gib`` class accepts.
+
+    The ceiling is the nominal size exactly: a machine with *more* memory than
+    its class names is refused too, because thresholds calibrated for the
+    smaller class would pass on headroom the class does not describe.
+    """
+
+    nominal_mib = nominal_gib * 1024
+    return int(nominal_mib * (1.0 - MACHINE_MEMORY_TOLERANCE)), nominal_mib
 
 
 class MachineResourceClass(BaseModel):
-    """The machine the exact-Docker layer ran on.
+    """The machine the exact-Docker layer ran on, as it was measured.
 
     Performance thresholds and any level exception are only meaningful against
-    a named class, so the class travels with the row. The runner measures
-    ``cpu_cores`` and ``memory_gib`` from the machine it is running on unless a
-    deployment declares them, so a row cannot name substrate that never ran it.
+    a named class, so the class travels with the row. ``cpu_cores`` and
+    ``memory_mib`` are measurements of the machine that ran the level — the
+    runner has no way to declare them — and a ref that names its own dimensions
+    is a claim that measurement has to satisfy. Memory is carried in MiB
+    because whole GiB cannot express the difference between a nominal 8-GiB
+    machine and a genuine 7-GiB one.
     """
 
     model_config = _MODEL_CONFIG
 
     resource_class_ref: str = Field(min_length=1, max_length=128)
     cpu_cores: int = Field(ge=1)
-    memory_gib: int = Field(ge=1)
+    memory_mib: int = Field(ge=1)
 
     @model_validator(mode="after")
     def validate_resource_class(self) -> "MachineResourceClass":
         named = _RESOURCE_CLASS_DIMENSIONS.search(self.resource_class_ref)
         if named is None:
             return self
-        cores, memory_gib = int(named.group(1)), int(named.group(2))
-        if (cores, memory_gib) != (self.cpu_cores, self.memory_gib):
+        cores, nominal_gib = int(named.group(1)), int(named.group(2))
+        floor_mib, ceiling_mib = nominal_memory_band_mib(nominal_gib)
+        if self.cpu_cores != cores or not floor_mib <= self.memory_mib <= ceiling_mib:
             raise ValueError(
                 f"resource class {self.resource_class_ref!r} names a "
-                f"{cores}-core/{memory_gib}-GiB machine, but the observed "
-                f"machine has {self.cpu_cores} cores and {self.memory_gib} GiB"
+                f"{cores}-core/{nominal_gib}-GiB machine, but the measured "
+                f"machine has {self.cpu_cores} cores and {self.memory_mib} MiB; "
+                f"a {nominal_gib}-GiB machine measures {floor_mib}-{ceiling_mib} MiB"
             )
         return self
 
@@ -1058,6 +1087,7 @@ __all__ = [
     "EXACT_DOCKER_LEVELS",
     "EXACT_DOCKER_REPEATED_WAVE_THRESHOLDS",
     "HERMETIC_LEVELS",
+    "MACHINE_MEMORY_TOLERANCE",
     "MAX_DIAGNOSTIC_ENTRIES",
     "MAX_DIAGNOSTIC_LENGTH",
     "PASSING_ROW_STATUSES",
@@ -1082,6 +1112,7 @@ __all__ = [
     "build_row_for_unavailable_environment",
     "compute_concurrency_evidence_digest",
     "load_observed_overlap",
+    "nominal_memory_band_mib",
     "observed_overlap_evidence_path",
     "observed_peak_overlap",
     "publish_observed_overlap",

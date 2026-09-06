@@ -20,8 +20,11 @@ name: Provider / Omnigent Concurrency Qualification
 # unset variable expands to an empty string, so the runner resolves the whole
 # support identity before it spends the matrix and names the missing variable
 # instead of discarding a completed wave. The machine dimensions are measured
-# on the runner, so the published resource class describes the machine that
-# actually ran the level.
+# on the runner — affinity mask, CPU quota and memory limit — and cannot be
+# declared, so the published resource class describes the machine that actually
+# ran the level. OMNIGENT_CONCURRENCY_RESOURCE_CLASS must therefore name a class
+# this runner can satisfy: a ref carrying <cores>x<gib> dimensions is refused
+# before the matrix runs when the measurement disagrees with it.
 #
 # Every job publishes a concurrency qualification record. A runner without the
 # exact images, without a daemon, or without protected-live admission emits

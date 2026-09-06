@@ -17,8 +17,8 @@ boundaries *before* the realizer unproven at concurrency:
 Both are exercised here through the production code that owns them:
 :func:`~moonmind.omnigent.harness_platform.planner.compile_execution_plan`
 behind :class:`~moonmind.omnigent.harness_platform.stores.InMemoryExecutionPlanStore`
-— the hermetic store, so ``load_or_compile`` idempotency is proven here while
-the DB-backed ``persist`` race stays with the plan-store tests — and
+— the hermetic store, so ``load_or_compile`` idempotency is proven here and the
+DB-backed ``persist`` race stays outside this layer's scope — and
 ``MoonMindAgentRun._admit_omnigent_capacity_before_execution`` against a real
 :class:`~moonmind.workflows.temporal.workflows.provider_profile_manager.ProfileSlotState`
 ledger and the production
@@ -268,8 +268,8 @@ async def test_n_submissions_compile_into_n_immutable_generic_plans(
     Omnigent plane runs at all. Compiling ``N`` at once through the production
     compiler behind the hermetic in-memory store is where a shared plan ref, a
     shared skill projection, or a realizer selection that varied under
-    concurrency would appear. The DB-backed store's ``persist`` race is owned
-    by the plan-store tests, not by this layer.
+    concurrency would appear. The DB-backed store's ``persist`` race belongs to
+    the plan-store boundary and is outside this layer's scope.
     """
 
     catalog = _catalog()
