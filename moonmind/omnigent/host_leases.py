@@ -357,6 +357,7 @@ class DbOmnigentHostLeaseRepository:
                     # Larger than the ceiling itself. Queueing it would wait
                     # forever and clamping it would silently change a
                     # billing-relevant resource value, so reject it here.
+                    await self._commit_refusal(session)
                     raise HarnessPlatformError(
                         decision.waiting_reason,
                         code=(
@@ -365,6 +366,7 @@ class DbOmnigentHostLeaseRepository:
                         ),
                     )
                 if not decision.admitted:
+                    await self._commit_refusal(session)
                     raise HarnessPlatformError(
                         decision.waiting_reason,
                         code=(
@@ -417,6 +419,27 @@ class DbOmnigentHostLeaseRepository:
         assert created is not None
         return created
 
+    @staticmethod
+    async def _commit_refusal(session: Any) -> None:
+        """Persist the ledger bookkeeping a refused allocation produced.
+
+        MoonLadderStudios/MoonMind#3881 remaining implementation 8. The refused
+        *reservation* must never survive this transaction, and it does not:
+        ``reserve_within`` writes a waiter marker, which accounts nothing, and
+        releases whatever it proved expired. Those are observations about the
+        machine, not this run's allocation, and the waiter marker exists
+        precisely so a refused owner's wait is visible without a second ledger.
+        Rolling them back with the failed allocation is what made oldest waiter
+        age structurally zero for the generic-host class. Committing here gives
+        this path the same durability the container-job path already gets from
+        the committing ``MachineCapacityLedger.reserve`` wrapper.
+
+        No binding or lease row has been added at this point, so committing
+        cannot leak a lease for an allocation the machine refused.
+        """
+
+        await session.commit()
+
     async def _machine_reservation(
         self,
         *,
@@ -455,12 +478,25 @@ class DbOmnigentHostLeaseRepository:
             )
         from moonmind.capacity import (
             WORKLOAD_CLASS_GENERIC_HOST,
+            MachineCapacityUnavailable,
             ReservationRequest,
             ResourceDemand,
         )
         from moonmind.omnigent.host_ports import host_correlation_identity
 
-        budget = await self._machine_budget_provider()
+        try:
+            budget = await self._machine_budget_provider()
+        except MachineCapacityUnavailable as exc:
+            # The daemon this host would launch on could not be read, so the
+            # machine's real budget is unknown. Admission already fails closed;
+            # what was missing is the typed classification every other refusal
+            # on this path carries, without which the operator sees an
+            # unclassified runtime error instead of an actionable one.
+            raise HarnessPlatformError(
+                "generic host allocation cannot establish the machine budget: "
+                f"{exc}",
+                code=HarnessPlatformFailure.OMNIGENT_HOST_CAPACITY_UNAVAILABLE,
+            ) from exc
         reservation = ReservationRequest(
             backend_ref=str(backend_ref),
             workload_class=WORKLOAD_CLASS_GENERIC_HOST,
