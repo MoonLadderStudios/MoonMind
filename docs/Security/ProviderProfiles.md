@@ -1452,6 +1452,13 @@ writer's own fencing high-water mark and preserves every row fenced above it. A
 patch marker in one workflow history cannot fence a stale database writer; a
 durable generation comparison can.
 
+No path in a history recorded under the transition contract issues `save`.
+Grant, release, expiry and terminal reclamation are single-row transitions, and
+re-announcing a slot the manager already holds — the drain branch an
+`AgentRun` reaches when its slot wait times out and it re-sends `request_slot`
+— writes nothing at all, because the row committed before that lease became
+visible is already the authority.
+
 **No credential material reaches a lease row.** Caller metadata passes through a
 fixed allowlist, and the only stored evidence is a compact non-secret identity
 digest plus bounded cleanup/release reasons.

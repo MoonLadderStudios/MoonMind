@@ -113,11 +113,13 @@ class _ProfileActivities:
 class _SlotRequester:
     def __init__(self) -> None:
         self.assignment: dict[str, Any] | None = None
+        self.assignments: list[dict[str, Any]] = []
         self.stopped = False
 
     @workflow.signal
     def slot_assigned(self, payload: dict[str, Any]) -> None:
         self.assignment = payload
+        self.assignments.append(payload)
 
     @workflow.signal
     def shutdown(self) -> None:
@@ -127,9 +129,20 @@ class _SlotRequester:
     def assigned(self) -> dict[str, Any] | None:
         return self.assignment
 
+    @workflow.query
+    def assignment_count(self) -> int:
+        return len(self.assignments)
+
     @workflow.run
     async def run(self) -> None:
         await workflow.wait_condition(lambda: self.stopped)
+
+
+async def _wait_for_assignments(handle: Any, expected: int) -> None:
+    """Poll the requester until it has received ``expected`` assignments."""
+
+    while await handle.query(_SlotRequester.assignment_count) < expected:
+        await asyncio.sleep(0.05)
 
 
 @pytest.mark.asyncio
@@ -282,6 +295,21 @@ async def test_the_lease_transition_contract_replays_from_its_own_history() -> N
             assignment = await requester.query(_SlotRequester.assigned)
             assert assignment["profile_id"] == "test-default"
 
+            # The production recovery shape: a slot wait times out and the run
+            # re-sends request_slot to a manager that still holds its lease.
+            # The manager re-signals the held slot without rewriting the
+            # runtime-wide snapshot (MoonLadderStudios/MoonMind#3883).
+            await manager.signal(
+                "request_slot",
+                {
+                    "requester_workflow_id": requester.id,
+                    "runtime_id": runtime_id,
+                },
+            )
+            await asyncio.wait_for(_wait_for_assignments(requester, 2), timeout=15)
+            re_assignment = await requester.query(_SlotRequester.assigned)
+            assert re_assignment == assignment
+
             await manager.signal(
                 "release_slot",
                 {
@@ -331,7 +359,13 @@ async def test_the_lease_transition_contract_replays_from_its_own_history() -> N
         < commands.index("slot_assigned")
         < commands.index("release_one")
     )
-    # Neither the release nor the reclamation rewrote the runtime-wide snapshot.
+    # The re-signal announced the same lease again and cost no durable write:
+    # one grant, two assignments, one release.
+    assert commands.count("slot_assigned") == 2
+    assert commands.count("grant") == 1
+    assert commands.count("release_one") == 1
+    # No path in a new history rewrites the runtime-wide snapshot: not the
+    # grant, not the re-signal drain, not the release, not the reclamation.
     assert "save" not in commands
 
     await Replayer(
