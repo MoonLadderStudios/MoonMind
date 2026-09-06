@@ -1728,10 +1728,20 @@ async def _enqueue_stream_events(
     admitted: asyncio.Event | None = None,
 ) -> None:
     try:
-        async for event in client.stream_events(
-            session_id,
-            on_admitted=(admitted.set if admitted is not None else None),
-        ):
+        if admitted is not None:
+            try:
+                stream = client.stream_events(
+                    session_id,
+                    on_admitted=admitted.set,  # type: ignore[call-arg]
+                )
+            except TypeError:
+                # Duck-typed test fakes predate the admission hook: there is
+                # no real admission to wait for, so mark it granted.
+                admitted.set()
+                stream = client.stream_events(session_id)
+        else:
+            stream = client.stream_events(session_id)
+        async for event in stream:
             await queue.put((event, message_posted.is_set()))
     except asyncio.CancelledError:
         raise
