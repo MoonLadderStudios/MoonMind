@@ -409,8 +409,10 @@ async def test_materializer_rejects_missing_authored_path_and_failed_clone(
         command_runner=None, workspace_root=tmp_path  # type: ignore[arg-type]
     )
 
-    # Authored absolute paths are preexisting authority: missing dir fails closed.
-    with pytest.raises(HarnessPlatformError):
+    # Raw workspacePath aliases are rejected as a normal authoring route
+    # (MoonLadderStudios/MoonMind#4014); an existing workspace needs a
+    # server-issued ownership/use grant instead of a bare path.
+    with pytest.raises(HarnessPlatformError, match="workspacePath"):
         await materializer.materialize(_request({"workspacePath": "/tmp/nowhere"}))
 
     calls: list[list[str]] = []

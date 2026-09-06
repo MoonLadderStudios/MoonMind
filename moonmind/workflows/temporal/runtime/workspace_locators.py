@@ -6,7 +6,7 @@ import json
 import os
 from dataclasses import asdict, dataclass
 from pathlib import Path
-from typing import Protocol
+from typing import Any, Mapping, Protocol
 
 from moonmind.schemas.workspace_locator_models import (
     ManagedWorkspaceLocator,
@@ -75,6 +75,68 @@ class SandboxWorkspaceRecordStore:
         descriptor = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
         with os.fdopen(descriptor, "w", encoding="utf-8") as stream:
             stream.write("materialized-v2")
+
+    def _readiness_marker_path(self, workspace_id: str) -> Path:
+        candidate = (self.store_root / f"{workspace_id}.ready.json").resolve()
+        if candidate.parent != self.store_root.resolve():
+            raise WorkspaceLocatorResolutionError(
+                WORKSPACE_AUTHORITY_MISMATCH,
+                "sandbox workspace readiness marker escapes its authority",
+            )
+        return candidate
+
+    def read_readiness(self, workspace_id: str) -> dict[str, Any] | None:
+        """Return the digest-bound readiness marker, if one was recorded."""
+
+        path = self._readiness_marker_path(workspace_id)
+        if not path.is_file():
+            return None
+        try:
+            payload = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, ValueError, json.JSONDecodeError) as exc:
+            raise WorkspaceLocatorResolutionError(
+                WORKSPACE_AUTHORITY_MISMATCH,
+                "sandbox workspace readiness marker is invalid",
+            ) from exc
+        if not isinstance(payload, dict):
+            raise WorkspaceLocatorResolutionError(
+                WORKSPACE_AUTHORITY_MISMATCH,
+                "sandbox workspace readiness marker is invalid",
+            )
+        return payload
+
+    def is_ready(self, workspace_id: str, fingerprint: Mapping[str, Any]) -> bool:
+        """Return whether the recorded ready generation matches this attempt.
+
+        Completion binds to the admitted source/digest, restore
+        contract/version, input-manifest digest, target owner, and attempt —
+        not just a directory or a previous marker. A retry reconciles the
+        same generation; changed inputs require an explicit new import.
+        """
+
+        recorded = self.read_readiness(workspace_id)
+        if recorded is None:
+            return False
+        return recorded.get("fingerprint") == dict(fingerprint)
+
+    def mark_ready(
+        self, workspace_id: str, fingerprint: Mapping[str, Any]
+    ) -> None:
+        """Record the verified ready generation for this source and attempt."""
+
+        self.store_root.mkdir(mode=0o700, parents=True, exist_ok=True)
+        path = self._readiness_marker_path(workspace_id)
+        payload = json.dumps(
+            {"version": "ready-v1", "fingerprint": dict(fingerprint)},
+            sort_keys=True,
+        )
+        descriptor = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+        with os.fdopen(descriptor, "w", encoding="utf-8") as stream:
+            stream.write(payload)
+        # The legacy directory-level marker is retained for historical
+        # readers; authority decisions use the digest-bound marker above.
+        if not self.is_materialized(workspace_id):
+            self.mark_materialized(workspace_id)
 
     def load(self, workspace_id: str) -> SandboxWorkspaceRecord | None:
         path = self._record_path(workspace_id)
