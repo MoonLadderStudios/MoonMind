@@ -84,7 +84,7 @@ Planned, implemented, and qualified behavior are distinct states (see the roadma
 | Governance report with explicit coverage/failure states | Not implemented; no `GovernanceReport` implementation exists | Child #3969 |
 | Bounded repository-security tool pack | Planned direction (generic tool-pack contract, graduated capability levels); no tool-pack design shipped | Child #3970, roadmap Milestone 2 |
 
-`docker compose up -d` with no `.env` plus UI-entered secrets remains the baseline personal-use path. A fresh install without model credentials stays usable for settings, artifacts, and diagnostics and reports the real blocking boundary (`no_eligible_free_model`) without paid fallback or an irrelevant PAT demand.
+`docker compose up -d` with no `.env` plus UI-entered secrets remains the baseline personal-use path. A fresh install without model credentials stays usable for settings, artifacts, and diagnostics and reports the real blocking boundary (described here as `no_eligible_free_model`; the product-code gate reasons are `no_eligible_profile` in the failure taxonomy, surfaced in the execution catalog as `no_eligible_codex_oauth_profile` per `api_service/api/routers/omnigent_catalog.py`) without paid fallback or an irrelevant PAT demand. Child #3968 owns folding this mapping into the full per-statement README traceability.
 
 ## 4. README and security-boundary traceability
 
