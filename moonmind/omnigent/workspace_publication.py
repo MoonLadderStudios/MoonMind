@@ -125,6 +125,7 @@ class OmnigentWorkspacePublicationService:
         base_branch: str | None,
         repository: str,
         github_token: str | None,
+        accepted_published_head: Mapping[str, Any] | None = None,
     ) -> dict[str, Any]:
         normalized_mode = str(publish_mode or "none").strip().lower()
         if normalized_mode not in {"branch", "pr"}:
@@ -272,14 +273,22 @@ class OmnigentWorkspacePublicationService:
                     f"/refs/heads/{published.branch_name}@{published.head_sha}"
                 ),
             }
-        # A publication-only Skill may create a PR without adding commits.
-        # Resolve it from the branch whose exact remote head we just verified,
-        # so its URL survives the same durable handoff as a new push.
-        if normalized_mode == "pr" and repository and token:
+        # A shared authored base is not a candidate owned by this workflow.
+        # Only the atomic head accepted by the prior publication boundary can
+        # authorize discovery when this step itself published no commits.
+        candidate_owned = result["push_status"] == "pushed" or (
+            isinstance(accepted_published_head, Mapping)
+            and accepted_published_head.get("workflowId") == current_workflow_id
+            and accepted_published_head.get("repository") == repository
+            and accepted_published_head.get("branch") == result["push_branch"]
+            and accepted_published_head.get("headSha") == result["push_head_sha"]
+        )
+        if normalized_mode == "pr" and repository and token and candidate_owned:
             pull_request = await GitHubService().resolve_pull_request_selector(
                 repo=str(repository).strip(),
                 selector=result["push_branch"],
                 github_token=token,
+                expected_head_sha=result["push_head_sha"],
             )
             if pull_request.resolved and pull_request.pr_url:
                 result["pull_request_url"] = pull_request.pr_url
@@ -315,6 +324,7 @@ class OmnigentWorkspacePublicationService:
             base_branch=authored_starting_branch(request),
             repository=repository,
             github_token=str(github_credential.token or "").strip() or None,
+            accepted_published_head=parameters.get("acceptedPublishedHead"),
         )
 
 

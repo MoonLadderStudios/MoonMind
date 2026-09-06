@@ -455,10 +455,13 @@ Rules:
 
 The generic Container Jobs plane owns reusable workspace-resolution and daemon-translation primitives. Long-lived Omnigent hosts reuse them where compatible while retaining separate host/session lease semantics.
 
-Existing PR discovery follows remote-head verification even when publication
-adds no commits. The unchanged candidate's verified branch supplies the lookup
-identity, and the resulting PR URL crosses the same durable result boundary as
-the URL for a newly pushed candidate.
+Existing PR discovery follows remote-head verification. When publication adds
+no commits, discovery requires the workflow's previously accepted publication
+head, bound to the same workflow, repository, branch, and exact commit. An
+unchanged shared authored base does not grant this authority. The GitHub PR
+head must still match the verified commit before its URL crosses the durable
+result boundary. Older requests without accepted publication authority retain
+no-commit evidence but cannot discover a PR from that base alone.
 
 Before repository publication, the workspace owner fetches the authored base
 branch into its explicit remote-tracking ref using the same repository

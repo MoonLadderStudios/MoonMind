@@ -782,8 +782,9 @@ class GitHubService:
         repo: str,
         selector: str,
         github_token: str | None = None,
+        expected_head_sha: str | None = None,
     ) -> PullRequestSelectorResult:
-        """Resolve a PR number, GitHub PR URL, or exact open head branch."""
+        """Resolve a PR selector; a pinned head requires exact branch discovery."""
 
         repository = str(repo or "").strip()
         candidate = str(selector or "").strip()
@@ -798,7 +799,7 @@ class GitHubService:
             pr_number = int(candidate)
         except ValueError:
             pr_number = 0
-        if pr_number > 0:
+        if pr_number > 0 and expected_head_sha is None:
             return PullRequestSelectorResult(
                 resolved=True,
                 prNumber=pr_number,
@@ -809,7 +810,7 @@ class GitHubService:
             )
 
         parsed_url = self.parse_github_pr_url(candidate.rstrip("/"))
-        if parsed_url is not None:
+        if parsed_url is not None and expected_head_sha is None:
             owner, repo_name, number_text = parsed_url
             url_repository = f"{owner}/{repo_name}"
             if url_repository.lower() != repository.lower():
@@ -900,6 +901,15 @@ class GitHubService:
             )
 
         match = matches[0]
+        if expected_head_sha is not None and (
+            str((match.get("head") or {}).get("sha") or "").lower()
+            != expected_head_sha.lower()
+        ):
+            return PullRequestSelectorResult(
+                selectorType="branch",
+                reasonCode="head_sha_mismatch",
+                summary="The pull-request head does not match the verified publication.",
+            )
         pr_number = int(match.get("number") or 0)
         pr_url = str(match.get("html_url") or "").strip()
         if pr_number <= 0 or not pr_url:

@@ -125,6 +125,7 @@ class OmnigentWorkspacePublicationPort(Protocol):
         base_branch: str | None,
         repository: str,
         github_token: str | None,
+        accepted_published_head: Mapping[str, Any] | None = None,
     ) -> dict[str, Any]: ...
 
 

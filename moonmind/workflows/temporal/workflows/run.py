@@ -963,6 +963,11 @@ RUN_OMNIGENT_PUBLICATION_CHECKPOINT_RESTORE_PATCH = (
 RUN_ISSUE_IMPLEMENT_PR_HANDOFF_AUTHORITY_PATCH = (
     "run-issue-implement-pr-handoff-authority-v1"
 )
+# Carry only the atomic, accepted publication head into a downstream publisher.
+# Existing histories retain requests without this optional no-commit authority.
+RUN_ACCEPTED_PUBLICATION_HEAD_HANDOFF_PATCH = (
+    "run-accepted-publication-head-handoff-v1"
+)
 # External runtimes create a fresh sandbox only after their AgentRun starts, so
 # they cannot satisfy a pre-execution archive checkpoint. Continue from the
 # workflow-owned, remote-verified published branch instead. This changes both
@@ -19702,6 +19707,24 @@ class MoonMindRunWorkflow:
         )
         current_repository = authored_repository_source(identity_request)
         current_branch = authored_starting_branch(identity_request)
+        if (
+            agent_kind == "external"
+            and agent_id == "omnigent"
+            and publish_mode == "pr"
+            and current_repository
+            and current_repository == self._repo
+            and self._workflow_patch_enabled(RUN_ACCEPTED_PUBLICATION_HEAD_HANDOFF_PATCH)
+        ):
+            accepted_head = self._accepted_published_head()
+            if accepted_head is not None:
+                # Reserved authority: absent from parameter_keys, so authored
+                # workflow/node inputs cannot attest to their own publication.
+                parameters["acceptedPublishedHead"] = {
+                    "workflowId": correlation_id,
+                    "repository": current_repository,
+                    "branch": accepted_head[0],
+                    "headSha": accepted_head[1],
+                }
         repository_bound_policy = self._workflow_patch_enabled(
             RUN_REPOSITORY_BOUND_NO_COMMIT_OUTCOME_PATCH
         )
