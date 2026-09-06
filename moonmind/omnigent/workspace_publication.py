@@ -212,7 +212,37 @@ class OmnigentWorkspacePublicationService:
         # Remediation workspaces may be single-branch clones of the candidate.
         # Materialize the authored comparison ref through the same repository
         # credential before the publisher measures or mutates that candidate.
-        normalized_base = str(base_branch or "main").strip() or "main"
+        normalized_base = str(base_branch or "").strip()
+        if not normalized_base:
+            # Clone records the selected repository default in origin/HEAD.
+            # Keep that selection stable even if the remote default changes.
+            default_head = await run_command(
+                ["git", "symbolic-ref", "--quiet", "refs/remotes/origin/HEAD"],
+                check=False,
+            )
+            if default_head.returncode == 0:
+                default_ref = str(default_head.stdout or "").strip()
+                if default_ref.startswith("refs/remotes/origin/"):
+                    normalized_base = default_ref.removeprefix("refs/remotes/origin/")
+            elif default_head.returncode == 1:
+                remote_head = await run_command(
+                    ["git", "ls-remote", "--symref", "origin", "HEAD"]
+                )
+                defaults = {
+                    fields[1].removeprefix("refs/heads/")
+                    for line in remote_head.stdout.splitlines()
+                    if len(fields := line.split()) == 3
+                    and fields[0] == "ref:"
+                    and fields[1].startswith("refs/heads/")
+                    and fields[2] == "HEAD"
+                }
+                if len(defaults) == 1:
+                    normalized_base = defaults.pop()
+            if not normalized_base:
+                raise HarnessPlatformError(
+                    "repository default branch could not be resolved; select a branch explicitly",
+                    code="OMNIGENT_REPOSITORY_PUBLICATION_FAILED",
+                )
         await run_command(["git", "check-ref-format", "--branch", normalized_base])
         await run_command(
             [
@@ -223,13 +253,23 @@ class OmnigentWorkspacePublicationService:
                 f"+refs/heads/{normalized_base}:refs/remotes/origin/{normalized_base}",
             ]
         )
+        if not str(base_branch or "").strip():
+            await run_command(
+                [
+                    "git",
+                    "symbolic-ref",
+                    "refs/remotes/origin/HEAD",
+                    f"refs/remotes/origin/{normalized_base}",
+                ]
+            )
         # A later publication step may restore the exact already-published
         # candidate and create its PR without changing tracked files. Keep that
         # accepted branch: generating a new one here strands the existing PR
         # and makes the subsequent exact-head lookup search the wrong branch.
         published = None
         if (
-            isinstance(accepted_published_head, Mapping)
+            normalized_mode == "pr"
+            and isinstance(accepted_published_head, Mapping)
             and accepted_published_head.get("workflowId") == current_workflow_id
             and accepted_published_head.get("repository") == repository
             and accepted_published_head.get("branch")
@@ -272,6 +312,11 @@ class OmnigentWorkspacePublicationService:
                 # PR creation remains owned by the durable parent workflow.
                 publish_mode="branch",
                 publish_base_branch=normalized_base,
+                # Branch mode updates the authored branch. PR mode creates a
+                # candidate only when there is no unchanged accepted publication.
+                publication_branch_name=(
+                    normalized_base if normalized_mode == "branch" else None
+                ),
                 runtime_mode="omnigent",
                 repo_dir=safe_workspace,
                 run_command=run_command,
