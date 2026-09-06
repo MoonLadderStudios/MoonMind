@@ -7,6 +7,7 @@ import os
 import shutil
 import tarfile
 import tempfile
+import time
 from pathlib import Path
 from typing import Any
 
@@ -22,6 +23,12 @@ MAX_EXPANDED_BYTES = 512 * 1024 * 1024
 MAX_ARCHIVE_FILES = 10_000
 MAX_ARCHIVE_FILE_SIZE = 64 * 1024 * 1024
 MAX_ARCHIVE_DEPTH = 32
+# Explicit wall-clock budget for staged extraction. The byte, count, and depth
+# caps above already bound total work; this deadline closes hostile-but-bounded
+# inputs (many tiny members, maximal decompression work inside the caps) that
+# would otherwise consume unbounded processing time without tripping a size
+# limit.
+MAX_EXTRACTION_SECONDS = 120.0
 SUPPORTED_RESTORE_CONTRACTS = frozenset({"workspace-snapshot-v1"})
 RESTORE_CONTRACT_VERSION = "workspace-snapshot-v1"
 RESTORE_PRINCIPAL = "service:omnigent_workspace_restore"
@@ -628,9 +635,16 @@ class WorkspaceArtifactProjector:
         expanded_bytes = 0
         file_count = 0
         has_git = False
+        deadline = time.monotonic() + MAX_EXTRACTION_SECONDS
         try:
             with tarfile.open(archive_path, mode="r:*") as archive:
                 for member in archive:
+                    if time.monotonic() > deadline:
+                        raise WorkspaceArtifactProjectionError(
+                            "workspace checkpoint extraction exceeds "
+                            "the processing-time bound",
+                            code="OMNIGENT_WORKSPACE_MATERIALIZATION_FAILED",
+                        )
                     name = member.name
                     if not name or name in seen:
                         raise WorkspaceArtifactProjectionError(
@@ -1137,6 +1151,7 @@ __all__ = [
     "MAX_ARCHIVE_FILE_SIZE",
     "MAX_CHECKPOINT_BYTES",
     "MAX_EXPANDED_BYTES",
+    "MAX_EXTRACTION_SECONDS",
     "MAX_INPUT_BYTES",
     "MAX_INPUT_REFS",
     "MAX_TOTAL_BYTES",
