@@ -49,6 +49,63 @@ from tests.unit.workflows.temporal.workflows.test_run_signals_updates import (
 )
 
 
+@workflow.defn(name="AcceptedPublishedBranchReplayFixture")
+class _LegacyPublishedBranchReplayFixture:
+    @workflow.run
+    async def run(self) -> str:
+        return "candidate"
+
+
+@workflow.defn(name="AcceptedPublishedBranchReplayFixture")
+class _CurrentPublishedBranchReplayFixture:
+    @workflow.run
+    async def run(self) -> str:
+        wf = MoonMindRunWorkflow()
+        wf._publish_context.update(
+            pushStatus="pushed",
+            branch="candidate",
+            headSha="a" * 40,
+            acceptedPublishedHead={
+                "branch": "candidate",
+                "headSha": "a" * 40,
+                "baseBranch": "main",
+            },
+        )
+        workspace = {"repository": "owner/repo", "startingBranch": "main"}
+        wf._apply_published_branch_handoff(workspace, repository_operation="write")
+        return workspace["startingBranch"]
+
+
+@pytest.mark.asyncio
+async def test_accepted_publication_handoff_pre_and_post_patch_histories_replay():
+    histories = []
+    async with await WorkflowEnvironment.start_time_skipping() as env:
+        for kind, implementation, expected in (
+            ("legacy", _LegacyPublishedBranchReplayFixture, "candidate"),
+            ("current", _CurrentPublishedBranchReplayFixture, "main"),
+        ):
+            queue = f"test-accepted-publication-{kind}"
+            async with Worker(
+                env.client,
+                task_queue=queue,
+                workflows=[implementation],
+                workflow_runner=UnsandboxedWorkflowRunner(),
+            ):
+                handle = await env.client.start_workflow(
+                    implementation.run,
+                    id=queue,
+                    task_queue=queue,
+                )
+                assert await handle.result() == expected
+                histories.append(await handle.fetch_history())
+    replayer = Replayer(
+        workflows=[_CurrentPublishedBranchReplayFixture],
+        workflow_runner=UnsandboxedWorkflowRunner(),
+    )
+    for history in histories:
+        await replayer.replay_workflow(history)
+
+
 @workflow.defn(name="MM3238RemediationReplayFixture")
 class _LegacyRemediationReplayFixture:
     @workflow.run

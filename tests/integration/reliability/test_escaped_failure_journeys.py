@@ -1085,6 +1085,7 @@ async def test_running_session_requests_continuation_after_quiet_tool_output() -
             interval_seconds=0.001,
             quiet_period_seconds=0.002,
             tool_only_quiet_period_seconds=0.002,
+            allow_same_session_continuation=True,
         )
 
     assert expected["acceptTerminalEventAfterToolOnlyQuietPeriod"] is False
@@ -1092,6 +1093,42 @@ async def test_running_session_requests_continuation_after_quiet_tool_output() -
     assert excinfo.value.code == expected["recoveryCode"]
     assert excinfo.value.session_id == manifest["sessionId"]
     assert excinfo.value.snapshot == terminal_snapshot
+
+
+@pytest.mark.parametrize(
+    "continuation_option", [{}, {"allow_same_session_continuation": False}]
+)
+async def test_running_session_without_continuation_owner_waits_for_terminal(
+    continuation_option: dict,
+) -> None:
+    """Replay mm:ac86d9e8: a tool-only response must not release its live host."""
+    manifest = load_replay("omnigent-running-tool-output-terminal", "manifest.json")
+    active = manifest["terminalSnapshot"]
+    inactive = {**active, "status": "idle", "active_response_id": None}
+
+    class Client:
+        calls = 0
+
+        async def get_session(self, _session_id):
+            self.calls += 1
+            return active if self.calls < 20 else inactive
+
+    client = Client()
+    status, snapshot = await _await_marked_turn_terminal(
+        client=client,
+        session_id=manifest["sessionId"],
+        marker=manifest["currentTurnMarker"],
+        baseline_item_ids=frozenset(manifest["preDispatchItemIds"]),
+        event_count=1,
+        terminal_status=manifest["terminalEventStatus"],
+        interval_seconds=0.001,
+        quiet_period_seconds=0.002,
+        tool_only_quiet_period_seconds=0.002,
+        **continuation_option,
+    )
+    assert status == "completed"
+    assert snapshot is inactive
+    assert client.calls >= 20
 
 
 async def test_pr_resolver_child_compiles_bindable_stock_agent_identity(
@@ -7841,6 +7878,80 @@ async def test_generic_omnigent_publication_materializes_resolved_github_auth(
     }
     assert '$GITHUB_TOKEN' in push_environment["GIT_CONFIG_VALUE_1"]
     assert credential_token not in push_environment["GIT_CONFIG_VALUE_1"]
+
+
+@pytest.mark.parametrize("authored_base", [None, "main", "release/main"])
+async def test_publication_restores_missing_authored_base_ref(
+    tmp_path: Path,
+    authored_base: str | None,
+) -> None:
+    """A single-branch candidate must publish against its original base."""
+    manifest = load_replay("omnigent-publication-missing-base", "manifest.json")
+    workflow_id = manifest["correlationId"]
+    workspace_root = tmp_path / "agent_jobs"
+    workspace_root.mkdir()
+    workspace_id = hashlib.sha256(f"{workflow_id}:{workflow_id}".encode()).hexdigest()[
+        :24
+    ]
+    candidate = manifest["candidateBranch"]
+    repo, _origin = _seed_no_commit_publication_repo(
+        workspace_root=workspace_root,
+        workspace_id=workspace_id,
+        relative_path=manifest["workspaceRelativePath"],
+        starting_branch=candidate,
+    )
+    base = authored_base or "main"
+    if base != "main":
+        _git(repo, "branch", base, "main")
+        _git(repo, "push", "origin", base)
+    (repo / "candidate.txt").write_text("accepted implementation\n")
+    _git(repo, "add", "candidate.txt")
+    _git(repo, "commit", "-m", "Implement the candidate")
+    _git(repo, "push", "origin", candidate)
+    head = _git(repo, "rev-parse", "HEAD")
+    _git(
+        repo,
+        "config",
+        "remote.origin.fetch",
+        f"+refs/heads/{candidate}:refs/remotes/origin/{candidate}",
+    )
+    _git(repo, "update-ref", "-d", f"refs/remotes/origin/{base}")
+    SandboxWorkspaceRecordStore(workspace_root).ensure(
+        SandboxWorkspaceRecord(
+            workspace_id=workspace_id,
+            workflow_id=workflow_id,
+            step_execution_id=workflow_id,
+            relative_path="repo",
+        )
+    )
+    request = _no_commit_publication_request(
+        manifest=manifest, workspace_id=workspace_id
+    )
+    if authored_base is None:
+        request.workspace_spec.pop("startingBranch")
+    else:
+        request.workspace_spec["startingBranch"] = authored_base
+    request.workspace_spec["targetBranch"] = candidate
+    realizer = _no_commit_publication_realizer(workspace_root)
+    result = await realizer._publish_repository(
+        request, AgentRunResult(summary="Created PR for the accepted candidate.")
+    )
+    evidence = result.metadata["acceptedRepositoryEvidence"]
+    assert evidence["baseBranch"] == base
+    assert evidence["headSha"] == head
+    assert evidence["commitsAheadOfBase"] == 1
+    assert evidence["remoteVerified"] is True
+    assert (
+        _git(repo, "ls-remote", "origin", f"refs/heads/{evidence['branch']}").split()[0]
+        == head
+    )
+
+    # A missing authored remote base must fail without publishing a substitute.
+    request.workspace_spec["startingBranch"] = "missing-base"
+    refs_before = _git(repo, "ls-remote", "--heads", "origin")
+    with pytest.raises(HarnessPlatformError):
+        await realizer._publish_repository(request, AgentRunResult(summary="Publish"))
+    assert _git(repo, "ls-remote", "--heads", "origin") == refs_before
 
 
 async def test_verified_no_commit_publication_reaches_the_workflow_publish_handoff(

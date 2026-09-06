@@ -3381,9 +3381,18 @@ async def test_run_omnigent_execution_raises_when_stream_ends_still_running(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "continuation_option",
+    [
+        {},
+        {"allow_same_session_continuation": False},
+        {"allow_same_session_continuation": True},
+    ],
+)
 async def test_stream_end_polls_unfinished_current_turn_before_completion(
     monkeypatch,
     tmp_path,
+    continuation_option,
 ) -> None:
     snapshots = [
         {
@@ -3465,11 +3474,15 @@ async def test_stream_end_polls_unfinished_current_turn_before_completion(
                 },
             ),
             artifact_gateway=LocalOmnigentArtifactGateway(root=tmp_path),
+            **continuation_option,
         )
 
     assert awaited["baseline_item_ids"] == frozenset({"prior-item"})
     assert awaited["terminal_status"] == "completed"
     assert awaited["timeout_seconds"] == 8400.0
+    assert awaited["allow_same_session_continuation"] is continuation_option.get(
+        "allow_same_session_continuation", False
+    )
 
 
 @pytest.mark.asyncio
