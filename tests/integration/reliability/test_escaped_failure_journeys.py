@@ -7970,11 +7970,15 @@ async def test_publication_restores_missing_authored_base_ref(
 @pytest.mark.integration_ci
 @pytest.mark.parametrize("authored_base", [None, "main"])
 @pytest.mark.parametrize("remote_changed", [False, True])
+@pytest.mark.parametrize(
+    "pr_state", ["ready", "wrong_base", "missing_base", "draft", "unknown_draft"]
+)
 async def test_existing_pr_survives_unchanged_omnigent_publication(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     authored_base: str | None,
     remote_changed: bool,
+    pr_state: str,
 ) -> None:
     """Replay mm:9886cfcb with real Git and the production PR selector."""
     from moonmind.workflows.adapters.github_service import GitHubService
@@ -8052,6 +8056,14 @@ async def test_existing_pr_survives_unchanged_omnigent_publication(
                 {
                     "number": manifest["pullRequestNumber"],
                     "html_url": manifest["pullRequestUrl"],
+                    "base": (
+                        {"ref": "release" if pr_state == "wrong_base" else "main"}
+                        if pr_state != "missing_base"
+                        else None
+                    ),
+                    "draft": (
+                        None if pr_state == "unknown_draft" else pr_state == "draft"
+                    ),
                     "head": {
                         "ref": branch,
                         "sha": head,
@@ -8100,7 +8112,8 @@ async def test_existing_pr_survives_unchanged_omnigent_publication(
         request, AgentRunResult(summary="completed")
     )
     result = AgentRunResult.model_validate_json(result.model_dump_json(by_alias=True))
-    assert result.metadata["pull_request_url"] == manifest["pullRequestUrl"]
+    expected_url = manifest["pullRequestUrl"] if pr_state == "ready" else None
+    assert result.metadata.get("pull_request_url") == expected_url
     assert result.metadata["acceptedRepositoryEvidence"]["branch"] == branch
     assert _git(repo, "ls-remote", "--heads", "origin") == refs_before
     parent = MoonMindRunWorkflow()
@@ -8113,21 +8126,7 @@ async def test_existing_pr_survives_unchanged_omnigent_publication(
         parameters={"publishMode": "pr"},
         execution_result={"outputs": result.metadata},
     )
-    assert parent._publish_context["pullRequestUrl"] == manifest["pullRequestUrl"]
-    parent._assessment_context = {"assessmentVerdict": manifest["assessmentVerdict"]}
-    preset = yaml.safe_load(
-        (
-            REPO_ROOT
-            / "api_service/data/presets/github-issue-search-and-implement.yaml"
-        ).read_text()
-    )
-    assert (
-        await parent._ensure_issue_implement_pr_before_status(
-            node=preset["steps"][-1],
-            parameters={"publishMode": "pr"},
-        )
-        == manifest["pullRequestUrl"]
-    )
+    assert parent._publish_context.get("pullRequestUrl") == expected_url
     final = await update_github_issue_status(
         {
             "repository": repository,
@@ -8141,8 +8140,11 @@ async def test_existing_pr_survives_unchanged_omnigent_publication(
             },
         }
     )
-    assert final.status == "COMPLETED"
+    assert final.status == ("COMPLETED" if pr_state == "ready" else "FAILED")
     mutations = [r for r in requests if r.method == "PATCH"]
+    if pr_state != "ready":
+        assert all(r.method == "GET" for r in requests)
+        return
     assert len(mutations) == 1
     assert "state" not in json.loads(mutations[0].content)  # Code Review, not Done.
 

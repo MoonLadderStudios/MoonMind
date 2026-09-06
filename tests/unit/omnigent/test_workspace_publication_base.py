@@ -165,6 +165,8 @@ async def test_publish_clean_single_branch_candidate(
             selector=evidence["push_branch"],
             github_token="fixture-credential",
             expected_head_sha=candidate_sha,
+            expected_base_branch=base_branch or "main",
+            expected_draft=False,
         )
     else:
         assert "pull_request_url" not in evidence

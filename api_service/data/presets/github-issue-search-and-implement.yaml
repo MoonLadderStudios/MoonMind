@@ -270,8 +270,6 @@ steps:
     - gh
 - title: Finalize resolved GitHub issue status
   type: tool
-  annotations:
-    issueImplementRole: code-review-handoff
   instructions: |-
     Read the resolved issue from MoonMind trusted previous step context and artifacts/github-issue-implement-assessment.json (or the recorded verdict from the assess step) before changing GitHub.
 
