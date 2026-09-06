@@ -55,6 +55,22 @@ Evidence produced against a different catalog version is refused. The identity
 is carried on `ProtectedExecutionSupportEvidence.concurrency`, and the record
 must name the same `supportCombinationKey` as the row it is filed under.
 
+The record reaches that field through the protected publisher
+(`moonmind/omnigent/execution_support_publication.py`): the live-conformance
+publish job stages the newest successful qualification run's records and
+`build_protected_support_index()` attaches each one to the passing entry naming
+its own combination. There is no second registry — the combined exact-support
+matrix is the existing index plus this one field. A record naming a combination
+the run did not publish at all is refused; a record naming a combination the run
+published as *not* passing is recorded on no row, because a combination that
+failed advertises no validated peak.
+
+The same publisher records non-pass combinations as rows with their real status
+and `policyQualified: false` instead of omitting them, so an operator can tell a
+combination that failed from one that was never attempted.
+`validate_protected_execution_support_evidence()` still refuses every non-pass
+row, so widening what is recorded never widens what is admitted.
+
 `resourceClass` is **measured, and there is no way to declare it**. The runner
 reads what this process may actually use — the CPU affinity mask, the CFS quota
 in `cpu.max`, the memory limit in `memory.max`, and `MemTotal` — and the smaller
@@ -85,13 +101,25 @@ class does not describe.
 
 | Layer | Levels | Environment | Owner |
 | --- | --- | --- | --- |
-| `hermetic` | 1, 2, 4, 8, 16 | Real schemas, planning, realizer, runtime bindings, host leases, session/bridge stores, cleanup authority, and real database constraints, over controlled provider and Docker boundaries. | Required pull-request CI. |
+| `hermetic` | 1, 2, 4, 8, 16 | Real schemas, planning, realizer, runtime bindings, host leases, session/bridge stores, cleanup authority, and real database constraints, over controlled provider and Docker boundaries. | Gated by required pull-request CI, except the PostgreSQL-backed machine-capacity owner, which is impact-selected `integration_ci`. Its **record** is produced by the scheduled workflow below. |
 | `exact_docker` | 2, 4, 8 | The built MoonMind, Omnigent server, and host artifacts under a real Docker daemon on a declared resource class. | `Provider / Omnigent Concurrency Qualification` (scheduled). |
 | `protected_live` | 2 up to the provider-safe ceiling | The exact eligible credentialless OpenCode Zen route under a bounded pricing/privacy/load policy (`tests/provider/omnigent/test_omnigent_concurrency.py`). | Same workflow, opt-in dispatch only. |
 
 `hermetic` and `exact_docker` are the **required layers**: a level is validated
 only when *both* carry a passing row at that exact level. A hermetic pass alone
 validates nothing, because the deployed artifacts were never exercised.
+
+Because the level is cross-layer, **both required layers are recorded by one
+job on one machine**. The substrate identity a record is filed under carries the
+*measured* resource class, so records from two different runners name two
+different substrates and the publisher refuses to merge them; a hermetic record
+earned on a pull-request runner could therefore never combine with the scheduled
+exact-image record, and the published index would carry a record that validates
+nothing. The scheduled job runs `--layer hermetic` alongside `--layer
+exact_docker` for that reason alone. Where the hermetic layer is *gated* does
+not move: its owning tests stay in required pull-request CI, and the hermetic
+recording step runs even when the exact-image rows failed, so evidence that was
+earned is never withheld.
 
 The hermetic layer spans three production boundaries, each with its own owner:
 
@@ -177,10 +205,22 @@ a no-op. A layer that publishes nothing is recorded `partial`, never `passed`.
   reached;
 - a peak equal to `min(requested_level, effective_limit)`;
 - when the requested level exceeds the effective limit, exactly
-  `requested_level - effective_limit` observed durable waiters.
+  `requested_level - effective_limit` observed durable waiters, each a
+  `DurableWaitObservation` naming the execution, the durable queue that
+  preserved it, and the waiting state it published.
 
 N executions submitted together but executed one after another sweep to a peak
 of 1 and are rejected. A self-asserted number with no samples is rejected.
+
+A **refusal is not a wait**. Work that raised at the realizer holds no slot, but
+it is also gone: nothing preserved it and nothing will resume it. A waiter has
+to name the queue it is preserved in, so a capacity refusal cannot be published
+as evidence that the surplus was queued, and an execution recorded in the peak
+cannot also be recorded as waiting. The hermetic realizer substrate refuses
+above its limit, so a hermetic wave that requested more than the effective limit
+publishes evidence for the level it actually ran; genuine durable waiting is
+observed at the dispatch boundary, where the queued run keeps its intent, starts
+no execution Activity, and publishes `awaiting_slot`.
 
 ## Row outcomes
 
@@ -244,6 +284,18 @@ deployment that is merely full must never produce it.
 operator ceiling, whichever is smaller. A combination with no concurrency
 evidence advertises `0`, not `1`: unqualified is not implicitly qualified at
 one. The configured operator ceiling is never rewritten by this call.
+
+The operator-visible consumer is the runtime-provider migration projection
+(`build_runtime_provider_migration_status()`), which reports an
+`advertisedConcurrency` view per exact combination: the `validatedLevel` its
+protected row observed, the `operatorCeiling` configured through
+`MOONMIND_OMNIGENT_GENERIC_HOST_CAPACITY`, the `advertisedLevel` that is the
+smaller of the two, and `limitedBy` naming which bound is binding
+(`unqualified`, `qualified_level`, or `operator_ceiling`). A row admission would
+refuse — expired, or older than `MAX_EXECUTION_SUPPORT_EVIDENCE_AGE` — advertises
+`0`: `advertised_concurrency_ceiling()` asks
+`validate_protected_execution_support_evidence()` rather than deciding freshness
+itself, so the advertisement cannot outlive the admission window.
 
 ## Cleanup and repeated waves
 

@@ -51,7 +51,10 @@ CONCURRENCY_SCENARIO_CATALOG_VERSION = "moonmind.omnigent-concurrency-scenarios/
 
 #: Bumped whenever the record schema below changes shape.
 CONCURRENCY_QUALIFICATION_RECORD_VERSION = (
-    "moonmind.omnigent-concurrency-qualification/v1"
+    # v2: durable waiters are named observations rather than a count that the
+    # requested level and effective limit already determined
+    # (MoonLadderStudios/MoonMind#3885).
+    "moonmind.omnigent-concurrency-qualification/v2"
 )
 
 #: The hermetic levels the program must keep correct. The exact-Docker layer
@@ -502,6 +505,27 @@ def observed_peak_overlap(samples: Iterable[ExecutionOverlapSample]) -> int:
     return peak
 
 
+class DurableWaitObservation(BaseModel):
+    """One execution that waited durably rather than being admitted or refused.
+
+    A refusal is not a wait. Work that raised at the realizer is gone: it holds
+    no slot, but it also no longer exists, and counting it as a waiter is how a
+    capacity refusal gets published as evidence that the surplus was preserved.
+    A durable waiter is still in a queue, still owns its intent, and still
+    publishes an operator-visible waiting state, so this observation records the
+    queue and the state instead of a bare count.
+    """
+
+    model_config = _MODEL_CONFIG
+
+    execution_ref: str = Field(min_length=1, max_length=255)
+    #: The durable queue this waiter is preserved in. A waiter in no queue is
+    #: not durable; it was refused.
+    queue_ref: str = Field(min_length=1, max_length=255)
+    #: The operator-visible waiting state the run published while it waited.
+    waiting_state: str = Field(min_length=1, max_length=128)
+
+
 class ObservedOverlapEvidence(BaseModel):
     """Proof that useful execution actually overlapped at the claimed level."""
 
@@ -516,7 +540,10 @@ class ObservedOverlapEvidence(BaseModel):
     #: the peak below is overlap and not a scheduling coincidence.
     barrier_synchronized: bool
     samples: tuple[ExecutionOverlapSample, ...]
-    durable_waiters: int = Field(default=0, ge=0)
+    #: The executions above the effective limit, each observed waiting in a
+    #: named durable queue. Recorded as observations rather than a count so the
+    #: field carries something the other two do not already determine.
+    durable_waiters: tuple[DurableWaitObservation, ...] = ()
 
     @model_validator(mode="after")
     def validate_observation(self) -> "ObservedOverlapEvidence":
@@ -539,13 +566,23 @@ class ObservedOverlapEvidence(BaseModel):
                 f"{self.observed_peak} does not match the effective limit "
                 f"{expected_peak}"
             )
+        waiter_refs = [waiter.execution_ref for waiter in self.durable_waiters]
+        if len(set(waiter_refs)) != len(waiter_refs):
+            raise ValueError("durable waiters must name distinct executions")
+        admitted_refs = {sample.execution_ref for sample in self.samples}
+        overlap_with_admitted = admitted_refs.intersection(waiter_refs)
+        if overlap_with_admitted:
+            raise ValueError(
+                "an execution cannot be both admitted and waiting: "
+                f"{sorted(overlap_with_admitted)}"
+            )
         if self.requested_level > self.effective_limit:
             expected_waiters = self.requested_level - self.effective_limit
-            if self.durable_waiters != expected_waiters:
+            if len(self.durable_waiters) != expected_waiters:
                 raise ValueError(
                     "work above the effective limit must be observed as durable "
                     f"waiters ({expected_waiters} expected, "
-                    f"{self.durable_waiters} observed)"
+                    f"{len(self.durable_waiters)} observed)"
                 )
         elif self.durable_waiters:
             raise ValueError(
@@ -1206,6 +1243,7 @@ __all__ = [
     "ConcurrencyRowStatus",
     "ConcurrencyScenarioFamily",
     "ConcurrencySupportIdentity",
+    "DurableWaitObservation",
     "ExecutionOverlapSample",
     "MachineResourceClass",
     "ObservedOverlapEvidence",

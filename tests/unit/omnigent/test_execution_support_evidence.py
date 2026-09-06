@@ -24,73 +24,26 @@ from moonmind.schemas.omnigent_session_models import (
     OMNIGENT_SESSION_COMPATIBILITY_VERSION,
     OMNIGENT_SESSION_FEATURE_GENERATION,
 )
+from tests.unit.omnigent.support_evidence_fixtures import (
+    concurrency_record,
+    support_identity,
+    support_plan,
+    support_row,
+)
 
 
 def _identity(*, model_digest: str = "sha256:" + "1" * 64) -> SupportKeyPayload:
-    return SupportKeyPayload(
-        omnigentServerBuildRef="sha256:" + "2" * 64,
-        omnigentHostBuildRef="sha256:" + "3" * 64,
-        harnessImplementationRef=(
-            "omnigent-harness-implementation:sha256:" + "4" * 64
-        ),
-        vendorRuntimeRefs=["opencode@1.2.3#sha256:" + "5" * 64],
-        agentSourceRef="agent-source:sha256:" + "6" * 64,
-        materializerRefs=["opencode-auth-json@1"],
-        providerCompatibilityClass="omnigent-provider-binding-set@1",
-        hostClassRef="omnigent-opencode@1",
-        architecture="linux/amd64",
-        launchPolicyRef="opencode-on-demand@1",
-        modelConfigDigest=model_digest,
-        executionRealizerRef="generic-omnigent-host@1",
-        requiredCapabilitiesDigest="sha256:" + "7" * 64,
-    )
+    return support_identity(model_digest=model_digest)
 
 
 def _plan(identity: SupportKeyPayload | None = None) -> SimpleNamespace:
-    selected = identity or _identity()
-    return SimpleNamespace(
-        supportIdentity=selected,
-        supportCombinationKey=compute_support_combination_key(selected),
-        hostImageRef="ghcr.io/example/opencode@sha256:" + "8" * 64,
-        policySnapshotDigest="sha256:" + "9" * 64,
-        effectiveLaunchSnapshotDigest="sha256:" + "a" * 64,
-        admissionAuthority=SimpleNamespace(
-            featureGeneration=OMNIGENT_SESSION_FEATURE_GENERATION,
-            replayCompatibilityVersion=OMNIGENT_SESSION_COMPATIBILITY_VERSION,
-            rollbackPolicyVersion=SUPERVISOR_ROLLBACK_POLICY_VERSION,
-        ),
-    )
+    return support_plan(identity)
 
 
 def _evidence(
     plan: SimpleNamespace, *, generated_at: datetime | None = None
 ) -> dict[str, object]:
-    now = generated_at or datetime.now(UTC)
-    return {
-        "schemaVersion": EXECUTION_SUPPORT_EVIDENCE_VERSION,
-        "evidenceIssuer": EXECUTION_SUPPORT_EVIDENCE_ISSUER,
-        "status": "passed",
-        "sourceCommit": "abcdef1234567890",
-        "protectedRunRef": "https://example.invalid/actions/runs/123",
-        "evidenceManifestRef": "artifact://manifest-123",
-        "evidenceManifestDigest": "sha256:" + "b" * 64,
-        "generatedAt": now.isoformat(),
-        "expiresAt": (now + timedelta(days=7)).isoformat(),
-        "supportClassification": "fully_managed",
-        "supportCombinationKey": plan.supportCombinationKey,
-        "supportIdentity": plan.supportIdentity.model_dump(
-            mode="json", by_alias=True
-        ),
-        "hostImageRef": plan.hostImageRef,
-        "policySnapshotDigest": plan.policySnapshotDigest,
-        "effectiveLaunchSnapshotDigest": plan.effectiveLaunchSnapshotDigest,
-        "policyGateRef": "deployment-ready",
-        "policyQualified": True,
-        "exactArtifactsVerified": True,
-        "featureGeneration": OMNIGENT_SESSION_FEATURE_GENERATION,
-        "replayCompatibilityVersion": OMNIGENT_SESSION_COMPATIBILITY_VERSION,
-        "rollbackPolicyVersion": SUPERVISOR_ROLLBACK_POLICY_VERSION,
-    }
+    return support_row(plan, generated_at=generated_at)
 
 
 def test_loader_selects_one_exact_protected_combination(
@@ -320,73 +273,6 @@ def test_freshness_probe_falls_through_a_lapsed_tier_like_admission(
 # ---------------------------------------------------------------------------
 
 
-def _concurrency_record(plan: SimpleNamespace, *, level: int) -> dict[str, object]:
-    """A concurrency record whose highest observed level is ``level``."""
-
-    from moonmind.omnigent.concurrency_qualification import (
-        ConcurrencyQualificationLayer,
-        ConcurrencyQualificationRecord,
-        ConcurrencyQualificationRow,
-        ConcurrencyRowStatus,
-        ConcurrencySupportIdentity,
-        ExecutionOverlapSample,
-        MachineResourceClass,
-        ObservedOverlapEvidence,
-        compute_concurrency_evidence_digest,
-    )
-
-    resource_class = MachineResourceClass(
-        # What a real 4-core/8-GiB machine measures: MemTotal is physical RAM
-        # minus the kernel's reservation, so it never reports a whole 8 GiB.
-        resource_class_ref="ci-standard-4x8@1",
-        cpu_cores=4,
-        memory_mib=7947,
-    )
-    overlap = ObservedOverlapEvidence(
-        requested_level=level,
-        effective_limit=level,
-        barrier_synchronized=True,
-        samples=tuple(
-            ExecutionOverlapSample(
-                execution_ref=f"run-{index}", started_at=0.0, ended_at=5.0
-            )
-            for index in range(level)
-        ),
-    )
-    rows = tuple(
-        ConcurrencyQualificationRow(
-            layer=layer,
-            level=level,
-            status=ConcurrencyRowStatus.passed,
-            overlap=overlap,
-            evidence_ref=f"artifact://concurrency/{layer.value}/{level}",
-            evidence_digest=compute_concurrency_evidence_digest(
-                {"layer": layer.value, "level": level}
-            ),
-            resource_class=resource_class,
-        )
-        for layer in (
-            ConcurrencyQualificationLayer.hermetic,
-            ConcurrencyQualificationLayer.exact_docker,
-        )
-    )
-    record = ConcurrencyQualificationRecord(
-        identity=ConcurrencySupportIdentity(
-            supportCombinationKey=plan.supportCombinationKey,
-            moonmindCommit="abcdef1234567890",
-            workerBuildRef="moonmind-worker@test",
-            providerCapacityPolicyVersion="omnigent-provider-capacity@1",
-            hostCapacityPolicyVersion="omnigent-host-capacity@1",
-            transportPoolPolicyVersion="omnigent-transport-pool@1",
-            workerTopologyRef="single-replica@1",
-            resourceClass=resource_class,
-        ),
-        generatedAt=datetime.now(UTC),
-        rows=rows,
-    )
-    return record.as_payload()
-
-
 @pytest.mark.parametrize(
     "status", ["failed", "skipped", "blocked", "unavailable", "partial"]
 )
@@ -478,7 +364,7 @@ def test_concurrency_evidence_binds_to_its_own_support_combination() -> None:
     plan = _plan()
     other = _plan(_identity(model_digest="sha256:" + "d" * 64))
     payload = _evidence(plan)
-    payload["concurrency"] = _concurrency_record(other, level=2)
+    payload["concurrency"] = concurrency_record(other, level=2)
 
     with pytest.raises(ValueError, match="different support combination"):
         ProtectedExecutionSupportEvidence.model_validate(payload)
@@ -492,7 +378,7 @@ def test_the_advertised_ceiling_is_the_validated_level_or_lower() -> None:
 
     plan = _plan()
     payload = _evidence(plan)
-    payload["concurrency"] = _concurrency_record(plan, level=4)
+    payload["concurrency"] = concurrency_record(plan, level=4)
     evidence = ProtectedExecutionSupportEvidence.model_validate(payload)
 
     assert advertised_concurrency_ceiling(evidence) == 4
@@ -540,3 +426,42 @@ def test_a_non_pass_row_never_reports_usable_support_freshness(
     # The row is still reported, so "blocked" is distinguishable from "absent".
     assert freshness.tier == "supported"
     assert freshness.expired is False
+
+
+@pytest.mark.parametrize(
+    "status",
+    ["passed", "failed", "skipped", "blocked", "unavailable", "partial"],
+)
+def test_the_rollout_probe_and_admission_agree_on_every_recorded_status(
+    status: str, tmp_path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The readiness probe and the admission authority cannot drift apart.
+
+    Widening :class:`ExecutionSupportRowStatus` so non-pass rows are recordable
+    (MoonLadderStudios/MoonMind#3885) means the probe now sees documents
+    admission refuses. Binding both directions here is what stops a future
+    status from being usable to the rollout gate and inadmissible at execution.
+    """
+
+    from moonmind.omnigent.evidence_resolver import resolve_support_evidence_freshness
+
+    plan = _plan()
+    payload = _evidence(plan)
+    payload["status"] = status
+    payload["policyQualified"] = status == "passed"
+    path = tmp_path / "execution-support-evidence.json"
+    path.write_text(json.dumps({"entries": [payload]}), encoding="utf-8")
+    monkeypatch.setenv("MOONMIND_OMNIGENT_EXECUTION_SUPPORT_EVIDENCE", str(path))
+    monkeypatch.setenv("MOONMIND_SOURCE_COMMIT", "abcdef1234567890")
+    monkeypatch.setenv("MOONMIND_OMNIGENT_EVIDENCE_POLICY", "protected")
+
+    freshness = resolve_support_evidence_freshness(plan.supportIdentity)
+    try:
+        load_protected_execution_support_evidence(plan)
+    except ValueError:
+        admitted = False
+    else:
+        admitted = True
+
+    assert freshness.usable is admitted, status
+    assert freshness.status == status

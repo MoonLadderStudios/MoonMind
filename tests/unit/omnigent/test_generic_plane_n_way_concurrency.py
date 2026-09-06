@@ -46,6 +46,7 @@ from moonmind.omnigent.concurrency_qualification import (
     CleanupScanEntry,
     CleanupScanReport,
     ConcurrencyQualificationLayer,
+    DurableWaitObservation,
     ExecutionOverlapSample,
     ObservedOverlapEvidence,
     RepeatedWaveReport,
@@ -699,26 +700,36 @@ class _Wave:
     requested_level: int
     effective_limit: int
 
-    def overlap(self, *, durable_waiters: int | None = None) -> ObservedOverlapEvidence:
+    def overlap(
+        self,
+        *,
+        requested_level: int | None = None,
+        durable_waiters: tuple[DurableWaitObservation, ...] = (),
+    ) -> ObservedOverlapEvidence:
         """Return the observed overlap evidence this wave actually produced.
 
         Constructing the evidence is itself an assertion: the model refuses a
         peak that does not match the effective limit, refuses samples that were
         not barrier-synchronized, and refuses work above the limit that was not
-        observed waiting.
+        observed waiting in a named durable queue.
+
+        Nothing is derived here. This substrate *refuses* work above the
+        effective limit at the realizer, so it produces no durable waiters, and
+        a wave that requested more than the limit can only publish evidence for
+        the level it actually ran (``requested_level``). Synthesizing the
+        arithmetic difference as "waiters" is what let a capacity refusal be
+        published as evidence that the surplus was preserved
+        (MoonLadderStudios/MoonMind#3885).
         """
 
-        waiters = (
-            durable_waiters
-            if durable_waiters is not None
-            else max(0, self.requested_level - self.effective_limit)
-        )
         return ObservedOverlapEvidence(
-            requested_level=self.requested_level,
+            requested_level=(
+                self.requested_level if requested_level is None else requested_level
+            ),
             effective_limit=self.effective_limit,
             barrier_synchronized=self.gate.satisfied,
             samples=self.machine.overlap_samples(),
-            durable_waiters=waiters,
+            durable_waiters=durable_waiters,
         )
 
     def observation(self, wave_index: int, control_seconds: float) -> WaveObservation:
@@ -1003,7 +1014,7 @@ async def test_observed_overlap_proves_simultaneous_useful_execution(
     assert wave.gate.satisfied, "executions never held the barrier together"
     overlap = wave.overlap()
     assert overlap.observed_peak == concurrency
-    assert overlap.durable_waiters == 0
+    assert overlap.durable_waiters == ()
     # Each workflow delivered its first message exactly once.
     assert sorted(wave.machine.first_messages) == sorted(
         f"session-{index}" for index in range(concurrency)
@@ -1067,19 +1078,34 @@ async def test_sequential_execution_cannot_be_filed_as_overlap_evidence() -> Non
 
 
 @pytest.mark.asyncio
-async def test_a_lower_effective_limit_observes_the_limit_and_its_waiters() -> None:
-    """Under a lower limit the peak is the limit, and the rest wait."""
+async def test_a_lower_effective_limit_observes_the_limit_and_refuses_the_rest() -> None:
+    """Under a lower limit the peak is the limit; here the surplus is refused.
+
+    This substrate refuses above the limit at the realizer, so the surplus holds
+    nothing and is gone -- it is not preserved anywhere and it is not a durable
+    waiter. Publishing it as one would claim the record's preservation property
+    on evidence of a refusal, so the model refuses that claim. Genuine durable
+    waiting is proven where it happens, at the dispatch boundary
+    (``tests/unit/omnigent/test_generic_plane_production_boundary_concurrency.py``).
+    """
 
     wave = await _run_wave(4, host_capacity=2)
 
-    overlap = wave.overlap()
-    assert overlap.observed_peak == 2
-    assert overlap.durable_waiters == 2
     refusals = wave.failures
     assert len(refusals) == 2
     for failure in refusals:
         assert isinstance(failure, HarnessPlatformError)
         assert failure.code == "OMNIGENT_HOST_CAPACITY_UNAVAILABLE"
+
+    # The evidence this wave can honestly publish is for the level it ran.
+    observed = wave.overlap(requested_level=2)
+    assert observed.observed_peak == 2
+    assert observed.durable_waiters == ()
+
+    # Claiming the requested level needs two executions observed waiting in a
+    # durable queue, and this wave produced none.
+    with pytest.raises(ValueError, match="observed as durable waiters"):
+        wave.overlap()
 
 
 #: Every authority handoff the concurrent journey crosses, in order. A failure
@@ -1315,7 +1341,9 @@ async def test_capacity_is_not_reused_before_teardown_is_proven() -> None:
     assert machine.peak_hosts == 4
     assert machine.allocated_hosts == {"0"}
     assert second.gate.satisfied
-    assert second.overlap().observed_peak == 3
+    # The fourth submission was refused, not queued, so the honest observation
+    # is for the three that ran.
+    assert second.overlap(requested_level=3).observed_peak == 3
 
 
 @pytest.mark.asyncio
