@@ -39,7 +39,7 @@ AGENT_SERVICE = "temporal-worker-agent-runtime"
 PROXY_SERVICE = "sandbox-egress-proxy"
 RUNNER_SERVICE = "temporal-worker-deployment-control"
 NETWORK = "restricted-egress-network"
-KNOWN_SERVICES = (AGENT_SERVICE, PROXY_SERVICE, RUNNER_SERVICE)
+KNOWN_SERVICES = (AGENT_SERVICE, PROXY_SERVICE, RUNNER_SERVICE, "init-db")
 
 
 def load_state():
@@ -116,6 +116,26 @@ if command == "pull":
     raise SystemExit(0)
 
 up_services = selected_services(tail)
+if "init-db" in up_services:
+    config = json.loads(Path(args[args.index("-f") + 1]).read_text())
+    volume = config["services"]["init-db"]["volumes"][0]
+    state["initDbBind"] = volume
+    # Model the daemon's mounted host checkout, not the worker's filesystem.
+    if volume["source"] != state["daemonProjectDir"] + "/init_db":
+        save_state(state)
+        print("cannot open /app/init_db/init_db_entrypoint.sh: No such file", file=sys.stderr)
+        raise SystemExit(2)
+    completed = subprocess.run(
+        ["sh", str(Path(state["localProjectDir"]) / "init_db/init_db_entrypoint.sh")],
+        capture_output=True, text=True, check=False,
+    )
+    state["initDbExitCode"] = completed.returncode
+    state["initDbOutput"] = completed.stdout
+    save_state(state)
+    sys.stdout.write(completed.stdout)
+    sys.stderr.write(completed.stderr)
+    raise SystemExit(completed.returncode)
+
 state["upServices"] = up_services
 if AGENT_SERVICE in up_services and PROXY_SERVICE not in up_services:
     state["networkError"] = f"network {NETWORK} is unavailable"
@@ -173,17 +193,28 @@ raise SystemExit(0)
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("windows_host", [False, True])
+@pytest.mark.parametrize("explicit_defaults", [False, True])
 async def test_deployment_update_reconciles_non_image_infrastructure(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
+    windows_host: bool,
+    explicit_defaults: bool,
 ) -> None:
     replay_id = "deployment-update-infrastructure-reconciliation"
     manifest = load_replay(replay_id, "manifest.json")
     expected = load_replay(replay_id, "expected-outcome.json")
     requested_repository = manifest["requestedRepository"]
     requested_image = f"{requested_repository}:latest"
+    windows_replay = (
+        load_replay("deployment-update-windows-bind-source", "manifest.json")
+        if windows_host
+        else None
+    )
     real_docker = shutil.which("docker")
-    assert real_docker is not None, "reliability journey image must provide Docker Compose"
+    assert (
+        real_docker is not None
+    ), "reliability journey image must provide Docker Compose"
 
     compose_path = tmp_path / "docker-compose.yaml"
     compose_path.write_text(
@@ -207,6 +238,25 @@ async def test_deployment_update_reconciles_non_image_infrastructure(
         ).lstrip(),
         encoding="utf-8",
     )
+    if windows_replay:
+        # Keep the real Compose parser in the journey; only the daemon is modeled.
+        compose_text = compose_path.read_text(encoding="utf-8")
+        compose_path.write_text(
+            compose_text.replace(
+                "networks:\n  restricted-egress-network:",
+                "  init-db:\n"
+                f"    image: {requested_image}\n"
+                "    volumes:\n"
+                "      - ./init_db:/app/init_db:ro\n"
+                "    command: sh /app/init_db/init_db_entrypoint.sh\n"
+                "networks:\n  restricted-egress-network:",
+            ),
+            encoding="utf-8",
+        )
+        (tmp_path / "init_db").mkdir()
+        (tmp_path / "init_db/init_db_entrypoint.sh").write_text(
+            "printf 'init-db completed\\n'\n", encoding="utf-8"
+        )
     state_path = tmp_path / "engine-state.json"
     state_path.write_text(
         json.dumps(
@@ -226,6 +276,10 @@ async def test_deployment_update_reconciles_non_image_infrastructure(
                 ],
                 "images": [],
                 "networks": {},
+                "localProjectDir": str(tmp_path),
+                "daemonProjectDir": (
+                    windows_replay["daemonProjectDir"] if windows_replay else None
+                ),
             }
         ),
         encoding="utf-8",
@@ -243,8 +297,11 @@ async def test_deployment_update_reconciles_non_image_infrastructure(
     monkeypatch.setenv("PATH", f"{tmp_path}{os.pathsep}{os.environ['PATH']}")
 
     runner = HostDockerComposeRunner(
-        project_dir=str(tmp_path),
-        project_name="deployment-replay",
+        project_dir=(
+            windows_replay["hostProjectDir"] if windows_replay else str(tmp_path)
+        ),
+        local_project_dir=str(tmp_path) if windows_replay else None,
+        project_name="moonmind-test-deployment-replay",
         excluded_services=tuple(manifest["excludedServices"]),
     )
     executor = DeploymentUpdateExecutor(
@@ -262,9 +319,11 @@ async def test_deployment_update_reconciles_non_image_infrastructure(
                 "repository": requested_repository,
                 "reference": "latest",
             },
-            "mode": "changed_services",
-            "removeOrphans": True,
-            "wait": True,
+            **(
+                {"mode": "changed_services", "removeOrphans": True, "wait": True}
+                if explicit_defaults
+                else {}
+            ),
             "reason": "Replay production infrastructure reconciliation failure",
         },
         context={"deployment_runner_mode": "privileged_worker"},
@@ -274,7 +333,9 @@ async def test_deployment_update_reconciles_non_image_infrastructure(
     assert result.status == "COMPLETED"
     assert result.outputs["status"] == "SUCCEEDED"
     assert state["composeConfigCalls"] >= 4
-    assert state["pullServices"] == expected["pullServices"]
+    assert state["pullServices"] == expected["pullServices"] + (
+        ["init-db"] if windows_replay else []
+    )
     assert state["upServices"] == expected["reconciliationServices"]
     assert set(state["networks"]["restricted-egress-network"]["services"]) == set(
         expected["reconciliationServices"]
@@ -288,3 +349,9 @@ async def test_deployment_update_reconciles_non_image_infrastructure(
         service not in state["pullServices"] and service not in state["upServices"]
         for service in expected["excludedServices"]
     )
+    if windows_replay:
+        assert state["initDbExitCode"] == 0
+        assert state["initDbOutput"] == "init-db completed\n"
+        assert state["initDbBind"]["source"] == windows_replay["expectedBindSource"]
+        assert state["initDbBind"]["bind"]["create_host_path"] is False
+        assert state["initDbBind"]["read_only"] is True
