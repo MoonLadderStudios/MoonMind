@@ -14,10 +14,12 @@ without the null ``sendWatch`` exception, using:
   ``omnigent/web/src/lib/sessionUpdatesSocket.ts`` at the pinned commit —
   executed in node against the extracted adapter.
 
-Pinned-bundle note: the ``omnigent`` git submodule is not checked out in this
-environment, so the compiled bundle itself is represented by a fragment
-carrying the exact pinned guard plus a transcript/empty-state marker. The
-adapter under test is always extracted from the served document. Browser
+Pinned-bundle note: the compiled Omnigent bundle itself is represented here by
+a fragment carrying the exact pinned guard plus a transcript/empty-state
+marker (no built ``web/dist`` in this environment). The literal pinned
+``SessionUpdatesSocket`` class from the checked-out submodule is executed
+against the served adapter in
+``tests/unit/omnigent/test_pinned_session_updates_socket_4013.py``. Browser
 (Chromium/Firefox) and deployment acceptance evidence (AC9/AC10) remain
 outstanding and are not claimed here. A denied (403-shaped) envelope must
 never render as a transcript.
