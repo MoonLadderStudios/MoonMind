@@ -11,7 +11,7 @@ import re
 import tempfile
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Any, Mapping, Protocol, Sequence
 
 from .deployment_tools import (
@@ -30,7 +30,7 @@ DEPLOYMENT_ONE_SHOT_SERVICES = frozenset({"init-db"})
 FILE_LOCK_STALE_AFTER_SECONDS = 6 * 60 * 60
 _REDACTED = "[REDACTED]"
 _STACK_PATH_COMPONENT_PATTERN = re.compile(r"^[A-Za-z0-9._-]+$")
-_WSL_HOST_MOUNT_ROOT = Path("/mnt")
+_DOCKER_DESKTOP_HOST_MOUNT_ROOT = PurePosixPath("/run/desktop/mnt/host")
 _SENSITIVE_KEY_PATTERN = re.compile(
     r"("
     r"token|secret|password|passwd|credential|authorization|"
@@ -419,8 +419,12 @@ def _is_host_absolute_path(path: Path | str) -> bool:
     return False
 
 
-def _wsl_linux_host_path(path: str) -> str | None:
-    """Translate a Windows drive path into WSL's Linux host path."""
+def _docker_desktop_host_path(path: str) -> str | None:
+    """Translate a Windows drive path into Docker Desktop's daemon namespace.
+
+    The Linux deployment worker talks directly to the Desktop daemon. WSL's
+    user-distro ``/mnt/<drive>`` paths are not the daemon's host-file mounts.
+    """
 
     normalized = path.strip()
     if len(normalized) < 3 or normalized[1] != ":" or not normalized[0].isalpha():
@@ -428,8 +432,8 @@ def _wsl_linux_host_path(path: str) -> str | None:
     tail = normalized[2:].replace("\\", "/").lstrip("/")
     drive = normalized[0].lower()
     if tail:
-        return str(_WSL_HOST_MOUNT_ROOT / drive / Path(tail))
-    return str(_WSL_HOST_MOUNT_ROOT / drive)
+        return str(_DOCKER_DESKTOP_HOST_MOUNT_ROOT / drive / tail)
+    return str(_DOCKER_DESKTOP_HOST_MOUNT_ROOT / drive)
 
 
 def _remap_host_compose_path(
@@ -736,8 +740,7 @@ class HostDockerComposeRunner:
         else:
             return local_source
         host_dir = (
-            _wsl_linux_host_path(str(self.project_dir))
-            or str(self.project_dir)
+            _docker_desktop_host_path(str(self.project_dir)) or str(self.project_dir)
         ).rstrip("\\/")
         if not suffix:
             return host_dir
@@ -764,10 +767,16 @@ class HostDockerComposeRunner:
                     if isinstance(raw_volume, Mapping):
                         volume = dict(raw_volume)
                         source = volume.get("source")
-                        if isinstance(source, str):
-                            volume["source"] = self._host_bind_source_for_local_path(
-                                source
-                            )
+                        if volume.get("type") == "bind" and isinstance(source, str):
+                            host_source = self._host_bind_source_for_local_path(source)
+                            if host_source != source:
+                                volume["source"] = host_source
+                                # A missing checkout must fail before Docker can
+                                # create an empty directory over image contents.
+                                volume["bind"] = {
+                                    **volume.get("bind", {}),
+                                    "create_host_path": False,
+                                }
                         rewritten_volumes.append(volume)
                     else:
                         rewritten_volumes.append(raw_volume)
