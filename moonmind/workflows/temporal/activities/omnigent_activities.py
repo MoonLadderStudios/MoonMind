@@ -857,8 +857,6 @@ async def _omnigent_execute_activity(
     to work that may still be live.
     """
 
-    import httpx
-
     from api_service.db.base import async_session_maker
     from moonmind.omnigent.bridge_artifacts import (
         LocalOmnigentArtifactGateway,
@@ -884,7 +882,10 @@ async def _omnigent_execute_activity(
     from moonmind.repositories.lore_runtime import (
         build_lore_repository_adapter_from_environment,
     )
-    from moonmind.workflows.adapters.omnigent_client import OmnigentHttpClient
+    from moonmind.workflows.adapters.omnigent_client import (
+        OmnigentHttpClient,
+        pooled_http_client,
+    )
     from moonmind.workflows.temporal.client import TemporalClientAdapter
 
     artifact_gateway = LocalOmnigentArtifactGateway()
@@ -925,7 +926,7 @@ async def _omnigent_execute_activity(
             ),
         )
 
-    async with httpx.AsyncClient() as http_client:
+    async with pooled_http_client() as http_client:
         omnigent_client = OmnigentHttpClient(
             base_url=resolved_server_url(),
             api_token=resolved_api_token(),
@@ -1063,8 +1064,6 @@ async def omnigent_oauth_host_janitor_activity(
 ) -> dict[str, object]:
     """Reconcile expired, missing, and orphaned OAuth hosts."""
 
-    import httpx
-
     from api_service.db.base import async_session_maker
     from moonmind.omnigent.bridge_store import OmnigentBridgeSessionStore
     from moonmind.omnigent.control_plane import OmnigentControlPlaneStore
@@ -1078,13 +1077,16 @@ async def omnigent_oauth_host_janitor_activity(
         resolved_server_url,
     )
     from moonmind.provider_profiles.lease_client import ProviderProfileLeaseClient
-    from moonmind.workflows.adapters.omnigent_client import OmnigentHttpClient
+    from moonmind.workflows.adapters.omnigent_client import (
+        OmnigentHttpClient,
+        pooled_http_client,
+    )
     from moonmind.workflows.temporal.client import TemporalClientAdapter
 
     control_plane_metrics.increment(
         control_plane_metrics.JANITOR_OPERATIONS, janitor_outcome="claim"
     )
-    async with httpx.AsyncClient() as http_client:
+    async with pooled_http_client() as http_client:
         client = OmnigentHttpClient(
             base_url=resolved_server_url(),
             api_token=resolved_api_token(),
