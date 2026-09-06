@@ -3477,7 +3477,10 @@ class MoonMindProviderProfileManagerWorkflow:
             )
             if policy_ref is not None:
                 scope.recovery_policy_ref = policy_ref
-            if scope.effective_limit >= scope.configured_limit:
+            if (
+                scope.effective_limit >= scope.configured_limit
+                and scope.backpressure_state != "disabled"
+            ):
                 scope.backpressure_state = "healthy"
 
     def _prune_disabled_profiles_without_leases(self) -> None:

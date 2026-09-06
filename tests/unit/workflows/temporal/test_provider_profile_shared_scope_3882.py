@@ -408,6 +408,44 @@ class TestCooldownAndDisabled:
             assert wf._scopes["shared"].effective_limit == 2
             assert wf._scopes["shared"].backpressure_state == "disabled"
 
+    def test_disabled_survives_authoritative_sync(self):
+        wf = _manager()
+        wf._profiles["a"] = _profile("a", 8, "shared")
+        with _run_with_fake(wf, NOW):
+            # Fresh operator disable with no prior reduction: the sync
+            # adopts the authoritative record and must keep it disabled.
+            wf._apply_scope_sync(
+                [
+                    {
+                        "scope_ref": "shared",
+                        "runtime_id": "codex_cli",
+                        "configured_limit": 10,
+                        "effective_limit": 10,
+                        "backpressure_state": "disabled",
+                    }
+                ]
+            )
+            scope = wf._scopes["shared"]
+            assert scope.backpressure_state == "disabled"
+            assert wf._scope_is_available(scope) is False
+            assert wf._profile_admitted_by_capacity(wf._profiles["a"]) is False
+            # A routine reload of the same authoritative record (the owned
+            # clamp-only branch) must not clear the disable either.
+            wf._apply_scope_sync(
+                [
+                    {
+                        "scope_ref": "shared",
+                        "runtime_id": "codex_cli",
+                        "configured_limit": 10,
+                        "effective_limit": 10,
+                        "backpressure_state": "disabled",
+                    }
+                ]
+            )
+            assert wf._scopes["shared"].backpressure_state == "disabled"
+            assert wf._scope_is_available(wf._scopes["shared"]) is False
+            assert wf._profile_admitted_by_capacity(wf._profiles["a"]) is False
+
 
 # ---------------------------------------------------------------------------
 # AC5: evidence-driven, interval-bounded, ceiling-capped recovery
