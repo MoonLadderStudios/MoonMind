@@ -1195,6 +1195,7 @@ def _never_started_client(
 
 
 @pytest.mark.asyncio
+@pytest.mark.timeout(10)
 @pytest.mark.parametrize(
     "agent_name", ["opencode-native-ui", "codex-native-ui", "claude-native-ui"]
 )
@@ -1275,9 +1276,9 @@ async def test_provider_rejection_after_injection_completion(
     monkeypatch.setenv("OMNIGENT_ENABLED", "true")
     monkeypatch.setenv("OMNIGENT_SERVER_URL", "https://omnigent.test")
     monkeypatch.setattr("moonmind.omnigent.execute.OmnigentHttpClient", Client)
-    monkeypatch.setattr(
-        "moonmind.omnigent.execute._MARKED_TURN_START_TIMEOUT_SECONDS", 0.05
-    )
+    # Keep the production watchdog budget: this test classifies native failure,
+    # and journal I/O must not race an unrelated 50ms turn-start deadline.
+    # The test-level timeout still bounds a regression that resumes polling.
     async def capture_with_crash(**kwargs):
         nonlocal crashed
         if crash_at == "harvest" and not crashed and kwargs["harvest_resources"]:
