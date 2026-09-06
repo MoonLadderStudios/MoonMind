@@ -1,13 +1,18 @@
 # Workflow Presets System
 
 **Document Class:** Canonical declarative  
-**Status:** Desired-state architecture  
+**Viewpoint:** Module Architecture View  
+**Status:** Draft  
 **Owners:** MoonMind Engineering  
-**Last Updated:** 2026-09-06
+**Updated:** 2026-09-06  
+**Audience:** Preset/catalog, workflow compiler, API, and dashboard contributors  
+**Authority:** Preset catalog, task-input composition, expansion/default metadata, nested provenance, and their integration with the shared publication compiler. Workflow Publishing owns publication semantics and Input Schema Guidance owns binding keys.  
+**Owning Surface:** Preset authoring/catalog and backend expansion boundary  
+**Related Implementation:** `api_service/data/presets/`, `.agents/skills/_shared/batch_workflows.py`, and existing preset expansion services.
 
 This document defines the schema-driven composition layer for reusable workflows. Presets collect task-specific inputs, expand into executable steps, and preserve provenance. Repository, branch, and publication are single workflow-level choices, not repeated preset inputs.
 
-Related: [Workflow Publishing](WorkflowPublishing.md), [Create Page](../UI/CreatePage.md), [Input Schema Guidance](../Steps/InputSchemaGuidance.md), [Step Types](../Steps/StepTypes.md), [Skill System](../Steps/SkillSystem.md), [Jira Integration](../Steps/JiraIntegration.md), [Workflow Architecture](WorkflowArchitecture.md), [Workflow Editing System](WorkflowEditingSystem.md).
+**Related Docs:** [Workflow Publishing](WorkflowPublishing.md), [Create Page](../UI/CreatePage.md), [Input Schema Guidance](../Steps/InputSchemaGuidance.md), [Step Types](../Steps/StepTypes.md), [Skill System](../Steps/SkillSystem.md), [Jira Integration](../Steps/JiraIntegration.md), [Workflow Architecture](WorkflowArchitecture.md), [Workflow Editing System](WorkflowEditingSystem.md), [Settings System](../Security/SettingsSystem.md).
 
 The document specifies the long-term design. Current seed files and helpers are implementation artifacts, not exceptions that override this contract. Rollout status belongs in issues or temporary execution notes.
 
@@ -149,7 +154,7 @@ When a preset is selected, the frontend loads its normalized metadata, task inpu
 
 Supported draft states include no preset, missing required input, configured but unexpanded, applied with editable generated task content, submitted without manual expansion, and expansion failure. Values and provenance survive validation failures.
 
-Generated-step editing does not reopen repository/branch/publish override controls. Material changes to a generated step are revalidated against the single workflow policy. A incompatible combination requires a supported composition or separate workflows, not a hidden override.
+Generated-step editing does not reopen repository/branch/publish override controls. Material changes to a generated step are revalidated against the single workflow policy. An incompatible combination requires a supported composition or separate workflows, not a hidden override.
 
 ## Jira Issue Input Pattern
 
@@ -270,7 +275,7 @@ annotations:
     children: inherit
 ```
 
-A fixed default uses `defaultMode` instead of `defaultModeFrom`. These are mutually exclusive sources of the recommendation. An internal declared default `auto` means the selected consumer requires the Skill-owned publication protocol; it is not the user-facing generic Auto string. Catalog validation requires the relevant Skill/evidence and finish contracts.
+A fixed default uses `defaultMode` instead of `defaultModeFrom`. These are mutually exclusive sources of the recommendation. An internal declared default `auto` means the selected consumer requires the Skill-owned publication protocol; it is not the user-facing generic Auto string. Catalog validation requires the relevant Skill/provider-evidence and finish contracts. All new managed and agent-owned publication evidence follows the unified repository schema, not a preset-specific format.
 
 The exact seed serialization can be normalized by the catalog, but it must preserve these semantics:
 
@@ -282,6 +287,8 @@ The exact seed serialization can be normalized by the catalog, but it must prese
 - Managed implementation explicitly declares its output behavior instead of depending on absence of metadata as an implicit PR default.
 - A plan with early PR handoff, read-only verification, tracker updates, or merge automation retains one policy and one owner per effect.
 - Capability metadata and schema expressions cannot broaden permissions, choose another repository, or duplicate Skill semantics.
+
+The retired `workflow.default_publish_mode` and environment aliases are not fallback sources for missing preset/default metadata or helper arguments. [Settings System section 10.6](../Security/SettingsSystem.md#106-publication-default-ownership-and-retired-setting) preserves configured historical intent through proven explicit reconstruction or visible review. New/defaulted expansion follows only the publication compiler, and missing authority-sensitive declarations fail rather than selecting the old workspace default.
 
 A read-only assessment included within implementation remains read-only without disabling publication of the implementation's cumulative candidate. A workflow with both its own repository deliverable and fan-out declares both responsibilities rather than using coordinator status to suppress its output.
 
@@ -391,5 +398,6 @@ Required coverage exercises the real catalog, expansion, compiler, fan-out, and 
 - A child or included assessment cannot replace the scope policy. A contradictory composition fails before effects.
 - Partial dispatch, duplicate requests, policy-conflicting idempotency reuse, dry run, and zero-target runs retain truthful outcomes.
 - Schedules, edit/rerun, MCP/API, legacy reconstruction, and immutable-history replay preserve the correct contract and definition evidence.
+- Retired workspace/default aliases cannot affect new expansion, and historical configured choices are preserved or reviewed rather than silently replaced.
 
 Implementation backlogs and rollout checklists belong outside this canonical design. A documentation or seed update alone is not proof of conformance.

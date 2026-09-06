@@ -1,13 +1,17 @@
 # PR Merge Automation - Child Workflow Resolver Strategy
 
 **Document Class:** Canonical declarative  
-**Status:** Proposed target design  
+**Viewpoint:** System / Feature Design View  
+**Status:** Proposed  
 **Owner:** MoonMind Platform  
 **Updated:** 2026-09-06  
 **Audience:** backend, workflow authors, API, Dashboard  
-**Related:** `docs/Workflows/WorkflowDependencies.md`, `docs/Workflows/WorkflowPublishing.md`, `docs/Workflows/RequiredCapabilities.md`, `docs/Temporal/WorkflowTypeCatalogAndLifecycle.md`, `docs/Temporal/TemporalAgentExecution.md`, `docs/Steps/SkillSystem.md`, `docs/Workflows/WorkflowPresetsSystem.md`, `docs/UI/CreatePage.md`
+**Authority:** Parent-owned PR readiness/review scheduling, resolver-child handoffs, finish-mode lifecycle, and post-merge tracker completion. Portable Skills own resolver semantics; Workflow Publishing and repository-provider contracts own publication policy and evidence.  
+**Owning Surface:** MoonMind.MergeAutomation and its UserWorkflow integration  
+**Related Implementation:** `MoonMind.MergeAutomation`, `.agents/skills/pr-resolver/`, and the existing merge_automation Activities.  
+**Related Docs:** `docs/Workflows/WorkflowDependencies.md`, `docs/Workflows/WorkflowPublishing.md`, `docs/Workflows/RequiredCapabilities.md`, `docs/Temporal/WorkflowTypeCatalogAndLifecycle.md`, `docs/Temporal/TemporalAgentExecution.md`, `docs/Steps/SkillSystem.md`, `docs/Workflows/WorkflowPresetsSystem.md`, `docs/UI/CreatePage.md`, `docs/Workflows/LoreVcsIntegrationDesign.md`
 
-This is a declarative target, not deployment or implementation evidence. [Workflow Publishing](WorkflowPublishing.md) owns the single authored publication policy and the distinction between authoring Auto and compiled Skill-owned `auto`.
+This is a declarative target, not deployment or implementation evidence. [Workflow Publishing](WorkflowPublishing.md) owns the single authored publication policy and the distinction between authoring Auto and compiled Skill-owned `auto`. All new repository evidence uses the unified provider-neutral contract in [Lore VCS Integration Design section 3.13](LoreVcsIntegrationDesign.md#313-unified-repository-publication-evidence); this gate consumes it, not a separate Auto schema.
 
 ## 1. Purpose
 
@@ -28,6 +32,8 @@ Preserve one parent dependency target, durable awaited completion, state-based r
 ## 4. Non-Goals
 
 No separate top-level follow-up dependency model, native replacement for `pr-resolver`, mid-flight broadening of admitted merge policy, or generalization into arbitrary non-PR output. Existing-PR adoption is supported, but explicit user None does not authorize pushing or merging merely because the adopting coordinator has no deliverable of its own.
+
+The GitHub PR resolver flow described here is not authority to merge a Lore-backed repository through its generated GitHub PR. Provider-aware merge automation routes Lore work through the exact-revision coordinator contract in LoreVcsIntegrationDesign. A PR projection is not the repository mutation target, and an unqualified Git-only Skill cannot acquire Lore authority through this gate.
 
 ## 5. Summary of the Strategy
 
@@ -105,7 +111,7 @@ A representative **compiled**, not independently authored, configuration is:
 }
 ```
 
-Runtime input never contains unresolved authoring `default`. Preset definitions describe requirements/defaults; they do not introduce a second publish selector or overwrite explicit intent.
+Runtime input never contains unresolved authoring `default`. Preset definitions describe requirements/defaults; they do not introduce a second publish selector or overwrite explicit intent. The gate cannot consult the retired workspace publish fallback to modify this frozen selection.
 
 ### 9.1.1 Entry points: publishing a PR versus adopting one
 
@@ -133,6 +139,8 @@ Fix-only is not None and cannot make blockers, deferred comments, or pending che
 ### 9.2 Parent publish output
 
 Durable PublishContext includes repository, prNumber, prUrl, baseRef, headRef, exact headSha, publishedAt or the qualified adoption observation, optional jiraIssueKey, and artifact provenance. Keep large evidence artifact-backed with a compact safe projection.
+
+This GitHub-oriented scheduling context is a projection of validated target/publication facts, not an alternate repository-publication schema. New managed and agent-owned publishers emit `moonmind.publish.repository.v1`; the accepted artifact reference and exact-attempt association remain authoritative. Adoption records target evidence without inventing an earlier publication by this run. Provider-discriminated targets and revisions are not replaced by these display fields.
 
 A PR URL alone is insufficient. Base and head are distinct; a resolver's head cannot become the implementation's original publication base. Target context and the inherited scope intent remain linked but separate.
 
@@ -282,13 +290,13 @@ The parent plan is never reused as the child's plan. Historical inputs without c
 
 The resolver artifact, normally `var/pr_resolver/result.json`, includes mergeAutomationDisposition: merged, already_merged, review_clean, reenter_gate, request_review, manual_review, or failed. Missing/malformed required result evidence is not generic child success.
 
-Review-clean requires admitted fix_only, remote-verified branch head, an explicitly unmerged PR, publish evidence with merged false and a non-merge action, and resolver result claiming no merge. Contradictory evidence fails `UNAUTHORIZED_MERGE_EVIDENCE`. Unverified head fails the shared parser. The Skill's live PR check emits blocked `unmerged_pr_verification_unavailable` when merged state or unreadable state prevents the no-merge proof. Review-clean and merged can both exit zero; structured evidence distinguishes them.
+Review-clean requires admitted fix_only, an exact remotely verified branch revision in unified repository evidence, a permitted non-merge publication action, and the resolver's own result plus a live PR observation proving that the PR remains unmerged. Contradictory merge evidence fails `UNAUTHORIZED_MERGE_EVIDENCE`; unverified remote revision fails the shared parser. The Skill's live check emits blocked `unmerged_pr_verification_unavailable` when merged or unreadable state prevents no-merge proof. Do not require the retired Auto schema's `merged` boolean in `moonmind.publish.repository.v1`; semantic merge/no-merge fields belong to the resolver result, while publication mechanics use the shared schema. Review-clean and merged may both exit zero, so structured evidence distinguishes them.
 
 A reenter_gate result is a durable handoff, not proof the PR merged. It carries completionDisposition gated_continuation and normalized gatedContinuation. The gate waits until the Skill-authored notBefore; old handoffs without timing use fallbackPollSeconds. The exact review-grace deadline is not recomputed or extended by the gate. Same-session continuation support is irrelevant to this parent-owned handoff.
 
 Only the synthetic PR_RESOLVER_REENTER_GATE terminal-contract failure can be cleared by an authorized handoff. Provider, auth, rate-limit, infrastructure, timeout, cancellation, stale-evidence, and malformed-evidence failures remain their own failures.
 
-A request_review `gated-continuation/v2` names only the configured provider, exact head, Step Execution reference, and progress signature. The parent validates owner workflow/run/type, actual child workflow/run, exact executionRef, reason, timing, provider, and head against authoritative results. Safe evidence exposes accepted/rejected handoffs, timing source, wait/cycle counters, and legacy fallback use.
+A request_review `gated-continuation/v2` names only the configured provider, exact head, Step Execution reference, and progress signature. The parent validates owner workflow/run/type, actual child workflow/run, exact executionRef in the continuation/terminal envelope, reason, timing, provider, and head against authoritative results. The accepted publication artifact is bound to that same current attempt through trusted artifact provenance, not a reintroduced legacy evidence field. Safe evidence exposes accepted/rejected handoffs, timing source, wait/cycle counters, and legacy fallback use.
 
 Adapters preserve qualified gate-owned continuation, including supported historical next_step values such as run_fix_comments_skill, run_fix_ci_skill, run_fix_merge_conflicts_skill, retry_finalize_after_backoff, or wait_for_ci_and_retry_finalize. They do not infer a gate owner from a nonzero process exit alone. Long transient waits emit bounded progress output so healthy waiting is not confused with a stuck process.
 
@@ -338,7 +346,7 @@ Parent cancellation propagates to MergeAutomation and its in-flight resolver chi
 
 Preserve parent workflow/run lineage, publication-scope intent and definition evidence, publish context, PR identity, latest tracked head, finish/gate policy, issue targets, active review request/cycles, blockers, resolver attempts, and original expiry deadline. Rollover does not refresh defaults, widen finish authority, or reset review-request idempotency.
 
-Historical None-labelled resolver payloads remain interpreted under their original contract for supported replay. New child compilation uses Skill-owned Auto explicitly. A new default must not rewrite old history or cause incompatible workers to reinterpret policy.
+Historical None-labelled resolver payloads and old publication-evidence schemas remain interpreted only under their original recorded contracts for supported replay. New child compilation explicitly uses Skill-owned Auto and the unified evidence schema. A new default must not rewrite old history or cause incompatible workers to reinterpret policy. Fresh public resolver authoring uses default/omission, not a claimed legacy auto ingress.
 
 ## 20. Visibility and Artifacts
 
@@ -350,7 +358,7 @@ Resolver titles use the deterministic one-based attempt ordinal, such as Resolve
 
 ### 20.2 Child artifacts
 
-Preserve `reports/merge_automation_summary.json`, gate snapshots, resolver-attempt artifacts, and review-cycle artifacts under `artifacts/merge_automation/`. Evidence is bounded, safe, and available after host removal.
+Preserve `reports/merge_automation_summary.json`, gate snapshots, resolver-attempt artifacts, and review-cycle artifacts under `artifacts/merge_automation/`. Evidence is bounded, safe, and available after host removal. The publication result path can remain `artifacts/publish_result.json` while its new payload uses the one provider-neutral schema.
 
 ### 20.3 Root terminal summary
 
@@ -390,5 +398,6 @@ Conformance covers actual parent/compiler/gate/Skill/result boundaries:
 10. Omnigent children get new child-owned plans preserving parent Runtime/Profile and admitted context without reusing parent plan ownership.
 11. Dependencies require the intended code handoff, not merely an open PR or review-clean status.
 12. Cancellation, Continue-As-New, historical payloads, saved work, and projection lag preserve policy and verified facts without repeated effects.
+13. All new publication consumers accept only the unified provider schema with actual connection/client/attempt/remote proof. Retired Auto booleans/accepted-evidence objects are not reintroduced as live alternatives, and GitHub projection state never authorizes a Lore merge.
 
 A documentation or schema update alone does not demonstrate runtime or protected-live conformance.

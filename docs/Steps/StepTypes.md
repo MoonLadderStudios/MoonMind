@@ -1,11 +1,16 @@
 # Step Types
 
 **Document Class:** Canonical declarative  
-**Status:** Desired-state architecture  
+**Viewpoint:** Module Contract Specification  
+**Status:** Draft  
 **Owners:** MoonMind Engineering (Workflow Platform + UI)  
-**Last Updated:** 2026-09-06
+**Updated:** 2026-09-06  
+**Audience:** Step/catalog, workflow, API, and dashboard contributors  
+**Authority:** Canonical Tool/Skill/Preset taxonomy, discriminated step authoring, expansion boundaries, and step provenance. Input Schema Guidance and Workflow Publishing own context binding and publication policy.  
+**Owning Surface:** Step authoring normalization and executable-plan handoff  
+**Related Implementation:** `moonmind/services/skill_step_inputs.py`, `api_service/data/presets/`, and the shared Create form/compiler.
 
-Related: `docs/Workflows/WorkflowPresetsSystem.md`, `docs/Workflows/RequiredCapabilities.md`, `docs/Workflows/WorkflowPublishing.md`, `docs/UI/CreatePage.md`, `docs/Steps/SkillSystem.md`, `docs/Steps/InputSchemaGuidance.md`, `docs/Steps/JiraIntegration.md`, `docs/Temporal/ManagedAndExternalAgentExecutionModel.md`, `docs/Tools/DockerComposeUpdateSystem.md`
+**Related Docs:** `docs/Workflows/WorkflowPresetsSystem.md`, `docs/Workflows/RequiredCapabilities.md`, `docs/Workflows/WorkflowPublishing.md`, `docs/UI/CreatePage.md`, `docs/Steps/SkillSystem.md`, `docs/Steps/InputSchemaGuidance.md`, `docs/Steps/JiraIntegration.md`, `docs/Temporal/ManagedAndExternalAgentExecutionModel.md`, `docs/Tools/DockerComposeUpdateSystem.md`
 
 ## 1. Purpose
 
@@ -200,7 +205,7 @@ A step can be read-only, a tracker effect, a coordinator, an implementation cand
 
 An Assess → Implement → Test → Update Documentation chain shares one policy. Read-only steps need no None selector. A supported composition may publish at declared stages, but each effect has one owner and exact target. Conflicting owners/objectives require a compatible declared composition or separate workflows, not last-step-wins or most-permissive mode selection.
 
-User-facing Auto/default resolves declared behavior. Internal Auto remains the Skill-owned evidence protocol. Coordinator-local None does not disable publishing children. Explicit scope None cannot run a push-requiring resolver, including fix_only, without a genuinely separate compatible non-publishing objective.
+User-facing Auto/default resolves declared behavior. Internal Auto remains the Skill-owned execution protocol using the same unified publication evidence as managed operations. Coordinator-local None does not disable publishing children. Explicit scope None cannot run a push-requiring resolver, including fix_only, without a genuinely separate compatible non-publishing objective. A retired workspace default is not another source for either layer.
 
 ## 10. Validation Rules
 

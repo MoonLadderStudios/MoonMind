@@ -1,13 +1,19 @@
 # Create Page
 
 **Document Class:** Canonical declarative  
-**Status:** Desired-state architecture  
+**Viewpoint:** System / Feature Design View  
+**Status:** Proposed  
 **Owners:** MoonMind Engineering  
-**Last Updated:** 2026-09-06
+**Updated:** 2026-09-06  
+**Audience:** Dashboard, workflow authoring, schema-form, and API contributors  
+**Authority:** Create-page information architecture, single-context presentation, schema-driven task inputs, preview/error behavior, and submission/reconstruction UX. Backend providing contracts remain authoritative for execution and policy.  
+**Owning Surface:** Shared /workflows/new authoring form and its catalog/compiler consumers  
+**Related Implementation:** `frontend/src/`, `frontend/src/styles/dashboard.css`, and existing workflow draft/submission helpers.  
+**Related Docs:** [Workflow Publishing](../Workflows/WorkflowPublishing.md), [Input Schema Guidance](../Steps/InputSchemaGuidance.md), [Step Types](../Steps/StepTypes.md), [Settings System](../Security/SettingsSystem.md); further related owners are listed below.
 
 The Create page is MoonMind's primary workflow composition surface. It lets a user describe work, select its execution context, configure task-specific steps, and submit without understanding internal orchestration roles.
 
-This specification describes the long-term UI, not a claim that every current control or backend path implements it. [Workflow Publishing](../Workflows/WorkflowPublishing.md) owns publishing semantics; [Input Schema Guidance](../Steps/InputSchemaGuidance.md) owns context bindings.
+This specification describes the long-term UI, not a claim that every current control or backend path implements it. Workflow Publishing owns publishing semantics; Input Schema Guidance owns context bindings.
 
 ## Design Principles
 
@@ -51,7 +57,7 @@ Changing Batch Jira's Run from Verify to Implement updates that explanation whil
 
 The user selects a PR as the task target. Its repository, head, and base are resolved through the authorized target surface and displayed read-only. A head-branch locator can be a supported alternative to the PR reference, not a second simultaneous editable branch selector.
 
-A PR-resolution batch displays “Branches come from discovered pull requests.” It never forces all children onto the coordinator's branch. Auto explains whether the selected resolver repairs and merges, or repairs without merging under `fix_only`.
+A PR-resolution batch displays “Branches come from discovered pull requests.” It never forces all children onto the coordinator's branch. Auto explains whether the selected resolver repairs and merges, or repairs without merging under `fix_only`. Historical startingBranch/targetBranch or non-default generic checkout branches are not new PR-locator fallbacks.
 
 ## Page Structure
 
@@ -194,6 +200,8 @@ Compiled execution `auto` is the Skill-owned protocol, not another UI option. Th
 
 The selector shows only supported choices or disabled choices with reasons. It never silently switches a selected value to make a new step fit. Selection of Auto follows declared definition metadata and current task inputs, not model improvisation. An unresolved or conflicting default blocks submission rather than guessing a permissive policy.
 
+The retired `workflow.default_publish_mode` and environment aliases are not lower-priority fallbacks and must not hydrate the selector as an apparent explicit value. For affected historical settings/drafts/schedules, the UI presents proven effective intent or a review requirement under [Settings System section 10.6](../Security/SettingsSystem.md#106-publication-default-ownership-and-retired-setting). It cannot silently change a configured None/Branch to PR or use an old global value instead of the selected composition's Auto.
+
 ### Effective Explanation
 
 The explanation is returned or validated by the shared backend compiler and identifies the output behavior, scope, and consequential effects. Examples:
@@ -290,6 +298,7 @@ Required production-boundary coverage includes:
 - Guided/Advanced required alternatives remain usable without duplicate context fields.
 - Apply/Reapply and unexpanded Submit preserve explicit policy and current bindings.
 - Auto and omission resolve identically; the explanation accurately shows child output and merge behavior.
+- Retired workspace fallback values do not become active hidden defaults; affected historical operator intent is preserved or explicitly reviewed.
 - Main Jira/GitHub batches, both breakdown families, document orchestration, PR/Dependabot batches, direct resolvers, and the review loop use the same control.
 - Existing PR targets derive head/base correctly, non-default bases survive fan-out, and stale async responses cannot change targets.
 - None, incompatible resolvers, shared-branch batches, and missing prerequisite-code handoffs fail visibly before prohibited effects.
@@ -313,3 +322,4 @@ A rendered selector or passing component fixture alone is not proof that the API
 - `docs/Workflows/WorkflowEditingSystem.md`
 - `docs/UI/WorkflowConsoleArchitecture.md`
 - `docs/UI/DashboardDesignSystem.md`
+- `docs/Security/SettingsSystem.md`

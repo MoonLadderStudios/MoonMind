@@ -1,13 +1,18 @@
 # No Commit Workflow Status
 
 **Document Class:** Canonical declarative  
-**Status:** Desired-state contract  
+**Viewpoint:** Module Contract Specification  
+**Status:** Draft  
 **Owners:** MoonMind Engineering  
-**Last updated:** 2026-09-06
+**Updated:** 2026-09-06  
+**Audience:** Workflow finalization, API, dashboard, and operator contributors  
+**Authority:** no_commit/NO_COMMIT outcome semantics, local publication-disabled distinctions, and bounded historical alias interpretation. Workflow Publishing and the repository evidence owner define publication proof.  
+**Owning Surface:** Workflow terminal outcome classification and its API/UI projections  
+**Related Implementation:** `MoonMind.UserWorkflow`, `execution.record_terminal_state`, and existing finish-summary consumers.
 
 Canonical for: no_commit lifecycle semantics, NO_COMMIT finish outcome, valid publishing-context completion without a repository commit, and side-effectful work that must not be described as “no changes.”
 
-Related:
+## Related Docs
 
 - `docs/Workflows/WorkflowFinishSummarySystem.md`
 - `docs/Workflows/WorkflowPublishing.md`
@@ -15,6 +20,7 @@ Related:
 - `docs/Api/ExecutionsApiContract.md`
 - `docs/UI/WorkflowStatusColorSemantics.md`
 - `docs/RepositoryAccessAndWorkspaceDesign.md`
+- `docs/Workflows/LoreVcsIntegrationDesign.md`
 
 ## 1. Purpose
 
@@ -39,7 +45,7 @@ NO_CHANGES/no_changes are historical aliases only. New domain code, labels, and 
 
 Use no_commit when the admitted repository-publishing objective reaches a valid no-op, authoritative evidence establishes no commit-worthy candidate was needed, no required publication was left undone, and required independent effects succeed or are explicitly best-effort under the composition.
 
-Managed PR/Branch normally uses a structured skipped/no_commit result. Skill-owned Auto uses its exact-attempt no_op_verified evidence and objective-specific terminal contract, mapped by Workflow Publishing. A plain empty diff, successful process, or model claim is insufficient. A merge-required resolver cannot report success from a local no-op while the PR remains unresolved.
+Managed and Skill-owned publication use the shared `moonmind.publish.repository.v1` evidence and objective-specific terminal contract. The managed summary may project skipped/no_commit from canonical no_op_verified, but it is not a separate evidence format. A plain empty diff, successful process, or model claim is insufficient. A merge-required resolver cannot report success from a local no-op while the PR remains unresolved. A Lore Content-only revision is not No Commit merely because its generated Git projection has an empty diff.
 
 Do not use no_commit for:
 
@@ -62,7 +68,7 @@ An ambiguous no-diff result does not authorize the Jira transition. Required tra
 
 ## 5. Required structured result shape
 
-A managed no-commit result uses structured fields, not prose parsing:
+A managed no-commit result uses structured projection fields, not prose parsing:
 
 ```json
 {
@@ -90,15 +96,15 @@ A managed no-commit result uses structured fields, not prose parsing:
 }
 ```
 
-The publish mode here is the compiled local result, not a replacement for the authored input snapshot. An authored Auto remains Auto with its resolved explanation in detail/reconstruction surfaces. Auto evidence retains its own schema/status/owner rather than being rewritten into fabricated managed evidence.
+The publish block here is a compiled local result summary, not the unified publication-evidence payload or a replacement for the authored input snapshot. Auto remains Auto with its resolved explanation in detail/reconstruction surfaces. Both managed and agent-owned evidence retain the canonical provider schema; projection booleans cannot substitute for exact revision, connection/client, and remote proof.
 
 A PR reference must identify an actual PR. Existing target context is distinct from proof that this run created, updated, or merged it. Never infer publication from a URL alone or invent one for no-commit output.
 
 ## 6. Publish-stage behavior
 
-The managed publisher returns structured mode, status, reasonCode, commit/push flags, target/head evidence, and PR identity where real. The finalizer maps a verified managed skipped/no_commit result to the canonical outcome. Skill-owned Auto is validated through its immutable Skill/current-attempt evidence before equivalent outcome mapping.
+The finalizer consumes the accepted unified repository-publication artifact and its exact-attempt/target association. It derives local summary mode, status, reasonCode, flags, target/revision, and PR identity from validated evidence. Both managed and Skill-owned no_op_verified results map to the compatible objective's NO_COMMIT outcome through this same reader.
 
-Unknown Git comparison, inaccessible base, failed remote verification, and missing evidence cannot become no_commit. A candidate produced or published earlier in the workflow remains authoritative even if a later read-only step reports no local changes. Do not overwrite cumulative acceptedRepositoryEvidence with the stopping step's raw branch/head metadata.
+Unknown provider comparison, inaccessible base, failed remote verification, and missing evidence cannot become no_commit. A candidate produced or published earlier in the workflow remains authoritative even if a later read-only step reports no local changes. Preserve the run-owned reference to validated `moonmind.publish.repository.v1`, not the retired `acceptedRepositoryEvidence` object or mutable raw branch/head metadata. Old formats remain frozen historical readers only.
 
 ## 7. Interaction with non-repository side effects
 
@@ -163,4 +169,4 @@ Supported old histories replay with their original command semantics. New workfl
 
 ### 9.2 Conformance
 
-Tests distinguish verified managed/Skill-owned no-op, technical failure, explicit None, coordinator enqueue/no-target outcomes, real publication, tracker failures, and saved work after failed compute/publication. They prove no local coordinator mode overwrites authored policy, no URL/process exit invents publication, and no alias repair changes authority. Exercise producer/finalizer/API/UI boundaries, not only display-string mappings.
+Tests distinguish verified managed/Skill-owned no-op, technical failure, explicit None, coordinator enqueue/no-target outcomes, real publication, tracker failures, and saved work after failed compute/publication. They prove no local coordinator mode overwrites authored policy, no URL/process exit invents publication, and no alias repair changes authority. New evidence uses the unified provider schema, with Content-only and pending-projection Lore cases preserved. Exercise producer/finalizer/API/UI boundaries, not only display-string mappings.

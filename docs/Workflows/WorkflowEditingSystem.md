@@ -1,9 +1,15 @@
 # Workflow Editing System
 
 **Document Class:** Canonical declarative  
-**Status:** Desired-state architecture  
+**Viewpoint:** System / Feature Design View  
+**Status:** Proposed  
 **Owners:** MoonMind Engineering  
-**Last Updated:** 2026-09-06
+**Updated:** 2026-09-06  
+**Audience:** Workflow lifecycle, API, draft reconstruction, and dashboard contributors  
+**Authority:** Shared Create/Edit/Rerun authoring experience, reconstruction of original intent, permitted update boundaries, and immutable input lineage. Execution lifecycle and publication schemas remain with their providing contracts.  
+**Owning Surface:** Workflow input reconstruction and Edit/Rerun integration  
+**Related Docs:** [Create Page](../UI/CreatePage.md), [Executions API Contract](../Api/ExecutionsApiContract.md), [Workflow Publishing](WorkflowPublishing.md), [Workflow Architecture](WorkflowArchitecture.md), [Temporal Scheduling](../Temporal/TemporalScheduling.md), [Settings System](../Security/SettingsSystem.md)  
+**Related Implementation:** `buildTemporalSubmissionDraftFromExecution`, `buildTemporalArtifactEditUpdatePayload`, and the existing UpdateInputs/RequestRerun lifecycle owners.
 
 ## 1. Purpose
 
@@ -159,9 +165,10 @@ Missing evidence, unsupported historical mode, conflicting copies, or inaccessib
 | Coordinator-local None with proven child PR intent | Reconstruct the one scope PR/default selection and explain the coordinator role. |
 | Historical literal auto | Preserve Skill-owned meaning, not generic Auto by string substitution. |
 | Historical None promoted to Auto | Preserve old execution history; require an explicit reviewed new selection rather than silently granting publication. |
+| Recorded omitted mode resolved by the retired workspace fallback | Preserve the proven effective choice explicitly with provenance and validation, or require review under SettingsSystem section 10.6. |
 | Conflicting copies, mixed per-step policies, ambiguous two-branch authoring | Show conflict and require a compatible composition or separately authored workflows. |
 
-Unknown origin is not implicit user consent. Compatibility collapse requires proven equivalence. Raw JSON and old argument aliases cannot bypass the new one-context contract.
+Unknown origin is not implicit user consent. Compatibility collapse requires proven equivalence. Raw JSON and old argument aliases cannot bypass the new one-context contract. In particular, Checkpoint Branch and PR Resolver reconstruction cannot use historical startingBranch/targetBranch or non-default checkout context as new active branch/PR selectors.
 
 ## 9. Submit semantics
 
@@ -195,7 +202,7 @@ Unsupported Temporal update/rerun fails explicitly. It cannot silently create a 
 
 ### 9.5 Auto and explicit selections
 
-While editing task inputs, Auto recomputes its recommendation from the selected definition and current inputs under the draft's update policy. An explicit None/Branch/PR choice survives and is validated. Returning to Auto is a deliberate action.
+While editing task inputs, Auto recomputes its recommendation from the selected definition and current inputs under the draft's update policy. An explicit None/Branch/PR choice survives and is validated. Returning to Auto is a deliberate action. The retired workspace default and environment aliases do not influence new resolution or hydrate an apparently explicit value.
 
 Before submission show the effective output, child scope, possible merge effects, and required branch/candidate handoff. A resolver requiring pushes is incompatible with None even in fix-only. A batch requiring predecessor code cannot silently lose its handoff when publication/merge is disabled.
 
@@ -253,7 +260,7 @@ New UI/docs use workflow Edit/Rerun rather than editJobId, `/tasks/queue/new`, q
 
 Conformance proves shared Create/Edit/Rerun UX through actual read/compiler/update boundaries; failed/canceled supported reruns; one authored context and policy; immutable artifacts; correct acceptance/redirect behavior; and preserved original-versus-new run lineage.
 
-Regression cases cover coordinator None with PR/Auto children, old None-to-Auto coercion, conflicting repository/branch copies, unchanged versus changed definition digests, explicit choices surviving Run changes, new-admission requirements for changed authority, stale lookups, and idempotency conflicts. UI-only prefill tests do not establish safe execution or replay.
+Regression cases cover coordinator None with PR/Auto children, old None-to-Auto coercion, configured workspace-default retirement, conflicting repository/branch copies, unchanged versus changed definition digests, explicit choices surviving Run changes, new-admission requirements for changed authority, stale lookups, and idempotency conflicts. UI-only prefill tests do not establish safe execution or replay.
 
 ## 18. Implementation tracking
 

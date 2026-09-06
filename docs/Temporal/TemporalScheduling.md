@@ -1,10 +1,14 @@
 # Temporal Scheduling
 
 **Document Class:** Canonical declarative  
-**Status:** Desired-state architecture  
+**Viewpoint:** Module Architecture View  
+**Status:** Draft  
 **Owner:** MoonMind Platform  
-**Last Updated:** 2026-09-06  
-**Audience:** Backend developers, UI developers, operators
+**Updated:** 2026-09-06  
+**Audience:** Backend developers, UI developers, operators  
+**Authority:** Temporal-native timing mechanisms, recurring-definition reconciliation, occurrence input pinning, and scheduling lifecycle boundaries. Workflow Publishing owns publication resolution and scope inheritance.  
+**Owning Surface:** RecurringWorkflowDefinition, RecurringWorkflowsService, and Temporal scheduling adapter  
+**Related Implementation:** `api_service/services/recurring_workflows_service.py`, `api_service/api/routers/recurring_workflows.py`, and `TemporalClientAdapter`.
 
 Implementation sequencing and rollout evidence belong in issues or `docs/tmp/`, not this canonical specification. New authoring semantics here describe the target, not support claimed for current deployed API/worker versions.
 
@@ -25,6 +29,7 @@ Every scheduled workflow uses the same single repository/source context, applica
 - [Workflow Editing System](../Workflows/WorkflowEditingSystem.md)
 - [Executions API Contract](../Api/ExecutionsApiContract.md)
 - [Create Page](../UI/CreatePage.md)
+- [Settings System](../Security/SettingsSystem.md)
 
 ## 3. Design Principles
 
@@ -102,6 +107,8 @@ New authored publication values are default, none, branch, pr, and pr_with_merge
 When saving a schedule, validate and record its selected preset/Skill definition evidence and the resolved recommendation for its authored task inputs. The default policy pins this meaning rather than adopting a changed catalog default on every firing. No silent change from verification to implementation, PR to merge, or no-publication to publishing is allowed.
 
 An explicitly supported definition-update policy can govern future occurrences through the existing definition/version owner, but changes in target roles, publication/merge authority, or required handoffs require visible review and a new admitted definition revision. Merely selecting Auto is not consent to future authority expansion. Missing pinned evidence is a blocker, not permission to use the latest definition.
+
+The retired workspace `workflow.default_publish_mode` and its environment aliases cannot supply a schedule's new omitted/defaulted selection. Existing configured fallbacks and definitions follow [Settings System section 10.6](../Security/SettingsSystem.md#106-publication-default-ownership-and-retired-setting): preserve proven old effective intent explicitly or require review before affected unattended launches. A generic settings reset, restored old override, or reconciliation pass is not evidence that the schedule's changed meaning was reviewed.
 
 #### Per-occurrence admission
 
@@ -220,6 +227,7 @@ Required production-boundary coverage includes ordinary scheduling, pause/resume
 - Parent overlap settings do not masquerade as cross-child shared-branch protection.
 - Dependabot cross-run deduplication and conflicting policy reuse cannot produce duplicate resolver effects.
 - Legacy copies and old literal Auto reconstruct honestly or require review.
+- Configured retired workspace fallbacks, backup/restore, and unattended definitions preserve proven intent or block for review instead of silently adopting new effects.
 - Current authorization revocation blocks use without credential/default substitution.
 
 Hermetic boundary results and protected-live scheduling/provider qualification are reported separately.
