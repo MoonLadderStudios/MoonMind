@@ -35,12 +35,23 @@ name: Provider / Omnigent Concurrency Qualification
 # this runner can satisfy: a ref carrying <cores>x<gib> dimensions is refused
 # before the matrix runs when the measurement disagrees with it.
 #
+# The support key and the host image travel together. The key is a digest of the
+# whole exact combination, so it cannot be recomputed from an image substituted
+# at dispatch time: a dispatch that selects a host image other than
+# OMNIGENT_CONFORMANCE_OPENCODE_HOST_IMAGE must supply the support key that names
+# it, and the runner holds --host-image-ref to the image the layer will actually
+# launch. Both refusals happen before the matrix, so a stale repository variable
+# can never publish rows for artifacts it did not exercise.
+#
 # Every job also supplies the environment its layer's owning tests require, and
 # the runner checks that same environment before it enters the layer: the
 # exact-image job runs a PostgreSQL service for the owners that decide their
-# invariant with real database constraints, and the protected-live job passes
-# every name in PROTECTED_LIVE_REQUIRED_ENV, which a GitHub `environment:`
-# cannot inject. Both are asserted by
+# invariant with real database constraints and passes every name in
+# EXACT_DOCKER_REQUIRED_ENV — including the control-plane endpoint, token and
+# expected host owner the production registration authority needs, without which
+# a launched container could only be observed alive rather than registered — and
+# the protected-live job passes every name in PROTECTED_LIVE_REQUIRED_ENV, which
+# a GitHub `environment:` cannot inject. Both are asserted by
 # tests/unit/test_omnigent_concurrency_qualification_workflow.py so a job and
 # its layer cannot drift into an invocation that can never produce a row.
 #
@@ -62,6 +73,14 @@ on:
     inputs:
       host_image:
         description: "Digest-pinned exact Omnigent host image for the concurrency rows"
+        required: false
+        type: string
+      support_combination_key:
+        description: >-
+          Support combination key for a dispatched host_image. Required whenever
+          host_image differs from the configured default, because the key is a
+          digest of the exact artifacts and cannot be recomputed from a
+          substituted image.
         required: false
         type: string
       protected_live:
@@ -114,19 +133,34 @@ jobs:
           python-version: "3.12"
       - name: Install test dependencies
         run: python -m pip install -e .[tests]
+      # The support key is a digest of the whole exact combination, so it cannot
+      # be recomputed from an image an operator substituted at dispatch time. A
+      # dispatch that selects a different host image therefore has to bring the
+      # key that names it, and the resolved pair is what every step below files
+      # its rows under. Rejecting the mismatch here — before the matrix — is
+      # what keeps a repository variable naming a previous combination from
+      # publishing rows for artifacts it never exercised.
       - name: Resolve the digest-pinned exact host image
         id: images
         shell: bash
         env:
           DISPATCH_HOST_IMAGE: ${{ inputs.host_image }}
+          DISPATCH_SUPPORT_KEY: ${{ inputs.support_combination_key }}
           DEFAULT_HOST_IMAGE: ${{ vars.OMNIGENT_CONFORMANCE_OPENCODE_HOST_IMAGE }}
+          DEFAULT_SUPPORT_KEY: ${{ vars.OMNIGENT_CONCURRENCY_SUPPORT_KEY }}
         run: |
           host_image="${DISPATCH_HOST_IMAGE:-$DEFAULT_HOST_IMAGE}"
+          support_key="${DISPATCH_SUPPORT_KEY:-$DEFAULT_SUPPORT_KEY}"
           if [[ ! "$host_image" =~ @sha256:[0-9a-fA-F]{64}$ ]]; then
             echo "::error::The exact host image must be configured by immutable digest"
             exit 1
           fi
+          if [[ "$host_image" != "$DEFAULT_HOST_IMAGE" && -z "$DISPATCH_SUPPORT_KEY" ]]; then
+            echo "::error::A dispatched host_image must supply its own support_combination_key; the configured key names the default host image"
+            exit 1
+          fi
           echo "host=$host_image" >> "$GITHUB_OUTPUT"
+          echo "support_key=$support_key" >> "$GITHUB_OUTPUT"
       - name: Run the exact-image concurrency rows
         env:
           MOONMIND_OMNIGENT_CONCURRENCY_HOST_IMAGE: ${{ steps.images.outputs.host }}
@@ -135,6 +169,15 @@ jobs:
           # server endpoint. Without it the layer publishes `unavailable` rows
           # rather than launching hosts that can never register.
           MOONMIND_OMNIGENT_HOST_SERVER_URL: ${{ vars.OMNIGENT_SERVER_URL }}
+          # The production registration authority's own inputs. A launched host
+          # is only an execution once this endpoint reports it under its
+          # expected id and owner, so the layer needs the control-plane URL,
+          # its token and the owner it must match — not just the host-facing
+          # endpoint above.
+          OMNIGENT_SERVER_URL: ${{ vars.OMNIGENT_SERVER_URL }}
+          OMNIGENT_API_TOKEN: ${{ secrets.OMNIGENT_API_TOKEN }}
+          OMNIGENT_HOST_RUNNER_TOKEN: ${{ secrets.OMNIGENT_HOST_RUNNER_TOKEN }}
+          MOONMIND_OMNIGENT_EXPECTED_HOST_OWNER: ${{ vars.MOONMIND_OMNIGENT_EXPECTED_HOST_OWNER }}
           MOONMIND_OMNIGENT_CONCURRENCY_NETWORK: ${{ vars.OMNIGENT_CONCURRENCY_NETWORK }}
           # The layer's PostgreSQL-dependent owners bind the service container
           # above rather than provisioning a throwaway cluster with binaries
@@ -144,12 +187,14 @@ jobs:
           python tools/run_omnigent_concurrency_qualification.py \
             --layer exact_docker \
             --levels 2,4,8 \
-            --support-combination-key "${{ vars.OMNIGENT_CONCURRENCY_SUPPORT_KEY }}" \
+            --support-combination-key "${{ steps.images.outputs.support_key }}" \
             --moonmind-commit "${{ github.sha }}" \
+            --host-image-ref "${{ steps.images.outputs.host }}" \
             --worker-build-ref "${{ vars.OMNIGENT_WORKER_BUILD_REF }}" \
             --worker-topology-ref "${{ vars.OMNIGENT_WORKER_TOPOLOGY_REF }}" \
             --resource-class "${{ vars.OMNIGENT_CONCURRENCY_RESOURCE_CLASS }}" \
             --evidence-dir artifacts/omnigent-concurrency/evidence \
+            --evidence-artifact "omnigent-concurrency-required-layers-${{ github.run_id }}-${{ github.run_attempt }}" \
             --output artifacts/omnigent-concurrency/exact-docker-record.json
       # The cross-layer validated level needs a passing row in *both* required
       # layers at the same level, and the two records only merge when they were
@@ -173,12 +218,14 @@ jobs:
           python tools/run_omnigent_concurrency_qualification.py \
             --layer hermetic \
             --levels 1,2,4,8,16 \
-            --support-combination-key "${{ vars.OMNIGENT_CONCURRENCY_SUPPORT_KEY }}" \
+            --support-combination-key "${{ steps.images.outputs.support_key }}" \
             --moonmind-commit "${{ github.sha }}" \
+            --host-image-ref "${{ steps.images.outputs.host }}" \
             --worker-build-ref "${{ vars.OMNIGENT_WORKER_BUILD_REF }}" \
             --worker-topology-ref "${{ vars.OMNIGENT_WORKER_TOPOLOGY_REF }}" \
             --resource-class "${{ vars.OMNIGENT_CONCURRENCY_RESOURCE_CLASS }}" \
             --evidence-dir artifacts/omnigent-concurrency/hermetic-evidence \
+            --evidence-artifact "omnigent-concurrency-required-layers-${{ github.run_id }}-${{ github.run_attempt }}" \
             --output artifacts/omnigent-concurrency/hermetic-record.json
       # One artifact carries both required-layer records, so the publisher
       # downloads a complete record for this run rather than half of one.
@@ -210,6 +257,31 @@ jobs:
           python-version: "3.12"
       - name: Install test dependencies
         run: python -m pip install -e .[tests]
+      # The same resolution the exact-image job performs, so this job's record
+      # is filed under one identity with the required-layer records. A record
+      # naming a different host image or support key would refuse to merge with
+      # them rather than combining into a cross-layer level.
+      - name: Resolve the digest-pinned exact host image
+        id: images
+        shell: bash
+        env:
+          DISPATCH_HOST_IMAGE: ${{ inputs.host_image }}
+          DISPATCH_SUPPORT_KEY: ${{ inputs.support_combination_key }}
+          DEFAULT_HOST_IMAGE: ${{ vars.OMNIGENT_CONFORMANCE_OPENCODE_HOST_IMAGE }}
+          DEFAULT_SUPPORT_KEY: ${{ vars.OMNIGENT_CONCURRENCY_SUPPORT_KEY }}
+        run: |
+          host_image="${DISPATCH_HOST_IMAGE:-$DEFAULT_HOST_IMAGE}"
+          support_key="${DISPATCH_SUPPORT_KEY:-$DEFAULT_SUPPORT_KEY}"
+          if [[ ! "$host_image" =~ @sha256:[0-9a-fA-F]{64}$ ]]; then
+            echo "::error::The exact host image must be configured by immutable digest"
+            exit 1
+          fi
+          if [[ "$host_image" != "$DEFAULT_HOST_IMAGE" && -z "$DISPATCH_SUPPORT_KEY" ]]; then
+            echo "::error::A dispatched host_image must supply its own support_combination_key; the configured key names the default host image"
+            exit 1
+          fi
+          echo "host=$host_image" >> "$GITHUB_OUTPUT"
+          echo "support_key=$support_key" >> "$GITHUB_OUTPUT"
       - name: Run the bounded protected-live concurrency rows
         env:
           # The protected admission boundary, not a fixture, authorizes this
@@ -230,12 +302,14 @@ jobs:
           python tools/run_omnigent_concurrency_qualification.py \
             --layer protected_live \
             --levels "${{ vars.OMNIGENT_PROTECTED_LIVE_CONCURRENCY_LEVELS || '2' }}" \
-            --support-combination-key "${{ vars.OMNIGENT_CONCURRENCY_SUPPORT_KEY }}" \
+            --support-combination-key "${{ steps.images.outputs.support_key }}" \
             --moonmind-commit "${{ github.sha }}" \
+            --host-image-ref "${{ steps.images.outputs.host }}" \
             --worker-build-ref "${{ vars.OMNIGENT_WORKER_BUILD_REF }}" \
             --worker-topology-ref "${{ vars.OMNIGENT_WORKER_TOPOLOGY_REF }}" \
             --resource-class "${{ vars.OMNIGENT_CONCURRENCY_RESOURCE_CLASS }}" \
             --evidence-dir artifacts/omnigent-concurrency/evidence \
+            --evidence-artifact "omnigent-concurrency-protected-live-${{ github.run_id }}-${{ github.run_attempt }}" \
             --output artifacts/omnigent-concurrency/protected-live-record.json
       - name: Scan the published record for secret-like material
         if: always()

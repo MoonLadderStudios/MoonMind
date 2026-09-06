@@ -21,7 +21,10 @@ control here is about keeping that load bounded and the evidence honest:
 
 Every session is created, driven, harvested, and closed by its own binding, so
 a shared identity between two concurrent runs shows up here as a duplicate
-session id rather than in a deployment.
+session id rather than in a deployment. Closing is a ``finally``: a wave that
+failed part-way through still reclaims every session it opened, because sessions
+left on a shared free route consume the next run's capacity and contaminate the
+level it measures.
 """
 
 from __future__ import annotations
@@ -40,12 +43,15 @@ from moonmind.omnigent.bridge_proxy import (
     BridgePrincipalBinding,
     BridgeSessionCreateRequest,
     BridgeSessionEventRequest,
+    OmnigentBridgeError,
     OmnigentBridgeSessionProxy,
 )
 from moonmind.omnigent.bridge_store import OmnigentBridgeSessionStore
 from moonmind.omnigent.concurrency_qualification import (
     CONCURRENCY_LEVEL_ENV,
     PROTECTED_LIVE_ADMISSION_ENV,
+    PROTECTED_LIVE_MAX_LEVEL,
+    PROTECTED_LIVE_MINIMUM_LEVEL,
     PROTECTED_LIVE_REQUIRED_ENV,
     ConcurrencyQualificationLayer,
     ExecutionOverlapSample,
@@ -61,10 +67,16 @@ pytestmark = [
     pytest.mark.requires_credentials,
 ]
 
-#: The provider-safe ceiling for this route. Release policy may select a lower
-#: level; it may not select a higher one from an environment variable.
-MAX_PROTECTED_LIVE_LEVEL = 4
-DEFAULT_PROTECTED_LIVE_LEVEL = 2
+#: The provider-safe ceiling for this route. Declared once, beside the layer's
+#: allowed levels, so the qualification runner refuses a level this test would
+#: also refuse instead of admitting the layer and failing inside it.
+MAX_PROTECTED_LIVE_LEVEL = PROTECTED_LIVE_MAX_LEVEL
+DEFAULT_PROTECTED_LIVE_LEVEL = PROTECTED_LIVE_MINIMUM_LEVEL
+
+#: How long one reclaim call may take. Reclaim runs after the measured window
+#: has closed, so it is bounded rather than unbounded: a provider that stops
+#: answering must not hold the wave open.
+_RECLAIM_TIMEOUT_SECONDS = 60.0
 
 _SUCCESS_STATUSES = {"completed", "succeeded"}
 _TERMINAL_STATUSES = _SUCCESS_STATUSES | {"failed", "canceled", "timed_out"}
@@ -74,7 +86,7 @@ _PROMPT = "Reply with: MM-3885 protected-live concurrency row complete"
 def _requested_level() -> int:
     raw = os.environ.get(CONCURRENCY_LEVEL_ENV, "").strip()
     level = int(raw) if raw.isdigit() else DEFAULT_PROTECTED_LIVE_LEVEL
-    if level < 2:
+    if level < PROTECTED_LIVE_MINIMUM_LEVEL:
         pytest.fail("a protected-live concurrency row needs at least two executions")
     if level > MAX_PROTECTED_LIVE_LEVEL:
         pytest.fail(
@@ -114,6 +126,39 @@ def _message_event(text: str) -> BridgeSessionEventRequest:
     )
 
 
+async def _reclaim_session(
+    proxy: OmnigentBridgeSessionProxy, session_id: str
+) -> str:
+    """Reclaim one provider session, returning why it could not be, or ``""``.
+
+    Every session this layer opens is reclaimed, including the sessions of a
+    wave that failed part-way through: repeated qualification runs otherwise
+    accumulate provider-side sessions that consume the shared route's capacity
+    and contaminate the next run's measurement. Stopping is the reclaim that
+    always exists; deleting the record is a deployment policy, so a refusal to
+    delete an already-stopped session is reported rather than treated as a
+    leak.
+    """
+
+    try:
+        await asyncio.wait_for(
+            proxy.stop_session(session_id), timeout=_RECLAIM_TIMEOUT_SECONDS
+        )
+    except Exception as exc:  # noqa: BLE001 - every session is offered
+        return f"{session_id}: stop failed ({type(exc).__name__}: {exc})"
+    try:
+        await asyncio.wait_for(
+            proxy.delete_session(session_id), timeout=_RECLAIM_TIMEOUT_SECONDS
+        )
+    except OmnigentBridgeError:
+        # Deletion is gated by bridge policy and by harvest completion. The
+        # session is already stopped, so it holds no provider capacity.
+        return ""
+    except Exception as exc:  # noqa: BLE001 - every session is offered
+        return f"{session_id}: delete failed ({type(exc).__name__}: {exc})"
+    return ""
+
+
 def _event_status(event: dict[str, object]) -> str:
     session = event.get("session")
     if isinstance(session, dict):
@@ -142,6 +187,7 @@ async def test_live_protected_concurrency_row(bridge_store) -> None:
     level = _requested_level()
     origin = time.monotonic()
     windows: dict[str, list[float]] = {}
+    unreclaimed: list[str] = []
     barrier = asyncio.Barrier(level)
 
     async def one_execution(index: int) -> dict[str, object]:
@@ -161,36 +207,57 @@ async def test_live_protected_concurrency_row(bridge_store) -> None:
             idempotency_key=run_ref,
             agent_run_id=f"ar-{run_ref}",
         )
-        created = await proxy.create_session(
-            request=BridgeSessionCreateRequest(
-                title=f"MM-3885 protected-live concurrency {index}",
-                host_type="managed",
-            ),
-            binding=binding,
-        )
+        try:
+            created = await proxy.create_session(
+                request=BridgeSessionCreateRequest(
+                    title=f"MM-3885 protected-live concurrency {index}",
+                    host_type="managed",
+                ),
+                binding=binding,
+            )
+        except BaseException:
+            # An execution that never got a session still has peers parked on
+            # the barrier, and a parked peer is a session not yet reclaimed.
+            await barrier.abort()
+            raise
+        session_id = str(created["id"])
         windows[run_ref] = [time.monotonic() - origin, time.monotonic() - origin]
-        # Hold until every admitted execution has a live session, so the
-        # published peak is observed overlap and not staggered execution.
-        await asyncio.wait_for(barrier.wait(), timeout=180)
-        await proxy.post_event(
-            session_id=created["id"], event=_message_event(_PROMPT)
-        )
-        async for event in client.stream_events(created["id"]):
-            if event.get("type") == "response.completed":
-                break
-            if _event_status(event) in _TERMINAL_STATUSES:
-                break
-        snapshot = await proxy.get_session(created["id"])
-        harvested = await proxy.harvest_session(created["id"])
-        windows[run_ref][1] = time.monotonic() - origin
-        return {
-            "runRef": run_ref,
-            "sessionId": created["id"],
-            "status": str(snapshot.get("status") or "").lower(),
-            "harvested": "resources" in harvested,
-        }
+        # Every path out of here — success, provider failure, a peer that never
+        # reached the barrier — reclaims this session before it returns.
+        try:
+            # Hold until every admitted execution has a live session, so the
+            # published peak is observed overlap and not staggered execution.
+            await asyncio.wait_for(barrier.wait(), timeout=180)
+            await proxy.post_event(
+                session_id=session_id, event=_message_event(_PROMPT)
+            )
+            async for event in client.stream_events(session_id):
+                if event.get("type") == "response.completed":
+                    break
+                if _event_status(event) in _TERMINAL_STATUSES:
+                    break
+            snapshot = await proxy.get_session(session_id)
+            harvested = await proxy.harvest_session(session_id)
+            return {
+                "runRef": run_ref,
+                "sessionId": session_id,
+                "status": str(snapshot.get("status") or "").lower(),
+                "harvested": "resources" in harvested,
+            }
+        except BaseException:
+            await barrier.abort()
+            raise
+        finally:
+            windows[run_ref][1] = time.monotonic() - origin
+            failure = await _reclaim_session(proxy, session_id)
+            if failure:
+                unreclaimed.append(failure)
 
     results = await asyncio.gather(*(one_execution(i) for i in range(level)))
+
+    # A wave that leaves provider sessions behind is not a repeatable
+    # qualification wave, so an unreclaimed session fails the row.
+    assert not unreclaimed, unreclaimed
 
     # Every execution reached a terminal success through its own session.
     assert len({item["sessionId"] for item in results}) == level

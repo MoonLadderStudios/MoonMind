@@ -44,6 +44,7 @@ binds a validated level to the substrate that produced it:
 | --- | --- |
 | `supportCombinationKey` | The exact support combination (harness, images, architecture, materializer, host class, launch policy, realizer, model policy). |
 | `moonmindCommit`, `workerBuildRef` | The MoonMind source and worker build under test. |
+| `hostImageRef` | The digest-pinned exact host image the run actually launched its hosts from. |
 | `providerCapacityPolicyVersion` | The Provider Profile capacity/backpressure policy in force. |
 | `hostCapacityPolicyVersion` | The aggregate host and machine-resource admission policy in force. |
 | `transportPoolPolicyVersion` | The pooled transport policy in force. |
@@ -64,6 +65,32 @@ matrix is the existing index plus this one field. A record naming a combination
 the run did not publish at all is refused; a record naming a combination the run
 published as *not* passing is recorded on no row, because a combination that
 failed advertises no validated peak.
+
+Naming the right combination is necessary but not sufficient.
+`supportCombinationKey` is an opaque digest of the substrate, so it cannot be
+inverted back into the artifacts or the revision that produced a given record,
+and the publisher compares the two things the key does not carry before it
+attaches anything:
+
+* **The revision.** A code-only change leaves the key unchanged, so a record's
+  `moonmindCommit` has to name the manifest's `sourceCommit` (abbreviations on
+  either side are matched by prefix). Otherwise a level observed on an older
+  MoonMind would be advertised for this one.
+* **The exact artifacts.** A record's `hostImageRef` has to be the entry's
+  `hostImageRef`. A manual dispatch can point the qualification job at any
+  digest while a repository variable still names the previous combination, and
+  the rows would otherwise be published under an identity whose host artifacts
+  were never exercised.
+* **Resolvability.** A row whose `evidenceRef` is a workspace-local `file:` URI
+  is refused: that path identifies no workflow artifact and does not survive the
+  qualification runner, so it cannot back a published claim.
+
+The qualification runner closes the same gap from the other side. It refuses to
+run when `--host-image-ref` disagrees with the image the layer will actually
+launch (`MOONMIND_OMNIGENT_CONCURRENCY_HOST_IMAGE`), and the scheduled workflow
+requires a dispatch that overrides `host_image` to supply the
+`support_combination_key` naming it. Both refusals happen *before* the matrix is
+spent.
 
 The same publisher records non-pass combinations as rows with their real status
 and `policyQualified: false` instead of omitting them, so an operator can tell a
@@ -103,7 +130,7 @@ class does not describe.
 | --- | --- | --- | --- |
 | `hermetic` | 1, 2, 4, 8, 16 | Real schemas, planning, realizer, runtime bindings, host leases, session/bridge stores, cleanup authority, and real database constraints, over controlled provider and Docker boundaries. | Gated by required pull-request CI, except the PostgreSQL-backed machine-capacity owner, which is impact-selected `integration_ci`. Its **record** is produced by the scheduled workflow below. |
 | `exact_docker` | 2, 4, 8 | The built MoonMind, Omnigent server, and host artifacts under a real Docker daemon on a declared resource class. | `Provider / Omnigent Concurrency Qualification` (scheduled). |
-| `protected_live` | 2 up to the provider-safe ceiling | The exact eligible credentialless OpenCode Zen route under a bounded pricing/privacy/load policy (`tests/provider/omnigent/test_omnigent_concurrency.py`). | Same workflow, opt-in dispatch only. |
+| `protected_live` | 2 up to the provider-safe ceiling (`PROTECTED_LIVE_MAX_LEVEL`, 4) | The exact eligible credentialless OpenCode Zen route under a bounded pricing/privacy/load policy (`tests/provider/omnigent/test_omnigent_concurrency.py`). Every session it opens is reclaimed in a bounded `finally`, including a wave that failed part-way through: sessions left on a shared free route consume the next run's capacity and contaminate the level it measures. | Same workflow, opt-in dispatch only. |
 
 `hermetic` and `exact_docker` are the **required layers**: a level is validated
 only when *both* carry a passing row at that exact level. A hermetic pass alone
@@ -147,17 +174,45 @@ races two **independent PostgreSQL transactions** for the final slot. Running
 `./tools/test_integration.sh` provides.
 
 The exact-Docker layer launches `N` run-dedicated hosts from the digest-pinned
-image through the production side-effect owners — `DockerOmnigentHostLauncher`
-and `DockerOmnigentHostCleanupService` over `DockerCommandBackend` — using the
-production identity derivations (correlation name, state-volume digest,
-expected Omnigent host id). No host is torn down until every host has been
-observed `running`, so the recorded windows overlap rather than merely abut, and
-the post-run scan is a real `docker inspect` of every container and volume the
-wave owned. Four of its owners — the capacity-admission fence, the control
-plane, the machine-capacity reservations and the provider-lease incremental
-contract — also decide their invariant against real PostgreSQL, so
-`--layer exact_docker` needs the same cluster the hermetic layer does; the
-scheduled job supplies one as a service container.
+image through the production side-effect owners — `DockerOmnigentHostLauncher`,
+`OmnigentHostRegistrationService` and `DockerOmnigentHostCleanupService` over
+`DockerCommandBackend` — using the production identity derivations (correlation
+name, state-volume digest, expected Omnigent host id).
+
+**A live container is not an execution.** A host's observed window opens only
+once the production registration authority returns *that host's* expected
+addressable Omnigent host id from the configured control-plane endpoint, owned
+by this deployment, with the declared harness ready. Without that boundary, `N`
+containers that started and then failed to register — or retried forever — would
+publish a passing row for an N-way path that cannot run anything. No host is
+torn down until every host in its wave has registered, so the recorded windows
+overlap rather than merely abut. A host that cannot register aborts the wave's
+barrier so its peers are released rather than parked until the job's own
+timeout, and every host the wave created is still offered to its cleanup
+authority.
+
+**The level is run twice.** A single wave cannot see image-level growth that
+only appears after teardown and relaunch — accumulating registrations,
+transports, volumes, control latency — so the layer runs `EXACT_DOCKER_WAVES`
+waves at the requested level and gates the row on the `RepeatedWaveReport` for
+`ci-standard-4x8@1`. The published observation carries both waves' samples on
+one timeline.
+
+The post-run scan is a real `docker inspect` of every container and volume the
+wave owned, and **only Docker's own "no such" answer proves absence**. An
+unreachable daemon, an authorization change, or any other failure of the scan
+establishes nothing about the resource, so the entry stays unresolved, the
+reason travels with it, and `zero_leak` cannot report a clean sweep the scan
+never observed.
+
+Four of its owners — the capacity-admission fence, the control plane, the
+machine-capacity reservations and the provider-lease incremental contract — also
+decide their invariant against real PostgreSQL, so `--layer exact_docker` needs
+the same cluster the hermetic layer does; the scheduled job supplies one as a
+service container. Because the layer proves registration, it also needs the
+control-plane endpoint, its token and the expected host owner
+(`EXACT_DOCKER_REQUIRED_ENV`); without them the row is `unavailable` naming what
+was absent, never `failed`.
 
 ## Authority handoffs under concurrency
 
@@ -336,11 +391,28 @@ python tools/run_omnigent_concurrency_qualification.py \
     --layer exact_docker --levels 2,4,8 \
     --support-combination-key "omnigent-support:sha256:..." \
     --moonmind-commit "$GITHUB_SHA" \
+    --host-image-ref "ghcr.io/example/opencode-host@sha256:..." \
     --worker-build-ref moonmind-worker@2026.09 \
     --worker-topology-ref single-replica@1 \
     --resource-class ci-standard-4x8@1 \
+    --evidence-artifact omnigent-concurrency-required-layers-1-1 \
     --output artifacts/omnigent-concurrency/record.json
 ```
+
+`--levels` is bounded by the layer's own declared matrix
+(`ALLOWED_CONCURRENCY_LEVELS`): `1,2,4,8,16` hermetic, `2,4,8` exact-image, and
+`2`-`4` protected-live. This program spends real containers and a shared free
+provider route, so a level with no declared matrix entry — and therefore no
+budget and no bounded-load contract — is refused while it is still an argument,
+not after `--levels 10000` has created ten thousand host specifications on a
+trusted qualification runner.
+
+`--evidence-artifact` and `--evidence-base-ref` name where a published
+observation resolves from once the record leaves the runner. In GitHub Actions
+the base defaults to this run and attempt, so a passing row carries an immutable
+run/artifact reference. Outside a durable publication context the ref is an
+explicit `file:` URI, which the protected publisher refuses — a workspace path
+never reaches the published index.
 
 ### Required repository variables
 
@@ -351,7 +423,8 @@ an empty string, which `argparse` accepts *over* the flag's default.
 
 | Repository variable | Flag | Meaning |
 | --- | --- | --- |
-| `OMNIGENT_CONCURRENCY_SUPPORT_KEY` | `--support-combination-key` | The exact support combination the level is claimed for. |
+| `OMNIGENT_CONCURRENCY_SUPPORT_KEY` | `--support-combination-key` | The exact support combination the level is claimed for. A dispatch that overrides `host_image` must supply the `support_combination_key` input naming it, because the key is a digest and cannot be recomputed from a substituted image. |
+| `OMNIGENT_CONFORMANCE_OPENCODE_HOST_IMAGE` | `--host-image-ref` | The digest-pinned exact host image the rows are earned on. Held to the image the layer actually launches. |
 | `OMNIGENT_WORKER_BUILD_REF` | `--worker-build-ref` | The worker build under test. |
 | `OMNIGENT_WORKER_TOPOLOGY_REF` | `--worker-topology-ref` | The worker replica/task-queue topology and concurrency settings. |
 | `OMNIGENT_CONCURRENCY_RESOURCE_CLASS` | `--resource-class` | The machine class the exact-image rows are filed under. A ref carrying `<cores>x<gib>` dimensions must be one the runner's measured machine satisfies. |
@@ -367,6 +440,10 @@ the job cannot pass until they are set.
 | Layer | Value | Source | Why the layer needs it |
 | --- | --- | --- | --- |
 | exact-image | `MOONMIND_TEST_POSTGRES_URL` | The job's PostgreSQL service container | Four of this layer's owners decide their invariant with real PostgreSQL constraints, and their fixture fails closed without a cluster. |
+| exact-image | `MOONMIND_OMNIGENT_CONCURRENCY_HOST_IMAGE` | The job's resolved digest-pinned image | The exact artifact the hosts are launched from. |
+| exact-image | `MOONMIND_OMNIGENT_HOST_SERVER_URL` | `vars.OMNIGENT_SERVER_URL` | The endpoint the launched hosts are given to register against. |
+| exact-image | `OMNIGENT_SERVER_URL`, `OMNIGENT_API_TOKEN` | `vars` / `secrets` | The control-plane endpoint and token the production registration authority polls for each launched host. |
+| exact-image | `MOONMIND_OMNIGENT_EXPECTED_HOST_OWNER` | `vars.MOONMIND_OMNIGENT_EXPECTED_HOST_OWNER` | The owner a registered host must report; a host owned by something else is not this deployment's execution. |
 | protected-live | `OMNIGENT_ENABLED` | `vars.OMNIGENT_ENABLED` | The owning test refuses to open a session unless the Omnigent gate is on. |
 | protected-live | `OMNIGENT_SERVER_URL` | `vars.OMNIGENT_SERVER_URL` | The server the live sessions are created against. |
 | protected-live | `OMNIGENT_API_TOKEN` | `secrets.OMNIGENT_API_TOKEN` | The bearer token for that server. |
@@ -374,10 +451,11 @@ the job cannot pass until they are set.
 | protected-live | `MOONMIND_OMNIGENT_PROVIDER_PROFILE_ID` | `vars.MOONMIND_OMNIGENT_PROVIDER_PROFILE_ID` | The credentialless Zen route the bounded load is placed on. |
 | protected-live | `MOONMIND_OMNIGENT_PROTECTED_LIVE_CONCURRENCY` | The job, on opt-in dispatch only | Release admission. Its absence is `blocked`, not `unavailable`: refusing to admit is a different operator action from a missing credential. |
 
-The four protected-live variables are `PROTECTED_LIVE_REQUIRED_ENV`. The
-runner's precondition, the owning test and the workflow job all read that one
-tuple — a GitHub `environment:` cannot inject them into the test process, so
-the job passes each one explicitly.
+The four protected-live variables are `PROTECTED_LIVE_REQUIRED_ENV` and the
+five exact-image ones are `EXACT_DOCKER_REQUIRED_ENV`. The runner's
+precondition, the owning test and the workflow job all read those tuples — a
+GitHub `environment:` cannot inject them into the test process, so each job
+passes every name explicitly.
 
 The runner resolves the **whole support identity before it runs any layer**. A
 blank or malformed value fails immediately, naming the flag and the repository
