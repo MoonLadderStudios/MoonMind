@@ -32,6 +32,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import re
 from datetime import UTC, datetime
 from enum import StrEnum
 from pathlib import Path
@@ -459,11 +460,22 @@ class ObservedOverlapEvidence(BaseModel):
         return observed_peak_overlap(self.samples)
 
 
+#: A resource-class ref may name the machine it stands for as
+#: ``<cpuCores>x<memoryGib>`` — ``ci-standard-4x8@1``. When it does, the
+#: declared numbers have to agree with it. A row that names a 4x8 class while
+#: the wave ran on a sixteen-core runner describes substrate that never ran the
+#: level, and the class is the only thing that makes that row's thresholds or a
+#: level exception mean anything.
+_RESOURCE_CLASS_DIMENSIONS = re.compile(r"(?<![0-9A-Za-z])(\d+)x(\d+)(?![0-9A-Za-z])")
+
+
 class MachineResourceClass(BaseModel):
-    """The declared machine the exact-Docker layer ran on.
+    """The machine the exact-Docker layer ran on.
 
     Performance thresholds and any level exception are only meaningful against
-    a named class, so the class travels with the row.
+    a named class, so the class travels with the row. The runner measures
+    ``cpu_cores`` and ``memory_gib`` from the machine it is running on unless a
+    deployment declares them, so a row cannot name substrate that never ran it.
     """
 
     model_config = _MODEL_CONFIG
@@ -471,6 +483,20 @@ class MachineResourceClass(BaseModel):
     resource_class_ref: str = Field(min_length=1, max_length=128)
     cpu_cores: int = Field(ge=1)
     memory_gib: int = Field(ge=1)
+
+    @model_validator(mode="after")
+    def validate_resource_class(self) -> "MachineResourceClass":
+        named = _RESOURCE_CLASS_DIMENSIONS.search(self.resource_class_ref)
+        if named is None:
+            return self
+        cores, memory_gib = int(named.group(1)), int(named.group(2))
+        if (cores, memory_gib) != (self.cpu_cores, self.memory_gib):
+            raise ValueError(
+                f"resource class {self.resource_class_ref!r} names a "
+                f"{cores}-core/{memory_gib}-GiB machine, but the observed "
+                f"machine has {self.cpu_cores} cores and {self.memory_gib} GiB"
+            )
+        return self
 
 
 class ConcurrencyQualificationRow(BaseModel):
@@ -767,6 +793,49 @@ DEFAULT_REPEATED_WAVE_THRESHOLDS = RepeatedWaveThresholds(
     max_transport_pool_peak=32,
 )
 
+#: The exact-image budget for the documented CI machine class. Real containers
+#: on a real daemon are slower than the deterministic substrate, so the control
+#: budget is wider. The per-execution mutation, registration and transport-pool
+#: budgets are identical, because those count control-plane work per execution
+#: and must not grow just because the machine did.
+EXACT_DOCKER_REPEATED_WAVE_THRESHOLDS = RepeatedWaveThresholds(
+    resource_class_ref="ci-standard-4x8@1",
+    max_control_seconds=300.0,
+    max_lease_mutations_per_execution=8,
+    max_registration_requests_per_execution=2,
+    max_transport_pool_peak=32,
+)
+
+#: Every declared budget, keyed by the resource class it binds to. A wave
+#: program resolves its budget from the class it actually ran on, so the
+#: deterministic budget can never be borrowed to pass an exact-image wave and
+#: an exact-image budget can never loosen the deterministic one.
+REPEATED_WAVE_THRESHOLDS: Mapping[str, RepeatedWaveThresholds] = {
+    thresholds.resource_class_ref: thresholds
+    for thresholds in (
+        DEFAULT_REPEATED_WAVE_THRESHOLDS,
+        EXACT_DOCKER_REPEATED_WAVE_THRESHOLDS,
+    )
+}
+
+
+def repeated_wave_thresholds(resource_class_ref: str) -> RepeatedWaveThresholds:
+    """Return the declared repeated-wave budget for one resource class.
+
+    An undeclared class is refused rather than silently given the deterministic
+    budget: thresholds are only meaningful against the machine that ran the
+    wave, so a class nobody budgeted has no verdict to offer.
+    """
+
+    try:
+        return REPEATED_WAVE_THRESHOLDS[resource_class_ref]
+    except KeyError:
+        raise ValueError(
+            "no repeated-wave budget is declared for resource class "
+            f"{resource_class_ref!r}; declared classes: "
+            + ", ".join(sorted(REPEATED_WAVE_THRESHOLDS))
+        ) from None
+
 
 class RepeatedWaveReport(BaseModel):
     """Bounded-growth verdict across repeated waves at one level."""
@@ -987,11 +1056,13 @@ __all__ = [
     "CONCURRENCY_SCENARIO_CATALOG_VERSION",
     "DEFAULT_REPEATED_WAVE_THRESHOLDS",
     "EXACT_DOCKER_LEVELS",
+    "EXACT_DOCKER_REPEATED_WAVE_THRESHOLDS",
     "HERMETIC_LEVELS",
     "MAX_DIAGNOSTIC_ENTRIES",
     "MAX_DIAGNOSTIC_LENGTH",
     "PASSING_ROW_STATUSES",
     "PROTECTED_LIVE_MINIMUM_LEVEL",
+    "REPEATED_WAVE_THRESHOLDS",
     "REQUIRED_QUALIFICATION_LAYERS",
     "CleanupScanEntry",
     "CleanupScanReport",
@@ -1014,6 +1085,7 @@ __all__ = [
     "observed_overlap_evidence_path",
     "observed_peak_overlap",
     "publish_observed_overlap",
+    "repeated_wave_thresholds",
     "requested_concurrency_level",
     "scenario_owners",
     "unowned_scenarios",

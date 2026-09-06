@@ -48,12 +48,25 @@ binds a validated level to the substrate that produced it:
 | `hostCapacityPolicyVersion` | The aggregate host and machine-resource admission policy in force. |
 | `transportPoolPolicyVersion` | The pooled transport policy in force. |
 | `workerTopologyRef` | The worker replica/task-queue topology and concurrency settings. |
-| `resourceClass` | The declared machine (`cpuCores`, `memoryGib`) the exact-image rows ran on. |
+| `resourceClass` | The measured machine (`cpuCores`, `memoryGib`) the exact-image rows ran on. |
 | `scenarioCatalogVersion` | The scenario catalog the evidence was produced against. |
 
 Evidence produced against a different catalog version is refused. The identity
 is carried on `ProtectedExecutionSupportEvidence.concurrency`, and the record
 must name the same `supportCombinationKey` as the row it is filed under.
+
+`resourceClass` is **measured, not defaulted**. The runner reads the CPU
+affinity mask and the physical memory of the machine it is running on, so a row
+cannot claim a machine size that nobody observed. `--cpu-cores` and
+`--memory-gib` are overrides for a deployment that must declare a class it
+cannot measure, never a fallback the CLI supplies on its own.
+
+A `resourceClassRef` may name the machine it stands for as
+`<cpuCores>x<memoryGib>` — `ci-standard-4x8@1`. When it does, the ref and the
+measured machine must agree: a `ci-standard-4x8@1` row produced on a sixteen-core
+runner is refused before the layer runs, rather than published as a row that
+contradicts itself. A ref without such a token (`local-deterministic@1`) carries
+no dimension claim and is not checked.
 
 ## Layers
 
@@ -69,9 +82,12 @@ validates nothing, because the deployed artifacts were never exercised.
 
 The hermetic layer spans three production boundaries, each with its own owner:
 
-- **Authoring** — `N` simultaneous submissions compiled through
-  `compile_execution_plan` behind the canonical plan store, producing `N`
+- **Authoring** — `N` simultaneous submissions compiled through the production
+  `compile_execution_plan` behind `InMemoryExecutionPlanStore`, producing `N`
   immutable plans that each select the generic Omnigent combination.
+  `load_or_compile` idempotency is exercised there; the DB-backed
+  `DbExecutionPlanStore.persist` `IntegrityError` race is owned separately by
+  the plan-store tests, not by this layer.
 - **Dispatch** — `N+2` submissions driven through
   `MoonMindAgentRun._admit_omnigent_capacity_before_execution` against a real
   `ProfileSlotState` ledger and the production `GenericHostCapacityAdmission`,
@@ -217,12 +233,22 @@ one. The configured operator ceiling is never rewritten by this call.
   and profile-owned resources are reported as preserved and are never deleted,
   and one cannot be recorded as "resolved" by this authority.
 - `RepeatedWaveReport` evaluates bounded growth across at least two waves
-  against a `RepeatedWaveThresholds` budget for the declared resource class:
-  observed overlap, control latency, per-lease database mutations, registration
-  request counts, transport pool peak, and residual resources. The checks are
-  both absolute (a slow allocator) and comparative (a leak that stays under
-  budget per wave but grows wave over wave). Provider latency is excluded by
-  construction — `WaveObservation` carries only control-plane timings.
+  against a `RepeatedWaveThresholds` budget for the declared resource class.
+  `repeated_wave_thresholds(resource_class_ref)` resolves that budget from
+  `REPEATED_WAVE_THRESHOLDS`, which declares `local-deterministic@1` for the
+  hermetic layer and `ci-standard-4x8@1` for the exact-image layer. The
+  exact-image control budget is wider because real containers on a real daemon
+  are slower; the per-execution mutation, registration and transport-pool
+  budgets are identical, because those count control-plane work per execution
+  and must not grow just because the machine did. An undeclared class is
+  refused rather than silently given the deterministic budget.
+
+  The budget binds observed overlap, control latency, per-lease database
+  mutations, registration request counts, transport pool peak, and residual
+  resources. The checks are both absolute (a slow allocator) and comparative (a
+  leak that stays under budget per wave but grows wave over wave). Provider
+  latency is excluded by construction — `WaveObservation` carries only
+  control-plane timings.
 - `max_control_seconds` binds on **every** control latency a wave reports —
   wait, launch, registration, the wave total, and cleanup — not only the total.
   A saturated deployment does not slow every phase evenly; a cancellation or
@@ -239,9 +265,36 @@ python tools/run_omnigent_concurrency_qualification.py \
     --layer exact_docker --levels 2,4,8 \
     --support-combination-key "omnigent-support:sha256:..." \
     --moonmind-commit "$GITHUB_SHA" \
+    --worker-build-ref moonmind-worker@2026.09 \
+    --worker-topology-ref single-replica@1 \
     --resource-class ci-standard-4x8@1 \
     --output artifacts/omnigent-concurrency/record.json
 ```
+
+### Required repository variables
+
+The scheduled `Provider / Omnigent Concurrency Qualification` workflow supplies
+the identity arguments from repository variables. **Every one of them must be
+set on the repository or the environment**; an unset GitHub variable expands to
+an empty string, which `argparse` accepts *over* the flag's default.
+
+| Repository variable | Flag | Meaning |
+| --- | --- | --- |
+| `OMNIGENT_CONCURRENCY_SUPPORT_KEY` | `--support-combination-key` | The exact support combination the level is claimed for. |
+| `OMNIGENT_WORKER_BUILD_REF` | `--worker-build-ref` | The worker build under test. |
+| `OMNIGENT_WORKER_TOPOLOGY_REF` | `--worker-topology-ref` | The worker replica/task-queue topology and concurrency settings. |
+| `OMNIGENT_CONCURRENCY_RESOURCE_CLASS` | `--resource-class` | The machine class the exact-image rows are filed under. |
+
+The runner resolves the **whole support identity before it runs any layer**. A
+blank or malformed value fails immediately, naming the flag and the repository
+variable behind it, so a completed exact-image wave — hours of real hosts on a
+real daemon — is never spent and then discarded because the record it would be
+filed under could not be built. `--moonmind-commit` comes from `github.sha`,
+and the policy-version flags default to the in-force policy refs.
+
+A valid invocation always writes its record, including when rows failed,
+`unavailable`, `blocked` or `partial`. The gate is the exit code; the record is
+evidence and survives the gate.
 
 The runner converts each (layer, level) outcome into one row. A missing daemon,
 missing exact image, missing host server endpoint, or missing PostgreSQL

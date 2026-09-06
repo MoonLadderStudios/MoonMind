@@ -52,7 +52,13 @@ from moonmind.omnigent.concurrency_qualification import (
     WaveObservation,
     load_observed_overlap,
     publish_observed_overlap,
+    repeated_wave_thresholds,
 )
+
+#: The class this hermetic layer runs on. The budget is resolved from it rather
+#: than pinned to a constant, so a wave cannot be scored against a machine it
+#: never ran on.
+HERMETIC_RESOURCE_CLASS_REF = "local-deterministic@1"
 
 from moonmind.omnigent.credential_materializers import CredentialRuntimeHandle
 from moonmind.omnigent.harness_platform.execution_plan import (
@@ -1225,9 +1231,11 @@ async def test_repeated_waves_show_bounded_growth() -> None:
             wave.observation(index, time.monotonic() - started)
         )
 
+    # The budget is resolved from the class this wave actually ran on. The
+    # exact-image layer resolves its own; neither can borrow the other's.
     report = RepeatedWaveReport(
         level=level,
-        thresholds=DEFAULT_REPEATED_WAVE_THRESHOLDS,
+        thresholds=repeated_wave_thresholds(HERMETIC_RESOURCE_CLASS_REF),
         waves=tuple(observations),
     )
     assert report.bounded, report.violations
