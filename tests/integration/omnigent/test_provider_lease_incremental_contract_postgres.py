@@ -31,6 +31,7 @@ from typing import Any
 import pytest
 import pytest_asyncio
 from sqlalchemy import select, text
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 from sqlalchemy.orm import sessionmaker
 
@@ -197,16 +198,17 @@ async def _rows(maker) -> list[ProviderProfileSlotLease]:
 
 
 @pytest.mark.asyncio
-async def test_the_migration_versions_existing_rows_and_breaks_id_collisions(
+async def test_the_migration_versions_existing_rows_and_keeps_lease_identity(
     control_plane_postgres_url,
 ) -> None:
-    """Existing rows survive; colliding backfilled lease IDs stay distinct.
+    """Existing rows survive and keep the identity their holders already quote.
 
     Pre-contract rows are unique per ``(runtime_id, workflow_id)``, so two
-    runtime families can hold the same workflow ID. Backfilling ``lease_id``
-    from ``workflow_id`` and then adding a global unique constraint has to
-    resolve that without failing the migration and without merging two leases
-    into one.
+    runtime families can hold the same workflow ID. Uniqueness is therefore
+    runtime-scoped: rewriting the later row's ``lease_id`` would break the
+    handle its holder releases with, so that holder's release would resolve the
+    *other* runtime's row, report a profile conflict, and leave the rewritten
+    row permanently active (MoonLadderStudios/MoonMind#3883).
     """
 
     from alembic.migration import MigrationContext
@@ -255,13 +257,12 @@ async def test_the_migration_versions_existing_rows_and_breaks_id_collisions(
             ).all()
 
         assert len(rows) == 3, "existing rows must survive the migration"
-        # The oldest row keeps the exact identity its holder already quotes.
+        # Both holders keep the exact identity they already quote on release.
         assert rows[0].lease_id == "agent-run-1"
-        # The colliding row is disambiguated instead of merged or dropped.
-        assert rows[1].lease_id.startswith("agent-run-1#")
-        assert rows[1].lease_id != rows[0].lease_id
+        assert rows[1].lease_id == "agent-run-1"
+        assert rows[0].runtime_id != rows[1].runtime_id
         assert rows[2].lease_id == "agent-run-2"
-        assert len({row.lease_id for row in rows}) == 3
+        assert len({(row.runtime_id, row.lease_id) for row in rows}) == 3
 
         # Historical values are versioned, not fabricated.
         assert rows[0].owner_kind == "workflow"
@@ -272,15 +273,34 @@ async def test_the_migration_versions_existing_rows_and_breaks_id_collisions(
         assert all(row.lease_state == DurableLeaseState.HELD.value for row in rows)
 
         async with engine.connect() as conn:
-            constraint = (
+            constrained_columns = (
                 await conn.execute(
                     text(
-                        "SELECT conname FROM pg_constraint "
-                        "WHERE conname = 'uq_provider_slot_lease_lease_id'"
+                        "SELECT array_agg(att.attname ORDER BY att.attname) "
+                        "FROM pg_constraint con "
+                        "JOIN pg_attribute att "
+                        "  ON att.attrelid = con.conrelid "
+                        " AND att.attnum = ANY(con.conkey) "
+                        "WHERE con.conname = 'uq_provider_slot_lease_lease_id'"
                     )
                 )
             ).scalar()
-        assert constraint == "uq_provider_slot_lease_lease_id"
+        assert sorted(constrained_columns or []) == ["lease_id", "runtime_id"]
+
+        # The owning workflow stays an identity for workflow-owned rows only.
+        async with engine.connect() as conn:
+            predicate = (
+                await conn.execute(
+                    text(
+                        "SELECT pg_get_indexdef(indexrelid) FROM pg_index "
+                        "JOIN pg_class ON pg_class.oid = pg_index.indexrelid "
+                        "WHERE relname = 'uq_provider_slot_lease_runtime_workflow'"
+                    )
+                )
+            ).scalar()
+        assert predicate is not None
+        assert "UNIQUE" in predicate
+        assert "WHERE owner_is_workflow" in predicate
     finally:
         async with engine.begin() as conn:
             await conn.execute(
@@ -588,12 +608,20 @@ async def test_a_retained_snapshot_writer_cannot_delete_newer_authority(
 
 
 @pytest.mark.asyncio
-async def test_a_pre_contract_snapshot_without_a_generation_still_replaces(
+async def test_a_pre_contract_snapshot_replaces_only_what_it_restates(
     lease_session_maker,
 ) -> None:
-    """Replay safety: the recorded legacy command keeps its exact semantics."""
+    """An absent writer generation is a zero high-water mark, not a wipe.
+
+    MoonLadderStudios/MoonMind#3883: an Activity payload recorded before this
+    contract carries no ``writer_generation``, so a retried legacy ``save`` that
+    lands after a transition-contract manager granted rows would otherwise
+    execute an unqualified runtime-wide delete and erase authority the ledger
+    had already handed out.
+    """
 
     await _run("grant", [_grant("agent-run-old", fence=2)])
+    await _run("grant", [_grant("agent-run-new", fence=40)])
 
     result = await _run(
         "save",
@@ -607,8 +635,30 @@ async def test_a_pre_contract_snapshot_without_a_generation_still_replaces(
         ],
     )
 
-    assert result == {"saved": 1}
-    assert len(await _rows(lease_session_maker)) == 1
+    assert result == {"saved": 1, "preserved": 1}
+    rows = {row.lease_id: row for row in await _rows(lease_session_maker)}
+    assert set(rows) == {"agent-run-old", "agent-run-new"}
+    # The row the legacy snapshot itself names is still replaced, so the
+    # retained writer keeps its own eviction semantics.
+    assert rows["agent-run-old"].fencing_generation == 2
+    assert rows["agent-run-new"].fencing_generation == 40
+    assert rows["agent-run-new"].lease_state == DurableLeaseState.HELD.value
+
+
+@pytest.mark.asyncio
+async def test_an_empty_pre_contract_snapshot_never_erases_newer_authority(
+    lease_session_maker,
+) -> None:
+    """The worst case: a legacy writer that believes it holds nothing."""
+
+    await _run("grant", [_grant("agent-run-new", fence=40)])
+
+    result = await _run("save", [])
+
+    assert result == {"saved": 0, "preserved": 1}
+    rows = await _rows(lease_session_maker)
+    assert [row.lease_id for row in rows] == ["agent-run-new"]
+    assert rows[0].fencing_generation == 40
 
 
 @pytest.mark.asyncio
@@ -689,6 +739,108 @@ async def test_load_reports_unknown_state_and_identity_conflicts(
         "agent-run-2",
         "agent-run-3",
     ]
+
+
+@pytest.mark.asyncio
+async def test_one_lease_id_in_two_runtimes_releases_independently(
+    lease_session_maker,
+) -> None:
+    """A holder's release resolves its own runtime's row, never a namesake.
+
+    Pre-contract rows backfill ``lease_id`` from ``workflow_id``, so the same
+    lease ID legitimately exists in two runtime families. Resolving a
+    transition without the runtime would hand the later runtime's release the
+    earlier runtime's row, report a profile conflict, and leave the real row
+    permanently active (MoonLadderStudios/MoonMind#3883).
+    """
+
+    activity = _activity()
+    await activity(
+        runtime_id=RUNTIME_ID,
+        leases=[_grant("agent-run-1", fence=1)],
+        action="grant",
+    )
+    await activity(
+        runtime_id="codex_cli",
+        leases=[_grant("agent-run-1", fence=1, profile_id="codex-oauth")],
+        action="grant",
+    )
+
+    released = await activity(
+        runtime_id="codex_cli",
+        leases=[
+            {
+                "lease_id": "agent-run-1",
+                "profile_id": "codex-oauth",
+                "fencing_generation": 1,
+            }
+        ],
+        action="release_one",
+    )
+
+    assert released["outcome"] == LeaseTransitionOutcome.RELEASED.value
+    states = {
+        (row.runtime_id, row.lease_state) for row in await _rows(lease_session_maker)
+    }
+    assert states == {
+        (RUNTIME_ID, DurableLeaseState.HELD.value),
+        ("codex_cli", DurableLeaseState.RELEASED.value),
+    }
+
+
+@pytest.mark.asyncio
+async def test_activity_leases_may_share_one_owning_workflow(
+    lease_session_maker,
+) -> None:
+    """Two Activity-owned Profiles under one workflow is supported concurrency.
+
+    ``OmnigentProviderLeaseCoordinator._acquire_activity_owned`` grants one
+    lease per Provider Profile for a single step, each with its own hashed
+    owner ID, and records the owning workflow only so the manager can verify
+    liveness. Treating that repeated workflow as a durable identity conflict
+    would refuse to restart the runtime manager
+    (MoonLadderStudios/MoonMind#3883).
+    """
+
+    for profile_ref, owner in (
+        (PROFILE_REF, "activity-owner-a"),
+        (OTHER_PROFILE_REF, "activity-owner-b"),
+    ):
+        await _run(
+            "grant",
+            [
+                {
+                    **_grant(owner, fence=1, profile_id=profile_ref),
+                    "workflow_id": "agent-run-1",
+                    "owner_id": owner,
+                    "owner_kind": "activity",
+                    "ownerIsWorkflow": False,
+                }
+            ],
+        )
+
+    loaded = await _run("load")
+
+    assert loaded["conflicts"] == []
+    assert sorted(lease["leaseId"] for lease in loaded["leases"]) == [
+        "activity-owner-a",
+        "activity-owner-b",
+    ]
+
+
+@pytest.mark.asyncio
+async def test_workflow_owned_rows_still_own_their_workflow_identity(
+    lease_session_maker,
+) -> None:
+    """The partial unique index keeps the workflow an identity where it is one."""
+
+    await _run("grant", [_grant("agent-run-1", fence=1)])
+
+    with pytest.raises(IntegrityError):
+        await _run(
+            "grant",
+            [{**_grant("agent-run-2", fence=2), "workflow_id": "agent-run-1"}],
+        )
 
 
 @pytest.mark.asyncio

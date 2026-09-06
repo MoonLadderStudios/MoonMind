@@ -4351,10 +4351,20 @@ class TemporalArtifactActivities:
             }
 
         async def _lease_row(session: Any, lease_id: str) -> Any:
+            """Resolve one lease row inside the runtime that issued it.
+
+            MoonLadderStudios/MoonMind#3883: lease identity is runtime-scoped.
+            A pre-contract row backfills ``lease_id`` from ``workflow_id``, so
+            two runtime families can name the same lease; resolving without the
+            runtime would hand one runtime's transition the other runtime's row
+            and report a permanent identity conflict to its real holder.
+            """
+
             return (
                 await session.execute(
                     select(ProviderProfileSlotLease).where(
-                        ProviderProfileSlotLease.lease_id == lease_id
+                        ProviderProfileSlotLease.runtime_id == runtime_id,
+                        ProviderProfileSlotLease.lease_id == lease_id,
                     )
                 )
             ).scalars().first()
@@ -4471,31 +4481,39 @@ class TemporalArtifactActivities:
                 ]
 
                 # Index disagreement is detected, never silently merged: two
-                # live rows that claim the same workflow or the same owner are
-                # two authorities for one identity.
+                # live rows that claim the same lease owner are two authorities
+                # for one identity, and nothing in the schema forbids it.
+                #
+                # MoonLadderStudios/MoonMind#3883: uniqueness is checked on
+                # lease and owner identity only. The owning workflow is an
+                # identity for a workflow-owned lease — the partial unique index
+                # enforces that — but an Activity-owned step legitimately binds
+                # several Provider Profiles from one runtime, each with its own
+                # owner ID and the same owning workflow recorded for liveness.
+                # Treating that repeat as a durable conflict would refuse to
+                # restart the manager on evidence of supported concurrency.
                 conflicts: list[dict[str, Any]] = []
-                for field_name in ("workflow_id", "owner_id"):
-                    seen: dict[str, Any] = {}
-                    for row in rows:
-                        key = str(getattr(row, field_name, "") or "")
-                        if not key:
-                            continue
-                        previous = seen.get(key)
-                        if previous is None:
-                            seen[key] = row
-                            continue
-                        if str(previous.lease_id or "") == str(row.lease_id or ""):
-                            continue
-                        conflicts.append(
-                            {
-                                "field": field_name,
-                                "value": key,
-                                "leases": [
-                                    _row_identity(previous),
-                                    _row_identity(row),
-                                ],
-                            }
-                        )
+                seen: dict[str, Any] = {}
+                for row in rows:
+                    key = str(getattr(row, "owner_id", "") or "")
+                    if not key:
+                        continue
+                    previous = seen.get(key)
+                    if previous is None:
+                        seen[key] = row
+                        continue
+                    if str(previous.lease_id or "") == str(row.lease_id or ""):
+                        continue
+                    conflicts.append(
+                        {
+                            "field": "owner_id",
+                            "value": key,
+                            "leases": [
+                                _row_identity(previous),
+                                _row_identity(row),
+                            ],
+                        }
+                    )
 
                 leases_data = [
                     {
@@ -4571,31 +4589,59 @@ class TemporalArtifactActivities:
                 # barrier is durable row state, not a patch marker in one
                 # workflow history: rows fenced above the snapshot writer's own
                 # high-water generation are preserved untouched.
+                #
+                # A payload recorded before this contract carries no generation
+                # at all. That is a *zero* high-water mark, not permission to
+                # delete the runtime: every positive-generation row belongs to a
+                # writer this snapshot cannot fence, so only the rows the
+                # snapshot itself re-states are replaced.
+                from sqlalchemy import func as _save_func
+                from sqlalchemy import or_ as _save_or_
+
                 barrier = _int_or_zero(writer_generation)
+                snapshot_lease_ids = set()
+                snapshot_workflow_ids = set()
+                for lease in leases or []:
+                    snapshot_workflow_id = str(lease.get("workflow_id") or "")
+                    if not snapshot_workflow_id or not lease.get("profile_id"):
+                        continue
+                    snapshot_workflow_ids.add(snapshot_workflow_id)
+                    snapshot_lease_ids.add(
+                        str(lease.get("leaseId") or snapshot_workflow_id)
+                    )
+                if barrier > 0:
+                    fenced_out = ProviderProfileSlotLease.fencing_generation <= barrier
+                else:
+                    fenced_out = _save_or_(
+                        ProviderProfileSlotLease.fencing_generation <= 0,
+                        # A pre-contract row can still carry a NULL lease_id;
+                        # coalescing keeps the predicate three-valued-logic
+                        # free so "preserved" and "deleted" stay complements.
+                        _save_func.coalesce(
+                            ProviderProfileSlotLease.lease_id,
+                            ProviderProfileSlotLease.workflow_id,
+                        ).in_(snapshot_lease_ids),
+                        ProviderProfileSlotLease.workflow_id.in_(
+                            snapshot_workflow_ids
+                        ),
+                    )
+                preserved = int(
+                    (
+                        await session.execute(
+                            select(_save_func.count())
+                            .select_from(ProviderProfileSlotLease)
+                            .where(
+                                ProviderProfileSlotLease.runtime_id == runtime_id,
+                                ~fenced_out,
+                            )
+                        )
+                    ).scalar()
+                    or 0
+                )
                 delete_stmt = delete(ProviderProfileSlotLease).where(
                     ProviderProfileSlotLease.runtime_id == runtime_id,
+                    fenced_out,
                 )
-                preserved = 0
-                if barrier > 0:
-                    from sqlalchemy import func as _save_func
-
-                    preserved = int(
-                        (
-                            await session.execute(
-                                select(_save_func.count())
-                                .select_from(ProviderProfileSlotLease)
-                                .where(
-                                    ProviderProfileSlotLease.runtime_id == runtime_id,
-                                    ProviderProfileSlotLease.fencing_generation
-                                    > barrier,
-                                )
-                            )
-                        ).scalar()
-                        or 0
-                    )
-                    delete_stmt = delete_stmt.where(
-                        ProviderProfileSlotLease.fencing_generation <= barrier
-                    )
                 await session.execute(delete_stmt)
                 saved_count = 0
                 for lease in leases or []:
@@ -4651,9 +4697,7 @@ class TemporalArtifactActivities:
                     session.add(new_lease)
                     saved_count += 1
                 await session.commit()
-                if barrier > 0:
-                    return {"saved": saved_count, "preserved": preserved}
-                return {"saved": saved_count}
+                return {"saved": saved_count, "preserved": preserved}
 
             elif action == "remove":
                 workflow_id = leases[0].get("workflow_id") if leases else None

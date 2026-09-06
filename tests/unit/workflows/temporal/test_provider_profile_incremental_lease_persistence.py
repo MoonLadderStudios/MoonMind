@@ -194,6 +194,9 @@ class _Recorder:
             def first(self):
                 return None
 
+            def scalar(self):
+                return 0
+
         return _Result()
 
     def add(self, row):
@@ -259,8 +262,15 @@ async def test_grant_deletes_nothing_and_writes_one_row() -> None:
 
 
 @pytest.mark.asyncio
-async def test_save_still_replaces_the_whole_runtime_snapshot() -> None:
-    """Eviction and verification rely on snapshot semantics to drop stale rows."""
+async def test_save_replaces_only_the_rows_its_snapshot_restates() -> None:
+    """Eviction and verification rely on snapshot semantics to drop stale rows.
+
+    MoonLadderStudios/MoonMind#3883: a payload recorded before the incremental
+    contract carries no ``writer_generation``. That is a zero high-water mark,
+    so the delete is scoped to the rows the snapshot itself re-states plus
+    unfenced rows — never a runtime-wide wipe that could erase a newer writer's
+    authority.
+    """
 
     recorder = await _run_action(
         "save",
@@ -269,8 +279,10 @@ async def test_save_still_replaces_the_whole_runtime_snapshot() -> None:
 
     deletes = _delete_targets(recorder)
     assert len(deletes) == 1
-    assert "workflow_id IN" not in deletes[0]
     assert "runtime_id" in deletes[0]
+    assert "fencing_generation <=" in deletes[0]
+    assert "lease_id IN" in deletes[0] or "coalesce" in deletes[0].lower()
+    assert "workflow_id IN" in deletes[0]
 
 
 @pytest.mark.asyncio
