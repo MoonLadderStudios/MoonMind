@@ -130,8 +130,10 @@ class GenericHostCapacityDecision:
         if self.machine is not None:
             machine = self.machine.as_payload()
             payload["limitingResource"] = machine.pop("limitingResource")
-            # Reservation identities are opaque digests, never metric labels;
-            # they travel in the payload so a retry can name its own allocation.
+            # Reservation identities are opaque digests, never metric labels,
+            # and they stay out of this payload entirely: a retry re-derives
+            # its own allocation id from the lease ref it already holds
+            # (``moonmind/omnigent/realizers/generic_host.py``).
             payload["machine"] = machine
         elif usage is not None:
             payload["limitingResource"] = self.limiting_resource_without_budget
