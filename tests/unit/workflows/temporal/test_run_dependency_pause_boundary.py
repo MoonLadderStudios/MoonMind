@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import asyncio
+import gc
 from contextlib import asynccontextmanager
 from datetime import timedelta
 from uuid import uuid4
@@ -20,6 +21,26 @@ from moonmind.workflows.temporal.workflows.run import (
     MoonMindUserWorkflow,
 )
 from tests.helpers.temporal_visibility import register_deployment_search_attributes
+
+
+@pytest.fixture(autouse=True)
+def _collect_closed_workflows():
+    """Finalize abandoned unsandboxed coroutines outside workflow event loops."""
+    # Open-history replay and hard termination can leave coroutine cycles. Their
+    # dependency-wait finally blocks issue commands; GC in the next workflow
+    # thread would attach those commands to that unrelated workflow history,
+    # including the same test's Replayer. Control collection until both close.
+    was_enabled = gc.isenabled()
+    gc.disable()
+    try:
+        gc.collect()
+        yield
+    finally:
+        try:
+            gc.collect()
+        finally:
+            if was_enabled:
+                gc.enable()
 
 
 class DependencySnapshot:
