@@ -556,8 +556,6 @@ class GenericOmnigentHostRealizer:
                     harness_id=harness_id,
                     latency_seconds=time.monotonic() - first_turn_started,
                 )
-            if result.failure_class is None:
-                result = await self._publish_repository(request, result)
             result = result.model_copy(
                 update={
                     "metadata": {
@@ -570,6 +568,15 @@ class GenericOmnigentHostRealizer:
                     }
                 }
             )
+            # Record the independently verified compute result BEFORE managed
+            # publication (#4016; #3825 outcome-4). The binding's terminal
+            # result is immutable once written, so this write must precede any
+            # publication attempt: a publication failure must not erase
+            # verified saved work, and a failed compute result is never
+            # upgraded by saving (publication runs only for successful
+            # compute). The publication-enriched result below is the
+            # in-memory return value; the durable record stays the compute
+            # truth the retry/resume paths restore without re-driving.
             binding = await self._update_binding(
                 binding,
                 updates={
@@ -578,6 +585,8 @@ class GenericOmnigentHostRealizer:
                     )
                 },
             )
+            if result.failure_class is None:
+                result = await self._publish_repository(request, result)
         except BaseException as exc:
             primary_error = exc
 
@@ -782,8 +791,16 @@ class GenericOmnigentHostRealizer:
                         }
                     }
                 )
-                if result.failure_class is None:
-                    result = await self._publish_repository(request, result)
+                # Record the independently verified compute result BEFORE
+                # managed publication (#4016; #3825 outcome-4). The binding's
+                # terminal result is immutable once written, so this write
+                # must precede any publication attempt: a publication failure
+                # must not erase verified saved work, and a failed compute
+                # result is never upgraded by saving (publication runs only
+                # for successful compute). The publication-enriched result
+                # below is the in-memory return value; the durable record
+                # stays the compute truth a later resume restores without
+                # re-driving.
                 current = await self._update_binding(
                     sink.binding,
                     updates={
@@ -792,6 +809,8 @@ class GenericOmnigentHostRealizer:
                         )
                     },
                 )
+                if result.failure_class is None:
+                    result = await self._publish_repository(request, result)
         except (Exception, asyncio.CancelledError) as exc:
             # Primary boundary captures failures and cancellation for outcome
             # recording; the error is re-raised after cleanup below.

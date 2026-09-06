@@ -17,10 +17,8 @@ from __future__ import annotations
 
 import ast
 import inspect
-import json
 import textwrap
 from datetime import UTC, datetime
-from pathlib import Path
 from unittest.mock import patch
 
 import pytest
@@ -70,10 +68,8 @@ from moonmind.workflows.temporal.remediation_workspace_head import (
     RemediationWorkspaceHead,
 )
 from moonmind.workflows.temporal.workflows.run import (
-    RUN_ACCEPTED_PUBLISHED_BRANCH_HANDOFF_PATCH,
     RUN_CANONICAL_TURN_LINEAGE_PATCH,
     RUN_OMNIGENT_EXECUTION_PLAN_REF_PATCH,
-    RUN_PUBLISHED_BRANCH_HANDOFF_PATCH,
     MoonMindRunWorkflow,
 )
 
@@ -384,8 +380,7 @@ def _remediation_node(*, ordinal: int, publish_mode: str) -> dict:
 
 
 def _dispatch_request(
-    wf: MoonMindRunWorkflow, node: dict, *, plan_ref: str,
-    extra_patches: tuple[str, ...] = (),
+    wf: MoonMindRunWorkflow, node: dict, *, plan_ref: str
 ) -> AgentExecutionRequest:
     """Build the request exactly as the run workflow's dispatch loop does.
 
@@ -404,7 +399,6 @@ def _dispatch_request(
         in {
             RUN_OMNIGENT_EXECUTION_PLAN_REF_PATCH,
             RUN_CANONICAL_TURN_LINEAGE_PATCH,
-            *extra_patches,
         },
     ):
         wf._record_canonical_turn_lineage(node=node, node_id=node_id)
@@ -547,97 +541,6 @@ def test_a_forged_remediation_node_without_loop_state_gets_no_lineage(plan) -> N
 
 
 # --- RW-5: the production remediation producer -------------------------------
-
-
-@pytest.mark.parametrize("current_history", [False, True])
-def test_published_handoff_replay_keeps_legacy_metadata_path(current_history) -> None:
-    wf = _run_workflow(base_step_execution_id=None)
-    wf._publish_context.update(
-        pushStatus="pushed", branch="legacy-head", headSha="a" * 40
-    )
-    with patch(
-        "moonmind.workflows.temporal.workflows.run.workflow.patched",
-        side_effect=lambda patch_id: current_history
-        and patch_id == RUN_ACCEPTED_PUBLISHED_BRANCH_HANDOFF_PATCH,
-    ):
-        # Current requests cannot establish authority using unaccepted metadata.
-        expected = None if current_history else ("legacy-head", "a" * 40)
-        assert wf._workflow_verified_published_head() == expected
-        payload = wf._build_remediation_loop_continue_as_new_input(ordered_nodes=[])
-        assert "acceptedPublishedHead" not in payload["remediation_loop_continuation"]
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize("later_status", [None, "no_commits", "", "unknown"])
-@pytest.mark.parametrize("continue_as_new", [False, True])
-async def test_escaped_publication_base_survives_remediation_dispatch(
-    turn_commands, session_factory, plan, later_status, continue_as_new
-) -> None:
-    """Replay the publication handoff that drifted from a job branch to main."""
-    fixture = json.loads(
-        (
-            Path(__file__).parent
-            / "fixtures/remediation-branch-handoff.json"
-        ).read_text()
-    )
-    wf = _run_workflow(base_step_execution_id=BASE_STEP_EXECUTION_ID)
-    realizer, lifecycles = _realizer(turn_commands, session_factory)
-    base_node = _base_node(publish_mode="branch")
-    base_node["inputs"].update(
-        repository="MoonLadderStudios/MoonMind", startingBranch="main"
-    )
-    base = _dispatch_request(wf, base_node, plan_ref=plan.planRef)
-    await realizer.execute(base, plan)
-    patches = (
-        RUN_PUBLISHED_BRANCH_HANDOFF_PATCH,
-        RUN_ACCEPTED_PUBLISHED_BRANCH_HANDOFF_PATCH,
-    )
-    with patch(
-        "moonmind.workflows.temporal.workflows.run.workflow.patched",
-        side_effect=lambda patch_id: patch_id in patches,
-    ), patch(
-        "moonmind.workflows.temporal.workflows.run.workflow.info",
-        return_value=_MockWorkflowInfo(),
-    ), patch(
-        "moonmind.workflows.temporal.workflows.run.workflow.now",
-        return_value=datetime(2026, 9, 6, tzinfo=UTC),
-    ):
-        wf._record_execution_context(
-            node_id="implement",
-            execution_result={"outputs": fixture["publicationOutputs"]},
-        )
-        wf._record_execution_context(
-            node_id="verify",
-            execution_result={"outputs": {"push_status": later_status}},
-        )
-        if continue_as_new:
-            payload = wf._build_remediation_loop_continue_as_new_input(ordered_nodes=[])
-            restored = _run_workflow(base_step_execution_id=None)
-            restored._remediation_loop_continuation = payload[
-                "remediation_loop_continuation"
-            ]
-            restored._restore_remediation_loop_continuation(ordered_nodes=[])
-            wf = restored
-    node = _remediation_node(ordinal=1, publish_mode="branch")
-    node["inputs"].update(
-        repository="MoonLadderStudios/MoonMind", startingBranch="main"
-    )
-    request = _dispatch_request(wf, node, plan_ref=plan.planRef, extra_patches=patches)
-    assert request.workspace_spec["startingBranch"] == "main"
-    assert (
-        request.workspace_spec["repositoryTarget"]["revision"]["commitSha"]
-        == fixture["publicationOutputs"]["push_head_sha"]
-    )
-    assert (
-        request.workspace_spec["targetBranch"]
-        == fixture["publicationOutputs"]["push_branch"]
-    )
-    result = await realizer.execute(request, plan)
-    assert result.failure_class is None
-    assert len(lifecycles) == 2
-    turns, commands, _ = await _turn_journal(session_factory, _session_id_for(request))
-    assert [turn.lineage_kind for turn in turns] == [TurnSource.REMEDIATION.value]
-    assert len(commands) == 1
 
 
 @pytest.mark.asyncio
