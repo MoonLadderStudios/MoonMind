@@ -79,43 +79,24 @@ def generic_host_lease_ref(
 
 
 def _record_machine_capacity(decision: Any) -> None:
-    """Publish the identity-free machine-capacity view for one admission.
+    """Publish the identity-free machine-capacity view for one host admission.
 
     MoonLadderStudios/MoonMind#3881 remaining implementation 8. This is the
     point where safe utilization, the configured ceilings and the limiting
-    resource are all established at once. Telemetry is never authority, so it
-    is recorded through the failure-tolerant helper.
+    resource are all established at once. The emission itself is shared with
+    every other admission boundary, so a host refusal and a container-job
+    refusal report the same vocabulary; this adapter only supplies the
+    host-count layer as the fallback when no machine verdict was reached.
     """
 
-    from moonmind.omnigent.control_plane import metrics as control_plane_metrics
+    from moonmind.capacity import record_machine_capacity_observation
 
-    machine = getattr(decision, "machine", None)
-    usage = getattr(decision, "machine_usage", None) or (
-        machine.usage if machine is not None else None
-    )
-    if machine is None and usage is None:
-        return
-    health = "healthy"
-    if usage is not None and usage.reconciliation_blocked:
-        health = "unprovable"
-    elif usage is not None and usage.reconciliation_faults:
-        health = "faulted"
-    control_plane_metrics.record_safely(
-        control_plane_metrics.record_machine_capacity,
-        utilization_percent=(
-            machine.utilization_percent if machine is not None else None
+    record_machine_capacity_observation(
+        machine=getattr(decision, "machine", None),
+        usage=getattr(decision, "machine_usage", None),
+        fallback_limiting_resource=(
+            decision.limiting_resource_without_budget or decision.limiting_layer
         ),
-        ceilings=(machine.budget.as_payload() if machine is not None else None),
-        limiting_resource=(
-            machine.limiting_resource
-            if machine is not None
-            else decision.limiting_resource_without_budget
-        )
-        or decision.limiting_layer,
-        oldest_waiter_age_seconds=(
-            usage.oldest_waiter_age_seconds if usage is not None else None
-        ),
-        reconciliation_health=health,
     )
 
 

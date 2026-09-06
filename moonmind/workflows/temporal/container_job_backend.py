@@ -48,10 +48,12 @@ from moonmind.capacity import (
     OwnedContainerInventory,
     ReleaseEvidence,
     ReservationRequest,
+    ResourceAdmissionDecision,
     ResourceDemand,
     evaluate_resource_admission,
     machine_budget_from_runner,
     probe_owned_containers,
+    record_machine_capacity_observation,
 )
 from moonmind.config.container_backend_settings import (
     ContainerBackendReadinessError,
@@ -840,7 +842,7 @@ class DockerContainerJobBackend:
             budget, memory_mib=min(budget.memory_mib, int(configured))
         )
 
-    async def _owned_inventory(self, *, exclude: str) -> OwnedContainerInventory:
+    async def _owned_inventory(self) -> OwnedContainerInventory:
         """Return every running MoonMind-owned container on this backend.
 
         MoonLadderStudios/MoonMind#3881 (FINDING-1): reconciliation releases the
@@ -848,7 +850,8 @@ class DockerContainerJobBackend:
         so a container-job-label-only enumeration would release the accounting
         of every live generic Omnigent host on the same daemon. The canonical
         owned inventory in ``moonmind.capacity.docker_inventory`` is the one
-        answer both this path and the janitor use.
+        answer both this path and the janitor use, and it is handed on
+        unfiltered so it keeps speaking for every launch class it enumerated.
 
         Only running containers are reported: a created-but-unstarted container
         consumes no CPU, memory or processes. Foreign containers are never in
@@ -862,16 +865,7 @@ class DockerContainerJobBackend:
                 ContainerJobFailureClass.INFRASTRUCTURE,
                 "owned container inventory is unavailable",
             )
-        # This job's own container may already exist from a prior attempt; its
-        # demand is accounted by its own reservation, not twice.
-        return dataclasses.replace(
-            inventory,
-            containers={
-                ref: owned
-                for ref, owned in inventory.containers.items()
-                if ref != exclude
-            },
-        )
+        return inventory
 
     def _machine_reservation(
         self, request: ContainerJobActivityRequest, *, container_name: str | None = None
@@ -909,13 +903,17 @@ class DockerContainerJobBackend:
         """
 
         budget = await self._machine_budget()
-        inventory = await self._owned_inventory(exclude=container_name)
+        inventory = await self._owned_inventory()
         reservation = self._machine_reservation(request, container_name=container_name)
         if self._machine_capacity is None:
             # No durable ledger is wired: the ceiling is still enforced, but
-            # only against directly observed running containers.
+            # only against directly observed running containers. This job's own
+            # container may already be running from a prior attempt, and its
+            # demand is this request's own, so it is summed once rather than
+            # twice. The exclusion narrows the view's scope with it, so a
+            # filtered inventory can never be mistaken for a full enumeration.
             usage = MachineUsage()
-            for owned in inventory.containers.values():
+            for owned in inventory.excluding(container_name).containers.values():
                 demand = owned.demand
                 usage = MachineUsage(
                     reserved_cpu_millis=usage.reserved_cpu_millis + demand.cpu_millis,
@@ -923,30 +921,52 @@ class DockerContainerJobBackend:
                     reserved_processes=usage.reserved_processes + demand.processes,
                 )
             decision = evaluate_resource_admission(
-                demand=reservation.demand, budget=budget, usage=usage
+                demand=reservation.demand,
+                budget=budget,
+                usage=usage,
+                workload_class=WORKLOAD_CLASS_CONTAINER_JOB,
             )
+            self._record_machine_capacity(decision)
             if not decision.admitted:
                 raise ContainerJobBackendError(
                     ContainerJobFailureClass.RESOURCE_LIMIT_EXCEEDED,
-                    "container-job active memory budget is exhausted; retry after "
-                    "another container job finishes or request less memory",
+                    f"container-job machine admission refused: {decision.reason}",
                 )
             return None
         # An owned live container missing its accounting record is a
         # reconciliation fault, not free capacity, so adopt it before counting.
+        # The inventory is passed whole: reconcile skips a row whose container
+        # is live and skips adopting a ref an accounted row already names, so
+        # this job's own running container reconciles with the reservation it
+        # already holds instead of being released as a vanished consumer.
         await self._machine_capacity.reconcile(
             backend_ref=self._backend_ref, inventory=inventory
         )
         outcome = await self._machine_capacity.reserve(
             request=reservation, budget=budget
         )
+        self._record_machine_capacity(outcome.decision)
         if not outcome.admitted:
             raise ContainerJobBackendError(
                 ContainerJobFailureClass.RESOURCE_LIMIT_EXCEEDED,
-                "container-job active memory budget is exhausted; retry after "
-                "another container job finishes or request less memory",
+                "container-job machine admission refused: "
+                f"{outcome.decision.reason}",
             )
         return reservation
+
+    @staticmethod
+    def _record_machine_capacity(decision: ResourceAdmissionDecision) -> None:
+        """Publish the identity-free machine-capacity view for this admission.
+
+        MoonLadderStudios/MoonMind#3881 remaining implementation 8: the
+        container-job boundary is an enforcing admission point, so the
+        utilization, ceilings, limiting resource, oldest-waiter age and
+        reconciliation health it established must be observable here too.
+        Telemetry is never authority; the shared emitter swallows its own
+        failures.
+        """
+
+        record_machine_capacity_observation(machine=decision)
 
     @staticmethod
     def _reject_forbidden_launch_args(

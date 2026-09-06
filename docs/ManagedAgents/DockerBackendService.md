@@ -755,7 +755,7 @@ explicitly:
 | `MOONMIND_MACHINE_MEMORY_MIB` | Explicit memory ceiling. |
 | `MOONMIND_MACHINE_PROCESSES` | Explicit machine-wide process ceiling. Docker reports no such total, so the default derives it from CPU count. |
 | `MOONMIND_MACHINE_TEMPORARY_STORAGE_MIB` | Explicit temporary-storage ceiling. Defaults to the memory total because MoonMind temporary storage is RAM-backed tmpfs. |
-| `MOONMIND_MACHINE_MAX_CONCURRENT_INITIALIZING` | How many managed launches may be initializing at once. |
+| `MOONMIND_MACHINE_MAX_CONCURRENT_INITIALIZING` | How many *cold host launches* may be initializing at once. Container jobs are exempt: see the permit scope below. |
 | `MOONMIND_MACHINE_PRELAUNCH_TTL_SECONDS` | How long a prelaunch reservation may be held before it is reclaimable as proven-unused. |
 | `MOONMIND_CONTAINER_BACKEND_MAX_ACTIVE_MEMORY_MIB` | Lowers this deployment's memory ceiling for the container-job path specifically. It is clamped to the utilization share above, so it can only lower the ceiling — never raise it past the documented headroom. |
 
@@ -773,10 +773,38 @@ exists, and it is released only on observed evidence that the consumer is gone.
 An Activity retry of the same job reconciles with the reservation it already
 holds rather than taking a second one.
 
+#### Permit scope: which launch classes the initialization permit bounds
+
+The concurrent-initialization permit and the resource ceilings answer different
+questions, and only the ceilings apply to every reserving class. The permit
+bounds *unserialized cold launches*: a generic Omnigent host holds its
+`prelaunch` reservation across an image pull, a container create/start and
+registration polling, and several of those can be in flight at once.
+
+A container job is exempt. Its image is already resolved and its container
+already created when it reserves, its `prelaunch` window is one `docker start`,
+and the backend-scoped OS advisory lock above already admits one container-job
+start at a time per backend. Charging it a permit would not protect the machine
+— the resource ceilings do that — it would only let a slow cold host launch
+refuse every container job on the daemon for minutes.
+
+The scope is a per-class policy in one registry
+(`COVERED_WORKLOAD_CLASS_POLICY` in `moonmind.capacity.machine_reservations`),
+not a caller-supplied flag, and it is restrictive by default: a launch class the
+registry does not classify holds a permit. `MOONMIND_MACHINE_MAX_CONCURRENT_INITIALIZING`
+therefore tunes cold host launches; lower it to smooth image-pull contention,
+and use the resource ceilings to bound container jobs.
+
 When admitting a job would exceed the budget, the job fails before start with
-`resource_limit_exceeded` and actionable retry guidance. An unbounded or
-unobservable active workload fails closed: an unreadable daemon or an
-unreadable owned-container inventory is `infrastructure`, never free capacity.
+`resource_limit_exceeded`, naming **the resource that actually refused it** —
+the decision's own `missing_condition` and current utilization, never a fixed
+guess at which ceiling was hit. The same admission emits the
+`omnigent_machine_capacity_*` observation on both the admitted and the refused
+outcome, so the limiting resource, safe utilization, configured ceilings,
+oldest-waiter age and reconciliation health are recoverable from telemetry as
+well as from the error. An unbounded or unobservable active workload fails
+closed: an unreadable daemon or an unreadable owned-container inventory is
+`infrastructure`, never free capacity.
 
 Reconciliation runs in the existing janitor, not a second coordinator. It
 reclaims reservations that provably never launched, keeps accounting for live
@@ -786,10 +814,21 @@ accounting for an observed one), and blocks new admission while the backend
 cannot be established. Only MoonMind's own owner labels are queried, so a
 foreign container is never inspected, adopted or removed.
 
+One live container is accounted exactly once. When the reservation that owns an
+adopted container next reserves, it takes that accounting over and the adopted
+row is released — never the other way round, and never while the reservation
+itself accounts only retained storage. Handing the accounting back to its real
+owner is the only release an adoption ever gets from a launch path; proving the
+container is gone remains reconciliation's job.
+
 Releasing accounting requires a **complete** enumeration. Absence from an
 inventory that never queried a launch class is not evidence that the class's
 consumers are gone, so a partial enumeration may add accounting but never
-remove it.
+remove it. That is structural rather than conventional: an inventory view that
+drops a running container drops the enumerated scope with it
+(`OwnedContainerInventory.excluding`), so a filtered view can never report
+complete coverage and can never be read as proof that the container it omitted
+vanished.
 
 Local image builds use separate deployment policy. Their Dockerfile, context,
 target, arguments, network access, timeout, output limit, and validation command

@@ -39,6 +39,7 @@ from typing import Any, Mapping
 
 from moonmind.capacity import (
     LIMITING_RESOURCE_RECONCILIATION,
+    WORKLOAD_CLASS_GENERIC_HOST,
     MachineCapacityLedger,
     MachineResourceBudget,
     MachineUsage,
@@ -405,7 +406,10 @@ class GenericHostCapacityAdmission:
                 from moonmind.capacity import evaluate_resource_admission
 
                 machine = evaluate_resource_admission(
-                    demand=demand, budget=budget, usage=usage
+                    demand=demand,
+                    budget=budget,
+                    usage=usage,
+                    workload_class=WORKLOAD_CLASS_GENERIC_HOST,
                 )
         return self._verdict(
             active_hosts=active_hosts,
