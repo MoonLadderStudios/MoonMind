@@ -28,6 +28,7 @@ from moonmind.integrations.jira.tool import JiraToolService
 from moonmind.workflows.adapters.github_service import GitHubService
 from moonmind.workflows.skills.tool_plan_contracts import ToolResult
 from moonmind.workflows.temporal.github_issue_search import (
+    check_prerequisites,
     is_complete_open_issue,
     resolve_issue,
 )
@@ -4467,14 +4468,25 @@ async def load_github_issue_preset_brief(
     """Load a compact GitHub issue preset brief through trusted GitHub data."""
 
     search_evidence: dict[str, Any] = {}
+
+    async def blockers_for_issue(issue: Mapping[str, Any]) -> list[dict[str, Any]]:
+        return await _resolved_github_blockers(
+            issue,
+            repository=repository,
+            github_service=github_service_factory(),
+        )
+
     if "issueSearch" in inputs:
         repository = _string(inputs.get("repository"))
-        issue_number, search_evidence = await resolve_issue(
-            repository=repository,
-            query=_string(inputs.get("issueSearch")),
-            github_service=github_service_factory(),
-            blockers_from_issue=_github_blockers_from_issue,
-        )
+        try:
+            issue_number, search_evidence = await resolve_issue(
+                repository=repository,
+                query=_string(inputs.get("issueSearch")),
+                github_service=github_service_factory(),
+                blockers_from_issue=blockers_for_issue,
+            )
+        except ValueError as exc:
+            return ToolResult(status="FAILED", outputs={"error": str(exc)})
         if issue_number is None:
             return ToolResult(
                 status="FAILED",
@@ -4496,13 +4508,18 @@ async def load_github_issue_preset_brief(
                 "issueNumber": issue_number,
             },
         )
+    try:
+        selected_blockers = (
+            await blockers_for_issue(_github_issue_payload(issue_data, repository))
+            if search_evidence and not _string(inputs.get("issueSearch"))
+            else []
+        )
+    except ValueError as exc:
+        return ToolResult(status="FAILED", outputs={"error": str(exc)})
     if search_evidence and (
         not is_complete_open_issue(issue_data, repository)
         or issue_data["number"] != issue_number
-        or (
-            not _string(inputs.get("issueSearch"))
-            and _github_blockers_from_issue(_github_issue_payload(issue_data, repository))
-        )
+        or (not _string(inputs.get("issueSearch")) and selected_blockers)
     ):
         return ToolResult(
             status="FAILED",
@@ -4557,6 +4574,20 @@ def _github_blockers_from_issue(issue: Mapping[str, Any]) -> list[dict[str, Any]
     return blockers
 
 
+async def _resolved_github_blockers(
+    issue: Mapping[str, Any],
+    *,
+    repository: str,
+    github_service: GitHubService,
+) -> list[dict[str, Any]]:
+    blockers = _github_blockers_from_issue(issue)
+    return blockers or await check_prerequisites(
+        issue=issue,
+        repository=repository,
+        github_service=github_service,
+    )
+
+
 async def check_github_issue_blockers(
     inputs: Mapping[str, Any],
     _context: Mapping[str, Any] | None = None,
@@ -4587,10 +4618,30 @@ async def check_github_issue_blockers(
     if issue_data is None:
         return ToolResult(
             status="FAILED",
-            outputs={"issueRef": issue_ref, "decision": "blocked", "summary": error or "GitHub blocker check failed.", **assessment_output},
+            outputs={
+                "issueRef": issue_ref,
+                "decision": "blocked",
+                "summary": error or "GitHub blocker check failed.",
+                **assessment_output,
+            },
         )
     issue = _github_issue_payload(issue_data, repository)
-    blockers = _github_blockers_from_issue(issue)
+    try:
+        blockers = await _resolved_github_blockers(
+            issue,
+            repository=repository,
+            github_service=github_service_factory(),
+        )
+    except ValueError as exc:
+        return ToolResult(
+            status="FAILED",
+            outputs={
+                "issueRef": issue_ref,
+                "decision": "blocked",
+                "summary": str(exc),
+                **assessment_output,
+            },
+        )
     if blockers:
         return ToolResult(
             status="COMPLETED",
