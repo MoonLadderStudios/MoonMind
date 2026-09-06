@@ -45,8 +45,7 @@ class OmnigentWorkspacePublicationService:
 
     def __init__(self, workspace_root: str | Path | None = None) -> None:
         self._workspace_root = Path(
-            workspace_root
-            or os.getenv("WORKFLOW_WORKSPACE_ROOT", "/work/agent_jobs")
+            workspace_root or os.getenv("WORKFLOW_WORKSPACE_ROOT", "/work/agent_jobs")
         ).resolve()
 
     @staticmethod
@@ -126,6 +125,7 @@ class OmnigentWorkspacePublicationService:
         base_branch: str | None,
         repository: str,
         github_token: str | None,
+        accepted_published_head: Mapping[str, Any] | None = None,
     ) -> dict[str, Any]:
         normalized_mode = str(publish_mode or "none").strip().lower()
         if normalized_mode not in {"branch", "pr"}:
@@ -209,11 +209,11 @@ class OmnigentWorkspacePublicationService:
                 returncode=code,
             )
 
+        # Remediation workspaces may be single-branch clones of the candidate.
+        # Materialize the authored comparison ref through the same repository
+        # credential before the publisher measures or mutates that candidate.
         normalized_base = str(base_branch or "main").strip() or "main"
-        # Candidate-only clones and restored checkpoints need not carry the
-        # authored base's remote-tracking ref. Fetch that exact authority with
-        # the publication credential before measuring or publishing commits;
-        # the repository's narrow fetch refspec must not select another base.
+        await run_command(["git", "check-ref-format", "--branch", normalized_base])
         await run_command(
             [
                 "git",
@@ -240,43 +240,55 @@ class OmnigentWorkspacePublicationService:
         if published is None:
             return {"push_status": "skipped"}
         if published.status == "skipped":
-            return await self._verified_no_commit_publication(
+            result = await self._verified_no_commit_publication(
                 run_command=run_command,
                 base_branch=(
                     str(published.base_branch or base_branch or "main").strip()
                     or "main"
                 ),
             )
-        if (
-            published.status != "published"
-            or not published.branch_pushed
-            or not published.remote_verified
-            or not published.head_sha
-            or not published.branch_name
-            or not published.base_branch
-            or not published.commits_ahead_of_base
-        ):
-            raise HarnessPlatformError(
-                "repository publication did not produce authoritative remote evidence",
-                code="OMNIGENT_REPOSITORY_PUBLICATION_UNVERIFIED",
-            )
-        result: dict[str, Any] = {
-            "push_status": "pushed",
-            "push_branch": published.branch_name,
-            "push_base_branch": published.base_branch,
-            "push_head_sha": published.head_sha,
-            "push_commit_count": published.commits_ahead_of_base,
-            "remote_verified": True,
-            "pushRef": (
-                f"git://{str(repository or 'repository').strip()}"
-                f"/refs/heads/{published.branch_name}@{published.head_sha}"
-            ),
-        }
-        if normalized_mode == "pr" and repository and token:
+        else:
+            if (
+                published.status != "published"
+                or not published.branch_pushed
+                or not published.remote_verified
+                or not published.head_sha
+                or not published.branch_name
+                or not published.base_branch
+                or not published.commits_ahead_of_base
+            ):
+                raise HarnessPlatformError(
+                    "repository publication did not produce authoritative remote evidence",
+                    code="OMNIGENT_REPOSITORY_PUBLICATION_UNVERIFIED",
+                )
+            result = {
+                "push_status": "pushed",
+                "push_branch": published.branch_name,
+                "push_base_branch": published.base_branch,
+                "push_head_sha": published.head_sha,
+                "push_commit_count": published.commits_ahead_of_base,
+                "remote_verified": True,
+                "pushRef": (
+                    f"git://{str(repository or 'repository').strip()}"
+                    f"/refs/heads/{published.branch_name}@{published.head_sha}"
+                ),
+            }
+        # A shared authored base is not a candidate owned by this workflow.
+        # Only the atomic head accepted by the prior publication boundary can
+        # authorize discovery when this step itself published no commits.
+        candidate_owned = result["push_status"] == "pushed" or (
+            isinstance(accepted_published_head, Mapping)
+            and accepted_published_head.get("workflowId") == current_workflow_id
+            and accepted_published_head.get("repository") == repository
+            and accepted_published_head.get("branch") == result["push_branch"]
+            and accepted_published_head.get("headSha") == result["push_head_sha"]
+        )
+        if normalized_mode == "pr" and repository and token and candidate_owned:
             pull_request = await GitHubService().resolve_pull_request_selector(
                 repo=str(repository).strip(),
-                selector=published.branch_name,
+                selector=result["push_branch"],
                 github_token=token,
+                expected_head_sha=result["push_head_sha"],
             )
             if pull_request.resolved and pull_request.pr_url:
                 result["pull_request_url"] = pull_request.pr_url
@@ -312,6 +324,7 @@ class OmnigentWorkspacePublicationService:
             base_branch=authored_starting_branch(request),
             repository=repository,
             github_token=str(github_credential.token or "").strip() or None,
+            accepted_published_head=parameters.get("acceptedPublishedHead"),
         )
 
 

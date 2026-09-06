@@ -614,6 +614,7 @@ RUN_DURABLE_PUBLISH_CONTEXT_MERGE_HANDOFF_PATCH = (
 )
 RUN_DIRECT_TOOL_REPORT_OUTPUTS_PATCH = "run-direct-tool-report-outputs-v1"
 RUN_ASSESSMENT_PARAMETER_INJECTION_PATCH = "run-assessment-parameter-injection-v1"
+RUN_ASSESSMENT_CONSUMER_HANDOFF_PATCH = "run-assessment-consumer-handoff-v1"
 RUN_ASSESSMENT_ATTACHMENT_HANDOFF_PATCH = "run-assessment-attachment-handoff-v1"
 RUN_ISSUE_BRIEF_ATTACHMENT_HANDOFF_PATCH = "run-issue-brief-attachment-handoff-v1"
 RUN_MOONSPEC_VERIFY_ATTACHMENT_HANDOFF_PATCH = (
@@ -962,6 +963,11 @@ RUN_OMNIGENT_PUBLICATION_CHECKPOINT_RESTORE_PATCH = (
 # histories retain their recorded agent-only handoff commands.
 RUN_ISSUE_IMPLEMENT_PR_HANDOFF_AUTHORITY_PATCH = (
     "run-issue-implement-pr-handoff-authority-v1"
+)
+# Carry only the atomic, accepted publication head into a downstream publisher.
+# Existing histories retain requests without this optional no-commit authority.
+RUN_ACCEPTED_PUBLICATION_HEAD_HANDOFF_PATCH = (
+    "run-accepted-publication-head-handoff-v1"
 )
 # External runtimes create a fresh sandbox only after their AgentRun starts, so
 # they cannot satisfy a pre-execution archive checkpoint. Continue from the
@@ -1589,6 +1595,7 @@ class MoonMindRunWorkflow:
         # MM-880: compact reference to the versioned ResiliencePolicy envelope
         # compiled for this run, attached before step execution begins.
         self._resilience_policy_ref: Optional[dict[str, Any]] = None
+        self._resilience_policy_run_id: str | None = None
         # MM-880: provider profile id that governed the run-level policy, plus a
         # per-step / per-profile policy cache. Steps whose resolved provider
         # profile differs from the run-level one reference a policy compiled with
@@ -4117,7 +4124,7 @@ class MoonMindRunWorkflow:
         return materialize_attempt_nodes(
             spec=spec,
             workflow_id=info.workflow_id,
-            run_id=info.run_id,
+            run_id=self._resilience_policy_run_id or info.run_id,
             ordinal=ordinal,
             workspace_head_ref=state.workspace_head_ref,
             runtime=self._remediation_loop_runtime_block(),
@@ -4595,7 +4602,7 @@ class MoonMindRunWorkflow:
             remediation, verification = materialize_attempt_nodes(
                 spec=spec,
                 workflow_id=workflow.info().workflow_id,
-                run_id=workflow.info().run_id,
+                run_id=self._resilience_policy_run_id or workflow.info().run_id,
                 ordinal=state.attempt_ordinal,
                 workspace_head_ref=state.workspace_head_ref,
                 runtime=self._remediation_loop_runtime_block(),
@@ -11560,6 +11567,12 @@ class MoonMindRunWorkflow:
         if isinstance(envelope_payload, tuple) and envelope_payload:
             envelope_payload = envelope_payload[0]
         envelope = ResiliencePolicyEnvelope.model_validate(envelope_payload)
+
+        # A reset changes workflow.info().run_id while replaying the original
+        # Activity results. Dynamic child IDs must retain the identity already
+        # recorded in this history. A continued run compiles its own policy.
+        if self._resilience_policy_run_id is None:
+            self._resilience_policy_run_id = envelope.run_id
 
         # MM-884: capture the run-level cost-attribution settings once (the
         # run-level policy is compiled first) so the incident reconstruction
@@ -19389,10 +19402,18 @@ class MoonMindRunWorkflow:
         not depend on a shared filesystem (the assessment may run on an Omnigent
         host whose workspace the deterministic Jira tools cannot mount).
 
-        Unlike moonspec-verify this applies to any agent skill (the assessment
-        step runs as ``auto``); callers gate it away from moonspec-verify steps,
-        which merely READ the assessment path, so only the writer publishes.
+        Once the workflow has accepted a durable assessment, later steps consume
+        that controlling input. Their local path arguments do not declare a new
+        output or grant authority to replace the assessment.
         """
+        if self._patched_or_false_outside_workflow(
+            RUN_ASSESSMENT_CONSUMER_HANDOFF_PATCH
+        ) and self._coerce_text(
+            self._assessment_context.get("assessmentArtifactRef")
+            or self._assessment_context.get("assessment_artifact_ref"),
+            max_chars=400,
+        ):
+            return
         nested_inputs = node_inputs.get("inputs")
         skill_inputs = nested_inputs if isinstance(nested_inputs, Mapping) else {}
         if not parameters.get("assessment_artifact_path"):
@@ -19703,6 +19724,24 @@ class MoonMindRunWorkflow:
         )
         current_repository = authored_repository_source(identity_request)
         current_branch = authored_starting_branch(identity_request)
+        if (
+            agent_kind == "external"
+            and agent_id == "omnigent"
+            and publish_mode == "pr"
+            and current_repository
+            and current_repository == self._repo
+            and self._workflow_patch_enabled(RUN_ACCEPTED_PUBLICATION_HEAD_HANDOFF_PATCH)
+        ):
+            accepted_head = self._accepted_published_head()
+            if accepted_head is not None:
+                # Reserved authority: absent from parameter_keys, so authored
+                # workflow/node inputs cannot attest to their own publication.
+                parameters["acceptedPublishedHead"] = {
+                    "workflowId": correlation_id,
+                    "repository": current_repository,
+                    "branch": accepted_head[0],
+                    "headSha": accepted_head[1],
+                }
         repository_bound_policy = self._workflow_patch_enabled(
             RUN_REPOSITORY_BOUND_NO_COMMIT_OUTCOME_PATCH
         )

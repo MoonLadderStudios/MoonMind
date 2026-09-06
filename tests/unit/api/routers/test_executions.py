@@ -142,7 +142,7 @@ _TARGET_SEARCH_ATTRIBUTE_TYPE = int(IndexedValueType.INDEXED_VALUE_TYPE_KEYWORD_
 
 
 def test_deployment_skill_requirements_merge_into_canonical_capabilities() -> None:
-    assert executions_module._merge_deployment_skill_required_capabilities(
+    assert executions_module._merge_workflow_required_capabilities(
         ["Git", "execution.fanout"],
         {
             "batch-skill": {
@@ -155,7 +155,7 @@ def test_deployment_skill_requirements_merge_into_canonical_capabilities() -> No
 
 def test_deployment_skill_requirements_reject_malformed_trusted_metadata() -> None:
     with pytest.raises(HTTPException, match="must be a JSON array of strings"):
-        executions_module._merge_deployment_skill_required_capabilities(
+        executions_module._merge_workflow_required_capabilities(
             [],
             {"batch-skill": {"required_capabilities": "execution.fanout"}},
         )
@@ -3987,32 +3987,39 @@ def test_list_executions_allows_explicit_user_owner_type_for_non_admin() -> None
     assert kwargs["owner_id"] == str(mock_user.id)
     assert kwargs["owner_type"] == "user"
 
-def test_create_task_shaped_execution_rejects_invalid_required_capabilities() -> None:
+@pytest.mark.parametrize("capability_location", ["root", "tool", "skill"])
+def test_create_task_shaped_execution_rejects_invalid_required_capabilities(
+    capability_location: str,
+) -> None:
     app = FastAPI()
     app.include_router(router)
     mock_service = AsyncMock()
     app.dependency_overrides[_get_service] = lambda: mock_service
     _override_temporal_client(app)
     _override_user_dependencies(app, is_superuser=False)
+    workflow_payload = {"instructions": "Ship the Temporal integration."}
+    payload = {"workflow": workflow_payload}
+    if capability_location == "root":
+        payload["requiredCapabilities"] = 1
+    else:
+        workflow_payload[capability_location] = {
+            "name": "auto",
+            "requiredCapabilities": 1,
+        }
 
     with TestClient(app) as test_client:
         response = test_client.post(
             "/api/executions",
             json={
                 "type": "workflow",
-                "payload": {
-                    "requiredCapabilities": 1,
-                    "workflow": {
-                        "instructions": "Ship the Temporal integration.",
-                    },
-                },
+                "payload": payload,
             },
         )
 
     assert response.status_code == 422
-    assert (
-        response.json()["detail"]["message"]
-        == "payload.requiredCapabilities must be a JSON array of strings."
+    field = "payload" if capability_location == "root" else "payload.workflow.tool"
+    assert response.json()["detail"]["message"] == (
+        f"{field}.requiredCapabilities must be a JSON array of strings."
     )
     mock_service.create_execution.assert_not_awaited()
 
@@ -4706,7 +4713,11 @@ def test_create_task_shaped_execution_rejects_missing_default_provider_profile(
     service.create_execution.assert_not_awaited()
 
 
+@pytest.mark.parametrize("root_capabilities", [None, [], ["git", "gh"]])
+@pytest.mark.parametrize("capability_location", ["steps", "tool", "skill"])
 def test_create_execution_keeps_resolved_agent_profile_out_of_authored_omnigent(
+    root_capabilities,
+    capability_location,
     client: tuple[TestClient, AsyncMock, SimpleNamespace],
 ) -> None:
     test_client, service, _user = client
@@ -4770,9 +4781,25 @@ def test_create_execution_keeps_resolved_agent_profile_out_of_authored_omnigent(
         binding=plan_binding,
         artifact_refs=("art_profile_1", "art_skills_1", "art_plan_1"),
         resolved_skillset_ref="art_skills_1",
-        runtime_provider_rollout=rollout_record.model_dump(
-            mode="json", by_alias=True
-        ),
+        runtime_provider_rollout=rollout_record.model_dump(mode="json", by_alias=True),
+    )
+    capability_contract = (
+        {
+            "steps": [
+                {
+                    "id": "implement",
+                    "skill": {"id": "auto", "requiredCapabilities": ["git"]},
+                },
+                {
+                    "id": "publish",
+                    "skill": {"id": "auto", "requiredCapabilities": ["git", "gh"]},
+                },
+            ]
+        }
+        if capability_location == "steps"
+        else {
+            capability_location: {"name": "auto", "requiredCapabilities": ["git", "gh"]}
+        }
     )
     with (
         patch(
@@ -4798,6 +4825,7 @@ def test_create_execution_keeps_resolved_agent_profile_out_of_authored_omnigent(
                 "type": "workflow",
                 "payload": {
                     "targetRuntime": "omnigent",
+                    "requiredCapabilities": root_capabilities,
                     "agentProfile": {
                         "profileId": "omnigent-bootstrap-default",
                         "providerProfileRef": "codex-openai-oauth",
@@ -4808,6 +4836,7 @@ def test_create_execution_keeps_resolved_agent_profile_out_of_authored_omnigent(
                     },
                     "workflow": {
                         "instructions": "Run the selected agent profile.",
+                        **capability_contract,
                         "runtime": {"mode": "omnigent"},
                     },
                 },
@@ -4824,21 +4853,18 @@ def test_create_execution_keeps_resolved_agent_profile_out_of_authored_omnigent(
         "initial_parameters"
     ]
     assert initial_parameters["agentProfileSnapshot"] == snapshot
+    assert initial_parameters["requiredCapabilities"] == ["git", "gh"]
     assert initial_parameters["profileId"] == "codex-openai-oauth"
     assert initial_parameters["omnigentExecutionPlan"] == plan_binding.model_dump(
         mode="json", by_alias=True, exclude_none=True
     )
     # The rollout decision is a sibling key, never a new field inside the
     # compatibility-sensitive plan binding.
-    assert "runtimeProviderTarget" not in initial_parameters[
-        "omnigentExecutionPlan"
-    ]
+    assert "runtimeProviderTarget" not in initial_parameters["omnigentExecutionPlan"]
     assert initial_parameters["runtimeProviderTarget"] == {
         "policyVersion": "moonmind.omnigent-runtime-provider-rollout/v1",
         "policyGeneration": 1,
-        "combinationKey": (
-            "omnigent-runtime-provider-combination:sha256:" + "d" * 64
-        ),
+        "combinationKey": ("omnigent-runtime-provider-combination:sha256:" + "d" * 64),
         "targetId": "codex.generic-omnigent",
         "pathClass": "generic_omnigent",
         "state": "new_work_default",

@@ -263,6 +263,21 @@ The scan is bounded to five pages of 100 candidates, excludes pull requests,
 and records pages and candidates examined. Missing, malformed, incomplete, or
 exhausted evidence stops the run before implementation or issue mutation.
 
+Explicit `Depends on`, `Completion depends on`, and `Integration prerequisites:`
+sentences contribute issue prerequisite evidence. Short issue references,
+qualified repository references, GitHub issue URLs, and inclusive numeric ranges
+are resolved through the selected repository's authorized GitHub access, with
+at most 100 declared prerequisites per candidate. The candidate scan shares a
+100-request prerequisite lookup budget and reuses validated state for repeated
+repository-and-issue identities. Exhausting that budget stops selection with an
+actionable request to select an explicit issue or narrow the search. Confirming
+the selected issue uses fresh prerequisite reads with its own 100-request budget;
+the later pre-implementation blocker check also fetches current state. An open
+prerequisite blocks admission; closed prerequisites do not. Only the leading
+reference list after a declaration contributes dependencies; subsequent prose,
+including parent and related references, does not. Unavailable or unknown
+evidence stops admission. These checks do not modify issue labels or issue content.
+
 The selected issue and brief travel through the workflow's trusted issue
 context and durable brief attachment. Downstream blocker and status tools
 resolve the same issue from that context and reject conflicting identities.
