@@ -5,7 +5,7 @@
 **Owner:** MoonMind Platform  
 **Updated:** 2026-09-06  
 **Audience:** backend, workflow authors, API, Dashboard  
-**Related:** `docs/Workflows/WorkflowDependencies.md`, `docs/Workflows/WorkflowPublishing.md`, `docs/Workflows/RequiredCapabilities.md`, `docs/Temporal/WorkflowTypeCatalogAndLifecycle.md`, `docs/Temporal/TemporalAgentExecution.md`, `docs/ManagedAgents/SkillGithubPrResolver.md`, `docs/Workflows/WorkflowPresetsSystem.md`, `docs/UI/CreatePage.md`
+**Related:** `docs/Workflows/WorkflowDependencies.md`, `docs/Workflows/WorkflowPublishing.md`, `docs/Workflows/RequiredCapabilities.md`, `docs/Temporal/WorkflowTypeCatalogAndLifecycle.md`, `docs/Temporal/TemporalAgentExecution.md`, `docs/Steps/SkillSystem.md`, `docs/Workflows/WorkflowPresetsSystem.md`, `docs/UI/CreatePage.md`
 
 This is a declarative target, not deployment or implementation evidence. [Workflow Publishing](WorkflowPublishing.md) owns the single authored publication policy and the distinction between authoring Auto and compiled Skill-owned `auto`.
 
