@@ -2,9 +2,12 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 import os
+import time
 from collections.abc import AsyncIterator, Iterable, Mapping
+from contextlib import asynccontextmanager
 from typing import Any
 from urllib.parse import quote
 
@@ -96,6 +99,130 @@ async def aclose_shared_pool_client() -> None:
         except Exception:
             # Best-effort shutdown; a close failure must not fail worker teardown.
             pass
+
+
+#: Bounded SSE stream admission (MoonLadderStudios/MoonMind#3884).
+#:
+#: Every long-lived SSE stream holds one pool connection for its lifetime, so
+#: unbounded streams can starve control/cleanup operations that share the
+#: pool. A larger fixed global maximum alone is not a reservation: instead,
+#: streams are admitted through this process-wide bound while ordinary
+#: control requests (``_request``/``_request_bytes``) never wait on it. That
+#: is the provable control budget — at most ``limit`` connections are ever
+#: stream-held, and the remainder of the pool is always available for
+#: registration, attestation, session, readiness, cancellation, and cleanup
+#: calls. Exhaustion returns a normalized capacity failure within a deadline
+#: instead of queueing behind saturated streams.
+STREAM_ADMISSION_ENV = "MOONMIND_OMNIGENT_MAX_CONCURRENT_STREAMS"
+STREAM_ADMISSION_TIMEOUT_ENV = "MOONMIND_OMNIGENT_STREAM_ADMISSION_TIMEOUT_SECONDS"
+DEFAULT_MAX_CONCURRENT_STREAMS = 32
+DEFAULT_STREAM_ADMISSION_TIMEOUT_SECONDS = 30.0
+
+_stream_admission_semaphore: asyncio.Semaphore | None = None
+
+
+def stream_admission_limit(*, env: Mapping[str, Any] | None = None) -> int:
+    """Return the bounded number of concurrent SSE streams admitted."""
+
+    source = env if env is not None else os.environ
+    try:
+        value = int(str(source.get(STREAM_ADMISSION_ENV) or "").strip())
+    except (TypeError, ValueError):
+        return DEFAULT_MAX_CONCURRENT_STREAMS
+    return max(1, min(1024, value))
+
+
+def stream_admission_timeout_seconds(*, env: Mapping[str, Any] | None = None) -> float:
+    """Return the bounded wait for one SSE stream admission slot."""
+
+    source = env if env is not None else os.environ
+    try:
+        value = float(str(source.get(STREAM_ADMISSION_TIMEOUT_ENV) or "").strip())
+    except (TypeError, ValueError):
+        return DEFAULT_STREAM_ADMISSION_TIMEOUT_SECONDS
+    if value <= 0:
+        return DEFAULT_STREAM_ADMISSION_TIMEOUT_SECONDS
+    return min(300.0, value)
+
+
+def _stream_semaphore() -> asyncio.Semaphore:
+    global _stream_admission_semaphore
+    if _stream_admission_semaphore is None:
+        _stream_admission_semaphore = asyncio.Semaphore(stream_admission_limit())
+    return _stream_admission_semaphore
+
+
+def reset_stream_admission_for_tests() -> None:
+    """Drop the process-wide admission semaphore. Test-only."""
+
+    global _stream_admission_semaphore
+    _stream_admission_semaphore = None
+
+
+@asynccontextmanager
+async def pooled_http_client() -> AsyncIterator[httpx.AsyncClient]:
+    """Yield the lifecycle-managed transport for one activity composition.
+
+    MoonLadderStudios/MoonMind#3884: production compositions must not build
+    an ad-hoc unbounded ``httpx.AsyncClient`` per invocation. Inside a worker
+    process this yields the worker-owned shared pool client (never closed
+    here — the worker owns its lifecycle); outside one it yields an owned
+    client with the same bounded pool limits, closed on exit. Either way the
+    caller gets explicitly bounded, owned transport.
+    """
+
+    shared = shared_pool_client()
+    if shared is not None:
+        yield shared
+        return
+    async with httpx.AsyncClient(
+        timeout=httpx.Timeout(_DEFAULT_REQUEST_TIMEOUT_SECONDS),
+        limits=default_omnigent_pool_limits(),
+    ) as client:
+        yield client
+
+
+@asynccontextmanager
+async def _admitted_stream() -> AsyncIterator[None]:
+    """Admit one SSE stream or fail with a normalized capacity error.
+
+    The slot is released on normal completion, response error, retry
+    exhaustion, and cancellation, so a cancelled or failed stream never leaks
+    admission budget. Control/cleanup paths never enter this context, so they
+    can never block behind saturated streams.
+    """
+
+    from moonmind.omnigent.control_plane.metrics import (
+        record_concurrency_operation_error,
+        record_concurrency_stream_admission_wait,
+        record_safely,
+    )
+
+    started = time.monotonic()
+    try:
+        await asyncio.wait_for(
+            _stream_semaphore().acquire(),
+            timeout=stream_admission_timeout_seconds(),
+        )
+    except (asyncio.TimeoutError, TimeoutError) as exc:
+        record_safely(
+            record_concurrency_operation_error,
+            operation_class="streaming",
+            operation_outcome="capacity_exhausted",
+        )
+        raise OmnigentClientError(
+            "Omnigent stream admission exhausted; control and cleanup "
+            "operations remain available",
+            failure_class="integration_error",
+        ) from exc
+    record_safely(
+        record_concurrency_stream_admission_wait,
+        wait_seconds=time.monotonic() - started,
+    )
+    try:
+        yield
+    finally:
+        _stream_semaphore().release()
 
 
 class OmnigentClientError(RuntimeError):
@@ -340,6 +467,41 @@ class OmnigentHttpClient:
         )
 
     async def stream_events(self, session_id: str) -> AsyncIterator[dict[str, Any]]:
+        """Yield SSE events with bounded admission and no admission leakage.
+
+        Cancellation during streaming closes the response (via the ``async
+        with`` stream blocks below) and releases the admission slot; response
+        errors propagate without retrying here, so neither path leaks
+        responses, clients, or admission budget.
+        """
+
+        from moonmind.omnigent.control_plane.metrics import (
+            record_concurrency_operation_error,
+            record_safely,
+        )
+
+        try:
+            async with _admitted_stream():
+                async for event in self._stream_events_inner(session_id):
+                    yield event
+        except asyncio.CancelledError:
+            record_safely(
+                record_concurrency_operation_error,
+                operation_class="streaming",
+                operation_outcome="cancelled",
+            )
+            raise
+        except OmnigentClientError:
+            record_safely(
+                record_concurrency_operation_error,
+                operation_class="streaming",
+                operation_outcome="error",
+            )
+            raise
+
+    async def _stream_events_inner(
+        self, session_id: str
+    ) -> AsyncIterator[dict[str, Any]]:
         path = f"/v1/sessions/{quote(session_id, safe='')}/stream"
         if self._client is not None:
             try:
@@ -788,11 +950,19 @@ def _scrub_payload_with_redactor(payload: Any, *, redactor: SecretRedactor) -> A
 
 
 __all__ = [
+    "DEFAULT_MAX_CONCURRENT_STREAMS",
+    "DEFAULT_STREAM_ADMISSION_TIMEOUT_SECONDS",
+    "STREAM_ADMISSION_ENV",
+    "STREAM_ADMISSION_TIMEOUT_ENV",
     "OmnigentClientError",
     "OmnigentHttpClient",
     "aclose_shared_pool_client",
     "default_omnigent_pool_limits",
     "init_shared_pool_client",
     "parse_sse_line",
+    "pooled_http_client",
+    "reset_stream_admission_for_tests",
     "shared_pool_client",
+    "stream_admission_limit",
+    "stream_admission_timeout_seconds",
 ]
