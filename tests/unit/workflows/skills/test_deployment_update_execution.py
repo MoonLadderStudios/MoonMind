@@ -1821,7 +1821,8 @@ async def test_host_compose_runner_rewrites_windows_bind_sources_via_resolved_co
     assert calls[0][calls[0].index("--project-directory") + 1] == str(local_dir)
     assert calls[1][calls[1].index("--project-directory") + 1] == str(local_dir)
     volume = generated_compose["services"]["api"]["volumes"][0]
-    assert volume["source"] == "/mnt/d/code/MoonMind/moonmind"
+    assert volume["source"] == "/run/desktop/mnt/host/d/code/MoonMind/moonmind"
+    assert volume["bind"]["create_host_path"] is False
 
 
 @pytest.mark.asyncio
@@ -2057,3 +2058,43 @@ async def test_run_compose_json_failure_bounds_stderr_in_tool_failure(
     embedded_result = failure.details["result"]
     assert len(embedded_result["stderr"]) <= 2000
     assert len(embedded_result["stderr"]) < len(huge_stderr)
+
+
+@pytest.mark.parametrize(
+    ("host_dir", "expected"),
+    [
+        (r"D:\code\MoonMind", "/run/desktop/mnt/host/d/code/MoonMind"),
+        ("C:/Projects/Moon Mind", "/run/desktop/mnt/host/c/Projects/Moon Mind"),
+        ("D:/", "/run/desktop/mnt/host/d"),
+        ("/srv/moonmind", "/srv/moonmind"),
+    ],
+)
+def test_checkout_bind_mapping_preserves_mount_options_and_other_sources(
+    tmp_path, host_dir, expected
+):
+    runner = HostDockerComposeRunner(
+        project_dir=host_dir, local_project_dir=str(tmp_path)
+    )
+    checkout = {
+        "type": "bind",
+        "source": str(tmp_path / "init_db"),
+        "target": "/app/init_db",
+        "read_only": True,
+        "bind": {"create_host_path": True, "propagation": "rprivate"},
+    }
+    other = {"type": "bind", "source": "/data/shared", "target": "/shared"}
+    neighbor = {"type": "bind", "source": str(tmp_path) + "-other", "target": "/other"}
+    named = {"type": "volume", "source": "data", "target": "/data"}
+    config = {"services": {"init-db": {"volumes": [checkout, other, neighbor, named]}}}
+
+    rewritten = runner._rewrite_local_bind_sources_to_host(config)
+
+    volumes = rewritten["services"]["init-db"]["volumes"]
+    assert volumes[0] == {
+        **checkout,
+        "source": expected + "/init_db",
+        "bind": {"create_host_path": False, "propagation": "rprivate"},
+    }
+    assert volumes[1:] == [other, neighbor, named]
+    assert runner._host_bind_source_for_local_path(str(tmp_path)) == expected
+    assert checkout["bind"]["create_host_path"] is True
