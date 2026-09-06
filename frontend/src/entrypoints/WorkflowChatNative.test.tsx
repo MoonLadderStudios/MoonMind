@@ -9,11 +9,9 @@ import { renderWithClient } from '../utils/test-utils';
 import {
   WorkflowChatNative,
   fullPageChatUrl,
-  isNativeChatReadySignal,
-  nativeChatFatalReason,
-  NATIVE_CHAT_READY_TIMEOUT_MS,
   type WorkflowChatBinding,
 } from './WorkflowChatNative';
+import { isNativeChatReadySignal, nativeChatFatalReason, NATIVE_CHAT_READY_TIMEOUT_MS } from '../features/workflow-native-chat/nativeChatProtocol';
 import {
   capturedEvidenceHref,
   type CapturedEvidence,
@@ -442,6 +440,7 @@ describe('WorkflowChatNative readiness containment (#4013 AC7/AC8)', () => {
       new MessageEvent('message', {
         data,
         origin: origin ?? window.location.origin,
+        source: document.querySelector<HTMLIFrameElement>('[data-testid="workflow-native-chat-frame"]')?.contentWindow ?? null,
       }),
     );
   }
