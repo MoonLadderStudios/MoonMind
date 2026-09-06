@@ -685,3 +685,53 @@ def test_built_in_policy_registers_every_required_target_identity():
         "claude-native",
         "opencode-native",
     }
+
+
+# --- MoonLadderStudios/MoonMind#3833 remaining work (AC8/AC9) -----------------
+# Exact qualification at the real use boundary: retirement and revocation
+# remove the new-work offer without rewriting recorded plan authority, an
+# explicit-only row executes without ever being a default, and an absent
+# promotion policy stays distinct from absent support.
+
+
+def test_retired_rows_leave_new_work_but_keep_recorded_authority_executable():
+    assert rollout.state_admits_new_authoring(RolloutState.retired_for_new_work) is False
+    assert rollout.state_admits_execution(RolloutState.retired_for_new_work) is True
+    assert rollout.state_admits_new_authoring(RolloutState.disabled) is False
+    assert rollout.state_admits_execution(RolloutState.disabled) is False
+
+
+def test_retired_legacy_decision_keeps_its_recorded_target():
+    policy = _policy({_CODEX_GATE: "true"})
+    legacy = resolve_rollout_decision(
+        policy=policy,
+        combination=_combination(
+            executionRealizerRef="codex-profile-bound@1",
+            pathClass="legacy_profile_bound_omnigent",
+        ),
+    )
+    assert legacy.state is RolloutState.retired_for_new_work
+    assert legacy.default_eligible is False
+    # Recorded authority keeps its realizer: rerun, replay, cleanup, and
+    # active executions of the retired row still resolve the same target.
+    assert legacy.target_id == "codex.legacy-profile-bound-omnigent"
+    assert rollout.state_admits_execution(legacy.state) is True
+    assert rollout.state_admits_new_authoring(legacy.state) is False
+
+
+def test_explicit_only_combination_executes_without_ever_being_a_default():
+    decision = resolve_rollout_decision(
+        policy=_policy(),
+        combination=_combination(
+            harnessId="brand-new-native",
+            runtimePackRef="brand-new-pack@1",
+            providerRuntimeId="brand_new",
+        ),
+    )
+    assert decision.state is RolloutState.explicit_only
+    assert decision.reason_code is RolloutReason.combination_not_registered
+    # Absent promotion policy stays distinct from absent support: the path is
+    # explicit and executable, never silently promoted and never blocked.
+    assert decision.default_eligible is False
+    assert decision.explicit_selection_allowed is True
+    assert rollout.state_admits_execution(decision.state) is True
