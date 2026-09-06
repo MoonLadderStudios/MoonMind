@@ -122,14 +122,37 @@ _stream_admission_semaphore: asyncio.Semaphore | None = None
 
 
 def stream_admission_limit(*, env: Mapping[str, Any] | None = None) -> int:
-    """Return the bounded number of concurrent SSE streams admitted."""
+    """Return the bounded number of concurrent SSE streams admitted.
+
+    The limit is always held strictly below the HTTP pool maximum so at
+    least one pooled connection remains for control, cancellation, and
+    cleanup requests that share the pool. An operator value at or above
+    the pool maximum is clamped to ``pool_max - 1`` instead of starving
+    the reserved control budget.
+    """
 
     source = env if env is not None else os.environ
     try:
         value = int(str(source.get(STREAM_ADMISSION_ENV) or "").strip())
     except (TypeError, ValueError):
-        return DEFAULT_MAX_CONCURRENT_STREAMS
-    return max(1, min(1024, value))
+        requested: int | None = None
+    else:
+        requested = max(1, min(1024, value))
+    if env is None:
+        pool_max = int(default_omnigent_pool_limits().max_connections)
+    else:
+        try:
+            pool_value = int(
+                str(source.get("MOONMIND_OMNIGENT_HTTP_MAX_CONNECTIONS") or "").strip()
+            )
+        except (TypeError, ValueError):
+            pool_max = 100
+        else:
+            pool_max = max(10, min(500, pool_value))
+    cap = max(1, pool_max - 1)
+    if requested is None:
+        return min(DEFAULT_MAX_CONCURRENT_STREAMS, cap)
+    return min(requested, cap)
 
 
 def stream_admission_timeout_seconds(*, env: Mapping[str, Any] | None = None) -> float:
@@ -183,13 +206,18 @@ async def pooled_http_client() -> AsyncIterator[httpx.AsyncClient]:
 
 
 @asynccontextmanager
-async def _admitted_stream() -> AsyncIterator[None]:
+async def _admitted_stream(
+    *,
+    on_admitted: Any | None = None,
+) -> AsyncIterator[None]:
     """Admit one SSE stream or fail with a normalized capacity error.
 
     The slot is released on normal completion, response error, retry
     exhaustion, and cancellation, so a cancelled or failed stream never leaks
     admission budget. Control/cleanup paths never enter this context, so they
-    can never block behind saturated streams.
+    can never block behind saturated streams. When ``on_admitted`` is given
+    it is invoked once the slot has been acquired, letting callers reserve
+    observation capacity before mutating provider state.
     """
 
     from moonmind.omnigent.control_plane.metrics import (
@@ -210,19 +238,60 @@ async def _admitted_stream() -> AsyncIterator[None]:
             operation_class="streaming",
             operation_outcome="capacity_exhausted",
         )
-        raise OmnigentClientError(
+        error = OmnigentClientError(
             "Omnigent stream admission exhausted; control and cleanup "
             "operations remain available",
             failure_class="integration_error",
-        ) from exc
+        )
+        error._omnigent_admission_exhausted = True  # type: ignore[attr-defined]
+        raise error from exc
     record_safely(
         record_concurrency_stream_admission_wait,
         wait_seconds=time.monotonic() - started,
     )
+    if on_admitted is not None:
+        on_admitted()
     try:
         yield
     finally:
         _stream_semaphore().release()
+
+
+async def wait_for_stream_admission_slot() -> None:
+    """Wait for stream admission without consuming a slot (pre-mutation check).
+
+    Acquires and immediately releases one admission slot within the
+    configured admission timeout so callers can fail fast before mutating
+    provider state when observation capacity is exhausted. Success records
+    no wait metric (the subsequent stream records its own); exhaustion
+    records ``capacity_exhausted`` once and raises the same normalized
+    capacity error as :func:`_admitted_stream`.
+    """
+
+    from moonmind.omnigent.control_plane.metrics import (
+        record_concurrency_operation_error,
+        record_safely,
+    )
+
+    try:
+        await asyncio.wait_for(
+            _stream_semaphore().acquire(),
+            timeout=stream_admission_timeout_seconds(),
+        )
+    except (asyncio.TimeoutError, TimeoutError) as exc:
+        record_safely(
+            record_concurrency_operation_error,
+            operation_class="streaming",
+            operation_outcome="capacity_exhausted",
+        )
+        error = OmnigentClientError(
+            "Omnigent stream admission exhausted; control and cleanup "
+            "operations remain available",
+            failure_class="integration_error",
+        )
+        error._omnigent_admission_exhausted = True  # type: ignore[attr-defined]
+        raise error from exc
+    _stream_semaphore().release()
 
 
 class OmnigentClientError(RuntimeError):
@@ -466,13 +535,20 @@ class OmnigentHttpClient:
             ),
         )
 
-    async def stream_events(self, session_id: str) -> AsyncIterator[dict[str, Any]]:
+    async def stream_events(
+        self,
+        session_id: str,
+        *,
+        on_admitted: Any | None = None,
+    ) -> AsyncIterator[dict[str, Any]]:
         """Yield SSE events with bounded admission and no admission leakage.
 
         Cancellation during streaming closes the response (via the ``async
         with`` stream blocks below) and releases the admission slot; response
         errors propagate without retrying here, so neither path leaks
-        responses, clients, or admission budget.
+        responses, clients, or admission budget. Admission exhaustion is
+        recorded once at the admission boundary, so it is re-raised here
+        without a second error recording.
         """
 
         from moonmind.omnigent.control_plane.metrics import (
@@ -481,7 +557,7 @@ class OmnigentHttpClient:
         )
 
         try:
-            async with _admitted_stream():
+            async with _admitted_stream(on_admitted=on_admitted):
                 async for event in self._stream_events_inner(session_id):
                     yield event
         except asyncio.CancelledError:
@@ -491,7 +567,11 @@ class OmnigentHttpClient:
                 operation_outcome="cancelled",
             )
             raise
-        except OmnigentClientError:
+        except OmnigentClientError as exc:
+            if getattr(exc, "_omnigent_admission_exhausted", False) or (
+                "admission exhausted" in str(exc)
+            ):
+                raise
             record_safely(
                 record_concurrency_operation_error,
                 operation_class="streaming",
@@ -965,4 +1045,5 @@ __all__ = [
     "shared_pool_client",
     "stream_admission_limit",
     "stream_admission_timeout_seconds",
+    "wait_for_stream_admission_slot",
 ]

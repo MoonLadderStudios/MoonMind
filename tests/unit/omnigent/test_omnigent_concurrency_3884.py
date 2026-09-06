@@ -23,7 +23,6 @@ stream admission against fake servers), not mocked helpers:
 from __future__ import annotations
 
 import asyncio
-from contextlib import suppress
 from uuid import UUID, uuid4
 
 import httpx
@@ -258,6 +257,25 @@ def _admission_env(
     reset_stream_admission_for_tests()
 
 
+def test_stream_admission_limit_stays_below_pool_maximum(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Stream admission always reserves at least one pool connection."""
+
+    monkeypatch.setenv("MOONMIND_OMNIGENT_HTTP_MAX_CONNECTIONS", "10")
+    monkeypatch.setenv(STREAM_ADMISSION_ENV, "1024")
+    assert (
+        omnigent_client_module.stream_admission_limit()
+        == int(
+            omnigent_client_module.default_omnigent_pool_limits().max_connections
+        )
+        - 1
+    )
+    monkeypatch.setenv(STREAM_ADMISSION_ENV, "2")
+    assert omnigent_client_module.stream_admission_limit() == 2
+    reset_stream_admission_for_tests()
+
+
 @pytest.mark.asyncio
 async def test_saturated_streams_cannot_starve_control(
     monkeypatch: pytest.MonkeyPatch,
@@ -307,8 +325,10 @@ async def test_saturated_streams_cannot_starve_control(
         for task in tasks:
             task.cancel()
         for task in tasks:
-            with suppress(asyncio.CancelledError):
+            try:
                 await task
+            except asyncio.CancelledError:
+                pass
     # Cancellation released both admission slots.
     assert omnigent_client_module._stream_semaphore()._value == 2
     reset_stream_admission_for_tests()
@@ -352,8 +372,63 @@ async def test_stream_exhaustion_is_a_normalized_capacity_failure(
     finally:
         gate.set()
         task.cancel()
-        with suppress(asyncio.CancelledError):
+        try:
             await task
+        except asyncio.CancelledError:
+            pass
+    reset_stream_admission_for_tests()
+
+
+@pytest.mark.asyncio
+async def test_stream_admission_exhaustion_records_once(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Admission exhaustion is recorded once, not doubled by the wrapper."""
+
+    control_plane_metrics.reset()
+    _admission_env(monkeypatch, limit=1, timeout=0.2)
+    gate = asyncio.Event()
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        await gate.wait()
+        return httpx.Response(200, content=b'data: {"type": "done"}\n')
+
+    held = OmnigentHttpClient(
+        base_url="https://omnigent.test",
+        client=httpx.AsyncClient(transport=httpx.MockTransport(handler)),
+    )
+    waiter = OmnigentHttpClient(
+        base_url="https://omnigent.test",
+        client=httpx.AsyncClient(transport=httpx.MockTransport(handler)),
+    )
+
+    async def _drain() -> list[dict]:
+        return [event async for event in held.stream_events("sess-1")]
+
+    task = asyncio.create_task(_drain())
+    try:
+        for _ in range(100):
+            await asyncio.sleep(0.01)
+            if omnigent_client_module._stream_semaphore()._value == 0:
+                break
+        with pytest.raises(OmnigentClientError, match="admission exhausted"):
+            async for _event in waiter.stream_events("sess-1"):
+                pass
+    finally:
+        gate.set()
+        task.cancel()
+        try:
+            await task
+        except asyncio.CancelledError:
+            pass
+    errors = [
+        (labels.get("operation_outcome"), count)
+        for name, labels, count in control_plane_metrics.counter_series()
+        if name == control_plane_metrics.CONCURRENCY_OPERATION_ERRORS
+        and labels.get("operation_class") == "streaming"
+    ]
+    assert ("capacity_exhausted", 1) in errors
+    assert ("error", 1) not in errors
     reset_stream_admission_for_tests()
 
 
@@ -445,7 +520,7 @@ async def test_pooled_http_client_fallback_is_bounded_and_owned(
 
     monkeypatch.setattr(httpx, "AsyncClient", _recording_factory)
     async with pooled_http_client() as owned:
-        assert isinstance(owned, httpx.AsyncClient)
+        assert isinstance(owned, real_client)
         assert owned.is_closed is False
     assert owned.is_closed is True
     expected = default_omnigent_pool_limits()
@@ -467,7 +542,7 @@ async def test_transport_fallback_without_pool_is_bounded(
 
     monkeypatch.setattr(httpx, "AsyncClient", _recording_factory)
     async with omnigent_transport_module.omnigent_httpx_client(None) as owned:
-        assert isinstance(owned, httpx.AsyncClient)
+        assert isinstance(owned, real_client)
     assert owned.is_closed is True
     assert (
         captured["limits"].max_connections
