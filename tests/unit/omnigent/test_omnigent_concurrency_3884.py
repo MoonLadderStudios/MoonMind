@@ -328,6 +328,7 @@ async def test_saturated_streams_cannot_starve_control(
             try:
                 await task
             except asyncio.CancelledError:
+                # Expected after requesting cancellation of helper tasks.
                 pass
     # Cancellation released both admission slots.
     assert omnigent_client_module._stream_semaphore()._value == 2
@@ -375,6 +376,7 @@ async def test_stream_exhaustion_is_a_normalized_capacity_failure(
         try:
             await task
         except asyncio.CancelledError:
+            # Expected after requesting cancellation of the helper task.
             pass
     reset_stream_admission_for_tests()
 
@@ -420,6 +422,7 @@ async def test_stream_admission_exhaustion_records_once(
         try:
             await task
         except asyncio.CancelledError:
+            # Expected after requesting cancellation of the helper task.
             pass
     errors = [
         (labels.get("operation_outcome"), count)
