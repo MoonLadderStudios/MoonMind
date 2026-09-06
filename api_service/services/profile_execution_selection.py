@@ -187,6 +187,73 @@ async def profile_execution_selection(
     )
 
 
+def resolved_execution_target_refs(snapshot: Mapping[str, Any]) -> set[str]:
+    """Return the unambiguous target identities advertised by a snapshot.
+
+    Generic (v2) Agent Profiles advertise readiness targets as the profile
+    identity (``profileId@version``), while their compiled plan carries the
+    host realizer ref. Legacy profiles advertise the execution-profile ref
+    directly. Both forms resolve unambiguously (MoonLadderStudios/MoonMind#3833).
+    """
+    resolved_ref = str(snapshot.get("executionProfileRef") or "").strip()
+    refs = {resolved_ref} if resolved_ref else set()
+    profile_id = str(snapshot.get("profileId") or "").strip()
+    version = snapshot.get("version")
+    if profile_id and version is not None:
+        refs.add(f"{profile_id}@{version}")
+    return refs
+
+
+def validate_omnigent_selection_agreement(
+    *,
+    expected_execution_configuration: Any,
+    authored_omnigent: Any,
+    profile_snapshot: Mapping[str, Any],
+    selected_provider_profile_id: str | None = None,
+) -> None:
+    """Enforce the shared new-admission intent/conflict boundary (#3833).
+
+    Every new-admission consumer (Create, schedules, checkpoint branches)
+    funnels explicit authoring intent through this boundary instead of
+    maintaining a per-surface map. Existing-owner retry/replay differs: those
+    paths reuse the frozen recorded snapshot/plan authority and never call
+    this helper.
+    """
+    validate_execution_configuration_expectation(
+        expected_execution_configuration, profile_snapshot
+    )
+    if selected_provider_profile_id and (
+        profile_snapshot.get("providerProfileRef") != selected_provider_profile_id
+    ):
+        # Preserve the Create surface's invalid_execution_request contract
+        # verbatim so every consumer surfaces the identical 422 shape.
+        raise HTTPException(
+            422,
+            {
+                "code": "invalid_execution_request",
+                "message": "The execution configuration must use the selected Profile.",
+            },
+        )
+    authored_target_ref = (
+        str(authored_omnigent.get("executionTargetRef") or "").strip()
+        if isinstance(authored_omnigent, Mapping)
+        else ""
+    )
+    if authored_target_ref and (
+        authored_target_ref not in resolved_execution_target_refs(profile_snapshot)
+    ):
+        raise HTTPException(
+            422,
+            {
+                "code": "invalid_execution_request",
+                "message": (
+                    "omnigent.executionTargetRef must match the selected "
+                    "Agent Profile executionProfileRef."
+                ),
+            },
+        )
+
+
 def validate_execution_configuration_expectation(
     expected: Any, snapshot: Mapping[str, Any]
 ) -> None:

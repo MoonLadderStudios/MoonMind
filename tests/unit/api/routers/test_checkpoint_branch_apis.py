@@ -558,6 +558,68 @@ async def test_checkpoint_branch_create_rejects_profile_provider_conflict(
 
 
 @pytest.mark.asyncio
+async def test_checkpoint_branch_create_rejects_execution_profile_conflict(
+    checkpoint_branch_client: AsyncClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # MoonLadderStudios/MoonMind#3833: checkpoint branches share the
+    # new-admission intent/conflict boundary; a conflicting explicit
+    # executionProfileRef is an actionable conflict, not a silent store.
+    snapshot = {
+        "profileId": "agent-profile-1",
+        "version": 3,
+        "digest": "sha256:profile-v3",
+        "providerProfileRef": "provider-profile-1",
+        "executionProfileRef": "omnigent-opencode@1",
+    }
+    monkeypatch.setattr(
+        "api_service.api.routers.executions.resolve_agent_profile_snapshot",
+        AsyncMock(return_value=snapshot),
+    )
+    payload = _create_payload("mm-3833:execution-profile-conflict")
+    payload["providerProfileRef"] = "provider-profile-1"
+    payload["agentProfile"] = {"profileId": "agent-profile-1", "version": 3}
+    payload["executionProfileRef"] = "codex.legacy-other"
+
+    response = await checkpoint_branch_client.post(
+        "/api/executions/mm:wf-branch/checkpoint-branches", json=payload
+    )
+
+    assert response.status_code == 422
+    assert "must match the selected" in response.text
+
+
+@pytest.mark.asyncio
+async def test_checkpoint_branch_create_rejects_snapshot_provider_mismatch(
+    checkpoint_branch_client: AsyncClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # A snapshot naming another account cannot be rescued by the requested
+    # provider ref; it stays a recoverable conflict (#3833).
+    snapshot = {
+        "profileId": "agent-profile-1",
+        "version": 3,
+        "digest": "sha256:profile-v3",
+        "providerProfileRef": "other-account",
+        "executionProfileRef": "omnigent-opencode@1",
+    }
+    monkeypatch.setattr(
+        "api_service.api.routers.executions.resolve_agent_profile_snapshot",
+        AsyncMock(return_value=snapshot),
+    )
+    payload = _create_payload("mm-3833:snapshot-provider-conflict")
+    payload["providerProfileRef"] = "provider-profile-1"
+    payload["agentProfile"] = {"profileId": "agent-profile-1", "version": 3}
+
+    response = await checkpoint_branch_client.post(
+        "/api/executions/mm:wf-branch/checkpoint-branches", json=payload
+    )
+
+    assert response.status_code == 422
+    assert "must use the selected Profile" in response.text
+
+
+@pytest.mark.asyncio
 async def test_checkpoint_branch_api_lists_creates_details_turns_and_is_idempotent(
     checkpoint_branch_client: AsyncClient,
 ) -> None:

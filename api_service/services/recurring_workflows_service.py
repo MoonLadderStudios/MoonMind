@@ -1059,6 +1059,42 @@ class RecurringWorkflowsService:
                     launch_policy_ref=(initial_parameters.get("omnigent") or {}).get("launchPolicyRef"),
                     consumer_type="schedule", consumer_id=str(definition_id), user=actor,
                 )
+            # MoonLadderStudios/MoonMind#3833: schedules are new admission
+            # through the shared intent/conflict boundary (no per-surface map).
+            # The displayed executionConfiguration / executionTargetRef must
+            # agree with the resolved snapshot; stale values are actionable
+            # conflicts, never silent substitutions. HTTPException contracts
+            # propagate verbatim so schedules surface the identical 409/422
+            # shapes as Create.
+            from api_service.services.profile_execution_selection import (
+                validate_omnigent_selection_agreement,
+            )
+
+            authored_target = definition.target.get("initialParameters") or {}
+            authored_task = (
+                authored_target.get("workflow")
+                or authored_target.get("task")
+                or {}
+            )
+            authored_runtime = (
+                authored_task.get("runtime")
+                if isinstance(authored_task, Mapping)
+                else {}
+            )
+            validate_omnigent_selection_agreement(
+                expected_execution_configuration=(
+                    authored_runtime.get("executionConfiguration")
+                    if isinstance(authored_runtime, Mapping)
+                    else None
+                ),
+                authored_omnigent=(
+                    authored_target.get("omnigent")
+                    if isinstance(authored_target.get("omnigent"), Mapping)
+                    else None
+                ),
+                profile_snapshot=snapshot,
+                selected_provider_profile_id=authored_profile.profile_id,
+            )
             initial_parameters = dict(definition.target.get("initialParameters") or {})
             initial_parameters = compile_agent_profile_snapshot_parameters(
                 initial_parameters,
