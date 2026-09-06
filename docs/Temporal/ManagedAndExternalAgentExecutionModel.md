@@ -455,6 +455,13 @@ Rules:
 
 The generic Container Jobs plane owns reusable workspace-resolution and daemon-translation primitives. Long-lived Omnigent hosts reuse them where compatible while retaining separate host/session lease semantics.
 
+Before repository publication, the workspace owner fetches the authored base
+branch into its explicit remote-tracking ref using the same repository
+credential. A candidate-only clone must remain publishable without agent edits
+or an incidental fetch. An unavailable base stops publication before candidate
+mutation; it never substitutes another branch or treats an unknown commit count
+as successful publication.
+
 ---
 
 ## 11. Runtime filesystem and network policy
