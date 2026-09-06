@@ -4255,27 +4255,41 @@ class TemporalArtifactActivities:
         runtime_id: str,
         leases: list[dict[str, Any]] | None = None,
         action: str = "load",
+        writer_generation: int | None = None,
     ) -> dict[str, Any]:
-        """Sync slot leases with the database for crash recovery.
+        """Own every durable transition of the Provider Profile lease ledger.
 
-        **load action**: Returns all persisted leases for the given runtime_id.
-            Returns {"leases": [{"workflow_id": ..., "profile_id": ..., "granted_at": ...}, ...]}
+        MoonLadderStudios/MoonMind#3883: this Activity is the single
+        persistence owner for the typed lease contract. A row's ``lease_state``
+        and ``fencing_generation`` — not an in-memory reservation, a log line
+        or a swallowed exception — decide whether a slot is spent.
 
-        **save action**: Snapshot rewrite — replaces every row for the runtime
-            with the provided leases (list of {workflow_id, profile_id}).
-            Returns {"saved": count}
+        **load**: return every row that still spends a slot (``held`` and
+            ``cleanup_requested``), the runtime's fencing high-water mark, rows
+            whose state the contract does not know (``unreconciled``), and
+            identity disagreements between live rows (``conflicts``). Unknown
+            state and index disagreement are reported, never silently dropped.
 
-        **grant action**: Durably records one lease row without touching any
-            other row (MoonLadderStudios/MoonMind#3878). This is the
-            incremental grant path; a runtime-wide rewrite per grant makes
-            durable cost scale with active concurrency.
-            Returns {"granted": True, "duplicate": bool}
+        **describe**: return the authoritative row for one lease ID. This is
+            how an ambiguous write outcome (a timeout that may have committed)
+            is reconciled without deleting a possibly live grant.
 
-        **remove action**: Removes a specific lease by workflow_id.
-            Returns {"removed": True}
+        **grant**: grant-or-get for one row. A retry that matches the complete
+            immutable identity and the acquired admission generations returns
+            the committed row; conflicting reuse of a live identity fails
+            without creating another unit of authority.
 
-        This enables the ProviderProfileManager to recover lease state after a crash,
-        rather than starting with empty state and orphaning all running workflows.
+        **release_one** / **request_cleanup** / **heartbeat**: fenced state
+            transitions that return an explicit
+            :class:`~moonmind.provider_profiles.lease_client.LeaseTransitionOutcome`.
+
+        **save**: the pre-incremental runtime-wide snapshot rewrite, retained
+            only for histories recorded before the incremental contract. It
+            carries a writer generation so a retained old snapshot writer
+            cannot delete leases a newer writer granted.
+
+        **purge_released**: reap release tombstones past the redelivery
+            horizon so the table stays bounded.
         """
         from datetime import datetime, timezone
 
@@ -4283,6 +4297,12 @@ class TemporalArtifactActivities:
 
         from api_service.db.models import ProviderProfileSlotLease
         from api_service.db.base import get_async_session_context
+        from moonmind.provider_profiles.lease_client import (
+            ACTIVE_DURABLE_LEASE_STATES,
+            KNOWN_DURABLE_LEASE_STATES,
+            DurableLeaseState,
+            LeaseTransitionOutcome,
+        )
 
         def _parse_lease_time(value: Any) -> Any:
             if not value:
@@ -4292,20 +4312,133 @@ class TemporalArtifactActivities:
             except (ValueError, TypeError):
                 return None
 
+        def _int_or_zero(value: Any) -> int:
+            try:
+                return int(value or 0)
+            except (TypeError, ValueError):
+                return 0
+
+        def _row_state(row: Any) -> str:
+            # A pre-contract row has no state column value; it predates the
+            # tombstone contract and is therefore still held.
+            return str(getattr(row, "lease_state", None) or DurableLeaseState.HELD.value)
+
+        def _row_identity(row: Any) -> dict[str, Any]:
+            """The compact, non-secret identity one lease row asserts."""
+
+            metadata = getattr(row, "safe_metadata_json", None)
+            return {
+                "lease_id": row.lease_id,
+                "workflow_id": row.workflow_id,
+                "profile_id": row.profile_id,
+                "owner_id": row.owner_id,
+                "owner_kind": getattr(row, "owner_kind", None),
+                "purpose": row.purpose,
+                "compatibility_class": getattr(row, "compatibility_class", None),
+                "capacity_scope_ref": getattr(row, "capacity_scope_ref", None),
+                "scope_generation": getattr(row, "scope_generation", None),
+                "credential_generation": getattr(row, "credential_generation", None),
+                "execution_plan_ref": getattr(row, "execution_plan_ref", None),
+                "lease_state": _row_state(row),
+                "fencing_generation": _int_or_zero(
+                    getattr(row, "fencing_generation", None)
+                ),
+                "evidence_identity": (
+                    str(metadata.get("evidenceIdentity") or "")
+                    if isinstance(metadata, dict)
+                    else ""
+                ),
+            }
+
+        async def _lease_row(session: Any, lease_id: str) -> Any:
+            return (
+                await session.execute(
+                    select(ProviderProfileSlotLease).where(
+                        ProviderProfileSlotLease.lease_id == lease_id
+                    )
+                )
+            ).scalars().first()
+
+        def _admission_generation_conflict(
+            row: Any, payload: dict[str, Any]
+        ) -> bool:
+            """Whether a retry names different admission authority than the row.
+
+            The scope and credential generations, the capacity scope and the
+            execution plan are the admission authority a grant was made
+            against. A retry that quotes different ones is not the same grant,
+            so it may not inherit the committed row.
+            """
+
+            for column, keys in (
+                ("capacity_scope_ref", ("capacity_scope_ref", "capacityScopeRef")),
+                ("execution_plan_ref", ("executionPlanRef", "execution_plan_ref")),
+            ):
+                incoming = ""
+                for key in keys:
+                    if payload.get(key):
+                        incoming = str(payload[key])
+                        break
+                existing = str(getattr(row, column, "") or "")
+                if incoming and existing and incoming != existing:
+                    return True
+            for column, keys in (
+                ("scope_generation", ("scope_generation", "scopeGeneration")),
+                (
+                    "credential_generation",
+                    ("credential_generation", "credentialGeneration"),
+                ),
+            ):
+                incoming_raw = None
+                for key in keys:
+                    if payload.get(key) is not None:
+                        incoming_raw = payload[key]
+                        break
+                existing_raw = getattr(row, column, None)
+                if incoming_raw is None or existing_raw is None:
+                    continue
+                if _int_or_zero(incoming_raw) != _int_or_zero(existing_raw):
+                    return True
+            return False
+
+        def _transition_identity_conflict(row: Any, payload: dict[str, Any]) -> bool:
+            """Whether a transition names a different lease than the row."""
+
+            for column, keys in (
+                ("runtime_id", ("runtime_id",)),
+                ("profile_id", ("profile_id", "profileId")),
+                ("owner_id", ("owner_id", "ownerId")),
+            ):
+                incoming = ""
+                for key in keys:
+                    if payload.get(key):
+                        incoming = str(payload[key])
+                        break
+                if not incoming:
+                    continue
+                existing = str(getattr(row, column, "") or "")
+                if existing and existing != incoming:
+                    return True
+            return False
+
         async with get_async_session_context() as session:
             if action == "load":
                 from sqlalchemy import func as _func
                 from sqlalchemy import or_ as _or_
 
+                # Indexed query on the runtime, narrowed to the states that
+                # still spend a slot. A released row is never resurrected and
+                # a pre-contract NULL state is still held.
+                active_states = sorted(ACTIVE_DURABLE_LEASE_STATES)
                 stmt = select(ProviderProfileSlotLease).where(
                     ProviderProfileSlotLease.runtime_id == runtime_id,
                     _or_(
-                        ProviderProfileSlotLease.lease_state == "held",
+                        ProviderProfileSlotLease.lease_state.in_(active_states),
                         ProviderProfileSlotLease.lease_state.is_(None),
                     ),
                 )
                 result = await session.execute(stmt)
-                rows = result.scalars().all()
+                rows: list[Any] = list(result.scalars().all())
                 # The fencing high-water mark survives released leases:
                 # tombstoned rows keep their generation so a fresh manager
                 # that finds no live rows still resumes above every number
@@ -4317,6 +4450,53 @@ class TemporalArtifactActivities:
                         ).where(ProviderProfileSlotLease.runtime_id == runtime_id)
                     )
                 ).scalar() or 0
+
+                # A state outside the contract is not free capacity and not a
+                # row to drop: it is reconciliation work that blocks admission.
+                unreconciled = [
+                    _row_identity(row)
+                    for row in (
+                        await session.execute(
+                            select(ProviderProfileSlotLease).where(
+                                ProviderProfileSlotLease.runtime_id == runtime_id,
+                                ProviderProfileSlotLease.lease_state.is_not(None),
+                                ProviderProfileSlotLease.lease_state.not_in(
+                                    sorted(KNOWN_DURABLE_LEASE_STATES)
+                                ),
+                            )
+                        )
+                    )
+                    .scalars()
+                    .all()
+                ]
+
+                # Index disagreement is detected, never silently merged: two
+                # live rows that claim the same workflow or the same owner are
+                # two authorities for one identity.
+                conflicts: list[dict[str, Any]] = []
+                for field_name in ("workflow_id", "owner_id"):
+                    seen: dict[str, Any] = {}
+                    for row in rows:
+                        key = str(getattr(row, field_name, "") or "")
+                        if not key:
+                            continue
+                        previous = seen.get(key)
+                        if previous is None:
+                            seen[key] = row
+                            continue
+                        if str(previous.lease_id or "") == str(row.lease_id or ""):
+                            continue
+                        conflicts.append(
+                            {
+                                "field": field_name,
+                                "value": key,
+                                "leases": [
+                                    _row_identity(previous),
+                                    _row_identity(row),
+                                ],
+                            }
+                        )
+
                 leases_data = [
                     {
                         "workflow_id": row.workflow_id,
@@ -4326,6 +4506,7 @@ class TemporalArtifactActivities:
                         else None,
                         "leaseId": row.lease_id or row.workflow_id,
                         "ownerId": row.owner_id or row.workflow_id,
+                        "ownerKind": getattr(row, "owner_kind", None),
                         "purpose": row.purpose,
                         "ownerIsWorkflow": row.owner_is_workflow,
                         "stepExecutionId": row.step_execution_id,
@@ -4336,6 +4517,17 @@ class TemporalArtifactActivities:
                         # row returns it with the rest of the lease identity.
                         "executionPlanRef": row.execution_plan_ref,
                         "credentialGeneration": row.credential_generation,
+                        # MoonLadderStudios/MoonMind#3883: the compatibility
+                        # class and the acquired scope generation are part of
+                        # the same identity. Restoring a narrower legacy-shaped
+                        # view would rebuild authority the ledger never granted.
+                        "compatibilityClass": getattr(row, "compatibility_class", None),
+                        "capacityScopeRef": getattr(row, "capacity_scope_ref", None),
+                        "scopeGeneration": getattr(row, "scope_generation", None),
+                        "leaseState": _row_state(row),
+                        "heartbeatAt": row.heartbeat_at.isoformat()
+                        if getattr(row, "heartbeat_at", None)
+                        else None,
                         # MoonLadderStudios/MoonMind#3879: the grant generation
                         # and the compact evidence identity are part of the
                         # lease contract, so a manager restart restores the
@@ -4352,18 +4544,59 @@ class TemporalArtifactActivities:
                 return {
                     "leases": leases_data,
                     "max_fencing_generation": int(max_generation or 0),
+                    "unreconciled": unreconciled,
+                    "conflicts": conflicts,
                 }
 
+            elif action == "describe":
+                payload = (leases or [{}])[0]
+                lease_id = str(
+                    payload.get("lease_id") or payload.get("leaseId") or ""
+                ).strip()
+                if not lease_id:
+                    return {"error": "describe requires lease_id"}
+                row = await _lease_row(session, lease_id)
+                if row is None:
+                    return {"found": False, "lease_id": lease_id}
+                return {"found": True, "lease": _row_identity(row)}
+
             elif action == "save":
-                # Snapshot semantics: delete ALL rows for this runtime, then
+                # Snapshot semantics: delete the rows for this runtime, then
                 # bulk-insert only the leases currently held in memory.
                 # This prevents stale rows from accumulating when leases
                 # disappear from memory (eviction, verify, release).
-                await session.execute(
-                    delete(ProviderProfileSlotLease).where(
-                        ProviderProfileSlotLease.runtime_id == runtime_id,
-                    )
+                #
+                # MoonLadderStudios/MoonMind#3883: a retained pre-incremental
+                # writer must not delete authority a newer writer granted. The
+                # barrier is durable row state, not a patch marker in one
+                # workflow history: rows fenced above the snapshot writer's own
+                # high-water generation are preserved untouched.
+                barrier = _int_or_zero(writer_generation)
+                delete_stmt = delete(ProviderProfileSlotLease).where(
+                    ProviderProfileSlotLease.runtime_id == runtime_id,
                 )
+                preserved = 0
+                if barrier > 0:
+                    from sqlalchemy import func as _save_func
+
+                    preserved = int(
+                        (
+                            await session.execute(
+                                select(_save_func.count())
+                                .select_from(ProviderProfileSlotLease)
+                                .where(
+                                    ProviderProfileSlotLease.runtime_id == runtime_id,
+                                    ProviderProfileSlotLease.fencing_generation
+                                    > barrier,
+                                )
+                            )
+                        ).scalar()
+                        or 0
+                    )
+                    delete_stmt = delete_stmt.where(
+                        ProviderProfileSlotLease.fencing_generation <= barrier
+                    )
+                await session.execute(delete_stmt)
                 saved_count = 0
                 for lease in leases or []:
                     workflow_id = lease.get("workflow_id")
@@ -4418,6 +4651,8 @@ class TemporalArtifactActivities:
                     session.add(new_lease)
                     saved_count += 1
                 await session.commit()
+                if barrier > 0:
+                    return {"saved": saved_count, "preserved": preserved}
                 return {"saved": saved_count}
 
             elif action == "remove":
@@ -4434,19 +4669,25 @@ class TemporalArtifactActivities:
                 return {"removed": True}
 
             elif action == "grant":
-                from sqlalchemy import select as _select
-
                 payload = (leases or [{}])[0]
                 lease_id = str(payload.get("lease_id") or payload.get("leaseId") or "").strip()
                 if not lease_id:
                     return {"error": "grant requires lease_id"}
-                existing = (
-                    await session.execute(
-                        _select(ProviderProfileSlotLease).where(
-                            ProviderProfileSlotLease.lease_id == lease_id
-                        )
-                    )
-                ).scalars().first()
+                incoming_purpose = str(
+                    payload.get("purpose") or "execution_direct"
+                )
+                incoming_compatibility = str(
+                    payload.get("compatibility_class")
+                    or payload.get("compatibilityClass")
+                    or incoming_purpose
+                )
+                incoming_metadata = payload.get("safe_metadata")
+                incoming_identity = (
+                    str(incoming_metadata.get("evidenceIdentity") or "")
+                    if isinstance(incoming_metadata, dict)
+                    else ""
+                )
+                existing = await _lease_row(session, lease_id)
                 if existing is not None:
                     if (
                         str(existing.runtime_id) != str(runtime_id)
@@ -4454,41 +4695,33 @@ class TemporalArtifactActivities:
                         or str(existing.owner_id or "") != str(payload.get("owner_id") or payload.get("ownerId") or "")
                     ):
                         return {"error": "lease identity conflict"}
-                    try:
-                        incoming_fence = int(payload.get("fencing_generation") or 0)
-                    except (TypeError, ValueError):
-                        incoming_fence = 0
+                    incoming_fence = _int_or_zero(payload.get("fencing_generation"))
                     if incoming_fence <= 0:
                         # A grant without a generation predates fenced grants;
                         # keep the legacy duplicate acknowledgement.
                         return {"granted": True, "duplicate": True}
-                    existing_live = (
-                        str(existing.lease_state or "held") == "held"
-                    )
-                    incoming_purpose = str(
-                        payload.get("purpose") or "execution_direct"
-                    )
-                    incoming_metadata = payload.get("safe_metadata")
-                    incoming_identity = (
-                        str(incoming_metadata.get("evidenceIdentity") or "")
-                        if isinstance(incoming_metadata, dict)
-                        else ""
-                    )
+                    existing_state = _row_state(existing)
+                    existing_live = existing_state in ACTIVE_DURABLE_LEASE_STATES
                     existing_metadata = existing.safe_metadata_json
                     existing_identity = (
                         str(existing_metadata.get("evidenceIdentity") or "")
                         if isinstance(existing_metadata, dict)
                         else ""
                     )
-                    try:
-                        existing_fence = int(existing.fencing_generation or 0)
-                    except (TypeError, ValueError):
-                        existing_fence = 0
+                    existing_fence = _int_or_zero(existing.fencing_generation)
+                    existing_compatibility = str(
+                        getattr(existing, "compatibility_class", None) or ""
+                    )
                     if (
                         existing_live
                         and existing_fence == incoming_fence
                         and str(existing.purpose or "") == incoming_purpose
                         and existing_identity == incoming_identity
+                        and (
+                            not existing_compatibility
+                            or existing_compatibility == incoming_compatibility
+                        )
+                        and not _admission_generation_conflict(existing, payload)
                     ):
                         # An idempotent retry of the same grant: the complete
                         # grant identity matches, so no new authority is made.
@@ -4498,28 +4731,44 @@ class TemporalArtifactActivities:
                         # it would downgrade the fence, so fail closed and let
                         # the caller roll its in-memory reservation back.
                         return {"error": "lease fencing regression"}
-                    # The row is stale \u2014 a tombstoned release, or a prior
-                    # DB release that failed after the in-memory lease was
-                    # freed while the manager moved on. Atomically replace it
-                    # with the incoming grant instead of reporting durable
-                    # success for authority the row does not describe.
+                    if existing_live and (
+                        str(existing.purpose or "") != incoming_purpose
+                        or (
+                            existing_compatibility
+                            and existing_compatibility != incoming_compatibility
+                        )
+                        or (existing_identity and existing_identity != incoming_identity)
+                        or _admission_generation_conflict(existing, payload)
+                    ):
+                        # Conflicting reuse of an identity that is still live.
+                        # Replacing it here would hand a second purpose, plan
+                        # or admission generation the same authority, so this
+                        # fails without creating another unit.
+                        return {"error": "lease identity conflict"}
+                    # The row is stale — a tombstoned release, or the same
+                    # identity re-granted under a newer generation. Atomically
+                    # replace it instead of reporting durable success for
+                    # authority the row does not describe.
                     await session.delete(existing)
                     await session.flush()
                     replaced_stale_row = True
                 else:
                     replaced_stale_row = False
+                owner_is_workflow = payload.get("ownerIsWorkflow", True) is not False
                 new_lease = ProviderProfileSlotLease(
                     runtime_id=runtime_id,
                     workflow_id=str(payload.get("workflow_id") or lease_id),
                     profile_id=str(payload.get("profile_id") or ""),
                     lease_id=lease_id,
                     owner_id=str(payload.get("owner_id") or payload.get("ownerId") or lease_id),
-                    owner_kind=str(payload.get("owner_kind") or payload.get("ownerKind") or "workflow"),
-                    purpose=str(payload.get("purpose") or "execution_direct"),
-                    compatibility_class=str(
-                        payload.get("compatibility_class") or payload.get("purpose") or "execution_direct"
+                    owner_kind=str(
+                        payload.get("owner_kind")
+                        or payload.get("ownerKind")
+                        or ("workflow" if owner_is_workflow else "activity")
                     ),
-                    owner_is_workflow=payload.get("ownerIsWorkflow", True) is not False,
+                    purpose=incoming_purpose,
+                    compatibility_class=incoming_compatibility,
+                    owner_is_workflow=owner_is_workflow,
                     step_execution_id=payload.get("stepExecutionId"),
                     oauth_session_id=payload.get("oauthSessionId"),
                     idempotency_key=payload.get("idempotencyKey"),
@@ -4527,7 +4776,9 @@ class TemporalArtifactActivities:
                     capacity_scope_ref=payload.get("capacity_scope_ref"),
                     scope_generation=int(payload.get("scope_generation") or 1),
                     credential_generation=payload.get("credential_generation"),
-                    lease_state=str(payload.get("lease_state") or "held"),
+                    lease_state=str(
+                        payload.get("lease_state") or DurableLeaseState.HELD.value
+                    ),
                     fencing_generation=int(payload.get("fencing_generation") or 1),
                     safe_metadata_json=payload.get("safe_metadata"),
                     expires_at=_parse_lease_time(payload.get("expiresAt")),
@@ -4540,26 +4791,15 @@ class TemporalArtifactActivities:
                 return {"granted": True, "duplicate": False}
 
             elif action == "heartbeat":
-                from sqlalchemy import select as _select
-
                 payload = (leases or [{}])[0]
                 lease_id = str(payload.get("lease_id") or "").strip()
                 if not lease_id:
                     return {"error": "heartbeat requires lease_id"}
-                try:
-                    expected_fence = int(payload.get("fencing_generation") or 0)
-                except (TypeError, ValueError):
-                    expected_fence = 0
-                row = (
-                    await session.execute(
-                        _select(ProviderProfileSlotLease).where(
-                            ProviderProfileSlotLease.lease_id == lease_id
-                        )
-                    )
-                ).scalars().first()
+                expected_fence = _int_or_zero(payload.get("fencing_generation"))
+                row = await _lease_row(session, lease_id)
                 if row is None:
                     return {"heartbeat": False, "stale": True}
-                if str(row.lease_state or "held") != "held":
+                if _row_state(row) not in ACTIVE_DURABLE_LEASE_STATES:
                     return {"heartbeat": False, "stale": True}
                 if expected_fence and int(row.fencing_generation) != expected_fence:
                     return {"heartbeat": False, "stale": True}
@@ -4567,39 +4807,104 @@ class TemporalArtifactActivities:
                 await session.commit()
                 return {"heartbeat": True}
 
-            elif action == "release_one":
-                from sqlalchemy import select as _select
+            elif action == "request_cleanup":
+                # MoonLadderStudios/MoonMind#1089: expiry and terminal owner
+                # state request resource cleanup. The slot stays spent, because
+                # the credential consumer this lease authorized may still be
+                # running; only proven-terminal ownership releases it.
+                payload = (leases or [{}])[0]
+                lease_id = str(payload.get("lease_id") or "").strip()
+                if not lease_id:
+                    return {"error": "request_cleanup requires lease_id"}
+                expected_fence = _int_or_zero(payload.get("fencing_generation"))
+                row = await _lease_row(session, lease_id)
+                if row is None:
+                    return {
+                        "outcome": LeaseTransitionOutcome.ALREADY_RELEASED.value,
+                        "cleanup_requested": False,
+                    }
+                if _transition_identity_conflict(row, payload):
+                    return {
+                        "outcome": LeaseTransitionOutcome.CONFLICT.value,
+                        "cleanup_requested": False,
+                        "error": "lease identity conflict",
+                    }
+                if expected_fence and _int_or_zero(row.fencing_generation) != expected_fence:
+                    return {
+                        "outcome": LeaseTransitionOutcome.STALE.value,
+                        "cleanup_requested": False,
+                    }
+                state = _row_state(row)
+                if state == DurableLeaseState.RELEASED.value:
+                    return {
+                        "outcome": LeaseTransitionOutcome.ALREADY_RELEASED.value,
+                        "cleanup_requested": False,
+                    }
+                if state != DurableLeaseState.CLEANUP_REQUESTED.value:
+                    row.lease_state = DurableLeaseState.CLEANUP_REQUESTED.value
+                metadata = dict(row.safe_metadata_json or {})
+                reason = str(payload.get("reason") or "lease_expired")
+                if metadata.get("cleanupReason") != reason:
+                    metadata["cleanupReason"] = reason
+                # Reassign rather than mutate in place: a JSON column only
+                # records a change the ORM can see.
+                row.safe_metadata_json = metadata
+                await session.commit()
+                return {
+                    "outcome": LeaseTransitionOutcome.CLEANUP_REQUESTED.value,
+                    "cleanup_requested": True,
+                }
 
+            elif action == "release_one":
                 payload = (leases or [{}])[0]
                 lease_id = str(payload.get("lease_id") or "").strip()
                 if not lease_id:
                     return {"error": "release_one requires lease_id"}
-                try:
-                    expected_fence = int(payload.get("fencing_generation") or 0)
-                except (TypeError, ValueError):
-                    expected_fence = 0
-                row = (
-                    await session.execute(
-                        _select(ProviderProfileSlotLease).where(
-                            ProviderProfileSlotLease.lease_id == lease_id
-                        )
-                    )
-                ).scalars().first()
+                expected_fence = _int_or_zero(payload.get("fencing_generation"))
+                row = await _lease_row(session, lease_id)
                 if row is None:
-                    return {"released": True, "duplicate": True}
-                if expected_fence and int(row.fencing_generation) != expected_fence:
-                    return {"released": False, "stale": True}
-                if str(row.lease_state or "held") != "held":
-                    return {"released": True, "duplicate": True}
+                    return {
+                        "released": True,
+                        "duplicate": True,
+                        "outcome": LeaseTransitionOutcome.ALREADY_RELEASED.value,
+                    }
+                if _transition_identity_conflict(row, payload):
+                    return {
+                        "released": False,
+                        "outcome": LeaseTransitionOutcome.CONFLICT.value,
+                        "error": "lease identity conflict",
+                    }
+                if expected_fence and _int_or_zero(row.fencing_generation) != expected_fence:
+                    return {
+                        "released": False,
+                        "stale": True,
+                        "outcome": LeaseTransitionOutcome.STALE.value,
+                    }
+                if _row_state(row) == DurableLeaseState.RELEASED.value:
+                    return {
+                        "released": True,
+                        "duplicate": True,
+                        "outcome": LeaseTransitionOutcome.ALREADY_RELEASED.value,
+                    }
                 # Tombstone instead of deleting: the row's fencing generation
                 # remains the runtime's high-water evidence, so a fresh
                 # manager that finds no live rows still resumes above every
                 # number it ever issued. Tombstones are excluded from "load"
                 # and reaped by "purge_released" after the redelivery horizon.
-                row.lease_state = "released"
+                row.lease_state = DurableLeaseState.RELEASED.value
                 row.released_at = datetime.now(timezone.utc)
+                reason = str(payload.get("reason") or "").strip()
+                if reason:
+                    metadata = dict(row.safe_metadata_json or {})
+                    metadata["releaseReason"] = reason
+                    if payload.get("cleanup_requested"):
+                        metadata["cleanupRequested"] = True
+                    row.safe_metadata_json = metadata
                 await session.commit()
-                return {"released": True}
+                return {
+                    "released": True,
+                    "outcome": LeaseTransitionOutcome.RELEASED.value,
+                }
 
             elif action == "purge_released":
                 payload = (leases or [{}])[0]
@@ -4616,7 +4921,8 @@ class TemporalArtifactActivities:
                     await session.execute(
                         delete(ProviderProfileSlotLease).where(
                             ProviderProfileSlotLease.runtime_id == runtime_id,
-                            ProviderProfileSlotLease.lease_state == "released",
+                            ProviderProfileSlotLease.lease_state
+                            == DurableLeaseState.RELEASED.value,
                             ProviderProfileSlotLease.released_at.is_not(None),
                             ProviderProfileSlotLease.released_at < horizon,
                         )
@@ -4626,12 +4932,10 @@ class TemporalArtifactActivities:
                 return {"purged": int(purged)}
 
             elif action == "list_active":
-                from sqlalchemy import select as _select
-
                 scope_filter = None
                 if leases:
                     scope_filter = str((leases[0] or {}).get("capacity_scope_ref") or "").strip() or None
-                stmt = _select(ProviderProfileSlotLease).where(
+                stmt = select(ProviderProfileSlotLease).where(
                     ProviderProfileSlotLease.runtime_id == runtime_id
                 )
                 if scope_filter:
