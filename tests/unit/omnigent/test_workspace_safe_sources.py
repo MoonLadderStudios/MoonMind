@@ -19,6 +19,10 @@ from types import SimpleNamespace
 import pytest
 
 import moonmind.omnigent.workspace_artifacts as workspace_artifacts
+from moonmind.core.artifacts import (
+    TemporalArtifactRedactionLevel,
+    TemporalArtifactStatus,
+)
 from moonmind.omnigent.harness_platform.failures import HarnessPlatformError
 from moonmind.omnigent.host_services.workspace import (
     OmnigentWorkspaceMaterializer,
@@ -853,6 +857,116 @@ async def test_checkpoint_quarantined_without_policy_fails_closed(tmp_path):
     workspace.mkdir()
     projector = WorkspaceArtifactProjector(
         _AdmitFakeArtifactService({"c": b"data"}, quarantined=True)
+    )
+    with pytest.raises(
+        WorkspaceArtifactProjectionError, match="restricted or quarantined"
+    ):
+        await projector.project(
+            workspace,
+            checkpoint_ref="artifact://c",
+            workflow_id="workflow-1",
+            runtime_uid=os.getuid(),
+            runtime_gid=os.getgid(),
+        )
+    _assert_no_ready_workspace(workspace)
+
+
+class _RealEnumArtifactService(_AdmitFakeArtifactService):
+    """Admission double mirroring the real ORM row's str-mixin enum shapes."""
+
+    def __init__(self, payloads, *, status, redaction_level, **kwargs):
+        super().__init__(payloads, status="COMPLETE", **kwargs)
+        self._enum_status = status
+        self._enum_redaction = redaction_level
+
+    async def get_metadata(self, *, artifact_id: str, principal: str):
+        payload = self.payloads[artifact_id]
+        digest = "sha256:" + hashlib.sha256(payload).hexdigest()
+        artifact = SimpleNamespace(
+            size_bytes=len(payload),
+            sha256=digest,
+            status=self._enum_status,
+            redaction_level=self._enum_redaction,
+            expires_at=self.expires_at,
+        )
+        # Mirror the real artifact-service 4-tuple
+        # (artifact, links, pinned, read_policy).
+        return artifact, [SimpleNamespace(workflow_id=self.workflow_id)], False, SimpleNamespace(raw_access_allowed=True)
+
+
+def _real_enum_service(payloads, *, status, redaction_level):
+    return _RealEnumArtifactService(
+        payloads, status=status, redaction_level=redaction_level
+    )
+
+
+@pytest.mark.asyncio
+async def test_checkpoint_real_complete_enum_shape_is_admitted(tmp_path):
+    """Real TemporalArtifactStatus.COMPLETE rows must survive admission."""
+    workspace = tmp_path / "ws"
+    workspace.mkdir()
+    projector = WorkspaceArtifactProjector(
+        _real_enum_service(
+            {"c": _tar_bytes([("result.txt", b"ok")])},
+            status=TemporalArtifactStatus.COMPLETE,
+            redaction_level=TemporalArtifactRedactionLevel.NONE,
+        )
+    )
+    outcome = await projector.project(
+        workspace,
+        checkpoint_ref="artifact://c",
+        workflow_id="workflow-1",
+        runtime_uid=os.getuid(),
+        runtime_gid=os.getgid(),
+    )
+    assert (workspace / "result.txt").read_bytes() == b"ok"
+    assert outcome is not None
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "status",
+    [
+        TemporalArtifactStatus.PENDING_UPLOAD,
+        TemporalArtifactStatus.FAILED,
+        TemporalArtifactStatus.DELETED,
+    ],
+)
+async def test_checkpoint_real_non_complete_enum_shapes_fail_closed(
+    tmp_path, status
+):
+    workspace = tmp_path / "ws"
+    workspace.mkdir()
+    projector = WorkspaceArtifactProjector(
+        _real_enum_service(
+            {"c": b"data"},
+            status=status,
+            redaction_level=TemporalArtifactRedactionLevel.NONE,
+        )
+    )
+    with pytest.raises(
+        WorkspaceArtifactProjectionError, match="not complete"
+    ):
+        await projector.project(
+            workspace,
+            checkpoint_ref="artifact://c",
+            workflow_id="workflow-1",
+            runtime_uid=os.getuid(),
+            runtime_gid=os.getgid(),
+        )
+    _assert_no_ready_workspace(workspace)
+
+
+@pytest.mark.asyncio
+async def test_checkpoint_real_restricted_enum_requires_explicit_policy(tmp_path):
+    workspace = tmp_path / "ws"
+    workspace.mkdir()
+    projector = WorkspaceArtifactProjector(
+        _real_enum_service(
+            {"c": b"data"},
+            status=TemporalArtifactStatus.COMPLETE,
+            redaction_level=TemporalArtifactRedactionLevel.RESTRICTED,
+        )
     )
     with pytest.raises(
         WorkspaceArtifactProjectionError, match="restricted or quarantined"
