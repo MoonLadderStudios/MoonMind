@@ -126,6 +126,31 @@ class OwnedContainerInventory:
     def covers_every_owned_launch_class(self) -> bool:
         return set(OWNED_CONTAINER_LABEL_FILTERS).issubset(set(self.label_selectors))
 
+    def excluding(self, container_ref: str) -> "OwnedContainerInventory":
+        """Return this inventory without ``container_ref``, as a partial view.
+
+        A caller that already accounts one container separately may want the
+        rest, but the result is no longer evidence of anything: the container it
+        omits is still running. Dropping the enumerated scope along with the
+        container is what makes that structural — a filtered view can never
+        report ``covers_every_owned_launch_class``, so reconciliation can never
+        read it as proof that the omitted consumer vanished.
+
+        Removing nothing changes nothing: an inventory that never contained
+        ``container_ref`` is still the complete enumeration it already was.
+        """
+
+        if container_ref not in self.containers:
+            return self
+        return OwnedContainerInventory(
+            containers={
+                ref: owned
+                for ref, owned in self.containers.items()
+                if ref != container_ref
+            },
+            label_selectors=(),
+        )
+
 
 _INSPECT_FORMAT = (
     "{{.Name}}\t{{.HostConfig.Memory}}\t{{.HostConfig.NanoCpus}}"

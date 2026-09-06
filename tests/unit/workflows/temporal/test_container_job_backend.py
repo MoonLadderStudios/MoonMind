@@ -1029,7 +1029,10 @@ async def test_start_rejects_aggregate_memory_overcommit_before_launch(
         raised.value.failure_class
         is ContainerJobFailureClass.RESOURCE_LIMIT_EXCEEDED
     )
-    assert "retry after" in str(raised.value)
+    # #3881 FINDING-A: the refusal names the resource that actually refused it
+    # and the utilization that established it, never a hardcoded guess.
+    assert "missing_condition=machine_memory" in str(raised.value)
+    assert "utilization_percent=" in str(raised.value)
     assert not any(command[0] == "start" for command in commands)
     lock.acquire.assert_awaited_once()
     lock.release.assert_awaited_once_with(lock.acquire.return_value)

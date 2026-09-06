@@ -20,7 +20,9 @@ from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 from api_service.db.models import MachineCapacityReservation
 from moonmind.capacity import (
+    COVERED_WORKLOAD_CLASS_POLICY,
     COVERED_WORKLOAD_CLASSES,
+    INITIALIZATION_PERMIT_WORKLOAD_CLASSES,
     LIMITING_RESOURCE_CPU,
     LIMITING_RESOURCE_INITIALIZING,
     LIMITING_RESOURCE_MEMORY,
@@ -50,6 +52,7 @@ from moonmind.capacity import (
     ReservationRequest,
     ResourceDemand,
     evaluate_resource_admission,
+    holds_initialization_permit,
     machine_reservation_id,
     probe_machine_totals,
     release_state_for,
@@ -260,6 +263,80 @@ def test_the_initialization_permit_is_separate_from_the_resource_ceiling() -> No
 
     assert decision.admitted is False
     assert decision.limiting_resource == LIMITING_RESOURCE_INITIALIZING
+
+
+def test_the_permit_registry_is_restrictive_for_an_unmodelled_class() -> None:
+    """#3881 FINDING-A: only a class the registry names may skip the permit.
+
+    The permit's scope is a documented per-class policy, not a caller-supplied
+    flag. A launch class nobody classified must therefore be treated as holding
+    a permit, so a new class can never opt itself out by omission.
+    """
+
+    assert {policy.name for policy in COVERED_WORKLOAD_CLASS_POLICY} == set(
+        COVERED_WORKLOAD_CLASSES
+    )
+    assert INITIALIZATION_PERMIT_WORKLOAD_CLASSES == {WORKLOAD_CLASS_GENERIC_HOST}
+    assert holds_initialization_permit(WORKLOAD_CLASS_GENERIC_HOST) is True
+    assert holds_initialization_permit(WORKLOAD_CLASS_CONTAINER_JOB) is False
+    for unmodelled in ("", None, "reconciliation", "some_future_class"):
+        assert holds_initialization_permit(unmodelled) is True
+
+
+def test_a_class_the_permit_does_not_bound_is_not_held_by_it() -> None:
+    """#3881 FINDING-A: an exempt class still obeys every resource ceiling."""
+
+    budget = _budget(MOONMIND_MACHINE_MAX_CONCURRENT_INITIALIZING="2")
+    saturated = MachineUsage(initializing=2)
+
+    exempt = evaluate_resource_admission(
+        demand=_demand(),
+        budget=budget,
+        usage=saturated,
+        workload_class=WORKLOAD_CLASS_CONTAINER_JOB,
+    )
+    assert exempt.admitted is True
+
+    bounded = evaluate_resource_admission(
+        demand=_demand(),
+        budget=budget,
+        usage=saturated,
+        workload_class=WORKLOAD_CLASS_GENERIC_HOST,
+    )
+    assert bounded.admitted is False
+    assert bounded.limiting_resource == LIMITING_RESOURCE_INITIALIZING
+
+    # Exemption is from the permit only, never from the machine budget.
+    full = evaluate_resource_admission(
+        demand=_demand(),
+        budget=budget,
+        usage=MachineUsage(initializing=2, reserved_memory_mib=budget.memory_mib),
+        workload_class=WORKLOAD_CLASS_CONTAINER_JOB,
+    )
+    assert full.admitted is False
+    assert full.limiting_resource == LIMITING_RESOURCE_MEMORY
+
+
+@pytest.mark.asyncio
+async def test_an_exempt_classs_prelaunch_row_spends_no_permit(ledger) -> None:
+    """The permit count is permits held, not prelaunch rows that exist."""
+
+    outcome = await ledger.reserve(
+        request=ReservationRequest(
+            backend_ref=BACKEND,
+            workload_class=WORKLOAD_CLASS_CONTAINER_JOB,
+            owner_kind="container_job",
+            owner_ref="job-a",
+            demand=_demand(),
+            container_ref="moonmind-container-job-a",
+        ),
+        budget=_budget(),
+    )
+
+    assert outcome.state == STATE_PRELAUNCH
+    usage = await ledger.usage(backend_ref=BACKEND)
+    assert usage.reserved_memory_mib == _demand().memory_mib
+    assert usage.initializing == 0
 
 
 def test_unprovable_reconciliation_blocks_before_any_count_is_trusted() -> None:
@@ -1045,6 +1122,70 @@ async def test_a_partial_inventory_may_adopt_but_never_release(ledger) -> None:
     assert summary["adopted"] == 1
     usage = await ledger.usage(backend_ref=BACKEND)
     assert usage.reserved_memory_mib == 2048 + 64
+
+
+@pytest.mark.asyncio
+async def test_a_storage_only_row_never_releases_its_live_containers_adoption(
+    ledger,
+) -> None:
+    """#3881 AC7: a live consumer keeps compute accounting through the hand-off.
+
+    Cleanup reported the consumer removed and its volume retained, so the
+    reservation accounts storage and no compute. The container is nevertheless
+    still running, so reconciliation adopts it — a live container is never free
+    capacity. When the owner then reserves again for that exact container, the
+    adopted row may only be released by a reservation that takes the compute
+    over: releasing it against a storage-only row would leave a running
+    container's CPU, memory and processes unaccounted.
+    """
+
+    budget = _budget()
+    request = _request("lease-a", container_ref="mm-host-a")
+    outcome = await ledger.reserve(request=request, budget=budget)
+    await ledger.confirm(
+        reservation_id=outcome.reservation_id, generation=1, container_ref="mm-host-a"
+    )
+    await ledger.release(
+        reservation_id=outcome.reservation_id,
+        generation=1,
+        evidence=ReleaseEvidence(
+            daemon_observed=True, consumer_removed=True, storage_retained=True
+        ),
+    )
+    assert (await ledger.usage(backend_ref=BACKEND)).reserved_memory_mib == 0
+
+    summary = await ledger.reconcile(
+        backend_ref=BACKEND,
+        inventory=_inventory({"mm-host-a": _demand(storage=0)}),
+    )
+    assert summary["adopted"] == 1
+    assert (await ledger.usage(backend_ref=BACKEND)).reconciliation_faults == 1
+
+    reused = await ledger.reserve(request=request, budget=budget)
+
+    assert reused.admitted is True
+    assert reused.reused is True
+    assert reused.state == STATE_ACTIVE
+    usage = await ledger.usage(backend_ref=BACKEND)
+    # One live container, accounted exactly once and never dropped to zero.
+    assert usage.reserved_memory_mib == 2048
+    assert usage.reserved_cpu_millis == 1000
+    assert usage.reserved_processes == 512
+    assert usage.reconciliation_faults == 0
+    async with ledger._factory()() as session:  # noqa: SLF001 - persisted contract
+        owner = await session.get(MachineCapacityReservation, outcome.reservation_id)
+        adopted = await session.get(
+            MachineCapacityReservation,
+            machine_reservation_id(
+                backend_ref=BACKEND,
+                owner_kind="adopted_container",
+                owner_ref="mm-host-a",
+                generation=1,
+            ),
+        )
+    assert owner.state == STATE_ACTIVE
+    assert owner.container_ref == "mm-host-a"
+    assert adopted.state == STATE_RELEASED
 
 
 @pytest.mark.asyncio

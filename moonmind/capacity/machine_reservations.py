@@ -30,9 +30,11 @@ Layering, kept deliberately distinct:
 ``machine resource ceilings``
     How much CPU/memory/process/temporary storage may be reserved at once.
 ``concurrent initialization permits``
-    How many launches may be *initializing* at once. A slow launch holds its
-    permit for as long as it is actually initializing, so a launch that spans
-    several rate windows is still bounded.
+    How many *unserialized cold launches* may be initializing at once. A slow
+    launch holds its permit for as long as it is actually initializing, so a
+    launch that spans several rate windows is still bounded. Which launch
+    classes the permit bounds is a per-class policy in
+    ``COVERED_WORKLOAD_CLASS_POLICY``, restrictive by default.
 ``recent-launch rate limits``
     How many launches may *start* per window (owned by
     ``moonmind.omnigent.host_capacity``; unchanged here).
@@ -62,13 +64,57 @@ MACHINE_CAPACITY_ADMISSION_LOCK_KEY = 3881001
 
 WORKLOAD_CLASS_GENERIC_HOST = "generic_host"
 WORKLOAD_CLASS_CONTAINER_JOB = "container_job"
+
+
+@dataclass(frozen=True)
+class CoveredWorkloadClass:
+    """One managed launch class that reserves the shared machine budget.
+
+    ``holds_initialization_permit`` is this class's documented policy for the
+    concurrent-initialization layer, which is a different question from how
+    much of the machine the class may reserve. The permit bounds *unserialized
+    cold launches*: a generic Omnigent host pulls an image, creates and starts
+    a container and then polls for registration, all while its reservation is
+    ``prelaunch``, and several of those may be in flight at once.
+
+    A class whose initialization is already serialized and bounded to the
+    Docker mutation itself neither needs nor consumes a permit. Making it take
+    one would not protect the machine — the resource ceilings already do that —
+    it would only let slow cold host launches refuse an unrelated workload
+    class for minutes at a time.
+    """
+
+    name: str
+    holds_initialization_permit: bool
+
+
 #: Every managed launch class that reserves the machine budget before it
-#: launches. A launch class missing from this tuple would spend the budget
-#: without reserving it, so it must instead be accounted from daemon evidence
-#: as ``WORKLOAD_CLASS_OBSERVED`` (see ``moonmind.capacity.docker_inventory``).
-COVERED_WORKLOAD_CLASSES = (
-    WORKLOAD_CLASS_GENERIC_HOST,
-    WORKLOAD_CLASS_CONTAINER_JOB,
+#: launches, with the initialization-permit policy each one follows. A launch
+#: class missing from this registry would spend the budget without reserving
+#: it, so it must instead be accounted from daemon evidence as
+#: ``WORKLOAD_CLASS_OBSERVED`` (see ``moonmind.capacity.docker_inventory``).
+COVERED_WORKLOAD_CLASS_POLICY: tuple[CoveredWorkloadClass, ...] = (
+    # A cold host launch pulls, creates, starts and then polls registration
+    # while holding its prelaunch reservation, and nothing else serializes it.
+    CoveredWorkloadClass(WORKLOAD_CLASS_GENERIC_HOST, holds_initialization_permit=True),
+    # A container job's image is already resolved and its container already
+    # created when it reserves; its prelaunch window is one ``docker start``,
+    # and the container-job backend's backend-scoped OS capacity lock admits
+    # one at a time per backend. Bounding it again would be a second serializer
+    # that only imports the host launch latency into an unrelated class.
+    CoveredWorkloadClass(
+        WORKLOAD_CLASS_CONTAINER_JOB, holds_initialization_permit=False
+    ),
+)
+#: The covered launch-class names, derived from the one registry above.
+COVERED_WORKLOAD_CLASSES = tuple(
+    policy.name for policy in COVERED_WORKLOAD_CLASS_POLICY
+)
+#: The launch classes the concurrent-initialization permit actually bounds.
+INITIALIZATION_PERMIT_WORKLOAD_CLASSES = frozenset(
+    policy.name
+    for policy in COVERED_WORKLOAD_CLASS_POLICY
+    if policy.holds_initialization_permit
 )
 #: Rows reconciliation writes on its own behalf. They are deliberately not in
 #: ``COVERED_WORKLOAD_CLASSES``: no caller may reserve as one, and recording a
@@ -91,7 +137,8 @@ WORKLOAD_CLASS_OBSERVED = "observed"
 STATE_WAITING = "waiting"
 #: A short-lived reservation held across the bounded hand-off to the
 #: complementary provider reservation (#3880) and the Docker create/start. It
-#: is fully accounted and it holds a concurrent-initialization permit.
+#: is fully accounted, and it holds a concurrent-initialization permit when
+#: its launch class is one the permit bounds.
 STATE_PRELAUNCH = "prelaunch"
 #: The consumer exists on the backend. Fully accounted, never clock-reclaimed.
 STATE_ACTIVE = "active"
@@ -117,10 +164,31 @@ COMPUTE_ACCOUNTED_STATES = (STATE_PRELAUNCH, STATE_ACTIVE, STATE_ADOPTED)
 STORAGE_ACCOUNTED_STATES = COMPUTE_ACCOUNTED_STATES + (STATE_STORAGE_RETAINED,)
 #: Any state that consumes something.
 ACCOUNTED_STATES = STORAGE_ACCOUNTED_STATES
-#: States that hold a concurrent-initialization permit. The permit follows the
-#: actual launch state, not a clock: a launch that is still initializing after
-#: several rate windows still holds exactly one permit.
+#: States that hold a concurrent-initialization permit, for the launch classes
+#: the permit bounds. The permit follows the actual launch state, not a clock: a
+#: launch that is still initializing after several rate windows still holds
+#: exactly one permit.
 INITIALIZING_STATES = (STATE_PRELAUNCH,)
+
+
+def holds_initialization_permit(workload_class: object) -> bool:
+    """Return whether ``workload_class`` takes a concurrent-initialization permit.
+
+    Restrictive by default: only a class the registry explicitly exempts is
+    exempt. A reconciliation, adopted or otherwise unrecognized row is treated
+    as holding a permit, so an unmodelled launch class can never quietly opt
+    itself out of the layer.
+    """
+
+    name = str(workload_class or "")
+    if not name:
+        return True
+    for policy in COVERED_WORKLOAD_CLASS_POLICY:
+        if policy.name == name:
+            return policy.holds_initialization_permit
+    return True
+
+
 #: States a launch may confirm from. The released states are included because a
 #: launch that outlived its prelaunch window can still succeed, and a live
 #: consumer with no accounting record is worse than a restored reservation.
@@ -540,7 +608,7 @@ class ResourceAdmissionDecision:
             return (
                 "Requested machine resources exceed the configured ceiling; "
                 f"missing_condition={self.limiting_resource}; "
-                "reduce the Host Class or Launch Policy request."
+                "reduce the requested resources."
             )
         if self.limiting_resource == LIMITING_RESOURCE_RECONCILIATION:
             return (
@@ -567,6 +635,7 @@ def evaluate_resource_admission(
     demand: ResourceDemand,
     budget: MachineResourceBudget,
     usage: MachineUsage,
+    workload_class: str | None = None,
     retry_after_seconds: int = 30,
 ) -> ResourceAdmissionDecision:
     """Return the machine-resource verdict for one launch.
@@ -577,6 +646,10 @@ def evaluate_resource_admission(
     not satisfy it anyway. The initialization permit is checked before the
     resource ceilings so a machine with room but no permit reports the limit
     that is actually holding the launch.
+
+    ``workload_class`` selects the launch class's documented permit policy; an
+    omitted class is treated as holding a permit, so the restrictive layer is
+    the default rather than something a caller must remember to ask for.
     """
 
     def verdict(
@@ -606,7 +679,10 @@ def evaluate_resource_admission(
     ):
         if requested > ceiling:
             return verdict(admitted=False, limiting=limiting, unsatisfiable=True)
-    if usage.initializing >= budget.max_concurrent_initializing:
+    if (
+        holds_initialization_permit(workload_class)
+        and usage.initializing >= budget.max_concurrent_initializing
+    ):
         return verdict(admitted=False, limiting=LIMITING_RESOURCE_INITIALIZING)
     for requested, reserved, ceiling, limiting in (
         (
@@ -734,6 +810,52 @@ class ReleaseEvidence:
     storage_retained: bool = False
 
 
+def record_machine_capacity_observation(
+    *,
+    machine: ResourceAdmissionDecision | None,
+    usage: MachineUsage | None = None,
+    fallback_limiting_resource: object = None,
+) -> None:
+    """Publish the identity-free machine-capacity view for one admission.
+
+    MoonLadderStudios/MoonMind#3881 remaining implementation 8. Every admission
+    boundary that reaches a machine verdict emits through this one function, so
+    the limiting resource an operator sees is the one the decision actually
+    reported rather than whatever each call site happened to name.
+
+    ``fallback_limiting_resource`` is used only when no machine verdict was
+    established — the advisory precheck reports the layer that held the run
+    instead. Telemetry is never authority, so this records through the
+    failure-tolerant helper.
+    """
+
+    from moonmind.omnigent.control_plane import metrics as control_plane_metrics
+
+    observed = (
+        usage if usage is not None else (machine.usage if machine is not None else None)
+    )
+    if machine is None and observed is None:
+        return
+    health = "healthy"
+    if observed is not None and observed.reconciliation_blocked:
+        health = "unprovable"
+    elif observed is not None and observed.reconciliation_faults:
+        health = "faulted"
+    control_plane_metrics.record_safely(
+        control_plane_metrics.record_machine_capacity,
+        utilization_percent=(
+            machine.utilization_percent if machine is not None else None
+        ),
+        ceilings=(machine.budget.as_payload() if machine is not None else None),
+        limiting_resource=(machine.limiting_resource if machine is not None else None)
+        or fallback_limiting_resource,
+        oldest_waiter_age_seconds=(
+            observed.oldest_waiter_age_seconds if observed is not None else None
+        ),
+        reconciliation_health=health,
+    )
+
+
 def release_state_for(evidence: ReleaseEvidence) -> str | None:
     """Return the state this evidence releases to, or ``None`` for no release.
 
@@ -856,7 +978,12 @@ class MachineCapacityLedger:
                         + int(row.temporary_storage_mib or 0)
                     ),
                 )
-            if state in INITIALIZING_STATES:
+            if state in INITIALIZING_STATES and holds_initialization_permit(
+                row.workload_class
+            ):
+                # ``initializing`` is the permit count, not the count of rows
+                # that happen to be prelaunch: a class the registry exempts
+                # spends the machine budget without spending a permit.
                 usage = replace(usage, initializing=usage.initializing + 1)
             if (
                 state == STATE_ADOPTED
@@ -898,6 +1025,11 @@ class MachineCapacityLedger:
         The caller must commit this transaction: counting in one transaction
         and reserving in another is precisely the race the shared advisory lock
         exists to close.
+
+        Three outcomes reconcile with existing accounting instead of taking a
+        second allocation: this attempt's own reservation, an adopted row for
+        the exact container this attempt names, and both at once. Everything
+        else is admitted or refused against the current usage.
         """
 
         from api_service.db.models import MachineCapacityReservation
@@ -911,7 +1043,23 @@ class MachineCapacityLedger:
         )
         reservation_id = request.reservation_id
         existing = await session.get(MachineCapacityReservation, reservation_id)
-        if existing is not None and str(existing.state) in ACCOUNTED_STATES:
+        adopted = await self._adopted_consumer_within(
+            session,
+            backend_ref=request.backend_ref,
+            container_ref=request.container_ref,
+        )
+        # A row that still accounts compute already covers this attempt's
+        # consumer, so an adopted row for the same container is a duplicate and
+        # is released below. A ``storage_retained`` row accounts no compute, so
+        # when reconciliation is the thing holding this exact container's CPU,
+        # memory and processes the hand-off branch must run instead: releasing
+        # the adopted row against a storage-only row would leave a live
+        # container unaccounted and read as free capacity.
+        reconciles_with_existing = existing is not None and (
+            str(existing.state) in COMPUTE_ACCOUNTED_STATES
+            or (adopted is None and str(existing.state) in ACCOUNTED_STATES)
+        )
+        if reconciles_with_existing:
             # This attempt already holds its reservation. Reconcile the retry
             # with the existing allocation rather than taking a second one, and
             # extend the bounded prelaunch hand-off so a legitimate retry is
@@ -922,6 +1070,7 @@ class MachineCapacityLedger:
                 )
                 if request.container_ref and not str(existing.container_ref or ""):
                     existing.container_ref = str(request.container_ref)
+            await self._hand_over_adopted_within(adopted, now=observed_at)
             usage = await self.usage_within(
                 session, backend_ref=request.backend_ref, now=observed_at
             )
@@ -940,11 +1089,56 @@ class MachineCapacityLedger:
                     retry_after_seconds=0,
                 ),
             )
+        if adopted is not None:
+            # Reconciliation observed this attempt's own container running and
+            # accounted it anonymously, because at that moment this attempt held
+            # no record of its own. The container provably exists, so this is
+            # not an admission question: refusing would strand a live consumer
+            # with no accounting record, which is strictly worse than
+            # re-attributing accounting the machine is already spending. The
+            # hand-off is derived from the persisted container identity both
+            # rows name, never from a caller's claim to already hold capacity.
+            state = STATE_ACTIVE
+            if existing is None:
+                existing = MachineCapacityReservation(
+                    reservation_id=reservation_id,
+                    backend_ref=request.backend_ref,
+                    owner_kind=request.owner_kind,
+                    owner_ref=request.owner_ref,
+                    generation=int(request.generation),
+                    created_at=observed_at,
+                )
+                session.add(existing)
+            self._apply_request(existing, request, state=state, now=observed_at)
+            existing.expires_at = None
+            await self._hand_over_adopted_within(adopted, now=observed_at)
+            await session.flush()
+            usage = await self.usage_within(
+                session, backend_ref=request.backend_ref, now=observed_at
+            )
+            return ReservationOutcome(
+                admitted=True,
+                reservation_id=reservation_id,
+                state=state,
+                reused=True,
+                decision=ResourceAdmissionDecision(
+                    admitted=True,
+                    limiting_resource=None,
+                    unsatisfiable=False,
+                    demand=request.demand,
+                    usage=usage,
+                    budget=budget,
+                    retry_after_seconds=0,
+                ),
+            )
         usage = await self.usage_within(
             session, backend_ref=request.backend_ref, now=observed_at
         )
         decision = evaluate_resource_admission(
-            demand=request.demand, budget=budget, usage=usage
+            demand=request.demand,
+            budget=budget,
+            usage=usage,
+            workload_class=request.workload_class,
         )
         if decision.unsatisfiable:
             # Never persist a waiter for a request that can never fit.
@@ -962,43 +1156,19 @@ class MachineCapacityLedger:
         # is a waiter marker that must not outlive the run that abandoned it.
         expires_at = observed_at + timedelta(seconds=budget.prelaunch_ttl_seconds)
         if existing is None:
-            session.add(
-                MachineCapacityReservation(
-                    reservation_id=reservation_id,
-                    backend_ref=request.backend_ref,
-                    workload_class=request.workload_class,
-                    owner_kind=request.owner_kind,
-                    owner_ref=request.owner_ref,
-                    generation=int(request.generation),
-                    state=state,
-                    plan_ref=request.plan_ref,
-                    host_class_ref=request.host_class_ref,
-                    launch_policy_ref=request.launch_policy_ref,
-                    cpu_millis=request.demand.cpu_millis,
-                    memory_mib=request.demand.memory_mib,
-                    processes=request.demand.processes,
-                    temporary_storage_mib=request.demand.temporary_storage_mib,
-                    container_ref=request.container_ref,
-                    created_at=observed_at,
-                    expires_at=expires_at,
-                    updated_at=observed_at,
-                )
+            existing = MachineCapacityReservation(
+                reservation_id=reservation_id,
+                backend_ref=request.backend_ref,
+                owner_kind=request.owner_kind,
+                owner_ref=request.owner_ref,
+                generation=int(request.generation),
+                created_at=observed_at,
             )
-        else:
-            # A waiter that is now admitted keeps its original ``created_at``
-            # so its recorded wait is not reset by the admission that ended it.
-            existing.state = state
-            existing.workload_class = request.workload_class
-            existing.plan_ref = request.plan_ref
-            existing.host_class_ref = request.host_class_ref
-            existing.launch_policy_ref = request.launch_policy_ref
-            existing.cpu_millis = request.demand.cpu_millis
-            existing.memory_mib = request.demand.memory_mib
-            existing.processes = request.demand.processes
-            existing.temporary_storage_mib = request.demand.temporary_storage_mib
-            existing.container_ref = request.container_ref
-            existing.expires_at = expires_at
-            existing.updated_at = observed_at
+            session.add(existing)
+        # A waiter that is now admitted keeps its original ``created_at`` so its
+        # recorded wait is not reset by the admission that ended it.
+        self._apply_request(existing, request, state=state, now=observed_at)
+        existing.expires_at = expires_at
         await session.flush()
         return ReservationOutcome(
             admitted=decision.admitted,
@@ -1006,6 +1176,72 @@ class MachineCapacityLedger:
             state=state,
             decision=decision,
         )
+
+    @staticmethod
+    def _apply_request(
+        row: Any, request: ReservationRequest, *, state: str, now: datetime
+    ) -> None:
+        """Write one request's identity and demand onto its reservation row."""
+
+        row.state = state
+        row.workload_class = request.workload_class
+        row.plan_ref = request.plan_ref
+        row.host_class_ref = request.host_class_ref
+        row.launch_policy_ref = request.launch_policy_ref
+        row.cpu_millis = request.demand.cpu_millis
+        row.memory_mib = request.demand.memory_mib
+        row.processes = request.demand.processes
+        row.temporary_storage_mib = request.demand.temporary_storage_mib
+        row.container_ref = request.container_ref
+        row.updated_at = now
+
+    @staticmethod
+    async def _adopted_consumer_within(
+        session: Any, *, backend_ref: str, container_ref: str | None
+    ) -> Any | None:
+        """Return the adopted row accounting for ``container_ref``, if any.
+
+        Reconciliation adopts an owned live container that has no accounting
+        record, which is correct — a running container is never free capacity.
+        When the reservation that owns that exact container then arrives, the
+        two rows describe one consumer, so the reservation must take the
+        accounting over rather than add a second copy of it.
+        """
+
+        from api_service.db.models import MachineCapacityReservation
+
+        if not str(container_ref or ""):
+            return None
+        row = await session.get(
+            MachineCapacityReservation,
+            machine_reservation_id(
+                backend_ref=backend_ref,
+                owner_kind="adopted_container",
+                owner_ref=str(container_ref),
+                generation=1,
+            ),
+        )
+        if row is None or str(row.state) != STATE_ADOPTED:
+            return None
+        return row
+
+    @staticmethod
+    async def _hand_over_adopted_within(row: Any | None, *, now: datetime) -> None:
+        """Release an adopted row whose consumer a real reservation now owns.
+
+        The precondition both call sites establish is that the reservation is
+        in ``COMPUTE_ACCOUNTED_STATES`` for this same container — every
+        production reserver derives its container name from the identity that
+        forms its reservation id, so the two rows describe one consumer. That
+        is what makes the release safe: the machine keeps accounting the live
+        container exactly once instead of twice.
+        """
+
+        if row is None:
+            return
+        row.state = STATE_RELEASED
+        row.expires_at = None
+        row.updated_at = now
 
     async def reserve(
         self,
@@ -1433,6 +1669,8 @@ __all__ = [
     "COMPUTE_ACCOUNTED_STATES",
     "CONFIRMABLE_STATES",
     "COVERED_WORKLOAD_CLASSES",
+    "COVERED_WORKLOAD_CLASS_POLICY",
+    "INITIALIZATION_PERMIT_WORKLOAD_CLASSES",
     "INITIALIZING_STATES",
     "LIMITING_RESOURCE_CPU",
     "LIMITING_RESOURCE_INITIALIZING",
@@ -1454,6 +1692,7 @@ __all__ = [
     "WORKLOAD_CLASS_OBSERVED",
     "WORKLOAD_CLASS_RECONCILIATION",
     "WORKLOAD_CLASS_UNATTRIBUTED",
+    "CoveredWorkloadClass",
     "MachineCapacityConflict",
     "MachineCapacityLedger",
     "MachineCapacityUnavailable",
@@ -1466,8 +1705,10 @@ __all__ = [
     "ResourceAdmissionDecision",
     "ResourceDemand",
     "evaluate_resource_admission",
+    "holds_initialization_permit",
     "machine_budget_from_runner",
     "machine_reservation_id",
     "probe_machine_totals",
+    "record_machine_capacity_observation",
     "release_state_for",
 ]

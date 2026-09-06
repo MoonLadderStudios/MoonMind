@@ -27,6 +27,7 @@ from api_service.db.models import (
 )
 from moonmind.capacity import (
     COVERED_WORKLOAD_CLASSES,
+    LIMITING_RESOURCE_INITIALIZING,
     LIMITING_RESOURCE_MEMORY,
     LIMITING_RESOURCE_RECONCILIATION,
     OWNED_CONTAINER_LABEL_FILTERS,
@@ -951,6 +952,8 @@ async def test_a_container_job_cannot_spend_a_generic_hosts_reservation(
     assert (
         raised.value.failure_class is ContainerJobFailureClass.RESOURCE_LIMIT_EXCEEDED
     )
+    # The shared memory ceiling is what refused it, and the message says so.
+    assert f"missing_condition={LIMITING_RESOURCE_MEMORY}" in str(raised.value)
     assert not any(command[0] == "start" for command in commands)
 
 
@@ -1230,3 +1233,390 @@ async def test_admission_never_pools_two_docker_backends(session_factory) -> Non
     assert decision.machine.limiting_resource is None
     assert decision.machine.usage.reserved_memory_mib == 0
     assert LIMITING_RESOURCE_MEMORY not in str(decision.waiting_reason)
+
+
+# ------------------------------- concurrent-initialization permit boundary
+
+
+def _default_budget() -> MachineResourceBudget:
+    """The documented default: every ``MOONMIND_MACHINE_*`` setting omitted.
+
+    ``_budget`` raises the permit out of the way so the other boundaries can be
+    exercised in isolation. These tests need the value a deployment that
+    configured nothing actually gets.
+    """
+
+    return MachineResourceBudget.from_totals(TOTALS, env={})
+
+
+def _default_repository(session_factory, admission):
+    async def budget():
+        return _default_budget()
+
+    return DbOmnigentHostLeaseRepository(
+        session_factory,
+        capacity_admission=admission,
+        machine_budget_provider=budget,
+    )
+
+
+def _small_container_job_request(tmp_path, *, job_id: str | None = None):
+    """A container job small enough to fit beside two cold host launches."""
+
+    from tests.unit.workflows.temporal.test_container_job_backend import _request
+
+    request = _request(
+        tmp_path,
+        resources={"cpuMillis": 250, "memoryMiB": 512, "pids": 64},
+    )
+    if job_id is None:
+        return request
+    # One job id owns exactly one reservation, so a second *distinct* job needs
+    # its own identity rather than reusing the first job's allocation.
+    payload = request.model_dump(by_alias=True, mode="json")
+    payload["jobId"] = job_id
+    payload["ownershipToken"] = f"{job_id}:v1"
+    return type(request).model_validate(payload)
+
+
+def _container_job_runner(request, commands, *, running: tuple[str, ...] = ()):
+    """A stub daemon reporting ``running`` as this backend's owned containers."""
+
+    import json as _json
+
+    from moonmind.workflows.temporal.container_job_backend import LABEL_OWNERSHIP
+
+    async def runner(args):
+        args = tuple(args)
+        commands.append(args)
+        if args[0] == "info":
+            return 0, f"{TOTALS.memory_mib * 1024 * 1024}\t16".encode(), b""
+        if args[0] == "ps":
+            selector = args[args.index("--filter") + 1]
+            if "container_job" in selector and running:
+                return 0, "".join(f"{ref}\n" for ref in running).encode(), b""
+            return 0, b"", b""
+        if args[:2] == ("inspect", "--format") and args[2].startswith("{{.Name}}"):
+            lines = [f"/{ref}\t{512 * 1024 * 1024}\t250000000\t64" for ref in args[3:]]
+            return 0, ("\n".join(lines) + "\n").encode(), b""
+        if args[:3] == ("inspect", "--format", "{{json .Config.Labels}}"):
+            return (
+                0,
+                _json.dumps({LABEL_OWNERSHIP: request.ownership_token}).encode(),
+                b"",
+            )
+        return 0, b"", b""
+
+    return runner
+
+
+@pytest.mark.asyncio
+async def test_a_cold_host_launch_still_spends_an_initialization_permit(
+    session_factory,
+) -> None:
+    """#3881 IMPL-5: the permit the layer exists for is unchanged.
+
+    Two hosts cold-launching at the documented default consume both permits, so
+    the third waits on the permit rather than on a resource ceiling it has room
+    in.
+    """
+
+    admission = _admission(session_factory)
+    repository = _default_repository(session_factory, admission)
+    await _acquire(repository, "binding-a")
+    await _acquire(repository, "binding-b")
+
+    usage = await MachineCapacityLedger(session_factory).usage(backend_ref=BACKEND)
+    assert usage.initializing == _default_budget().max_concurrent_initializing
+
+    with pytest.raises(HarnessPlatformError) as raised:
+        await _acquire(repository, "binding-c")
+
+    assert (
+        raised.value.code
+        == HarnessPlatformFailure.OMNIGENT_HOST_CAPACITY_UNAVAILABLE.value
+    )
+    assert f"missing_condition={LIMITING_RESOURCE_INITIALIZING}" in str(raised.value)
+
+
+@pytest.mark.asyncio
+async def test_a_container_job_is_not_held_by_a_cold_host_launchs_permit(
+    session_factory, tmp_path
+) -> None:
+    """#3881 FINDING-A: the permit bounds cold host launches, not every class.
+
+    Under the documented defaults two hosts cold-launching consume every
+    initialization permit for the whole of ``realize()`` — an image pull, a
+    create/start and up to 91 registration polls. Charging a container job for
+    that permit terminally failed every job start in that multi-minute window
+    while the machine had ample CPU and memory to run it.
+    """
+
+    ledger = MachineCapacityLedger(session_factory)
+    admission = _admission(session_factory)
+    repository = _default_repository(session_factory, admission)
+    await _acquire(repository, "binding-a")
+    await _acquire(repository, "binding-b")
+    assert (await ledger.usage(backend_ref=BACKEND)).initializing == 2
+
+    request = _small_container_job_request(tmp_path)
+    commands: list[tuple[str, ...]] = []
+    backend = _container_job_backend(
+        tmp_path, ledger=ledger, runner=_container_job_runner(request, commands)
+    )
+
+    await backend.start_container(request)
+
+    assert any(command[0] == "start" for command in commands)
+    usage = await ledger.usage(backend_ref=BACKEND)
+    # The job spent the machine budget it asked for and no permit at all: the
+    # two hosts still hold every permit the layer bounds.
+    assert usage.reserved_memory_mib == 6512
+    assert usage.initializing == 2
+
+
+@pytest.mark.asyncio
+async def test_a_container_job_refusal_names_the_resource_that_refused_it(
+    session_factory, tmp_path
+) -> None:
+    """#3881 FINDING-A/FINDING-C: the raised message must not name a guess."""
+
+    from moonmind.schemas.container_job_models import (
+        ContainerJobBackendError,
+        ContainerJobFailureClass,
+    )
+
+    ledger = MachineCapacityLedger(session_factory)
+    admission = _admission(session_factory)
+    repository = _default_repository(session_factory, admission)
+    # Two hosts hold every permit and 6000 MiB of the 7000 MiB ceiling.
+    await _acquire(repository, "binding-a")
+    await _acquire(repository, "binding-b")
+
+    request = _container_job_request(tmp_path)
+    commands: list[tuple[str, ...]] = []
+    backend = _container_job_backend(
+        tmp_path, ledger=ledger, runner=_container_job_runner(request, commands)
+    )
+
+    with pytest.raises(ContainerJobBackendError) as raised:
+        await backend.start_container(request)
+
+    assert (
+        raised.value.failure_class is ContainerJobFailureClass.RESOURCE_LIMIT_EXCEEDED
+    )
+    # Memory is the resource that actually refused it. The permit is not, and
+    # the message must not claim another container job is holding the machine.
+    assert f"missing_condition={LIMITING_RESOURCE_MEMORY}" in str(raised.value)
+    assert LIMITING_RESOURCE_INITIALIZING not in str(raised.value)
+    assert not any(command[0] == "start" for command in commands)
+
+
+@pytest.mark.asyncio
+async def test_the_container_job_boundary_records_the_machine_capacity_view(
+    session_factory, tmp_path, monkeypatch
+) -> None:
+    """#3881 FINDING-A, implementation 8: the enforcing boundary must emit.
+
+    Without this the limiting resource is unrecoverable from telemetry as well
+    as from the error, so an operator cannot tell which layer refused the job.
+    """
+
+    from moonmind.omnigent.control_plane import metrics as control_plane_metrics
+    from moonmind.schemas.container_job_models import ContainerJobBackendError
+
+    recorded: list[dict[str, object]] = []
+    monkeypatch.setattr(
+        control_plane_metrics,
+        "record_machine_capacity",
+        lambda **kwargs: recorded.append(kwargs),
+    )
+    vocabulary = control_plane_metrics.BOUNDED_LABEL_VALUES["limiting_resource"]
+    ledger = MachineCapacityLedger(session_factory)
+
+    admitted_request = _small_container_job_request(tmp_path)
+    commands: list[tuple[str, ...]] = []
+    backend = _container_job_backend(
+        tmp_path,
+        ledger=ledger,
+        runner=_container_job_runner(admitted_request, commands),
+    )
+    await backend.start_container(admitted_request)
+
+    assert len(recorded) == 1
+    admitted = recorded[-1]
+    assert admitted["limiting_resource"] is None
+    assert admitted["reconciliation_health"] == "healthy"
+    assert admitted["ceilings"]["memoryMiB"] == 7000
+    assert admitted["oldest_waiter_age_seconds"] == 0
+
+    # Fill the ceiling so the next start is refused, and assert the refusal
+    # reports the resource that refused it.
+    admission = _admission(session_factory)
+    repository = _default_repository(session_factory, admission)
+    await _acquire(repository, "binding-a")
+    await _acquire(repository, "binding-b")
+    refused_request = _small_container_job_request(
+        tmp_path, job_id="container-job:ffffffffffffffffffffffffffffffff"
+    )
+    backend = _container_job_backend(
+        tmp_path,
+        ledger=ledger,
+        runner=_container_job_runner(
+            refused_request,
+            commands,
+            running=(backend._name(admitted_request),),
+        ),
+    )
+    with pytest.raises(ContainerJobBackendError):
+        await backend.start_container(refused_request)
+
+    refused = recorded[-1]
+    assert refused["limiting_resource"] == LIMITING_RESOURCE_MEMORY
+    assert refused["limiting_resource"] in vocabulary
+    # Identity never reaches a metric label.
+    flattened = repr(recorded)
+    assert admitted_request.job_id not in flattened
+    assert "binding-a" not in flattened
+
+
+# --------------------------- inventory scope at the container-job boundary
+
+
+def test_a_filtered_inventory_can_never_speak_for_every_launch_class() -> None:
+    """#3881 FINDING-B: absence from a filtered view proves nothing.
+
+    Reconciliation releases the accounting of consumers that are absent from a
+    *complete* enumeration. A view that deliberately removed a running
+    container while still reporting complete coverage would release that live
+    container's compute, so the scope is dropped along with the container.
+    """
+
+    inventory = _owned_inventory(
+        {
+            "mm-host-a": ResourceDemand(memory_mib=3000),
+            "mm-job-a": ResourceDemand(memory_mib=512),
+        }
+    )
+    assert inventory.covers_every_owned_launch_class is True
+
+    filtered = inventory.excluding("mm-job-a")
+
+    assert "mm-job-a" not in filtered.containers
+    assert filtered.covers_every_owned_launch_class is False
+    # Removing nothing removes no evidence either.
+    assert inventory.excluding("mm-absent") is inventory
+
+
+@pytest.mark.asyncio
+async def test_a_container_job_retry_keeps_its_own_live_containers_accounting(
+    session_factory, tmp_path
+) -> None:
+    """#3881 FINDING-B: a job's own running container is not a vanished one.
+
+    The launch path reconciles before it reserves. Handing that reconciliation
+    an inventory with this job's own live container removed — while still
+    claiming complete enumeration — released the container's own compute, after
+    which the pre-Docker fence re-verification refused the attempt.
+    """
+
+    ledger = MachineCapacityLedger(session_factory)
+    request = _small_container_job_request(tmp_path)
+    commands: list[tuple[str, ...]] = []
+    backend = _container_job_backend(
+        tmp_path, ledger=ledger, runner=_container_job_runner(request, commands)
+    )
+
+    await backend.start_container(request)
+    container_ref = backend._name(request)
+    reservation_id = machine_reservation_id(
+        backend_ref=BACKEND,
+        owner_kind="container_job",
+        owner_ref=request.job_id,
+        generation=1,
+    )
+    async with session_factory() as session:
+        row = await session.get(MachineCapacityReservation, reservation_id)
+    assert row.state == STATE_ACTIVE
+
+    # The same attempt runs again against its own already-running container.
+    commands.clear()
+    backend = _container_job_backend(
+        tmp_path,
+        ledger=ledger,
+        runner=_container_job_runner(request, commands, running=(container_ref,)),
+    )
+
+    await backend.start_container(request)
+
+    assert any(command[0] == "start" for command in commands)
+    usage = await ledger.usage(backend_ref=BACKEND)
+    # One live container, accounted exactly once and never released.
+    assert usage.reserved_memory_mib == 512
+    assert usage.reserved_cpu_millis == 250
+    assert usage.reserved_processes == 64
+    assert usage.reconciliation_faults == 0
+    async with session_factory() as session:
+        row = await session.get(MachineCapacityReservation, reservation_id)
+    assert row.state == STATE_ACTIVE
+
+
+@pytest.mark.asyncio
+async def test_a_job_whose_record_was_lost_reclaims_its_adopted_accounting(
+    session_factory, tmp_path
+) -> None:
+    """#3881 IMPL-6: one live container is accounted once, by its real owner.
+
+    Handing reconciliation the unfiltered inventory means it can observe a job's
+    own live container while that job holds no accounting record, and adopt it.
+    Adoption is right — a running container is never free capacity — but the
+    reservation that owns that exact container must then take the accounting
+    over rather than add a second copy of it.
+    """
+
+    ledger = MachineCapacityLedger(session_factory)
+    request = _small_container_job_request(tmp_path)
+    commands: list[tuple[str, ...]] = []
+    backend = _container_job_backend(
+        tmp_path, ledger=ledger, runner=_container_job_runner(request, commands)
+    )
+    await backend.start_container(request)
+    container_ref = backend._name(request)
+    reservation_id = machine_reservation_id(
+        backend_ref=BACKEND,
+        owner_kind="container_job",
+        owner_ref=request.job_id,
+        generation=1,
+    )
+    adopted_id = machine_reservation_id(
+        backend_ref=BACKEND,
+        owner_kind="adopted_container",
+        owner_ref=container_ref,
+        generation=1,
+    )
+
+    # The job's own record is lost while its container keeps running.
+    async with session_factory() as session:
+        row = await session.get(MachineCapacityReservation, reservation_id)
+        await session.delete(row)
+        await session.commit()
+
+    backend = _container_job_backend(
+        tmp_path,
+        ledger=ledger,
+        runner=_container_job_runner(request, commands, running=(container_ref,)),
+    )
+    await backend.start_container(request)
+
+    usage = await ledger.usage(backend_ref=BACKEND)
+    # One container, accounted once — not once as an orphan and once as a
+    # reservation — and no longer an outstanding reconciliation fault.
+    assert usage.reserved_memory_mib == 512
+    assert usage.reserved_cpu_millis == 250
+    assert usage.reconciliation_faults == 0
+    async with session_factory() as session:
+        owner = await session.get(MachineCapacityReservation, reservation_id)
+        orphan = await session.get(MachineCapacityReservation, adopted_id)
+    assert owner.state == STATE_ACTIVE
+    assert owner.container_ref == container_ref
+    assert orphan.state == "released"
