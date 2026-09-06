@@ -168,7 +168,13 @@ async def test_current_manager_cleans_then_grants_and_replays(
                 },
             )
             await asyncio.wait_for(activities.verified.wait(), timeout=15)
-            assignment = await requester.query(_SlotRequester.assigned)
+            # Activity observation does not order a separate workflow's signal
+            # delivery. Wait for the recipient's authoritative assignment.
+            async with asyncio.timeout(15):
+                while (
+                    assignment := await requester.query(_SlotRequester.assigned)
+                ) is None:
+                    await asyncio.sleep(0.01)
             assert assignment["profile_id"] == "test-default"
             assert assignment["fencing_generation"] > 0
             state = await manager.query("get_state")

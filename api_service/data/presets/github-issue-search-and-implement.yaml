@@ -89,48 +89,25 @@ inputs:
   required: false
   default: true
 steps:
-- title: Search GitHub issues and resolve target issue
-  type: skill
-  instructions: |-
-    Resolve one target GitHub issue and persist it to artifacts/github-issue-search-result.json with keys repository, number, url, and title.
-
-    Repository scope: "{{ inputs.repository }}". When empty, use the repository from workflow context.
-
-    When the search input below is non-empty, search GitHub issues with the query "<search> is:issue state:open" using the authenticated GitHub tooling with deterministic pagination. Use `gh search issues "<search> is:issue state:open --repo <repository>" --limit 100` and page with `--page N` until the result set is exhausted or 500 candidates have been examined. Take the best match as the target issue:
-
-    {{ inputs.issue_search }}
-
-    When the search input is blank, use fallback behavior with deterministic pagination: list open issues with `gh issue list --state open --limit 100 --page N --repo <repository>`, advancing pages until 500 issues have been examined or the list is exhausted. Examine candidates in listed order through the deterministic trusted GitHub blocker preflight (explicit blocking labels or a known blocker section in the issue body counts as blocker evidence). Keep looking until you find the first issue that has no blocking dependencies, and use that issue as the target. Never conclude "no unblocked issue exists" until every fetched page has been examined; report the page count and issues examined as search evidence.
-
-    If no matching (or no unblocked) issue can be resolved from trusted GitHub data, stop without implementing and report the empty search evidence including pages examined and total candidates. Do not invent an issue number. Record the resolved repository, issue number, URL, title, and whether fallback scanning was used in the step result.
-  skill:
-    id: auto
-    args: {}
-    requiredCapabilities:
-    - git
-    - gh
-- title: Load GitHub issue brief for resolved issue
+- title: Resolve GitHub issue and load trusted brief
   type: tool
-  instructions: |-
-    Read artifacts/github-issue-search-result.json from the previous step to get the resolved repository and issue number. Do not use any other issue.
-
-    Fetch that GitHub issue by dispatching the registered github.load_issue_preset_brief tool with the resolved repository, issue number, and artifactPath artifacts/github-issue-implement-brief.json. The resolved issue is discovered at runtime, so this step's static inputs carry only the fallback repository and artifact path; the runtime invocation MUST supply the exact resolved repository and issue number from the search-result artifact.
-
-    Build the canonical implementation input from the issue title, body, labels, state, URL, and any acceptance criteria in the issue body, producing the tool's canonical trustedSource, normalized issue, and presetBrief outputs. Preserve the repository and issue number in the brief so downstream implementation artifacts and the pull request can reference it. On retrieval errors emit the tool's explicit FAILED result and stop without writing a fabricated brief.
-
-    Persist the brief to artifacts/github-issue-implement-brief.json following the GitHub Issue Implement preset (github-issue-implement) brief shape, validate its schema and truncation state, and record the resolved issue reference in the step result.
+  instructions: >-
+    Resolve the best open issue matching issueSearch, or the first unblocked open
+    issue when blank, within 500 candidates. Load its trusted issue brief and
+    preserve the resolved identity and search evidence for downstream steps.
   tool:
     id: github.load_issue_preset_brief
     requiredCapabilities:
     - gh
     inputs:
-      repository: '{{ inputs.repository }}'
+      repository: '{{ inputs.repository or context.get(''repository'', '''') }}'
+      issueSearch: '{{ inputs.issue_search }}'
       artifactPath: artifacts/github-issue-implement-brief.json
 - title: Assess resolved issue implementation state
   repositoryOperation: read
   type: skill
   instructions: |-
-    Read artifacts/github-issue-search-result.json for the resolved issue reference and artifacts/github-issue-implement-brief.json for the brief produced by the github.load_issue_preset_brief tool step. Note the binding constraints for this run (empty means none):
+    Use the resolved issue in MoonMind trusted previous step context and the brief produced by github.load_issue_preset_brief. Read the durable brief attachment when present, and persist it to artifacts/github-issue-implement-brief.json for local implementation steps. Note the binding constraints for this run (empty means none):
 
     {{ inputs.constraints }}
 
@@ -147,9 +124,9 @@ steps:
 - title: Check resolved GitHub issue blockers before implementation
   type: tool
   instructions: |-
-    Read artifacts/github-issue-search-result.json and artifacts/github-issue-implement-assessment.json (or the recorded verdict from the assess step) before deciding how to apply blocker results.
+    Read the resolved issue from MoonMind trusted previous step context and artifacts/github-issue-implement-assessment.json (or the recorded verdict from the assess step) before deciding how to apply blocker results.
 
-    Dispatch the registered github.check_issue_blockers tool with the resolved repository, issue number from the search-result artifact, and the assessment verdict. The static inputs below carry only the fallback repository; the runtime invocation MUST supply the exact resolved repository and issue number. Treat explicit blocking labels or a known blocker section in the issue body as blocker evidence, following the GitHub Issue Implement preset (github-issue-implement) blocker stage.
+    Dispatch the registered github.check_issue_blockers tool with the resolved repository, issue number from the trusted previous step context, and the assessment verdict. The tool resolves the exact issue identity from the preserved trusted previous step context. Treat explicit blocking labels or a known blocker section in the issue body as blocker evidence, following the GitHub Issue Implement preset (github-issue-implement) blocker stage.
 
     If the recorded verdict is FULLY_IMPLEMENTED, report blocker findings for the record but do not stop finalization. Otherwise, if unresolved blockers are detected or blocker evidence cannot be evaluated from trusted GitHub data, emit a structured blocked outcome: write decision blocked with the blocker details AND a parser-recognized `Verdict: BLOCKED` line in the step result, then stop implementation. If the agent responds only with ordinary prose such as "found unresolved blockers" without the structured decision and verdict line, the plan MUST NOT advance to implementation.
   tool:
@@ -157,26 +134,27 @@ steps:
     requiredCapabilities:
     - gh
     inputs:
-      repository: '{{ inputs.repository }}'
+      repository: '{{ inputs.repository or context.get(''repository'', '''') }}'
+      assessmentArtifactPath: artifacts/github-issue-implement-assessment.json
 - title: Mark resolved GitHub issue In Progress
   type: tool
   instructions: |-
-    Read artifacts/github-issue-search-result.json and artifacts/github-issue-implement-assessment.json (or the previous step's recorded verdict) before doing anything.
+    Read the resolved issue from MoonMind trusted previous step context and artifacts/github-issue-implement-assessment.json (or the previous step's recorded verdict) before doing anything.
 
-    If the recorded verdict is FULLY_IMPLEMENTED, skip the In Progress update because the issue is already implemented. If the recorded verdict is BLOCKED, stop without changing GitHub. Otherwise dispatch the registered github.update_issue_status tool with the resolved repository, resolved issue number, targetStatus In Progress, and mode start. The static inputs below carry the fallback repository and policy; the runtime invocation MUST supply the exact resolved repository and issue number from the search-result artifact, plus the assessment artifact path, so the update flows through the registered tool's assessment/verification/PR-artifact checks, confirmed GitHub response, and structured side-effect evidence.
+    If the recorded verdict is FULLY_IMPLEMENTED, skip the In Progress update because the issue is already implemented. If the recorded verdict is BLOCKED, stop without changing GitHub. Otherwise dispatch the registered github.update_issue_status tool with the resolved repository, resolved issue number, targetStatus In Progress, and mode start. The tool resolves the exact issue identity from preserved trusted previous step context and uses the declared assessment artifact path, so the update flows through the registered tool's assessment/verification/PR-artifact checks, confirmed GitHub response, and structured side-effect evidence.
   tool:
     id: github.update_issue_status
     requiredCapabilities:
     - gh
     inputs:
-      repository: '{{ inputs.repository }}'
+      repository: '{{ inputs.repository or context.get(''repository'', '''') }}'
       targetStatus: In Progress
       mode: start
       assessmentArtifactPath: artifacts/github-issue-implement-assessment.json
 - title: Implement resolved issue
   type: skill
   instructions: |-
-    Read artifacts/github-issue-search-result.json, artifacts/github-issue-implement-brief.json, and artifacts/github-issue-implement-assessment.json. Binding constraints for this run (empty means none):
+    Read the resolved issue and brief from MoonMind trusted previous step context or its durable brief attachment, and read artifacts/github-issue-implement-assessment.json (or its durable assessment attachment). Binding constraints for this run (empty means none):
 
     {{ inputs.constraints }}
 
@@ -273,7 +251,7 @@ steps:
   annotations:
     issueImplementRole: pull-request-handoff
   instructions: |-
-    Read artifacts/github-issue-search-result.json, artifacts/github-issue-implement-brief.json, and artifacts/github-issue-implement-assessment.json. Binding constraints for this run (empty means none):
+    Read the resolved issue and brief from MoonMind trusted previous step context or its durable brief attachment, and read artifacts/github-issue-implement-assessment.json (or its durable assessment attachment). Binding constraints for this run (empty means none):
 
     {{ inputs.constraints }}
 
@@ -293,7 +271,7 @@ steps:
 - title: Finalize resolved GitHub issue status
   type: tool
   instructions: |-
-    Read artifacts/github-issue-search-result.json and artifacts/github-issue-implement-assessment.json (or the recorded verdict from the assess step) before changing GitHub.
+    Read the resolved issue from MoonMind trusted previous step context and artifacts/github-issue-implement-assessment.json (or the recorded verdict from the assess step) before changing GitHub.
 
     If the recorded verdict is BLOCKED, stop without changing GitHub and report the blocking evidence. If the recorded verdict is FULLY_IMPLEMENTED, apply the configured Done strategy via the trusted GitHub update tool. Otherwise {% if inputs.run_verify %}read artifacts/github-issue-implement-verify.json and require the latest controlling verifier result to report FULLY_IMPLEMENTED before any Code Review update{% else %}confirm implementation is complete and the focused tests required by the issue have passed; verification was disabled for this run so do not require artifacts/github-issue-implement-verify.json{% endif %}. Then read artifacts/github-issue-implement-pr.json, verify it contains a pull_request_url for the resolved issue, and dispatch the registered github.update_issue_status tool with mode finalize_after_pr_or_done, the resolved repository and issue number, the PR artifact path, and the verification artifact path. {% if inputs.run_verify %}If the verifier artifact is missing, terminal, or still reports ADDITIONAL_WORK_NEEDED after remediation is exhausted, stop without changing GitHub.{% else %}If the pull request artifact is missing or lacks a confirmed pull_request_url, stop without changing GitHub.{% endif %} Do not assume a single organization's workflow; use the configured label/comment/close strategy exposed by the trusted GitHub update tool.
   tool:
@@ -301,8 +279,9 @@ steps:
     requiredCapabilities:
     - gh
     inputs:
-      repository: '{{ inputs.repository }}'
+      repository: '{{ inputs.repository or context.get(''repository'', '''') }}'
       mode: finalize_after_pr_or_done
+      assessmentArtifactPath: artifacts/github-issue-implement-assessment.json
       pullRequestArtifactPath: artifacts/github-issue-implement-pr.json
       verificationArtifactPath: artifacts/github-issue-implement-verify.json
       requireVerification: '{{ inputs.run_verify }}'
