@@ -4944,6 +4944,12 @@ class MoonMindRunWorkflow:
             task_payload = self._mapping_value(parameters, "task")
         inputs = self._mapping_value(task_payload, "inputs")
         issue = self._mapping_value(inputs, "github_issue")
+        # Search presets resolve identity through the trusted issue tool after
+        # submission, so their authored inputs cannot contain the selected issue.
+        if not issue and isinstance(self._trusted_issue_context, Mapping):
+            context = self._trusted_issue_context
+            if context.get("trustedSource") == "moonmind.github.get_issue":
+                issue = self._mapping_value(context, "issue")
         repository = str(issue.get("repository") or "").strip()
         number = issue.get("number")
         if not repository or isinstance(number, bool):

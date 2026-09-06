@@ -397,6 +397,7 @@ async def test_default_preset_resolves_and_preserves_issue_across_agent_steps(
     finally:
         await engine.dispose()
     steps = expanded["steps"]
+    assert steps[-1]["annotations"]["issueImplementRole"] == "code-review-handoff"
     assert steps[0]["type"] == "tool"
     tool = steps[0]["tool"]
     result = await activity_boundary.execute(tool["id"], tool["inputs"])
@@ -409,6 +410,9 @@ async def test_default_preset_resolves_and_preserves_issue_across_agent_steps(
     }
     workflow = MoonMindRunWorkflow()
     workflow._record_trusted_issue_context(result.outputs)
+    assert workflow._github_issue_ref_from_parameters({"workflow": {"inputs": inputs}}) == (
+        f"{REPOSITORY}#4025"
+    )
     previous = workflow._merge_trusted_issue_context(
         {
             "summary": "Omnigent session completed",

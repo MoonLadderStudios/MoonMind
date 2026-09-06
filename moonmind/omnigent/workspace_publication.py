@@ -18,7 +18,7 @@ from moonmind.omnigent.workspace_intent import (
     authored_repository_source,
     authored_starting_branch,
 )
-from moonmind.publish.service import PublishService
+from moonmind.publish.service import PublishResult, PublishService
 from moonmind.schemas.agent_runtime_models import AgentExecutionRequest
 from moonmind.schemas.workspace_locator_models import (
     WORKSPACE_LOCATOR_ADAPTER,
@@ -223,20 +223,63 @@ class OmnigentWorkspacePublicationService:
                 f"+refs/heads/{normalized_base}:refs/remotes/origin/{normalized_base}",
             ]
         )
-        published = await PublishService().publish(
-            job_id=uuid5(NAMESPACE_URL, publication_identity),
-            instruction="Publish completed Omnigent repository work",
-            # PR creation remains owned by the durable parent workflow.
-            publish_mode="branch",
-            publish_base_branch=normalized_base,
-            runtime_mode="omnigent",
-            repo_dir=safe_workspace,
-            run_command=run_command,
-            repo=str(repository or "").strip() or None,
-            github_token=token or None,
-            publish_existing_commits=True,
-            verify_remote=True,
-        )
+        # A later publication step may restore the exact already-published
+        # candidate and create its PR without changing tracked files. Keep that
+        # accepted branch: generating a new one here strands the existing PR
+        # and makes the subsequent exact-head lookup search the wrong branch.
+        published = None
+        if (
+            isinstance(accepted_published_head, Mapping)
+            and accepted_published_head.get("workflowId") == current_workflow_id
+            and accepted_published_head.get("repository") == repository
+            and accepted_published_head.get("branch")
+            and accepted_published_head.get("branch") != normalized_base
+        ):
+            head = await run_command(["git", "rev-parse", "HEAD"])
+            status = await run_command(["git", "status", "--porcelain"])
+            if (
+                head.stdout.strip() == accepted_published_head.get("headSha")
+                and not status.stdout.strip()
+            ):
+                candidate_branch = str(accepted_published_head["branch"])
+                await run_command(
+                    ["git", "check-ref-format", "--branch", candidate_branch]
+                )
+                await self._verified_no_commit_publication(
+                    run_command=run_command,
+                    base_branch=candidate_branch,
+                )
+                ahead = await run_command(
+                    ["git", "rev-list", "--count", f"origin/{normalized_base}..HEAD"]
+                )
+                commit_count = int(ahead.stdout.strip())
+                if commit_count > 0:
+                    published = PublishResult(
+                        mode="branch",
+                        status="published",
+                        reason="Reused the unchanged, remotely verified candidate.",
+                        branch_name=candidate_branch,
+                        base_branch=normalized_base,
+                        head_sha=head.stdout.strip(),
+                        branch_pushed=True,
+                        remote_verified=True,
+                        commits_ahead_of_base=commit_count,
+                    )
+        if published is None:
+            published = await PublishService().publish(
+                job_id=uuid5(NAMESPACE_URL, publication_identity),
+                instruction="Publish completed Omnigent repository work",
+                # PR creation remains owned by the durable parent workflow.
+                publish_mode="branch",
+                publish_base_branch=normalized_base,
+                runtime_mode="omnigent",
+                repo_dir=safe_workspace,
+                run_command=run_command,
+                repo=str(repository or "").strip() or None,
+                github_token=token or None,
+                publish_existing_commits=True,
+                verify_remote=True,
+            )
         if published is None:
             return {"push_status": "skipped"}
         if published.status == "skipped":
