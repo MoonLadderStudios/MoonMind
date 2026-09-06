@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import os
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, Sequence
 
 from moonmind.auth.resolvers import (
     DbEncryptedSecretResolver,
@@ -95,6 +95,12 @@ class GenericOmnigentExecutionServices:
     runtime_binding_store: DbRuntimeBindingStore
     host_lease_repository: DbOmnigentHostLeaseRepository
     generic_realizer: GenericOmnigentHostRealizer
+    #: The shared machine-capacity ledger and the exact Docker backend it is
+    #: scoped to, so the existing janitor can reconcile reservations against
+    #: owned container state without building a second services graph (#3881).
+    machine_capacity: Any | None = None
+    machine_backend_ref: str | None = None
+    owned_container_inventory: Any | None = None
 
 
 # MoonLadderStudios/MoonMind#3878: the services graph is rebuilt per execution,
@@ -272,8 +278,31 @@ def build_generic_omnigent_execution_services(
     host_capacity_admission = GenericHostCapacityAdmission.from_environment(
         session_factory=session_factory
     )
+
+    async def capacity_runner(
+        argv: Sequence[str], *, timeout_seconds: float = 30.0
+    ) -> tuple[int, bytes, bytes]:
+        """Run one bounded read against the backend hosts actually launch on.
+
+        MoonLadderStudios/MoonMind#3881: machine capacity is established from
+        the daemon that carries the workload, so an unreadable daemon blocks
+        the allocation instead of admitting it against a guess.
+        """
+
+        code, out, err = await docker.run(
+            ["docker", *argv], check=False, timeout_seconds=timeout_seconds
+        )
+        return code, out.encode("utf-8"), err.encode("utf-8")
+
+    async def machine_budget() -> Any:
+        from moonmind.capacity import machine_budget_from_runner
+
+        return await machine_budget_from_runner(capacity_runner)
+
     host_leases = DbOmnigentHostLeaseRepository(
-        session_factory, capacity_admission=host_capacity_admission
+        session_factory,
+        capacity_admission=host_capacity_admission,
+        machine_budget_provider=machine_budget,
     )
     realizer = GenericOmnigentHostRealizer(
         runtime_binding_store=runtime_bindings,
@@ -314,7 +343,25 @@ def build_generic_omnigent_execution_services(
         )
     )
     registry.register(realizer)
+
+    async def owned_container_inventory() -> Any:
+        """Return the owned running containers with the scope that was queried.
+
+        ``None`` means the backend could not be read. Reconciliation releases
+        accounting only for a complete enumeration, which is what this
+        canonical probe produces (#3881).
+        """
+
+        from moonmind.capacity import probe_owned_containers
+
+        return await probe_owned_containers(
+            lambda argv: capacity_runner(argv, timeout_seconds=60.0)
+        )
+
     return GenericOmnigentExecutionServices(
+        machine_capacity=host_capacity_admission.machine_capacity,
+        machine_backend_ref=host_capacity_admission.backend_ref,
+        owned_container_inventory=owned_container_inventory,
         planning_service=planning,
         realizer_registry=registry,
         catalog_service=OmnigentHarnessCatalogService(

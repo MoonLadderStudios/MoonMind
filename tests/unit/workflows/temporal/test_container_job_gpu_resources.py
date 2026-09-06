@@ -159,7 +159,9 @@ def _runner(
             code, stderr = failures[args[0]]
             return code, b"", stderr
         if args[0] == "info":
-            return 0, str(64 * 1024**3).encode(), b""
+            # MoonLadderStudios/MoonMind#3881: the shared machine budget is
+            # probed from memory *and* CPU count.
+            return 0, f"{64 * 1024**3}\t16".encode(), b""
         return 0, b"", b""
 
     return runner
