@@ -49,7 +49,12 @@ class WorkspaceArtifactProjector:
 
         evidence: dict[str, Any] = {}
         if checkpoint_ref:
-            await self._apply_checkpoint(workspace, checkpoint_ref)
+            await self._apply_checkpoint(
+                workspace,
+                checkpoint_ref,
+                runtime_uid=runtime_uid,
+                runtime_gid=runtime_gid,
+            )
             evidence["checkpointRestoreRef"] = checkpoint_ref
         # Checkpoints preserve repository work, not the prior step's injected
         # context. Remove both runtime-owned input directories after extraction
@@ -109,7 +114,19 @@ class WorkspaceArtifactProjector:
                     code="OMNIGENT_WORKSPACE_MATERIALIZATION_FAILED",
                 ) from exc
 
-    async def _apply_checkpoint(self, workspace: Path, artifact_ref: str) -> None:
+    async def _apply_checkpoint(
+        self,
+        workspace: Path,
+        artifact_ref: str,
+        *,
+        runtime_uid: int,
+        runtime_gid: int,
+    ) -> None:
+        if runtime_uid < 0 or runtime_gid < 0:
+            raise WorkspaceArtifactProjectionError(
+                "checkpoint runtime identity is invalid",
+                code="OMNIGENT_WORKSPACE_MATERIALIZATION_FAILED",
+            )
         artifact_id = self._artifact_id(artifact_ref, noun="workspace checkpoint")
         service = self._require_service("workspace checkpoint")
         await self._validate_metadata(
@@ -150,6 +167,30 @@ class WorkspaceArtifactProjector:
                                 code="WORKSPACE_AUTHORITY_MISMATCH",
                             )
                 archive.extractall(workspace, filter="data")
+                # The data filter discards archived ownership. Extraction runs
+                # as the worker, after the checkout's runtime ownership handoff,
+                # so assign restored entries and their implicit directories to
+                # the selected runtime before the host can use this workspace.
+                # Keep modes intact and never follow symlinks during chown.
+                restored_paths: set[Path] = set()
+                for member in archive.getmembers():
+                    target = Path(os.path.normpath(workspace_root / member.name))
+                    while target != workspace_root:
+                        if not target.is_relative_to(
+                            workspace_root
+                        ) or not target.resolve().is_relative_to(workspace_root):
+                            raise WorkspaceArtifactProjectionError(
+                                "checkpoint ownership target escapes workspace",
+                                code="WORKSPACE_AUTHORITY_MISMATCH",
+                            )
+                        restored_paths.add(target)
+                        target = target.parent
+                for target in restored_paths:
+                    current = target.stat(follow_symlinks=False)
+                    if (current.st_uid, current.st_gid) != (runtime_uid, runtime_gid):
+                        os.chown(
+                            target, runtime_uid, runtime_gid, follow_symlinks=False
+                        )
         except WorkspaceArtifactProjectionError:
             raise
         except (tarfile.TarError, OSError) as exc:
@@ -301,7 +342,9 @@ class WorkspaceArtifactProjector:
         metadata = await get_metadata(artifact_id=artifact_id, principal=principal)
         artifact = metadata[0] if isinstance(metadata, tuple) else metadata
         if required_workflow_id is not None:
-            links = metadata[1] if isinstance(metadata, tuple) and len(metadata) > 1 else ()
+            links = (
+                metadata[1] if isinstance(metadata, tuple) and len(metadata) > 1 else ()
+            )
             family = f"{required_workflow_id}:"
             if not any(
                 str(getattr(link, "workflow_id", "")) == required_workflow_id

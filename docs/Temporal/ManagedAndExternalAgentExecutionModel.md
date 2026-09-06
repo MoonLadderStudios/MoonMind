@@ -793,6 +793,11 @@ Checkpoint capabilities remain distinct:
 - `step_workspace_checkpoint_capture` captures the workspace owned by a completed Step Execution;
 - `step_workspace_checkpoint_restore` materializes a declared compatible workspace checkpoint kind.
 
+Omnigent checkpoint extraction assigns restored files and their containing
+directories to the selected runtime identity before launch. Archive ownership is
+not runtime authority. Restored modes remain intact, and newly injected input
+artifacts retain their read-only projection contract.
+
 A session-state ref is not evidence of workspace capture or restore. `external_state_ref` can preserve Omnigent/provider continuity without being locally restorable.
 
 For Omnigent, checkpoint identity may include profile, provider-lease, credential-generation, binding, host-lease, host, bridge-session, Omnigent-session, idempotency, first-message, workspace-locator, diagnostics, terminal, and artifact refs. Credentials and daemon paths are forbidden.

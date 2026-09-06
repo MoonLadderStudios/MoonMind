@@ -885,12 +885,67 @@ async def test_resolved_skill_capabilities_drive_plan_and_mounted_tools(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("contract_kind", ["skill", "tool"])
+async def test_authored_step_capabilities_reach_mounted_tool_authority(
+    monkeypatch,
+    contract_kind,
+) -> None:
+    from api_service.api.routers.executions import _merge_workflow_required_capabilities
+    from moonmind.omnigent.host_services.github_credentials import (
+        OmnigentGithubCredentialService,
+    )
+    from moonmind.omnigent.host_services.mounted_tools import OmnigentMountedToolService
+    from unittest.mock import AsyncMock
+
+    requirements = _merge_workflow_required_capabilities(
+        [],
+        {},
+        steps=[{contract_kind: {"requiredCapabilities": ["git", "GH"]}}],
+    )
+    monkeypatch.setattr(
+        service,
+        "resolve_execution_evidence",
+        lambda payload, **_kwargs: (_protected_support_evidence(payload), "supported"),
+    )
+    result = await _compile_opencode_plan(
+        monkeypatch,
+        artifacts=_ArtifactService(),
+        launch_policy_ref="opencode-on-demand@1",
+        plan_store=_PlanStore(object()),
+        extra_parameters={"requiredCapabilities": requirements},
+    )
+    resolved = result.envelope.payload.resolvedTools
+    backend = SimpleNamespace(run=AsyncMock())
+    mounts = await OmnigentMountedToolService(backend=backend).materialize(resolved)
+    assert mounts[0]["tools"][0]["name"] == "gh"
+    assert mounts[0]["accessMode"] == "read-only"
+    assert OmnigentGithubCredentialService.required(resolved)
+    assert result.envelope.payload.classAdmissionDecision["requiredSatisfied"] == [
+        "gh",
+        "git",
+    ]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("source", ["workflow", "step"])
 async def test_workflow_cannot_self_attest_an_unknown_capability(
     monkeypatch,
+    source,
 ) -> None:
     """Authored requirements are requests, never bridge support evidence."""
 
     from moonmind.omnigent.harness_platform.failures import HarnessPlatformError
+    from api_service.api.routers.executions import _merge_workflow_required_capabilities
+
+    requirements = _merge_workflow_required_capabilities(
+        ["custom-capability"] if source == "workflow" else [],
+        {},
+        steps=(
+            [{"skill": {"requiredCapabilities": ["custom-capability"]}}]
+            if source == "step"
+            else []
+        ),
+    )
 
     with pytest.raises(HarnessPlatformError, match="custom-capability"):
         await _compile_opencode_plan(
@@ -898,7 +953,7 @@ async def test_workflow_cannot_self_attest_an_unknown_capability(
             artifacts=_ArtifactService(),
             launch_policy_ref="opencode-on-demand@1",
             plan_store=_PlanStore(object()),
-            extra_parameters={"requiredCapabilities": ["custom-capability"]},
+            extra_parameters={"requiredCapabilities": requirements},
         )
 
 
