@@ -167,6 +167,7 @@ async def test_default_preset_resolves_and_preserves_issue_across_agent_steps(
             "assessmentArtifactRef": "art_assessment",
         }
     )
+    assert previous["searchEvidence"] == result.outputs["searchEvidence"]
     # No local workspace, issue-number injection, or assistant-text parsing.
     for step in steps[2:4]:
         tool = step["tool"]
@@ -180,6 +181,8 @@ async def test_default_preset_resolves_and_preserves_issue_across_agent_steps(
         )
         workflow._record_assessment_context(result.outputs)
         previous = workflow._merge_trusted_issue_context(result.outputs)
+        assert previous["searchEvidence"]["candidatesExamined"] == 1
+        assert previous["searchEvidence"]["pagesExamined"] == 1
     patches = [
         request for request in activity_boundary.requests if request.method == "PATCH"
     ]
@@ -279,6 +282,11 @@ async def test_query_search_and_previous_explicit_issue_payload(activity_boundar
     assert result.status == "COMPLETED"
     assert len(activity_boundary.requests) == 1
     assert "searchEvidence" not in result.outputs
+    workflow = MoonMindRunWorkflow()
+    workflow._record_trusted_issue_context(result.outputs)
+    previous = workflow._merge_trusted_issue_context({"summary": "Legacy agent result"})
+    assert "searchEvidence" not in previous
+    assert previous["issue"]["number"] == 4025
 
 
 @pytest.mark.asyncio
@@ -295,6 +303,40 @@ async def test_selected_issue_is_revalidated_before_loading_brief(
     assert result.status == "FAILED"
     assert "could not be confirmed" in result.outputs["error"]
     assert "trustedSource" not in result.outputs
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("field", ["title", "body", "labels"])
+@pytest.mark.parametrize("mode", ["missing", "malformed"])
+async def test_incomplete_selected_details_cannot_produce_a_trusted_brief(
+    activity_boundary, field, mode
+):
+    if mode == "missing":
+        del activity_boundary.detail[field]
+    else:
+        activity_boundary.detail[field] = {"unexpected": "shape"}
+    result = await activity_boundary.execute(
+        "github.load_issue_preset_brief", {"repository": REPOSITORY, "issueSearch": ""}
+    )
+    assert result.status == "FAILED"
+    assert "trustedSource" not in result.outputs
+    assert "presetBrief" not in result.outputs
+    assert not any(request.method != "GET" for request in activity_boundary.requests)
+
+
+def test_compact_issue_context_preserves_search_evidence():
+    import json
+
+    evidence = {"fallbackScanning": True, "pagesExamined": 5, "candidatesExamined": 499}
+    context = {
+        "trustedSource": "moonmind.github.get_issue",
+        "searchEvidence": evidence,
+        "issue": {"repository": REPOSITORY, **issue()},
+        **{key: "x" * 30000 for key in ("title", "body", "summary", "presetBrief")},
+    }
+    payload, truncated = MoonMindRunWorkflow._trusted_context_payload(context)
+    assert truncated
+    assert json.loads(payload)["searchEvidence"] == evidence
 
 
 @pytest.mark.asyncio
