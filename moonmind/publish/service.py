@@ -292,7 +292,10 @@ class PublishService:
             if remote_line:
                 remote_sha = remote_line[0].split(maxsplit=1)[0].strip()
         push_command = [self._git_binary, "push", "-u"]
-        if verify_remote:
+        if verify_remote and branch_name != base_branch:
+            # A generated candidate may be retried with a lease. The authored
+            # branch is shared authority: use Git's atomic fast-forward check
+            # so a stale workspace cannot replace concurrent remote work.
             push_command.append(
                 f"--force-with-lease=refs/heads/{branch_name}:{remote_sha}"
             )

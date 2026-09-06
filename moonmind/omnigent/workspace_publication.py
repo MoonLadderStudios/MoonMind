@@ -229,6 +229,11 @@ class OmnigentWorkspacePublicationService:
             # PR creation remains owned by the durable parent workflow.
             publish_mode="branch",
             publish_base_branch=normalized_base,
+            # Branch mode updates the authored branch. Only PR mode gets a
+            # generated candidate; PR creation stays with the parent workflow.
+            publication_branch_name=(
+                normalized_base if normalized_mode == "branch" else None
+            ),
             runtime_mode="omnigent",
             repo_dir=safe_workspace,
             run_command=run_command,

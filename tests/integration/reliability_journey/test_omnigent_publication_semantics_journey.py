@@ -162,8 +162,9 @@ async def _materialize_workspace(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("publish_mode", ["branch", "pr"])
 async def test_materialized_workspace_publishes_branch_and_recovery_is_idempotent(
-    tmp_path, monkeypatch
+    tmp_path, monkeypatch, publish_mode
 ) -> None:
     # The outbound secret scan is the publication layer's own concern and is
     # covered elsewhere; disable it so this journey is deterministic and offline.
@@ -172,7 +173,7 @@ async def test_materialized_workspace_publishes_branch_and_recovery_is_idempoten
     )
     remote = _init_bare_remote_with_seed(tmp_path)
 
-    _runtime, workspace = await _materialize_workspace(
+    runtime, workspace = await _materialize_workspace(
         tmp_path,
         workflow_id="mm:wf-3561",
         step_execution_id="mm:wf-3561:run:implement:execution:1",
@@ -181,7 +182,7 @@ async def test_materialized_workspace_publishes_branch_and_recovery_is_idempoten
         target_branch="agent/implement",
     )
 
-    # Authored source, output, and publication branches stay distinct (AC1).
+    # The agent's local checkout need not name the publication destination.
     assert _git_out(workspace, "rev-parse", "--abbrev-ref", "HEAD") == (
         "agent/implement"
     )
@@ -191,27 +192,31 @@ async def test_materialized_workspace_publishes_branch_and_recovery_is_idempoten
     # canonical publication owns the commit/branch/push for).
     (workspace / "feature.py").write_text("print('feature')\n", encoding="utf-8")
 
-    publisher = PublishService()
-    job_id = UUID("00000000-0000-0000-0000-000000003561")
-    result = await publisher.publish(
-        job_id=job_id,
-        instruction="Add the feature module",
-        publish_mode="branch",
-        publish_base_branch="main",
-        runtime_mode="codex",
-        repo_dir=workspace,
-        run_command=_run_command,
+    workspace_id = workspace.parent.name
+    args = dict(
+        workspace_locator={
+            "kind": "sandbox",
+            "workspaceId": workspace_id,
+            "relativePath": "repo",
+        },
+        current_workflow_id="mm:wf-3561",
+        current_step_execution_id="mm:wf-3561:run:implement:execution:1",
+        publication_identity="materialized-workspace-publication",
+        publish_mode=publish_mode,
+        base_branch="main",
+        repository="",
+        github_token=None,
     )
+    result = await runtime.publish_workspace(**args)
 
-    assert result is not None
-    assert result.status == "published"
-    assert result.commit_created is True
-    assert result.branch_pushed is True
-    publication_branch = result.branch_name
-    assert publication_branch and publication_branch.startswith("moonmind-job-")
-    # Source (main), output (agent/implement), and publication branch are three
-    # distinct refs; none was silently reset onto another (AC1/AC3).
-    assert publication_branch not in {"main", "agent/implement"}
+    assert result["push_status"] == "pushed"
+    assert result["remote_verified"] is True
+    publication_branch = result["push_branch"]
+    if publish_mode == "branch":
+        assert publication_branch == "main"
+    else:
+        assert publication_branch.startswith("moonmind-job-")
+        assert publication_branch not in {"main", "agent/implement"}
 
     # The push reached the real remote with the mutation.
     remote_branches = _git_out(remote, "branch", "--list", publication_branch)
@@ -221,18 +226,12 @@ async def test_materialized_workspace_publishes_branch_and_recovery_is_idempoten
     # Publication-only recovery from the already-qualified candidate is
     # idempotent: the accepted work is already committed and pushed, so a retry
     # neither creates a second commit nor a divergent remote head (AC4).
-    recovery = await publisher.publish(
-        job_id=job_id,
-        instruction="Add the feature module",
-        publish_mode="branch",
-        publish_base_branch="main",
-        runtime_mode="codex",
-        repo_dir=workspace,
-        run_command=_run_command,
+    recovery = await runtime.publish_workspace(**args)
+    assert recovery["push_status"] == (
+        "no_commits" if publish_mode == "branch" else "pushed"
     )
-    assert recovery is not None
-    assert recovery.status == "skipped"
-    assert recovery.reason_code == "no_commit"
+    assert recovery["remote_verified"] is True
+    assert recovery["push_head_sha"] == remote_head
     assert _git_out(remote, "rev-parse", publication_branch) == remote_head
 
 
@@ -421,9 +420,7 @@ async def test_profile_bound_publication_supplies_missing_git_identity(
 ) -> None:
     """Replay mm:bfc017e9 staged output with no repository-local author."""
 
-    replay = load_replay(
-        "omnigent-publication-missing-git-identity", "manifest.json"
-    )
+    replay = load_replay("omnigent-publication-missing-git-identity", "manifest.json")
     expected = load_replay(
         "omnigent-publication-missing-git-identity", "expected-outcome.json"
     )
@@ -496,7 +493,9 @@ async def test_materialized_workspace_publishes_pull_request_through_canonical_c
     # publishing authority. Stub the resolver so the PR path stays offline.
     monkeypatch.setattr(
         "moonmind.auth.github_credentials.resolve_github_credential",
-        AsyncMock(return_value=SimpleNamespace(token="ghp_journeytoken", safe_summary="stub")),
+        AsyncMock(
+            return_value=SimpleNamespace(token="ghp_journeytoken", safe_summary="stub")
+        ),
     )
     remote = _init_bare_remote_with_seed(tmp_path)
     _runtime, workspace = await _materialize_workspace(
@@ -513,9 +512,7 @@ async def test_materialized_workspace_publishes_pull_request_through_canonical_c
 
     async def _create_pull_request(**kwargs):
         created_calls.append(kwargs)
-        return SimpleNamespace(
-            created=True, url="https://github.com/owner/repo/pull/7"
-        )
+        return SimpleNamespace(created=True, url="https://github.com/owner/repo/pull/7")
 
     publisher = PublishService(github_create_pull_request=_create_pull_request)
     result = await publisher.publish(
