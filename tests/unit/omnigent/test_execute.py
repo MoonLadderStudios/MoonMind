@@ -32,10 +32,13 @@ from moonmind.omnigent.execute import (
     _agent_items,
     _await_marked_turn_terminal,
     _build_omnigent_first_message,
+    _build_capture_bundle,
     _durable_terminal_status_with_evidence,
     _enqueue_stream_events,
     _first_message_text,
     _marked_turn_item_state,
+    _marked_turn_failure_snapshot,
+    _journaled_marked_turn_failure_snapshot,
     _marked_turn_timeout_diagnostics,
     _marked_turn_timeout_message,
     _MarkedTurnStartWatchdog,
@@ -1144,7 +1147,7 @@ def _never_started_client(
             elif stream_shape == "closes":
                 streamed["value"] += 1
                 yield {"type": "session.heartbeat", "status": "running"}
-            elif stream_shape == "completed-then-heartbeats":
+            elif stream_shape in {"completed-then-heartbeats", "completed-only"}:
                 for event_type, status in (
                     ("response.in_progress", "in_progress"),
                     ("response.completed", "completed"),
@@ -1159,7 +1162,14 @@ def _never_started_client(
                     }
                 while True:
                     streamed["value"] += 1
-                    yield {"type": "session.heartbeat", "status": "running"}
+                    yield (
+                        {
+                            "type": "response.completed",
+                            "response": {"id": "injection-response"},
+                        }
+                        if stream_shape == "completed-only"
+                        else {"type": "session.heartbeat", "status": "running"}
+                    )
                     await asyncio.sleep(0.005)
             else:
                 while True:
@@ -1186,6 +1196,208 @@ def _never_started_client(
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
+    "agent_name", ["opencode-native-ui", "codex-native-ui", "claude-native-ui"]
+)
+@pytest.mark.parametrize("crash_at", [None, "journal", "harvest"])
+async def test_provider_rejection_after_injection_completion(
+    monkeypatch, tmp_path, agent_name, crash_at
+):
+    """The injection response must not hide a later native failure behind polling."""
+    replay = json.loads(
+        (
+            Path(__file__).parents[2]
+            / "fixtures/omnigent/provider_rejection_after_injection.json"
+        ).read_text()
+    )
+    marker = "MoonMind-Omnigent-Run:\n  correlationId: corr-1\n  idempotencyKey: idem-1"
+    base = _never_started_client(marker, stream_shape="silent", streamed={"value": 0})
+    retrying = False
+    crashed = False
+    posts = []
+
+    class WorkerCrash(BaseException):
+        pass
+
+    class Store(_RecordingBridgeStore):
+        async def attach_session(self, _, session_id):
+            self.row.omnigent_session_id = session_id
+            return self.row
+
+        async def mark_posted(self, _, **kwargs):
+            self.row.first_message_state = "posted"
+            self.row.first_message_posted_at = "2026-09-06T00:00:00Z"
+            return self.row
+
+        async def attach_active_journal_refs(self, _, *, raw_ref, normalized_ref):
+            self.row.raw_events_ref = raw_ref
+            self.row.normalized_events_ref = normalized_ref
+            return self.row
+
+        async def append_events(self, _, events):
+            nonlocal crashed
+            if (
+                crash_at == "journal"
+                and not crashed
+                and any(
+                    event["type"] == "session.status"
+                    and event["normalizedStatus"] == "failed"
+                    for event in events
+                )
+            ):
+                crashed = True
+                raise WorkerCrash()
+
+    store = Store()
+
+    class Client(base):
+        def __init__(self, **kwargs):
+            super().__init__(**kwargs)
+            if retrying:
+                self.posted.set()
+
+        async def post_event(self, session_id, payload):
+            posts.append(session_id)
+            return await super().post_event(session_id, payload)
+
+        async def list_agents(self):
+            return {"items": [{"id": "agent-1", "name": agent_name}]}
+
+        async def stream_events(self, session_id):
+            assert (
+                not retrying
+            ), "journaled terminal evidence must precede SSE reattachment"
+            await self.posted.wait()
+            for event in replay["events"]:
+                yield event
+                await asyncio.sleep(0)
+            await asyncio.Event().wait()
+
+    monkeypatch.setenv("OMNIGENT_ENABLED", "true")
+    monkeypatch.setenv("OMNIGENT_SERVER_URL", "https://omnigent.test")
+    monkeypatch.setattr("moonmind.omnigent.execute.OmnigentHttpClient", Client)
+    monkeypatch.setattr(
+        "moonmind.omnigent.execute._MARKED_TURN_START_TIMEOUT_SECONDS", 0.05
+    )
+    async def capture_with_crash(**kwargs):
+        nonlocal crashed
+        if crash_at == "harvest" and not crashed and kwargs["harvest_resources"]:
+            crashed = True
+            raise WorkerCrash()
+        return await _build_capture_bundle(**kwargs)
+
+    monkeypatch.setattr(
+        "moonmind.omnigent.execute._build_capture_bundle", capture_with_crash
+    )
+    request = _request().model_copy(
+        update={
+            "parameters": {
+                "omnigent": {
+                    "agent": {"agentName": agent_name},
+                    "session": {"allowEmptyWorkspace": True},
+                    "prompt": {"text": "assess issue"},
+                }
+            }
+        }
+    )
+    gateway = LocalOmnigentArtifactGateway(root=tmp_path)
+    if crash_at:
+        with pytest.raises(WorkerCrash):
+            await run_omnigent_execution(
+                request, artifact_gateway=gateway, run_store=store
+            )
+        assert not store.terminal_calls
+        assert store.row.raw_events_ref and store.row.normalized_events_ref
+        retrying = True
+    result = await run_omnigent_execution(
+        request,
+        artifact_gateway=gateway,
+        run_store=store,
+    )
+    assert posts == ["session-1"]
+    assert result.failure_class == "integration_error"
+    assert result.retry_recommendation == "reauthenticate"
+    assert result.provider_error_code == "codex_reauth_required"
+    assert "requires explicit opt in" in result.summary
+    assert "never started" not in result.summary
+    assert result.diagnostics_ref and result.output_refs
+    assert store.terminal_calls[-1]["status"] == "failed"
+    assert (
+        "requires explicit opt in"
+        in store.terminal_calls[-1]["terminalRefs"]["summary"]
+    )
+
+
+@pytest.mark.parametrize(
+    "scenario",
+    ["replayed", "other-session", "newer-user", "active", "unknown", "blank"],
+)
+@pytest.mark.parametrize("source", ["live", "journal"])
+def test_native_failure_requires_current_turn_authority(scenario, source):
+    snapshot = _never_started_snapshot("current-marker")
+    event = {
+        "type": "session.status",
+        "status": "failed",
+        "conversation_id": "session-1",
+        "error": {"code": "native_turn_error", "message": "provider rejected request"},
+    }
+    if scenario == "other-session":
+        event["conversation_id"] = "another-session"
+    elif scenario == "newer-user":
+        snapshot["items"].append(
+            {"type": "message", "data": {"role": "user", "content": []}}
+        )
+    elif scenario == "active":
+        snapshot["active_response_id"] = "live-response"
+    elif scenario == "unknown":
+        event["status"] = "new-provider-status"
+    elif scenario == "blank":
+        event["error"]["message"] = " "
+    if source == "journal":
+        metadata = {} if scenario == "replayed" else {"postDispatchRawEventIndex": 0}
+        failure = _journaled_marked_turn_failure_snapshot(
+            [event],
+            [{"metadata": {"reconciliation": metadata}}],
+            snapshot,
+            session_id="session-1",
+            marker="current-marker",
+        )
+    else:
+        failure = _marked_turn_failure_snapshot(
+            event,
+            snapshot,
+            session_id="session-1",
+            marker="current-marker",
+            arrived_after_message_post=scenario != "replayed",
+        )
+    assert failure is None
+
+
+@pytest.mark.parametrize("index", [None, -1, True, "0", 99])
+def test_journaled_failure_requires_valid_dispatch_provenance(index):
+    """Old journal shapes cannot turn pre-dispatch replay into live evidence."""
+    event = {
+        "type": "session.status",
+        "status": "failed",
+        "conversation_id": "session-1",
+        "error": {
+            "message": "provider rejected credential",
+            "code": "codex_reauth_required",
+        },
+    }
+    assert (
+        _journaled_marked_turn_failure_snapshot(
+            [event],
+            [{"metadata": {"reconciliation": {"postDispatchRawEventIndex": index}}}],
+            _never_started_snapshot("current-marker"),
+            session_id="session-1",
+            marker="current-marker",
+        )
+        is None
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
     (
         "scenario",
         "stream_shape",
@@ -1205,6 +1417,7 @@ def _never_started_client(
             False,
             True,
         ),
+        ("only-completion-frames", "completed-only", None, False, True),
     ],
 )
 async def test_run_omnigent_execution_finalizes_never_started_turn(
@@ -3800,9 +4013,13 @@ async def test_run_omnigent_execution_reconciles_idle_snapshot_from_heartbeat(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "failure_code", ["provider_failure", "codex_reauth_required", None]
+)
 async def test_run_omnigent_execution_preserves_durable_failed_terminal_on_retry(
     monkeypatch,
     tmp_path,
+    failure_code,
 ) -> None:
     terminal_calls: list[str] = []
 
@@ -3820,7 +4037,7 @@ async def test_run_omnigent_execution_preserves_durable_failed_terminal_on_retry
             "metadataRefs": {"finalSnapshotRef": "artifact:final"},
             "resourceProjection": {},
             "failureClass": "execution_error",
-            "failureCode": "provider_failure",
+            "failureCode": failure_code,
             "summary": "durable provider failure",
         }
         metadata_: dict[str, object] = {}
@@ -3867,7 +4084,14 @@ async def test_run_omnigent_execution_preserves_durable_failed_terminal_on_retry
 
         async def get_session(self, session_id: str) -> dict[str, object]:
             assert session_id == "existing-session"
-            return {"status": "idle", "summary": "provider has returned to idle"}
+            return {
+                "status": "idle",
+                "summary": "provider has returned to idle",
+                "last_task_error": {
+                    "code": "later_turn_error",
+                    "message": "unrelated turn",
+                },
+            }
 
     monkeypatch.setenv("OMNIGENT_ENABLED", "true")
     monkeypatch.setenv("OMNIGENT_SERVER_URL", "https://omnigent.test")
@@ -3892,8 +4116,16 @@ async def test_run_omnigent_execution_preserves_durable_failed_terminal_on_retry
     )
 
     assert result.metadata["normalizedStatus"] == "failed"
-    assert result.failure_class == "execution_error"
+    assert result.failure_class == (
+        "integration_error"
+        if failure_code == "codex_reauth_required"
+        else "execution_error"
+    )
     assert result.summary == "durable provider failure"
+    assert result.provider_error_code == failure_code
+    assert result.retry_recommendation == (
+        "reauthenticate" if failure_code == "codex_reauth_required" else None
+    )
     assert terminal_calls == ["failed"]
 
 

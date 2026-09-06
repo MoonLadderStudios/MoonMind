@@ -3646,6 +3646,22 @@ def test_activity_result_retryable_blocks_permanent_agent_runtime_failure() -> N
     assert retryable is False
 
 
+def test_native_provider_reauthentication_does_not_retry_step() -> None:
+    workflow = MoonMindRunWorkflow()
+    assert not workflow._activity_result_retryable(
+        {
+            "status": "FAILED",
+            "outputs": {
+                "failureClass": "integration_error",
+                "providerErrorCode": "codex_reauth_required",
+                "retryRecommendation": "reauthenticate",
+            },
+        },
+        failure_message="execution_error",
+        tool_type="agent_runtime",
+    )
+
+
 def test_activity_result_retryable_allows_empty_assistant_turn_recovery() -> None:
     workflow = MoonMindRunWorkflow()
 
