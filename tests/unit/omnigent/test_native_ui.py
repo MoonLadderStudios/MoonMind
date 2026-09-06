@@ -17,9 +17,11 @@ from moonmind.omnigent.host_auth_adapter import PINNED_OMNIGENT_COMMIT
 from moonmind.omnigent.native_ui import (
     CODE_NATIVE_CHAT_UNAVAILABLE,
     NATIVE_UI_BOOTSTRAP_SCHEMA_VERSION,
+    _head_insert_position,
     build_chat_bootstrap,
     evaluate_native_ui_compatibility,
     is_document_request,
+    is_valid_chat_binding_id,
     native_ui_security_headers,
     presentation_mode_from_query,
     render_native_ui_document,
@@ -777,3 +779,49 @@ def test_injected_adapter_waits_for_authorized_render_and_reports_handled_failur
         [node, str(harness), str(adapter_path)], capture_output=True, text=True, timeout=15
     )
     assert completed.returncode == 0, completed.stdout + completed.stderr
+
+
+def test_is_valid_chat_binding_id_accepts_both_server_shapes() -> None:
+    # The bridge store mints opaque `chatb_` handles while the canonical
+    # control-plane resolver mints deterministic `omc_` digest ids; the single
+    # serving allowlist must accept both exact server-generated shapes.
+    assert is_valid_chat_binding_id("chatb_opaque123")
+    assert is_valid_chat_binding_id("omc_" + "a" * 40)
+    assert is_valid_chat_binding_id("omc_0123456789abcdef0123456789abcdef01234567")
+
+    assert not is_valid_chat_binding_id("")
+    assert not is_valid_chat_binding_id(None)
+    assert not is_valid_chat_binding_id("chatb_")
+    assert not is_valid_chat_binding_id("omc_")
+    assert not is_valid_chat_binding_id("omc_" + "a" * 39)
+    assert not is_valid_chat_binding_id("omc_" + "a" * 41)
+    assert not is_valid_chat_binding_id("omc_" + "A" * 40)
+    assert not is_valid_chat_binding_id("omc_" + "g" * 40)
+    assert not is_valid_chat_binding_id("chatb_" + "x" * 129)
+    assert not is_valid_chat_binding_id("chatb_evil/../escape")
+    assert not is_valid_chat_binding_id("https://example.test/chatb_x")
+
+
+def test_head_insert_position_preserves_offsets_with_unicode_before_head() -> None:
+    # `İ` (U+0130) expands to two chars under str.lower(); an offset-shifting
+    # fold would skip the real head terminator and inject inside a later
+    # element. The ASCII fold keeps offsets identical to the input.
+    document = "<!-- \u0130 --><head><script>var x = 1 > 0;</script></head>"
+    position = _head_insert_position(document)
+    assert position == document.index("<head>") + len("<head>")
+    assert document[:position].endswith("<head>")
+
+
+def test_render_injects_after_head_with_unicode_prefix() -> None:
+    document = "<!-- \u0130 --><HEAD><title>t</title></HEAD><body></body>"
+    rendered = render_native_ui_document(
+        document,
+        bootstrap={
+            "chatBindingId": "cb-1",
+            "apiBase": "/api/workflow-chat-bindings/cb-1/omnigent",
+        },
+        scoped_base=scoped_ui_base("cb-1"),
+    )
+    head_close = rendered.index("</HEAD>")
+    assert rendered.index("<base href=") < head_close
+    assert "__MOONMIND_OMNIGENT_CHAT__" in rendered
