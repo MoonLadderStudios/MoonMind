@@ -5,6 +5,8 @@ from __future__ import annotations
 import hashlib
 import subprocess
 from pathlib import Path
+from types import SimpleNamespace
+from unittest.mock import AsyncMock
 
 import pytest
 
@@ -24,9 +26,13 @@ def git(*args: str, cwd: Path) -> str:
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("base_branch", [None, "main", "missing"])
+@pytest.mark.parametrize("base_branch", [None, "main", "missing", "candidate"])
+@pytest.mark.parametrize("publish_mode", ["branch", "pr"])
 async def test_publish_clean_single_branch_candidate(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, base_branch: str | None
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    base_branch: str | None,
+    publish_mode: str,
 ) -> None:
     """No agent edit or incidental fetch may be required to publish a candidate."""
     monkeypatch.setattr(settings.security, "high_security_mode", False)
@@ -69,6 +75,16 @@ async def test_publish_clean_single_branch_candidate(
         SandboxWorkspaceRecord(workspace_id, workflow_id, step_id, "repo")
     )
     publisher = OmnigentWorkspacePublicationService(tmp_path)
+    resolve_pr = AsyncMock(
+        return_value=SimpleNamespace(
+            resolved=True,
+            pr_url="https://github.com/example/repository/pull/1",
+        )
+    )
+    monkeypatch.setattr(
+        "moonmind.omnigent.workspace_publication.GitHubService.resolve_pull_request_selector",
+        resolve_pr,
+    )
     args = dict(
         workspace_locator={
             "kind": "sandbox",
@@ -78,7 +94,7 @@ async def test_publish_clean_single_branch_candidate(
         current_workflow_id=workflow_id,
         current_step_execution_id=step_id,
         publication_identity="remediation-4-publication",
-        publish_mode="branch",
+        publish_mode=publish_mode,
         base_branch=base_branch,
         repository="example/repository",
         github_token="fixture-credential",
@@ -88,16 +104,30 @@ async def test_publish_clean_single_branch_candidate(
             await publisher.publish_workspace(**args)
         assert git("rev-parse", "HEAD", cwd=workspace) == candidate_sha
         assert "moonmind-job-" not in git("branch", cwd=origin)
+        resolve_pr.assert_not_awaited()
         return
 
     evidence = await publisher.publish_workspace(**args)
-    assert evidence["push_status"] == "pushed"
-    assert evidence["push_base_branch"] == "main"
+    no_new_commits = base_branch == "candidate"
+    assert evidence["push_status"] == ("no_commits" if no_new_commits else "pushed")
+    assert evidence["push_base_branch"] == ("candidate" if no_new_commits else "main")
     assert evidence["push_head_sha"] == candidate_sha
-    assert evidence["push_commit_count"] == 1
+    assert evidence["push_commit_count"] == (0 if no_new_commits else 1)
     assert evidence["remote_verified"] is True
     assert (
         git("rev-parse", f"refs/heads/{evidence['push_branch']}", cwd=origin)
         == candidate_sha
     )
     assert git("status", "--porcelain", cwd=workspace) == ""
+    if publish_mode == "pr":
+        assert (
+            evidence["pull_request_url"]
+            == "https://github.com/example/repository/pull/1"
+        )
+        resolve_pr.assert_awaited_once_with(
+            repo="example/repository",
+            selector=evidence["push_branch"],
+            github_token="fixture-credential",
+        )
+    else:
+        resolve_pr.assert_not_awaited()

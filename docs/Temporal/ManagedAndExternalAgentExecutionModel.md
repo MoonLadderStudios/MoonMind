@@ -455,6 +455,11 @@ Rules:
 
 The generic Container Jobs plane owns reusable workspace-resolution and daemon-translation primitives. Long-lived Omnigent hosts reuse them where compatible while retaining separate host/session lease semantics.
 
+Existing PR discovery follows remote-head verification even when publication
+adds no commits. The unchanged candidate's verified branch supplies the lookup
+identity, and the resulting PR URL crosses the same durable result boundary as
+the URL for a newly pushed candidate.
+
 Before repository publication, the workspace owner fetches the authored base
 branch into its explicit remote-tracking ref using the same repository
 credential. A candidate-only clone must remain publishable without agent edits
