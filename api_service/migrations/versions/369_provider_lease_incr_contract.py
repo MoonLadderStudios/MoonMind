@@ -77,6 +77,22 @@ def upgrade() -> None:
         "UPDATE provider_profile_slot_leases SET lease_id = workflow_id "
         "WHERE lease_id IS NULL"
     )
+    # Existing rows are unique per (runtime_id, workflow_id), so backfilling
+    # lease_id from workflow_id can collide across runtime families. A lease ID
+    # is the stable identity every fenced transition quotes, so the collision is
+    # broken deterministically instead of failing the migration or merging two
+    # leases into one: the oldest row keeps the exact identity its holder
+    # already quotes, and each later duplicate is disambiguated by its own row
+    # id (MoonLadderStudios/MoonMind#3883).
+    op.execute(
+        "UPDATE provider_profile_slot_leases "
+        "SET lease_id = lease_id || '#' || id "
+        "WHERE EXISTS ("
+        "  SELECT 1 FROM provider_profile_slot_leases AS other"
+        "  WHERE other.lease_id = provider_profile_slot_leases.lease_id"
+        "    AND other.id < provider_profile_slot_leases.id"
+        ")"
+    )
     with op.batch_alter_table("provider_profile_slot_leases") as batch:
         batch.alter_column("owner_kind", existing_type=sa.String(32), nullable=False)
         batch.alter_column(

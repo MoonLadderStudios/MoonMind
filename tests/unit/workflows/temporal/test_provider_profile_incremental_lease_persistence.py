@@ -293,6 +293,11 @@ class _LeaseRow:
         self.lease_id = fields.get("lease_id", "agent-run-3")
         self.owner_id = fields.get("owner_id", "agent-run-3")
         self.purpose = fields.get("purpose", "execution_direct")
+        self.compatibility_class = fields.get("compatibility_class")
+        self.capacity_scope_ref = fields.get("capacity_scope_ref")
+        self.scope_generation = fields.get("scope_generation")
+        self.owner_kind = fields.get("owner_kind", "workflow")
+        self.heartbeat_at = fields.get("heartbeat_at")
         self.owner_is_workflow = fields.get("owner_is_workflow", True)
         self.step_execution_id = fields.get("step_execution_id")
         self.oauth_session_id = fields.get("oauth_session_id")
@@ -450,6 +455,7 @@ async def test_a_stale_row_is_replaced_by_a_newer_grant() -> None:
         [_grant_payload(6)],
         [
             _LeaseRow(
+                purpose="execution_omnigent",
                 fencing_generation=5,
                 safe_metadata_json={"evidenceIdentity": "evidence-1"},
             )
@@ -492,7 +498,7 @@ async def test_a_release_tombstones_instead_of_deleting() -> None:
         [_LeaseRow(fencing_generation=5)],
     )
 
-    assert recorder.result == {"released": True}
+    assert recorder.result == {"released": True, "outcome": "released"}
     row = recorder.table["agent-run-3"]
     assert row.lease_state == "released"
     assert row.released_at is not None
@@ -523,7 +529,12 @@ async def test_load_excludes_tombstones_but_reports_the_high_water_mark() -> Non
     assert recorder.result["max_fencing_generation"] == 9
     load_statement = recorder.statements[0]
     assert "lease_state" in str(load_statement)
-    assert "held" in list(load_statement.compile().params.values())
+    # The live read is an indexed query narrowed to the states that still
+    # spend a slot, not a full scan filtered in Python.
+    assert list(load_statement.compile().params.values()) == [
+        "opencode",
+        ["cleanup_requested", "held"],
+    ]
 
 
 @pytest.mark.asyncio

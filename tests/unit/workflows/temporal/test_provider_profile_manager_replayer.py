@@ -11,9 +11,11 @@ from temporalio.converter import DataConverter
 from temporalio.testing import WorkflowEnvironment
 from temporalio.worker import Replayer, UnsandboxedWorkflowRunner, Worker
 
+from moonmind.provider_profiles.lease_client import LeaseTransitionOutcome
 from moonmind.workflows.temporal.workflows.provider_profile_manager import (
     ACTIVITY_TASK_QUEUE,
     LEASE_TOMBSTONE_PURGE_PATCH,
+    LEASE_TRANSITION_CONTRACT_PATCH,
     MoonMindProviderProfileManagerWorkflow,
 )
 
@@ -51,6 +53,7 @@ class _ProfileActivities:
         self.actions: list[str] = []
         self.cleaned = asyncio.Event()
         self.verified = asyncio.Event()
+        self.released = asyncio.Event()
 
     @activity.defn(name="provider_profile.list")
     async def list_profiles(self, request: dict[str, Any]) -> dict[str, Any]:
@@ -82,6 +85,14 @@ class _ProfileActivities:
                 raise exceptions.ApplicationError(
                     "cleanup unavailable", non_retryable=True
                 )
+        if action == "release_one":
+            # MoonLadderStudios/MoonMind#3883: a release answers with an
+            # explicit outcome. The manager frees capacity only for this one.
+            self.released.set()
+            return {
+                "released": True,
+                "outcome": LeaseTransitionOutcome.RELEASED.value,
+            }
         return {"leases": [], "synced": len(request.get("leases", []))}
 
     @activity.defn(name="provider_profile.pending_request_order")
@@ -214,6 +225,115 @@ async def test_current_manager_cleans_then_grants_and_replays(
         < commands.index("grant")
         < commands.index("slot_assigned")
     )
+    await Replayer(
+        workflows=[MoonMindProviderProfileManagerWorkflow],
+        workflow_runner=UnsandboxedWorkflowRunner(),
+    ).replay_workflow(history)
+
+
+@pytest.mark.asyncio
+async def test_the_lease_transition_contract_replays_from_its_own_history() -> None:
+    """The durable ordering contract is pinned by production replay.
+
+    MoonLadderStudios/MoonMind#3883: the grant must commit before the slot is
+    signalled, the release must reach the ledger before capacity is published,
+    and the whole history must replay against the current workflow code. A
+    release that never reaches an explicit outcome must not free the slot.
+    """
+
+    runtime_id = "opencode"
+    activities = _ProfileActivities(runtime_id, fail_cleanup=False)
+    async with await WorkflowEnvironment.start_time_skipping() as env:
+        async with Worker(
+            env.client,
+            task_queue="test-lease-transition",
+            workflows=[MoonMindProviderProfileManagerWorkflow, _SlotRequester],
+            workflow_runner=UnsandboxedWorkflowRunner(),
+        ), Worker(
+            env.client,
+            task_queue=ACTIVITY_TASK_QUEUE,
+            activities=[
+                activities.list_profiles,
+                activities.sync_leases,
+                activities.pending_order,
+                activities.verify,
+            ],
+        ):
+            manager = await env.client.start_workflow(
+                MoonMindProviderProfileManagerWorkflow.run,
+                {"runtime_id": runtime_id},
+                id=f"provider-profile-manager:{runtime_id}",
+                task_queue="test-lease-transition",
+            )
+            await asyncio.wait_for(activities.cleaned.wait(), timeout=15)
+            requester = await env.client.start_workflow(
+                _SlotRequester.run,
+                id="test-lease-transition-requester",
+                task_queue="test-lease-transition",
+            )
+            await manager.signal(
+                "request_slot",
+                {
+                    "requester_workflow_id": requester.id,
+                    "runtime_id": runtime_id,
+                },
+            )
+            await asyncio.wait_for(activities.verified.wait(), timeout=15)
+            assignment = await requester.query(_SlotRequester.assigned)
+            assert assignment["profile_id"] == "test-default"
+
+            await manager.signal(
+                "release_slot",
+                {
+                    "profile_id": "test-default",
+                    "requester_workflow_id": requester.id,
+                    "fencing_generation": assignment["fencing_generation"],
+                },
+            )
+            await asyncio.wait_for(activities.released.wait(), timeout=15)
+
+            with env.auto_time_skipping_disabled():
+                await manager.signal("shutdown")
+                await requester.signal(_SlotRequester.shutdown)
+                assert (await manager.result())["status"] == "shutdown"
+                await requester.result()
+            history = await manager.fetch_history()
+
+    commands: list[str] = []
+    patch_ids: list[str] = []
+    for event in history.events:
+        if event.HasField("marker_recorded_event_attributes"):
+            attrs = event.marker_recorded_event_attributes
+            if attrs.marker_name == "core_patch":
+                payload = (
+                    await DataConverter.default.decode(
+                        attrs.details["patch-data"].payloads
+                    )
+                )[0]
+                patch_ids.append(payload["id"])
+        elif event.HasField("activity_task_scheduled_event_attributes"):
+            attrs = event.activity_task_scheduled_event_attributes
+            if attrs.activity_type.name == "provider_profile.sync_slot_leases":
+                payload = (await DataConverter.default.decode(attrs.input.payloads))[0]
+                commands.append(payload["action"])
+        elif event.HasField(
+            "signal_external_workflow_execution_initiated_event_attributes"
+        ):
+            attrs = event.signal_external_workflow_execution_initiated_event_attributes
+            if attrs.signal_name == "slot_assigned":
+                commands.append("slot_assigned")
+
+    assert LEASE_TRANSITION_CONTRACT_PATCH in patch_ids
+    # The grant is durable before the consumer is told it has capacity, and the
+    # release reaches the ledger before the slot is published as reusable.
+    assert (
+        commands.index("grant")
+        < commands.index("slot_assigned")
+        < commands.index("release_one")
+    )
+    # Neither the release nor the reclamation rewrote the runtime-wide snapshot.
+    assert "save" not in commands
+
     await Replayer(
         workflows=[MoonMindProviderProfileManagerWorkflow],
         workflow_runner=UnsandboxedWorkflowRunner(),

@@ -1381,6 +1381,81 @@ is dropped instead of freeing the replacement holder. A release that carries no
 generation is still honoured, so callers whose handles predate fenced grants keep
 working.
 
+#### The durable lease ledger owns whether a slot is spent
+
+The `provider_profile_slot_leases` row — not an in-memory reservation, a log
+line, or an Activity exception — decides whether a Provider Profile slot is
+available. `provider_profile.sync_slot_leases` is its single persistence owner
+and the only place a state transition happens.
+
+**Lease states.** `held` (the owner may consume the credential),
+`cleanup_requested` (the slot is still spent; the owner's resources are owed
+cleanup), and `released` (a tombstone: the slot is free, the row survives as
+fencing evidence until `purge_released` reaps it past the redelivery horizon).
+A state outside this set is *not* free capacity: recovery reports it as
+unreconciled evidence and refuses to admit new capacity until it is resolved.
+
+**One typed identity per row.** A grant persists the exact lease ID separately
+from the workflow, step, attempt and owner kind, plus the purpose, the
+compatibility class (the ledger mode the lease coexists under), the immutable
+plan and evidence identity, and the credential and capacity-scope generations
+it was admitted against. Recovery restores the same identity rather than
+re-deriving a narrower view of it. Columns that are null on a pre-contract row
+stay explicitly historical; they are never backfilled into current authority.
+
+**Ordering contract.** Every grant path follows the same order:
+
+1. reserve in memory and mark the grant handoff pending;
+2. write the row (`grant`), which is grant-or-get: a retry that matches the
+   complete immutable identity *and* the acquired generations returns the
+   committed row, conflicting reuse of a live identity fails without creating
+   another unit, and a lower generation is rejected as a fencing regression;
+3. only then signal or return the grant.
+
+A reservation whose write has not resolved is never reported as `already_held`.
+A concurrent identical caller waits and joins the committed result — or observes
+the rolled-back state — instead of inheriting a pending reservation.
+
+**Ambiguous write outcomes are reconciled, not guessed at.** A database write
+can time out *after* it commits. The manager re-reads the stable lease identity
+(`describe`) and treats the grant as durable only when the ledger holds the same
+profile, state and generation. It never deletes a possibly live row and never
+issues a second grant on that evidence.
+
+**Releases keep capacity unavailable until they resolve.** `release_one` is
+fenced and returns an explicit outcome — `released`, `already_released`,
+`stale`, `conflict` or `retryable`. Only the first two let the in-memory ledger
+free the slot. A failed Activity, a structured error, or a stale fence leaves the
+slot spent and records the owner for a bounded retry against the same lease
+identity. A logged warning never announces reuse.
+
+**Expiry and terminal ownership request cleanup.** Lease expiry is not evidence
+that the holder stopped: it transitions the row to `cleanup_requested` and
+leaves the slot spent, so the resource owner can reclaim what the run held
+(MoonLadderStudios/MoonMind#1089) without a second credential consumer starting
+while the first may still be running. The slot is released only when workflow
+status verification proves the owner terminal, and that release tombstones the
+row with `cleanupRequested` so the cleanup is still owed. Both paths cost one
+fenced row transition per lease.
+
+**Bounded cost, detected disagreement.** An ordinary grant or release touches
+exactly one row, independent of how many leases the runtime holds. Recovery and
+reconciliation may read the runtime's rows once; nothing rewrites every lease on
+each mutation. The manager keeps a direct reverse index so removing a lease is
+O(1), and duplicate or contradictory identities — one lease on two profiles, one
+owner on two leases, two live rows claiming one workflow or owner — are recorded
+as reconciliation evidence on `get_state` rather than silently skipped.
+
+**The retained snapshot rewrite is fenced durably.** `action=save` still exists
+for histories recorded before the incremental contract, but it carries the
+writer's own fencing high-water mark and preserves every row fenced above it. A
+patch marker in one workflow history cannot fence a stale database writer; a
+durable generation comparison can.
+
+**No credential material reaches a lease row.** Caller metadata passes through a
+fixed allowlist, and the only stored evidence is a compact non-secret identity
+digest plus bounded cleanup/release reasons.
+
 #### Validation identity
 
 A `single_flight_validation` lease is granted against a **versioned evidence
@@ -1420,6 +1495,14 @@ themselves:
 - the per-purpose scope exemption, so a pre-marker manager still gates credential
   repair and revocation on shared-scope availability;
 - withdrawing a pending request when its owner releases.
+
+The durable lease transition contract above has its own workflow marker,
+`provider-profile-manager-lease-transition-contract-v1`. A history recorded
+before it keeps its exact recorded commands: the pre-contract release order, the
+runtime-wide snapshot rewrite on expiry and reclamation, and recovery that does
+not fail closed on unreconciled state. New executions record the marker and use
+the per-lease transitions, the pending-grant handoff, the ambiguous-outcome
+reconciliation and the fail-closed recovery described above.
 
 Periodic released-lease tombstone cleanup has its own workflow marker,
 `provider-profile-manager-lease-tombstone-purge-v1`. Both DB lease persistence and
