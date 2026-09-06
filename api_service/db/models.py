@@ -3922,10 +3922,27 @@ class ProviderProfileSlotLease(Base):
         Index("ix_provider_slot_leases_owner", "owner_id"),
         Index("ix_provider_slot_leases_profile", "profile_id"),
         Index("ix_provider_slot_leases_scope", "capacity_scope_ref"),
-        UniqueConstraint(
-            "runtime_id", "workflow_id", name="uq_provider_slot_lease_runtime_workflow"
+        # MoonLadderStudios/MoonMind#3883: the owning workflow is an identity
+        # only for a workflow-owned lease. One Activity-owned step legitimately
+        # binds several Provider Profiles from the same runtime, giving each
+        # lease its own owner ID while recording the same owning workflow purely
+        # so the manager can verify liveness, so uniqueness is partial.
+        Index(
+            "uq_provider_slot_lease_runtime_workflow",
+            "runtime_id",
+            "workflow_id",
+            unique=True,
+            postgresql_where=text("owner_is_workflow"),
+            sqlite_where=text("owner_is_workflow"),
         ),
-        UniqueConstraint("lease_id", name="uq_provider_slot_lease_lease_id"),
+        # MoonLadderStudios/MoonMind#3883: a lease ID is unique *within* the
+        # runtime that issued it. Pre-contract rows backfill ``lease_id`` from
+        # ``workflow_id``, and one workflow can legitimately hold a lease on
+        # two runtimes, so a global constraint would either fail the backfill
+        # or force a rewrite that breaks the identity existing holders quote.
+        UniqueConstraint(
+            "runtime_id", "lease_id", name="uq_provider_slot_lease_lease_id"
+        ),
     )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
