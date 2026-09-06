@@ -65,6 +65,8 @@ AI coding agents are remarkable, but long-running autonomous work needs more tha
 
 MoonMind exists to answer those questions. Progress against each promise below is tracked milestone by milestone in the [MoonMind Roadmap](docs/MoonMindRoadmap.md).
 
+The exact supported entrypoint, authorization boundary, terminal evidence, recovery behavior, local-first limitations, and child ownership for the software-engineering journey are defined in the [Software-Engineering Adoption Path](docs/SoftwareEngineeringAdoptionPath.md) (MoonLadderStudios/MoonMind#3930). Statements under "Where this is headed" below describe planned direction, not current enforcement; planned, implemented, and qualified behavior remain distinct per the roadmap evidence rules.
+
 ### 🛡️ Security — boundaries the agent can't cross
 
 An autonomous agent with your credentials and a shell creates a privileged attack surface unless something constrains it. MoonMind enforces those constraints in the execution substrate rather than depending on the agent to police its own authority:
