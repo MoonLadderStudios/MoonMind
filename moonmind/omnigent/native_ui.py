@@ -74,17 +74,31 @@ PresentationMode = Literal["embedded", "full_page"]
 _TRUE_QUERY_VALUES = {"1", "true", "yes", "on"}
 
 
-# Opaque chat-binding ids are server-generated as ``chatb_`` + urlsafe-base64
-# (``[A-Za-z0-9_-]``). Incoming path values are untrusted, so serving code
-# validates them against this allowlist and fails closed before reflecting
-# them into HTML, redirects, or scoped routes.
+# Chat-binding ids are server-generated in two shapes, both validated by this
+# one allowlist before serving code reflects them into HTML, redirects, or
+# scoped routes:
+# - ``chatb_`` + urlsafe-base64 from the bridge store
+#   (``bridge_store._generate_chat_binding_id``): the browser-facing binding
+#   authority the canonical flow propagates as ``chat_binding_ref``; and
+# - ``omc_`` + 40 lowercase hex chars from the canonical control-plane
+#   resolver (deterministic session digest), which shares the
+#   ``chat_binding_id`` field as an internal dedup key.
+# Unifying the generators on a single format is out of scope for a serving
+# validator: the digest shape is load-bearing for idempotent session
+# establishment while the opaque shape is load-bearing for unguessable browser
+# handles. Anything outside both exact shapes still fails closed.
 _CHAT_BINDING_ID_PATTERN = re.compile(r"^chatb_[A-Za-z0-9_-]{1,128}$")
+_OMC_CHAT_BINDING_ID_PATTERN = re.compile(r"^omc_[0-9a-f]{40}$")
 
 
 def is_valid_chat_binding_id(value: Any) -> bool:
-    """Return whether an incoming binding id matches the server-generated shape."""
+    """Return whether an incoming binding id matches a server-generated shape."""
 
-    return bool(_CHAT_BINDING_ID_PATTERN.fullmatch(str(value or "").strip()))
+    text = str(value or "").strip()
+    return bool(
+        _CHAT_BINDING_ID_PATTERN.fullmatch(text)
+        or _OMC_CHAT_BINDING_ID_PATTERN.fullmatch(text)
+    )
 
 
 def scoped_ui_base(chat_binding_id: str) -> str:
@@ -358,23 +372,43 @@ _ROOT_ABSOLUTE_ATTR = re.compile(r"""\b(src|href)=(["'])/(?!/)""")
 _MAX_HEAD_SEARCH_BYTES = 256 * 1024
 
 
+def _ascii_lower(char: str) -> str:
+    """Length-preserving ASCII lowercase for offset-sensitive scans."""
+
+    code = ord(char)
+    if ord("A") <= code <= ord("Z"):
+        return chr(code + 32)
+    return char
+
+
 def _head_insert_position(document: str) -> int | None:
     """Return the insert offset just after the opening `<head ...>` tag.
 
-    Linear, backtracking-free scan equivalent to ``<head[^>]*>``
-    (case-insensitive). Returns ``None`` when no head tag closes inside the
-    bounded search window, in which case the caller prepends the injection.
+    ASCII case-insensitive scan equivalent to ``<head[^>]*>``. ``str.lower()``
+    is not used because some characters (for example ``İ``) expand when
+    lowercased, shifting every later offset so the injection can land inside a
+    later element instead of right after the head tag. Comparing ASCII letters
+    with a length-preserving fold keeps match offsets identical to the input.
+    Returns ``None`` when no head tag closes inside the bounded search window,
+    in which case the caller prepends the injection.
     """
 
     window = document[:_MAX_HEAD_SEARCH_BYTES]
-    lowered = window.lower()
-    idx = lowered.find("<head")
-    if idx == -1:
-        return None
-    end = window.find(">", idx + len("<head"))
-    if end == -1:
-        return None
-    return end + 1
+    start = 0
+    while True:
+        idx = window.find("<", start)
+        if idx == -1:
+            return None
+        candidate = window[idx + 1 : idx + 5]
+        if len(candidate) == 4 and all(
+            _ascii_lower(char) == expected
+            for char, expected in zip(candidate, "head")
+        ):
+            end = window.find(">", idx + 5)
+            if end == -1:
+                return None
+            return end + 1
+        start = idx + 1
 
 
 # Inline CSS url() references (`url(/assets/wordmark.svg)`) ignore <base href>
