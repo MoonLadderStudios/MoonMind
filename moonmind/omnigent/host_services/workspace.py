@@ -21,8 +21,11 @@ from moonmind.omnigent.workspace_sources import (
     CompiledWorkspaceSource,
     ExistingWorkspaceGrantLedger,
     WorkspaceSourceError,
+    check_source_backend_supported,
     compile_workspace_source,
+    resolve_workspace_backend,
     verify_existing_workspace_grant,
+    verify_existing_workspace_grant_signature,
 )
 from moonmind.schemas.agent_runtime_models import AgentExecutionRequest
 from moonmind.schemas.workspace_locator_models import SandboxWorkspaceLocator
@@ -155,6 +158,24 @@ class OmnigentWorkspaceMaterializer:
                 workflow_id=owner_workflow_id,
                 step_execution_id=owner_step_execution_id,
                 runtime="omnigent",
+            )
+        except WorkspaceSourceError as exc:
+            raise HarnessPlatformError(
+                str(exc),
+                code=HarnessPlatformFailure.OMNIGENT_HOST_LAUNCH_FAILED,
+            ) from exc
+        # Unsupported backend/platform/source combinations fail before launch:
+        # an exclusive writable grant cannot be honored on a remote daemon
+        # view that cannot fence the owner's live checkout.
+        try:
+            check_source_backend_supported(
+                source.kind,
+                resolve_workspace_backend(),
+                grant_mode=(
+                    source.existing_grant.mode
+                    if source.existing_grant is not None
+                    else None
+                ),
             )
         except WorkspaceSourceError as exc:
             raise HarnessPlatformError(
@@ -409,6 +430,28 @@ class OmnigentWorkspaceMaterializer:
         except WorkspaceSourceError as exc:
             raise HarnessPlatformError(
                 str(exc),
+                code=HarnessPlatformFailure.OMNIGENT_HOST_LAUNCH_FAILED,
+            ) from exc
+        # A signed grant carries issuance authenticity: forged signatures fail
+        # closed here. Historical unsigned grants keep the owner/generation /
+        # expiry checks above.
+        try:
+            verify_existing_workspace_grant_signature(
+                grant, grantee_workflow_id=target_workflow_id
+            )
+        except WorkspaceSourceError as exc:
+            raise HarnessPlatformError(
+                str(exc),
+                code=HarnessPlatformFailure.OMNIGENT_HOST_LAUNCH_FAILED,
+            ) from exc
+        # Fence exclusive use: an exclusive claim conflicts with any other
+        # active claim, while read-only claims coexist only with read-only
+        # claims. Reclaiming the same grant is idempotent for retries.
+        try:
+            record_store.claim_existing_workspace(grant.workspace_id, grant)
+        except Exception as exc:
+            raise HarnessPlatformError(
+                f"existing workspace is already granted elsewhere: {exc}",
                 code=HarnessPlatformFailure.OMNIGENT_HOST_LAUNCH_FAILED,
             ) from exc
         authority = (self._root / "temporal_sandbox").resolve()

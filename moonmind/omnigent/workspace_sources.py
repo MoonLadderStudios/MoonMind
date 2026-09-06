@@ -24,9 +24,11 @@ consumers cannot drift from the compiled decision.
 from __future__ import annotations
 
 import hashlib
+import hmac
 import json
 import os
 import re
+import time
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
@@ -69,7 +71,27 @@ WORKSPACE_SOURCE_RUNTIME_UNSUPPORTED = "WORKSPACE_SOURCE_RUNTIME_UNSUPPORTED"
 WORKSPACE_SOURCE_GRANT_INVALID = "WORKSPACE_SOURCE_GRANT_INVALID"
 
 _DIGEST_RE = re.compile(r"^sha256:[0-9a-f]{64}$")
+_GRANT_DIGEST_RE = re.compile(r"^(?:sha256:[0-9a-f]{64}|hmac-sha256:[0-9a-f]{64})$")
 _ARTIFACT_REF_RE = re.compile(r"^artifact://[A-Za-z0-9_.\-]{1,200}$")
+
+# Grant HMAC secret lives in the server environment only; agents never see it.
+# A ``hmac-sha256:`` grant digest authenticates issuance; plain ``sha256:``
+# digests remain format-checked only, for historical grants.
+_GRANT_HMAC_ENV = "MOONMIND_WORKSPACE_GRANT_SECRET"
+
+# Backend/source support matrix. An advanced selected directory is not
+# permission for arbitrary host mounts, and not every sharing mode is
+# meaningful on every backend. Unsupported combinations fail before launch.
+_SUPPORTED_BACKENDS = ("docker_local", "docker_remote", "managed")
+_BACKEND_BY_SOURCE: dict[str, frozenset[str]] = {
+    "scratch": frozenset({"docker_local", "docker_remote", "managed"}),
+    "repository": frozenset({"docker_local", "docker_remote", "managed"}),
+    "artifact": frozenset({"docker_local", "docker_remote", "managed"}),
+    "checkpoint": frozenset({"docker_local", "docker_remote", "managed"}),
+    "existing_workspace": frozenset(
+        {"docker_local", "docker_remote", "managed"}
+    ),
+}
 
 
 class WorkspaceSourceError(ValueError):
@@ -252,7 +274,7 @@ def parse_existing_workspace_grant(value: Any) -> ExistingWorkspaceGrant:
             WORKSPACE_SOURCE_GRANT_INVALID,
             "existingWorkspaceGrant.generation must be >= 1",
         )
-    if grant_digest and not _DIGEST_RE.match(grant_digest):
+    if grant_digest and not _GRANT_DIGEST_RE.match(grant_digest):
         raise WorkspaceSourceError(
             WORKSPACE_SOURCE_GRANT_INVALID,
             "existingWorkspaceGrant.grantDigest must be a sha256: digest",
@@ -275,6 +297,194 @@ def check_source_runtime_supported(kind: str, runtime: str) -> None:
             WORKSPACE_SOURCE_RUNTIME_UNSUPPORTED,
             f"workspace source {kind!r} is not supported on runtime {runtime!r}; "
             f"supported: {', '.join(supported) or 'none'}",
+        )
+
+
+def check_source_backend_supported(
+    kind: str,
+    backend: str,
+    *,
+    grant_mode: str | None = None,
+) -> None:
+    """Fail before execution when a source/backend combination is unsupported.
+
+    An exclusive writable grant cannot be honored on a remote daemon view
+    that cannot fence the owner's live checkout; read-only sharing is
+    supported there through the qualified locator mapping.
+    """
+
+    normalized = str(backend or "").strip().lower() or "docker_local"
+    if normalized not in _SUPPORTED_BACKENDS:
+        raise WorkspaceSourceError(
+            WORKSPACE_SOURCE_RUNTIME_UNSUPPORTED,
+            f"workspace backend {backend!r} is not a supported runtime",
+        )
+    allowed = _BACKEND_BY_SOURCE.get(str(kind))
+    if allowed is None or normalized not in allowed:
+        raise WorkspaceSourceError(
+            WORKSPACE_SOURCE_RUNTIME_UNSUPPORTED,
+            f"workspace source {kind!r} is unsupported on backend {normalized!r}",
+        )
+    if (
+        kind == "existing_workspace"
+        and normalized == "docker_remote"
+        and (grant_mode or "exclusive") == "exclusive"
+    ):
+        raise WorkspaceSourceError(
+            WORKSPACE_SOURCE_RUNTIME_UNSUPPORTED,
+            "exclusive existing-workspace use is unsupported on a remote daemon; "
+            "request read_only sharing or a local backend",
+        )
+
+
+def resolve_workspace_backend() -> str:
+    """Map the deployment daemon selection onto the backend support matrix."""
+
+    mode = os.getenv("WORKFLOW_DOCKER_DAEMON_MODE", "").strip().lower()
+    if mode == "remote":
+        return "docker_remote"
+    if mode == "local":
+        return "docker_local"
+    daemon_root = os.getenv("WORKFLOW_WORKSPACE_DAEMON_ROOT", "").strip()
+    return "docker_remote" if daemon_root else "docker_local"
+
+
+def _grant_signature_payload(
+    *,
+    workspace_id: str,
+    owner_workflow_id: str,
+    owner_step_execution_id: str,
+    grantee_workflow_id: str,
+    mode: str,
+    generation: int,
+    expires_at: int,
+) -> str:
+    return json.dumps(
+        {
+            "version": "grant-v1",
+            "workspaceId": workspace_id,
+            "ownerWorkflowId": owner_workflow_id,
+            "ownerStepExecutionId": owner_step_execution_id,
+            "granteeWorkflowId": grantee_workflow_id,
+            "mode": mode,
+            "generation": generation,
+            "expiresAt": expires_at,
+        },
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+
+
+def issue_existing_workspace_grant(
+    *,
+    workspace_id: str,
+    owner_workflow_id: str,
+    owner_step_execution_id: str,
+    grantee_workflow_id: str = "",
+    mode: str = "exclusive",
+    generation: int = 1,
+    lifetime_seconds: int = 3600,
+    secret: str | None = None,
+) -> ExistingWorkspaceGrant:
+    """Issue a server-side HMAC-authenticated ownership/use grant.
+
+    The HMAC in ``grant_digest`` authenticates issuance so a forged grant
+    cannot pass verification; agents never see the server secret.
+    """
+
+    key = secret if secret is not None else os.getenv(_GRANT_HMAC_ENV, "")
+    if not key:
+        raise WorkspaceSourceError(
+            WORKSPACE_SOURCE_GRANT_INVALID,
+            "workspace grant issuance requires a server grant secret",
+        )
+    normalized_mode = str(mode or "exclusive").strip().lower()
+    if normalized_mode not in {"exclusive", "read_only"}:
+        raise WorkspaceSourceError(
+            WORKSPACE_SOURCE_GRANT_INVALID,
+            "existingWorkspaceGrant.mode must be 'exclusive' or 'read_only'",
+        )
+    if not str(workspace_id or "").strip() or not str(
+        owner_workflow_id or ""
+    ).strip():
+        raise WorkspaceSourceError(
+            WORKSPACE_SOURCE_GRANT_INVALID,
+            "workspace grant requires a workspace and owner workflow identity",
+        )
+    if generation < 1:
+        raise WorkspaceSourceError(
+            WORKSPACE_SOURCE_GRANT_INVALID,
+            "existingWorkspaceGrant.generation must be >= 1",
+        )
+    if lifetime_seconds <= 0 or lifetime_seconds > 86400:
+        raise WorkspaceSourceError(
+            WORKSPACE_SOURCE_GRANT_INVALID,
+            "workspace grant lifetime must be within one day",
+        )
+    expires_epoch = int(time.time()) + int(lifetime_seconds)
+    payload = _grant_signature_payload(
+        workspace_id=str(workspace_id).strip(),
+        owner_workflow_id=str(owner_workflow_id).strip(),
+        owner_step_execution_id=str(owner_step_execution_id).strip(),
+        grantee_workflow_id=str(grantee_workflow_id or "").strip(),
+        mode=normalized_mode,
+        generation=generation,
+        expires_at=expires_epoch,
+    )
+    digest = hmac.new(key.encode(), payload.encode(), hashlib.sha256).hexdigest()
+    return ExistingWorkspaceGrant(
+        workspace_id=str(workspace_id).strip(),
+        owner_workflow_id=str(owner_workflow_id).strip(),
+        owner_step_execution_id=str(owner_step_execution_id).strip(),
+        generation=generation,
+        mode=normalized_mode,  # type: ignore[arg-type]
+        expires_at=datetime.fromtimestamp(expires_epoch, tz=UTC),
+        grant_digest=f"hmac-sha256:{digest}",
+    )
+
+
+def verify_existing_workspace_grant_signature(
+    grant: ExistingWorkspaceGrant,
+    *,
+    grantee_workflow_id: str = "",
+    secret: str | None = None,
+) -> None:
+    """Verify the HMAC issuance signature of a grant, when one is carried.
+
+    Grants without an ``hmac-sha256:`` digest are historical grants and keep
+    the owner/generation/expiry checks of :func:`verify_existing_workspace_grant`;
+    forged or mismatched signatures fail closed here.
+    """
+
+    digest = str(grant.grant_digest or "")
+    if not digest.startswith("hmac-sha256:"):
+        return
+    key = secret if secret is not None else os.getenv(_GRANT_HMAC_ENV, "")
+    if not key:
+        raise WorkspaceSourceError(
+            WORKSPACE_SOURCE_GRANT_INVALID,
+            "workspace grant verification requires a server grant secret",
+        )
+    if grant.expires_at is None:
+        raise WorkspaceSourceError(
+            WORKSPACE_SOURCE_GRANT_INVALID,
+            "signed workspace grant requires a bounded lifetime",
+        )
+    expires_epoch = int(grant.expires_at.timestamp())
+    payload = _grant_signature_payload(
+        workspace_id=grant.workspace_id,
+        owner_workflow_id=grant.owner_workflow_id,
+        owner_step_execution_id=grant.owner_step_execution_id,
+        grantee_workflow_id=str(grantee_workflow_id or "").strip(),
+        mode=grant.mode,
+        generation=grant.generation,
+        expires_at=expires_epoch,
+    )
+    expected = hmac.new(key.encode(), payload.encode(), hashlib.sha256).hexdigest()
+    if not hmac.compare_digest(digest, f"hmac-sha256:{expected}"):
+        raise WorkspaceSourceError(
+            WORKSPACE_SOURCE_GRANT_INVALID,
+            "existingWorkspaceGrant signature is invalid",
         )
 
 
@@ -780,10 +990,14 @@ __all__ = [
     "WORKSPACE_SOURCE_RAW_PATH_REJECTED",
     "WORKSPACE_SOURCE_RUNTIME_UNSUPPORTED",
     "WorkspaceSourceError",
+    "check_source_backend_supported",
     "check_source_runtime_supported",
     "compile_workspace_source",
     "compute_input_manifest_digest",
     "decode_legacy_workspace_path",
+    "issue_existing_workspace_grant",
     "parse_existing_workspace_grant",
+    "resolve_workspace_backend",
     "verify_existing_workspace_grant",
+    "verify_existing_workspace_grant_signature",
 ]
