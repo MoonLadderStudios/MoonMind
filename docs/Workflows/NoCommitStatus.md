@@ -1,98 +1,68 @@
 # No Commit Workflow Status
 
-Status: Active  
-Owners: MoonMind Engineering  
-Last updated: 2026-06-28
+**Document Class:** Canonical declarative  
+**Status:** Desired-state contract  
+**Owners:** MoonMind Engineering  
+**Last updated:** 2026-09-06
 
-Canonical for: `no_commit` lifecycle semantics, `NO_COMMIT` finish outcome semantics, publish-mode PR runs that complete without creating a repository commit, and side-effectful workflows that should not be described as "no changes."
+Canonical for: no_commit lifecycle semantics, NO_COMMIT finish outcome, valid publishing-context completion without a repository commit, and side-effectful work that must not be described as “no changes.”
 
 Related:
 
-- `docs/Workflows/WorkflowFinishSummarySystem.md` — finish summary artifact and outcome-code contract.
-- `docs/Temporal/VisibilityAndUiQueryModel.md` — `mm_state`, exact state, and compatibility dashboard grouping.
-- `docs/Api/ExecutionsApiContract.md` — execution API state surface.
-- `docs/UI/WorkflowStatusColorSemantics.md` — status color grouping and display rationale.
-
----
+- `docs/Workflows/WorkflowFinishSummarySystem.md`
+- `docs/Workflows/WorkflowPublishing.md`
+- `docs/Temporal/VisibilityAndUiQueryModel.md`
+- `docs/Api/ExecutionsApiContract.md`
+- `docs/UI/WorkflowStatusColorSemantics.md`
+- `docs/RepositoryAccessAndWorkspaceDesign.md`
 
 ## 1. Purpose
 
-MoonMind workflows can complete useful work without creating a repository commit. The clearest canonical example is a Jira Implement preset run that determines the requested repository work is already implemented and then updates the Jira issue, such as moving it to Done.
+A workflow can complete meaningful work without producing a repository commit. For example, an implementation workflow may establish that the requested code already exists and complete the authoritative Jira issue. “No changes” hides that tracker effect. “No commit” describes the narrower repository result.
 
-Calling that outcome **No Changes** is misleading because the workflow may have performed non-repository side effects. The correct meaning is narrower:
-
-> The workflow completed successfully, but no repository commit was created because there were no repository changes to commit.
-
-Use **No Commit** for that outcome.
-
----
+The outcome is determined from compiled role and verified result, not by comparing a user-facing Auto string or assuming a coordinator's local None represents the whole batch policy.
 
 ## 2. Canonical terms
 
 | Layer | Canonical value | Meaning |
 | --- | --- | --- |
-| Exact lifecycle state | `no_commit` | Terminal completed-without-commit state: workflow completed without creating a repository commit. |
-| Finish outcome code | `NO_COMMIT` | Structured finish-summary outcome for the same condition. |
-| Publish status | `skipped` | Publish stage intentionally skipped branch/PR creation because no commit was needed. |
-| Publish reason code | `no_commit` | Stable machine-readable publish reason. |
-| Compatibility dashboard grouping | `completed` | The workflow did not fail or cancel; it is grouped with terminal successful outcomes for coarse filters. |
-| Temporal/API close status | `completed` | The execution reached a successful terminal condition. |
+| Exact lifecycle state | no_commit | Valid terminal completion without a needed repository commit |
+| Finish outcome code | NO_COMMIT | Structured repository no-commit outcome |
+| Publish status | skipped | Managed branch/PR creation was not needed |
+| Publish reason code | no_commit | Stable reason, distinct from policy disable or failure |
+| Compatibility dashboard grouping | completed | Coarse successful-outcome grouping |
+| Temporal/API close status | completed | Successful terminal condition |
 
-`NO_CHANGES` is a legacy alias only. New code, docs, UI labels, and finish summaries should use `NO_COMMIT` / `no_commit`.
+NO_CHANGES/no_changes are historical aliases only. New domain code, labels, and summaries use NO_COMMIT/no_commit. Coarse dashboard grouping does not change the exact lifecycle/dependency contract.
 
----
+## 3. When to use no_commit
 
-## 3. When to use `no_commit`
+Use no_commit when the admitted repository-publishing objective reaches a valid no-op, authoritative evidence establishes no commit-worthy candidate was needed, no required publication was left undone, and required independent effects succeed or are explicitly best-effort under the composition.
 
-Use `no_commit` when all of the following are true:
+Managed PR/Branch normally uses a structured skipped/no_commit result. Skill-owned Auto uses its exact-attempt no_op_verified evidence and objective-specific terminal contract, mapped by Workflow Publishing. A plain empty diff, successful process, or model claim is insufficient. A merge-required resolver cannot report success from a local no-op while the PR remains unresolved.
 
-1. The workflow reached a normal terminal path.
-2. The workflow was in a repository-publishing context, usually `publish.mode = "pr"` or `publish.mode = "branch"`.
-3. The repository workspace had no commit-worthy diff at the publish boundary.
-4. No branch or pull request was created by the publish stage.
-5. The absence of a commit was a valid outcome, not a technical publishing failure.
-6. Any non-repository side effects either completed successfully or are represented separately in side-effect output metadata.
+Do not use no_commit for:
 
-Do **not** use `no_commit` when:
+- explicit scope None or an execution with no repository-publishing role merely because it produced no commit;
+- coordinator discovery/enqueue/no-target objectives, which have their own outcome evidence;
+- unknown candidate eligibility, failed publication, missing/stale evidence, required side-effect failure, or cancellation;
+- verified push, PR publication/adoption, or merge outcomes that have their own publication result.
 
-- `publish.mode = "none"`; use `PUBLISH_DISABLED` instead.
-- The workflow failed before it could determine repository commit eligibility; use `failed` / `FAILED`.
-- Commit or PR creation failed for a technical reason; use `failed` / `FAILED` with `finishOutcome.stage = "publish"`.
-- A branch or pull request was created; use `PUBLISHED_BRANCH` or `PUBLISHED_PR`.
-- The user canceled or force-canceled the workflow; use `canceled` / `CANCELLED`.
-- A side-effect that is required for success failed; use `failed` unless the preset explicitly defines that side effect as best-effort.
-
----
+PUBLISH_DISABLED records a local compiled no-publication disposition where appropriate. It does not prove that all descendants were prohibited from publishing. A coordinator can have local None under an authored PR scope and complete its enqueue objective while children continue independently.
 
 ## 4. Canonical Jira Implement example
 
-A Jira Implement preset run may behave like this:
-
-1. The workflow starts from a Jira issue and runs with publish mode PR.
-2. The implementation step inspects the repository and determines the requested work is already present.
-3. The preset performs a Jira side effect, for example transitioning the issue to Done or writing a verification comment.
-4. The publish stage checks the repository and finds no commit-worthy diff.
-5. The workflow terminalizes as `no_commit`, not `completed` and not `failed`.
-
-The operator-facing summary should communicate both facts:
+The workflow's Auto resolves to its declared PR behavior, or the user explicitly selected PR. Implementation establishes the requested code is already present. The trusted tracker boundary completes the canonical issue when that already-implemented fact is explicit. The publication boundary verifies no repository commit was needed. The result is No Commit with the tracker effect shown separately.
 
 ```text
-No commit was created because the repository already matched the request. Jira was updated successfully.
+No commit was needed because the repository already matched the request. Jira was updated successfully.
 ```
 
-The outcome must not be summarized as:
-
-```text
-No changes.
-```
-
-That wording hides side effects and makes a Jira transition look invisible.
-
----
+An ambiguous no-diff result does not authorize the Jira transition. Required tracker failure remains failure even when no code change was needed.
 
 ## 5. Required structured result shape
 
-A `no_commit` terminal result should be represented with structured fields rather than summary-string parsing:
+A managed no-commit result uses structured fields, not prose parsing:
 
 ```json
 {
@@ -115,115 +85,54 @@ A `no_commit` terminal result should be represented with structured fields rathe
     "prUrl": null
   },
   "sideEffects": [
-    {
-      "kind": "jira",
-      "status": "completed",
-      "summary": "Issue transitioned to Done."
-    }
+    {"kind": "jira", "status": "completed", "summary": "Issue transitioned to Done."}
   ]
 }
 ```
 
-Rules:
+The publish mode here is the compiled local result, not a replacement for the authored input snapshot. An authored Auto remains Auto with its resolved explanation in detail/reconstruction surfaces. Auto evidence retains its own schema/status/owner rather than being rewritten into fabricated managed evidence.
 
-1. `state = "no_commit"` is the exact lifecycle state shown in exact-state UI surfaces.
-2. `closeStatus = "completed"` because the workflow reached a valid terminal outcome.
-3. `dashboardStatus = "completed"` for broad compatibility grouping.
-4. `finishOutcome.code = "NO_COMMIT"` is the canonical outcome-code spelling.
-5. `publish.status = "skipped"` must be paired with `publish.reasonCode = "no_commit"` so skipped publication is not confused with dry-run, policy skip, validation failure, or credentials failure.
-6. Side effects belong in a separate structured block. Do not infer side effects from `finishOutcome.reason`.
-7. `prUrl` must be `null` unless a PR actually exists.
-
----
+A PR reference must identify an actual PR. Existing target context is distinct from proof that this run created, updated, or merged it. Never infer publication from a URL alone or invent one for no-commit output.
 
 ## 6. Publish-stage behavior
 
-The publish implementation should return a structured publish result, not just a prose note.
+The managed publisher returns structured mode, status, reasonCode, commit/push flags, target/head evidence, and PR identity where real. The finalizer maps a verified managed skipped/no_commit result to the canonical outcome. Skill-owned Auto is validated through its immutable Skill/current-attempt evidence before equivalent outcome mapping.
 
-Recommended shape:
-
-```python
-PublishResult(
-    mode="pr",
-    status="skipped",
-    reason_code="no_commit",
-    reason="No repository changes were available to commit or publish.",
-    commit_created=False,
-    branch_pushed=False,
-    pr_url=None,
-    branch_name=None,
-)
-```
-
-The workflow finalization layer then maps that result to:
-
-```text
-state: no_commit
-closeStatus: completed
-finishOutcome.code: NO_COMMIT
-finishOutcome.stage: publish
-publish.status: skipped
-publish.reasonCode: no_commit
-```
-
-This avoids parsing strings such as `publish skipped: no local changes` and keeps the UI, API projection, and run-summary artifact consistent.
-
----
+Unknown Git comparison, inaccessible base, failed remote verification, and missing evidence cannot become no_commit. A candidate produced or published earlier in the workflow remains authoritative even if a later read-only step reports no local changes. Do not overwrite cumulative acceptedRepositoryEvidence with the stopping step's raw branch/head metadata.
 
 ## 7. Interaction with non-repository side effects
 
-`no_commit` says nothing about whether non-repository side effects happened. A workflow may be `no_commit` and still have meaningful effects, including:
+No Commit does not mean no Jira transition, issue/PR comment, tracker verification, artifact publication, notification, or other declared external effect. Expose bounded structured summaries separately. A required failed effect prevents success unless the definition explicitly makes it best-effort.
 
-- Jira issue transition or comment updates;
-- GitHub issue or PR comment updates;
-- tracker verification records;
-- artifact publication;
-- notification or reporting side effects;
-- future preset-specific external actions.
+### 7.1 Batch coordinators
 
-Those side effects should be exposed explicitly through bounded side-effect summaries or preset output metadata.
+A coordinator under PR or Auto scope records targets and actual child enqueue outcomes. Its own compiled None means no local repository deliverable, not an authored tree-wide None. Appropriate objective summaries are children queued, verified no targets, partial dispatch, blocked, or failed.
 
-A workflow with required side effects should not be marked `no_commit` if those side effects failed. In that case the correct terminal state is `failed`, with the side-effect failure captured in the failure diagnostic.
+```text
+12 child workflows queued. Each will create a pull request against release/1.2. This coordinator publishes no repository changes.
+```
 
----
+Do not label that “No changes,” “Nothing happened,” or “Publishing disabled for this batch.” Enqueue success is not child completion, publication, or merge success. Link actual children and display their outcomes separately. Missing child results remain pending/unavailable, not inferred successful.
+
+A Dependabot dry run reports would-queue results without creating children. That is not the same as None. A deliberate zero-target run requires the discovery/terminal contract's positive evidence, not an absent artifact interpreted as no-op.
+
+### 7.2 Saved work
+
+Save outcome, compute outcome, local publication outcome, and descendant outcomes are independently inspectable. None can produce useful saved files with PUBLISH_DISABLED as local repository disposition. Failed compute or publication can still have verified saved work without becoming successful compute/publication.
+
+Required saving precedes destructive cleanup. None does not authorize an otherwise forbidden recovery push. A retained workspace is not equivalent to a verified artifact-backed save.
 
 ## 8. UI presentation
 
-Primary label:
+Use “No commit” with a reason such as “No repository changes were needed,” and include known side effects, for example “No commit · Jira updated.” Avoid “No changes,” unexplained “No publish,” or a generic Completed label that hides a valid no-commit publishing outcome.
 
-```text
-No commit
-```
+Display the single authored selection and effective explanation separately from local compiled disposition. Examples include Auto → no repository changes needed, explicit None → saved without publication, and PR batch → coordinator queued children with child publication pending. Do not reconstruct a new draft from only a local result mode.
 
-Preferred detail copy:
-
-```text
-No commit was created because no repository changes were needed.
-```
-
-When side effects are known:
-
-```text
-No commit · Jira updated
-```
-
-Avoid:
-
-- `No changes`
-- `Completed` by itself when the workflow was launched in publish mode
-- `No publish` without a reason code
-
-Color and grouping are defined in `docs/UI/WorkflowStatusColorSemantics.md`.
-
----
+Colors and coarse groupings remain owned by WorkflowStatusColorSemantics. A successful save does not change failed publication to green, and a successful coordinator does not turn pending child results into success.
 
 ## 9. Backward compatibility
 
-Existing persisted artifacts, projections, or compatibility clients may still emit `NO_CHANGES` or `no_changes`.
-
-Source traceability: MM-1073 established the canonical `no_commit` / `NO_COMMIT` model; MM-1082 bounds the remaining legacy-alias quarantine and repair path.
-
-Explicit compatibility maps:
+MM-1073 established the canonical no_commit/NO_COMMIT model; MM-1082 bounds remaining alias quarantine and repair.
 
 ```text
 LEGACY_WORKFLOW_STATE_ALIASES:
@@ -233,32 +142,25 @@ LEGACY_FINISH_OUTCOME_ALIASES:
   NO_CHANGES -> NO_COMMIT
 ```
 
-Compatibility is allowed only at inbound or durable-history boundaries:
+Only named inbound/durable-history readers may repair these aliases: Visibility mm_state reads, terminal-state historical inputs, finish summaries/memo/API serialization, and automation-run repository coercion. Direct canonical-domain callers reject them.
 
-- Temporal Visibility `mm_state` reads may repair `no_changes` to `no_commit`.
-- Terminal-state activity inputs may repair legacy workflow histories that pass `state=no_changes`.
-- Finish-summary artifacts, memo payloads, and API serialization may repair `finishOutcome.code=NO_CHANGES` and `publish.reasonCode=no_changes`.
-- Automation-run repository reads and writes may repair old `automation_runs.status=no_changes` rows to the canonical `no_commit` value.
+These maps do not translate provider, billing, model, effort, runtime, credentials, or publication policy. Historical literal Auto, old None-to-Auto behavior, and coordinator-versus-scope intent use the separate versioned authoring/history contract in Workflow Publishing.
 
-Direct canonical-domain callers must reject legacy aliases instead of silently accepting them. Provider, billing, model, effort, runtime, credential, and publish-policy values are not part of this compatibility rule and must not be translated through these maps.
-
-Alias observation must log only bounded fields: `domain`, `alias`, and `canonical`. It must not log full finish summaries, search-attribute maps, provider payloads, prompts, credentials, or large artifacts.
+Alias observation logs only bounded domain/alias/canonical fields, never entire summaries, prompts, search attributes, environments, or credentials.
 
 ### 9.1 Persisted inventory and repair path
 
-Persisted surfaces that may contain legacy no-changes aliases:
-
-| Surface | Legacy value | Repair path |
+| Surface | Legacy value | Repair boundary |
 | --- | --- | --- |
-| Temporal Visibility Search Attribute `mm_state` | `no_changes` | Read-time compatibility repairs to `no_commit`; open workflows should write canonical `mm_state=no_commit` on their next lifecycle update. Closed histories are read through the compatibility boundary. |
-| `temporal_execution_sources.state` and projection `temporal_executions.state` | `no_changes` if written by an older worker or imported projection | Repository/API sync must coerce legacy values through the workflow-state alias map before storing or serializing. Database repair should update rows to `no_commit` before removing legacy enum values. |
-| `automation_runs.status` | `no_changes` | Migration `332_mm1024_no_commit_status` updates existing rows to `no_commit`; repository coercion keeps reads and writes canonical. |
-| `finish_summary_json.finishOutcome.code` | `NO_CHANGES` | Finish-summary compatibility rewrites to `NO_COMMIT` before indexing, API serialization, or terminal-state persistence. |
-| `finish_summary_json.publish.reasonCode` and related JSON payloads | `no_changes` | Finish-summary compatibility rewrites to `no_commit` when the publish reason is repository-publication absence. |
-| Memo `finishSummary` / `finish_summary` payloads | `NO_CHANGES` or `no_changes` nested values | Projection sync repairs memo-derived summaries before storing projection fields or returning API payloads. |
+| Visibility mm_state | no_changes | Read compatibility; canonical writes on next supported lifecycle update; closed histories remain historical |
+| temporal_execution_sources.state and temporal_executions.state | no_changes | Repository/API sync before storage/serialization; repair persisted rows before enum retirement |
+| automation_runs.status | no_changes | Migration 332_mm1024_no_commit_status and repository coercion |
+| finish_summary_json.finishOutcome.code | NO_CHANGES | Finish-summary compatibility before indexing/serialization/persistence |
+| finish_summary_json.publish.reasonCode and related JSON | no_changes | Only repository-publication absence maps to no_commit |
+| Memo finishSummary/finish_summary | Nested legacy aliases | Projection sync through the named compatibility reader |
 
-Replay and in-flight compatibility:
+Supported old histories replay with their original command semantics. New workflow code emits canonical values directly. Removing old enum support requires proof that rows and durable JSON/history consumers no longer require it.
 
-- Existing Temporal histories may replay terminal-state payloads or memo/search-attribute values containing legacy aliases. Those values are accepted only through the named compatibility helpers above.
-- New workflow code must emit `no_commit`, `NO_COMMIT`, and publish `reasonCode=no_commit` directly.
-- Removing the legacy database enum member requires a coordinated persisted-data repair that first proves no rows or durable JSON payloads still require direct enum decoding.
+### 9.2 Conformance
+
+Tests distinguish verified managed/Skill-owned no-op, technical failure, explicit None, coordinator enqueue/no-target outcomes, real publication, tracker failures, and saved work after failed compute/publication. They prove no local coordinator mode overwrites authored policy, no URL/process exit invents publication, and no alias repair changes authority. Exercise producer/finalizer/API/UI boundaries, not only display-string mappings.
