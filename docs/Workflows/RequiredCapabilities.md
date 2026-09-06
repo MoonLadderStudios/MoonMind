@@ -1,551 +1,218 @@
 # Required Capabilities
 
-**Document Class:** Canonical declarative
-**Viewpoint:** Module Contract Specification
-Status: Desired State
-Owners: MoonMind Engineering
-Last Updated: 2026-08-18
-Canonical for: `requiredCapabilities` declaration, derivation, normalization, readiness checks, and failure semantics
-Related: `docs/Workflows/WorkflowArchitecture.md`, `docs/Steps/StepTypes.md`, `docs/Steps/SkillSystem.md`, `docs/Workflows/SkillAndPlanContracts.md`, `docs/Temporal/ManagedAndExternalAgentExecutionModel.md`
+**Document Class:** Canonical declarative  
+**Viewpoint:** Module Contract Specification  
+**Status:** Desired State  
+**Owners:** MoonMind Engineering  
+**Last Updated:** 2026-09-06  
+**Canonical for:** requiredCapabilities declaration, derivation, normalization, readiness checks, and failure semantics
 
----
+Related: `docs/Workflows/WorkflowArchitecture.md`, `docs/Steps/StepTypes.md`, `docs/Steps/SkillSystem.md`, `docs/Workflows/SkillAndPlanContracts.md`, `docs/Temporal/ManagedAndExternalAgentExecutionModel.md`, `docs/Workflows/WorkflowPublishing.md`, `docs/RepositoryAccessAndWorkspaceDesign.md`
 
 ## 1. Purpose
 
-This document defines the declarative design of MoonMind **Required Capabilities**.
+Required Capabilities state what MoonMind must provide before a workflow execution, step, Tool, Skill, preset-derived operation, or runtime session starts. They make local Git, repository preparation, hosting/tracker operations, runtime support, container access, and fan-out requirements explicit.
 
-Required Capabilities are the normalized execution contract that says what the platform must be able to provide before a workflow, task, step, Tool, Skill, preset-derived step, or managed runtime session may start.
-
-They answer questions such as:
-
-1. Does the run need a repository checkout and `git`?
-2. Does it need authenticated GitHub CLI / PR access through `gh`?
-3. Does it need trusted Jira issue access or prefetched Jira artifacts?
-4. Does it need a specific managed runtime such as `codex_cli`?
-5. Does it need Docker, a sandbox, or another worker-side runtime feature?
-
-Required Capabilities are declarative. They describe requirements. They do not grant authorization, contain credentials, execute tools, or replace policy checks.
-
----
+They describe requirements. They do not grant authorization, contain credentials, invoke tools, select a Skill, or replace policy checks.
 
 ## 2. Desired-state summary
 
-MoonMind has one Required Capabilities contract:
+MoonMind has one normalized contract:
 
 ```ts
 type RequiredCapabilities = string[];
 ```
 
-The normalized execution payload carries top-level `requiredCapabilities` after control-plane compilation and backend normalization. Those top-level capabilities are the execution-facing requirements consumed by worker routing, runtime preparation, integration readiness checks, and pre-launch blocking.
+The control plane compiles an ordered, deduplicated execution-facing list from runtime, source/workspace, resolved publication role, selected Skills and supporting-Skill closure, Tools, preset expansion, output format, and additive explicit requirements. Worker routing, preparation, and readiness consume this evidence rather than rediscovering requirements after launch.
 
-Capability declarations may originate from multiple authoring sources:
+Compilation is scoped to the relevant execution and effect owner. The parent's plan can validate known child requirements, but it does not inject every descendant's credentials or write authority into the coordinator. A batch's root PR intent and the coordinator's own no-publication role are distinct. Child admission verifies the frozen inherited scope and prepares only the child's required operations.
 
-1. runtime mode,
-2. publish mode,
-3. workflow-level Skill selection,
-4. step-level Skill selection,
-5. Tool definitions or Tool steps,
-6. preset metadata and preset-expanded child steps,
-7. Skill metadata such as `metadata.required-capabilities`,
-8. explicit advanced authoring fields.
-
-The backend merges all sources into a single normalized, deduplicated, ordered top-level list before launch.
-
-If any required capability cannot be satisfied under policy and authorization, the workflow or agent step must fail before runtime launch with a structured blocker.
-
----
+Unsatisfied required capabilities block before the affected launch/effect with a structured reason. Unsupported scope/policy combinations are rejected, not repaired by changing the user's publishing mode.
 
 ## 3. Terminology
 
-| Term | Meaning |
-| --- | --- |
-| **Required Capability** | A declarative token naming a runtime, integration, worker, or materialization requirement that must be satisfied before launch. |
-| **Capability token** | A normalized string such as `git`, `gh`, `jira`, `docker`, or `codex_cli`. |
-| **Capability source** | The authoring or compilation source that contributed a token, such as publish mode, a preset, a selected Skill, or a Tool step. |
-| **Satisfied capability** | A required capability whose readiness check has succeeded for the requested target, policy, and user/deployment authorization. |
-| **Unsatisfied capability** | A required capability that cannot be prepared or verified. Unsatisfied required capabilities block before launch. |
-| **Readiness check** | A pre-launch platform check that proves the capability can be provided safely enough for the run to start. |
-| **Materialization** | The act of preparing concrete runtime-visible state, such as a checkout, sanitized Jira artifacts, a `GH_TOKEN`, a Tool result artifact, or an active Skill bundle. |
+A required capability is a normalized token such as git, gh, jira, docker, or execution.fanout. Its source identifies the declared operation or compiler decision. Satisfied means the required readiness evidence is valid for the exact target, policy, and current authorization; unavailable or unknown required evidence is not satisfaction.
 
-The word **Capability** is also used in Step Type docs for selectable catalog items. That usage means "a selectable Tool, Skill, or Preset." `requiredCapabilities` are different: they are execution requirements derived from selected work, not user-facing Step Types.
+Materialization prepares concrete state such as workspace content, sanitized tracker artifacts, an active Skill bundle, or scoped runtime delivery. It does not mean every declared integration credential is copied into the agent.
 
----
+Selectable Tool/Skill/Preset catalog capabilities and execution requirement tokens are separate concepts.
 
 ## 4. Non-goals and boundaries
 
-Required Capabilities are not:
+This is not a new repository/tracker access system, permission store, Tool invocation, SkillSet selector, runtime command, approval mechanism, or substitute for Provider Profiles.
 
-1. a new GitHub/Jira access system;
-2. an authorization grant;
-3. a place to store secrets;
-4. a Tool invocation;
-5. a Skill or SkillSet selector;
-6. a runtime command;
-7. a replacement for provider profiles, approval policy, or user permissions;
-8. the only validation a workflow needs.
-
-A run that declares `jira` still needs valid Jira authorization or prefetched trusted Jira artifacts. A run that declares `gh` still needs a GitHub identity/token with appropriate repository permissions. A run that declares `git` still needs a repository target that policy allows the worker to prepare.
-
----
+Git can mean local Git without a remote repository. GitHub operations require the selected supported access path and appropriate authority; the presence of gh does not prove a token is needed for every qualified read, or authorize anonymous fallback. Jira content can use trusted prefetched artifacts where the operation permits it; a mutation still requires its own authorized Tool boundary.
 
 ## 5. Contract surfaces
 
 ### 5.1 Top-level execution contract
 
-The normalized execution payload carries the final, flattened list:
-
-```json
-{
-  "requiredCapabilities": ["codex_cli", "git", "gh", "jira"],
-  "task": {
-    "runtime": { "mode": "codex_cli" },
-    "publish": { "mode": "none" }
-  }
-}
-```
-
-This list is execution-facing and authoritative after backend normalization.
+The normalized execution payload carries its final requirement list. A worker-facing list is authoritative only as part of the admitted immutable plan. A caller cannot attest readiness by authoring the same strings.
 
 ### 5.2 Workflow or task Skill field
 
-A selected workflow-level Skill may declare explicit requirements:
-
-```json
-{
-  "task": {
-    "skill": {
-      "id": "jira-pr-verify",
-      "requiredCapabilities": ["jira", "git", "gh"]
-    }
-  }
-}
-```
-
-Explicit authoring fields are additive with Skill metadata defaults.
+A selected Skill can contribute explicit requirements in its Skill selector, additive with resolved metadata. New repository/branch/publication choices remain workflow-level and cannot be smuggled into Skill inputs by calling them capabilities.
 
 ### 5.3 Step Skill field
 
-A step-level Skill may declare requirements:
-
-```json
-{
-  "id": "verify-pr-against-jira",
-  "type": "skill",
-  "skill": {
-    "id": "jira-pr-verify",
-    "requiredCapabilities": ["jira", "git", "gh"]
-  }
-}
-```
-
-Step-level declarations contribute to the top-level execution payload because worker/runtimes must be prepared for the whole executable workflow.
+Step declarations contribute to the containing execution's requirements and retain provenance. Read-only steps do not erase a later publishing step's requirements. Conversely, the workflow's PR intent does not make a read-only step an independent publisher.
 
 ### 5.4 Tool field
 
-Tool definitions and Tool steps may contribute required worker or integration capabilities:
-
-```json
-{
-  "id": "fetch-jira-issue",
-  "type": "tool",
-  "tool": {
-    "id": "jira.get_issue",
-    "requiredCapabilities": ["jira"]
-  }
-}
-```
-
-Tool capability requirements do not convert a Tool into a Skill. They describe what the execution environment must satisfy to run the Tool.
+Typed Tool definitions and steps contribute the worker/integration requirements needed for their declared operations. This does not convert Tools to Skills or grant all actions in an integration.
 
 ### 5.5 Preset metadata and expansion
 
-Presets may declare capability requirements directly, and preset expansion may generate Tool or Skill steps that declare additional requirements.
-
-Preset-derived capabilities must be compiled into the resolved workflow payload before runtime execution. Runtime workers must not depend on live preset catalog lookup to discover missing capabilities for an already submitted workflow.
+Resolved preset metadata and generated steps contribute requirements before launch. Included assessment or coordinator roles are preserved. The worker never consults a live preset catalog to acquire extra requirements for a pinned run.
 
 ### 5.6 Agent Skill metadata
 
-Agent Skills may declare default capabilities in `SKILL.md` frontmatter:
-
 ```yaml
----
-name: jira-pr-verify
-description: Verify a GitHub pull request against a Jira issue and post a PR comment.
 metadata:
   required-capabilities:
     - jira
     - git
     - gh
----
 ```
 
-Deployment-stored Skill versions should preserve the same data in metadata as:
-
-```json
-{
-  "required_capabilities": ["jira", "git", "gh"]
-}
-```
-
-When a Skill requires supporting Skills through `metadata.required-skills`, the resolved Skill closure contributes the required capabilities of every selected and required Skill.
+Deployment-stored content preserves the corresponding normalized required_capabilities metadata. Supporting Skills selected through required-skills contribute their requirements through the resolved closure. The immutable content/source evidence participates in policy checks.
 
 ### 5.7 Runtime and publish derivation
 
-The control plane may derive capabilities from runtime and publish choices:
+Publication requirements come from the shared compiler's **resolved execution role**, not directly from a generic authored string:
 
-1. runtime mode `codex_cli` contributes `codex_cli`;
-2. repository-backed execution contributes `git`;
-3. `publish.mode = "pr"` contributes `gh`;
-4. container-enabled execution contributes `docker`.
+| Context | Derivation |
+| --- | --- |
+| Authored Auto/default | Resolve declared behavior first; default is never a worker capability or unresolved execution mode. |
+| Managed GitHub PR publication | Local candidate/repository and hosting PR operations for the actual publisher. |
+| Branch publication | Required branch/write mechanics without automatically requiring PR or issue-write authority. |
+| Skill-owned auto | Declared Skill operations, exact target, supporting Skills, and terminal evidence. |
+| Coordinator under a PR batch scope | Discovery/tracker/fan-out requirements, not an unnecessary parent repository publisher. |
+| Explicit scope None | Independent local/tracker/dispatch requirements remain; push/merge-required objectives are rejected as incompatible. |
+| Scratch/report or anonymous source | Only supported source/output capabilities, not a hypothetical future publisher. |
 
-These derived tokens use the same `requiredCapabilities` list as Skill, Tool, and preset declarations.
-
----
+Runtime mode contributes the qualified runtime requirement; container operations contribute docker where needed. A PR-capable external provider can satisfy declared publishing mechanics only through its qualified adapter. It cannot implement None or Branch by silently creating a PR.
 
 ## 6. Normalization and merge rules
 
-Required Capability normalization is deterministic.
+Tokens are strings, trimmed, lowercased under the current registry, nonblank, and deduplicated in first-seen order. Invalid types and blanks fail. The backend recomputes declarations even when the browser omits them.
 
-Rules:
+Sources are additive within the compiled execution: explicit incoming requirements, runtime/source requirements, derived publishing/effect requirements, preset metadata/expanded steps, selected Skill closure, explicit Skill requirements, Tools, and adapter/container requirements. Preserve stable source provenance.
 
-1. Capability tokens are strings.
-2. Tokens are trimmed.
-3. Tokens are normalized to lowercase unless a future capability registry explicitly marks a token as case-sensitive.
-4. Blank tokens are invalid.
-5. Non-string tokens are invalid.
-6. Duplicate tokens are removed while preserving first-seen order.
-7. The backend is authoritative. The frontend may derive and preview capabilities, but backend normalization must not trust the browser as the only source of required capabilities.
-8. Capability sources are additive. A user or preset may add requirements, but the authoring UI must not silently remove requirements declared by selected Skills, Tools, runtime mode, or publish mode.
-9. Explicit removal, if ever supported, must be policy-checked and visibly represented as an override with audit provenance.
+Removing a required operation is not ordinary authoring. A contradictory policy is rejected; the system does not drop Skill requirements, choose the most permissive mode, or modify explicit None to make a plan launch. A separately supported narrowing must have a validated compatible objective and current authorization.
 
-Representative merge order:
-
-1. incoming top-level `requiredCapabilities`,
-2. runtime-mode-derived capabilities,
-3. publish-mode-derived capabilities,
-4. preset/template-derived capabilities,
-5. selected Skill metadata capabilities,
-6. explicit Skill field capabilities,
-7. selected Tool capabilities,
-8. container/runtime adapter capabilities.
-
-The exact internal order may vary, but the resulting list must be stable, deduplicated, and explainable through source provenance.
-
----
+Per-child lists are compiled at child admission with the parent's frozen scope and declared target mapping. Neither a coordinator-local None nor a latest-catalog child default substitutes for that scope. Top-level requirement flattening is not blanket credential inheritance.
 
 ## 7. Capability semantics
 
-### 7.1 `git`
+### 7.1 git
 
-`git` means the platform must be able to prepare a repository workspace for the run.
+Git requires the needed local Git or supported repository-workspace mechanics. When a repository is used, the target/access policy and applicable branch/base/head can be prepared. Scratch Git exports can require local Git with no remote target or credentials. Applicable source/output/publication constraints must be satisfiable before launch.
 
-Minimum readiness:
+Git never implies push permission. A selected implementation base remains distinct from a generated PR head, and a resolved existing-PR head comes from trusted target evidence rather than a duplicate input override.
 
-1. the target repository is known when required;
-2. repository policy permits checkout or workspace reuse;
-3. `git` is available to the runtime or to the workspace preparation layer;
-4. branch/base/head state required by the workflow can be prepared;
-5. publish mode constraints can be honored.
+### 7.2 gh
 
-`git` does not imply permission to push unless the workflow's publish mode, Tool, or Skill requires and authorizes mutation.
+Gh requires supported GitHub repository/PR operations through the qualified CLI or equivalent hosting path. Verify applicable repository/PR access, selected connection/access intent, operation scopes, and current authorization. Mutation and comment requirements are distinct from reads and from each other.
 
-### 7.2 `gh`
+A read-only probe or an endpoint-required permission header does not prove write authority. Unknown observation remains unknown. A connector 404 alone does not establish whether the selected runtime path is unavailable; evaluate the actual canonical bound path without credential shopping or target substitution.
 
-`gh` means the platform must be able to provide GitHub PR/repository operations through GitHub CLI or an equivalent runtime path.
+### 7.3 jira
 
-Minimum readiness:
+Jira requires trusted issue/project operations or qualifying prefetched trusted content. Known issue targets are authorized, private payloads are sanitized/materialized when needed, and raw Atlassian credentials are not placed in managed shells or Skill files. Prefetched issue content cannot satisfy a declared later mutation by itself.
 
-1. GitHub authentication is available under the selected policy;
-2. target repository access can be verified when a repository is known;
-3. target PR access can be verified when a PR is known;
-4. mutation permissions are verified before mutation-capable work starts;
-5. PR comment permission is verified before Skills that must post PR comments start.
+### 7.4 docker
 
-A GitHub connector 404 is not, by itself, proof that runtime `gh` access is unavailable. Readiness should check the canonical runtime GitHub path for the selected execution mode.
+Docker requires an enabled qualified container path, allowed deployment/workflow policy, enforced resource/network limits, and correct ownership of workspace side effects. Availability of a daemon is not permission to mount arbitrary paths or acquire repository credentials.
 
-### 7.3 `jira`
+### 7.5 execution.fanout
 
-`jira` means the platform must provide trusted Jira issue/project access or materialized trusted Jira artifacts.
+Fan-out is bounded child creation and child-only inspection under the current parent, not general MoonMind API access.
 
-Minimum readiness:
+Trusted normalization derives the requirement from resolved sideEffect.kind enqueue_children metadata. Built-in/deployment-managed provenance and normal policy produce the immutable allow/deny attestation required before bearer minting. An authored top-level token does not grant authority; repository/local metadata remains untrusted. Missing historical attestation is allowed only under the recorded replay contract, not a new-write bypass.
 
-1. trusted Jira Tool/connector access is available in the control plane, or required Jira artifacts are already attached to the run;
-2. requested Jira issue keys or URLs are authorized when known;
-3. sanitized Jira outputs can be materialized into artifacts or prepared workspace paths when a managed runtime needs issue content;
-4. raw Atlassian credentials are not exposed in managed agent shells or Skill files.
+Readiness requires a permitted child contract, a short-lived capability bound to parent workflow/run, agent run, step, runtime session/id, reachable allowlisted create/describe routes, and the capability file/material available before model execution. Runtime advertisements are readiness inputs, not permission.
 
-For managed agent Skills, Jira readiness should prefer prefetched normalized artifacts or trusted control-plane Tool output over placing Jira credentials into the runtime environment.
-
-### 7.4 `docker`
-
-`docker` means the worker or runtime preparation layer can run containerized operations under policy.
-
-Minimum readiness:
-
-1. Docker or the approved container runtime is available;
-2. container execution is allowed for the deployment, repository, and workflow;
-3. resource and network policy are enforceable;
-4. publishable workspace contents are protected from container-only side effects unless explicitly intended.
-
-### 7.5 `execution.fanout`
-
-`execution.fanout` means a runtime may create bounded child Workflow Executions
-under its current parent and inspect only those children. It does not grant
-general MoonMind API access.
-
-Skill metadata with `sideEffect.kind: enqueue_children` automatically contributes
-this requirement during trusted backend normalization. Built-in batch Skills
-therefore work without an operator permission toggle, while repo and local Skill
-metadata still passes through the normal untrusted-source policy checks.
-The Run workflow records a compact allow/deny attestation from the immutable
-resolved Skill entry: only built-in or deployment-managed provenance with the
-derived requirement authorizes bearer minting. An authored top-level token is
-still only a requirement and cannot grant fan-out by itself. Missing attestation
-is reserved for replay of launches scheduled before this contract existed.
-Standard Codex and Claude workers advertise fan-out readiness so trusted batch
-Skills work by default. That readiness label is not authority: the attestation
-and launch-boundary policy check remain mandatory before bearer minting.
-
-Minimum readiness:
-
-1. policy authorizes child execution fan-out for the resolved Skill and caller;
-2. the runtime adapter can materialize a short-lived bearer bound to the parent
-   Workflow Execution, agent run, step, runtime session, and runtime id;
-3. the runtime can reach only the exact execution-create and child-describe API
-   paths through its enforced network profile;
-4. for profile-bound Omnigent, the portable queue helper can read the
-   lease-owned capability file before the model begins work.
-
-The API accepts this authority only for idempotent task/workflow child requests
-with `runtimeInheritance="caller"`. It rejects schedules, unrelated execution
-reads, and broader API operations. A policy denial or materialization failure
-blocks before runtime launch with capability provenance and safe remediation.
+The API requires stable idempotency and runtimeInheritance caller. It validates publication-scope inheritance server-side against the authenticated parent and pinned definitions. No optional helper flag, copied parent ID, alternate create shape, or local None can bypass it. Children receive validated target-derived PR heads where declared; arbitrary repository overrides remain forbidden. Schedules, unrelated reads, and broader operations are denied.
 
 ### 7.6 Runtime-mode capabilities
 
-Runtime tokens such as `codex_cli` or `claude_code` mean the selected runtime adapter is available and compatible with the workflow's Skill, Tool, policy, and provider profile requirements.
+Runtime requirements such as codex_cli, claude_code, or omnigent require enabled adapters, qualified worker launch, compatible Profile/model policy, and supported workspace/Skill/artifact/prompt contracts. The trusted runtime-selection owner supplies evidence; strings do not attest themselves.
 
-Minimum readiness:
-
-1. the adapter is enabled;
-2. the target worker can launch it;
-3. required model/provider profile constraints are satisfied;
-4. runtime-specific materialization, prompt, Skill bundle, and artifact contracts can be honored.
-
-The trusted runtime-selection boundary supplies this readiness evidence; the
-authored token cannot attest itself. For a hybrid runtime such as Omnigent, the
-runtime token remains in the normalized authored requirement and is proven by
-the selected execution-plan authority. It is not added to the v1
-`ClassAdmissionDecision.requiredSatisfied` field or its exact-host support
-digest, because older workers interpret that field as capabilities the selected
-host must advertise. The exact host is still required to prove its harness
-implementation, image, vendor runtime, workspace, network, model, Skill, and
-tool evidence.
+For hybrid Omnigent, keep the runtime requirement in the normalized execution contract and prove it through selected plan authority. Do not add it to historical v1 ClassAdmissionDecision.requiredSatisfied or its exact-host digest when older workers interpret that field as host-advertised capabilities. The exact host still proves harness, image/vendor runtime, workspace, network, model, Skill, and Tool support.
 
 ### 7.7 Scoped future capabilities
 
-Coarse names remain valid. Future scoped aliases may refine semantics:
-
-| Coarse token | Possible scoped tokens |
-| --- | --- |
-| `jira` | `jira.read`, `jira.issue.read`, `jira.comment.write` |
-| `gh` | `github.repo.read`, `github.pr.read`, `github.pr.comment`, `github.pr.merge` |
-| `git` | `repo.read`, `repo.write`, `repo.branch.write` |
-
-Scoped tokens must map into the same Required Capabilities contract. They must not introduce a parallel integration access model.
-
----
+Coarse tokens can be refined by supported aliases such as jira.read, jira.comment.write, github.pr.read, github.pr.merge, or repo.branch.write through the same versioned capability compiler. A finer name is not a parallel access model or proof of confinement.
 
 ## 8. Readiness and blocking model
 
-Required Capabilities are hard pre-launch requirements.
+Resolve selected definitions, context bindings, preset expansion, source/target roles, and publication intent before deriving readiness. Check required capabilities before session/agent/Tool launch and before any effect relying on them.
 
-Readiness checks happen after:
+Validate static child incompatibilities before parent launch or tracker mutation when known. Dynamic discovery validates each target before child dispatch. External partial failure preserves accepted child IDs and outcomes instead of claiming atomic rollback.
 
-1. preset expansion;
-2. Skill resolution;
-3. backend execution contract normalization;
-4. repository/runtime/publish target resolution sufficient for the check.
-
-Readiness checks happen before:
-
-1. managed agent launch;
-2. Tool step execution;
-3. runtime session creation;
-4. any action that assumes the capability is present.
-
-If a required capability cannot be satisfied, the platform must block before launch with a structured diagnostic.
-
-Representative diagnostic:
-
-```json
-{
-  "status": "blocked",
-  "capability": "jira",
-  "source": ["skill:jira-pr-verify"],
-  "target": {
-    "issueKey": "KANDY-2558"
-  },
-  "check": "trusted_jira_readiness",
-  "reason": "No trusted Jira connection or prefetched Jira artifact is available for this run.",
-  "remediation": "Connect Jira or add a trusted Jira fetch/import step before the agent Skill step."
-}
-```
-
-Diagnostics must be safe to show in logs and UI. They must not include raw tokens, auth headers, cookies, API keys, environment dumps, or private Jira/GitHub content beyond necessary identifiers.
-
----
+Blockers identify status, capability, contributing source, safe target identifiers, check, reason, and remediation. Never include raw tokens, auth headers, cookies, API keys, environment dumps, or unnecessary private content.
 
 ## 9. Authorization and policy boundary
 
-Declaring a capability is necessary but not sufficient.
+Capability satisfaction requires deployment policy, target policy, principal authorization, approval/autonomy policy, qualified runtime preparation, and safe credential handling. It cannot exceed the admitted publication scope or turn a requested None into permission for recovery push.
 
-The platform may satisfy a required capability only when all relevant gates pass:
-
-1. deployment policy permits the capability;
-2. repository/project policy permits the target;
-3. the user or service identity has the required authorization;
-4. approval/autonomy policy permits the action;
-5. the worker or runtime adapter can prepare the capability safely;
-6. secret handling policy can be honored.
-
-A required capability never grants broader access than the user, deployment, or runtime policy allows. It only makes the requirement explicit so the platform can prepare or reject the run deterministically.
-
----
+Managed publication keeps destination write material outside the agent where the contract requires it. Skill-owned publication needs the qualified mediated or explicitly accepted exposure policy. A prompt or routing allowlist does not confine an agent holding broader credentials; unsupported required guarantees block rather than being advertised as enforced.
 
 ## 10. Skill interaction rules
 
-Skill selection may require capabilities, but Skill identity and Tool access remain separate.
+Selected and supporting Skills contribute requirements, but not unrestricted Tool access. Tools remain governed by policy and approvals. The runtime uses the immutable resolved Skill closure, not newly discovered files after launch.
 
-Rules:
-
-1. Selecting a Skill contributes the Skill's declared `metadata.required-capabilities`.
-2. Supporting Skills included through Skill resolution contribute their own declared capabilities.
-3. A Skill-declared capability does not automatically allow every Tool in that integration.
-4. Allowed Tools remain governed by Skill policy, runtime policy, user authorization, and approval rules.
-5. Runtime adapters must not rediscover Skill files after launch to add new capabilities.
-6. If an active Skill requires a capability that cannot be satisfied, Skill resolution or runtime preparation must fail before the agent starts.
-
-Example: `jira-pr-verify` declaring `jira`, `git`, and `gh` means the platform must prepare Jira issue access/artifacts, repository state, and GitHub PR/comment access. It does not grant the Skill arbitrary Jira mutation Tools or GitHub merge permission.
-
----
+A Skill-owned publisher remains the semantic/effect owner under compiled Auto and exact evidence. User-facing Auto only selects its declared behavior. An incompatible explicit None requires correction, not a name-based capability fallback or a native substitute resolver.
 
 ## 11. Preset interaction rules
 
-Presets are authoring-time composition objects. They may contribute required capabilities in two ways:
+Presets contribute definition metadata and generated step requirements through the same compiler. Included read-only/assessment roles do not overwrite the root publication intent. A coordinator can validate that children require PR support without receiving their publishing credentials itself.
 
-1. direct preset metadata;
-2. generated Tool and Skill steps after expansion.
-
-Rules:
-
-1. Preset expansion must happen before execution by default.
-2. Expanded steps carry their own capability declarations and provenance.
-3. Preset-derived capability metadata is flattened into top-level `requiredCapabilities`.
-4. Submitted execution payloads must not need live preset catalog lookup to discover required capabilities.
-5. Rerun and detail views should preserve enough provenance to explain preset-derived capability requirements.
-
----
+Rerun/detail provenance explains definition, task inputs, bound context, recommended versus explicit policy, and per-execution requirements. A child follows the frozen scope, not its latest standalone default. Main issue batches, breakdown families, document orchestration, and resolver families use this same rule.
 
 ## 12. Replay, rerun, and Resume semantics
 
-Required Capabilities participate in execution durability.
+Normalized requirements are part of the admitted contract. Exact recovery uses original intent/definition evidence and rechecks current authorization. Explicitly edited new admission may recompute requirements, but cannot mutate already-admitted children or historical hashes.
 
-Rules:
-
-1. The normalized `requiredCapabilities` list is part of the execution contract.
-2. Exact rerun reuses the original normalized requirements unless explicit re-resolution is requested.
-3. Edited full retry may recompute requirements from the edited workflow input.
-4. Resume from failed step uses the original workflow input and preserved execution contract unless the Resume design explicitly permits re-resolution in the future.
-5. A Resume attempt must not silently drop a capability required by the original failed step.
-6. If a capability was satisfiable in the source run but is no longer satisfiable for Resume, the Resume attempt must fail explicitly before executing the failed step.
-
----
+Resume from a failed step preserves its original requirements; a formerly available but now unavailable capability fails before execution. Historical alias decoding and the old Auto/None behavior remain versioned. New authoring does not silently re-resolve changing defaults or drop requirements on retry.
 
 ## 13. Observability
 
-The dashboard and operator diagnostics should expose Required Capabilities as first-class execution context.
+Authorized detail/debug views expose normalized requirements, source provenance, readiness and materialization evidence, safe blockers, and whether each requirement belongs to a runtime, local step, publisher, or child.
 
-At minimum, detail/debug surfaces should be able to show:
-
-1. normalized top-level `requiredCapabilities`;
-2. source provenance for each token;
-3. readiness status for each token;
-4. materialized artifact refs or safe summaries where applicable;
-5. pre-launch blockers and remediation guidance;
-6. policy denials without leaking secrets;
-7. whether a capability came from runtime mode, publish mode, preset, Skill, Tool, or explicit advanced authoring.
-
-User-facing views may collapse details, but operator/debug views must make capability-driven launch failures explainable without parsing raw workflow history.
-
----
+The UI can summarize details but must distinguish authored publication intent from coordinator-local mode and descendant authority. A coordinator with PR children is not mislabeled as globally publish-disabled. Busy qualified capacity is not structural incompatibility or permission to choose another profile.
 
 ## 14. Security invariants
 
-1. Required Capabilities do not contain secrets.
-2. Skill files and preset files do not contain secrets.
-3. Capability readiness diagnostics do not print environment variables or token values.
-4. Runtime adapters do not broaden capabilities after launch.
-5. Agents do not receive raw integration credentials merely because a capability is required.
-6. Trusted control-plane Tool output and sanitized artifacts are preferred for private integration data needed by managed agents.
-7. Capability metadata from repo or local Skill sources is untrusted input until parsed, normalized, validated, and policy-checked.
-8. Capability satisfaction must be idempotent or safely retryable because workflow preparation may retry.
-
----
+No secrets in capability or definition metadata. No runtime broadening after launch. No raw integration credential delivery merely because a coarse token exists. Prefer trusted sanitized content. Treat repository/local metadata as untrusted until normalized and policy-checked. Materialization and readiness retries are idempotent or safely reconciled with exact ownership.
 
 ## 15. Core invariants
 
-1. MoonMind has one Required Capabilities contract: normalized `requiredCapabilities`.
-2. Required Capabilities are declarative launch requirements, not authorization grants.
-3. Backend normalization is authoritative.
-4. Frontend derivation is a preview and submit convenience, not the only enforcement layer.
-5. Presets, Tools, Skills, runtime mode, publish mode, and advanced authoring all contribute to the same top-level list.
-6. Direct Skill selection and preset-backed Skill selection must produce equivalent capability requirements when they select equivalent work.
-7. Unsatisfied required capabilities block before launch.
-8. Runtime adapters must not discover or add undeclared capabilities after launch.
-9. Capability source provenance must be available for diagnostics.
-10. Required Capabilities must remain safe to store in workflow histories, manifests, and logs.
-
----
+One normalized capability contract and one backend compiler serve all producers. Declarations are requirements, not grants. Equivalent direct Skill and preset-backed work derives equivalent scoped requirements. Known incompatibilities block before effects. Provenance is inspectable. No live catalog lookup or helper-local default changes admitted authority. Data remains safe for history, artifacts, and logs.
 
 ## 16. Validation and test requirements
 
-Minimum coverage:
+Production-boundary tests cover token normalization, source/runtime/container/Tool/preset/Skill-closure contribution, omitted browser metadata, hard readiness failures, safe diagnostics, and exact recovery.
 
-1. top-level `requiredCapabilities` normalization trims, lowercases, deduplicates, and rejects invalid entries;
-2. runtime mode contributes the selected runtime token;
-3. PR publish mode contributes `gh`;
-4. container-enabled execution contributes `docker`;
-5. Tool-declared capabilities contribute to the normalized top-level list;
-6. preset-declared and preset-expanded capabilities contribute to the normalized top-level list;
-7. Skill `metadata.required-capabilities` contributes when a Skill is selected directly;
-8. supporting Skills selected through required-Skill closure contribute their capabilities;
-9. frontend omission of Skill metadata capabilities is corrected by backend normalization;
-10. readiness blocks before launch when `jira`, `gh`, `git`, `docker`, or runtime-mode requirements cannot be satisfied;
-11. readiness diagnostics include capability, source, check, reason, and remediation;
-12. readiness diagnostics do not include secrets or raw environment dumps;
-13. exact rerun preserves the original normalized requirements by default.
+Publication-specific coverage proves:
 
----
+- Auto resolves before derivation and is distinct from Skill-owned execution Auto.
+- Managed GitHub PR publication has required hosting operations at the publisher, not automatically inside a coordinator.
+- Branch, local Git, anonymous reads, scratch output, and tracker-only work do not acquire irrelevant PR credentials.
+- Coordinator None with PR/Auto descendants preserves scope and child-only authority through nesting.
+- Explicit None cannot be bypassed by a publishing Skill, review/merge child, raw payload, or recovery branch.
+- Per-PR target heads and selected issue-batch bases survive binding and readiness checks.
+- Static incompatible branch/dependency handoffs fail before effects; dynamic failures remain truthful and bounded.
+- Fan-out capability provenance, missing/forged attestation, expired bearer, idempotency conflicts, and unrelated API operations cannot broaden scope.
+- Mixed-version replay and edited admission preserve historical evidence and current authorization separately.
+
+Required hermetic tests and protected-live/runtime conformance are identified separately. A parser or UI result alone does not qualify execution.
 
 ## 17. Documentation boundaries
 
-Use this document for the Required Capabilities system.
-
-Use related documents for adjacent systems:
-
-- `docs/Workflows/WorkflowArchitecture.md` for the broader workflow control-plane contract.
-- `docs/Steps/StepTypes.md` for Tool, Skill, and Preset Step Type taxonomy and selectable capability terminology.
-- `docs/Steps/SkillSystem.md` for Skill resolution, required supporting Skills, and runtime Skill materialization.
-- `docs/Workflows/SkillAndPlanContracts.md` for executable Tool and plan contracts.
-- `docs/Temporal/ManagedAndExternalAgentExecutionModel.md` for managed and external agent runtime execution.
-
----
+Workflow Publishing owns authored policy and compiled publication roles. Repository Access and Workspace Design owns source/access/save separation. Step Types owns selectable categories, Skill System owns resolution/materialization, SkillAndPlanContracts owns executable Tool/plan interfaces, and managed/external runtime docs own their substrate. This document owns requirement derivation and readiness, not a second implementation of those domains.
 
 ## 18. Summary
 
-Required Capabilities are MoonMind's declarative execution requirement layer.
-
-They make hidden runtime and integration prerequisites explicit, merge them into one normalized execution contract, verify them before launch, and block early when the platform cannot safely satisfy them.
-
-The correct design is not a separate GitHub/Jira access system. It is a single `requiredCapabilities` contract used consistently by presets, directly selected Skills, Tools, runtime mode, publish mode, backend normalization, runtime preparation, and operator diagnostics.
+Required Capabilities make execution prerequisites explicit and enforceable before launch. They use the single authored context and publication policy to derive the requirements of each actual effect owner without turning a batch coordinator into a publisher or treating a token as authorization.
