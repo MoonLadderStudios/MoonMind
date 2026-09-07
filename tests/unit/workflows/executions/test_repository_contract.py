@@ -7,17 +7,24 @@ import pytest
 from moonmind.auth.github_credentials import ResolvedGitHubCredential
 from moonmind.workflows.executions.repository_contract import (
     DEFAULT_GIT_CONNECTION_REF,
+    SCOPED_CONNECTIONS_API_VERSION,
     CapabilityReadinessRegistry,
+    RepositoryAssignment,
     RepositoryClientEvidence,
     RepositoryClientPolicy,
     RepositoryConnection,
+    RepositoryConnectionStore,
     RepositoryContractError,
+    RepositoryIdentity,
     compile_repository_target,
+    connection_api_dict,
     decode_legacy_repository_history_v1,
     derive_repository_capabilities,
     ensure_repository_ready,
     github_repository_name_from_value,
+    is_repository_admitted,
     load_repository_connection,
+    load_snapshot,
     materialize_resolved_repository_target,
     persist_repository_connection,
     reconcile_default_git_connection,
@@ -532,3 +539,445 @@ async def test_readiness_boundary_rejects_unresolved_github_credential() -> None
         )
 
     remote_tip.assert_not_awaited()
+
+
+# --- MoonMind#4005: scoped RepositoryConnections and transactional routes ---
+
+
+def _pat_connection(connection_id: str, operations=("read", "write")) -> RepositoryConnection:
+    return RepositoryConnection(
+        schemaVersion="moonmind.repository-connection.v1",
+        id=connection_id,
+        provider="git",
+        displayName=connection_id,
+        endpointRef="https://github.com",
+        hostingService="github",
+        allowedOperations=operations,
+        clientPolicy=_policy(),
+        credential={
+            "source": "pat_secret_ref",
+            "credentialRef": {"provider": "managed", "key": f"token-{connection_id}"},
+            "patSubtype": "fine_grained",
+        },
+    )
+
+
+def _identity(repository_id: str) -> RepositoryIdentity:
+    return RepositoryIdentity(
+        endpoint="https://github.com", repositoryId=repository_id
+    )
+
+
+def test_two_pat_connections_with_assignments_survive_restart(tmp_path) -> None:
+    db = tmp_path / "connections.db"
+    store = RepositoryConnectionStore(db)
+    team_a = store.create_connection(
+        _pat_connection("repository-connection:team-a"),
+        actor="admin",
+        request_id="create-a",
+        principal="admin",
+    )
+    team_b = store.create_connection(
+        _pat_connection("repository-connection:team-b"),
+        actor="admin",
+        request_id="create-b",
+        principal="admin",
+    )
+    store.assign_repository(
+        RepositoryAssignment(
+            connectionId=team_a.id,
+            endpoint="https://github.com",
+            repositoryId="1001",
+            operations=("read", "write"),
+        ),
+        actor="admin",
+        request_id="assign-a1",
+        principal="admin",
+    )
+    store.assign_repository(
+        RepositoryAssignment(
+            connectionId=team_b.id,
+            endpoint="https://github.com",
+            repositoryId="1001",
+            operations=("read",),
+        ),
+        actor="admin",
+        request_id="assign-b1",
+        principal="admin",
+    )
+    store.close()
+
+    reopened = RepositoryConnectionStore(db)
+    try:
+        resolved = reopened.resolve(
+            scope="system",
+            workspace_id=None,
+            identity=_identity("1001"),
+            capabilities=("repo.read", "git"),
+            principal="admin",
+            use_granted=True,
+            connection_ref=team_b.id,
+        )
+        assert resolved.id == team_b.id
+        # Metadata-only persistence: the typed SecretRef survives restart so
+        # the Secrets System can resolve it, while secret bodies are never
+        # stored here and the versioned API projection redacts the ref key.
+        reloaded = reopened._load_connection(team_a.id)
+        assert reloaded.credential.credential_ref.key == f"token-{team_a.id}"
+        assert "token-value-" not in db.read_bytes().decode("utf-8", "replace")
+        api = connection_api_dict(reloaded)
+        assert api["credential"]["credentialRef"]["key"] == "***"
+        assert api["apiVersion"] == SCOPED_CONNECTIONS_API_VERSION
+    finally:
+        reopened.close()
+
+
+def test_empty_or_unverified_scope_grants_nothing_legacy_confined(tmp_path) -> None:
+    store = RepositoryConnectionStore(tmp_path / "connections.db")
+    try:
+        connection = store.create_connection(
+            _pat_connection("repository-connection:solo"),
+            actor="admin",
+            request_id="create",
+            principal="admin",
+        )
+        # Zero assignments authorize no repositories in the new admission path,
+        # even though the historical empty-means-unrestricted check still passes.
+        assert not is_repository_admitted(
+            connection,
+            [],
+            endpoint="https://github.com",
+            repository_id="1001",
+            operation="read",
+        )
+        target = compile_repository_target(
+            {
+                "provider": "git",
+                "repository": {"name": "anything/goes"},
+                "branch": {"name": "main"},
+            }
+        )
+        legacy = reconcile_default_git_connection(client_policy=_policy())
+        evidence = RepositoryClientEvidence(
+            toolBundleRef="tool-bundle:git-2.46",
+            clientVersion="2.46.0",
+            executableSha256="sha256:git",
+        )
+        validate_connection_and_client(target, legacy, evidence, operation="read")
+
+        store.assign_repository(
+            RepositoryAssignment(
+                connectionId=connection.id,
+                endpoint="https://github.com",
+                repositoryId="1001",
+                operations=("read",),
+                verified=False,
+            ),
+            actor="admin",
+            request_id="assign-unverified",
+            principal="admin",
+        )
+        with pytest.raises(
+            RepositoryContractError, match="REPOSITORY_SETUP_REQUIRED"
+        ):
+            store.resolve(
+                scope="system",
+                workspace_id=None,
+                identity=_identity("1001"),
+                capabilities=("repo.read",),
+                principal="admin",
+                use_granted=True,
+            )
+    finally:
+        store.close()
+
+
+def test_concurrent_default_changes_keep_one_valid_snapshot(tmp_path) -> None:
+    import threading
+
+    store = RepositoryConnectionStore(tmp_path / "connections.db")
+    try:
+        for suffix in ("a", "b"):
+            connection = store.create_connection(
+                _pat_connection(f"repository-connection:{suffix}"),
+                actor="admin",
+                request_id=f"create-{suffix}",
+                principal="admin",
+            )
+            store.assign_repository(
+                RepositoryAssignment(
+                    connectionId=connection.id,
+                    endpoint="https://github.com",
+                    repositoryId="2001",
+                    operations=("read",),
+                ),
+                actor="admin",
+                request_id=f"assign-{suffix}",
+                principal="admin",
+            )
+
+        errors: list[Exception] = []
+
+        def set_default(connection_id: str, request_id: str) -> None:
+            try:
+                store.set_default(
+                    scope="system",
+                    workspace_id=None,
+                    repository_id="2001",
+                    capabilities=("repo.read",),
+                    connection_id=connection_id,
+                    actor="admin",
+                    request_id=request_id,
+                    principal="admin",
+                )
+            except Exception as exc:  # pragma: no cover - diagnostics only
+                errors.append(exc)
+
+        threads = [
+            threading.Thread(
+                target=set_default,
+                args=(f"repository-connection:{suffix}", f"default-{i}"),
+            )
+            for i, suffix in enumerate(["a", "b"] * 4)
+        ]
+        for thread in threads:
+            thread.start()
+        for thread in threads:
+            thread.join()
+        assert not errors
+        assert (
+            store._db.execute("SELECT COUNT(*) FROM routes").fetchone()[0] == 1
+        )
+    finally:
+        store.close()
+
+
+def test_revision_compare_and_endpoint_change_rules(tmp_path) -> None:
+    store = RepositoryConnectionStore(tmp_path / "connections.db")
+    try:
+        connection = store.create_connection(
+            _pat_connection("repository-connection:ep"),
+            actor="admin",
+            request_id="create",
+            principal="admin",
+        )
+        with pytest.raises(RepositoryContractError, match="REPOSITORY_CONFLICT"):
+            store.update_connection(
+                connection.id,
+                actor="admin",
+                request_id="stale",
+                principal="admin",
+                expected_policy_revision=999,
+                display_name="stale",
+            )
+        # Retargeting credentials to another endpoint is never a label edit.
+        with pytest.raises(RepositoryContractError, match="REPOSITORY_DENIED"):
+            store.update_connection(
+                connection.id,
+                actor="admin",
+                request_id="retarget",
+                principal="admin",
+                expected_policy_revision=1,
+                endpoint_ref="https://unvalidated.example.com",
+            )
+        updated = store.update_connection(
+            connection.id,
+            actor="admin",
+            request_id="retarget-validated",
+            principal="admin",
+            expected_policy_revision=1,
+            endpoint_ref="https://ghe.example.com",
+            validated_endpoint_change=True,
+        )
+        assert updated.policy_revision == 2
+    finally:
+        store.close()
+
+
+def test_transfer_and_rename_lifecycle(tmp_path) -> None:
+    store = RepositoryConnectionStore(tmp_path / "connections.db")
+    try:
+        connection = store.create_connection(
+            _pat_connection("repository-connection:life"),
+            actor="admin",
+            request_id="create",
+            principal="admin",
+        )
+        store.assign_repository(
+            RepositoryAssignment(
+                connectionId=connection.id,
+                endpoint="https://github.com",
+                repositoryId="3001",
+                operations=("read",),
+            ),
+            actor="admin",
+            request_id="assign",
+            principal="admin",
+        )
+        assert (
+            store.transfer_repository_owner(
+                endpoint="https://github.com",
+                repository_id="3001",
+                actor="admin",
+                request_id="transfer",
+                principal="admin",
+            )
+            == 1
+        )
+        with pytest.raises(RepositoryContractError, match="REPOSITORY_DENIED"):
+            store.resolve(
+                scope="system",
+                workspace_id=None,
+                identity=_identity("3001"),
+                capabilities=("repo.read",),
+                principal="admin",
+                use_granted=True,
+                connection_ref=connection.id,
+            )
+        store.reauthorize_assignment(
+            connection_id=connection.id,
+            endpoint="https://github.com",
+            repository_id="3001",
+            actor="admin",
+            request_id="reauthorize",
+            principal="admin",
+        )
+        assert (
+            store.reconcile_repository_rename(
+                endpoint="https://github.com",
+                old_repository_id="3001",
+                new_repository_id="3002",
+                actor="admin",
+                request_id="rename",
+                principal="admin",
+            )
+            == 1
+        )
+        resolved = store.resolve(
+            scope="system",
+            workspace_id=None,
+            identity=_identity("3002"),
+            capabilities=("repo.read",),
+            principal="admin",
+            use_granted=True,
+            connection_ref=connection.id,
+        )
+        assert resolved.id == connection.id
+    finally:
+        store.close()
+
+
+def test_disable_delete_and_snapshot_lifecycle(tmp_path) -> None:
+    store = RepositoryConnectionStore(tmp_path / "connections.db")
+    try:
+        connection = store.create_connection(
+            _pat_connection("repository-connection:gone"),
+            actor="admin",
+            request_id="create",
+            principal="admin",
+        )
+        store.assign_repository(
+            RepositoryAssignment(
+                connectionId=connection.id,
+                endpoint="https://github.com",
+                repositoryId="4001",
+                operations=("read",),
+            ),
+            actor="admin",
+            request_id="assign",
+            principal="admin",
+        )
+        store.set_default(
+            scope="system",
+            workspace_id=None,
+            repository_id="4001",
+            capabilities=("repo.read",),
+            connection_id=connection.id,
+            actor="admin",
+            request_id="default",
+            principal="admin",
+        )
+        disabled = store.disable_connection(
+            connection_id=connection.id,
+            actor="admin",
+            request_id="disable",
+            principal="admin",
+        )
+        assert disabled.lifecycle_status == "disabled"
+        # Disabling drops the now-dangling default in the same transaction.
+        assert store._db.execute("SELECT COUNT(*) FROM routes").fetchone()[0] == 0
+        store.delete_connection(
+            connection_id=connection.id,
+            actor="admin",
+            request_id="delete",
+            principal="admin",
+        )
+        with pytest.raises(RepositoryContractError, match="REPOSITORY_CONFLICT"):
+            store.create_connection(
+                _pat_connection("repository-connection:gone"),
+                actor="admin",
+                request_id="recreate",
+                principal="admin",
+            )
+        snapshot_path = tmp_path / "snapshot.json"
+        snapshot = store.publish_snapshot(snapshot_path)
+        assert load_snapshot(snapshot_path).digest == snapshot.digest
+        with pytest.raises(
+            RepositoryContractError, match="REPOSITORY_STALE_SNAPSHOT"
+        ):
+            load_snapshot(snapshot_path, expected_digest="stale")
+        assert {record.action for record in store.audit_records()} >= {
+            "connection.create",
+            "assignment.upsert",
+            "route.set_default",
+            "connection.disable",
+            "connection.delete",
+        }
+    finally:
+        store.close()
+
+
+def test_use_grant_and_ambiguous_selection_are_denied(tmp_path) -> None:
+    store = RepositoryConnectionStore(tmp_path / "connections.db")
+    try:
+        for suffix in ("a", "b"):
+            connection = store.create_connection(
+                _pat_connection(f"repository-connection:{suffix}"),
+                actor="admin",
+                request_id=f"create-{suffix}",
+                principal="admin",
+            )
+            store.assign_repository(
+                RepositoryAssignment(
+                    connectionId=connection.id,
+                    endpoint="https://github.com",
+                    repositoryId="5001",
+                    operations=("read",),
+                ),
+                actor="admin",
+                request_id=f"assign-{suffix}",
+                principal="admin",
+            )
+        with pytest.raises(RepositoryContractError, match="REPOSITORY_DENIED"):
+            store.resolve(
+                scope="system",
+                workspace_id=None,
+                identity=_identity("5001"),
+                capabilities=("repo.read",),
+                principal="admin",
+                use_granted=False,
+                connection_ref="repository-connection:a",
+            )
+        with pytest.raises(
+            RepositoryContractError, match="REPOSITORY_ROUTE_AMBIGUOUS"
+        ):
+            store.resolve(
+                scope="system",
+                workspace_id=None,
+                identity=_identity("5001"),
+                capabilities=("repo.read",),
+                principal="admin",
+                use_granted=True,
+            )
+    finally:
+        store.close()
