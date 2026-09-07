@@ -1,0 +1,41 @@
+{
+  "failureShapeId": "issue-search-publication-handoff",
+  "incidentWorkflowId": "mm:7ecd83e1-f260-4d02-828d-fd9e59e1f8b8-2026-09-07T16:15:48Z",
+  "runtime": "external/omnigent",
+  "cause": "The publication agent mistook successful verification on the restored work branch for an initially implemented issue. The search preset omitted the code-review-handoff annotation, bypassing the existing PR recovery boundary.",
+  "repository": "MoonLadderStudios/MoonMind",
+  "issueNumber": 3963,
+  "assessmentVerdict": "NOT_IMPLEMENTED",
+  "verificationVerdict": "FULLY_IMPLEMENTED",
+  "acceptedRepositoryEvidence": {
+    "schemaVersion": "accepted-repository-evidence/v1",
+    "authority": "omnigent.generic_host_execution",
+    "publicationAuthorized": true,
+    "candidateContaminated": false,
+    "pushStatus": "pushed",
+    "branch": "moonmind-job-aacfde57",
+    "headSha": "49d3a2a7c81afb4f2b07b0d9f82a868525f576b0",
+    "baseBranch": "main",
+    "remoteVerified": true,
+    "repositoryChanged": true,
+    "commitsAheadOfBase": 1
+  },
+  "agentOutcome": {
+    "summary": "Omnigent session completed",
+    "pull_request_url": null,
+    "outcome": "no_change_already_implemented"
+  },
+  "eventScript": [
+    "Expand the seeded search preset with omitted or explicit default inputs",
+    "Load the selected issue through the registered GitHub tool",
+    "Restore the accepted publication head and independent assessment/verifier evidence",
+    "Resume the compiled finalization step after the agent omitted its PR",
+    "Create or adopt the PR before the registered issue status activity mutates GitHub"
+  ],
+  "expected": {
+    "issueState": "open",
+    "issueLabel": "status: code-review",
+    "publishStatus": "published",
+    "closingLine": "Closes MoonLadderStudios/MoonMind#3963"
+  }
+}

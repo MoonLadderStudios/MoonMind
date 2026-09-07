@@ -964,6 +964,9 @@ RUN_OMNIGENT_PUBLICATION_CHECKPOINT_RESTORE_PATCH = (
 RUN_ISSUE_IMPLEMENT_PR_HANDOFF_AUTHORITY_PATCH = (
     "run-issue-implement-pr-handoff-authority-v1"
 )
+# Search-driven workflows resolve the issue after admission. Preserve the old
+# PR and merge-handoff payloads when replaying histories without this marker.
+RUN_TRUSTED_GITHUB_ISSUE_IDENTITY_PATCH = "run-trusted-github-issue-identity-v1"
 # Carry only the atomic, accepted publication head into a downstream publisher.
 # Existing histories retain requests without this optional no-commit authority.
 RUN_ACCEPTED_PUBLICATION_HEAD_HANDOFF_PATCH = (
@@ -4944,6 +4947,12 @@ class MoonMindRunWorkflow:
             task_payload = self._mapping_value(parameters, "task")
         inputs = self._mapping_value(task_payload, "inputs")
         issue = self._mapping_value(inputs, "github_issue")
+        if not issue and self._patched_or_false_outside_workflow(
+            RUN_TRUSTED_GITHUB_ISSUE_IDENTITY_PATCH
+        ):
+            resolved = self._canonical_github_issue_from_parameters(parameters)
+            if resolved:
+                return f"{resolved['repository']}#{resolved['issueNumber']}"
         repository = str(issue.get("repository") or "").strip()
         number = issue.get("number")
         if not repository or isinstance(number, bool):
@@ -18244,6 +18253,15 @@ class MoonMindRunWorkflow:
                 nested = template.get("inputs")
                 if isinstance(nested, Mapping):
                     mappings.append(nested)
+        trusted = self._trusted_issue_context
+        if (
+            isinstance(trusted, Mapping)
+            and trusted.get("trustedSource") == "moonmind.github.get_issue"
+            and self._patched_or_false_outside_workflow(
+                RUN_TRUSTED_GITHUB_ISSUE_IDENTITY_PATCH
+            )
+        ):
+            mappings.append({"githubIssue": trusted.get("issue")})
         for mapping in mappings:
             issue = mapping.get("github_issue") or mapping.get("githubIssue")
             if not isinstance(issue, Mapping):
