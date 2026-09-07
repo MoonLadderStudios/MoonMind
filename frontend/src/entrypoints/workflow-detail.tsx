@@ -93,6 +93,11 @@ import {
   workflowDetailSubrouteFromPath,
   workflowDetailSubrouteHref,
 } from '../lib/workflowDetailRoutes';
+import {
+  governanceReportExplanation,
+  governanceReportHref,
+  normalizeGovernanceReportStatus,
+} from '../lib/governanceReport';
 import { WorkflowNativeChatRoute } from '../features/workflow-native-chat';
 
 export {
@@ -2857,6 +2862,37 @@ function BridgeTerminalEvidence({ apiBase, envelope }: { apiBase: string; envelo
     ].filter(Boolean).join(' — ')}</p> : null}
     {envelope.failureClass || envelope.failureCode ? <p className="small">Failure: {[envelope.failureClass, envelope.failureCode].filter(Boolean).join(' — ')}</p> : null}
   </section>;
+}
+
+// Per-run governance report (MoonMind#3969): presentation only. The report
+// JSON, status, and explanations are owned by
+// moonmind/governance/run_reports.py; this block maps the server-provided
+// finish-summary block to a safe evidence-surface link.
+function GovernanceReportBlock({ workflowId, report }: { workflowId: string; report: unknown }) {
+  if (!report || typeof report !== 'object') return null;
+  const block = report as {
+    report_id?: unknown;
+    status?: unknown;
+    link?: { href?: unknown; explanation?: unknown } | null;
+  };
+  const reportId = typeof block.report_id === 'string' && block.report_id.trim() ? block.report_id : null;
+  if (!reportId && !block.link) return null;
+  const status = normalizeGovernanceReportStatus(block.status);
+  const serverHref = block.link && typeof block.link.href === 'string' ? block.link.href : null;
+  const href = serverHref || governanceReportHref(workflowId, reportId);
+  const serverExplanation =
+    block.link && typeof block.link.explanation === 'string' ? block.link.explanation : undefined;
+  return (
+    <div className="td-summary-block" aria-label="Governance report">
+      <h4>Governance report</h4>
+      <p className="small">{governanceReportExplanation(status, serverExplanation)}</p>
+      <div className="button-group">
+        <a className="button secondary small" href={href} aria-label="Open governance report evidence">
+          {status === 'ready' ? 'Open report' : `Report: ${status}`}
+        </a>
+      </div>
+    </div>
+  );
 }
 
 async function fetchBridgeSessionResources(apiBase: string, bridgeSessionId: string): Promise<BridgeResourceProjection> {
@@ -10289,6 +10325,10 @@ function WorkflowDetailPageContent({ payload }: { payload: BootPayload }) {
               </p>
             ) : null}
           </div>
+          <GovernanceReportBlock
+            workflowId={workflowId}
+            report={(runSummary as { governanceReport?: unknown } | null)?.governanceReport}
+          />
 
           <MetricStrip
             items={[

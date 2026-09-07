@@ -4,9 +4,11 @@ from __future__ import annotations
 
 import json
 import os
+import time
 from dataclasses import asdict, dataclass
+from datetime import UTC, datetime
 from pathlib import Path
-from typing import Protocol
+from typing import Any, Mapping, Protocol
 
 from moonmind.schemas.workspace_locator_models import (
     ManagedWorkspaceLocator,
@@ -75,6 +77,333 @@ class SandboxWorkspaceRecordStore:
         descriptor = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
         with os.fdopen(descriptor, "w", encoding="utf-8") as stream:
             stream.write("materialized-v2")
+
+    def _readiness_marker_path(self, workspace_id: str) -> Path:
+        candidate = (self.store_root / f"{workspace_id}.ready.json").resolve()
+        if candidate.parent != self.store_root.resolve():
+            raise WorkspaceLocatorResolutionError(
+                WORKSPACE_AUTHORITY_MISMATCH,
+                "sandbox workspace readiness marker escapes its authority",
+            )
+        return candidate
+
+    def read_readiness(self, workspace_id: str) -> dict[str, Any] | None:
+        """Return the digest-bound readiness marker, if one was recorded."""
+
+        path = self._readiness_marker_path(workspace_id)
+        if not path.is_file():
+            return None
+        try:
+            payload = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, ValueError, json.JSONDecodeError) as exc:
+            raise WorkspaceLocatorResolutionError(
+                WORKSPACE_AUTHORITY_MISMATCH,
+                "sandbox workspace readiness marker is invalid",
+            ) from exc
+        if not isinstance(payload, dict):
+            raise WorkspaceLocatorResolutionError(
+                WORKSPACE_AUTHORITY_MISMATCH,
+                "sandbox workspace readiness marker is invalid",
+            )
+        return payload
+
+    def is_ready(self, workspace_id: str, fingerprint: Mapping[str, Any]) -> bool:
+        """Return whether the recorded ready generation matches this attempt.
+
+        Completion binds to the admitted source/digest, restore
+        contract/version, input-manifest digest, target owner, and attempt —
+        not just a directory or a previous marker. A retry reconciles the
+        same generation; changed inputs require an explicit new import.
+        """
+
+        recorded = self.read_readiness(workspace_id)
+        if recorded is None:
+            return False
+        return recorded.get("fingerprint") == dict(fingerprint)
+
+    def mark_ready(
+        self, workspace_id: str, fingerprint: Mapping[str, Any]
+    ) -> None:
+        """Record the verified ready generation for this source and attempt."""
+
+        self.store_root.mkdir(mode=0o700, parents=True, exist_ok=True)
+        path = self._readiness_marker_path(workspace_id)
+        payload = json.dumps(
+            {"version": "ready-v1", "fingerprint": dict(fingerprint)},
+            sort_keys=True,
+        )
+        descriptor = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+        with os.fdopen(descriptor, "w", encoding="utf-8") as stream:
+            stream.write(payload)
+        # The legacy directory-level marker is retained for historical
+        # readers; authority decisions use the digest-bound marker above.
+        if not self.is_materialized(workspace_id):
+            self.mark_materialized(workspace_id)
+
+    def _claims_dir(self, workspace_id: str) -> Path:
+        candidate = (self.store_root / f"{workspace_id}.grants").resolve()
+        if candidate.parent != self.store_root.resolve():
+            raise WorkspaceLocatorResolutionError(
+                WORKSPACE_AUTHORITY_MISMATCH,
+                "sandbox workspace grant registry escapes its authority",
+            )
+        return candidate
+
+    @staticmethod
+    def _grant_claim_identity(grant: Any) -> tuple[str, str]:
+        """Derive a stable (claim_id, mode) pair from either grant model.
+
+        Supports the ``workspace_sources`` grant (workspace_id/owner/generation
+        based) and the HMAC grant shape (grant_id based) so both compilers
+        fence exclusive use through the same registry.
+        """
+
+        mode = str(getattr(grant, "mode", "") or "").strip()
+        grant_id = str(getattr(grant, "grant_id", "") or "").strip()
+        if not grant_id:
+            digest = str(getattr(grant, "grant_digest", "") or "").strip()
+            if digest:
+                grant_id = "digest_" + digest.replace(":", "_")
+            else:
+                workspace_id = str(
+                    getattr(grant, "workspace_id", "")
+                    or getattr(grant, "source_workspace_id", "")
+                ).strip()
+                owner = str(
+                    getattr(grant, "owner_workflow_id", "")
+                    or getattr(grant, "grantee_workflow_id", "")
+                ).strip()
+                generation = str(
+                    getattr(grant, "generation", "")
+                    or getattr(grant, "expected_generation", "")
+                ).strip()
+                grantee = str(getattr(grant, "grantee_workflow_id", "") or "").strip()
+                grant_id = f"{workspace_id}:{owner}:{generation}:{grantee}"
+        # The sharing mode is part of the claim identity so an exclusive
+        # grant and a read-only grant never collapse onto the same claim
+        # file: distinct grants must conflict, identical grants must be
+        # idempotent on reclaim.
+        return f"{grant_id}:{mode}", mode
+
+    def _claims_mutex_path(self, workspace_id: str) -> Path:
+        return self._claims_dir(workspace_id) / ".claims.lock"
+
+    @staticmethod
+    def _lock_owner_alive(content: str) -> bool | None:
+        """Return whether the mutex owner PID is alive (None if unknown)."""
+
+        try:
+            owner_pid = int(str(content or "").strip().split("\n", 1)[0])
+        except (TypeError, ValueError):
+            return None
+        if owner_pid <= 0:
+            return None
+        if owner_pid == os.getpid():
+            return False
+        try:
+            os.kill(owner_pid, 0)
+        except ProcessLookupError:
+            return False
+        except PermissionError:
+            return True
+        except OSError:
+            return None
+        return True
+
+    def _acquire_claims_mutex(self, workspace_id: str) -> None:
+        """Serialize claim check-and-insert against competing workers.
+
+        The directory scan and the ``O_EXCL`` claim creation below must run
+        as one atomic step: without this mutex two different claims can each
+        finish the scan before either creates its file, and both ``O_EXCL``
+        creations succeed because the filenames differ. A stale mutex from
+        a crashed worker is taken over after a PID-liveness check; an
+        actively held mutex fails closed after a bounded wait instead of
+        granting conflicting access.
+        """
+
+        claims = self._claims_dir(workspace_id)
+        claims.mkdir(mode=0o700, parents=True, exist_ok=True)
+        mutex = self._claims_mutex_path(workspace_id)
+        own_pid = str(os.getpid())
+        for _ in range(250):
+            try:
+                descriptor = os.open(
+                    mutex, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600
+                )
+            except FileExistsError:
+                try:
+                    recorded = mutex.read_text(encoding="utf-8")
+                except OSError:
+                    recorded = ""
+                alive = self._lock_owner_alive(recorded)
+                if alive is True:
+                    time.sleep(0.02)
+                    continue
+                # Unknown or dead owner: reclaim the stale mutex. Our PID
+                # reappearing here means a prior holder in this process
+                # crashed without releasing.
+                try:
+                    mutex.unlink()
+                except OSError:
+                    # Lost the reclaim race to a competing worker: fall
+                    # through to re-acquire below instead of proceeding
+                    # beside the new owner.
+                    pass
+                continue
+            with os.fdopen(descriptor, "w", encoding="utf-8") as stream:
+                stream.write(own_pid)
+            return
+        raise WorkspaceLocatorResolutionError(
+            WORKSPACE_IDENTITY_MISMATCH,
+            "existing workspace claim is contended by another execution",
+        )
+
+    def _release_claims_mutex(self, workspace_id: str) -> None:
+        """Release the claims mutex only when this process owns it."""
+
+        mutex = self._claims_mutex_path(workspace_id)
+        try:
+            if mutex.read_text(encoding="utf-8").strip().split("\n", 1)[0] != str(
+                os.getpid()
+            ):
+                return
+            mutex.unlink()
+        except OSError:
+            # Lock already gone (or unreadable): another owner reclaimed a
+            # mutex we no longer hold. Never delete a foreign lock here.
+            pass
+
+    @staticmethod
+    def _claim_is_expired(payload: dict[str, Any]) -> bool:
+        """Return whether a recorded claim outlived its grant lifetime."""
+
+        raw = str(payload.get("expiresAt") or "")
+        if not raw:
+            return False
+        try:
+            moment = datetime.fromisoformat(raw.replace("Z", "+00:00"))
+        except ValueError:
+            return False
+        if moment.tzinfo is None:
+            moment = moment.replace(tzinfo=UTC)
+        return moment <= datetime.now(tz=UTC)
+
+    def claim_existing_workspace(self, workspace_id: str, grant: Any) -> None:
+        """Record exclusive/read-only use of another workflow's workspace.
+
+        Existing-workspace grants declare exclusive writable use or explicitly
+        supported read-only sharing. An exclusive claim conflicts with any
+        other active claim; read-only claims coexist only with read-only
+        claims. Reclaiming the same grant is idempotent for retries. Claims
+        whose grant lifetime has expired are reaped during the scan so a
+        grant that was never released cannot conflict indefinitely: every
+        grant carries a bounded lifetime, and expiry is enforced here even
+        when the execution lifecycle never called
+        :meth:`release_existing_workspace`.
+        """
+
+        claims = self._claims_dir(workspace_id)
+        claims.mkdir(mode=0o700, parents=True, exist_ok=True)
+        grant_id, mode = self._grant_claim_identity(grant)
+        if not grant_id or mode not in {"exclusive", "read_only"}:
+            raise WorkspaceLocatorResolutionError(
+                WORKSPACE_AUTHORITY_MISMATCH,
+                "existing-workspace grant claim is invalid",
+            )
+        safe_name = "".join(
+            ch if ch.isalnum() or ch in {"-", "_", "."} else "_"
+            for ch in grant_id
+        )[:128] or "grant"
+        self._acquire_claims_mutex(workspace_id)
+        try:
+            for existing_path in sorted(claims.glob("*.json")):
+                if existing_path.name == f"{safe_name}.json":
+                    continue
+                try:
+                    existing = json.loads(existing_path.read_text(encoding="utf-8"))
+                except (OSError, ValueError, json.JSONDecodeError):
+                    continue
+                if not isinstance(existing, dict):
+                    continue
+                if self._claim_is_expired(existing):
+                    try:
+                        existing_path.unlink()
+                    except OSError:
+                        # Reap best-effort only: an unlinked-expired claim
+                        # stays visible to this scan and conflicts below.
+                        pass
+                    else:
+                        continue
+                if mode == "exclusive" or existing.get("mode") == "exclusive":
+                    raise WorkspaceLocatorResolutionError(
+                        WORKSPACE_IDENTITY_MISMATCH,
+                        "existing workspace is already granted to another execution",
+                    )
+            claim_path = claims / f"{safe_name}.json"
+            expires_at = getattr(grant, "expires_at", None)
+            try:
+                expires_text = (
+                    expires_at.isoformat()
+                    if expires_at is not None and hasattr(expires_at, "isoformat")
+                    else ""
+                )
+            except (OSError, ValueError, TypeError):
+                expires_text = ""
+            payload = json.dumps(
+                {
+                    "grantId": grant_id,
+                    "mode": mode,
+                    "granteeWorkflowId": str(
+                        getattr(grant, "grantee_workflow_id", "")
+                        or getattr(grant, "owner_workflow_id", "")
+                        or ""
+                    ),
+                    "expectedGeneration": int(
+                        getattr(grant, "expected_generation", None)
+                        if getattr(grant, "expected_generation", None) is not None
+                        else getattr(grant, "generation", 0) or 0
+                    ),
+                    "expiresAt": expires_text,
+                },
+                sort_keys=True,
+            )
+            try:
+                descriptor = os.open(
+                    claim_path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600
+                )
+            except FileExistsError:
+                return
+            with os.fdopen(descriptor, "w", encoding="utf-8") as stream:
+                stream.write(payload)
+        finally:
+            self._release_claims_mutex(workspace_id)
+
+    def release_existing_workspace(self, workspace_id: str, grant_id: str) -> None:
+        """Release ownership of a previously claimed existing workspace.
+
+        ``grant_id`` is the claim identity returned as the first element of
+        :meth:`_grant_claim_identity` for the granted object. The execution
+        lifecycle owner calls this when the granted execution finalizes so
+        the claim does not outlive its use; claims whose grant lifetime has
+        expired are additionally reaped by :meth:`claim_existing_workspace`.
+        """
+
+        safe_name = "".join(
+            ch if ch.isalnum() or ch in {"-", "_", "."} else "_"
+            for ch in str(grant_id or "")
+        )[:128] or "grant"
+        claim_path = self._claims_dir(workspace_id) / f"{safe_name}.json"
+        try:
+            claim_path.unlink()
+        except FileNotFoundError:
+            # Already released or never claimed: idempotent for retries.
+            pass
+        except OSError as exc:
+            raise WorkspaceLocatorResolutionError(
+                WORKSPACE_AUTHORITY_MISMATCH,
+                "existing-workspace grant release failed",
+            ) from exc
 
     def load(self, workspace_id: str) -> SandboxWorkspaceRecord | None:
         path = self._record_path(workspace_id)

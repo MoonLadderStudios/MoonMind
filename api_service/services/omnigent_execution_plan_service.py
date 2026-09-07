@@ -10,6 +10,7 @@ from __future__ import annotations
 import hashlib
 import json
 from collections.abc import Mapping
+from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
@@ -144,6 +145,7 @@ async def _try_load_real_harness_config(
     harness_id: str,
     agent_profile_snapshot: Mapping[str, Any],
     session_factory: Any,
+    db_session: Any | None = None,
 ) -> dict[str, Any] | None:
     """Try to load authoritative harness config from synchronized catalog.
 
@@ -151,6 +153,14 @@ async def _try_load_real_harness_config(
     authorities pinned by the Agent Profile. Hermetic callers without catalog
     storage receive ``None`` and use the bounded fixture configuration.
     """
+    if db_session is not None:
+        # Schedule admission owns an existing transaction. Borrow its session
+        # for catalog reads without closing or committing the caller's work.
+        @asynccontextmanager
+        async def catalog_session():
+            yield db_session
+
+        session_factory = catalog_session
     try:
         from moonmind.omnigent.harness_platform.catalog_service import (
             DbHarnessCatalogRepository,
@@ -184,10 +194,18 @@ async def _try_load_real_harness_config(
         catalog_result = None
         if catalog_ref:
             catalog_result = await repo.load(catalog_ref)
-        if catalog_result is None:
+            if catalog_result is None:
+                raise HarnessPlatformError(
+                    "selected Agent Profile catalog snapshot is unavailable",
+                    code=HarnessPlatformFailure.OMNIGENT_HARNESS_CATALOG_UNAVAILABLE,
+                )
+        else:
             catalog_result = await repo.latest(endpoint_ref)
         if catalog_result is None:
-            return None
+            raise HarnessPlatformError(
+                "harness catalog observation is unavailable",
+                code=HarnessPlatformFailure.OMNIGENT_HARNESS_CATALOG_UNAVAILABLE,
+            )
         latest_catalog_result = await repo.latest(endpoint_ref)
         if latest_catalog_result is None:
             raise HarnessPlatformError(
@@ -199,7 +217,10 @@ async def _try_load_real_harness_config(
             None,
         )
         if harness_record is None:
-            return None
+            raise HarnessPlatformError(
+                "selected harness is absent from its catalog snapshot",
+                code=HarnessPlatformFailure.OMNIGENT_HARNESS_CATALOG_UNAVAILABLE,
+            )
         freshness_trust_record = next(
             (
                 record
@@ -237,7 +258,7 @@ async def _try_load_real_harness_config(
     except HarnessPlatformError:
         raise
     except Exception as exc:
-        if callable(session_factory):
+        if callable(session_factory) or session_factory is None:
             raise HarnessPlatformError(
                 "harness catalog authority could not be loaded",
                 code=HarnessPlatformFailure.OMNIGENT_HARNESS_CATALOG_UNAVAILABLE,
@@ -357,11 +378,24 @@ class PersistedOmnigentExecutionPlan:
     runtime_provider_rollout: dict[str, Any] | None = None
 
 
+def _workflow_payload(initial_parameters: Mapping[str, Any]) -> Mapping[str, Any]:
+    """Read workflow intent, including the persisted schedule task envelope.
+
+    Match execution's precedence without rewriting immutable authored inputs.
+    Existing schedule definitions retain their task envelope across refreshes.
+    """
+
+    workflow = initial_parameters.get("workflow")
+    if isinstance(workflow, Mapping) and workflow:
+        return workflow
+    task = initial_parameters.get("task")
+    return task if isinstance(task, Mapping) else {}
+
+
 def selected_skill_names(initial_parameters: Mapping[str, Any]) -> list[str]:
     """Collect the workflow's MoonMind Skill intent for one run snapshot."""
 
-    workflow = initial_parameters.get("workflow")
-    workflow_mapping = dict(workflow) if isinstance(workflow, Mapping) else {}
+    workflow_mapping = _workflow_payload(initial_parameters)
     names: list[str] = []
 
     def add(raw: Any) -> None:
@@ -411,8 +445,7 @@ def selected_skill_names(initial_parameters: Mapping[str, Any]) -> list[str]:
 
 
 def _skill_selector(initial_parameters: Mapping[str, Any]) -> SkillSelector:
-    workflow = initial_parameters.get("workflow")
-    workflow_mapping = dict(workflow) if isinstance(workflow, Mapping) else {}
+    workflow_mapping = _workflow_payload(initial_parameters)
     selectors = workflow_mapping.get("skills")
     selector_mapping = dict(selectors) if isinstance(selectors, Mapping) else {}
     excluded = sorted(
@@ -663,6 +696,7 @@ async def compile_and_persist_execution_plan(
         harness_id=harness_id,
         agent_profile_snapshot=agent_profile_snapshot,
         session_factory=session_factory,
+        db_session=db_session,
     )
     config = real_config or _fixture_harness_config(harness_id)
     if config is None:
@@ -1032,10 +1066,7 @@ async def compile_and_persist_execution_plan(
     repository_intent_ref = _digest_ref(
         "repository-intent", {"repository": repository, "workspace": workspace}
     )
-    workflow_payload = initial_parameters.get("workflow")
-    workflow_mapping = (
-        dict(workflow_payload) if isinstance(workflow_payload, Mapping) else {}
-    )
+    workflow_mapping = _workflow_payload(initial_parameters)
     authority = {
         "authoredRequestRef": authored_request_ref,
         "authoredRequestDigest": authored_request_digest,
@@ -1132,8 +1163,7 @@ async def compile_and_persist_execution_plan(
     )
     # A client may name an exact rollout row, but only the compiled Profile,
     # policy and harness can establish it. Validate before persisting the plan.
-    workflow = initial_parameters.get("workflow") or {}
-    runtime = workflow.get("runtime") or {}
+    runtime = workflow_mapping.get("runtime") or {}
     requested_target_id = runtime.get("targetId")
     if requested_target_id and (
         plan.payload.runtimeProviderRollout is None
