@@ -10,11 +10,15 @@ from __future__ import annotations
 import json
 import os
 from datetime import UTC, datetime, timedelta
+from enum import StrEnum
 from pathlib import Path
 from typing import Any, Literal, Mapping
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
+from moonmind.omnigent.concurrency_qualification import (
+    ConcurrencyQualificationRecord,
+)
 from moonmind.omnigent.conformance import assert_secret_free
 from moonmind.omnigent.harness_platform.support import (
     SupportClassification,
@@ -32,6 +36,26 @@ EXECUTION_SUPPORT_EVIDENCE_ISSUER = (
 MAX_EXECUTION_SUPPORT_EVIDENCE_AGE = timedelta(days=30)
 
 
+class ExecutionSupportRowStatus(StrEnum):
+    """Distinct outcomes one protected support row may record.
+
+    MoonLadderStudios/MoonMind#3885 requires the protected index to record
+    non-pass rows rather than omitting them: an operator must be able to tell a
+    combination that failed from one that was deselected, refused by a release
+    gate, or never had an environment to run in. Only :attr:`passed` is
+    admissible — :func:`validate_protected_execution_support_evidence` refuses
+    every other status, so widening what can be *recorded* never widens what
+    can be *admitted*.
+    """
+
+    passed = "passed"
+    failed = "failed"
+    skipped = "skipped"
+    blocked = "blocked"
+    unavailable = "unavailable"
+    partial = "partial"
+
+
 class ProtectedExecutionSupportEvidence(BaseModel):
     """One independently-qualified exact execution combination."""
 
@@ -40,7 +64,7 @@ class ProtectedExecutionSupportEvidence(BaseModel):
     schema_version: Literal[EXECUTION_SUPPORT_EVIDENCE_VERSION] = Field(
         EXECUTION_SUPPORT_EVIDENCE_VERSION, alias="schemaVersion"
     )
-    status: Literal["passed"] = "passed"
+    status: ExecutionSupportRowStatus = ExecutionSupportRowStatus.passed
     evidence_issuer: Literal[EXECUTION_SUPPORT_EVIDENCE_ISSUER] = Field(
         EXECUTION_SUPPORT_EVIDENCE_ISSUER,
         alias="evidenceIssuer",
@@ -72,10 +96,12 @@ class ProtectedExecutionSupportEvidence(BaseModel):
         alias="effectiveLaunchSnapshotDigest", pattern=r"^sha256:[0-9a-f]{64}$"
     )
     policy_gate_ref: str = Field(alias="policyGateRef", min_length=1, max_length=255)
-    policy_qualified: Literal[True] = Field(True, alias="policyQualified")
-    exact_artifacts_verified: Literal[True] = Field(
-        True, alias="exactArtifactsVerified"
-    )
+    policy_qualified: bool = Field(True, alias="policyQualified")
+    exact_artifacts_verified: bool = Field(True, alias="exactArtifactsVerified")
+    #: The concurrency dimension of this combination, when the protected run
+    #: also qualified concurrency. Absent means "no concurrency level is
+    #: validated for this exact combination", which is not the same as 1.
+    concurrency: ConcurrencyQualificationRecord | None = None
     feature_generation: str = Field(alias="featureGeneration", min_length=1)
     replay_compatibility_version: str = Field(
         alias="replayCompatibilityVersion", min_length=1
@@ -97,6 +123,27 @@ class ProtectedExecutionSupportEvidence(BaseModel):
             SupportClassification.connected_host,
         }:
             raise ValueError("protected support classification is not admissible")
+        if self.status is ExecutionSupportRowStatus.passed:
+            if not (self.policy_qualified and self.exact_artifacts_verified):
+                raise ValueError(
+                    "a passing protected row must be policy qualified against "
+                    "verified exact artifacts"
+                )
+        elif self.policy_qualified:
+            # A recorded non-pass row exists so the outcome is visible, not so
+            # it can carry admission authority. Letting it stay "qualified"
+            # would make a blocked or unavailable environment look like a pass
+            # to any reader that checks the flag instead of the status.
+            raise ValueError(
+                "a non-passing protected row cannot claim policy qualification"
+            )
+        if self.concurrency is not None and (
+            self.concurrency.identity.support_combination_key
+            != self.support_combination_key
+        ):
+            raise ValueError(
+                "concurrency evidence belongs to a different support combination"
+            )
         assert_secret_free(self.model_dump(mode="json", by_alias=True))
         return self
 
@@ -110,6 +157,11 @@ def validate_protected_execution_support_evidence(
     """Validate provenance, freshness, and the closed protected schema."""
 
     parsed = ProtectedExecutionSupportEvidence.model_validate(evidence)
+    if parsed.status is not ExecutionSupportRowStatus.passed:
+        raise ValueError(
+            "protected support evidence did not pass "
+            f"(status={parsed.status.value})"
+        )
     observed_at = now or datetime.now(UTC)
     if parsed.generated_at > observed_at:
         raise ValueError("protected support evidence is future-dated")
@@ -175,6 +227,59 @@ def assert_protected_evidence_matches_plan(
         raise ValueError("protected support evidence conflicts with the execution plan")
 
 
+def protected_evidence_is_admissible(
+    evidence: ProtectedExecutionSupportEvidence | None,
+    *,
+    now: datetime | None = None,
+) -> bool:
+    """Whether this row still carries admission authority on its own terms.
+
+    Admission also matches a row against the plan it is admitting; this answers
+    only the half that is about the row itself — its recorded outcome and its
+    freshness window. It answers it by asking
+    :func:`validate_protected_execution_support_evidence`, so a consumer that
+    advertises something on the strength of a row cannot drift into a second,
+    more permissive freshness rule and advertise what admission will refuse.
+    """
+
+    if evidence is None:
+        return False
+    try:
+        validate_protected_execution_support_evidence(
+            evidence.model_dump(mode="json", by_alias=True), now=now
+        )
+    except ValueError:
+        return False
+    return True
+
+
+def advertised_concurrency_ceiling(
+    evidence: ProtectedExecutionSupportEvidence | None,
+    *,
+    operator_ceiling: int | None = None,
+    now: datetime | None = None,
+) -> int:
+    """Return the concurrency level this exact combination may advertise.
+
+    Readiness advertises the *validated* level for the exact deployment
+    combination, or a lower operator ceiling — never a configured value that
+    was never observed. Missing concurrency evidence advertises ``0``: an
+    unqualified combination is not implicitly qualified at 1, because nothing
+    observed it.
+
+    A row admission would refuse — a non-pass outcome, an expired document, or
+    one older than :data:`MAX_EXECUTION_SUPPORT_EVIDENCE_AGE` — advertises ``0``
+    for the same reason: the concurrency dimension inherits the authority of the
+    row that carries it and has none of its own.
+    """
+
+    if evidence is None or evidence.concurrency is None:
+        return 0
+    if not protected_evidence_is_admissible(evidence, now=now):
+        return 0
+    return evidence.concurrency.advertised_concurrency_level(operator_ceiling)
+
+
 def _protected_evidence_candidates(path: str | Path | None) -> list[Any]:
     """Return the published protected entries, unvalidated."""
 
@@ -203,9 +308,10 @@ def find_protected_evidence_entry(
 
     This is an observation probe, not admission authority. It applies the
     document's structural authority (closed schema, declared issuer, recomputed
-    support key, secret scan) but not its freshness, so a caller reporting
-    readiness can distinguish missing evidence from expired evidence instead of
-    collapsing both into "missing". Admission still runs through
+    support key, secret scan) but not its freshness or its recorded outcome, so
+    a caller reporting readiness can distinguish missing evidence from expired
+    evidence and from a recorded ``failed``/``blocked``/``unavailable`` row
+    instead of collapsing them all into "missing". Admission still runs through
     :func:`load_protected_execution_support_evidence`, which fails closed.
     """
 
@@ -257,9 +363,12 @@ __all__ = [
     "EXECUTION_SUPPORT_EVIDENCE_VERSION",
     "EXECUTION_SUPPORT_EVIDENCE_ISSUER",
     "MAX_EXECUTION_SUPPORT_EVIDENCE_AGE",
+    "ExecutionSupportRowStatus",
     "ProtectedExecutionSupportEvidence",
+    "advertised_concurrency_ceiling",
     "assert_protected_evidence_matches_plan",
     "find_protected_evidence_entry",
+    "protected_evidence_is_admissible",
     "load_protected_execution_support_evidence",
     "validate_protected_execution_support_evidence",
 ]

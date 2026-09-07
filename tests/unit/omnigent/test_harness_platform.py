@@ -1929,3 +1929,193 @@ def test_no_top_level_harness_identity():
     # Verified via compile_execution_plan handling any harness without new code path
     assert "external" == "external"
     assert "omnigent" == "omnigent"
+
+
+# MoonLadderStudios/MoonMind#3885: the frozen rollout decision must demote for
+# exactly the support evidence admission refuses, including a recorded non-pass
+# row, which is present and unexpired and therefore invisible to the ref and
+# expiry dimensions alone.
+def _opencode_plan_inputs():
+    catalog = make_catalog()
+    profile = OmnigentAgentProfileV2.model_validate(
+        {
+            "schemaVersion": "moonmind.omnigent-agent-profile.v2",
+            "endpointRef": "default",
+            "source": {
+                "kind": "upstream",
+                "upstreamId": "opencode-native-ui",
+                "upstreamVersion": "1.0.0",
+                "upstreamSnapshotDigest": "sha256:" + "d" * 64,
+            },
+            "harness": {
+                "id": "opencode-native",
+                "catalogRef": catalog.catalogRef,
+                "implementationRef": make_impl(
+                    digest="sha256:" + "a" * 64
+                ).implementation_ref(),
+            },
+            "requirements": {
+                "harness": {"required": [], "preferred": []},
+                "moonmind": {"required": []},
+                "host": {"required": []},
+            },
+            "credentialSlots": [
+                {
+                    "id": "primary-model",
+                    "optional": False,
+                    "acceptedAuthModels": ["own-auth"],
+                    "acceptedProviderIds": ["opencode"],
+                }
+            ],
+            "model": {},
+            "workspace": {},
+            "skills": [],
+            "tools": [],
+            "capture": {},
+            "continuations": {},
+            "publish": {},
+            "allowedLaunchPolicyRefs": ["omnigent-on-demand@1"],
+        }
+    )
+    binding_set = create_binding_set(
+        bindingSetId="opencode-go-primary",
+        version=3,
+        bindings={
+            "primary-model": {
+                "providerProfileRef": "opencode-go-default",
+                "materializerRef": "opencode-auth-json@1",
+            }
+        },
+    )
+    return catalog, profile, binding_set
+
+
+def _compile_opencode_plan():
+    catalog, profile, binding_set = _opencode_plan_inputs()
+    return compile_execution_plan(
+        agent_profile=profile,
+        harness_catalog=catalog,
+        trust_record=classify_harness_trust(
+            harnessId="opencode-native",
+            implementation=make_impl(digest="sha256:" + "a" * 64),
+            trustState=TrustState.core_trusted,
+        ),
+        resolved_skills={
+            "resolvedSkillSetRef": "artifact:test",
+            "resolvedSkillSetDigest": "sha256:" + "a" * 64,
+            "skillDeliveryRef": "skill-delivery:sha256:" + "b" * 64,
+        },
+        credential_binding_set=binding_set,
+        host_class_ref="omnigent-native-standard@3",
+        launch_policy_ref="omnigent-on-demand@1",
+        model_qualified_id="opencode/test-model",
+        model_effort=None,
+        model_route_ref="opencode-go",
+        model_normalized_options={},
+        # The exact deployable identity a protected row has to name. Admission
+        # compares these against the row, so the plan has to carry them for the
+        # published document to be about this plan at all.
+        host_image_ref="ghcr.io/example/omnigent-host@sha256:" + "8" * 64,
+        omnigent_host_build_digest="sha256:" + "b" * 64,
+        host_architecture="linux/amd64",
+        policy_snapshot_ref="artifact:policy",
+        policy_snapshot_digest="sha256:" + "9" * 64,
+        effective_launch_snapshot_ref="artifact:effective",
+        effective_launch_snapshot_digest="sha256:" + "a" * 64,
+    )
+
+
+def _protected_row(payload, *, status: str, generated_at: datetime) -> dict:
+    from moonmind.omnigent.execution_support_evidence import (
+        EXECUTION_SUPPORT_EVIDENCE_ISSUER,
+        EXECUTION_SUPPORT_EVIDENCE_VERSION,
+    )
+    from moonmind.omnigent.session_supervisor_rollback import (
+        SUPERVISOR_ROLLBACK_POLICY_VERSION,
+    )
+    from moonmind.schemas.omnigent_session_models import (
+        OMNIGENT_SESSION_COMPATIBILITY_VERSION,
+        OMNIGENT_SESSION_FEATURE_GENERATION,
+    )
+
+    return {
+        "schemaVersion": EXECUTION_SUPPORT_EVIDENCE_VERSION,
+        "evidenceIssuer": EXECUTION_SUPPORT_EVIDENCE_ISSUER,
+        "status": status,
+        "sourceCommit": "abcdef1234567890",
+        "protectedRunRef": "https://example.invalid/actions/runs/4242",
+        "evidenceManifestRef": "artifact://manifest-4242",
+        "evidenceManifestDigest": "sha256:" + "b" * 64,
+        "generatedAt": generated_at.isoformat(),
+        "expiresAt": (generated_at + timedelta(days=7)).isoformat(),
+        "supportClassification": "fully_managed",
+        "supportCombinationKey": payload.supportCombinationKey,
+        "supportIdentity": payload.supportIdentity.model_dump(
+            mode="json", by_alias=True
+        ),
+        "hostImageRef": payload.hostImageRef,
+        "policySnapshotDigest": payload.policySnapshotDigest,
+        "effectiveLaunchSnapshotDigest": payload.effectiveLaunchSnapshotDigest,
+        "policyGateRef": "deployment-ready",
+        "policyQualified": status == "passed",
+        "exactArtifactsVerified": True,
+        "featureGeneration": OMNIGENT_SESSION_FEATURE_GENERATION,
+        "replayCompatibilityVersion": OMNIGENT_SESSION_COMPATIBILITY_VERSION,
+        "rollbackPolicyVersion": SUPERVISOR_ROLLBACK_POLICY_VERSION,
+    }
+
+
+@pytest.mark.parametrize("status", ["failed", "blocked", "unavailable", "partial"])
+def test_compiled_plan_demotes_a_recorded_non_pass_support_row(
+    status, tmp_path, monkeypatch
+):
+    monkeypatch.setenv("MOONMIND_OMNIGENT_OPENCODE_ENABLED", "true")
+    monkeypatch.setenv("MOONMIND_OMNIGENT_EVIDENCE_POLICY", "protected")
+    monkeypatch.delenv("MOONMIND_OMNIGENT_RUNTIME_PROVIDER_ROLLOUT", raising=False)
+    monkeypatch.delenv("MOONMIND_OMNIGENT_RUNTIME_PROVIDER_ROLLBACK", raising=False)
+
+    # Compile once to learn the exact combination this deployment would run,
+    # then record evidence against that key. Compilation is pure, so the second
+    # compile differs only by the evidence it resolves.
+    probe = _compile_opencode_plan().payload
+    generated_at = datetime.now(UTC)
+    index = tmp_path / "execution-support-evidence.json"
+
+    index.write_text(
+        json.dumps(
+            {"entries": [_protected_row(probe, status=status, generated_at=generated_at)]}
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("MOONMIND_OMNIGENT_EXECUTION_SUPPORT_EVIDENCE", str(index))
+    monkeypatch.setenv("MOONMIND_SOURCE_COMMIT", "abcdef1234567890")
+
+    # The row is genuinely resolved, so this is the recorded-outcome path and
+    # not an index the probe silently failed to read.
+    from moonmind.omnigent.evidence_resolver import resolve_support_evidence_freshness
+
+    freshness = resolve_support_evidence_freshness(probe.supportIdentity)
+    assert freshness.tier == "supported"
+    assert freshness.expired is False
+    assert freshness.usable is False
+
+    record = _compile_opencode_plan().payload.runtimeProviderRollout
+    assert record is not None
+    assert record.state == "explicit_only"
+    assert record.reasonCode == "support_evidence_missing"
+
+    # The same combination with a passing row is promoted, so the denial above
+    # is the recorded outcome and not an unrelated readiness gate.
+    index.write_text(
+        json.dumps(
+            {
+                "entries": [
+                    _protected_row(probe, status="passed", generated_at=generated_at)
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+    promoted = _compile_opencode_plan().payload.runtimeProviderRollout
+    assert promoted is not None
+    assert promoted.state == "new_work_default"

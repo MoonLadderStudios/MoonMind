@@ -126,9 +126,13 @@ def test_publication_requires_every_matrix_case_to_pass() -> None:
     assert '"sourceCommit": os.environ["GITHUB_SHA"]' in manifest["run"]
     assert '"browserRows": rows' in manifest["run"]
     assert "validate_workflow_chat_acceptance_manifest" in manifest["run"]
-    assert "ProtectedExecutionSupportEvidence" in manifest["run"]
+    # The index derivation is production code, so this job must call it rather
+    # than restate the schema inline (MoonLadderStudios/MoonMind#3885). The
+    # shape it produces is covered by
+    # tests/unit/omnigent/test_execution_support_publication.py.
+    assert "build_protected_support_index" in manifest["run"]
+    assert "load_concurrency_records" in manifest["run"]
     assert "execution-support-evidence.json" in manifest["run"]
-    assert "policySnapshotDigest" in manifest["run"]
     assert "effectiveLaunchSnapshotDigest" in manifest["run"]
     assert '"nativeWorkflowChatEvidence"' in manifest["run"]
     assert "product evidence lacks independently resolved production records" in manifest["run"]
@@ -154,6 +158,19 @@ def test_publication_requires_every_matrix_case_to_pass() -> None:
         for step in job["steps"]
         if step.get("name") == "Download passing case evidence"
     )
+    # The concurrency dimension reaches the published index from the program
+    # that qualified it, and its absence is a publishable state rather than a
+    # failure (MoonLadderStudios/MoonMind#3885).
+    stage_concurrency = next(
+        step
+        for step in job["steps"]
+        if step.get("name") == "Stage the newest qualified concurrency record"
+    )
+    assert "omnigent-concurrency-qualification.yml" in stage_concurrency["run"]
+    assert "--status success" in stage_concurrency["run"]
+    assert "artifacts/omnigent-concurrency/published" in stage_concurrency["run"]
+    assert "publishing without the concurrency dimension" in stage_concurrency["run"]
+    assert job["permissions"]["actions"] == "read"
     assert "github.run_attempt" in download["with"]["pattern"]
     assert "github.run_attempt" in upload["with"]["name"]
     assert upload["with"]["retention-days"] == 90
