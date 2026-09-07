@@ -8,6 +8,9 @@
 
 ## Related documents
 
+- [`docs/Omnigent/README.md`](./README.md) — module entrypoint and contract owners
+- [`docs/Omnigent/ContractOwnership.md`](./ContractOwnership.md) — per-file ownership map
+- [`docs/Omnigent/SharedHostImage.md`](./SharedHostImage.md) — shared image, runtime packs, Host Classes, credential ownership (implemented)
 - [`docs/Omnigent/OmnigentModuleArchitecture.md`](./OmnigentModuleArchitecture.md)
 - [`docs/Omnigent/OmnigentAdapter.md`](./OmnigentAdapter.md)
 - [`docs/Omnigent/OmnigentBridge.md`](./OmnigentBridge.md)
@@ -44,6 +47,12 @@ MoonMind is moving toward Omnigent as the primary wrapper around coding-agent ha
 This design generalizes the existing Codex-through-Omnigent system. It does not discard that work. The current Codex lane supplies the reference implementation for Agent Profile selection, Provider Profile leasing, OAuth-generation fencing, host leasing, workspace materialization, resolved Skill delivery, bridge authorization, session execution, publication, checkpoint evidence, cleanup, and support qualification.
 
 The design owns the generic target architecture. The existing Codex documents continue to own the current Codex specialization until a later evidence-backed cutover explicitly moves that specialization onto the generic realizer. A conflict is resolved without weakening the current Codex contract.
+
+Implemented counterparts: this document stays the Proposed target model. The
+shipped shared image, runtime packs, Host Classes, and OAuth-home materializers
+are owned by [`SharedHostImage.md`](./SharedHostImage.md) and
+[`OmnigentHostOAuth.md`](./OmnigentHostOAuth.md); read those for current
+behavior, not §§11–13 below.
 
 ## 2. Goals
 

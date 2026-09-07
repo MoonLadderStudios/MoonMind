@@ -8,6 +8,8 @@
 
 ## Related documents
 
+- [`docs/Omnigent/README.md`](./README.md) — module entrypoint and contract owners
+- [`docs/Omnigent/ContractOwnership.md`](./ContractOwnership.md) — per-file ownership map
 - [`docs/Omnigent/PrimaryRuntimeProviderStrategy.md`](./PrimaryRuntimeProviderStrategy.md)
 - [`docs/Omnigent/RuntimeProviderRollout.md`](./RuntimeProviderRollout.md)
 - [`docs/Omnigent/OmnigentHarnessPlatformDesign.md`](./OmnigentHarnessPlatformDesign.md)
@@ -78,9 +80,13 @@ Changing a vendor pin is a deployment change that must land in the image build a
 ## 3. Host Classes on the shared digest
 
 ```text
-omnigent-codex@1    codex-native   + codex-native-pack@1   + codex-oauth-home@1, none@1
-omnigent-claude@1   claude-native  + claude-native-pack@1  + claude-oauth-home@1, none@1
+omnigent-codex@1     codex-native     + codex-native-pack@1     + codex-oauth-home@1, none@1
+omnigent-claude@1    claude-native    + claude-native-pack@1    + claude-oauth-home@1, none@1
+omnigent-opencode@2  opencode-native  + opencode-native-pack@1  + opencode-auth-json@1, none@1
 ```
+
+(`omnigent-opencode@1` remains the dedicated-image legacy row for historical
+reads; `@2` is the shared-image row.)
 
 Separate classes reference the same `OMNIGENT_SHARED_HOST_IMAGE_REF` digest without conflating harness support. Each class declares only its own harness, runtime pack, and materializers, so a shared image never authorizes every installed runtime. One-harness admission is enforced at selection (the pack must own the harness, the materializers must be allowlisted) and again at planning (the Host Class must declare the plan's harness implementation).
 
