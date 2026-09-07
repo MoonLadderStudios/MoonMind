@@ -135,10 +135,13 @@ async def test_plan_compilation_gates_unseeded_policy_authority(monkeypatch) -> 
     assert "startup reconciliation" in str(exc_info.value)
 
 
-def test_skill_selector_includes_nested_dynamic_execution_skills() -> None:
+@pytest.mark.parametrize("payload_key", ["workflow", "task"])
+def test_skill_selector_includes_nested_dynamic_execution_skills(
+    payload_key: str,
+) -> None:
     selector = service._skill_selector(
         {
-            "workflow": {
+            payload_key: {
                 "steps": [
                     {
                         "skill": {
@@ -179,7 +182,10 @@ def test_skill_selector_includes_nested_dynamic_execution_skills() -> None:
 
 
 @pytest.mark.asyncio
-async def test_admission_persists_nested_dynamic_execution_skills() -> None:
+@pytest.mark.parametrize("payload_key", ["workflow", "task"])
+async def test_admission_persists_nested_dynamic_execution_skills(
+    payload_key: str,
+) -> None:
     artifacts = _ArtifactService()
 
     resolved, manifest_ref, _manifest_digest, content_refs = (
@@ -190,7 +196,7 @@ async def test_admission_persists_nested_dynamic_execution_skills() -> None:
             workflow_id="mm:remediation-skill-snapshot",
             task_input_snapshot_digest="sha256:" + "1" * 64,
             initial_parameters={
-                "workflow": {
+                payload_key: {
                     "steps": [
                         {
                             "skill": {
@@ -235,6 +241,32 @@ async def test_admission_persists_nested_dynamic_execution_skills() -> None:
         "remediate-issue",
     ]
     assert len(content_refs) == 2
+
+
+@pytest.mark.parametrize("workflow", [None, {}, {"skill": {"id": "moonspec-verify"}}])
+def test_skill_admission_preserves_execution_envelope_precedence(workflow) -> None:
+    parameters = {
+        "workflow": workflow,
+        "task": {"skill": {"id": "remediate-issue"}},
+    }
+    before = json.dumps(parameters, sort_keys=True)
+    assert service.selected_skill_names(parameters) == [
+        "moonspec-verify" if workflow else "remediate-issue"
+    ]
+    assert json.dumps(parameters, sort_keys=True) == before
+
+
+@pytest.mark.parametrize("payload_key", ["workflow", "task"])
+def test_skill_admission_rejects_excluded_selected_skill(payload_key: str) -> None:
+    with pytest.raises(ValueError, match="selected Skills cannot also be excluded"):
+        service._skill_selector(
+            {
+                payload_key: {
+                    "skills": {"exclude": ["moonspec-verify"]},
+                    "steps": [{"skill": {"id": "moonspec-verify"}}],
+                }
+            }
+        )
 
 
 def _snapshot(*, harness: str, policy: str, provider_id: str) -> dict:
