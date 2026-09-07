@@ -218,6 +218,12 @@ reject or hide any tool whose successful contract requires a later callback when
 the runtime has no durable same-session continuation owner. A tool's availability
 is not evidence that the selected execution lane can deliver its result.
 
+The direct Claude Code print-mode launcher disables background Bash and subagent
+tasks with `CLAUDE_CODE_DISABLE_BACKGROUND_TASKS=1` after profile materialization,
+in addition to denying deferred wakeup tools. This launch-mode restriction cannot
+be relaxed by profile environment overrides. Long waits stay in the foreground
+or return a validated continuation to a durable owner before the process exits.
+
 A provider response ending in matched tool output while its session remains
 active is not terminal evidence. The execution driver requests same-session
 continuation only when its caller explicitly owns that recovery. Other hosts
