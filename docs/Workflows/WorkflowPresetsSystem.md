@@ -257,8 +257,10 @@ Only widgets are allowed to have custom UI components. Presets consume widgets d
 The `github-issue-search-and-implement` preset resolves its optional repository
 input from the workflow repository during expansion. Its first typed
 `github.load_issue_preset_brief` operation accepts `issueSearch`: a nonempty
-query selects GitHub's best open issue match; an empty query scans open issues
-in descending creation order for the first candidate without blocker evidence.
+query selects GitHub's best available open issue match, skipping issues already
+marked status in-progress; an empty query scans open issues
+in descending creation order for the first candidate without blocker evidence
+and without an in-progress status.
 The scan is bounded to five pages of 100 candidates, excludes pull requests,
 and records pages and candidates examined. Missing, malformed, incomplete, or
 exhausted evidence stops the run before implementation or issue mutation.
@@ -271,7 +273,9 @@ at most 100 declared prerequisites per candidate. The candidate scan shares a
 100-request prerequisite lookup budget and reuses validated state for repeated
 repository-and-issue identities. Exhausting that budget stops selection with an
 actionable request to select an explicit issue or narrow the search. Confirming
-the selected issue uses fresh prerequisite reads with its own 100-request budget;
+the selected issue uses fresh prerequisite reads with its own 100-request budget
+and re-fetches current issue detail to reject an in-progress status added
+between search and brief loading;
 the later pre-implementation blocker check also fetches current state. An open
 prerequisite blocks admission; closed prerequisites do not. Only the leading
 reference list after a declaration contributes dependencies; subsequent prose,
