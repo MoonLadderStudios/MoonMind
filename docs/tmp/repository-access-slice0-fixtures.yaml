@@ -9,8 +9,10 @@
 # Schema-semantics rules enforced by
 # tests/unit/docs/test_repository_access_slice0_reconciliation.py:
 # - `scratch` carries no repository keys, no connectionRef, no credential.
-# - `anonymous` carries a repository target with accessMode `anonymous`,
-#   no connectionRef, and no credential material.
+# - `anonymous` carries a top-level repository target with accessMode
+#   `anonymous` (sibling of `workspaceSource`, per
+#   docs/RepositoryAccessAndWorkspaceDesign.md:88-115), no connectionRef,
+#   and no credential material.
 # - No fixture contains raw tokens, secret values, or environment
 #   credential values anywhere.
 # - Repository names use the real, existing MoonMind repository so examples
@@ -30,11 +32,11 @@
   description: Explicit anonymous read of a real public repository; no credential lookup.
   workspaceSource:
     kind: repository
+  repository:
+    provider: git
     repository:
-      provider: git
-      repository:
-        name: MoonLadderStudios/MoonMind
-      accessMode: anonymous
+      name: MoonLadderStudios/MoonMind
+    accessMode: anonymous
   outputPolicy:
     savedWork: required
     formatProfile: portable
@@ -45,11 +47,11 @@
   description: Connected repository picker authoring routed access; omitted branch requests the remote default.
   workspaceSource:
     kind: repository
+  repository:
+    provider: git
     repository:
-      provider: git
-      repository:
-        name: MoonLadderStudios/MoonMind
-      accessMode: routed
+      name: MoonLadderStudios/MoonMind
+    accessMode: routed
   outputPolicy:
     savedWork: required
     formatProfile: portable

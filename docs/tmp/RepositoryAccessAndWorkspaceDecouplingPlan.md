@@ -16,17 +16,17 @@ The baseline observations below are source inspection, not deployment or integra
 
 | Work area | Canonical target |
 | --- | --- |
-| Optional repository access and responsibility separation | Design Sections 1–2, `DOC-REQ-001`, `CONTRACT-001`, `INV-001` |
-| Source union, canonical authoring, access intent, and capability compilation | Section 3, `CONTRACT-002` through `CONTRACT-004`, `INV-002` |
-| Connection persistence, scope, routing, authentication variants, and validation | Section 4, `CONTRACT-005` through `CONTRACT-007`, `QUALITY-001` |
+| Optional repository access and responsibility separation | Design Sections 1–2, `DOC-REQ-001`, `DOC-REQ-002`, `CONTRACT-001`, `INV-001` |
+| Source union, canonical authoring, access intent, and capability compilation | Section 3, `CONTRACT-002`, `CONTRACT-003`, `CONTRACT-004`, `INV-002` |
+| Connection persistence, scope, routing, authentication variants, and validation | Section 4, `CONTRACT-005`, `CONTRACT-006`, `CONTRACT-007`, `QUALITY-001` |
 | Typed execution bindings, rotation, refresh, revocation, and throttling | Section 5, `CONTRACT-008`, `CONTRACT-009`, `INV-003`, `QUALITY-002` |
 | Bound consumers, isolation, confinement, and source safety | Section 6, `CONTRACT-010`, `INV-004`, `INV-005`, `QUALITY-003` |
 | Workspace preparation and restore | Section 7, `CONTRACT-011`, `INV-006` |
 | Saved-work formats, finalization, ownership, and retention | Section 8, `CONTRACT-012`, `INV-007`, `QUALITY-004`, `QUALITY-005` |
 | Deferred publication and recovery | Section 9, `CONTRACT-013`, `INV-008`, `QUALITY-006` |
 | Historical interpretation and observability | Section 10, `CONTRACT-014`, `QUALITY-007` |
-| Free-model qualification and product UX | Sections 11–12, `DOC-REQ-003` through `DOC-REQ-005`, `INV-009`, `QUALITY-008` |
-| Conformance and scope | Sections 13–14, `TEST-001` through `TEST-004`, `NON-GOAL-001`, `QUALITY-009` |
+| Free-model qualification and product UX | Sections 11–12, `DOC-REQ-003`, `DOC-REQ-004`, `DOC-REQ-005`, `INV-009`, `QUALITY-008` |
+| Conformance and scope | Sections 13–14, `TEST-001`, `TEST-002`, `TEST-003`, `TEST-004`, `NON-GOAL-001`, `QUALITY-009` |
 
 The slices share one contract. Do not enable a new public submission path until all supported consumers enforce its bindings. Internal staging may use explicit version gates, never connection-count heuristics. Unsupported runtime/capability combinations must be rejected rather than allowed to use legacy discovery.
 
@@ -243,7 +243,7 @@ owns this inventory and the interface agreement only — not the cutovers.
 | R-13 | `moonmind/omnigent/workspace_publication.py` (workspace publication) | `resolve_github_credential(repo=…)` | #3938 proposed (destination authority via the existing publisher; confirm in review) |
 | R-14 | `moonmind/omnigent/host_services/github_credentials.py` (lease-owned `gh` volume projection) | `resolve_github_credential(repo=…)` | #2615 (bound materialization; preserve ownership/cleanup) |
 | R-15 | `moonmind/omnigent/host_services/workspace.py` (fresh-sandbox preparation token) | `resolve_github_token_for_launch()` | #2615 (source union + anonymous execution at the shared boundary) |
-| R-16 | `moonmind/agents/codex_worker/worker.py`, `handlers.py`, `cli.py` (Codex worker launch) | `resolve_github_credential(repo=…)` | #2619 proposed (Codex runtime lane cutover; confirm in review) |
+| R-16 | `moonmind/agents/codex_worker/worker.py`, `moonmind/agents/codex_worker/handlers.py`, `moonmind/agents/codex_worker/cli.py` (Codex worker launch) | `resolve_github_credential(repo=…)` | #2619 proposed (Codex runtime lane cutover; confirm in review) |
 | R-17 | `moonmind/publish/service.py` (publisher remote mutation) | `resolve_github_credential(repo=…)` | #3938 proposed (publisher consumes destination admission; confirm in review) |
 | R-18 | `moonmind/workflows/temporal/story_output_tools.py`, `moonmind/workflows/temporal/activities/omnigent_session_activities.py` (story/issue/PR tools, session activities) | `service.resolve_github_token(repo=…)` / coordinator `_github_token` | #2615 (bound tool clients) |
 | R-19 | `moonmind/auth/secret_refs.py` (`resolve_github_auth`) | Typed secret-ref auth resolution (not global discovery) | #1090 proposed (Secrets System revision/use-protection surface; confirm in review) |
@@ -263,6 +263,7 @@ owns this inventory and the interface agreement only — not the cutovers.
 | G-08 | `moonmind/omnigent/workspace_publication.py`, `moonmind/publish/service.py` (publication token parameters) | #3938 proposed |
 | G-09 | `moonmind/manifest/adapters.py` (`GithubClient(github_token=token, …)`) | #2615 (manifest pipeline is fan-out adjacent; bound client) |
 | G-10 | `api_service/api/routers/workflow_console_view_model.py`, `api_service/api/routers/settings.py`, `api_service/services/settings_catalog.py`, `api_service/db/models.py` (settings/console token fields) | #1090 proposed (Settings wizard, secret attachment, scoped discovery; confirm in review) |
+| G-11 | `moonmind/omnigent/oauth_host_runtime.py` (`start_session`/`_launch_daemon` `github_token: str \| None = None`, `GH_TOKEN` child-env injection) | #2615 (Omnigent host lane: replace explicit-token/env delivery with admitted-issuance acquisition; shares the R-10/R-11 acquisition interface) |
 
 #### 10.2.3 Token-environment readers
 
@@ -270,12 +271,13 @@ owns this inventory and the interface agreement only — not the cutovers.
 | --- | --- | --- | --- |
 | E-01 | `moonmind/auth/github_credentials.py`, `moonmind/auth/env_shaping.py`, `moonmind/config/settings.py` | Canonical `GITHUB_TOKEN` env catalogue and shaping | #2615 (reads move to bootstrap/acquisition; never routing) |
 | E-02 | `moonmind/workflows/temporal/runtime/managed_api_key_resolve.py` (launch/shaped environment `GITHUB_TOKEN`) | Launch env shaping | #2615 |
-| E-03 | `moonmind/workflows/temporal/runtime/managed_session_controller.py`, `launcher.py`, `git_auth.py`, `github_auth_broker.py` (session/broker env) | Session/broker delivery env | #2615 |
+| E-03 | `moonmind/workflows/temporal/runtime/managed_session_controller.py`, `moonmind/workflows/temporal/runtime/launcher.py`, `moonmind/workflows/temporal/runtime/git_auth.py`, `moonmind/workflows/temporal/runtime/github_auth_broker.py` (session/broker env) | Session/broker delivery env | #2615 |
 | E-04 | `moonmind/workflows/temporal/activity_runtime.py` (ambient read + workspace command env + scrub) | Ambient read, injection, and scrubbing | #2615 (scrub/isolate per INV-004; reads only from admitted adapter material) |
 | E-05 | `moonmind/workflows/temporal/worker_runtime.py` (`GH_TOKEN`/`GITHUB_TOKEN` fallback) | Worker ambient fallback | #2615 (remove fallback; fail closed) |
 | E-06 | `moonmind/workflows/adapters/managed_agent_adapter.py` (`_SECRET_ENV_PASSTHROUGH_KEYS = ("GITHUB_TOKEN",)`) | Secret env passthrough | #2615 (passthrough only admitted material) |
 | E-07 | `moonmind/schemas/managed_session_models.py`, `moonmind/schemas/agent_runtime_models.py` (session schema token fields) | Schema-carried token refs | #2615 (non-sensitive authority refs; secret-carrying types stay in trusted boundaries) |
-| E-08 | `moonmind/agents/codex_worker/*`, `moonmind/utils/logging.py` (worker env, log redaction) | Worker env + redaction | #2619 proposed for worker env; redaction stays (INV-004) |
+| E-08 | `moonmind/agents/codex_worker/worker.py`, `moonmind/agents/codex_worker/handlers.py`, `moonmind/agents/codex_worker/cli.py`, `moonmind/utils/logging.py` (worker env, log redaction) | Worker env + redaction | #2619 proposed for worker env; redaction stays (INV-004) |
+| E-09 | `moonmind/omnigent/oauth_host_runtime.py` (`_launch_daemon` injects `GH_TOKEN` child env from explicit `github_token`) | Explicit-token environment delivery | #2615 (delivery only from admitted issuance; never ambient discovery; shares the R-10/R-11 acquisition interface) |
 
 #### 10.2.4 New-write producers and retained history readers
 
@@ -298,6 +300,7 @@ owns this inventory and the interface agreement only — not the cutovers.
 | Attestation | `moonmind/workflows/temporal/agent_result_payloads.py`, `activities/omnigent_activities.py`, `workflows/omnigent_session.py`, `workflows/container_job.py`, `moonmind/workloads/docker_launcher.py` | #2615 (attestation/cleanup dispatch by authority kind; existing boundaries retained) |
 | Registry pulls | `moonmind/omnigent/bootstrap/image_resolution.py`, `provider_revalidation.py`, `harness_platform/support.py` | #2615 (independent registry auth; source PAT never a GHCR fallback) |
 | Artifact/checkpoint | `moonmind/schemas/managed_checkpoint_models.py`, `moonmind/workflows/temporal/checkpoint_policy.py`, `moonmind/omnigent/authority_chain.py`, `moonmind/omnigent/checkpoints.py` | #3938 proposed (saved-work manifest, capture/restore, save-before-cleanup; confirm in review) |
+| Bootstrap env shaping | `api_service/main.py` (preferred `GITHUB_TOKEN`/`GITHUB_PAT` env selection into the secret store at startup) | #2615 (reads belong to bootstrap/acquisition, never routing; no new-run ambient discovery) |
 
 ### 10.3 Module-owned contract mapping, wire versions, and type owners
 
@@ -308,19 +311,21 @@ remain illustrative authoring semantics, with owner-defined fixtures in
 
 | Design addition | Owning module (type owner) | Wire version / linkage |
 | --- | --- | --- |
-| `workspaceSource` union (`scratch \| repository \| artifact \| checkpoint \| existing_workspace`) | `moonmind/omnigent/workspace_intent.py` + `moonmind/schemas/workspace_intent.py` (`WorkspaceIntentRecord`; single compiler for create/edit/rerun/schedule/preset surfaces) | Extend `WorkspaceIntentRecord` schema version (`WORKSPACE_INTENT_SCHEMA_VERSION`); `repository` present only for the `repository` kind; publication destination stays a separate role, not a second source alias |
-| `accessMode` (`anonymous \| routed \| explicit`) | `moonmind/workflows/executions/repository_contract.py` | New field on the authored target at the next owned contract revision; `anonymous` forbids `connectionRef` and creates no dummy connection; omitted values compile to documented-UI-default intent without inspecting token presence |
+| `workspaceSource` union (`scratch \| repository \| artifact \| checkpoint \| existing_workspace`) (`DOC-REQ-002`, `CONTRACT-002`) | `moonmind/omnigent/workspace_intent.py` + `moonmind/schemas/workspace_intent.py` (`WorkspaceIntentRecord`; single compiler for create/edit/rerun/schedule/preset surfaces) | Extend `WorkspaceIntentRecord` schema version (`WORKSPACE_INTENT_SCHEMA_VERSION`); top-level `repository` present only for the `repository` kind (sibling of `workspaceSource`, per the design §3 shapes); publication destination stays a separate role, not a second source alias |
+| `accessMode` (`anonymous \| routed \| explicit`) (`CONTRACT-003`) | `moonmind/workflows/executions/repository_contract.py` | New field on the authored target at the next owned contract revision; `anonymous` forbids `connectionRef` and creates no dummy connection; omitted values compile to documented-UI-default intent without inspecting token presence |
+| Typed acquisition variants (`CONTRACT-006`) | `moonmind/auth/github_credentials.py` (compatibility acquisition) + `moonmind/workflows/temporal/runtime/managed_api_key_resolve.py` + `moonmind/workflows/temporal/runtime/github_auth_broker.py` + `moonmind/omnigent/oauth_host_runtime.py` (host-lane delivery, G-11/E-09) | Discriminated PAT / App-installation / Lore configuration; expiring issuance refreshes same-authority scope; consumers use returned scope/expiry, never hardcoded lifetimes |
 | Capability bundles + role-specific compilation | `moonmind/workflows/executions/repository_contract.py` (`derive_repository_capabilities`, `ensure_repository_ready`) with `moonmind/omnigent/effective_capabilities.py` as consumer | Capability tokens stay strings; readiness registry remains fail-closed; friendly/indexing/readiness/publish/full-PR profiles are versioned bundle presets, not a privilege ladder |
 | Role snapshots (`repositoryAccessSnapshotRef`) | `moonmind/workflows/executions/repository_contract.py` (immutable snapshot type; `RepositoryAuthorityBinding` union) | Snapshot carries endpoint/repository, role, admitted operations, policy/binding revision, selection origin, principal/workspace scope; existing binding-set version/digest infrastructure supplies immutable linkage |
 | `outputPolicy` (small format profile, not booleans) | `moonmind/omnigent/workspace_intent.py` (`savedWorkPolicy` today) + artifact/checkpoint owners (§10.2.5) | `savedWorkPolicy` string evolves into the owned profile enum; required-format failure blocks save finalization |
 | Saved-work manifests | `moonmind/schemas/managed_checkpoint_models.py`, `moonmind/workflows/temporal/checkpoint_policy.py`, `moonmind/omnigent/authority_chain.py` | Manifest is a compact index (schema version/digest, source identity, content digest, completeness, ownership/retention); reuse suitable checkpoint archives, never duplicate |
 | Publication-only requests (`savedWorkRef` + destination admission) | `moonmind/publish/service.py` (existing publisher; sole publication engine) | `savedWorkRef` is an immutable digest reference; destination target/connection/operations/client-policy snapshot newly admitted; no rerun by default |
-| `provider: git \| lore`, `RepositoryConnection`, `none \| branch \| pr \| auto` | Unchanged owners (`repository_contract.py`, `publish/service.py`, `WorkflowPublishing.md`) | `moonmind.repository-connection.v1`, `moonmind.resolved-repository-target.v1`, `moonmind.repository-legacy-history.v1` stay; changed contracts version at their owning boundary |
+| `provider: git \| lore`, `RepositoryConnection`, `none \| branch \| pr \| auto` | Unchanged owners (`repository_contract.py`, `publish/service.py`, `WorkflowPublishing.md`) | `moonmind.repository-connection.v1`, `moonmind.resolved-repository-target.v1`, `moonmind.repository-legacy-history.v1` stay; changed contracts version at their owning boundary. `auto` is the existing Skill-owned mode (`WorkflowPublishing.md:3-42`) for `pr-resolver`, `fix-comments`, `fix-ci`, `fix-merge-conflicts`; see the §10.5 `auto` rows for its capability-qualified combinations |
 | Generated types | Each owning module generates/consumes its own types; no cross-module generated-type owner is introduced | Frontend/API projections consume authoritative records; UI text never replaces primary evidence |
 
 Schema semantics without fake values (acceptance): `scratch` carries no
-repository keys, no credential binding, and no resolver call; `anonymous`
-carries a repository target with `accessMode: anonymous`, no `connectionRef`,
+top-level repository keys, no credential binding, and no resolver call;
+`anonymous` carries a top-level repository target (sibling of
+`workspaceSource`) with `accessMode: anonymous`, no `connectionRef`,
 and no credential materializer; routed/explicit carry admitted connection
 authority, never raw tokens. The fixtures file records these as validated
 owner-defined examples.
@@ -375,6 +380,10 @@ downgraded silently.
 | Codex worker lane | `repository` (git) | explicit/default compat identity | `none` / `branch` / `pr` | Genuine via worker resolver call (R-16). Owner: #2619 proposed |
 | Codex worker lane | `scratch` / `anonymous` | n/a / `anonymous` | saved work | Gap. Owner: #2619 proposed |
 | Claude/managed profile-bound lanes | `repository` | explicit/default compat identity | `none` / `branch` / `pr` | Genuine where profile-bound execution resolves today; bound-authority cutover is a gap. Owners: #2615, #2619 proposed |
+| Managed Docker | `repository` (git) | explicit/default compat identity | `auto` (Skill-owned: `pr-resolver`, `fix-comments`, `fix-ci`, `fix-merge-conflicts`; terminal evidence validated per `WorkflowPublishing.md:3-42`) | Genuine (launcher, managed controller, existing publisher validation of `artifacts/publish_result.json`). Owners: #2615 launch, #3938 publication |
+| Omnigent generic host | `repository` (git) | explicit/default compat identity | `auto` (Skill-owned; same skill set and evidence contract) | Genuine (host services workspace + github_credentials, generic_host realizer, existing evidence validation). Owners: #2615 launch, #3938 publication |
+| Codex worker lane | `repository` (git) | explicit/default compat identity | `auto` (Skill-owned) | Genuine where the worker lane resolves today (R-16); bound-authority cutover is a gap. Owner: #2619 proposed |
+| Claude/managed profile-bound lanes | `repository` | explicit/default compat identity | `auto` (Skill-owned) | Partial: profile-bound execution resolves today; Skill-owned evidence validation exists but bound-authority cutover is a gap. Owners: #2615, #2619 proposed |
 | Any runtime | any | any | publication-only (`savedWorkRef`) | Gap: no `savedWorkRef` admission; publisher has no destination re-admission. Owner: #3938 proposed |
 | Any runtime | `repository` (lore) | explicit | `none` / `branch` / `pr` | Partial: Lore target/adapter/authority exist; normalized-connection routing + capability evidence are gaps. Owner: #2615 |
 | Free route | `scratch` / public `repository` | n/a / `anonymous` | saved work, `none` | Partial: `opencode-zen-free` + `none@1` identity seeded; pricing/privacy qualification + no-key journey unproven. Owner: #3940 proposed |
@@ -395,19 +404,23 @@ separate from provider-session reattachment (`_partition_restore_refs` keeps
   cutover (slices 2–3): typed bindings, immutable snapshots, bound
   transport/API clients, expiring acquisition interface, isolated delivery,
   independent registry auth, workspace source decoupling, fan-out authority,
-  attestation/cleanup dispatch. All R/G/E rows marked #2615.
+  attestation/cleanup dispatch. All R/G/E rows marked #2615. Owns the
+  `TEST-002` credential-isolation conformance (explicit-B-wins, concurrency,
+  rotation/refresh/revocation) across the cut-over consumers.
 - **#1090 (proposed, confirm in review):** Connection persistence and
   lifecycle (slice 1): `RepositoryConnection` extension, normalized routing,
   scope/secret-use authorization, atomic revision lifecycle, non-mutating
   probes, Settings wizard, scoped discovery. Rows R-19, G-10, discovery.
 - **#2619 (proposed, confirm in review):** Runtime-lane cutovers beyond
   generic managed/Omnigent (Codex/Claude/profile-bound lanes, worker env).
-  Rows R-16, E-08, matrix Codex/Claude rows.
+  Rows R-16, E-08, E-09 (OAuth host lane), matrix Codex/Claude/`auto` rows.
 - **#3938 (proposed, confirm in review):** Saved-work finalization and
   Publish Saved Work (slices 4–5): manifests, exports, failure/cancellation
   capture, retention/restore, save-before-cleanup, destination admission,
   exact remote verification, publication-only recovery. Rows R-10, R-13,
-  R-17, G-08, artifact/checkpoint surface.
+  R-17, G-08, G-11/E-09 (OAuth host delivery), artifact/checkpoint surface.
+  Owns the `TEST-003` saved-work survival conformance (host/credential loss,
+  crash/cancel capture, deferred-publication recovery).
 - **#3940 (proposed, confirm in review):** Default UX and retirement
   (slice 6): free-model pricing/privacy qualification, exact host and public
   image pulls, create/detail/results UX, no-key onboarding, superseded-path
