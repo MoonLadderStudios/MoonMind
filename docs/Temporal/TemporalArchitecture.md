@@ -352,18 +352,14 @@ Rules:
 
 ## 7. Workflow catalog
 
-The live repo-aligned workflow catalog is:
-
-| Workflow Type | Role | Product visibility |
-| --- | --- | --- |
-| `MoonMind.UserWorkflow` | Current live root workflow implementation for user/service Workflow Executions; plans work, owns Step ledger, starts child agent runs, integrates outputs | Primary Workflow Execution surface |
-| `MoonMind.ManifestIngest` | Ingests, validates, compiles, and orchestrates manifest-backed work | User/system execution surface |
-| `MoonMind.AgentRun` | Durable lifecycle wrapper for one true managed or external agent execution | Child/internal, surfaced through parent details |
-| `MoonMind.AgentSession` | Workflow-scoped managed-session workflow; currently Codex-backed in the live session plane | Internal/operator/detail support |
-| `MoonMind.ManagedSessionReconcile` | Bounded operational reconciliation for managed sessions | Operational |
-| `MoonMind.ProviderProfileManager` | Long-lived provider-profile slot, lease, cooldown, and reconciliation manager | Internal/operator |
-| `MoonMind.OAuthSession` | OAuth / terminal-auth lifecycle support for managed runtimes | Support workflow |
-| `MoonMind.MergeAutomation` | PR readiness watcher and resolver follow-up launcher after publish-capable runs | Child/support workflow |
+The live repo-aligned workflow catalog is the generated reference
+`WorkflowTypeCatalogGenerated.md` (exact Temporal type, module/class owner,
+and declared projection role for every production registration, produced
+mechanically from `moonmind/workflows/temporal/workflow_registry.py`).
+Roles group as user-submitted roots, manifest-backed orchestration, durable
+agent-execution wrappers, session and coordination workflows, and
+operational/maintenance workflows; the generated table is authoritative for
+which registered type sits in each group.
 
 Rules:
 
@@ -371,7 +367,10 @@ Rules:
 - Add new Workflow Types only when lifecycle behavior is materially distinct.
 - Do not model provider brands as root workflow types.
 - Do not model worker fleets or task queues as product taxonomies.
-- Product Workflow Execution vocabulary maps primarily to `MoonMind.UserWorkflow`; `MoonMind.UserWorkflow` remains the current live implementation name where code and workflow registration still use it.
+- Product Workflow Execution vocabulary maps primarily to the single live
+  user-workflow registration `MoonMind.UserWorkflow`
+  (`moonmind/workflows/temporal/workflows/run.py`, projection `product` in
+  the generated reference). There is no separate live implementation name.
 - If docs and code disagree about the live catalog, code registration and `WorkflowTypeCatalogAndLifecycle.md` must be reconciled immediately.
 
 ---
