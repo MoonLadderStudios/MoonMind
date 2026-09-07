@@ -68,6 +68,7 @@ from moonmind.omnigent.harness_platform.host_classes import (
     register_launch_policy,
 )
 from moonmind.omnigent.harness_platform.materializers import (
+    CREDENTIALLESS_FORBIDDEN_AMBIENT_ENV_KEYS,
     FORBIDDEN_AMBIENT_ENV_KEYS,
     OPENCODE_AUTH_FILE_MODE,
     OPENCODE_AUTH_PARENT_MODE,
@@ -75,8 +76,10 @@ from moonmind.omnigent.harness_platform.materializers import (
     OPENCODE_PROVIDER_KEY,
     OPENCODE_SUPPORTED_VERSION_RANGE,
     CredentialMaterializer,
+    assert_no_credentialless_ambient_env,
     assert_opencode_materialization_secret_free,
     build_opencode_auth_json_bytes,
+    clear_credentialless_ambient_env,
     clear_forbidden_ambient_env,
     get_materializer,
     materialize_credential,
@@ -121,6 +124,7 @@ from moonmind.omnigent.harness_platform.support import (
 )
 
 __all__ = [
+    "CREDENTIALLESS_FORBIDDEN_AMBIENT_ENV_KEYS",
     "FORBIDDEN_AMBIENT_ENV_KEYS",
     "OMNIGENT_OPENCODE_HOST_IMAGE_ENV",
     "OMNIGENT_SHARED_HOST_IMAGE_ENV",
@@ -161,6 +165,7 @@ __all__ = [
     "assert_credential_isolation",
     "assert_failure_isolation",
     "assert_lifecycle_order",
+    "assert_no_credentialless_ambient_env",
     "assert_one_harness_admission",
     "assert_opencode_materialization_secret_free",
     "assert_ownership_cleanup",
@@ -170,6 +175,7 @@ __all__ = [
     "build_opencode_auth_json_bytes",
     "build_shared_host_image_inventory",
     "classify_harness_trust",
+    "clear_credentialless_ambient_env",
     "clear_forbidden_ambient_env",
     "compile_execution_plan",
     "compute_catalog_ref",

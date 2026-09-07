@@ -39,6 +39,21 @@ FORBIDDEN_AMBIENT_ENV_KEYS = (
     "ANTHROPIC_API_KEY",
 )
 
+# MoonLadderStudios/MoonMind#4021 req6: the credentialless (Zen free-route,
+# ``none@1``) runtime must never inherit a deployment key, auth cache, or
+# provider override. ``OPENCODE_API_KEY`` configures the separate keyed
+# ``opencode-go`` profile only; it must never rescue a ``none@1`` attempt.
+# Inherited OpenCode configuration / plugin / provider overrides are likewise
+# excluded at this boundary while the declared no-material route is preserved.
+CREDENTIALLESS_EXTRA_FORBIDDEN_AMBIENT_ENV_KEYS = (
+    "OPENCODE_API_KEY",
+    "OPENCODE_AUTH_FILE",
+    "OPENCODE_CONFIG_FILE",
+)
+CREDENTIALLESS_FORBIDDEN_AMBIENT_ENV_KEYS = (
+    FORBIDDEN_AMBIENT_ENV_KEYS + CREDENTIALLESS_EXTRA_FORBIDDEN_AMBIENT_ENV_KEYS
+)
+
 _SAFE_ID_RE = re.compile(r"^[a-z0-9][a-z0-9._-]*$")
 
 
@@ -347,6 +362,25 @@ def _assert_no_forbidden_ambient_env() -> None:
         )
 
 
+def assert_no_credentialless_ambient_env() -> None:
+    """Fail if any ambient key could rescue or redirect a ``none@1`` attempt.
+
+    MoonLadderStudios/MoonMind#4021 req6: the credentialless Zen free route
+    receives no secret role, no credential attachment, and no API key. A
+    deployment-level ``OPENCODE_API_KEY`` belongs only to the explicit
+    ``opencode-go`` profile and must never be inherited by the Zen profile,
+    and inherited OpenCode config/plugin/provider overrides must be absent
+    at this boundary. Positive keyed tests remain separate.
+    """
+
+    present = [k for k in CREDENTIALLESS_FORBIDDEN_AMBIENT_ENV_KEYS if os.environ.get(k)]
+    if present:
+        raise HarnessPlatformError(
+            f"credentialless runtime inherits forbidden ambient credentials: {present}",
+            code=HarnessPlatformFailure.OMNIGENT_CREDENTIAL_MATERIALIZATION_FAILED,
+        )
+
+
 def _opencode_auth_json_payload(*, api_key: str, provider_key: str) -> dict[str, Any]:
     """Exact OpenCode credential structure for the pinned version.
 
@@ -391,6 +425,16 @@ def clear_forbidden_ambient_env() -> list[str]:
     """Remove conflicting ambient credentials and return the cleared key names (no raw values)."""
     cleared: list[str] = []
     for key in FORBIDDEN_AMBIENT_ENV_KEYS:
+        if os.environ.pop(key, None) is not None:
+            cleared.append(key)
+    return cleared
+
+
+def clear_credentialless_ambient_env() -> list[str]:
+    """Remove credentialless-forbidden ambient keys; return cleared names only."""
+
+    cleared: list[str] = []
+    for key in CREDENTIALLESS_FORBIDDEN_AMBIENT_ENV_KEYS:
         if os.environ.pop(key, None) is not None:
             cleared.append(key)
     return cleared

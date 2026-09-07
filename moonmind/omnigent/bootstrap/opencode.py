@@ -50,6 +50,12 @@ def resolve_model_by_display(
 ) -> dict[str, str]:
     """Resolve friendly display name to provider and qualified IDs.
 
+    Display/historical-loading aid only. Punctuation-insensitive alias and
+    normalized catalog matches here must never select execution: collisions
+    can resolve a different model/provider. Execution selection must use
+    :func:`resolve_exact_qualified_id`, which requires an exact qualified-ID
+    match in the exact runtime/provider catalog.
+
     If available_models is provided (from live catalog), verify existence.
     Otherwise, use alias table.
     """
@@ -97,6 +103,48 @@ def resolve_model_by_display(
                 f"Available: {alternatives or 'none'}"
             )
     return alias
+
+
+def resolve_exact_qualified_id(
+    selected: str,
+    available_models: list[dict[str, Any]] | None,
+) -> dict[str, str]:
+    """Resolve the exact qualified ID selected for execution.
+
+    MoonLadderStudios/MoonMind#4021 req3: execution selection uses exact
+    qualified IDs only. Alias/normalized matches, names containing ``free``,
+    a successful list request, or an installed binary never establish
+    eligible execution. ``available_models`` is the exact runtime/provider
+    catalog; a missing or inexact entry is an actionable error, never a
+    silent substitute. Callers qualify pricing/privacy/capability through
+    ``free_model_eligibility.assess_free_model_candidate`` before promoting
+    the result, and resolve model/effort through actual
+    bootstrap/profile/plan consumers.
+    """
+
+    qualified = (selected or "").strip()
+    if not qualified or "/" not in qualified:
+        raise ValueError(
+            f"Requested model {selected!r} is not a canonical qualified ID "
+            "(expected '<provider>/<model-id>'); refusing to guess"
+        )
+    catalog_ids = {
+        str(m.get("qualifiedId") or "").strip()
+        for m in (available_models or [])
+        if isinstance(m, dict)
+    }
+    if qualified not in catalog_ids:
+        alternatives = ", ".join(sorted(catalog_ids)[:5])
+        raise ValueError(
+            f"Requested model {selected!r} is unavailable in the exact "
+            f"runtime/provider catalog. Available: {alternatives or 'none'}"
+        )
+    provider_id = qualified.split("/", 1)[-1]
+    return {
+        "displayName": qualified,
+        "providerModelId": provider_id,
+        "qualifiedId": qualified,
+    }
 
 
 def validate_effort(effort: str, available_efforts: list[str] | None = None) -> str:

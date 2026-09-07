@@ -280,21 +280,60 @@ credential attachment, and no API key. The OpenCode runtime wrapper is selected
 from the `opencode-native` harness identity, so its startup does not depend on
 an `auth.json` mount. A deployment-level `OPENCODE_API_KEY` belongs only to an
 explicit `opencode-go` profile and must never be inherited by the Zen profile.
+The credentialless ambient boundary additionally excludes `OPENCODE_API_KEY`
+and inherited config/file overrides at the `none@1` launch boundary (see
+section 6). Execution selection uses exact qualified IDs only
+(`opencode/<model-id>`); friendly labels and punctuation-insensitive aliases
+are display aids and never select execution. Qualification of pricing,
+data-use policy, capability, and availability is defined in
+`moonmind/omnigent/bootstrap/free_model_eligibility.py`; catalog presence, a
+name containing `free`, a successful list request, or an installed binary
+alone never establishes eligible execution.
 
 ## 6. Shared-image credential isolation
 
 When the image also contains Codex and Claude Code, an OpenCode execution must still receive only the OpenCode credential attachment.
 
-Exact-host conformance must prove:
+Exact-host conformance must prove (for whichever materializer class the
+selected profile uses — `none@1` for the credentialless Zen free route or
+`opencode-auth-json@1` for the key-backed Go route):
 
 - `/home/app/.codex` is not mounted from a Codex Provider Profile
 - Claude credential paths are not mounted
 - no Codex or Claude API-key environment is inherited
 - the selected runtime pack is `opencode-native-pack@1`
-- the selected materializer is `opencode-auth-json@1`
+- the selected materializer is `none@1` (Zen free route, no secret role, no
+  credential attachment, no API key) or `opencode-auth-json@1` (Go route)
 - only `opencode-native` is admitted by the selected Host Class
+- for the `none@1` route, the credentialless ambient boundary holds: no
+  `OPENCODE_API_KEY`, auth content, config override, or plugin/provider
+  override is inherited (`assert_no_credentialless_ambient_env`);
+  a deployment-level `OPENCODE_API_KEY` belongs only to the explicit
+  `opencode-go` profile and never rescues the Zen attempt
 
 The presence of the other binaries is not a support or authorization signal.
+
+### Free-route eligibility states
+
+The Runtime/Profile UI distinguishes five states for the credentialless
+default rather than collapsing them into one "free" label (see
+`moonmind/omnigent/bootstrap/free_model_eligibility.py`,
+policy `free-route-eligibility.v1`):
+
+- configured seed (`opencode-zen-free`, `none@1`, pinned default model/effort)
+- observed catalog (exact runtime/provider catalog on the pinned host)
+- qualified runtime (exact-host validation of image, runtime pack, model
+  route, and materializer under the existing support policy)
+- eligible pricing/privacy (all cost dimensions proven zero or declared
+  inapplicable, no subscription/key prerequisite, permitted data-use policy
+  version explicitly accepted and recorded)
+- temporary availability (provider/host capacity saturation is a wait state,
+  not ineligibility and never a paid-fallback signal)
+
+When no model satisfies policy, the UI surfaces `no_eligible_free_model`
+with separate availability, pricing, capability, and privacy reasons and an
+explicit valid alternative (configure a provider or wait), without extra
+mandatory free-model controls and without rewriting an active plan.
 
 ## 7. OpenCode Provider Profile
 
