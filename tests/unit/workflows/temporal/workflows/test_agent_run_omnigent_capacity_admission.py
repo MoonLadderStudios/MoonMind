@@ -20,7 +20,9 @@ acquiring capacity inside the execution slot.
 from __future__ import annotations
 
 import asyncio
+import json
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
 from unittest.mock import patch
@@ -37,6 +39,7 @@ from moonmind.schemas.agent_runtime_models import (
     ADMITTED_PROVIDER_CAPACITY_SCHEMA_V2,
     AgentExecutionRequest,
     AgentRunResult,
+    AgentRuntimeStepExecutionLaunch,
 )
 from moonmind.schemas.omnigent_session_models import (
     OmnigentSessionAdmissionDecision,
@@ -750,6 +753,76 @@ class _ExecutingRun(_RecordingRun):
             self.capacity_states.append(self._omnigent_capacity_state)
             return self.results.pop(0)
         return await super()._execute_routed_activity(name, payload, **kwargs)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("extended_identities", [False, True])
+async def test_remediation_lease_identities_survive_the_execution_handoff(
+    monkeypatch: pytest.MonkeyPatch, extended_identities: bool
+) -> None:
+    """Replay the long-identity grant that stranded a run after slot assignment."""
+
+    fixture = (
+        Path(__file__).resolve().parents[4]
+        / "integration/omnigent/fixtures/remediation_lease_grant.json"
+    )
+    lease = json.loads(fixture.read_text())["leases"][0]
+    _configure_workflow_runtime(monkeypatch)
+    owner_id = lease["workflow_id"]
+    step_id = lease["stepExecutionId"]
+    request_id = lease["idempotencyKey"]
+    workflow_id = owner_id.split(":agent:", 1)[0]
+    run_id = step_id[len(workflow_id) + 1:][:36]
+    logical_step_id = step_id[len(workflow_id) + len(run_id) + 2:].removesuffix(
+        ":execution:1"
+    )
+    if extended_identities:
+        owner_id += ":continuation" * 8
+        logical_step_id += ":continuation" * 8
+        step_id = f"{workflow_id}:{run_id}:{logical_step_id}:execution:1"
+        request_id = f"{step_id}:agent_execute"
+    monkeypatch.setattr(
+        agent_run_module.workflow,
+        "info",
+        lambda: SimpleNamespace(
+            namespace="default", workflow_id=owner_id, run_id="run-1",
+            search_attributes={}, parent=None,
+        ),
+    )
+    request = _omnigent_request().model_copy(update={
+        "idempotency_key": request_id,
+        "step_execution": AgentRuntimeStepExecutionLaunch(
+            workflowId=workflow_id, runId=run_id,
+            logicalStepId=logical_step_id,
+            executionOrdinal=1, stepExecutionId=step_id,
+            runtimeContextPolicy="fresh_agent_run",
+        ),
+    })
+    run = _ExecutingRun([{"summary": "completed"}])
+    _capture_release_signals(monkeypatch, run)
+    await run._execute_omnigent_with_admitted_capacity(
+        act_name="integration.omnigent.execute",
+        request=request, admission=_admission(), parent_info=None,
+        stc_seconds=600, admit_capacity_before_activity=True,
+        execution_plan_admission=True,
+    )
+
+    assert len(request_id) > 255
+    assert len(run.executions) == 1
+    # Deserialize the same payload shape the Activity receives from Temporal.
+    received = AgentExecutionRequest.model_validate_json(
+        run.executions[0].model_dump_json(by_alias=True)
+    )
+    capacity = received.admitted_provider_capacity
+    assert capacity.lease_owner_id == owner_id
+    assert capacity.agent_run_workflow_id == owner_id
+    assert capacity.step_execution_id == step_id
+    assert capacity.idempotency_key == received.idempotency_key == request_id
+    grant = next(p for name, p in run.signals if name == "request_slot")
+    assert grant["lease_metadata"]["idempotencyKey"] == request_id
+    assert grant["lease_metadata"]["stepExecutionId"] == step_id
+    release = next(p for name, p in run.signals if name == "release_slot")
+    assert release["requester_workflow_id"] == owner_id
 
 
 async def _run_execution(run: _ExecutingRun) -> tuple[Any, Any]:
