@@ -5,8 +5,8 @@ Source issue: MoonLadderStudios/MoonMind#3709 (acceptance criterion 2).
 
 from __future__ import annotations
 
-from moonmind.omnigent.faultlab.provider import ProgrammableFakeProvider, payload_digest
-from moonmind.omnigent.faultlab.scenario import (
+from tools.omnigent_faultlab.provider import ProgrammableFakeProvider, payload_digest
+from tools.omnigent_faultlab.scenario import (
     LogicalOperation,
     ResponseBehavior,
     SideEffect,

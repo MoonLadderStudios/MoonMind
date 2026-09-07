@@ -13,7 +13,7 @@ retry, Continue-As-New, and replay machinery actually run:
 
 * **at-most-once submission** — a lost turn response drives Temporal to retry the
   activity, and the independent provider ledger (the same
-  :class:`~moonmind.omnigent.faultlab.SideEffectLedger` the pure-domain suite
+  :class:`~tools.omnigent_faultlab.SideEffectLedger` the pure-domain suite
   uses) records at most one accepted provider turn for the turn identity despite
   the retries;
 * **delayed activity result** — the workflow still converges when the activity
@@ -43,14 +43,14 @@ from temporalio.testing import WorkflowEnvironment
 from temporalio.worker import Replayer, UnsandboxedWorkflowRunner, Worker
 
 from moonmind.config.settings import settings
-from moonmind.omnigent.faultlab import (
+from tools.omnigent_faultlab import (
     SideEffectLedger,
     generate_plan,
     payload_digest,
     project_run,
     run_plan,
 )
-from moonmind.omnigent.faultlab.scenario import LogicalOperation, SideEffect
+from tools.omnigent_faultlab.scenario import LogicalOperation, SideEffect
 from moonmind.schemas.managed_session_models import CodexManagedSessionWorkflowInput
 from moonmind.workflows.temporal.workflows import agent_session as agent_session_module
 from moonmind.workflows.temporal.workflows.agent_session import (

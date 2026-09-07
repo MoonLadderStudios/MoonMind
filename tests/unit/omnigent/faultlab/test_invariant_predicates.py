@@ -14,14 +14,14 @@ reintroduced the bug would fail rather than silently converge.
 
 from __future__ import annotations
 
-from moonmind.omnigent.faultlab import (
+from tools.omnigent_faultlab import (
     JournalEntry,
     ObservationFault,
     run_plan,
 )
-from moonmind.omnigent.faultlab.corpus import INITIAL_CORPUS
-from moonmind.omnigent.faultlab.harness import FaultPlan
-from moonmind.omnigent.faultlab.invariants import (
+from tools.omnigent_faultlab.corpus import INITIAL_CORPUS
+from tools.omnigent_faultlab.harness import FaultPlan
+from tools.omnigent_faultlab.invariants import (
     cleanup_safety,
     compatibility_safety,
     lease_safety,
