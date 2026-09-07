@@ -2434,14 +2434,14 @@ openai = ">=1.108.1,<3"
 
 [[package]]
 name = "llama-index-readers-confluence"
-version = "0.7.0"
+version = "0.8.0"
 description = "llama-index readers confluence integration"
 optional = false
 python-versions = "<4.0,>=3.10"
 groups = ["main"]
 files = [
-    {file = "llama_index_readers_confluence-0.7.0-py3-none-any.whl", hash = "sha256:4f400bfb2abe65074e19d434763301cd75c219c21b70654a9db8777b5f19969c"},
-    {file = "llama_index_readers_confluence-0.7.0.tar.gz", hash = "sha256:66322693b93ee70ae39fea86939d1880311253181f70340e2ca4bbe22ffb0308"},
+    {file = "llama_index_readers_confluence-0.8.0-py3-none-any.whl", hash = "sha256:6caa3ad25442e36819c8bb097e0534703a4402ec46eb7bbfbad54cf47204ac56"},
+    {file = "llama_index_readers_confluence-0.8.0.tar.gz", hash = "sha256:feb4cca7500438c1bf93c46ab962d59c8f5b4407aafab317cec95c56b86ca017"},
 ]
 
 [package.dependencies]
@@ -6540,4 +6540,4 @@ tests = ["pytest", "pytest-asyncio", "pytest-mock", "pytest-timeout", "pytest-xd
 [metadata]
 lock-version = "2.1"
 python-versions = ">=3.10,<3.14"
-content-hash = "51075b737b21a94e4d7ae54fd7554bef61223ff53f03ca572fa1ca2e5788b3f7"
+content-hash = "35283bafc431c00746149c3fc1ed899bea25ff69cc4d8b33d0b646c601977f0b"
