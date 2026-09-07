@@ -2,8 +2,8 @@
 
 Source issue: MoonLadderStudios/MoonMind#3709.
 
-The :class:`~moonmind.omnigent.faultlab.harness.FaultPlan` is the executable
-form; the :class:`~moonmind.omnigent.faultlab.scenario.FaultScenario` is the
+The :class:`~tools.omnigent_faultlab.harness.FaultPlan` is the executable
+form; the :class:`~tools.omnigent_faultlab.scenario.FaultScenario` is the
 declarative, versioned, storable form. Minimized failing plans are serialized to
 scenarios for the corpus, and stored scenarios are converted back to plans to be
 replayed. The mapping is deterministic and total for generated faults, so a

@@ -19,15 +19,15 @@ from pathlib import Path
 
 import pytest
 
-from moonmind.omnigent.faultlab import generate_plan, is_deterministic, run_plan
-from moonmind.omnigent.faultlab.corpus import (
+from tools.omnigent_faultlab import generate_plan, is_deterministic, run_plan
+from tools.omnigent_faultlab.corpus import (
     INITIAL_CORPUS,
     load_corpus_dir,
     replay_scenario,
     scenario_violations,
 )
-from moonmind.omnigent.faultlab.diagnostics import build_diagnostic_bundle
-from moonmind.omnigent.faultlab.invariants import violations
+from tools.omnigent_faultlab.diagnostics import build_diagnostic_bundle
+from tools.omnigent_faultlab.invariants import violations
 
 pytestmark = [
     pytest.mark.integration,
@@ -39,9 +39,8 @@ FIXED_SEED_CORPUS = range(128)
 
 _PACKAGED_SCENARIOS = (
     Path(__file__).parents[3]
-    / "moonmind"
-    / "omnigent"
-    / "faultlab"
+    / "tools"
+    / "omnigent_faultlab"
     / "scenarios"
 )
 

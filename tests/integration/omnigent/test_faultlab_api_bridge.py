@@ -41,7 +41,7 @@ from api_service.api.routers.omnigent_bridge import (
     router,
 )
 from api_service.auth_providers import get_current_user
-from moonmind.omnigent.faultlab.scenario import (
+from tools.omnigent_faultlab.scenario import (
     EmittedEvent,
     FaultScenario,
     ScenarioStep,

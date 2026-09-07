@@ -12,8 +12,8 @@ import inspect
 
 import pytest
 
-from moonmind.omnigent.faultlab import reference_model
-from moonmind.omnigent.faultlab.reference_model import (
+from tools.omnigent_faultlab import reference_model
+from tools.omnigent_faultlab.reference_model import (
     IllegalTransitionError,
     ReferenceCommand,
     ReferenceModel,
