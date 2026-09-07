@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import copy
 import hashlib
 import json
 import re
@@ -9,6 +10,7 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from typing import Any, Literal
+from urllib.parse import quote
 
 GOVERNANCE_REPORT_CONTRACT_VERSION = 1
 GOVERNANCE_REPORT_KIND = "run_governance_report"
@@ -60,6 +62,7 @@ MAX_DIGEST_ENTRIES = 64
 MAX_STRING_CHARS = 1024
 MAX_REF_CHARS = 512
 MAX_EVIDENCE_AGE = timedelta(hours=24 * 30)
+MAX_CLOCK_SKEW = timedelta(minutes=5)
 MAX_RECONCILE_ITEMS = 100
 
 _SECRET_KEY_PATTERN = re.compile(
@@ -375,6 +378,12 @@ def _build_cleanup(raw: object) -> dict[str, Any]:
     if raw.get("detail_ref") is not None:
         detail_ref = _artifact_ref(raw.get("detail_ref"), path="cleanup.detail_ref")
     provenance = _provenance(raw.get("provenance", "observed"), field_name="cleanup.provenance")
+    if disposition == "succeeded" and provenance != "observed":
+        # Explicitly missing cleanup evidence must never be reported as a
+        # success; only authoritative observed evidence may claim succeeded.
+        raise GovernanceReportError(
+            "MALFORMED_SOURCE", "cleanup.disposition succeeded requires observed provenance"
+        )
     return {"provenance": provenance, "disposition": disposition, "detail_ref": detail_ref}
 
 
@@ -514,7 +523,12 @@ def build_governance_report(evidence: Mapping[str, Any]) -> dict[str, Any]:
             "run_id": run_id,
             "attempt": attempt,
             "terminal_outcome": terminal_outcome,
+            "created_at": created_at,
             "evidence_cutoff": evidence_cutoff,
+            "completeness": completeness,
+            "owner": owner,
+            "annotation": annotation,
+            "supersedes": supersedes,
             "policy": policy,
             "profile": profile,
             "image": image,
@@ -689,22 +703,22 @@ class GovernanceReportStore:
             raise GovernanceReportError("MALFORMED_SOURCE", "report_id and input_digest are required")
         existing_id = self._by_input.get(input_digest)
         if existing_id is not None and existing_id in self._reports:
-            return self._reports[existing_id], True
+            return copy.deepcopy(self._reports[existing_id]), True
         if report_id in self._reports:
             # Immutable write contract: never overwrite an existing report id.
             if self._reports[report_id] != dict(report):
                 raise GovernanceReportError("REPORT_ID_COLLISION", "report_id already stored with different content")
-            return self._reports[report_id], True
-        stored = dict(report)
+            return copy.deepcopy(self._reports[report_id]), True
+        stored = copy.deepcopy(dict(report))
         self._reports[report_id] = stored
         self._by_input[input_digest] = report_id
-        return stored, False
+        return copy.deepcopy(stored), False
 
     def get(self, report_id: str) -> dict[str, Any] | None:
         """Return a stored report copy or None."""
 
         stored = self._reports.get(str(report_id or ""))
-        return dict(stored) if stored is not None else None
+        return copy.deepcopy(stored) if stored is not None else None
 
     def supersede(self, old_report_id: str, new_evidence: Mapping[str, Any]) -> dict[str, Any]:
         """Write a new immutable version that explicitly supersedes the old report."""
@@ -714,9 +728,12 @@ class GovernanceReportStore:
             raise GovernanceReportError("REPORT_NOT_FOUND", "superseded report is unknown")
         merged = dict(new_evidence)
         merged["supersedes"] = old["report_id"]
-        # Preserve logical-run/attempt continuity across continuation and recovery.
+        # Preserve logical-run/attempt continuity across continuation and recovery:
+        # the new version always belongs to the superseded run, so identity
+        # fields supplied with the late evidence never reassign the version to
+        # another run and corrupt the immutable audit chain.
         for key in ("logical_workflow_id", "run_id", "attempt"):
-            merged.setdefault(key, old[key])
+            merged[key] = old[key]
         new_report = build_governance_report(merged)
         stored, reused = self.put(new_report)
         if reused:
@@ -812,11 +829,18 @@ def reconcile_missing_reports(
         outcome = str(execution.get("terminal_outcome") or "").strip()
         if outcome not in TERMINAL_OUTCOMES:
             continue
+        try:
+            attempt = int(execution.get("attempt", 0) or 0)
+        except (TypeError, ValueError):
+            # One malformed row must not abort the whole batch or block later
+            # valid executions from being repaired; it stays eligible for a
+            # future reconciler pass once corrected.
+            continue
         items.append(
             {
                 "run_id": run_id,
                 "logical_workflow_id": str(execution.get("logical_workflow_id") or "").strip() or "unknown-workflow",
-                "attempt": int(execution.get("attempt", 0) or 0),
+                "attempt": attempt,
                 "terminal_outcome": outcome,
                 "reason": "missing_report_after_terminal_outcome",
             }
@@ -851,6 +875,10 @@ def authorize_governance_report_access(
         cutoff = _parse_time(report.get("evidence_cutoff"), field_name="evidence_cutoff")
     except GovernanceReportError as exc:
         return GovernanceAccessResult(False, exc.code, str(exc))
+    if cutoff - current > MAX_CLOCK_SKEW:
+        # A future cutoff would otherwise authorize with a negative age and
+        # bypass retention until that date; invalid evidence fails closed.
+        return GovernanceAccessResult(False, "EVIDENCE_EXPIRED", "evidence cutoff is in the future")
     if current - cutoff > MAX_EVIDENCE_AGE:
         return GovernanceAccessResult(False, "EVIDENCE_EXPIRED", "evidence cutoff is beyond retention")
     stored_digests = report.get("source_artifact_digests") if isinstance(report.get("source_artifact_digests"), Mapping) else {}
@@ -879,7 +907,11 @@ def build_workflow_detail_governance_link(
     """Build the Workflow Detail governance link with safe, authorized download."""
 
     workflow_id = str(logical_workflow_id or "").strip() or "unknown-workflow"
-    safe_id = workflow_id.replace("/", "_")
+    # Path-segment encoding matching the TypeScript helper's
+    # encodeURIComponent: the safe set is exactly the characters
+    # encodeURIComponent leaves unescaped, so both hosts build the same href
+    # and distinct ids (for example "team/run" vs "team_run") never alias.
+    safe_id = quote(workflow_id, safe="-_.!~*'()")
     if report is not None:
         status = str(report.get("status") or "partial").strip()
         if status not in ("ready", "partial", "pending", "failed"):

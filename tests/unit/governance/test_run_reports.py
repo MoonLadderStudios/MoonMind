@@ -161,9 +161,12 @@ def test_canaries_absent_from_output_rendering_diagnostics_and_logs() -> None:
 
 def test_access_expiry_digest_and_malformed_sources_have_safe_outcomes() -> None:
     report = build_governance_report(_evidence())
-    assert authorize_governance_report_access(report, requester_owner="owner-1").allowed is True
+    # Frozen clock inside the 30-day retention window: the fixture cutoff is
+    # fixed, so the live clock must not decide this assertion.
+    now = datetime(2026, 9, 15, tzinfo=UTC)
+    assert authorize_governance_report_access(report, requester_owner="owner-1", now=now).allowed is True
 
-    wrong_owner = authorize_governance_report_access(report, requester_owner="owner-2")
+    wrong_owner = authorize_governance_report_access(report, requester_owner="owner-2", now=now)
     assert (wrong_owner.allowed, wrong_owner.code) == (False, "WRONG_OWNER")
 
     expired = authorize_governance_report_access(
@@ -172,7 +175,7 @@ def test_access_expiry_digest_and_malformed_sources_have_safe_outcomes() -> None
     assert (expired.allowed, expired.code) == (False, "EVIDENCE_EXPIRED")
 
     mismatch = authorize_governance_report_access(
-        report, requester_owner="owner-1", expected_digests={"primary": "b" * 32}
+        report, requester_owner="owner-1", now=now, expected_digests={"primary": "b" * 32}
     )
     assert (mismatch.allowed, mismatch.code) == (False, "DIGEST_MISMATCH")
 
@@ -252,3 +255,94 @@ def test_evidence_ttl_boundary() -> None:
     outside = cutoff + timedelta(hours=24 * 30) + timedelta(seconds=1)
     assert authorize_governance_report_access(report, requester_owner="owner-1", now=inside).code == "OK"
     assert authorize_governance_report_access(report, requester_owner="owner-1", now=outside).code == "EVIDENCE_EXPIRED"
+
+
+def test_input_digest_binds_every_report_affecting_field() -> None:
+    base = build_governance_report(_evidence())
+    for field, value in (
+        ("annotation", "operator note"),
+        ("owner", "owner-2"),
+        ("completeness", "partial"),
+        ("created_at", "2026-09-01T11:00:00Z"),
+        ("supersedes", "govrep_" + "c" * 32),
+    ):
+        other = build_governance_report(_evidence(**{field: value}))
+        assert other["report_id"] != base["report_id"], field
+        assert other["input_digest"] != base["input_digest"], field
+
+
+def test_store_returns_deep_immutable_copies() -> None:
+    store = GovernanceReportStore()
+    final = finalize_governance_report(_evidence(), store=store)
+    assert final.report is not None
+    report_id = final.report["report_id"]
+    final.report["policy"]["ref"] = "mutated"
+    stored = store.get(report_id)
+    assert stored is not None
+    assert stored["policy"]["ref"] == "policy:v3"
+    stored["policy"]["ref"] = "mutated-again"
+    fresh = store.get(report_id)
+    assert fresh is not None
+    assert fresh["policy"]["ref"] == "policy:v3"
+
+
+def test_supersede_keeps_the_superseded_run_identity() -> None:
+    store = GovernanceReportStore()
+    first = finalize_governance_report(_evidence(), store=store)
+    assert first.report is not None
+    foreign = _evidence(
+        logical_workflow_id="wf-other",
+        run_id="run-other",
+        attempt=9,
+        evidence_cutoff="2026-09-01T11:00:00Z",
+    )
+    superseded = store.supersede(first.report["report_id"], foreign)
+    assert superseded["supersedes"] == first.report["report_id"]
+    assert superseded["logical_workflow_id"] == "wf-3930"
+    assert superseded["run_id"] == "run-001"
+    assert superseded["attempt"] == 0
+
+
+def test_reconciler_skips_malformed_attempt_rows() -> None:
+    executions = [
+        {"logical_workflow_id": "wf-1", "run_id": "run-bad", "attempt": "not-an-int", "terminal_outcome": "succeeded"},
+        {"logical_workflow_id": "wf-1", "run_id": "run-good", "attempt": 2, "terminal_outcome": "failed"},
+    ]
+    items = reconcile_missing_reports(executions)
+    assert [item["run_id"] for item in items] == ["run-good"]
+    assert items[0]["attempt"] == 2
+
+
+def test_governance_link_encodes_workflow_id_without_aliasing() -> None:
+    report = build_governance_report(_evidence())
+    link = build_workflow_detail_governance_link(logical_workflow_id="team/run?x#y", report=report)
+    assert "team/run" not in link.href.split("/workflows/", 1)[1].split("?", 1)[0]
+    assert "team%2Frun%3Fx%23y" in link.href
+    assert link.href.startswith("/workflows/team%2Frun%3Fx%23y/evidence?report=")
+
+    slash = build_workflow_detail_governance_link(logical_workflow_id="team/run", report=report)
+    underscore = build_workflow_detail_governance_link(logical_workflow_id="team_run", report=report)
+    assert slash.href != underscore.href
+
+
+def test_cleanup_succeeded_requires_observed_evidence() -> None:
+    with pytest.raises(GovernanceReportError, match="observed"):
+        build_governance_report(_evidence(cleanup={"provenance": "unavailable", "disposition": "succeeded"}))
+    assert (
+        build_governance_report(_evidence(cleanup={"provenance": "observed", "disposition": "succeeded"}))["status"]
+        == "ready"
+    )
+
+
+def test_future_evidence_cutoff_fails_closed() -> None:
+    report = build_governance_report(_evidence(evidence_cutoff="2026-09-01T10:05:00Z"))
+    future_now = datetime(2026, 8, 1, 10, 0, tzinfo=UTC)
+    result = authorize_governance_report_access(report, requester_owner="owner-1", now=future_now)
+    assert (result.allowed, result.code) == (False, "EVIDENCE_EXPIRED")
+
+
+def test_unresolved_cleanup_is_partial_not_ready() -> None:
+    report = build_governance_report(_evidence(cleanup=None))
+    assert report["completeness"] == "complete"
+    assert report["status"] == "partial"
+    assert report["cleanup"] == {"provenance": "pending", "disposition": "unknown", "detail_ref": None}
