@@ -7967,7 +7967,6 @@ async def test_publication_restores_missing_authored_base_ref(
     assert _git(repo, "ls-remote", "--heads", "origin") == refs_before
 
 
-@pytest.mark.integration_ci
 @pytest.mark.parametrize("authored_base", [None, "main"])
 @pytest.mark.parametrize("remote_changed", [False, True])
 @pytest.mark.parametrize(
