@@ -351,6 +351,8 @@ Trust is bound to implementation identity. A plugin name or canonical harness id
 
 Catalog snapshots are immutable. New plans retain the Agent Profile's pinned catalog as authority and require a current observation that attests the same endpoint, Omnigent build, and harness implementation. The current observation supplies freshness only; it never replaces the pinned authority. Historical plans retain their original snapshot ref.
 
+Recurring schedule creation and refresh use the same durable catalog authority as immediate execution. Catalog reads borrow the admission transaction when it supplies an existing database session; the planner does not own that transaction's commit or close. Missing catalog authority fails admission before a schedule or plan can publish an unresolvable reference.
+
 An endpoint outage may retain the last known catalog for diagnostics. It does not silently make stale harnesses launchable.
 
 ## 8. Exact-host harness attestation

@@ -539,10 +539,17 @@ async def test_product_boundary_uses_exact_arm64_architecture_for_support_identi
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("catalog_access", ["factory", "session", "schedule_refresh"])
 async def test_product_boundary_uses_profile_catalog_build_identity(
     monkeypatch,
+    tmp_path,
+    catalog_access,
 ) -> None:
-    """Fresh observation attests old profile authority without replacing it."""
+    """Replay the catalog handoff that failed in mm:9b176122 at 2026-09-07T06:00Z.
+
+    A schedule passes session_factory=None and db_session=session. Its plan
+    must keep readable profile authority through refresh and worker dispatch.
+    """
 
     build_identity = "sha256:" + "b" * 64
     implementation_digest = "sha256:" + "c" * 64
@@ -593,18 +600,31 @@ async def test_product_boundary_uses_profile_catalog_build_identity(
         trustState=TrustState.core_trusted,
     )
 
-    async def load_authority(**_kwargs):
-        return {
-            "hostClassRef": "omnigent-opencode@1",
-            "implementationDigest": implementation_digest,
-            "materializerRef": "opencode-auth-json@1",
-            "authModel": "own-auth",
-            "integrationMode": "native-server",
-            "_catalogSnapshot": authority_catalog,
-            "_freshnessCatalogSnapshot": freshness_catalog,
-            "_freshnessTrustRecord": freshness_trust,
-            "_harnessRecord": harness,
-        }
+    from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
+
+    from api_service.db.models import Base, ManagedAgentProviderProfile
+    from moonmind.omnigent.harness_platform.catalog_service import (
+        DbHarnessCatalogRepository,
+        HarnessCatalogSyncResult,
+    )
+    from moonmind.omnigent.harness_platform.planning_service import (
+        OmnigentPlannedHostResolver,
+    )
+    from moonmind.omnigent.harness_platform.stores import SessionExecutionPlanStore
+
+    engine = create_async_engine(f"sqlite+aiosqlite:///{tmp_path}/admission.db")
+    async with engine.begin() as connection:
+        await connection.run_sync(Base.metadata.create_all)
+    factory = async_sessionmaker(engine, expire_on_commit=False)
+    catalogs = DbHarnessCatalogRepository(factory)
+    for observation in (authority_catalog, freshness_catalog):
+        await catalogs.persist(
+            HarnessCatalogSyncResult(
+                snapshot=observation,
+                trust_records=(freshness_trust,),
+                diagnostics={},
+            )
+        )
 
     async def resolve_policy(**_kwargs):
         return _policy_snapshot(
@@ -612,7 +632,6 @@ async def test_product_boundary_uses_profile_catalog_build_identity(
             policy="opencode-on-demand@1",
         )
 
-    monkeypatch.setattr(service, "_try_load_real_harness_config", load_authority)
     monkeypatch.setattr(service, "_resolve_runtime_policy_snapshot", resolve_policy)
     monkeypatch.setenv(
         "OMNIGENT_OPENCODE_HOST_IMAGE_REF",
@@ -627,16 +646,26 @@ async def test_product_boundary_uses_profile_catalog_build_identity(
         ),
     )
 
+    artifacts = _ArtifactService()
+    snapshot = _snapshot(
+        harness="opencode-native",
+        policy="opencode-on-demand@1",
+        provider_id="provider-opencode-native",
+    )
+    snapshot["document"]["harness"] = {
+        "id": harness.id,
+        "catalogRef": authority_catalog.catalogRef,
+        "implementationRef": harness.implementation.implementation_ref(),
+    }
+    db_session = factory()
+    transaction = await db_session.begin()
     result = await service.compile_and_persist_execution_plan(
-        session_factory=object(),
-        artifact_service=_ArtifactService(),
+        session_factory=factory if catalog_access == "factory" else None,
+        db_session=db_session if catalog_access != "factory" else None,
+        artifact_service=artifacts,
         principal="user-1",
         workflow_id="mm:test-profile-catalog-build",
-        agent_profile_snapshot=_snapshot(
-            harness="opencode-native",
-            policy="opencode-on-demand@1",
-            provider_id="provider-opencode-native",
-        ),
+        agent_profile_snapshot=snapshot,
         provider_profile=SimpleNamespace(
             profile_id="provider-opencode-native",
             runtime_id="opencode",
@@ -653,16 +682,72 @@ async def test_product_boundary_uses_profile_catalog_build_identity(
         authored_request_digest="sha256:" + "1" * 64,
         task_input_snapshot_ref="art_request_1",
         task_input_snapshot_digest="sha256:" + "1" * 64,
-        execution_plan_store=_PlanStore(object()),
+        execution_plan_store=SessionExecutionPlanStore(db_session),
     )
 
-    support = result.envelope.payload.supportIdentity
+    envelope = result.envelope
+    if catalog_access == "schedule_refresh":
+        from uuid import uuid4
+
+        from api_service.services.recurring_workflows_service import (
+            RecurringWorkflowsService,
+        )
+
+        db_session.add(
+            ManagedAgentProviderProfile(
+                profile_id="provider-opencode-native",
+                runtime_id="opencode",
+                provider_id="opencode-go",
+            )
+        )
+        await db_session.flush()
+        parameters = {
+            "targetRuntime": "omnigent",
+            "model": "example/model",
+            "publishMode": "none",
+            "workflow": {"instructions": "Read the repository."},
+            "omnigentExecutionPlan": result.binding.model_dump(
+                mode="json", by_alias=True,
+            ),
+        }
+        target = {"initialParameters": parameters, "agentProfileSnapshot": snapshot}
+        definition = SimpleNamespace(
+            id=uuid4(), owner_user_id=None, version=1, target=target,
+        )
+        schedules = RecurringWorkflowsService(db_session, artifact_service=artifacts)
+        assert await schedules._refresh_omnigent_execution_plan_target(
+            definition,
+            target=target,
+            initial_parameters=parameters,
+        )
+        envelope = await SessionExecutionPlanStore(db_session).load(
+            definition.target["initialParameters"]["omnigentExecutionPlan"]["planRef"]
+        )
+
+    assert transaction.is_active
+    assert db_session.get_transaction() is transaction
+    await db_session.commit()
+    await db_session.close()
+
+    class Gateway:
+        async def read_bytes(self, ref):
+            return artifacts.payloads[ref.removeprefix("artifact:")]
+
+    # The next worker must be able to resolve the admitted plan from durable
+    # storage, including plans refreshed with the schedule's session-only call.
+    host_class, policy = await OmnigentPlannedHostResolver(
+        catalog_repository=DbHarnessCatalogRepository(factory),
+        artifact_gateway=Gateway(),
+    )(envelope)
+    assert host_class.ref == envelope.payload.hostClassRef
+    assert policy.ref == envelope.payload.launchPolicyRef
+
+    support = envelope.payload.supportIdentity
     assert support.omnigentServerBuildRef == build_identity
     assert support.omnigentHostBuildRef == build_identity
-    assert (
-        result.envelope.payload.harnessCatalogRef == authority_catalog.catalogRef
-    )
-    assert result.envelope.payload.harnessCatalogRef != freshness_catalog.catalogRef
+    assert envelope.payload.harnessCatalogRef == authority_catalog.catalogRef
+    assert envelope.payload.harnessCatalogRef != freshness_catalog.catalogRef
+    await engine.dispose()
 
 
 @pytest.mark.asyncio
@@ -767,6 +852,61 @@ async def test_real_harness_config_fails_closed_when_freshness_read_errors(
         exc_info.value.code
         == HarnessPlatformFailure.OMNIGENT_HARNESS_CATALOG_UNAVAILABLE
     )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("access", ["factory", "session"])
+@pytest.mark.parametrize("failure", ["missing", "database_error"])
+async def test_catalog_authority_failure_cannot_select_fixture_or_latest(
+    monkeypatch,
+    access,
+    failure,
+) -> None:
+    from contextlib import asynccontextmanager
+    from unittest.mock import AsyncMock
+
+    from moonmind.omnigent.harness_platform import catalog_service
+
+    session = SimpleNamespace()
+
+    @asynccontextmanager
+    async def factory():
+        yield session
+
+    latest = AsyncMock()
+
+    class Repository:
+        def __init__(self, session_factory):
+            self.factory = session_factory
+
+        async def load(self, _catalog_ref):
+            async with self.factory() as borrowed:
+                assert borrowed is session
+                if failure == "database_error":
+                    raise RuntimeError("database unavailable")
+                return None
+
+    Repository.latest = latest
+    monkeypatch.setattr(catalog_service, "DbHarnessCatalogRepository", Repository)
+    with pytest.raises(HarnessPlatformError) as error:
+        await service._try_load_real_harness_config(
+            harness_id="opencode-native",
+            agent_profile_snapshot={
+                "document": {
+                    "harness": {
+                        "id": "opencode-native",
+                        "catalogRef": "omnigent-harness-catalog:sha256:" + "1" * 64,
+                    },
+                },
+            },
+            session_factory=factory if access == "factory" else None,
+            db_session=session if access == "session" else None,
+        )
+    assert (
+        error.value.code
+        == HarnessPlatformFailure.OMNIGENT_HARNESS_CATALOG_UNAVAILABLE
+    )
+    latest.assert_not_awaited()
 
 
 async def _compile_opencode_plan(
