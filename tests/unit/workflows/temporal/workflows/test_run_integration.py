@@ -25,6 +25,7 @@ from moonmind.workflows.temporal.workflows.run import (
     RUN_HEADLESS_REMEDIATION_VERIFIED_WORKSPACE_PATCH,
     RUN_HEADLESS_REMEDIATION_EXECUTION_PATCH,
     RUN_ISSUE_IMPLEMENT_PR_HANDOFF_AUTHORITY_PATCH,
+    RUN_TRUSTED_GITHUB_ISSUE_IDENTITY_PATCH,
     RUN_LATE_REMEDIATION_HEAD_ATTEMPT_ORDINAL_PATCH,
     RUN_MANAGED_SESSION_CHECKPOINT_LOCATOR_PATCH,
     RUN_MOONSPEC_GATE_PREVIOUS_OUTPUTS_HANDOFF_PATCH,
@@ -6703,6 +6704,59 @@ async def test_issue_implement_status_handoff_does_not_create_pr_for_fully_imple
 
     assert url is None
     execute_activity.assert_not_awaited()
+
+
+@pytest.mark.parametrize("patch_enabled", [False, True])
+def test_search_issue_identity_preserves_historical_publication_payloads(
+    mock_run_workflow, monkeypatch, patch_enabled
+):
+    mock_run_workflow._record_trusted_issue_context(
+        {
+            "trustedSource": "moonmind.github.get_issue",
+            "issue": {"repository": "org/repo", "number": 3963},
+        }
+    )
+    monkeypatch.setattr(
+        run_workflow_module.workflow,
+        "patched",
+        lambda patch_id: patch_enabled
+        and patch_id == RUN_TRUSTED_GITHUB_ISSUE_IDENTITY_PATCH,
+    )
+    assert mock_run_workflow._github_issue_ref_from_parameters({}) == (
+        "org/repo#3963" if patch_enabled else None
+    )
+    assert mock_run_workflow._canonical_github_issue_from_parameters({}) == (
+        {"repository": "org/repo", "issueNumber": 3963} if patch_enabled else None
+    )
+    # Explicit issue input retains the same identity on both history paths.
+    explicit = {
+        "workflow": {
+            "inputs": {
+                "github_issue": {"repository": "org/repo", "number": 123},
+            }
+        }
+    }
+    assert (
+        mock_run_workflow._github_issue_ref_from_parameters(explicit) == "org/repo#123"
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("verdict", ["", "UNKNOWN", "BLOCKED", "NEW_PROVIDER_STATUS"])
+async def test_issue_handoff_does_not_infer_publication_from_unknown_assessment(
+    mock_run_workflow, monkeypatch, verdict
+):
+    mock_run_workflow._assessment_context = {"assessmentVerdict": verdict}
+    create_pr = AsyncMock()
+    monkeypatch.setattr(run_workflow_module.workflow, "execute_activity", create_pr)
+    assert (
+        await mock_run_workflow._ensure_issue_implement_pr_before_status(
+            node={"annotations": {"issueImplementRole": "code-review-handoff"}},
+            parameters={"publishMode": "pr"},
+        )
+        is None
+    )
+    create_pr.assert_not_awaited()
 
 
 def test_partial_issue_implementation_no_commits_cannot_satisfy_pr_handoff(

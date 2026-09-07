@@ -258,7 +258,9 @@ steps:
 
     {{ inputs.constraints }}
 
-    Following the GitHub Issue Implement preset (github-issue-implement) work-PR stage for the resolved issue: if the verdict is FULLY_IMPLEMENTED, make no code changes and ensure artifacts/github-issue-implement-pr.json explains the no-change outcome. If BLOCKED, stop without changes. Otherwise {% if inputs.run_verify %}only proceed when the latest controlling post-remediation moonspec-verify verdict in artifacts/github-issue-implement-verify.json is FULLY_IMPLEMENTED. If the verifier reported ADDITIONAL_WORK_NEEDED, NO_DETERMINATION, BLOCKED, or FAILED_UNRECOVERABLE, or if 6 remediation attempts have been exhausted without FULLY_IMPLEMENTED, stop without creating a pull request.{% else %}confirm implementation is complete and the focused tests required by the issue have passed; verification was disabled for this run so do not require artifacts/github-issue-implement-verify.json.{% endif %}
+    The initial assessment verdict and the later verification verdict have different roles. Skip PR creation only when the initial assessment in artifacts/github-issue-implement-assessment.json was FULLY_IMPLEMENTED and this run produced no repository changes. If the initial assessment was BLOCKED, stop without changes. If it was NOT_IMPLEMENTED or PARTIALLY_IMPLEMENTED, publish the implementation produced by this run even when the restored work branch is clean and its commits are already pushed. A later FULLY_IMPLEMENTED verification approves that implementation for publication; it does not mean the work was already on the base branch and does not authorize a no-change outcome.
+
+    {% if inputs.run_verify %}Only proceed when the latest controlling post-remediation moonspec-verify verdict in artifacts/github-issue-implement-verify.json is FULLY_IMPLEMENTED. If the verifier reported ADDITIONAL_WORK_NEEDED, NO_DETERMINATION, BLOCKED, or FAILED_UNRECOVERABLE, or if 6 remediation attempts have been exhausted without FULLY_IMPLEMENTED, stop without creating a pull request.{% else %}Confirm implementation is complete and the focused tests required by the issue have passed; verification was disabled for this run so do not require artifacts/github-issue-implement-verify.json.{% endif %}
 
     Commit intentional changes only (no raw credentials), push the non-protected work branch, and create a non-draft pull request. The pull request title must reference the resolved issue. The pull request body must include a summary, the verification outcome, tests run, remaining risks, AND a standalone `Closes <owner>/<repository>#<number>` line for the resolved issue (for example `Closes MoonLadderStudios/MoonMind#123`) so GitHub closes the issue on merge. A mere mention of the issue without the closing keyword is not sufficient. Propagate the resolved canonical issue identity (repository, number, url) into the PR artifact and publication handoffs. Record the confirmed pull_request_url in the step result and in artifacts/github-issue-implement-pr.json with keys issue_provider, issue_ref, repository, issue_number, and pull_request_url.
   skill:
@@ -273,6 +275,8 @@ steps:
     - gh
 - title: Finalize resolved GitHub issue status
   type: tool
+  annotations:
+    issueImplementRole: code-review-handoff
   instructions: |-
     Read the resolved issue from MoonMind trusted previous step context and artifacts/github-issue-implement-assessment.json (or the recorded verdict from the assess step) before changing GitHub.
 
