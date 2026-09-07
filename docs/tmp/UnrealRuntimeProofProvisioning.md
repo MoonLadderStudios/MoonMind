@@ -16,9 +16,12 @@ The pull never succeeded because:
 
 1. The skill defaulted to the **EULA-gated** `ghcr.io/epicgames/unreal-engine:dev-5.7`,
    pullable only with an Epic-linked GHCR token (the repo's `UNREAL_ENGINE_PAT`).
-2. MoonMind's session GHCR auth (`resolve_ghcr_pull_credentials_for_launch`) reads
-   `GHCR_PULL_USER` / `GHCR_PULL_TOKEN`; neither was configured, so pulls were
-   anonymous → `unauthorized` (and, on a sidecar without working egress, a hang).
+2. MoonMind's legacy session GHCR auth (retired per #4012;
+    `resolve_ghcr_pull_credentials_for_launch` removed, registry pull auth now
+    resolves exclusively from an explicitly selected `registryCredentialRef`)
+    previously read `GHCR_PULL_USER` / `GHCR_PULL_TOKEN`; neither was
+    configured, so pulls were anonymous → `unauthorized` (and, on a sidecar
+    without working egress, a hang).
 3. The docker-sidecar preflight that can `docker manifest inspect` and fail fast was
    inert because no pinned UE image ref was configured.
 
