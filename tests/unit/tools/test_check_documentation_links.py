@@ -151,3 +151,75 @@ def test_explicit_anchor_tag_satisfies_check(tmp_path: Path) -> None:
 
 def test_checker_is_advisory_only(tmp_path: Path) -> None:
     assert mod.main(["--scope", "all"]) == 0
+
+
+def test_link_destination_with_title_passes(tmp_path: Path) -> None:
+    _write(tmp_path, "docs/Target.md", "# Target\n")
+    docs = [_doc("docs/Index.md", '# I\n\nSee [x](./Target.md "A title").\n')]
+    findings, _ = mod.run_checks(docs, root=tmp_path)
+    assert findings == []
+
+
+def test_link_destination_with_balanced_parens_passes(tmp_path: Path) -> None:
+    _write(tmp_path, "docs/a(b)/c.md", "# C\n")
+    docs = [_doc("docs/Index.md", "# I\n\nSee [x](./a(b)/c.md).\n")]
+    findings, _ = mod.run_checks(docs, root=tmp_path)
+    assert findings == []
+
+
+def test_link_resolving_outside_repo_is_rejected(tmp_path: Path) -> None:
+    escape = tmp_path.parent / "outside_repo_escape_probe.txt"
+    escape.write_text("not a repo doc\n", encoding="utf-8")
+    try:
+        docs = [
+            _doc("docs/sub/Index.md", "# I\n\nSee [x](../../../outside_repo_escape_probe.txt).\n")
+        ]
+        findings, _ = mod.run_checks(docs, root=tmp_path)
+    finally:
+        escape.unlink(missing_ok=True)
+    assert _rules(findings) == {"broken-local-link"}
+    assert "outside" in findings[0].message
+
+
+def test_duplicate_heading_anchor_suffixes_pass(tmp_path: Path) -> None:
+    _write(tmp_path, "docs/Target.md", "# Repeat\n\n# Repeat\n")
+    docs = [_doc("docs/Index.md", "# I\n\nSee [x](./Target.md#repeat-1).\n")]
+    findings, _ = mod.run_checks(docs, root=tmp_path)
+    assert findings == []
+
+
+def test_setext_headings_provide_anchors(tmp_path: Path) -> None:
+    _write(tmp_path, "docs/Target.md", "My Heading\n==========\n\nSub Part\n--------\n")
+    docs = [
+        _doc(
+            "docs/Index.md",
+            "# I\n\nSee [a](./Target.md#my-heading) and [b](./Target.md#sub-part).\n",
+        )
+    ]
+    findings, _ = mod.run_checks(docs, root=tmp_path)
+    assert findings == []
+
+
+def test_fenced_explicit_anchor_does_not_satisfy_check(tmp_path: Path) -> None:
+    _write(
+        tmp_path,
+        "docs/Target.md",
+        '# T\n\n```html\n<a id="fake"></a>\n```\n',
+    )
+    docs = [_doc("docs/Index.md", "# I\n\nSee [x](./Target.md#fake).\n")]
+    findings, _ = mod.run_checks(docs, root=tmp_path)
+    assert _rules(findings) == {"broken-local-anchor"}
+
+
+def test_explicit_missing_path_exits_nonzero() -> None:
+    assert mod.main(["docs/DefinitelyMissing.md"]) == 2
+
+
+def test_parse_removed_targets_collects_deleted_and_renamed() -> None:
+    lines = [
+        "D\tdocs/Gone.md",
+        "R100\tdocs/Old.md\tdocs/New.md",
+        "M\tdocs/Keep.md",
+        "A\ttools/new.py",
+    ]
+    assert mod._parse_removed_targets(lines) == ["docs/Gone.md", "docs/Old.md"]
