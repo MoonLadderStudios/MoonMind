@@ -250,6 +250,7 @@ def _build_credentials(raw: object) -> dict[str, Any]:
         state = str(item.get("state") or "").strip() or "unknown"
         if len(state) > MAX_REF_CHARS:
             raise GovernanceReportError("MALFORMED_SOURCE", f"{path}.state is too long")
+        _reject_secret_value(state, path=f"{path}.state")
         evidence_ref = None
         if item.get("evidence_ref") is not None:
             evidence_ref = _artifact_ref(item.get("evidence_ref"), path=f"{path}.evidence_ref")
@@ -296,6 +297,7 @@ def _build_container_jobs(raw: object) -> dict[str, Any]:
         status = str(item.get("status") or "").strip() or "unknown"
         if len(status) > MAX_REF_CHARS:
             raise GovernanceReportError("MALFORMED_SOURCE", f"{path}.status is too long")
+        _reject_secret_value(status, path=f"{path}.status")
         jobs.append({"job_ref": job_ref, "status": status})
     return {"provenance": ("observed" if jobs else "unavailable"), "jobs": jobs}
 
@@ -353,6 +355,7 @@ def _build_ref_list_section(raw: object, *, field_name: str, item_key: str, ref_
         status = str(item.get("status") or "").strip() or "unknown"
         if len(status) > MAX_REF_CHARS:
             raise GovernanceReportError("MALFORMED_SOURCE", f"{path}.status is too long")
+        _reject_secret_value(status, path=f"{path}.status")
         evidence_ref = None
         if item.get("evidence_ref") is not None:
             evidence_ref = _artifact_ref(item.get("evidence_ref"), path=f"{path}.evidence_ref")
@@ -480,6 +483,13 @@ def build_governance_report(evidence: Mapping[str, Any]) -> dict[str, Any]:
         evidence.get("publications"), field_name="publications", item_key="publication", ref_key="publication_ref"
     )
     cleanup = _build_cleanup(evidence.get("cleanup"))
+    if status == "ready" and (
+        cleanup.get("disposition") in ("unknown", "pending") or cleanup.get("provenance") == "pending"
+    ):
+        # Unresolved cleanup is never reported as ready: a complete evidence
+        # set with unknown/pending cleanup stays partial so historical entries
+        # never claim unresolved cleanup succeeded.
+        status = "partial"
     spend_usage = _build_spend_usage(evidence.get("spend_usage"))
     source_digests = _build_source_digests(evidence.get("source_artifact_digests"))
 
