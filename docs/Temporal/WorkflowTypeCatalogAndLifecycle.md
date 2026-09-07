@@ -1,5 +1,7 @@
 # Workflow Type Catalog and Lifecycle
 
+**Document Class:** Module Contract Specification
+
 **Implementation tracking:** Rollout and backlog notes live under `docs/tmp/` or in gitignored local-only handoffs (for example `artifacts/`), not as migration checklists in canonical `docs/`.
 
 MoonMind’s **Temporal-native** lifecycle contract for Temporal-managed Workflow Executions. MoonMind does not define a separate product entity named Task; this document governs workflow types and execution semantics inside Temporal.
@@ -245,113 +247,20 @@ Rules:
 
 ## 6. Update and Signal contracts
 
-## 6.1 Updates
+The canonical per-workflow Update and Signal shapes live in
+[`TemporalSignalsSystem.md`](./TemporalSignalsSystem.md) §6, which owns
+`UpdateInputs`, `SetTitle`, `RequestRerun`, `ExternalEvent`, `Approve`,
+`Pause`/`Resume`, and the provider-profile coordination signals
+(MoonLadderStudios/MoonMind#3961). This catalog does not restate those
+payloads; it records only the lifecycle posture:
 
-Updates are the primary way to support edit-like semantics because they provide request/response behavior and acceptance decisions.
-
-### Update: `UpdateInputs`
-
-Purpose: replace or modify references to inputs, plans, or parameters.
-
-Request:
-
-- `input_ref?`
-- `plan_ref?`
-- `parameters_patch?`
-
-Response:
-
-- `accepted: bool`
-- `applied: "immediate" | "next_safe_point" | "continue_as_new"`
-- `message: string`
-
-Rules:
-
-- must be idempotent
-- must reject invalid or unauthorized changes
-- must reject changes when the workflow is terminal or policy forbids them
-
-### Update: `SetTitle`
-
-Request:
-
-- `title: string`
-
-Response:
-
-- `accepted: bool`
-- `message: string`
-
-Rules:
-
-- normally safe while running
-- terminal behavior depends on product policy
-
-### Update: `RequestRerun`
-
-Purpose: request a clean re-execution.
-
-Request:
-
-- `input_ref?`
-- `plan_ref?`
-- `parameters_patch?`
-
-Response:
-
-- `accepted: bool`
-- `message: string`
-
-Semantics:
-
-- prefer Continue-As-New when the intent is “same durable execution identity, fresh orchestration state”
-- use a fresh Workflow ID only when product semantics explicitly call for a new execution identity
-
-## 6.2 Signals
-
-Signals are used for asynchronous external events.
-
-### Signal: `ExternalEvent`
-
-Examples:
-
-- GitHub callback
-- Jules/provider callback
-- integration completion event
-- async external status transition
-
-Payload:
-
-- `source: string`
-- `event_type: string`
-- `payload_ref?`
-- `payload_inline?`
-
-Rules:
-
-- authenticity verification belongs in an Activity if external verification is required
-- workflows should not do cryptographic or network verification inline
-
-### Signal: `Approve`
-
-Payload:
-
-- `approval_type: string`
-- `note?`
-
-### Signal: `Pause` / `Resume`
-
-Optional. Only expose if interactive long-run control is a product requirement.
-
-### Signal: provider-profile coordination signals
-
-Representative cases include:
-
-- slot assigned
-- slot released
-- cooldown reported
-
-These are internal orchestration signals and should stay compact and policy-bound.
+- Updates are the acknowledged edit path (idempotent; rejected when terminal
+  or policy forbids).
+- Signals are compact async ingress (external verification belongs in an
+  Activity, never inline in workflow code).
+- `RequestRerun` prefers Continue-As-New for same-identity fresh state; a
+  fresh Workflow ID requires explicit new-identity product semantics. Run
+  detail lives in `WorkflowRunHistoryAndNewRunSemantics.md`.
 
 ---
 
@@ -388,6 +297,12 @@ Important child behavior:
 ---
 
 ## 8. History management and Continue-As-New
+
+Recovery and projection-repair semantics live with the source-of-truth owner
+([`SourceOfTruthAndProjectionModel.md`](./SourceOfTruthAndProjectionModel.md));
+run-identity and rerun detail lives in
+[`WorkflowRunHistoryAndNewRunSemantics.md`](./WorkflowRunHistoryAndNewRunSemantics.md).
+This catalog keeps the lifecycle-level preservation obligations (MoonLadderStudios/MoonMind#3961):
 
 ## 8.1 Why
 

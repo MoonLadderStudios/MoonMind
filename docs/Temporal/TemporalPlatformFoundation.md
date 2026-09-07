@@ -1,5 +1,7 @@
 # Temporal Platform Foundation
 
+**Document Class:** Module Architecture View
+
 **Implementation tracking:** Rollout and backlog notes live under `docs/tmp/` or in gitignored local-only handoffs (for example `artifacts/`), not as migration checklists in canonical `docs/`.
 
 **Project:** MoonMind
@@ -67,19 +69,14 @@ Temporal Server is logically composed of multiple services (Frontend/History/Mat
 
 ## 5. Core workflow catalog
 
-The following workflow types constitute the live Temporal application layer at the platform foundation level:
-
-| Workflow type | Purpose |
-| --- | --- |
-| `MoonMind.UserWorkflow` | General root execution workflow for plan-driven orchestration |
-| `MoonMind.ManifestIngest` | Fan-out/fan-in manifest ingestion |
-| `MoonMind.AgentRun` | Durable lifecycle wrapper for true agent execution (managed and external) |
-| `MoonMind.AgentSession` | Workflow-scoped managed-session workflow, currently Codex-backed |
-| `MoonMind.ManagedSessionReconcile` | Bounded support workflow for managed-session reconciliation and cleanup |
-| `MoonMind.ProviderProfileManager` | Long-running provider-profile coordination for managed runtimes |
-| `MoonMind.OAuthSession` | OAuth dance lifecycle |
-
-All true agent execution steps are dispatched as `MoonMind.AgentRun` child workflows from `MoonMind.UserWorkflow`. They are not plain activity invocations. When a managed run uses a workflow-scoped session, `MoonMind.AgentSession` owns the session container and turn/control lifecycle separately from the step-scoped `MoonMind.AgentRun`.
+The canonical workflow catalog lives in
+[`WorkflowTypeCatalogAndLifecycle.md`](./WorkflowTypeCatalogAndLifecycle.md)
+§4, which owns Workflow Type names, roles, and lifecycle behavior
+(MoonLadderStudios/MoonMind#3961). This foundation keeps only the
+platform-level posture: all true agent execution steps are dispatched as
+`MoonMind.AgentRun` child workflows from `MoonMind.UserWorkflow`, never as
+plain activity invocations; `MoonMind.AgentSession` owns the session container
+and turn/control lifecycle separately from the step-scoped `MoonMind.AgentRun`.
 
 ---
 
@@ -280,7 +277,7 @@ MoonMind standardizes on Temporal-native scheduling mechanisms (Schedules) for p
 
 The legacy DB-polling `moonmind-scheduler` has been removed. Temporal Schedules and Timers are now the authoritative mechanism for all recurring and time-based workflow starts.
 
-(Details live in `docs/Temporal/WorkflowSchedulingGuide.md`.)
+(Canonical scheduling semantics live in `docs/Temporal/TemporalScheduling.md`; dashboard UX lives in `docs/Temporal/WorkflowSchedulingGuide.md`.)
 
 ---
 

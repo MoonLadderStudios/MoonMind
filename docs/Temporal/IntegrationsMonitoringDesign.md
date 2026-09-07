@@ -1,5 +1,7 @@
 # Integrations Monitoring Design
 
+**Document Class:** System / Feature Design View
+
 **Implementation tracking:** Rollout and backlog notes live under `docs/tmp/` or in gitignored local-only handoffs (for example `artifacts/`), not as migration checklists in canonical `docs/`.
 
 Status: Draft (Temporal-first, migration-aware) 
@@ -349,7 +351,10 @@ Why:
 
 ### 8.3 `ExternalEvent` signal shape
 
-The current MoonMind execution API already exposes `ExternalEvent`. For integrations monitoring, the payload should stay small and include fields such as:
+The canonical `ExternalEvent` shape lives in
+[`TemporalSignalsSystem.md`](./TemporalSignalsSystem.md) §6.1, which owns
+that contract (MoonLadderStudios/MoonMind#3961). For integrations monitoring,
+the payload stays small and includes fields such as:
 
 * `source`
 * `event_type`
