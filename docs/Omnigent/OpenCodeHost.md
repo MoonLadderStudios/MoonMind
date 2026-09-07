@@ -8,6 +8,9 @@
 
 ## Related documents
 
+- [`docs/Omnigent/README.md`](./README.md) — module entrypoint and contract owners
+- [`docs/Omnigent/ContractOwnership.md`](./ContractOwnership.md) — per-file ownership map
+- [`docs/Omnigent/SharedHostImage.md`](./SharedHostImage.md) — shared image, runtime packs, Host Classes, credential ownership
 - [`docs/Omnigent/PrimaryRuntimeProviderStrategy.md`](./PrimaryRuntimeProviderStrategy.md)
 - [`docs/Omnigent/OmnigentHarnessPlatformDesign.md`](./OmnigentHarnessPlatformDesign.md)
 - [`docs/Omnigent/OmnigentHostOAuth.md`](./OmnigentHostOAuth.md)
@@ -49,43 +52,24 @@ RUN npm install --cache /opt/moonmind/opencode-npm-cache '@opencode-ai/plugin@1.
 
 ### Shared-image implementation
 
-The default Compose image is:
-
-```text
-ghcr.io/moonladderstudios/omnigent-host-moonmind@sha256:<digest>
-```
-
-The shared image contains and verifies the approved versions of:
-
-```text
-omnigent
-codex
-claude
-opencode
-```
-
-An explicit `OMNIGENT_OPENCODE_HOST_IMAGE_REF` or image/tag override remains authoritative for specialized deployments. It must pass the same bootstrap checks. An incompatible pin is quarantined rather than silently replaced. Existing environment files selecting the old image repository must be updated explicitly. A rejected Host Class reports the underlying reason, including missing or placeholder digests, mismatched compatibility evidence, build/version mismatch, and a missing offline bootstrap contract. A valid digest alone does not prove launch readiness. For an obsolete image, select a qualified shared host and its matching server build, then restart the API and runtime workers so reconciliation and launch use the same image pair. A rejected Host Class reports the underlying reason, including missing or placeholder digests, mismatched compatibility evidence, build/version mismatch, and a missing offline bootstrap contract. A valid digest alone does not prove launch readiness. For an obsolete image, select a qualified shared host and its matching server build, then restart the API and runtime workers so reconciliation and launch use the same image pair.
-
-The image migration does not by itself move Codex or Claude execution to the generic realizer. Those changes require their own runtime-pack, credential-materializer, conformance, rollout, and replay-safe retirement work.
+The shared image, its publication, and its deployment configuration are owned
+by [`SharedHostImage.md`](./SharedHostImage.md) §1, which also holds the
+verified vendor pins. OpenCode-specific rules that remain here: no workflow
+installs OpenCode dynamically, and the warm plugin-SDK cache contract in §4
+below. An explicit `OMNIGENT_OPENCODE_HOST_IMAGE_REF` override remains
+authoritative for specialized deployments but must pass the same bootstrap
+checks; an incompatible pin is quarantined rather than silently replaced.
 
 ## 2. Governing image rules
 
-The shared image must:
-
-- derive from an immutable compatible Omnigent host base
-- install or inherit every supported runtime at image-build time
-- warm every dependency a supported runtime installs on its own first start (today the OpenCode plugin SDK npm cache) and prove it resolves offline
-- perform no package installation during workflow launch
-- run as the normal non-root Omnigent host user
-- preserve `/home/app` as the runtime home contract
-- contain no provider credentials
-- publish SBOM and provenance data
-- publish the portable `moonmind.omnigent.build_digest` identity
-- support the architectures claimed by its manifest and Host Classes
-- verify every included CLI and required harness integration in release CI
-- remain digest-pinned at execution-plan and Host Class boundaries
-
-A shared image is an implementation artifact, not a permission boundary. The selected immutable plan still controls which harness, materializer, Provider Profile, model, and runtime pack are authorized.
+The generic shared-image rules are owned by
+[`SharedHostImage.md`](./SharedHostImage.md) §1. The OpenCode-specific rules
+that remain here: the image warms every dependency a supported runtime
+installs on its own first start (today the OpenCode plugin SDK npm cache) and
+proves it resolves offline; a shared image is an implementation artifact, not
+a permission boundary — the selected immutable plan still controls which
+harness, materializer, Provider Profile, model, and runtime pack are
+authorized.
 
 Image admission checks the selected digest's executable Omnigent version and
 offline plugin-enabled OpenCode startup from the warm cache. Matching
@@ -103,22 +87,10 @@ release remain fenced by the durable lease owner.
 
 ## 3. Separate Host Classes share the image
 
-OpenCode retains its own Host Class on the shared image.
-
-The default image mapping is:
-
-```text
-omnigent-opencode@1
-  -> shared omnigent-host-moonmind digest
-
-omnigent-codex@1
-  -> shared omnigent-host-moonmind digest
-
-omnigent-claude@1
-  -> shared omnigent-host-moonmind digest
-```
-
-Each class declares only the harnesses and materializers that it authorizes. Separate Host Classes preserve independent support and rollout decisions.
+OpenCode retains its own Host Class on the shared image. The class inventory
+and the one-harness admission rule are owned by
+[`SharedHostImage.md`](./SharedHostImage.md) §3; separate Host Classes
+preserve independent support and rollout decisions.
 
 A representative OpenCode class remains:
 
@@ -283,9 +255,9 @@ explicit `opencode-go` profile and must never be inherited by the Zen profile.
 
 ## 6. Shared-image credential isolation
 
-When the image also contains Codex and Claude Code, an OpenCode execution must still receive only the OpenCode credential attachment.
-
-Exact-host conformance must prove:
+Credential ownership is owned by [`SharedHostImage.md`](./SharedHostImage.md)
+§4. The OpenCode-specific isolation proof that remains here — exact-host
+conformance must prove:
 
 - `/home/app/.codex` is not mounted from a Codex Provider Profile
 - Claude credential paths are not mounted
@@ -646,6 +618,10 @@ valid launch-ready Provider Profile does not require changing the runtime
 default or manual requalification. The deployment evidence publication retains
 one independently signed entry per launchable materializer class; entries are
 replaced only by a newly qualified entry for the same deployment-scoped class.
+
+Conformance tiers and live-smoke boundaries are owned by
+[`ConformanceAndLiveSmoke.md`](./ConformanceAndLiveSmoke.md); rollout states
+and promotion by [`RuntimeProviderRollout.md`](./RuntimeProviderRollout.md).
 
 ## 16. Deployment upgrades and rollback
 

@@ -21,7 +21,7 @@ The migration is deliberately evidence-gated. OpenCode is the first generic-host
 
 The intended host direction is one digest-pinned MoonMind Omnigent image reused by Codex, Claude Code, and OpenCode wherever practical. Separate Host Classes, runtime-pack adapters, credential materializers, and support rows preserve strict runtime and credential isolation even when they share the same image digest.
 
-See the canonical [Omnigent Primary Runtime Provider Strategy](docs/Omnigent/PrimaryRuntimeProviderStrategy.md), the [Omnigent Harness Platform Design](docs/Omnigent/OmnigentHarnessPlatformDesign.md), and the [MoonMind Roadmap](docs/MoonMindRoadmap.md).
+See the [Omnigent module entrypoint](docs/Omnigent/README.md), the canonical [Omnigent Primary Runtime Provider Strategy](docs/Omnigent/PrimaryRuntimeProviderStrategy.md), the [Omnigent Harness Platform Design](docs/Omnigent/OmnigentHarnessPlatformDesign.md), and the [MoonMind Roadmap](docs/MoonMindRoadmap.md).
 
 ## Quick Start
 
