@@ -7857,7 +7857,7 @@ async def test_generic_omnigent_publication_materializes_resolved_github_auth(
         if "ls-remote" in command:
             ls_remote_calls += 1
             if ls_remote_calls == 1:
-                return 0, "", ""
+                return 0, f"{'b' * 40}\trefs/heads/{expected['pushBranch']}\n", ""
             return 0, f"{remote_head}\trefs/heads/{expected['pushBranch']}\n", ""
         if "rev-parse" in command:
             return 0, f"{remote_head}\n", ""
@@ -7965,6 +7965,188 @@ async def test_publication_restores_missing_authored_base_ref(
     with pytest.raises(HarnessPlatformError):
         await realizer._publish_repository(request, AgentRunResult(summary="Publish"))
     assert _git(repo, "ls-remote", "--heads", "origin") == refs_before
+
+
+@pytest.mark.integration_ci
+@pytest.mark.parametrize("authored_base", [None, "main"])
+@pytest.mark.parametrize("remote_changed", [False, True])
+@pytest.mark.parametrize(
+    "pr_state", ["ready", "wrong_base", "missing_base", "draft", "unknown_draft"]
+)
+async def test_existing_pr_survives_unchanged_omnigent_publication(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    authored_base: str | None,
+    remote_changed: bool,
+    pr_state: str,
+) -> None:
+    """Replay mm:9886cfcb with real Git and the production PR selector."""
+    from moonmind.workflows.adapters.github_service import GitHubService
+    from moonmind.workflows.temporal.story_output_tools import (
+        update_github_issue_status,
+    )
+
+    manifest = load_replay("omnigent-existing-pr-branch-handoff", "manifest.json")
+    workflow_id = manifest["incidentWorkflowId"]
+    repository = manifest["repository"]
+    branch = manifest["acceptedBranch"]
+    workspace_id = hashlib.sha256(f"{workflow_id}:{workflow_id}".encode()).hexdigest()[
+        :24
+    ]
+    repo, origin = _seed_no_commit_publication_repo(
+        workspace_root=tmp_path,
+        workspace_id=workspace_id,
+        relative_path="repo",
+        starting_branch=branch,
+    )
+    (repo / "candidate.txt").write_text("implementation\n")
+    _git(repo, "add", "candidate.txt")
+    _git(repo, "commit", "-m", "Implement issue")
+    _git(repo, "push", "origin", branch)
+    head = _git(repo, "rev-parse", "HEAD")
+    SandboxWorkspaceRecordStore(tmp_path).ensure(
+        SandboxWorkspaceRecord(workspace_id, workflow_id, workflow_id, "repo")
+    )
+    request = AgentExecutionRequest(
+        agentKind="external",
+        agentId="omnigent",
+        correlationId=workflow_id,
+        idempotencyKey=f"{workflow_id}:publish",
+        workspaceSpec={
+            "repository": repository,
+            **({"startingBranch": authored_base} if authored_base else {}),
+            "targetBranch": branch,
+            "workspaceLocator": {
+                "kind": "sandbox",
+                "workspaceId": workspace_id,
+                "relativePath": "repo",
+            },
+        },
+        parameters={
+            "publishMode": "pr",
+            "acceptedPublishedHead": {
+                "workflowId": workflow_id,
+                "repository": repository,
+                "branch": branch,
+                "headSha": head,
+            },
+        },
+    )
+    request = AgentExecutionRequest.model_validate_json(
+        request.model_dump_json(by_alias=True)
+    )
+    monkeypatch.setattr(settings.security, "high_security_mode", False)
+    monkeypatch.setattr(
+        "moonmind.omnigent.workspace_publication.resolve_github_credential",
+        AsyncMock(return_value=SimpleNamespace(token="fixture-credential")),
+    )
+    monkeypatch.setattr(
+        GitHubService,
+        "resolve_github_token",
+        AsyncMock(return_value=("fixture-credential", None)),
+    )
+    requests = []
+
+    def github_api(request):
+        requests.append(request)
+        if request.url.path.endswith("/pulls"):
+            assert request.method == "GET"  # Adoption must never create a duplicate PR.
+            assert request.url.params["head"] == f"MoonLadderStudios:{branch}"
+            payload = [
+                {
+                    "number": manifest["pullRequestNumber"],
+                    "html_url": manifest["pullRequestUrl"],
+                    "base": (
+                        {"ref": "release" if pr_state == "wrong_base" else "main"}
+                        if pr_state != "missing_base"
+                        else None
+                    ),
+                    "draft": (
+                        None if pr_state == "unknown_draft" else pr_state == "draft"
+                    ),
+                    "head": {
+                        "ref": branch,
+                        "sha": head,
+                        "repo": {"full_name": repository},
+                    },
+                }
+            ]
+        else:
+            payload = {
+                "number": manifest["issueNumber"],
+                "state": "open",
+                "labels": [],
+                "html_url": f"https://github.com/{repository}/issues/{manifest['issueNumber']}",
+            }
+        return httpx.Response(200, json=payload)
+
+    client_type = httpx.AsyncClient
+    monkeypatch.setattr(
+        httpx,
+        "AsyncClient",
+        lambda **kwargs: client_type(
+            transport=httpx.MockTransport(github_api),
+            **kwargs,
+        ),
+    )
+    if remote_changed:
+        _git(
+            origin,
+            "update-ref",
+            f"refs/heads/{branch}",
+            _git(repo, "rev-parse", "HEAD^"),
+        )
+    refs_before = _git(repo, "ls-remote", "--heads", "origin")
+    realizer = _no_commit_publication_realizer(tmp_path)
+    if remote_changed:
+        with pytest.raises(HarnessPlatformError) as error:
+            await realizer._publish_repository(
+                request, AgentRunResult(summary="completed")
+            )
+        assert error.value.code == "OMNIGENT_REPOSITORY_PUBLICATION_UNVERIFIED"
+        assert _git(repo, "ls-remote", "--heads", "origin") == refs_before
+        assert not requests
+        return
+
+    result = await realizer._publish_repository(
+        request, AgentRunResult(summary="completed")
+    )
+    result = AgentRunResult.model_validate_json(result.model_dump_json(by_alias=True))
+    expected_url = manifest["pullRequestUrl"] if pr_state == "ready" else None
+    assert result.metadata.get("pull_request_url") == expected_url
+    assert result.metadata["acceptedRepositoryEvidence"]["branch"] == branch
+    assert _git(repo, "ls-remote", "--heads", "origin") == refs_before
+    parent = MoonMindRunWorkflow()
+    parent._repo = repository
+    parent._record_execution_context(
+        node_id="publish",
+        execution_result={"outputs": result.metadata},
+    )
+    parent._record_publish_result(
+        parameters={"publishMode": "pr"},
+        execution_result={"outputs": result.metadata},
+    )
+    assert parent._publish_context.get("pullRequestUrl") == expected_url
+    final = await update_github_issue_status(
+        {
+            "repository": repository,
+            "issueNumber": manifest["issueNumber"],
+            "mode": "finalize_after_pr_or_done",
+            "verificationArtifactPath": "artifacts/github-issue-implement-verify.json",
+            "previousOutputs": {
+                **result.metadata,
+                "assessmentVerdict": manifest["assessmentVerdict"],
+                "moonSpecVerify": {"verdict": manifest["verificationVerdict"]},
+            },
+        }
+    )
+    assert final.status == ("COMPLETED" if pr_state == "ready" else "FAILED")
+    mutations = [r for r in requests if r.method == "PATCH"]
+    if pr_state != "ready":
+        assert all(r.method == "GET" for r in requests)
+        return
+    assert len(mutations) == 1
+    assert "state" not in json.loads(mutations[0].content)  # Code Review, not Done.
 
 
 async def test_verified_no_commit_publication_reaches_the_workflow_publish_handoff(

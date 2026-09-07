@@ -55,7 +55,7 @@
         "sha256": "f78b0ac8bb1ad3d0c01a9230ef6414e66158bac2a15ef1f6e57b01eae28e62f5"
       }
     ],
-    "routeCount": 41,
+    "routeCount": 45,
     "dimensions": [
       "pathPattern",
       "methods",
@@ -67,8 +67,8 @@
       "apiBaseDiscovery"
     ]
   },
-  "contractSha256": "54d09228d5a37d73830647223b1c381d41e6bf95fe0e85d236e41e174557a3f2",
-  "moonmindFacadeDigest": "2761e379eb13c6b46fc4b2b66208642e45123ca2ab6244ef66b3f20deb0d1fac",
+  "contractSha256": "aba290935dfe66a23e748c1449290b0865f6900e7d2a1822d809b3043ac1a6a4",
+  "moonmindFacadeDigest": "afeb499a6f016821753a80de53f2401c461d33549e47611a4cd550031262979a",
   "routes": [
     "liveness",
     "native_server_info",
@@ -76,6 +76,10 @@
     "list_projects",
     "list_sessions",
     "list_agents",
+    "list_harnesses",
+    "get_session_agent",
+    "get_session_environment",
+    "list_child_sessions",
     "get_session",
     "stream_events",
     "stream_events_websocket",
@@ -87,6 +91,7 @@
     "workspace_diff",
     "session_files",
     "session_file",
+    "local_session_import",
     "session_items",
     "terminal_view",
     "terminal_create",
@@ -109,8 +114,7 @@
     "session_reconnect",
     "ws_session_updates",
     "terminal_attach",
-    "dictation_stream",
-    "local_session_import"
+    "dictation_stream"
   ],
   "payloadClasses": [
     "json",

@@ -1,6 +1,15 @@
 """N concurrent OpenCode Zen executions on the generic Omnigent plane.
 
-Source issue: MoonLadderStudios/MoonMind#3878 (AC3, invariants 2, 7, 10, 12).
+Source issues: MoonLadderStudios/MoonMind#3878 (AC3, invariants 2, 7, 10, 12)
+and MoonLadderStudios/MoonMind#3885 (hermetic layer of the layered N-way
+qualification program).
+
+Overlap here is *observed*, not assumed. Every admitted execution holds a
+controlled barrier inside its own live session until the effective limit has
+been reached, and the peak is swept from the per-execution start/end windows
+the substrate actually recorded. N executions that merely ran concurrently
+under ``asyncio.gather`` would sweep to a peak of 1 and fail; only genuinely
+simultaneous, useful execution sweeps to N.
 
 This is the acceptance journey the program was missing: ``N`` real
 ``GenericOmnigentHostRealizer.execute`` calls running at once against one shared
@@ -24,10 +33,33 @@ lifecycle ordering and authority handoffs under test are the production ones.
 from __future__ import annotations
 
 import asyncio
+import time
+from dataclasses import dataclass, field
 from types import SimpleNamespace
 from typing import Any
 
 import pytest
+
+from moonmind.omnigent.concurrency_qualification import (
+    CONCURRENCY_EVIDENCE_DIR_ENV,
+    DEFAULT_REPEATED_WAVE_THRESHOLDS,
+    CleanupScanEntry,
+    CleanupScanReport,
+    ConcurrencyQualificationLayer,
+    DurableWaitObservation,
+    ExecutionOverlapSample,
+    ObservedOverlapEvidence,
+    RepeatedWaveReport,
+    WaveObservation,
+    load_observed_overlap,
+    publish_observed_overlap,
+    repeated_wave_thresholds,
+)
+
+#: The class this hermetic layer runs on. The budget is resolved from it rather
+#: than pinned to a constant, so a wave cannot be scored against a machine it
+#: never ran on.
+HERMETIC_RESOURCE_CLASS_REF = "local-deterministic@1"
 
 from moonmind.omnigent.credential_materializers import CredentialRuntimeHandle
 from moonmind.omnigent.harness_platform.execution_plan import (
@@ -163,6 +195,69 @@ _HOST_CLASS = HostClass.model_validate(
 )
 
 
+class _ConcurrencyGate:
+    """A controlled hold proving executions were simultaneously live.
+
+    Each admitted execution parks here in the middle of its own session and is
+    released only once ``expected`` executions are parked at the same time. A
+    substrate that serialized the runs never reaches the release, so the wait
+    times out and :attr:`satisfied` stays ``False`` — which is the assertion
+    that separates real overlap from N sequential results.
+    """
+
+    def __init__(self, expected: int, *, timeout: float = 10.0) -> None:
+        self._expected = max(1, expected)
+        self._timeout = timeout
+        self._arrived = 0
+        self._released = asyncio.Event()
+        self.satisfied = False
+        self.peak_parked = 0
+
+    async def hold(self) -> None:
+        self._arrived += 1
+        self.peak_parked = max(self.peak_parked, self._arrived)
+        if self._arrived >= self._expected:
+            self.satisfied = True
+            self._released.set()
+        try:
+            await asyncio.wait_for(self._released.wait(), timeout=self._timeout)
+        except (asyncio.TimeoutError, TimeoutError):
+            # Release the stragglers so the test reports the missing overlap
+            # rather than hanging for every remaining execution's full budget.
+            self._released.set()
+
+
+@dataclass(frozen=True)
+class _Faults:
+    """Injected authority-handoff failures for specific runs.
+
+    ``lost_ack`` runs perform the side effect and *then* raise, which is the
+    ambiguous case the program has to survive: the caller cannot tell whether
+    the mutation happened, so cleanup must still reclaim it and no second
+    mutation may be authorized.
+
+    ``late_completion`` is the other half of that ambiguity: the caller gives
+    up first and the side effect lands *afterwards*, while teardown is already
+    running. The retried effect must reconcile the exact same identity, and no
+    second mutation may be authorized for it either.
+    """
+
+    #: run id -> handoff point that fails for that run.
+    points: dict[str, str] = field(default_factory=dict)
+    lost_ack: bool = False
+    late_completion: bool = False
+
+    def trips(self, run: str, point: str) -> bool:
+        return self.points.get(run) == point
+
+
+_NO_FAULTS = _Faults()
+
+
+class _InjectedHandoffFailure(RuntimeError):
+    """A deliberate failure at one named authority handoff."""
+
+
 class _Machine:
     """One shared, observable substrate for every concurrent run."""
 
@@ -177,13 +272,89 @@ class _Machine:
         self.provider_releases: list[str] = []
         self.runtime_bindings: list[str] = []
         self.admitted_capacity: list[Any] = []
+        self.first_messages: list[str] = []
+        self.lease_mutations = 0
+        self.registration_requests = 0
+        self.streamed_events = 0
+        self._origin = time.monotonic()
+        #: run id -> (started_at, ended_at) seconds since this machine started.
+        self.windows: dict[str, list[float]] = {}
+        #: run id -> milestone -> seconds since this machine started. The
+        #: repeated-wave latencies are derived from these, so the declared
+        #: budgets bind on measurements rather than on zeros.
+        self.milestones: dict[str, dict[str, float]] = {}
+        #: run id -> effect that lands after its caller already gave up.
+        self.late_effects: dict[str, Any] = {}
+
+    def _now(self) -> float:
+        return time.monotonic() - self._origin
+
+    def mark(self, run: str, milestone: str) -> None:
+        self.milestones.setdefault(run, {})[milestone] = self._now()
+
+    def phase_seconds(self, start: str, end: str) -> float:
+        """Return the slowest observed ``start`` -> ``end`` span, in seconds.
+
+        The slowest run is the one a budget has to bind on: an allocator that
+        starves one execution out of ``N`` is exactly the regression a mean
+        would hide.
+        """
+
+        spans = [
+            marks[end] - marks[start]
+            for marks in self.milestones.values()
+            if start in marks and end in marks
+        ]
+        return max([span for span in spans if span >= 0.0], default=0.0)
 
     def allocate(self, run: str) -> None:
         self.allocated_hosts.add(run)
         self.peak_hosts = max(self.peak_hosts, len(self.allocated_hosts))
+        self.windows.setdefault(run, [self._now(), self._now()])[0] = self._now()
 
     def free(self, run: str) -> None:
         self.allocated_hosts.discard(run)
+        window = self.windows.get(run)
+        if window is not None:
+            window[1] = self._now()
+
+    def overlap_samples(self) -> tuple[ExecutionOverlapSample, ...]:
+        """Return the observed execution windows, oldest first."""
+
+        return tuple(
+            ExecutionOverlapSample(
+                execution_ref=f"run-{run}",
+                started_at=window[0],
+                ended_at=max(window[0], window[1]),
+            )
+            for run, window in sorted(self.windows.items())
+        )
+
+    def cleanup_scan(self) -> CleanupScanReport:
+        """Return the honest post-run teardown scan for this machine.
+
+        A host still allocated after every execution settled is an unresolved
+        entry, so :attr:`CleanupScanReport.zero_leak` reports ``False`` instead
+        of an empty-looking clean sweep.
+        """
+
+        from datetime import UTC, datetime
+
+        entries = [
+            CleanupScanEntry(
+                resource_ref=f"host-{run}", kind="container", resolved=False
+            )
+            for run in sorted(self.allocated_hosts)
+        ]
+        entries.extend(
+            CleanupScanEntry(
+                resource_ref=record["containerName"],
+                kind="container",
+                resolved=record["hostCleanupRef"] in self.cleanups,
+            )
+            for record in self.launched
+        )
+        return CleanupScanReport(scanned_at=datetime.now(UTC), entries=tuple(entries))
 
 
 class _LedgerAdmission(GenericHostCapacityAdmission):
@@ -241,8 +412,17 @@ def _build_realizer(
     machine: _Machine,
     *,
     admission: _LedgerAdmission | None,
+    gate: _ConcurrencyGate | None = None,
+    faults: _Faults = _NO_FAULTS,
+    stream_events: int = 0,
 ) -> GenericOmnigentHostRealizer:
     """Build the run's own service graph, exactly as production does per run."""
+
+    def _trip(point: str) -> None:
+        """Raise at ``point`` when this run is the injected failure."""
+
+        if faults.trips(run, point):
+            raise _InjectedHandoffFailure(f"{point} failed for run {run}")
 
     acquired = AcquiredProviderLease(
         slot="primary-model",
@@ -262,12 +442,19 @@ def _build_realizer(
 
     class Leases:
         async def acquire_all(self, **kwargs):
+            machine.lease_mutations += 1
+            _trip("provider_lease_confirmation")
             # Record what the realizer forwarded so a dropped hand-off of the
             # workflow-owned capacity is visible rather than silently ignored.
             machine.admitted_capacity.append(kwargs.get("admitted_capacity"))
+            machine.mark(run, "leased")
             return (acquired,)
 
         async def release_all(self, leases):
+            # Provider capacity is released last, after every host-owned
+            # resource is reclaimed, so a failure here cannot strand a
+            # container behind an already-freed slot.
+            _trip("capacity_release")
             for item in leases:
                 if not item.owned_by_workflow:
                     machine.provider_releases.append(run)
@@ -289,6 +476,7 @@ def _build_realizer(
 
     class Credentials:
         async def materialize_all(self, **_kwargs):
+            _trip("credential_preparation")
             return (handle,)
 
         async def load_cleanup_handles(self, *_args):
@@ -297,6 +485,8 @@ def _build_realizer(
         async def cleanup_all(self, handles):
             for item in handles:
                 machine.credentials_cleaned.append(item.cleanupRef)
+            machine.mark(run, "cleanup_finished")
+            _trip("credential_cleanup")
             return ()
 
     class HostRuntime:
@@ -304,6 +494,7 @@ def _build_realizer(
             await kwargs["authority_sink"](
                 {"kind": "skills", "cleanupRef": f"skill-cleanup:{run}"}
             )
+            _trip("workspace_preparation")
             return PreparedHostInputs(
                 workspace_attachment={
                     "kind": "bind",
@@ -325,11 +516,35 @@ def _build_realizer(
                 },
             )
 
-        async def realize(self, **_kwargs):
+        async def realize(self, **kwargs):
+            # The container and its state volume are created here. A failure
+            # before the allocation is recorded is the one case where nothing
+            # was taken from the machine at all.
+            machine.mark(run, "launch_started")
+            _trip("host_container_creation")
             machine.allocate(run)
+            machine.registration_requests += 1
+            # Production records launch authority the moment the container
+            # exists, before registration can fail, so an ambiguous launch is
+            # still reclaimable. Modelling that ordering is what makes the
+            # lost-acknowledgment case meaningful here.
+            await kwargs["authority_sink"](
+                {
+                    "kind": "host",
+                    "containerName": f"mm-host-{run}",
+                    "stateVolumeRef": f"mm-state-{run}",
+                    "hostCleanupRef": f"host-cleanup:{run}",
+                }
+            )
             # A cold launch is not instantaneous; overlap is what makes this a
             # concurrency test rather than N sequential runs.
             await asyncio.sleep(0.01)
+            machine.mark(run, "launch_ready")
+            if not faults.lost_ack and not faults.late_completion:
+                # Ordinary failure: the container exists but registration never
+                # produced a record, so cleanup has only the allocation to
+                # reclaim.
+                _trip("host_registration")
             record = {
                 "omnigentHostId": f"host-{run}",
                 "hostId": f"host-{run}",
@@ -342,10 +557,33 @@ def _build_realizer(
                 "modelOptionAttestationRef": f"artifact://models/{run}",
                 "hostCleanupRef": f"host-cleanup:{run}",
             }
+            if faults.late_completion and faults.trips(run, "host_registration"):
+                # Late completion: the caller gives up now, and the
+                # registration record lands during teardown. Cleanup has to
+                # reconcile that exact host rather than authorize a second one.
+                machine.late_effects[run] = record
+                raise _InjectedHandoffFailure(
+                    f"host_registration timed out for run {run}"
+                )
             machine.launched.append(record)
+            machine.mark(run, "registered")
+            if faults.lost_ack:
+                # Lost acknowledgment: the host is registered and recorded, but
+                # the caller never learns it. Cleanup must reclaim the same
+                # host rather than authorize a second launch.
+                _trip("host_registration")
             return record
 
         async def cleanup(self, **_kwargs):
+            # The side effect that landed after its caller gave up is
+            # reconciled here, against the identity cleanup already holds.
+            late = machine.late_effects.pop(run, None)
+            if late is not None:
+                machine.launched.append(late)
+            # A teardown that failed did not remove the container, so the
+            # machine must still count it. Freeing first would manufacture the
+            # clean scan this program exists to catch.
+            _trip("host_teardown")
             machine.free(run)
             machine.cleanups.append(f"host-cleanup:{run}")
             return {"containerRemoved": True}
@@ -358,6 +596,7 @@ def _build_realizer(
 
     async def session_driver(request, *, session_authority_sink):
         session_id = f"session-{run}"
+        _trip("session_creation")
         await session_authority_sink.session_created(session_id)
         omnigent = request.parameters["omnigent"]
         # Each run drives its own host through its own session.
@@ -369,14 +608,32 @@ def _build_realizer(
         machine.runtime_bindings.append(
             omnigent["session"]["labels"]["moonmind.runtime_binding_id"]
         )
-        await asyncio.sleep(0.01)
+        # The first message is delivered exactly once per workflow, inside the
+        # live session, and the run then holds the barrier so this session is
+        # provably open while every other admitted session is open too.
+        _trip("first_message")
+        machine.first_messages.append(session_id)
+        if gate is not None:
+            await gate.hold()
+        else:
+            await asyncio.sleep(0.01)
+        # Live event streaming continues while the session is open. Under
+        # saturation this is the traffic that must not starve the control
+        # operations (cancellation, drain, teardown) running alongside it.
+        for _ in range(stream_events):
+            machine.streamed_events += 1
+            await asyncio.sleep(0)
+        _trip("event_streaming")
+        _trip("harvest")
         return AgentRunResult(
             summary=f"done-{run}", metadata={"omnigentSessionId": session_id}
         )
 
     class SessionCleanup:
         async def drain(self, session_id):
+            machine.mark(run, "cleanup_started")
             machine.cleanups.append(f"session-drain:{session_id}")
+            _trip("drain")
             return {"sessionId": session_id, "stopped": True}
 
     class WorkspacePublisher:
@@ -385,6 +642,9 @@ def _build_realizer(
 
     class TurnCommands:
         async def claim(self, **_kwargs):
+            machine.mark(run, "claimed")
+            machine.lease_mutations += 1
+            _trip("turn_claim")
             return SimpleNamespace(
                 owns_delivery=True,
                 session_id=f"oms_generic_{run}",
@@ -397,11 +657,26 @@ def _build_realizer(
         async def settle(self, **_kwargs):
             return None
 
+    class BindingStore(InMemoryStableRuntimeBindingStore):
+        """The grant has landed; the execution is not yet bound to a run."""
+
+        async def create_initial(self, **kwargs):
+            _trip("runtime_binding_creation")
+            return await super().create_initial(**kwargs)
+
+    class HostLeases(InMemoryOmnigentHostLeaseRepository):
+        """The execution is scheduled; its host has not started yet."""
+
+        async def acquire(self, **kwargs):
+            machine.lease_mutations += 1
+            _trip("host_lease_acquisition")
+            return await super().acquire(**kwargs)
+
     return GenericOmnigentHostRealizer(
-        runtime_binding_store=InMemoryStableRuntimeBindingStore(),
+        runtime_binding_store=BindingStore(),
         provider_lease_coordinator=Leases(),
         credential_provisioning_service=Credentials(),
-        host_lease_repository=InMemoryOmnigentHostLeaseRepository(),
+        host_lease_repository=HostLeases(),
         host_runtime=HostRuntime(),
         planned_host_resolver=resolve_host,
         session_driver=session_driver,
@@ -415,22 +690,169 @@ def _build_realizer(
     )
 
 
-async def _run_n(
-    concurrency: int, *, host_capacity: int | None = None
-) -> tuple[_Machine, list[Any]]:
-    machine = _Machine()
+@dataclass
+class _Wave:
+    """One executed concurrency wave and the evidence it produced."""
+
+    machine: _Machine
+    results: list[Any]
+    gate: _ConcurrencyGate
+    requested_level: int
+    effective_limit: int
+
+    def overlap(
+        self,
+        *,
+        requested_level: int | None = None,
+        durable_waiters: tuple[DurableWaitObservation, ...] = (),
+    ) -> ObservedOverlapEvidence:
+        """Return the observed overlap evidence this wave actually produced.
+
+        Constructing the evidence is itself an assertion: the model refuses a
+        peak that does not match the effective limit, refuses samples that were
+        not barrier-synchronized, and refuses work above the limit that was not
+        observed waiting in a named durable queue.
+
+        Nothing is derived here. This substrate *refuses* work above the
+        effective limit at the realizer, so it produces no durable waiters, and
+        a wave that requested more than the limit can only publish evidence for
+        the level it actually ran (``requested_level``). Synthesizing the
+        arithmetic difference as "waiters" is what let a capacity refusal be
+        published as evidence that the surplus was preserved
+        (MoonLadderStudios/MoonMind#3885).
+        """
+
+        return ObservedOverlapEvidence(
+            requested_level=(
+                self.requested_level if requested_level is None else requested_level
+            ),
+            effective_limit=self.effective_limit,
+            barrier_synchronized=self.gate.satisfied,
+            samples=self.machine.overlap_samples(),
+            durable_waiters=durable_waiters,
+        )
+
+    def observation(self, wave_index: int, control_seconds: float) -> WaveObservation:
+        """Return this wave's measured control-plane cost.
+
+        Every latency below is swept from milestones the substrate recorded, so
+        the declared thresholds bind on observations. Reporting zeros here
+        would leave every budget except the total unenforced.
+        """
+
+        return WaveObservation(
+            wave_index=wave_index,
+            observed_peak=self.overlap().observed_peak,
+            wait_seconds=self.machine.phase_seconds("claimed", "leased"),
+            launch_seconds=self.machine.phase_seconds(
+                "launch_started", "launch_ready"
+            ),
+            registration_seconds=self.machine.phase_seconds(
+                "launch_ready", "registered"
+            ),
+            # Provider latency is excluded by construction: this substrate has
+            # no provider round-trip, so the budget measures control.
+            control_seconds=control_seconds,
+            cleanup_seconds=self.machine.phase_seconds(
+                "cleanup_started", "cleanup_finished"
+            ),
+            lease_mutations=self.machine.lease_mutations,
+            registration_requests=self.machine.registration_requests,
+            transport_pool_peak=self.machine.peak_hosts,
+            residual_resources=len(self.machine.allocated_hosts),
+        )
+
+    @property
+    def completed(self) -> list[Any]:
+        return [item for item in self.results if not isinstance(item, BaseException)]
+
+    @property
+    def failures(self) -> list[BaseException]:
+        return [item for item in self.results if isinstance(item, BaseException)]
+
+
+#: Handoffs that trip only after a run has already parked on the barrier, so a
+#: fault there does not reduce the number of executions expected to overlap.
+_POST_PARK_HANDOFFS = frozenset(
+    {
+        "event_streaming",
+        "harvest",
+        "drain",
+        "host_teardown",
+        "credential_cleanup",
+        "capacity_release",
+    }
+)
+
+
+async def _run_wave(
+    concurrency: int,
+    *,
+    host_capacity: int | None = None,
+    faults: _Faults = _NO_FAULTS,
+    machine: _Machine | None = None,
+    offset: int = 0,
+    expected_overlap: int | None = None,
+    stream_events: int = 0,
+) -> _Wave:
+    """Execute one wave of ``concurrency`` runs against one shared machine.
+
+    Every run that reaches a live session parks on a shared barrier sized to
+    the effective limit, so the executions are provably simultaneous rather
+    than merely submitted together. Runs the machine refuses never reach the
+    barrier, which is why the barrier is sized to the limit and not to the
+    submission count.
+
+    ``offset`` gives a later wave distinct run identities, and
+    ``expected_overlap`` states the limit when the machine already carries work
+    from an earlier wave.
+    """
+
+    machine = machine if machine is not None else _Machine()
     capacity = host_capacity if host_capacity is not None else concurrency
-    runs = [str(index) for index in range(concurrency)]
+    effective_limit = (
+        expected_overlap
+        if expected_overlap is not None
+        else min(concurrency, capacity)
+    )
+    runs = [str(offset + index) for index in range(concurrency)]
+    # A run whose session never opens cannot park, so the barrier expects only
+    # the runs that are admitted *and* not failed before their first message.
+    expected_parked = effective_limit - sum(
+        1
+        for run in runs[:effective_limit]
+        for point in (faults.points.get(run),)
+        if point is not None and point not in _POST_PARK_HANDOFFS
+    )
+    gate = _ConcurrencyGate(max(1, expected_parked))
     results = await asyncio.gather(
         *(
             _build_realizer(
-                run, machine, admission=_LedgerAdmission(machine, host_capacity=capacity)
+                run,
+                machine,
+                admission=_LedgerAdmission(machine, host_capacity=capacity),
+                gate=gate,
+                faults=faults,
+                stream_events=stream_events,
             ).execute(_request(run, workflow_owned=True), _zen_plan(run))
             for run in runs
         ),
         return_exceptions=True,
     )
-    return machine, results
+    return _Wave(
+        machine=machine,
+        results=list(results),
+        gate=gate,
+        requested_level=concurrency,
+        effective_limit=effective_limit,
+    )
+
+
+async def _run_n(
+    concurrency: int, *, host_capacity: int | None = None
+) -> tuple[_Machine, list[Any]]:
+    wave = await _run_wave(concurrency, host_capacity=host_capacity)
+    return wave.machine, wave.results
 
 
 @pytest.mark.parametrize("concurrency", CONCURRENCY_LEVELS)
@@ -564,3 +986,522 @@ async def test_a_run_without_admitted_capacity_keeps_the_pre_patch_shape() -> No
 
     assert result.summary == "done-solo"
     assert machine.admitted_capacity == [None]
+
+
+# ---------------------------------------------------------------------------
+# MoonLadderStudios/MoonMind#3885 — observed overlap, injected authority-handoff
+# failures, bounded repeated waves, and honest cleanup reporting.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("concurrency", CONCURRENCY_LEVELS)
+@pytest.mark.asyncio
+async def test_observed_overlap_proves_simultaneous_useful_execution(
+    concurrency: int,
+) -> None:
+    """The peak is swept from observed windows, not asserted by the test.
+
+    This is also the hermetic layer's evidence producer. When the qualification
+    runner exports an evidence directory, the observation this test measured is
+    published there under the level it measured, so the hermetic row carries a
+    resolvable observation instead of being recorded ``partial`` forever. With
+    no evidence directory exported — an ordinary developer run — publishing is
+    a no-op and the assertions below are the whole test.
+    """
+
+    wave = await _run_wave(concurrency)
+
+    assert wave.gate.satisfied, "executions never held the barrier together"
+    overlap = wave.overlap()
+    assert overlap.observed_peak == concurrency
+    assert overlap.durable_waiters == ()
+    # Each workflow delivered its first message exactly once.
+    assert sorted(wave.machine.first_messages) == sorted(
+        f"session-{index}" for index in range(concurrency)
+    )
+
+    publish_observed_overlap(ConcurrencyQualificationLayer.hermetic, overlap)
+
+
+@pytest.mark.asyncio
+async def test_the_hermetic_layer_publishes_evidence_the_runner_can_load(
+    tmp_path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The layer's observation is readable by the qualification runner.
+
+    Without this, the hermetic owning tests can stay green forever while the
+    qualification runner records the layer as ``partial`` — tests passed, but
+    nothing observed the concurrency being claimed — and no level is ever
+    validated.
+    """
+
+    monkeypatch.setenv(CONCURRENCY_EVIDENCE_DIR_ENV, str(tmp_path))
+    wave = await _run_wave(4)
+
+    published = publish_observed_overlap(
+        ConcurrencyQualificationLayer.hermetic, wave.overlap()
+    )
+
+    assert published is not None and published.exists()
+    loaded = load_observed_overlap(
+        tmp_path, ConcurrencyQualificationLayer.hermetic, 4
+    )
+    assert loaded is not None
+    assert loaded.observed_peak == 4
+    assert loaded.barrier_synchronized is True
+
+
+@pytest.mark.asyncio
+async def test_sequential_execution_cannot_be_filed_as_overlap_evidence() -> None:
+    """An expected invariant violation must actually fail the suite.
+
+    This is the broken-allocator case: N runs that completed one after another
+    look identical to N successes at the summary level, so the evidence
+    contract has to reject them explicitly.
+    """
+
+    sequential = tuple(
+        ExecutionOverlapSample(
+            execution_ref=f"run-{index}",
+            started_at=float(index),
+            ended_at=float(index) + 0.5,
+        )
+        for index in range(4)
+    )
+    with pytest.raises(ValueError, match="observed peak concurrency"):
+        ObservedOverlapEvidence(
+            requested_level=4,
+            effective_limit=4,
+            barrier_synchronized=True,
+            samples=sequential,
+        )
+
+
+@pytest.mark.asyncio
+async def test_a_lower_effective_limit_observes_the_limit_and_refuses_the_rest() -> None:
+    """Under a lower limit the peak is the limit; here the surplus is refused.
+
+    This substrate refuses above the limit at the realizer, so the surplus holds
+    nothing and is gone -- it is not preserved anywhere and it is not a durable
+    waiter. Publishing it as one would claim the record's preservation property
+    on evidence of a refusal, so the model refuses that claim. Genuine durable
+    waiting is proven where it happens, at the dispatch boundary
+    (``tests/unit/omnigent/test_generic_plane_production_boundary_concurrency.py``).
+    """
+
+    wave = await _run_wave(4, host_capacity=2)
+
+    refusals = wave.failures
+    assert len(refusals) == 2
+    for failure in refusals:
+        assert isinstance(failure, HarnessPlatformError)
+        assert failure.code == "OMNIGENT_HOST_CAPACITY_UNAVAILABLE"
+
+    # The evidence this wave can honestly publish is for the level it ran.
+    observed = wave.overlap(requested_level=2)
+    assert observed.observed_peak == 2
+    assert observed.durable_waiters == ()
+
+    # Claiming the requested level needs two executions observed waiting in a
+    # durable queue, and this wave produced none.
+    with pytest.raises(ValueError, match="observed as durable waiters"):
+        wave.overlap()
+
+
+#: Every authority handoff the concurrent journey crosses, in order. A failure
+#: at any one of them must stay confined to its own run.
+AUTHORITY_HANDOFFS = [
+    "turn_claim",
+    "provider_lease_confirmation",
+    # The provider grant exists, but the execution is not bound to a run yet.
+    "runtime_binding_creation",
+    "credential_preparation",
+    "workspace_preparation",
+    # The execution is scheduled and its host has not started yet.
+    "host_lease_acquisition",
+    # The container and state volume are being created.
+    "host_container_creation",
+    "host_registration",
+    "session_creation",
+    "first_message",
+    # The session is live and streaming.
+    "event_streaming",
+    "harvest",
+]
+
+#: Handoffs that trip only after this run's first message was delivered.
+_POST_FIRST_MESSAGE_HANDOFFS = frozenset({"event_streaming", "harvest"})
+
+
+@pytest.mark.parametrize("handoff", AUTHORITY_HANDOFFS)
+@pytest.mark.asyncio
+async def test_a_failed_handoff_is_confined_to_its_own_run(handoff: str) -> None:
+    """Invariant: one run's failed handoff never touches another run.
+
+    At concurrency 4 a shared identity, a shared cleanup claim, or a released
+    neighbour lease shows up here as a missing completion or a leaked host.
+    """
+
+    wave = await _run_wave(4, faults=_Faults(points={"0": handoff}))
+
+    assert len(wave.failures) == 1
+    assert sorted(item.summary for item in wave.completed) == [
+        "done-1",
+        "done-2",
+        "done-3",
+    ]
+    # The three healthy runs still overlapped; the failure did not serialize
+    # the machine.
+    assert wave.gate.satisfied
+    # Nothing leaked, and the failed run never released a neighbour's capacity.
+    assert wave.machine.allocated_hosts == set()
+    assert wave.machine.provider_releases == []
+    assert wave.machine.cleanup_scan().zero_leak
+    # No identity crossed between runs: a failure that reused a neighbour's
+    # container, volume, workspace or cleanup claim appears here as a duplicate.
+    for key in (
+        "omnigentHostId",
+        "containerName",
+        "stateVolumeRef",
+        "workspacePath",
+        "hostCleanupRef",
+    ):
+        values = [record[key] for record in wave.machine.launched]
+        assert len(set(values)) == len(values), f"{key} crossed a run boundary"
+    assert len(set(wave.machine.sessions)) == len(wave.machine.sessions)
+    assert len(set(wave.machine.runtime_bindings)) == len(
+        wave.machine.runtime_bindings
+    )
+    # No run consumed another run's first message.
+    assert len(wave.machine.first_messages) == len(set(wave.machine.first_messages))
+    # A run that never got past its first message never posted one.
+    delivered_zero = "session-0" in wave.machine.first_messages
+    assert delivered_zero == (handoff in _POST_FIRST_MESSAGE_HANDOFFS)
+
+
+@pytest.mark.asyncio
+async def test_a_lost_registration_acknowledgment_reclaims_the_same_host() -> None:
+    """Ambiguous registration does not authorize a second launch.
+
+    The container was created and recorded; only the acknowledgment was lost.
+    Cleanup must reclaim that exact host, and no run may be launched twice.
+    """
+
+    wave = await _run_wave(
+        4, faults=_Faults(points={"0": "host_registration"}, lost_ack=True)
+    )
+
+    assert len(wave.failures) == 1
+    launched_for_run_zero = [
+        record for record in wave.machine.launched if record["hostId"] == "host-0"
+    ]
+    assert len(launched_for_run_zero) == 1, "an ambiguous ack authorized a relaunch"
+    assert wave.machine.allocated_hosts == set()
+    assert wave.machine.cleanup_scan().zero_leak
+    assert wave.machine.provider_releases == []
+
+
+#: Teardown steps the host reclaim depends on. ``drain`` runs before the host
+#: is removed, so a failure at either point strands the container for the
+#: janitor rather than reclaiming it inline.
+BLOCKING_TEARDOWN_STEPS = ["drain", "host_teardown"]
+
+
+@pytest.mark.parametrize("step", BLOCKING_TEARDOWN_STEPS)
+@pytest.mark.asyncio
+async def test_an_unresolved_teardown_is_never_a_zero_leak_pass(step: str) -> None:
+    """A container the teardown could not remove stays visibly unresolved.
+
+    This is the false-clean-scan invariant: the run reached its terminal
+    result, so a scan that only counted completions would report zero leaks
+    while one container is still consuming the machine. The scan reports the
+    stranded host instead, which is what makes the leak actionable.
+    """
+
+    wave = await _run_wave(4, faults=_Faults(points={"0": step}))
+
+    assert wave.gate.satisfied
+    assert wave.machine.allocated_hosts == {"0"}
+    scan = wave.machine.cleanup_scan()
+    assert not scan.zero_leak
+    assert "host-0" in {entry.resource_ref for entry in scan.unresolved}
+    # One run's stuck teardown never releases a neighbour's capacity, and the
+    # three healthy runs still reclaimed their own hosts.
+    assert wave.machine.provider_releases == []
+    for index in (1, 2, 3):
+        assert f"host-cleanup:{index}" in wave.machine.cleanups
+
+
+@pytest.mark.asyncio
+async def test_a_credential_teardown_failure_still_reclaims_the_host() -> None:
+    """Credential teardown runs after the host reclaim and cannot strand it."""
+
+    wave = await _run_wave(4, faults=_Faults(points={"0": "credential_cleanup"}))
+
+    assert wave.gate.satisfied
+    assert wave.machine.allocated_hosts == set()
+    assert wave.machine.cleanup_scan().zero_leak
+    assert wave.machine.provider_releases == []
+
+
+@pytest.mark.asyncio
+async def test_repeated_waves_show_bounded_growth() -> None:
+    """Repeated waves must not grow per-lease work, requests, or residue."""
+
+    level = 4
+    observations: list[WaveObservation] = []
+    for index in range(3):
+        started = time.monotonic()
+        wave = await _run_wave(level)
+        observations.append(
+            wave.observation(index, time.monotonic() - started)
+        )
+
+    # The budget is resolved from the class this wave actually ran on. The
+    # exact-image layer resolves its own; neither can borrow the other's.
+    report = RepeatedWaveReport(
+        level=level,
+        thresholds=repeated_wave_thresholds(HERMETIC_RESOURCE_CLASS_REF),
+        waves=tuple(observations),
+    )
+    assert report.bounded, report.violations
+    # The latencies are measurements, not placeholders: every wave observed a
+    # wait, a launch, a registration and a teardown.
+    for observation in observations:
+        assert observation.wait_seconds > 0.0
+        assert observation.launch_seconds > 0.0
+        assert observation.registration_seconds > 0.0
+        assert observation.cleanup_seconds > 0.0
+
+
+@pytest.mark.asyncio
+async def test_a_growing_leak_fails_the_repeated_wave_report() -> None:
+    """The bounded-growth check must actually catch a wave-over-wave leak."""
+
+    def _observation(index: int, *, residual: int, mutations: int) -> WaveObservation:
+        return WaveObservation(
+            wave_index=index,
+            observed_peak=4,
+            wait_seconds=0.0,
+            launch_seconds=0.0,
+            registration_seconds=0.0,
+            control_seconds=1.0,
+            cleanup_seconds=0.0,
+            lease_mutations=mutations,
+            registration_requests=4,
+            transport_pool_peak=4,
+            residual_resources=residual,
+        )
+
+    report = RepeatedWaveReport(
+        level=4,
+        thresholds=DEFAULT_REPEATED_WAVE_THRESHOLDS,
+        waves=(
+            _observation(0, residual=0, mutations=8),
+            _observation(1, residual=1, mutations=12),
+        ),
+    )
+    assert not report.bounded
+    violations = " ".join(report.violations)
+    assert "residual resources" in violations
+    assert "database mutations grew" in violations
+
+
+@pytest.mark.asyncio
+async def test_capacity_is_not_reused_before_teardown_is_proven() -> None:
+    """A stranded host keeps consuming the slot it was never released from.
+
+    This is the premature-release invariant. The first wave's run 0 reached a
+    terminal result but its container was never removed, so the machine is
+    still carrying it. A second wave must be admitted against the real
+    occupancy, not against the count of finished workflows — otherwise the
+    machine is oversubscribed by exactly the number of unresolved teardowns.
+    """
+
+    machine = _Machine()
+    first = await _run_wave(
+        4, machine=machine, faults=_Faults(points={"0": "host_teardown"})
+    )
+    assert first.machine.allocated_hosts == {"0"}
+    assert not machine.cleanup_scan().zero_leak
+
+    # Four more submissions against a machine of four, one slot of which is
+    # still held by the stranded host: exactly three may run.
+    second = await _run_wave(
+        4, host_capacity=4, machine=machine, offset=10, expected_overlap=3
+    )
+
+    assert len(second.completed) == 3
+    refusals = second.failures
+    assert len(refusals) == 1
+    assert isinstance(refusals[0], HarnessPlatformError)
+    assert refusals[0].code == "OMNIGENT_HOST_CAPACITY_UNAVAILABLE"
+    # The machine never exceeded its four slots, and the stranded host is still
+    # counted rather than quietly reclaimed by the second wave.
+    assert machine.peak_hosts == 4
+    assert machine.allocated_hosts == {"0"}
+    assert second.gate.satisfied
+    # The fourth submission was refused, not queued, so the honest observation
+    # is for the three that ran.
+    assert second.overlap(requested_level=3).observed_peak == 3
+
+
+@pytest.mark.asyncio
+async def test_a_late_registration_completion_authorizes_no_second_host() -> None:
+    """The caller gave up first; the side effect landed during teardown.
+
+    This is the mirror of the lost acknowledgment. There the mutation happened
+    and the answer was lost; here the answer never came and the mutation lands
+    afterwards, while cleanup is already running. Both have to converge on the
+    same host identity, and neither may authorize a second launch.
+    """
+
+    wave = await _run_wave(
+        4, faults=_Faults(points={"0": "host_registration"}, late_completion=True)
+    )
+
+    assert len(wave.failures) == 1
+    launched_for_run_zero = [
+        record for record in wave.machine.launched if record["hostId"] == "host-0"
+    ]
+    assert len(launched_for_run_zero) == 1, "a late completion authorized a relaunch"
+    # The reconciled record is the exact identity cleanup already held.
+    assert launched_for_run_zero[0]["hostCleanupRef"] == "host-cleanup:0"
+    assert wave.machine.allocated_hosts == set()
+    assert wave.machine.cleanup_scan().zero_leak
+    assert wave.machine.provider_releases == []
+    # The three healthy runs are untouched by the late arrival.
+    assert sorted(item.summary for item in wave.completed) == [
+        "done-1",
+        "done-2",
+        "done-3",
+    ]
+
+
+@pytest.mark.asyncio
+async def test_a_failed_final_release_never_overwrites_a_completed_run() -> None:
+    """Provider capacity is released last, and its failure is not the outcome.
+
+    The run reached a terminal result before the final release was attempted,
+    so a release failure leaves the release recoverable rather than rewriting
+    an objectively completed turn — and it never touches a neighbour's slot.
+    """
+
+    wave = await _run_wave(4, faults=_Faults(points={"0": "capacity_release"}))
+
+    assert sorted(item.summary for item in wave.completed) == [
+        f"done-{index}" for index in range(4)
+    ]
+    assert wave.failures == []
+    assert wave.machine.allocated_hosts == set()
+    assert wave.machine.cleanup_scan().zero_leak
+    assert wave.machine.provider_releases == []
+
+
+@pytest.mark.asyncio
+async def test_control_operations_progress_under_stream_saturation() -> None:
+    """Cancellation and teardown still complete while events saturate.
+
+    A saturated event stream is the load that makes a control operation look
+    like a hang: if cancellation or cleanup is scheduled behind the stream, a
+    cancelled run keeps its container while the machine reports itself busy.
+    The saturated wave is measured against the same budget as the quiet one, so
+    a control path that only progresses when the stream is idle fails here.
+    """
+
+    level = 4
+    baseline = await _run_wave(level)
+    baseline_started = time.monotonic()
+    quiet = baseline.observation(0, time.monotonic() - baseline_started)
+
+    machine = _Machine()
+    gate = _ConcurrencyGate(level)
+    started = time.monotonic()
+    tasks = [
+        asyncio.create_task(
+            _build_realizer(
+                str(index),
+                machine,
+                admission=_LedgerAdmission(machine, host_capacity=level),
+                gate=gate,
+                stream_events=2000,
+            ).execute(_request(str(index), workflow_owned=True), _zen_plan(str(index)))
+        )
+        for index in range(level)
+    ]
+    # Cancel one run only once every session is provably live and streaming.
+    while not gate.satisfied:
+        await asyncio.sleep(0)
+    tasks[0].cancel()
+    results = await asyncio.gather(*tasks, return_exceptions=True)
+    control_seconds = time.monotonic() - started
+
+    saturated = _Wave(
+        machine=machine,
+        results=list(results),
+        gate=gate,
+        requested_level=level,
+        effective_limit=level,
+    )
+
+    assert machine.streamed_events > 0, "the stream never saturated"
+    assert isinstance(results[0], asyncio.CancelledError)
+    assert sorted(
+        item.summary for item in saturated.completed
+    ) == ["done-1", "done-2", "done-3"]
+    # The cancelled run released its own host under load, and no neighbour's
+    # capacity was released for it.
+    assert machine.allocated_hosts == set()
+    assert machine.cleanup_scan().zero_leak
+    assert machine.provider_releases == []
+
+    report = RepeatedWaveReport(
+        level=level,
+        thresholds=DEFAULT_REPEATED_WAVE_THRESHOLDS,
+        waves=(quiet, saturated.observation(1, control_seconds)),
+    )
+    assert report.bounded, report.violations
+
+
+@pytest.mark.asyncio
+async def test_two_worker_replicas_share_one_machine_ledger() -> None:
+    """Two workers admitting independently still cannot oversubscribe one machine.
+
+    Each replica runs its own admission client against the same machine, which
+    is the deployed topology: worker concurrency is a per-replica setting and
+    the machine is shared. A ledger that counted per replica would admit twice
+    the capacity here.
+    """
+
+    capacity = 4
+    machine = _Machine()
+    gate = _ConcurrencyGate(capacity)
+    # Replica A owns runs 0-2, replica B owns runs 10-12: six submissions
+    # against a machine of four.
+    runs = [str(index) for index in (0, 1, 2, 10, 11, 12)]
+    results = await asyncio.gather(
+        *(
+            _build_realizer(
+                run,
+                machine,
+                admission=_LedgerAdmission(machine, host_capacity=capacity),
+                gate=gate,
+            ).execute(_request(run, workflow_owned=True), _zen_plan(run))
+            for run in runs
+        ),
+        return_exceptions=True,
+    )
+
+    refusals = [item for item in results if isinstance(item, BaseException)]
+    assert len(refusals) == len(runs) - capacity
+    for failure in refusals:
+        assert isinstance(failure, HarnessPlatformError)
+        assert failure.code == "OMNIGENT_HOST_CAPACITY_UNAVAILABLE"
+    assert machine.peak_hosts == capacity
+    assert gate.satisfied, "the admitted runs never overlapped across replicas"
+    # No identity crossed between the two replicas' runs.
+    for key in ("omnigentHostId", "containerName", "stateVolumeRef"):
+        values = [record[key] for record in machine.launched]
+        assert len(set(values)) == len(values), f"{key} crossed a replica boundary"
+    assert machine.allocated_hosts == set()
+    assert machine.cleanup_scan().zero_leak

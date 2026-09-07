@@ -385,10 +385,22 @@ defaultModel: opencode-go/muse-spark-1.3-contributor
 ```
 
 A user may enroll it through Settings with a write-only API-key field. A
-deployment may also bootstrap it from `OPENCODE_API_KEY`. On restart, that
-deployment setting repairs a missing, partially enrolled, or automatically
-disabled `opencode-go-default` profile through the same pinned-runtime
-validation path. Explicit user and policy disables remain authoritative.
+deployment may also bootstrap it from `OPENCODE_API_KEY`. Reconciliation repairs
+a missing, partially enrolled, or automatically disabled `opencode-go-default`
+profile and rotates its stored credential when the configured key changes,
+through the same pinned-runtime validation path. A successful rotation commits
+the key, incremented credential generation, and catalog evidence together;
+failed credential validation preserves the previous credential and evidence.
+An unchanged key does not trigger rotation. Existing model, effort, tier policy,
+and runtime-default selection remain authoritative, as do explicit user and
+policy disables. Other Provider Profiles are not targets of this key rotation.
+
+A nonblank deployment key is authoritative for this default profile; removing
+the environment value leaves the enrolled credential intact. After editing
+`.env`, recreate the API service with `docker compose up -d api` so its process
+loads the changed environment. A container restart alone does not reload
+`.env`. Startup reconciliation then applies the new key without requiring a
+second update in Settings.
 
 The raw key is never returned after submission.
 

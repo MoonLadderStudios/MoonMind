@@ -463,6 +463,15 @@ class RolloutSelectionContext(BaseModel):
     support_evidence_expired: bool = Field(
         default=False, alias="supportEvidenceExpired"
     )
+    #: Whether the resolved row would also satisfy admission. A recorded
+    #: ``failed``/``blocked``/``unavailable``/``partial``/``skipped`` row is
+    #: present and unexpired, so neither of the two fields above can express it
+    #: (MoonLadderStudios/MoonMind#3885). Without this dimension the gate
+    #: promotes a combination that :func:`load_protected_execution_support_evidence`
+    #: refuses at execution time.
+    support_evidence_usable: bool = Field(
+        default=True, alias="supportEvidenceUsable"
+    )
     launch_ready: bool = Field(default=True, alias="launchReady")
     model_qualified: bool = Field(default=True, alias="modelQualified")
     architecture_supported: bool = Field(default=True, alias="architectureSupported")
@@ -688,6 +697,12 @@ def _readiness_denials(
             denials.append(RolloutReason.support_evidence_missing)
         elif context.support_evidence_expired:
             denials.append(RolloutReason.support_evidence_stale)
+        elif not context.support_evidence_usable:
+            # A row exists and is current, but it records a non-pass outcome,
+            # so no passing row backs this combination and admission will
+            # refuse the same document. Reported as "missing" rather than a new
+            # reason: what the operator has to restore is a passing row.
+            denials.append(RolloutReason.support_evidence_missing)
         elif (
             rule.evidence_max_age_seconds is not None
             and context.support_evidence_age_seconds is not None

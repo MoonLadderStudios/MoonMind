@@ -297,6 +297,93 @@ def test_missing_and_stale_support_evidence_deny_promotion():
     assert fresh.state is RolloutState.new_work_default
 
 
+def test_a_recorded_non_pass_support_row_denies_promotion():
+    """A present, unexpired row that admission refuses must still demote.
+
+    MoonLadderStudios/MoonMind#3885 made ``failed``/``blocked``/``unavailable``/
+    ``partial``/``skipped`` protected rows recordable. Such a row reports a ref
+    and ``expired=False``, so before this dimension existed the gate saw a
+    current, named ref and promoted a combination that
+    ``load_protected_execution_support_evidence`` refuses at execution time.
+    """
+
+    policy = _policy({_CODEX_GATE: "true"})
+    evidence_required = policy.model_copy(
+        update={
+            "rules": tuple(
+                rule.model_copy(update={"requires_support_evidence": True})
+                for rule in policy.rules
+            )
+        }
+    )
+
+    decision = resolve_rollout_decision(
+        policy=evidence_required,
+        combination=_combination(),
+        context=RolloutSelectionContext(
+            supportEvidenceRef="https://example.invalid/actions/runs/123",
+            supportEvidenceAgeSeconds=60.0,
+            supportEvidenceExpired=False,
+            supportEvidenceUsable=False,
+        ),
+    )
+
+    assert decision.state is RolloutState.explicit_only
+    assert decision.default_eligible is False
+    assert (
+        RolloutReason.support_evidence_missing in decision.unavailable_reasons
+    )
+    # The frozen record an execution plan carries names the evidence, so the
+    # operator is not left with a promoted plan that fails later without a
+    # rollout reason.
+    assert freeze_rollout_record(decision)["reasonCode"] == str(
+        RolloutReason.support_evidence_missing
+    )
+
+
+def test_an_unusable_row_is_denied_before_the_rule_age_window():
+    """Usability is checked on its own, not folded into the age window."""
+
+    policy = _policy({_CODEX_GATE: "true"})
+    evidence_required = policy.model_copy(
+        update={
+            "rules": tuple(
+                rule.model_copy(
+                    update={
+                        "requires_support_evidence": True,
+                        "evidence_max_age_seconds": 3600,
+                    }
+                )
+                for rule in policy.rules
+            )
+        }
+    )
+    # Well inside the rule's age window, so only the recorded outcome can deny.
+    denied = resolve_rollout_decision(
+        policy=evidence_required,
+        combination=_combination(),
+        context=RolloutSelectionContext(
+            supportEvidenceRef="artifact:art_1",
+            supportEvidenceAgeSeconds=10.0,
+            supportEvidenceUsable=False,
+        ),
+    )
+    assert RolloutReason.support_evidence_missing in denied.unavailable_reasons
+    assert RolloutReason.support_evidence_stale not in denied.unavailable_reasons
+
+    # An expired row still reports "stale": the two states stay distinguishable.
+    stale = resolve_rollout_decision(
+        policy=evidence_required,
+        combination=_combination(),
+        context=RolloutSelectionContext(
+            supportEvidenceRef="artifact:art_1",
+            supportEvidenceExpired=True,
+            supportEvidenceUsable=False,
+        ),
+    )
+    assert RolloutReason.support_evidence_stale in stale.unavailable_reasons
+
+
 # --- Canary allowlists ------------------------------------------------------
 
 

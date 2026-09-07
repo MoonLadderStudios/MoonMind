@@ -383,6 +383,133 @@ async def test_configured_api_key_enrolls_the_profile_on_a_cold_deployment(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("stored_key", [API_KEY, "previous-deployment-key"])
+async def test_deployment_key_change_rotates_connected_default(monkeypatch, stored_key):
+    """A current catalog must not hide a stale deployment credential."""
+    _install_stubs(monkeypatch)
+    profile = _profile(evidence_image=CURRENT_IMAGE)
+    profile.default_effort = "high"
+
+    class Resolver:
+        async def resolve(self, ref):
+            assert ref.locator == "opencode-key"
+            return stored_key
+
+    monkeypatch.setattr(
+        "moonmind.omnigent.production.build_omnigent_secret_resolver", Resolver
+    )
+    controller = _Controller()
+    outcome = await reconcile_opencode_provider_readiness(
+        session_factory=_session_factory([profile]),
+        env={"OPENCODE_API_KEY": API_KEY},
+        controller=controller,
+    )
+    assert outcome.ready
+    assert outcome.enrolled is (stored_key != API_KEY)
+    assert len(controller.calls) == (0 if stored_key == API_KEY else 1)
+    if controller.calls:
+        assert controller.calls[0]["api_key"] == API_KEY
+        assert controller.calls[0]["model_display_name"] == profile.default_model
+        assert controller.calls[0]["effort"] == "high"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "env", [{}, {"OPENCODE_API_KEY": ""}, {"OPENCODE_API_KEY": "  "}]
+)
+async def test_absent_deployment_key_preserves_enrolled_default(monkeypatch, env):
+    _install_stubs(monkeypatch)
+    controller = _Controller()
+    outcome = await reconcile_opencode_provider_readiness(
+        session_factory=_session_factory([_profile(evidence_image=CURRENT_IMAGE)]),
+        env=env,
+        controller=controller,
+    )
+    assert outcome.ready and not outcome.enrolled
+    assert controller.calls == []
+
+
+@pytest.mark.asyncio
+async def test_targeted_refresh_does_not_rotate_from_deployment_key(monkeypatch):
+    _install_stubs(monkeypatch)
+    controller = _Controller()
+    profile = _profile(evidence_image=CURRENT_IMAGE)
+    outcome = await reconcile_opencode_provider_readiness(
+        session_factory=_session_factory([profile]),
+        env={"OPENCODE_API_KEY": API_KEY},
+        profile_ids=[profile.profile_id],
+        controller=controller,
+    )
+    assert outcome.ready and not outcome.enrolled
+    assert controller.calls == []
+
+
+@pytest.mark.asyncio
+async def test_unreadable_enrolled_key_defers_rotation_without_disclosing_error(
+    monkeypatch,
+):
+    _install_stubs(monkeypatch)
+
+    class Resolver:
+        async def resolve(self, ref):
+            raise RuntimeError(API_KEY)
+
+    monkeypatch.setattr(
+        "moonmind.omnigent.production.build_omnigent_secret_resolver", Resolver
+    )
+    controller = _Controller()
+    outcome = await reconcile_opencode_provider_readiness(
+        session_factory=_session_factory([_profile(evidence_image=CURRENT_IMAGE)]),
+        env={"OPENCODE_API_KEY": API_KEY},
+        controller=controller,
+    )
+    assert not outcome.ready
+    assert API_KEY not in outcome.reason
+    assert "could not compare" in outcome.reason
+    assert controller.calls == []
+
+
+@pytest.mark.asyncio
+async def test_env_backed_default_is_enrolled_before_comparing_credentials(monkeypatch):
+    _install_stubs(monkeypatch)
+    controller = _Controller()
+    outcome = await reconcile_opencode_provider_readiness(
+        session_factory=_session_factory(
+            [
+                _profile(
+                    evidence_image=CURRENT_IMAGE,
+                    secret_refs={"opencode_api_key": "env://OPENCODE_API_KEY"},
+                )
+            ]
+        ),
+        env={"OPENCODE_API_KEY": API_KEY},
+        controller=controller,
+    )
+    assert outcome.ready and outcome.enrolled
+    assert len(controller.calls) == 1
+
+
+@pytest.mark.asyncio
+async def test_custom_go_profile_does_not_consume_deployment_default_key(monkeypatch):
+    _install_stubs(monkeypatch)
+    controller = _Controller()
+    custom = _profile(profile_id="custom-go", evidence_image=CURRENT_IMAGE)
+    outcome = await reconcile_opencode_provider_readiness(
+        session_factory=_session_factory([custom]),
+        env={"OPENCODE_API_KEY": API_KEY},
+        controller=controller,
+    )
+    assert outcome.ready and outcome.enrolled
+    assert controller.calls == [
+        {
+            "api_key": API_KEY,
+            "accept_contributor_data_use": True,
+        }
+    ]
+    assert custom.secret_refs == {"opencode_api_key": "db://opencode-key"}
+
+
+@pytest.mark.asyncio
 async def test_credentialless_zen_does_not_suppress_configured_go_enrollment(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

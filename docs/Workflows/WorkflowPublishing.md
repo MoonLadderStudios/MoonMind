@@ -148,6 +148,8 @@ A new request has one canonical authored branch in its repository/source target,
 
 An omitted repository branch is resolved through the selected repository's authoritative default branch, never an unconditional `main` fallback. An explicitly selected base survives target discovery and fan-out. Discovery cannot replace `release/1.2` with the remote default merely because it fetched repository metadata.
 
+For publication, that authoritative default is the repository default recorded by clone in `origin/HEAD`. Workspaces without that record resolve the remote's symbolic `HEAD` and persist it before publishing. Publication never assumes a default branch name, and retries retain the resolved selection even if the remote default changes. An unavailable default requires explicit branch selection.
+
 For an existing PR, the ordinary target input is the PR reference. A branch-only lookup may be an alternative target locator, but must resolve exactly one eligible PR. Repository/head/base information then becomes resolved read-only target context. A conflicting explicit repository or PR reference is rejected. Missing, ambiguous, fork-only, or unsupported cross-repository targets fail or are truthfully skipped under the discovery contract; no guessing or fallback checkout is allowed.
 
 A PR batch displays that branches come from the discovered PRs. Its coordinator's own checkout branch, if any, is not a destination for its children. Changing target-derived branch identity does not change the inherited publication policy.
@@ -300,6 +302,8 @@ Agents produce the candidate and semantic work description. The managed publishe
 After successful provider-conditional publication, including an already-current remote revision, the publisher emits the same `moonmind.publish.repository.v1` artifact with owner moonmind. Its admitted target, original base revision, published revision, changes/scan refs, connection/client evidence, and exact remote proof are validated together. Consumers retain a run-owned reference to that accepted artifact and its target/candidate association, not a second `acceptedRepositoryEvidence` object or raw `push_*` metadata.
 
 Before comparison, refresh the exact remote base. Use the provider's admitted compare-and-set or exact publication lease, then verify the live remote revision equals the candidate. An unavailable base, incompatible expected-tip movement, mismatching revision, or indeterminate comparison cannot produce accepted evidence or allow PR creation. Reconcile a lost acknowledgement before repeating an effect. Persist candidate and branch identity so retries do not generate new commits or duplicate PRs.
+
+In managed `branch` publication, the shared Omnigent publication boundary passes the resolved authored branch as the publication destination for every harness. It must not generate a replacement job branch. Publication verifies fast-forward ancestry and uses an exact remote-tip lease; concurrent remote updates or branch deletion must fail publication rather than overwrite or recreate the branch. A retry whose local head already equals the selected remote head returns verified no-change evidence for that same branch.
 
 Before pushing, reject hard-protected `main`, `master`, detached `HEAD`, and unknown Git branch states, as well as applicable repository/provider protection. For PR mode the separate work branch is pushed, never the authored base. A refused push is an explicit publication blocker, not successful publication or a mere warning that permits downstream handoff.
 
