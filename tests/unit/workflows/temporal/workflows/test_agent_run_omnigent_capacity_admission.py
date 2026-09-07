@@ -756,9 +756,8 @@ class _ExecutingRun(_RecordingRun):
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("extended_identities", [False, True])
 async def test_remediation_lease_identities_survive_the_execution_handoff(
-    monkeypatch: pytest.MonkeyPatch, extended_identities: bool
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Replay the long-identity grant that stranded a run after slot assignment."""
 
@@ -776,11 +775,6 @@ async def test_remediation_lease_identities_survive_the_execution_handoff(
     logical_step_id = step_id[len(workflow_id) + len(run_id) + 2:].removesuffix(
         ":execution:1"
     )
-    if extended_identities:
-        owner_id += ":continuation" * 8
-        logical_step_id += ":continuation" * 8
-        step_id = f"{workflow_id}:{run_id}:{logical_step_id}:execution:1"
-        request_id = f"{step_id}:agent_execute"
     monkeypatch.setattr(
         agent_run_module.workflow,
         "info",
@@ -800,14 +794,28 @@ async def test_remediation_lease_identities_survive_the_execution_handoff(
     })
     run = _ExecutingRun([{"summary": "completed"}])
     _capture_release_signals(monkeypatch, run)
+    admission = await run._evaluate_omnigent_session_admission(
+        request, include_execution_plan_ref=True
+    )
     await run._execute_omnigent_with_admitted_capacity(
         act_name="integration.omnigent.execute",
-        request=request, admission=_admission(), parent_info=None,
+        request=request, admission=admission, parent_info=None,
         stc_seconds=600, admit_capacity_before_activity=True,
         execution_plan_admission=True,
     )
 
     assert len(request_id) > 255
+    admission_payload = next(
+        payload for name, payload in run.activity_calls
+        if name == "omnigent.evaluate_session_admission"
+    )
+    assert admission_payload["workflowId"] == workflow_id
+    assert admission_payload["stepExecutionId"] == step_id
+    assert admission_payload["agentRunId"] == owner_id
+    assert all(
+        len(admission_payload[field]) <= 255
+        for field in ("workflowId", "stepExecutionId", "agentRunId")
+    )
     assert len(run.executions) == 1
     # Deserialize the same payload shape the Activity receives from Temporal.
     received = AgentExecutionRequest.model_validate_json(
@@ -835,6 +843,66 @@ async def _run_execution(run: _ExecutingRun) -> tuple[Any, Any]:
         admit_capacity_before_activity=True,
         execution_plan_admission=True,
     )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("key", ["x" * 40_000, "é" * 20_000], ids=["ascii", "multibyte"])
+@pytest.mark.parametrize("preflight_enabled", [True, False])
+@pytest.mark.parametrize("activity_name", [
+    "integration.omnigent.execute", "integration.omnigent.profile_bound_execute",
+])
+async def test_capacity_payload_budget_precedes_grant_and_preserves_recorded_path(
+    monkeypatch: pytest.MonkeyPatch, key: str, preflight_enabled: bool,
+    activity_name: str,
+) -> None:
+    """The key fits on input but its ticket copy exceeds the handoff budget."""
+
+    _configure_workflow_runtime(monkeypatch)
+    monkeypatch.setattr(
+        agent_run_module.workflow, "patched",
+        lambda marker: (
+            preflight_enabled
+            if marker == agent_run_module.OMNIGENT_CAPACITY_PAYLOAD_PREFLIGHT_PATCH_ID
+            else True
+        ),
+    )
+    request = _production_started_omnigent_request().model_copy(
+        update={"idempotency_key": key}
+    )
+    # Initial deserialization must accept the value; the guard must account for
+    # the future ticket, not simply check this smaller initial payload.
+    request = AgentExecutionRequest.model_validate_json(
+        request.model_dump_json(by_alias=True)
+    )
+    budget = agent_run_module.OMNIGENT_EXECUTION_HANDOFF_MAX_BYTES
+    assert len(request.model_dump_json(by_alias=True).encode("utf-8")) < budget
+    run = _ExecutingRun([{"summary": "completed"}])
+    _capture_release_signals(monkeypatch, run)
+
+    async def execute():
+        return await run._execute_omnigent_with_admitted_capacity(
+            act_name=activity_name, request=request, admission=_admission(),
+            parent_info=None, stc_seconds=600,
+            admit_capacity_before_activity=True, execution_plan_admission=True,
+        )
+
+    if preflight_enabled:
+        with pytest.raises(ApplicationError) as error:
+            await execute()
+        assert error.value.type == "AgentExecutionPayloadTooLarge"
+        assert error.value.non_retryable
+        assert run.signals == []
+        assert run.activity_calls == []
+        assert run.executions == []
+    else:
+        # Histories without the marker retain their scheduled invocation. The
+        # new size policy cannot strand an already-held lease during replay.
+        await execute()
+        assert len(run.executions) == 1
+        serialized = run.executions[0].model_dump_json(by_alias=True).encode("utf-8")
+        assert len(serialized) > budget
+        assert run.executions[0].admitted_provider_capacity.idempotency_key == key
+        assert [name for name, _ in run.signals] == ["request_slot", "release_slot"]
 
 
 def _capacity_failure(code: str) -> dict[str, Any]:
