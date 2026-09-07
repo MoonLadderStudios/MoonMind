@@ -1,0 +1,95 @@
+{
+  "incidentWorkflowId": "mm:7ecd83e1-f260-4d02-828d-fd9e59e1f8b8-2026-09-07T07:56:37Z",
+  "failure": "selected skill moonspec-verify was not resolved into the agent skill snapshot",
+  "initialParameters": {
+    "task": {
+      "skill": {
+        "id": "auto"
+      },
+      "steps": [
+        {
+          "id": "tpl:github-issue-search-and-implement:01:094d273f",
+          "type": "tool",
+          "tool": {
+            "id": "github.load_issue_preset_brief"
+          }
+        },
+        {
+          "id": "tpl:github-issue-search-and-implement:02:094d273f",
+          "type": "skill",
+          "skill": {
+            "id": "auto"
+          }
+        },
+        {
+          "id": "tpl:github-issue-search-and-implement:03:094d273f",
+          "type": "tool",
+          "tool": {
+            "id": "github.check_issue_blockers"
+          }
+        },
+        {
+          "id": "tpl:github-issue-search-and-implement:04:094d273f",
+          "type": "tool",
+          "tool": {
+            "id": "github.update_issue_status"
+          }
+        },
+        {
+          "id": "tpl:github-issue-search-and-implement:05:094d273f",
+          "type": "skill",
+          "skill": {
+            "id": "auto"
+          }
+        },
+        {
+          "id": "tpl:github-issue-search-and-implement:06:094d273f",
+          "type": "skill",
+          "skill": {
+            "id": "moonspec-verify"
+          }
+        },
+        {
+          "id": "tpl:github-issue-search-and-implement:07:094d273f",
+          "type": "skill",
+          "skill": {
+            "id": "auto"
+          },
+          "annotations": {
+            "remediationLoop": {
+              "kind": "remediation_loop",
+              "remediationTool": {
+                "type": "agent_runtime",
+                "name": "auto",
+                "inputs": {
+                  "selectedSkill": "remediate-issue"
+                }
+              },
+              "verificationTool": {
+                "type": "agent_runtime",
+                "name": "auto",
+                "inputs": {
+                  "selectedSkill": "moonspec-verify"
+                }
+              }
+            }
+          }
+        },
+        {
+          "id": "tpl:github-issue-search-and-implement:08:094d273f",
+          "type": "skill",
+          "skill": {
+            "id": "auto"
+          }
+        },
+        {
+          "id": "tpl:github-issue-search-and-implement:09:094d273f",
+          "type": "tool",
+          "tool": {
+            "id": "github.update_issue_status"
+          }
+        }
+      ]
+    }
+  }
+}

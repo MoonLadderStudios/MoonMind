@@ -351,6 +351,8 @@ Trust is bound to implementation identity. A plugin name or canonical harness id
 
 Catalog snapshots are immutable. New plans retain the Agent Profile's pinned catalog as authority and require a current observation that attests the same endpoint, Omnigent build, and harness implementation. The current observation supplies freshness only; it never replaces the pinned authority. Historical plans retain their original snapshot ref.
 
+Recurring schedule creation and refresh use the same durable catalog authority as immediate execution. Catalog reads borrow the admission transaction when it supplies an existing database session; the planner does not own that transaction's commit or close. Missing catalog authority fails admission before a schedule or plan can publish an unresolvable reference.
+
 An endpoint outage may retain the last known catalog for diagnostics. It does not silently make stale harnesses launchable.
 
 ## 8. Exact-host harness attestation
@@ -544,6 +546,8 @@ The template factory adapts only structural harness needs. It does not duplicate
 The `skills` list in an Agent Profile identifies desired Skill names and constraints. It is not the executable Skill content. Repository, deployment-managed, and local-overlay sources can change independently of the Agent Profile.
 
 Before plan commitment, MoonMind resolves Skill intent through the canonical Skill System into one immutable per-run snapshot.
+
+Admission and scheduled authority refresh read the same workflow intent as execution: a non-empty `workflow` envelope takes precedence over the persisted `task` envelope. The snapshot includes selected step Skills and the Skills declared by dynamic remediation contracts before any step launches. The same envelope governs Skill exclusions, remediation policy, and explicit runtime target validation. Persisted schedule inputs remain immutable; historical execution plans retain their admitted snapshots and dispatch never silently expands them.
 
 ### 10.2 Plan references
 

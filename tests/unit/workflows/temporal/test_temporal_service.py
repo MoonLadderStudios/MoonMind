@@ -3394,10 +3394,13 @@ async def test_record_terminal_state_fans_out_dependency_resolution_signals(
         assert source.state is MoonMindWorkflowState.COMPLETED
         assert source.close_status is TemporalExecutionCloseStatus.COMPLETED
         assert source.finish_outcome_code == "SUCCESS"
-        assert source.finish_summary_json == {
-            "finishOutcome": {"code": "SUCCESS"},
-            "artifacts": {"count": 1},
-        }
+        assert source.finish_summary_json["finishOutcome"] == {"code": "SUCCESS"}
+        assert source.finish_summary_json["artifacts"] == {"count": 1}
+        governance = source.finish_summary_json["governanceReport"]
+        assert governance["canonical_outcome"] == "succeeded"
+        assert governance["report_id"].startswith("govrep_")
+        assert governance["status"] == "partial"
+        assert governance["link"]["status"] == "partial"
         mock_client_adapter.signal_workflow.assert_awaited_once()
         assert mock_client_adapter.signal_workflow.await_args.args[0] == (
             dependent.workflow_id
@@ -3473,7 +3476,11 @@ async def test_record_terminal_state_updates_projection_only_child_workflow(
         assert result.close_status is TemporalExecutionCloseStatus.FAILED
         assert result.closed_at is not None
         assert result.finish_outcome_code == "FAILED"
-        assert result.finish_summary_json == {"finishOutcome": {"code": "FAILED"}}
+        assert result.finish_summary_json["finishOutcome"] == {"code": "FAILED"}
+        governance = result.finish_summary_json["governanceReport"]
+        assert governance["canonical_outcome"] == "failed"
+        assert governance["report_id"].startswith("govrep_")
+        assert governance["status"] == "partial"
         assert result.memo["summary"] == (
             "execution_error: codex app-server closed unexpectedly"
         )
@@ -3707,10 +3714,24 @@ async def test_record_terminal_state_derives_snake_case_finish_outcome_code(
         )
         assert source is not None
         assert source.finish_outcome_code == "PUBLISH_DISABLED"
-        assert source.finish_summary_json == finish_summary
+        assert source.finish_summary_json["finish_outcome"] == {
+            "code": "PUBLISH_DISABLED",
+            "stage": "publish",
+            "reason": "publishing disabled",
+        }
+        snake_governance = source.finish_summary_json["governanceReport"]
+        assert snake_governance["canonical_outcome"] == "succeeded"
+        assert snake_governance["report_id"].startswith("govrep_")
         assert isinstance(projection, TemporalExecutionRecord)
         assert projection.finish_outcome_code == "PUBLISH_DISABLED"
-        assert projection.finish_summary_json == finish_summary
+        assert projection.finish_summary_json["finish_outcome"] == {
+            "code": "PUBLISH_DISABLED",
+            "stage": "publish",
+            "reason": "publishing disabled",
+        }
+        assert projection.finish_summary_json["governanceReport"]["report_id"] == (
+            snake_governance["report_id"]
+        )
 
 
 @pytest.mark.asyncio
