@@ -26,6 +26,13 @@ class WorkflowRegistration:
         return getattr(import_module(self.module), self.class_name)
 
 
+class WorkflowRegistrationError(ValueError):
+    """A production workflow registration is invalid or ambiguous."""
+
+
+PROJECTION_SCOPES = ("product", "operator", "excluded")
+
+
 USER_WORKFLOW_REGISTRATION = WorkflowRegistration(
     "moonmind.workflows.temporal.workflows.run",
     "MoonMindUserWorkflow",
@@ -112,6 +119,77 @@ STATIC_WORKFLOW_REGISTRATIONS = (
 )
 
 
+def raw_workflow_registrations() -> tuple[WorkflowRegistration, ...]:
+    """Return every production registration before any name-keyed reduction.
+
+    Validate this sequence — never only the ``workflow_projection_scopes()``
+    dictionary — so duplicate Temporal names cannot hide behind key
+    replacement (MoonLadderStudios/MoonMind#3959).
+    """
+
+    return (USER_WORKFLOW_REGISTRATION, *STATIC_WORKFLOW_REGISTRATIONS)
+
+
+def validate_workflow_registrations(
+    registrations: tuple[WorkflowRegistration, ...] | None = None,
+) -> dict[str, WorkflowRegistration]:
+    """Resolve raw registrations to Temporal names, failing before formatting.
+
+    Raises :class:`WorkflowRegistrationError` on duplicate Temporal names
+    within the same production worker, unresolved classes, or missing
+    required role/owner metadata. Returns the validated name-keyed map.
+    """
+
+    resolved: dict[str, WorkflowRegistration] = {}
+    owners: dict[str, list[str]] = {}
+    for registration in (
+        raw_workflow_registrations() if registrations is None else registrations
+    ):
+        module = (registration.module or "").strip()
+        class_name = (registration.class_name or "").strip()
+        scope = (registration.projection_scope or "").strip()
+        if not module or not class_name:
+            raise WorkflowRegistrationError(
+                "Workflow registration is missing required owner metadata: "
+                f"{registration!r}"
+            )
+        if scope not in PROJECTION_SCOPES:
+            raise WorkflowRegistrationError(
+                f"Workflow registration {module}.{class_name} declares "
+                f"unsupported projection scope {scope!r}; expected one of: "
+                f"{', '.join(PROJECTION_SCOPES)}"
+            )
+        try:
+            workflow_class = registration.load_class()
+        except (ImportError, AttributeError) as exc:
+            raise WorkflowRegistrationError(
+                f"Workflow registration {module}.{class_name} cannot be "
+                f"resolved: {exc}"
+            ) from exc
+        try:
+            temporal_name = workflow._Definition.must_from_class(workflow_class).name
+        except Exception as exc:
+            raise WorkflowRegistrationError(
+                f"Workflow class {module}.{class_name} has no Temporal "
+                f"definition name: {exc}"
+            ) from exc
+        if not temporal_name:
+            raise WorkflowRegistrationError(
+                f"Workflow class {module}.{class_name} resolved to an empty "
+                "Temporal type name"
+            )
+        owners.setdefault(temporal_name, []).append(f"{module}.{class_name}")
+        if temporal_name in resolved:
+            raise WorkflowRegistrationError(
+                f"Duplicate Temporal workflow name {temporal_name!r} registered by "
+                f"{owners[temporal_name][0]} and {module}.{class_name}; "
+                "registrations within one production worker must be unique "
+                "before dictionary reduction"
+            )
+        resolved[temporal_name] = registration
+    return resolved
+
+
 @cache
 def workflow_fleet_workflow_classes() -> tuple[type[Any], ...]:
     """Return the exact workflow classes registered by production workers."""
@@ -136,7 +214,15 @@ def workflow_fleet_workflow_types(
 
 @cache
 def workflow_fleet_activity_handlers() -> tuple[Any, ...]:
-    """Return the exact local activities hosted beside deterministic workflows."""
+    """Return the exact activity handlers hosted on the workflow fleet.
+
+    These are regular Temporal activities colocated with deterministic
+    workflow code — not Temporal Local Activities. ``agent_run`` helpers are
+    the current workflow-queue lane; the checkpoint-branch handlers below
+    remain only for pre-cutover histories recorded without a queue override
+    (replay/in-flight compatibility) and must not be read as the live
+    scheduling pattern.
+    """
 
     from moonmind.workflows.temporal.workflows.agent_run import (
         external_adapter_execution_style,
@@ -161,9 +247,8 @@ def workflow_fleet_activity_handlers() -> tuple[Any, ...]:
 def workflow_projection_scopes() -> dict[str, str]:
     """Classify the actual production registrations without guessing type names."""
     return {
-        workflow._Definition.must_from_class(registration.load_class()).name:
-            registration.projection_scope
-        for registration in (USER_WORKFLOW_REGISTRATION, *STATIC_WORKFLOW_REGISTRATIONS)
+        temporal_name: registration.projection_scope
+        for temporal_name, registration in validate_workflow_registrations().items()
     }
 
 
