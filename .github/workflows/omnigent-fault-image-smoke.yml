@@ -7,7 +7,7 @@ name: Provider / Omnigent Fault Image Smoke
 # developer checkout. The matrix core lives in
 # tools/omnigent_faultlab/image_smoke.py (test-only tooling, absent from the
 # production image per MoonLadderStudios/MoonMind#3958) and is mounted into the
-# image at /src, then invoked as `python -m tools.omnigent_faultlab.image_smoke`
+# image at /src/tools, then invoked as `python -m tools.omnigent_faultlab.image_smoke`
 # with PYTHONPATH=/app:/src so production modules resolve from the image's own
 # /app install while the harness resolves from the mount;
 # tools/run_omnigent_fault_image_smoke.py is only a local wrapper; the same logic
@@ -66,20 +66,24 @@ jobs:
           ROLE: ${{ matrix.role }}
         run: |
           mkdir -p artifacts/omnigent-fault-image-smoke
-          # Mount the checkout's test-only faultlab harness at /src and run it
+          # Mount only the test-only faultlab harness at /src/tools and run it
           # inside the image with PYTHONPATH=/app:/src (MoonLadderStudios/MoonMind#3958):
           # ``moonmind`` and ``api_service`` resolve from the image's own /app
           # install, so a missing dependency, wrong interpreter, or stripped
           # module in the shipped image fails the smoke (#3694), while ``tools``
           # resolves from the mount because the production image never copies
-          # test tooling. ``--role`` resolves that role's real startup module
+          # test tooling. Mounting only ``tools/`` (never the whole checkout)
+          # keeps /src/moonmind and /src/api_service off PYTHONPATH so a broken
+          # image cannot pass by falling back to checkout sources; the driver
+          # additionally fails unless production imports resolve under /app.
+          # ``--role`` resolves that role's real startup module
           # inside the image so a role-specific stripped dependency fails too,
           # and ``--image-ref`` records the exact pinned digest as provenance
           # instead of an unrelated workflow-checkout commit; the driver also
           # self-stamps the image's own build id read from inside the image.
           docker run --rm \
             --entrypoint python \
-            -v "$PWD:/src:ro" \
+            -v "$PWD/tools:/src/tools:ro" \
             -v "$PWD/artifacts/omnigent-fault-image-smoke:/out" \
             -w /app \
             -e PYTHONPATH=/app:/src \

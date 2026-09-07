@@ -81,7 +81,7 @@ def test_production_image_copy_rules_exclude_test_tooling() -> None:
             f"production image must not COPY faultlab: {stripped}"
         )
         # tools/ is never copied into the deployable runtime (/app); the
-        # image-smoke workflow mounts it at /src instead. Build-stage copies
+        # image-smoke workflow mounts only tools/ at /src/tools instead. Build-stage copies
         # into /build (e.g. the frontend-builder verify script) are not
         # shipped to the runtime and are out of scope here.
         if " /app/" in stripped:
@@ -104,11 +104,18 @@ def test_runtime_validators_do_not_require_faultlab() -> None:
             assert "faultlab" not in imported, (
                 f"{relative} depends on test-only faultlab via {imported}"
             )
-    # The validators import cleanly with no faultlab present.
-    import moonmind.omnigent.conformance  # noqa: F401
-    import moonmind.omnigent.embedded_acceptance  # noqa: F401
-    import moonmind.omnigent.exact_artifact_conformance  # noqa: F401
-    import moonmind.omnigent.live_verification_health  # noqa: F401
+    # The validators import cleanly with no faultlab present. Use importlib so
+    # this module keeps a single static import style (from-imports below) and
+    # the code-quality mixed import-style check stays clean.
+    import importlib
+
+    for validator in (
+        "moonmind.omnigent.conformance",
+        "moonmind.omnigent.embedded_acceptance",
+        "moonmind.omnigent.exact_artifact_conformance",
+        "moonmind.omnigent.live_verification_health",
+    ):
+        importlib.import_module(validator)
 
 
 def test_catalog_readiness_imports_from_runtime_not_tests() -> None:
@@ -192,7 +199,13 @@ def test_image_smoke_workflow_mounts_harness_and_records_provenance() -> None:
     assert "tools.omnigent_faultlab.image_smoke" in workflow
     assert "moonmind.omnigent.faultlab" not in workflow
     # Mount-based execution: harness from the checkout, prod modules from image.
-    assert "-v \"$PWD:/src:ro\"" in workflow or '-v "$PWD:/src:ro"' in workflow
+    # Only tools/ is mounted (never the whole checkout) so /src/moonmind and
+    # /src/api_service stay off PYTHONPATH; the driver additionally fails unless
+    # production imports resolve under /app.
+    assert "-v \"$PWD/tools:/src/tools:ro\"" in workflow or (
+        '-v "$PWD/tools:/src/tools:ro"' in workflow
+    )
+    assert '"$PWD:/src:ro"' not in workflow and "'$PWD:/src:ro'" not in workflow
     assert "PYTHONPATH=/app:/src" in workflow
     assert "--image-ref" in workflow
     assert "--role" in workflow
