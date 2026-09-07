@@ -788,6 +788,23 @@ def test_the_requested_level_comes_from_the_runner_or_the_default(
 # ---------------------------------------------------------------------------
 
 
+@pytest.fixture(autouse=True)
+def no_ambient_publication_context(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Remove the durable run context this suite never asked for.
+
+    ``durable_evidence_ref`` falls back to the ambient GitHub run when no
+    ``--evidence-base-ref`` is supplied, so the same row carries a workspace
+    ``file:`` URI locally and a run reference when the suite happens to run
+    inside Actions. That is correct for the runner and useless for a test: the
+    assertion would depend on where the suite ran rather than on what it
+    declared. The context is cleared for every test here, and a test that means
+    a durable one declares it.
+    """
+
+    for name in runner.GITHUB_RUN_CONTEXT_ENV:
+        monkeypatch.delenv(name, raising=False)
+
+
 @pytest.fixture
 def postgres_cluster(monkeypatch: pytest.MonkeyPatch) -> None:
     """Satisfy the database precondition of any layer whose owners need one.
