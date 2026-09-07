@@ -1330,6 +1330,14 @@ Checkpoint branches and remediation preserve:
 
 A branch or remediation attempt may select a different harness, model, Skill set, binding set, Host Class, or realizer only through a new explicit plan. It is never an implicit recovery fallback.
 
+For PR output, an unchanged restored candidate preserves the workflow's accepted
+branch when the workspace is clean and its HEAD still matches the accepted and
+live remote heads. The publisher reuses that verified publication without pushing
+another branch, and resolves an existing PR against the same branch and exact SHA.
+PR adoption also requires the requested base branch and confirmed non-draft state.
+A changed or missing remote head rejects reuse before repository or issue mutation.
+New repository work continues through the ordinary publication path.
+
 ## 21. Native Workflow Chat and controls
 
 Native Workflow Chat continues to use the binding-scoped facade.

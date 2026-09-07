@@ -15,7 +15,7 @@ needed.
 This boundary closes both gaps from deployment configuration alone:
 
 * enrollment runs the canonical bootstrap for the configured
-  ``OPENCODE_API_KEY`` when no connected profile exists; and
+  ``OPENCODE_API_KEY`` when the default profile is missing or its key changed; and
 * re-validation re-runs the pinned-runtime check against the already-enrolled
   SecretRef when only the evidence is stale.
 
@@ -25,6 +25,7 @@ Neither path substitutes a credential, an image, or a weaker evidence contract.
 from __future__ import annotations
 
 import hashlib
+import hmac
 import logging
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
@@ -432,6 +433,30 @@ async def _opencode_profiles(session_factory: Any) -> list[Any]:
         )
 
 
+async def _deployment_key_changed(profile: Any, api_key: str) -> bool:
+    """Compare credential values privately; never persist a key fingerprint.
+
+    The deployment-owned default takes its credential from explicit environment
+    configuration. Enrollment freezes it into Managed Secrets so generations
+    and runtime evidence can track subsequent rotation. Older env-backed seeds
+    must first pass through that enrollment path: resolving their live env ref
+    would otherwise compare the new key to itself.
+    """
+    from moonmind.auth.secret_refs import parse_secret_ref
+    from moonmind.omnigent.production import build_omnigent_secret_resolver
+
+    secret_ref = str((profile.secret_refs or {}).get(OPENCODE_SECRET_ROLE) or "")
+    if not secret_ref or secret_ref == OPENCODE_DEPLOYMENT_SECRET_REF:
+        return True
+    enrolled_key = await build_omnigent_secret_resolver().resolve(
+        parse_secret_ref(secret_ref)
+    )
+    try:
+        return not hmac.compare_digest(api_key.encode(), enrolled_key.encode())
+    finally:
+        del enrolled_key
+
+
 async def reconcile_opencode_provider_readiness(
     *,
     session_factory: Any,
@@ -468,17 +493,21 @@ async def reconcile_opencode_provider_readiness(
         profile for profile in profiles if _has_configured_runtime_authority(profile)
     ]
     api_key = resolved_opencode_api_key(env=env)
-    key_backed_enrolled = any(
-        str(getattr(profile, "provider_id", "") or "") == OPENCODE_PROVIDER_ID
-        for profile in enrolled
+    deployment_profile = next(
+        (
+            profile
+            for profile in enrolled
+            if profile.profile_id == "opencode-go-default"
+            and str(getattr(profile, "provider_id", "") or "") == OPENCODE_PROVIDER_ID
+        ),
+        None,
     )
     recoverable_deployment_profile = next(
         (
             profile
             for profile in profiles
             if profile.profile_id == "opencode-go-default"
-            and str(getattr(profile, "provider_id", "") or "")
-            == OPENCODE_PROVIDER_ID
+            and str(getattr(profile, "provider_id", "") or "") == OPENCODE_PROVIDER_ID
             and not profile.enabled
             and not _has_authoritative_disable(profile)
         ),
@@ -494,13 +523,37 @@ async def reconcile_opencode_provider_readiness(
         and _has_authoritative_disable(profile)
         for profile in profiles
     )
+    deployment_key_changed = False
+    if (
+        api_key
+        and profile_ids is None
+        and deployment_profile is not None
+        and recoverable_deployment_profile is None
+        and not has_authoritative_disable_on_default
+    ):
+        try:
+            deployment_key_changed = await _deployment_key_changed(
+                deployment_profile, api_key
+            )
+        except Exception:
+            # A failed secret read cannot authorize replacement or allow the
+            # old credential to masquerade as the deployment's requested key.
+            return ProviderReconcileOutcome(
+                ready=False,
+                checked=len(profiles),
+                reason="could not compare the configured OpenCode key with the enrolled credential",
+            )
     # OpenCode Zen and OpenCode Go are distinct provider routes. A launchable
     # credential-free Zen profile must not consume an explicitly configured Go
     # credential or prevent its separate enrollment.
     if (
         api_key
         and profile_ids is None
-        and (not key_backed_enrolled or recoverable_deployment_profile is not None)
+        and (
+            deployment_profile is None
+            or recoverable_deployment_profile is not None
+            or deployment_key_changed
+        )
         and not has_authoritative_disable_on_default
     ):
         if not allow_enrollment:
@@ -516,6 +569,7 @@ async def reconcile_opencode_provider_readiness(
             image_ref=image_ref or "",
             checked=len(profiles),
             controller=controller,
+            profile=deployment_profile,
         )
     # Explicit user and policy disables remain authoritative. Any other
     # inconsistent disabled state on the stable deployment-owned Go profile was
@@ -584,10 +638,14 @@ async def _enroll_from_deployment_config(
     image_ref: str,
     checked: int,
     controller: Any | None,
+    profile: Any | None = None,
 ) -> ProviderReconcileOutcome:
     """Run the canonical bootstrap for the deployment-configured credential."""
 
-    from moonmind.omnigent.bootstrap.controller import BootstrapController
+    from moonmind.omnigent.bootstrap.controller import (
+        BootstrapController,
+        _resolve_profile_model_effort,
+    )
     from moonmind.omnigent.bootstrap.models import BootstrapState
 
     fingerprint = _enrollment_fingerprint(
@@ -607,9 +665,14 @@ async def _enroll_from_deployment_config(
 
     active = controller or BootstrapController(session_factory=session_factory)
     try:
+        selection = {}
+        if profile is not None:
+            model, effort = _resolve_profile_model_effort(profile)
+            selection = {"model_display_name": model, "effort": effort}
         record = await active.configure_opencode(
             api_key=api_key,
             accept_contributor_data_use=accepted,
+            **selection,
         )
     except ValueError as exc:
         # The deployment stated its configuration incorrectly: a malformed key,

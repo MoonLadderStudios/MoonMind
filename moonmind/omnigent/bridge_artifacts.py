@@ -577,6 +577,23 @@ def build_omnigent_result(
         if failure_reason is not None
         else failure_class_for_terminal_status(terminal_status)
     )
+    retry_recommendation = None
+    task_error = final_snapshot.get("last_task_error")
+    if terminal_status == "failed" and isinstance(task_error, dict):
+        failure_summary = failure_summary or task_error.get("message")
+        provider_error_code = provider_error_code or task_error.get("code")
+    if terminal_status == "failed":
+        provider_error_code = provider_error_code or final_snapshot.get(
+            "providerErrorCode"
+        )
+        # Omnigent's native status wire contract uses this code for all native
+        # harnesses, including OpenCode. Interpret it at the provider boundary;
+        # the workflow consumes the canonical retry recommendation.
+        if provider_error_code == "codex_reauth_required":
+            failure_class = classify_omnigent_failure(
+                OmnigentFailureReason.AUTH_FAILURE
+            )
+            retry_recommendation = "reauthenticate"
 
     # A classified failure must never be summarized with the provider's
     # success snapshot text (for example a full-evidence harvest escalation on
@@ -642,6 +659,7 @@ def build_omnigent_result(
         diagnosticsRef=str(diagnostics_ref),
         failureClass=failure_class,
         providerErrorCode=provider_error_code,
+        retryRecommendation=retry_recommendation,
         metadata=metadata,
     )
 

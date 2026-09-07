@@ -255,6 +255,7 @@ async def _enroll_opencode_go_with_pinned_runtime(
     monkeypatch: pytest.MonkeyPatch,
     *,
     validation_error: Exception | None = None,
+    api_key: str = "sk-opencode-test-key",
 ) -> list[tuple[str, dict]]:
     """Exercise the real bootstrap profile transaction with hermetic edges."""
 
@@ -285,7 +286,7 @@ async def _enroll_opencode_go_with_pinned_runtime(
             if validation_error is not None:
                 raise validation_error
             return {
-                "credentialGeneration": 1,
+                "credentialGeneration": _kwargs["candidate_generation"],
                 "imageRef": image_ref,
                 "materializerRef": "opencode-auth-json@1",
                 "runtimeVersions": {"opencode": "1.18.11"},
@@ -323,7 +324,7 @@ async def _enroll_opencode_go_with_pinned_runtime(
     await BootstrapController(
         session_factory=db_base.async_session_maker
     )._ensure_provider_profile(
-        api_key="sk-opencode-test-key",
+        api_key=api_key,
         qualified_model=qualified_model,
         effort="xhigh",
         resolved=SimpleNamespace(opencode_host_image_ref=image_ref),
