@@ -10,6 +10,7 @@ from __future__ import annotations
 import hashlib
 import json
 from collections.abc import Mapping
+from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
@@ -144,6 +145,7 @@ async def _try_load_real_harness_config(
     harness_id: str,
     agent_profile_snapshot: Mapping[str, Any],
     session_factory: Any,
+    db_session: Any | None = None,
 ) -> dict[str, Any] | None:
     """Try to load authoritative harness config from synchronized catalog.
 
@@ -151,6 +153,14 @@ async def _try_load_real_harness_config(
     authorities pinned by the Agent Profile. Hermetic callers without catalog
     storage receive ``None`` and use the bounded fixture configuration.
     """
+    if db_session is not None:
+        # Schedule admission owns an existing transaction. Borrow its session
+        # for catalog reads without closing or committing the caller's work.
+        @asynccontextmanager
+        async def catalog_session():
+            yield db_session
+
+        session_factory = catalog_session
     try:
         from moonmind.omnigent.harness_platform.catalog_service import (
             DbHarnessCatalogRepository,
@@ -184,10 +194,18 @@ async def _try_load_real_harness_config(
         catalog_result = None
         if catalog_ref:
             catalog_result = await repo.load(catalog_ref)
-        if catalog_result is None:
+            if catalog_result is None:
+                raise HarnessPlatformError(
+                    "selected Agent Profile catalog snapshot is unavailable",
+                    code=HarnessPlatformFailure.OMNIGENT_HARNESS_CATALOG_UNAVAILABLE,
+                )
+        else:
             catalog_result = await repo.latest(endpoint_ref)
         if catalog_result is None:
-            return None
+            raise HarnessPlatformError(
+                "harness catalog observation is unavailable",
+                code=HarnessPlatformFailure.OMNIGENT_HARNESS_CATALOG_UNAVAILABLE,
+            )
         latest_catalog_result = await repo.latest(endpoint_ref)
         if latest_catalog_result is None:
             raise HarnessPlatformError(
@@ -199,7 +217,10 @@ async def _try_load_real_harness_config(
             None,
         )
         if harness_record is None:
-            return None
+            raise HarnessPlatformError(
+                "selected harness is absent from its catalog snapshot",
+                code=HarnessPlatformFailure.OMNIGENT_HARNESS_CATALOG_UNAVAILABLE,
+            )
         freshness_trust_record = next(
             (
                 record
@@ -237,7 +258,7 @@ async def _try_load_real_harness_config(
     except HarnessPlatformError:
         raise
     except Exception as exc:
-        if callable(session_factory):
+        if callable(session_factory) or session_factory is None:
             raise HarnessPlatformError(
                 "harness catalog authority could not be loaded",
                 code=HarnessPlatformFailure.OMNIGENT_HARNESS_CATALOG_UNAVAILABLE,
@@ -663,6 +684,7 @@ async def compile_and_persist_execution_plan(
         harness_id=harness_id,
         agent_profile_snapshot=agent_profile_snapshot,
         session_factory=session_factory,
+        db_session=db_session,
     )
     config = real_config or _fixture_harness_config(harness_id)
     if config is None:
