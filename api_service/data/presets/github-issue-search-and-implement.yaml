@@ -1,7 +1,8 @@
 slug: github-issue-search-and-implement
 title: GitHub Issue Search and Implement
-description: Search GitHub issues for the best match (or the first unblocked issue
-  when the search is blank), then implement it following the GitHub Issue Implement
+description: Search GitHub issues for the best available match (skipping issues already
+  marked status in-progress), or the first unblocked issue skipping in-progress
+  work when the search is blank, then implement it following the GitHub Issue Implement
   workflow, creating a pull request and updating the issue.
 scope: global
 tags:
@@ -42,9 +43,10 @@ annotations:
       issue_search:
         type: string
         title: GitHub issue search
-        description: Free-text search used as '<search> is:issue state:open'. Leave
-          blank to fall back to scanning open issues for the first one without blocking
-          dependencies.
+        description: Free-text search used as '<search> is:issue state:open' (skipping
+          issues already marked status in-progress). Leave blank to fall back to scanning
+          open issues for the first one without blocking dependencies and without an
+          in-progress status.
       repository:
         type: string
         title: Repository
@@ -92,8 +94,9 @@ steps:
 - title: Resolve GitHub issue and load trusted brief
   type: tool
   instructions: >-
-    Resolve the best open issue matching issueSearch, or the first unblocked open
-    issue when blank, within 500 candidates. Load its trusted issue brief and
+    Resolve the best available open issue matching issueSearch (skipping issues already
+    marked status in-progress), or the first unblocked open issue skipping in-progress
+    work when blank, within 500 candidates. Load its trusted issue brief and
     preserve the resolved identity and search evidence for downstream steps.
   tool:
     id: github.load_issue_preset_brief
