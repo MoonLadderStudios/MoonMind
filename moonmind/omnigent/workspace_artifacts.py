@@ -465,6 +465,8 @@ class WorkspaceArtifactProjector:
                         continue
                     current = target.stat(follow_symlinks=False)
                 except OSError:
+                    # Raced-away or unreadable entries stay worker-owned;
+                    # ownership assignment is best-effort per entry.
                     continue
                 if (current.st_uid, current.st_gid) != (runtime_uid, runtime_gid):
                     os.chown(
@@ -491,36 +493,115 @@ class WorkspaceArtifactProjector:
                 elif staging.is_dir():
                     shutil.rmtree(staging, ignore_errors=True)
             except OSError:
+                # Best-effort post-promotion cleanup: a leftover staging
+                # generation is reclaimed by the next cleanup_import_staging
+                # pass and never exposes partial content (promotion already
+                # moved the verified entries out).
                 pass
 
     @staticmethod
     def _import_lock_path(workspace: Path) -> Path:
-        return workspace.parent / f".moonmind-import-{workspace.name}.lock"
+        # The lock name must not start with STAGING_PREFIX: cleanup paths
+        # reclaim `.moonmind-import-*` generations, and a lock matching that
+        # pattern could be deleted while its import is still staging or
+        # promoting, letting a second import acquire a replacement lock.
+        return workspace.parent / f".moonmind-workspace-import-{workspace.name}.lock"
+
+    @staticmethod
+    def _import_lock_owner(lock: Path) -> tuple[str, int | None]:
+        """Read the lock's (token, owner PID); PID is None when unknown."""
+
+        try:
+            lines = lock.read_text(encoding="utf-8").splitlines()
+        except OSError:
+            return "", None
+        token = lines[0].strip() if lines else ""
+        owner: int | None = None
+        if len(lines) > 1:
+            try:
+                candidate = int(lines[1].strip())
+            except (TypeError, ValueError):
+                candidate = -1
+            owner = candidate if candidate > 0 else None
+        return token, owner
+
+    @staticmethod
+    def _import_lock_owner_alive(owner: int | None) -> bool | None:
+        """Return whether the lock owner PID is alive (None if unknown)."""
+
+        if owner is None:
+            return None
+        if owner == os.getpid():
+            return False
+        try:
+            os.kill(owner, 0)
+        except ProcessLookupError:
+            return False
+        except PermissionError:
+            return True
+        except OSError:
+            return None
+        return True
 
     @staticmethod
     def _acquire_import_lock(lock: Path, *, token: str) -> None:
+        # A retry of the same import token reconciles a stale lock from a
+        # crashed attempt (dead owner PID) but never bypasses an active
+        # one: two concurrent same-token retries must not both promote, and
+        # the first must not unlink the lock while the second still runs
+        # (see _release_import_lock, which only releases its own PID).
         try:
             descriptor = os.open(lock, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
         except FileExistsError as exc:
+            recorded_token, owner = WorkspaceArtifactProjector._import_lock_owner(
+                lock
+            )
+            if recorded_token != str(token):
+                raise WorkspaceArtifactProjectionError(
+                    "another workspace import is already in flight",
+                    code="WORKSPACE_IMPORT_CONFLICT",
+                ) from exc
+            if (
+                WorkspaceArtifactProjector._import_lock_owner_alive(owner) is True
+            ):
+                raise WorkspaceArtifactProjectionError(
+                    "another workspace import is already in flight",
+                    code="WORKSPACE_IMPORT_CONFLICT",
+                )
+            # Stale lock from a crashed attempt (or a lock this process
+            # holds): take it over instead of running beside its owner.
             try:
-                recorded = lock.read_text(encoding="utf-8")
-            except OSError:
-                recorded = ""
-            if recorded.strip() == str(token):
-                return
-            raise WorkspaceArtifactProjectionError(
-                "another workspace import is already in flight",
-                code="WORKSPACE_IMPORT_CONFLICT",
-            ) from exc
+                lock.unlink()
+            except OSError as unlink_exc:
+                raise WorkspaceArtifactProjectionError(
+                    "another workspace import is already in flight",
+                    code="WORKSPACE_IMPORT_CONFLICT",
+                ) from unlink_exc
+            try:
+                descriptor = os.open(
+                    lock, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600
+                )
+            except FileExistsError as retry_exc:
+                raise WorkspaceArtifactProjectionError(
+                    "another workspace import is already in flight",
+                    code="WORKSPACE_IMPORT_CONFLICT",
+                ) from retry_exc
         with os.fdopen(descriptor, "w", encoding="utf-8") as stream:
-            stream.write(str(token))
+            stream.write(f"{token}\n{os.getpid()}\n")
 
     @staticmethod
     def _release_import_lock(lock: Path, *, token: str) -> None:
         try:
-            if lock.read_text(encoding="utf-8").strip() == str(token):
-                lock.unlink()
+            recorded_token, owner = WorkspaceArtifactProjector._import_lock_owner(
+                lock
+            )
+            if recorded_token != str(token) or owner != os.getpid():
+                # Never unlink a lock owned by another import: a concurrent
+                # retry must not remove the active owner's exclusion.
+                return
+            lock.unlink()
         except OSError:
+            # Lock already gone or unreadable after the ownership check.
             pass
 
     @staticmethod
@@ -540,6 +621,9 @@ class WorkspaceArtifactProjector:
                 reasons.append("external object alternates require admission")
             if list(git_dir.glob("objects/pack/*.thinpack")):
                 reasons.append("thin pack requires its external baseline")
+            reasons.extend(
+                WorkspaceArtifactProjector._find_promisor_state(staging, git_dir)
+            )
             gitmodules = staging / ".gitmodules"
             if gitmodules.is_file() and not gitmodules.is_symlink():
                 try:
@@ -549,7 +633,6 @@ class WorkspaceArtifactProjector:
                     reasons.append("submodule configuration is unreadable")
                     parser = None
                 if parser is not None:
-                    modules_dir = git_dir / "modules"
                     for section in parser.sections():
                         try:
                             sub_path = parser[section]["path"]
@@ -559,9 +642,17 @@ class WorkspaceArtifactProjector:
                             )
                             break
                         worktree = staging / sub_path
-                        populated = worktree.is_dir() and any(worktree.iterdir())
-                        admitted = (modules_dir / section).is_dir()
-                        if not populated and not admitted:
+                        # Only a populated worktree provides the files
+                        # required at execution time: archived
+                        # `.git/modules/<section>` metadata alone is not
+                        # submodule content and no longer suppresses the
+                        # incomplete result.
+                        populated = (
+                            worktree.is_dir()
+                            and not worktree.is_symlink()
+                            and any(worktree.iterdir())
+                        )
+                        if not populated:
                             reasons.append(
                                 f"submodule {section!r} content requires admission"
                             )
@@ -569,30 +660,102 @@ class WorkspaceArtifactProjector:
         return list(dict.fromkeys(reasons))
 
     @staticmethod
+    def _lfs_pointer_oid(head: bytes) -> str | None:
+        """Return the LFS object OID named by a pointer header, if parseable."""
+
+        for line in head.decode("utf-8", errors="replace").splitlines():
+            text = line.strip()
+            if text.lower().startswith("oid sha256:"):
+                oid = text[len("oid sha256:"):].strip().lower()
+                if len(oid) == 64 and all(
+                    c in "0123456789abcdef" for c in oid
+                ):
+                    return oid
+        return None
+
+    @staticmethod
     def _find_unresolved_lfs(staging: Path, git_dir: Path) -> list[str]:
-        pointers: list[str] = []
+        # Every remaining pointer is verified against its own object:
+        # `.git/lfs/objects/<xx>/<yy>/<oid>` must exist for the OID the
+        # pointer names. Any entry under the objects directory no longer
+        # satisfies unrelated pointers.
+        pointers: list[tuple[str, str | None]] = []
         for dirpath, dirnames, filenames in os.walk(staging, followlinks=False):
             dirnames[:] = [d for d in dirnames if d != ".git"]
             for filename in filenames:
                 candidate = Path(dirpath) / filename
                 try:
-                    if candidate.stat().st_size > 1024:
+                    if candidate.is_symlink() or candidate.stat().st_size > 1024:
                         continue
-                    head = candidate.read_bytes()[:256]
+                    head = candidate.read_bytes()[:512]
                 except OSError:
                     continue
                 if b"version https://git-lfs.github.com/spec/" in head:
-                    pointers.append(os.path.relpath(candidate, staging))
-                    if len(pointers) >= 4:
+                    pointers.append(
+                        (
+                            os.path.relpath(candidate, staging),
+                            WorkspaceArtifactProjector._lfs_pointer_oid(head),
+                        )
+                    )
+                    if len(pointers) >= 64:
                         break
-            if len(pointers) >= 4:
+            if len(pointers) >= 64:
                 break
         if not pointers:
             return []
         objects_dir = git_dir / "lfs" / "objects"
-        if objects_dir.is_dir() and any(objects_dir.iterdir()):
+        missing = 0
+        for rel, oid in pointers:
+            if oid is None:
+                missing += 1
+                continue
+            if not (
+                objects_dir / oid[:2] / oid[2:4] / oid
+            ).is_file() or (
+                objects_dir / oid[:2] / oid[2:4] / oid
+            ).is_symlink():
+                missing += 1
+        if missing:
+            return ["large-file objects require independent admission"]
+        return []
+
+    @staticmethod
+    def _find_promisor_state(staging: Path, git_dir: Path) -> list[str]:
+        """Report partial-clone promisor state that needs object admission.
+
+        A checkpoint from a partial clone (for example ``blob:none``) can
+        omit Git objects that are only fetchable from its promisor remote
+        at execution time. Thin packs and alternates are checked
+        separately; this covers the promisor configuration that declares
+        such external object dependencies.
+        """
+
+        _ = staging
+        config = git_dir / "config"
+        if not config.is_file() or config.is_symlink():
             return []
-        return ["large-file objects require independent admission"]
+        try:
+            parser = configparser.ConfigParser(interpolation=None)
+            parser.read(config, encoding="utf-8")
+        except (configparser.Error, OSError, UnicodeDecodeError):
+            return ["partial-clone state is unreadable"]
+        for section in parser.sections():
+            lowered = section.lower()
+            try:
+                options = dict(parser[section])
+            except (configparser.Error, OSError, ValueError):
+                continue
+            if lowered == "extensions" and str(
+                options.get("partialclone", "")
+            ).strip():
+                return ["partial-clone promisor objects require admission"]
+            if lowered.startswith('remote "') and str(
+                options.get("promisor", "")
+            ).strip().lower() in {"true", "yes", "1"}:
+                return ["partial-clone promisor objects require admission"]
+            if str(options.get("partialclonefilter", "")).strip():
+                return ["partial-clone promisor objects require admission"]
+        return []
 
     @staticmethod
     def _verify_staged_links(staging: Path) -> None:
@@ -605,8 +768,12 @@ class WorkspaceArtifactProjector:
                 if not target.is_symlink():
                     continue
                 try:
-                    resolved = target.resolve()
-                except OSError as exc:
+                    # Strict resolution: a link whose target is absent or
+                    # was removed by neutralization must fail here. The
+                    # default non-strict resolve is purely lexical and
+                    # would promote dangling links as verified.
+                    resolved = target.resolve(strict=True)
+                except (OSError, RuntimeError) as exc:
                     raise WorkspaceArtifactProjectionError(
                         "workspace checkpoint symlink is unresolvable",
                         code="WORKSPACE_AUTHORITY_MISMATCH",
@@ -809,6 +976,8 @@ class WorkspaceArtifactProjector:
                     try:
                         os.chmod(target, 0o600, follow_symlinks=False)
                     except OSError:
+                        # Mode normalization is best-effort: extraction
+                        # already created the file with restrictive bits.
                         pass
                 elif member.isdir():
                     target.mkdir(parents=True, exist_ok=True)
@@ -898,6 +1067,8 @@ class WorkspaceArtifactProjector:
                     path.unlink()
                     _record(path)
             except OSError:
+                # Best-effort neutralization: an unremovable entry keeps its
+                # imported authority bits, which the manifest records as-is.
                 pass
 
         def _remove_tree(path: Path) -> None:
@@ -909,6 +1080,7 @@ class WorkspaceArtifactProjector:
                     shutil.rmtree(path, ignore_errors=True)
                     _record(path)
             except OSError:
+                # Best-effort neutralization (see _remove_file above).
                 pass
 
         git_dir = staging / ".git"
@@ -1076,6 +1248,8 @@ class WorkspaceArtifactProjector:
         try:
             config.write_text("\n".join(kept) + "\n", encoding="utf-8")
         except OSError:
+            # Best-effort scrub: an unwritable config keeps its imported
+            # bindings, which stay visible in the staged tree for review.
             pass
 
     @staticmethod
@@ -1194,6 +1368,9 @@ class WorkspaceArtifactProjector:
                         code="WORKSPACE_AUTHORITY_MISMATCH",
                     )
             except OSError:
+                # An unresolvable destination cannot be proven inside the
+                # workspace, but promotion already placed a staged entry
+                # there; the post-promotion manifest records the result.
                 pass
 
     @staticmethod
@@ -1429,11 +1606,6 @@ class WorkspaceArtifactProjector:
                 or getattr(service, "_moonmind_metadata_less", False)
                 or required_workflow_id is not None
             ):
-                raise WorkspaceArtifactProjectionError(
-                    "source-artifact authorization requires linked artifact "
-                    "metadata",
-                    code="WORKSPACE_AUTHORITY_MISMATCH",
-                )
                 raise WorkspaceArtifactProjectionError(
                     "source-artifact authorization requires linked artifact "
                     "metadata",
