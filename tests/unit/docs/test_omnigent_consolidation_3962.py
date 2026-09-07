@@ -77,7 +77,12 @@ def test_exact_support_contract_survives() -> None:
     assert "evidence-gated" in strategy
     assert "never silently" in strategy or "No silent fallback" in strategy
     cutover = _read(OMNIGENT / "CodexSupportAndCutover.md")
-    assert "never" in cutover and "supported" in cutover
+    assert "## Support and conformance matrix v1" in cutover
+    assert "REQUIRED_ROW_CATALOG" in cutover
+    assert "REQUIRED_MATRIX_ROWS" in cutover
+    assert "codex-omnigent-support-matrix/v1" in cutover
+    assert "## Operator remediation support matrix v1" in cutover
+    assert "## Release thresholds and telemetry" in cutover
     assert "RuntimeProviderRollout.md" in cutover
 
 
