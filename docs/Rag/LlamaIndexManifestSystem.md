@@ -91,7 +91,7 @@ flowchart LR
 
 Manifests are YAML. Environment variables interpolate as `${VAR}`. A JSON Schema validates structure and semantics.
 
-### Top‑level Keys
+### Top-level Keys
 
 | Key | Required | Description |
 | ------------------ | :------: | ---------------------------------------------------------------------------------------------- |
@@ -342,7 +342,7 @@ run:
 
 ---
 
-### Example B: “Kitchen Sink” Multi‑source + Hybrid + Eval
+### Example B: “Kitchen Sink” Multi-source + Hybrid + Eval
 
 > **Path:** `examples/readers-full-example.yaml`
 
@@ -538,7 +538,7 @@ Manifest execution is orchestrated by the `MoonMind.ManifestIngest` Temporal wor
 
 ---
 
-## Operational Patterns & Anti‑patterns
+## Operational Patterns & Anti-patterns
 
 **Do**
 

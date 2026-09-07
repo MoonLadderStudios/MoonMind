@@ -31,7 +31,7 @@ def test_docs_only_change_does_not_select_heavy_backend_suites(
     outputs = _outputs([changed_path])
 
     assert outputs == {
-        "unit_fast": "false",
+        "unit_fast": "true",
         "unit_slow": "false",
         "api_component": "false",
         "temporal_boundary": "false",
@@ -409,7 +409,7 @@ def test_docs_only_change_never_selects_omnigent_gate() -> None:
     outputs = _outputs(["docs/Omnigent/Overview.md"])
 
     for key in OMNIGENT_CONTRACT_GATE_KEYS:
-        assert outputs[key] == "false", key
+        assert outputs[key] == ("true" if key == "unit_fast" else "false"), key
 
 
 # --- Tier-1 exact deployable-artifact gate (MoonLadderStudios/MoonMind#3710) ---

@@ -1,6 +1,5 @@
 from pathlib import Path
 
-
 REPO_ROOT = Path(__file__).resolve().parents[3]
 PRODUCT_MODEL = REPO_ROOT / "docs" / "Temporal" / "WorkflowExecutionProductModel.md"
 TYPE_CATALOG = REPO_ROOT / "docs" / "Temporal" / "WorkflowTypeCatalogAndLifecycle.md"
@@ -31,7 +30,8 @@ def test_workflow_type_catalog_uses_workflow_native_user_workflow_language() -> 
     text = _read(TYPE_CATALOG)
 
     assert "`MoonMind.UserWorkflow`" in text
-    assert "User-submitted, Step-ledger-owning Workflow Execution" in text
+    # Product identity is a machine token. The description is editorial;
+    # ownership/routing is covered by test_temporal_claims_reconciliation_3960.
     assert "standard task execution" not in text
     assert "public APIs and UI flows may still use `task` terminology" not in text
 
