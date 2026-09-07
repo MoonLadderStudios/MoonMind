@@ -2902,7 +2902,7 @@ def _signed_grant_digest(workspace_id: str, *, secret: str) -> str:
         owner_workflow_id="workflow-1",
         owner_step_execution_id="idem-1",
         grantee_workflow_id="workflow-1",
-        mode="exclusive",
+        mode="read_only",
         generation=1,
         secret=secret,
     ).grant_digest or ""
@@ -2962,7 +2962,10 @@ async def test_workspace_attachment_translates_to_daemon_visible_volume_path(
                         "ownerWorkflowId": "workflow-1",
                         "ownerStepExecutionId": "idem-1",
                         "generation": 1,
-                        "mode": "exclusive",
+                        # Exclusive use cannot be honored on a remote
+                        # daemon view; read-only sharing is supported
+                        # there through the qualified locator mapping.
+                        "mode": "read_only",
                         "grantDigest": _signed_grant_digest(
                             workspace_id,
                             secret="test-workspace-grant-secret",
@@ -2980,7 +2983,7 @@ async def test_workspace_attachment_translates_to_daemon_visible_volume_path(
         attachment["sourceRef"]
         == "/daemon/agent_workspaces/temporal_sandbox/granted-ws-1/repo"
     )
-    assert attachment["accessMode"] == "read-write"
+    assert attachment["accessMode"] == "read-only"
 
     read_only_attachment = await service.materialize(request, mutation="read_only")
 
