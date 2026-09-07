@@ -2106,6 +2106,58 @@ async def test_generic_realizer_persists_authority_and_releases_provider_last() 
     assert events[len(first_execution_events) :] == []
 
 
+@pytest.mark.asyncio
+async def test_generic_host_retains_leases_through_active_tool_only_response() -> None:
+    from moonmind.omnigent.execute import _await_marked_turn_terminal
+
+    manifest_path = Path(__file__).resolve().parents[2] / "integration/reliability/replays/omnigent-running-tool-output-terminal/manifest.json"
+    manifest = json.loads(manifest_path.read_text())
+    harness = await _generic_publication_harness(_PUSHED_PUBLICATION)
+    active = manifest["terminalSnapshot"]
+    inactive = {**active, "status": "idle", "active_response_id": None}
+
+    class Client:
+        calls = 0
+
+        async def get_session(self, _session_id):
+            assert "host-cleaned" not in harness.events
+            assert "provider-released" not in harness.events
+            self.calls += 1
+            return active if self.calls < 20 else inactive
+
+    async def session_driver(request, *, session_authority_sink):
+        await session_authority_sink.session_created("session-1")
+        status, snapshot = await _await_marked_turn_terminal(
+            client=Client(),
+            session_id="session-1",
+            marker=manifest["currentTurnMarker"],
+            baseline_item_ids=frozenset(manifest["preDispatchItemIds"]),
+            event_count=1,
+            terminal_status="completed",
+            interval_seconds=0.001,
+            quiet_period_seconds=0.002,
+            tool_only_quiet_period_seconds=0.002,
+        )
+        assert status == "completed" and snapshot is inactive
+        harness.events.append("terminal-observed")
+        return AgentRunResult(
+            summary="done", metadata={"omnigentSessionId": "session-1"}
+        )
+
+    harness.realizer._session_driver = session_driver
+    result = await harness.realizer.execute(
+        harness.publish_request, _plan("opencode-go/model")
+    )
+    assert result.failure_class is None
+    assert harness.events.index("terminal-observed") < harness.events.index(
+        "host-cleaned"
+    )
+    replay = await harness.realizer.execute(
+        harness.publish_request, _plan("opencode-go/model")
+    )
+    assert replay == result
+
+
 def _metric_keys(section: str, name: str) -> list[str]:
     """Return the recorded aggregate keys for one metric family."""
 

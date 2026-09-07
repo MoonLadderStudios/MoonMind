@@ -782,8 +782,11 @@ class GitHubService:
         repo: str,
         selector: str,
         github_token: str | None = None,
+        expected_head_sha: str | None = None,
+        expected_base_branch: str | None = None,
+        expected_draft: bool | None = None,
     ) -> PullRequestSelectorResult:
-        """Resolve a PR number, GitHub PR URL, or exact open head branch."""
+        """Resolve a selector, validating publication expectations when supplied."""
 
         repository = str(repo or "").strip()
         candidate = str(selector or "").strip()
@@ -798,7 +801,11 @@ class GitHubService:
             pr_number = int(candidate)
         except ValueError:
             pr_number = 0
-        if pr_number > 0:
+        publication_expected = any(
+            value is not None
+            for value in (expected_head_sha, expected_base_branch, expected_draft)
+        )
+        if pr_number > 0 and not publication_expected:
             return PullRequestSelectorResult(
                 resolved=True,
                 prNumber=pr_number,
@@ -809,7 +816,7 @@ class GitHubService:
             )
 
         parsed_url = self.parse_github_pr_url(candidate.rstrip("/"))
-        if parsed_url is not None:
+        if parsed_url is not None and not publication_expected:
             owner, repo_name, number_text = parsed_url
             url_repository = f"{owner}/{repo_name}"
             if url_repository.lower() != repository.lower():
@@ -900,6 +907,29 @@ class GitHubService:
             )
 
         match = matches[0]
+        if expected_head_sha is not None and (
+            str((match.get("head") or {}).get("sha") or "").lower()
+            != expected_head_sha.lower()
+        ):
+            return PullRequestSelectorResult(
+                selectorType="branch",
+                reasonCode="head_sha_mismatch",
+                summary="The pull-request head does not match the verified publication.",
+            )
+        base = match.get("base")
+        base = base if isinstance(base, Mapping) else {}
+        if expected_base_branch is not None and base.get("ref") != expected_base_branch:
+            return PullRequestSelectorResult(
+                selectorType="branch",
+                reasonCode="base_branch_mismatch",
+                summary="The pull-request base does not match the publication target.",
+            )
+        if expected_draft is not None and match.get("draft") is not expected_draft:
+            return PullRequestSelectorResult(
+                selectorType="branch",
+                reasonCode="draft_state_mismatch",
+                summary="The pull-request draft state does not match publication policy.",
+            )
         pr_number = int(match.get("number") or 0)
         pr_url = str(match.get("html_url") or "").strip()
         if pr_number <= 0 or not pr_url:

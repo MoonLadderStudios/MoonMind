@@ -51,6 +51,7 @@ from moonmind.workflows.skills.deployment_tools import (
 )
 from moonmind.workflows.temporal import activity_runtime as activity_runtime_module
 from moonmind.workflows.temporal.workflows import run as run_module
+from moonmind.workflows.temporal.workflows.agent_run import MoonMindAgentRun
 from moonmind.workflows.temporal.activity_catalog import (
     AGENT_RUNTIME_FLEET,
     ARTIFACTS_FLEET,
@@ -3830,6 +3831,106 @@ async def test_agent_runtime_publish_artifacts_resolves_omnigent_sandbox_workspa
             )
             persisted = json.loads(artifact_path.read_text(encoding="utf-8"))
             assert persisted["issue_ref"] == "MoonLadderStudios/MoonMind#3620"
+
+
+@pytest.mark.parametrize(
+    "runtime",
+    ["omnigent", "codex_cli", "claude_code", "jules", "openclaw"],
+)
+@pytest.mark.parametrize("consumer_handoff", [True, False])
+async def test_assessment_consumer_dispatch_to_publication_regression(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    runtime: str,
+    consumer_handoff: bool,
+) -> None:
+    """Reproduce the escaped producer/consumer confusion across boundaries."""
+    fixture = json.loads(
+        (
+            Path(__file__).resolve().parents[3]
+            / "fixtures/workflows/assessment_consumer_handoff.json"
+        ).read_text(encoding="utf-8")
+    )
+    info = SimpleNamespace(
+        namespace="default",
+        workflow_id="assessment-handoff",
+        run_id="parent-run",
+        workflow_run_id="child-run",
+        parent=None,
+    )
+    monkeypatch.setattr(run_module.workflow, "info", lambda: info)
+    monkeypatch.setattr(
+        run_module.workflow,
+        "patched",
+        lambda patch_id: (
+            patch_id in {
+                run_module.RUN_ASSESSMENT_PARAMETER_INJECTION_PATCH,
+                run_module.RUN_ASSESSMENT_ATTACHMENT_HANDOFF_PATCH,
+                run_module.RUN_ISSUE_BRIEF_ATTACHMENT_HANDOFF_PATCH,
+            }
+            or (
+                consumer_handoff
+                and patch_id == run_module.RUN_ASSESSMENT_CONSUMER_HANDOFF_PATCH
+            )
+        ),
+    )
+    parent = run_module.MoonMindRunWorkflow()
+    parent._assessment_context = fixture["assessmentContext"]
+    request = parent._build_agent_execution_request(
+        node_inputs={
+            **fixture["nodeInputs"],
+            "targetRuntime": runtime,
+            "previousOutputs": {
+                "trustedSource": "moonmind.github.get_issue",
+                "issueRef": "MoonLadderStudios/MoonMind#4024",
+                **fixture["assessmentContext"],
+            },
+        },
+        node_id=fixture["logicalStepId"],
+        tool_name=runtime,
+    )
+    if request.agent_kind == "external":
+        assert request.input_refs == ["artifact://art_assessment", "artifact://art_brief"]
+    assert "NOT_IMPLEMENTED" in request.instruction_ref
+    assert parent._assessment_context == fixture["assessmentContext"]
+    if not consumer_handoff:
+        # Histories without the new marker retain the original child payload.
+        assert request.parameters["assessment_artifact_path"] == (
+            fixture["nodeInputs"]["inputs"]["assessment_artifact_path"]
+        )
+        assert request.parameters["brief_artifact_path"] == (
+            fixture["nodeInputs"]["inputs"]["brief_artifact_path"]
+        )
+        return
+    assert "assessment_artifact_path" not in request.parameters
+    assert "brief_artifact_path" not in request.parameters
+    result = MoonMindAgentRun()._enrich_result_metadata(
+        request=request,
+        result=AgentRunResult.model_validate(fixture["result"]),
+    )
+    assert "assessment_artifact_path" not in result.metadata
+    assert "brief_artifact_path" not in result.metadata
+
+    # The consumer workspace has no copies at the producer's local paths.
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    result.metadata["workspacePath"] = str(workspace)
+    async with temporal_db(tmp_path) as session_maker:
+        async with session_maker() as session:
+            service = TemporalArtifactService(
+                TemporalArtifactRepository(session),
+                store=LocalTemporalArtifactStore(tmp_path / "artifacts"),
+            )
+            activities = TemporalAgentRuntimeActivities(artifact_service=service)
+            monkeypatch.setattr(activities, "execution_notify_completion", AsyncMock())
+            monkeypatch.setattr(temporal_activity, "info", lambda: info)
+            published = await activities.agent_runtime_publish_artifacts(result)
+            assert published.failure_class is None
+            assert published.metadata["push_head_sha"] == (
+                fixture["result"]["metadata"]["push_head_sha"]
+            )
+            assert "assessmentArtifactRef" not in published.metadata
+            assert "briefArtifactRef" not in published.metadata
 
 
 async def test_agent_runtime_publish_artifacts_requires_declared_assessment_file(

@@ -3,7 +3,7 @@
  * (MoonLadderStudios/MoonMind#3638).
  */
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { fireEvent, waitFor } from '@testing-library/react';
+import { act, fireEvent, waitFor } from '@testing-library/react';
 
 import { renderWithClient } from '../utils/test-utils';
 import {
@@ -11,6 +11,7 @@ import {
   fullPageChatUrl,
   type WorkflowChatBinding,
 } from './WorkflowChatNative';
+import { isNativeChatReadySignal, nativeChatFatalReason, NATIVE_CHAT_READY_TIMEOUT_MS } from '../features/workflow-native-chat/nativeChatProtocol';
 import {
   capturedEvidenceHref,
   type CapturedEvidence,
@@ -345,8 +346,7 @@ describe('WorkflowChatNative terminal actions (#3641)', () => {
     ).toBe(false);
   });
 
-  it('continues into the linked workflow with authored intent and navigates to it', async () => {
-    const fetchMock = mockFetchByUrl({
+  it('continues into the linked workflow with authored intent and navigates to it', async () => {    const fetchMock = mockFetchByUrl({
       binding: bindingResponse({ state: 'ended', readOnly: true }),
       continue: CONTINUE_RESULT,
     });
@@ -385,5 +385,179 @@ describe('WorkflowChatNative terminal actions (#3641)', () => {
     const body = JSON.parse(String(continueCall?.[1]?.body));
     expect(body.instructions).toBe('Do the follow-up work');
     expect(typeof body.idempotencyKey).toBe('string');
+  });
+});
+
+describe('native chat signal validation (#4013 AC7/PLAN5)', () => {
+  it('accepts only the ready shape for the current binding', () => {
+    expect(
+      isNativeChatReadySignal(
+        { type: 'moonmind.omnigent.chat.ready', chatBindingId: 'chatb_opaque123' },
+        'chatb_opaque123',
+      ),
+    ).toBe(true);
+    expect(
+      isNativeChatReadySignal(
+        { type: 'moonmind.omnigent.chat.ready', chatBindingId: 'chatb_other' },
+        'chatb_opaque123',
+      ),
+    ).toBe(false);
+    expect(
+      isNativeChatReadySignal({ type: 'something-else', chatBindingId: 'chatb_opaque123' }, 'chatb_opaque123'),
+    ).toBe(false);
+    expect(isNativeChatReadySignal(null, 'chatb_opaque123')).toBe(false);
+  });
+
+  it('extracts a bounded fatal reason only for the current binding', () => {
+    expect(
+      nativeChatFatalReason(
+        { type: 'moonmind.omnigent.chat.fatal', chatBindingId: 'chatb_opaque123', reason: 'native_crash' },
+        'chatb_opaque123',
+      ),
+    ).toBe('native_crash');
+    expect(
+      nativeChatFatalReason(
+        { type: 'moonmind.omnigent.chat.fatal', chatBindingId: 'chatb_other', reason: 'native_crash' },
+        'chatb_opaque123',
+      ),
+    ).toBeNull();
+    expect(
+      nativeChatFatalReason(
+        { type: 'moonmind.omnigent.chat.ready', chatBindingId: 'chatb_opaque123' },
+        'chatb_opaque123',
+      ),
+    ).toBeNull();
+  });
+});
+
+describe('WorkflowChatNative readiness containment (#4013 AC7/AC8)', () => {
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  function postToChat(data: unknown, origin?: string) {
+    window.dispatchEvent(
+      new MessageEvent('message', {
+        data,
+        origin: origin ?? window.location.origin,
+        source: document.querySelector<HTMLIFrameElement>('[data-testid="workflow-native-chat-frame"]')?.contentWindow ?? null,
+      }),
+    );
+  }
+
+  // Fake timers must be armed before render so the readiness deadline itself
+  // runs on the fake clock; async RTL queries would deadlock on fake timers,
+  // so initial readiness is flushed with virtual time + sync queries instead.
+  async function renderLiveFrame(children?: React.ReactNode, terminal = false) {
+    vi.useFakeTimers();
+    const utils = renderWithClient(
+      <WorkflowChatNative apiBase={API_BASE} workflowId={WORKFLOW_ID} active terminal={terminal}>
+        {children}
+      </WorkflowChatNative>,
+    );
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(1000);
+    });
+    utils.getByTestId('workflow-native-chat-frame');
+    return utils;
+  }
+
+  async function advance(ms: number) {
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(ms);
+    });
+  }
+
+  it('shows a bounded timeout with Retry and the read-only fallback when ready never arrives', async () => {
+    mockFetch(bindingResponse());
+    const { getByTestId, getByText, queryByTestId } = await renderLiveFrame(
+      <div>legacy projection</div>,
+    );
+
+    expect(queryByTestId('workflow-native-chat-timeout')).toBeNull();
+
+    await advance(NATIVE_CHAT_READY_TIMEOUT_MS + 1);
+
+    expect(getByTestId('workflow-native-chat-timeout')).toBeTruthy();
+    expect(getByTestId('workflow-native-chat-retry')).toBeTruthy();
+    // The iframe and the transcript fallback stay reachable (AC8).
+    expect(getByTestId('workflow-native-chat-frame')).toBeTruthy();
+    expect(getByText('legacy projection')).toBeTruthy();
+  });
+
+  it('a valid ready signal suppresses the timeout', async () => {
+    mockFetch(bindingResponse());
+    const { queryByTestId } = await renderLiveFrame();
+
+    await act(async () => {
+      postToChat({ type: 'moonmind.omnigent.chat.ready', chatBindingId: 'chatb_opaque123' });
+    });
+    await advance(NATIVE_CHAT_READY_TIMEOUT_MS + 1);
+
+    expect(queryByTestId('workflow-native-chat-timeout')).toBeNull();
+    expect(queryByTestId('workflow-native-chat-fatal')).toBeNull();
+    expect(queryByTestId('workflow-native-chat-frame')).not.toBeNull();
+  });
+
+  it('ignores ready signals from another origin or another binding', async () => {
+    mockFetch(bindingResponse());
+    const { getByTestId } = await renderLiveFrame(<div>legacy projection</div>);
+
+    await act(async () => {
+      postToChat(
+        { type: 'moonmind.omnigent.chat.ready', chatBindingId: 'chatb_opaque123' },
+        'https://evil.test',
+      );
+      postToChat({ type: 'moonmind.omnigent.chat.ready', chatBindingId: 'chatb_other' });
+    });
+    await advance(NATIVE_CHAT_READY_TIMEOUT_MS + 1);
+
+    expect(getByTestId('workflow-native-chat-timeout')).toBeTruthy();
+  });
+
+  it('a fatal signal shows the failure surface with Retry and the fallback', async () => {
+    mockFetch(bindingResponse());
+    const { getByTestId, getByText } = await renderLiveFrame(<div>legacy projection</div>);
+
+    await act(async () => {
+      postToChat({
+        type: 'moonmind.omnigent.chat.fatal',
+        chatBindingId: 'chatb_opaque123',
+        reason: 'native_crash',
+      });
+    });
+
+    const fatal = getByTestId('workflow-native-chat-fatal');
+    expect(fatal.textContent).toContain('native_crash');
+    expect(getByTestId('workflow-native-chat-retry')).toBeTruthy();
+    expect(getByText('legacy projection')).toBeTruthy();
+  });
+
+  it('Retry after a timeout remounts the frame and waits again', async () => {
+    mockFetch(bindingResponse());
+    const { getByTestId, queryByTestId } = await renderLiveFrame();
+
+    await advance(NATIVE_CHAT_READY_TIMEOUT_MS + 1);
+    expect(getByTestId('workflow-native-chat-timeout')).toBeTruthy();
+
+    fireEvent.click(getByTestId('workflow-native-chat-retry'));
+    // The retry clears the timeout banner and rearms the deadline.
+    expect(queryByTestId('workflow-native-chat-timeout')).toBeNull();
+    expect(getByTestId('workflow-native-chat-frame')).toBeTruthy();
+
+    await advance(NATIVE_CHAT_READY_TIMEOUT_MS + 1);
+    expect(getByTestId('workflow-native-chat-timeout')).toBeTruthy();
+  });
+
+  it('keeps terminal workflow actions available while the native frame times out', async () => {
+    mockFetchByUrl({ binding: bindingResponse({ state: 'ended', readOnly: true }) });
+    const { getByTestId } = await renderLiveFrame(undefined, true);
+
+    await advance(NATIVE_CHAT_READY_TIMEOUT_MS + 1);
+
+    expect(getByTestId('workflow-native-chat-timeout')).toBeTruthy();
+    // Terminal evidence and continuation survive the native failure (AC8).
+    expect(getByTestId('workflow-native-chat-evidence-toggle')).toBeTruthy();
+    expect(getByTestId('workflow-native-chat-continue')).toBeTruthy();
   });
 });

@@ -29,6 +29,7 @@ from api_service.api.routers.omnigent_native_ui import (
     NativeUiUpstream,
     NativeUiUpstreamError,
     NativeUiUpstreamResponse,
+    _is_safe_scoped_redirect,
     _rewrite_upstream_location,
     get_native_ui_upstream,
     native_ui_router,
@@ -450,3 +451,45 @@ async def test_fetch_returns_asset_under_limit() -> None:
     assert result.status_code == 200
     assert result.content == b"console.log('ok');"
     assert result.media_type == "application/javascript"
+
+
+def test_encoded_dot_traversal_fails_closed_to_scope() -> None:
+    base = scoped_ui_base(_CHAT_BINDING_ID)
+    # Browsers decode %2e segments into traversal while urlsplit/normpath do
+    # not, so an encoded escape must fail closed just like a literal one.
+    assert (
+        _rewrite_upstream_location(
+            "/%2e%2e/%2e%2e/api/executions", scoped_base=base
+        )
+        == base + "/"
+    )
+    assert (
+        _rewrite_upstream_location(
+            "/%2E%2E/%2E%2E/api/executions", scoped_base=base
+        )
+        == base + "/"
+    )
+    assert (
+        _rewrite_upstream_location(
+            "/%252e%252e/%252e%252e/api/executions", scoped_base=base
+        )
+        == base + "/"
+    )
+    # A benign encoded path with no traversal stays under the scoped base.
+    assert (
+        _rewrite_upstream_location("/assets/app%20v2.js", scoped_base=base)
+        == f"{base}/assets/app v2.js"
+    )
+
+
+def test_sink_rejects_encoded_dot_traversal() -> None:
+    base = scoped_ui_base(_CHAT_BINDING_ID)
+    assert _is_safe_scoped_redirect(f"{base}/assets/x.js", scoped_base=base)
+    assert _is_safe_scoped_redirect(base, scoped_base=base)
+    assert not _is_safe_scoped_redirect(
+        f"{base}/%2e%2e/evil", scoped_base=base
+    )
+    assert not _is_safe_scoped_redirect(f"{base}/../evil", scoped_base=base)
+    assert not _is_safe_scoped_redirect(
+        "https://evil.test/x", scoped_base=base
+    )

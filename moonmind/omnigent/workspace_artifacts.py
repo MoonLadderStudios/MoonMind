@@ -279,6 +279,8 @@ class WorkspaceArtifactProjector:
                 required_workflow_id=workflow_id if strict_admission else None,
                 strict_metadata=strict_admission,
                 overlay_policy=overlay_policy,
+                runtime_uid=runtime_uid,
+                runtime_gid=runtime_gid,
             )
             evidence["checkpointRestoreRef"] = checkpoint_ref
             evidence["checkpointManifest"] = manifest
@@ -351,7 +353,14 @@ class WorkspaceArtifactProjector:
         required_workflow_id: str | None = None,
         strict_metadata: bool = False,
         overlay_policy: str = "authoritative_restore",
+        runtime_uid: int,
+        runtime_gid: int,
     ) -> dict[str, Any]:
+        if runtime_uid < 0 or runtime_gid < 0:
+            raise WorkspaceArtifactProjectionError(
+                "checkpoint runtime identity is invalid",
+                code="OMNIGENT_WORKSPACE_MATERIALIZATION_FAILED",
+            )
         artifact_id = self._artifact_id(artifact_ref, noun="workspace checkpoint")
         service = self._require_service("workspace checkpoint")
         # Historical alias payloads without an authored workspaceSource pass
@@ -419,10 +428,48 @@ class WorkspaceArtifactProjector:
             # link that was safe at write time must still resolve inside the
             # staging area after neutralization removed entries around it.
             self._verify_staged_links(staging)
+            # Capture staged relative paths before promotion renames them, so
+            # runtime ownership can be assigned to exactly the restored
+            # entries and their implicit directories without following links.
+            staged_rel_paths = [
+                child.relative_to(staging)
+                for child in staging.rglob("*")
+            ]
             if overlay_policy == OVERLAY_ADDITIVE:
                 self._promote_additive_overlay(workspace, staging)
             else:
                 self._promote_authoritative_restore(workspace, staging)
+            # The staging extraction runs as the worker, after the checkout's
+            # runtime ownership handoff, so assign the promoted entries and
+            # their implicit directories to the selected runtime before the
+            # host can use this workspace. Keep modes intact and never follow
+            # symlinks during chown.
+            workspace_root = workspace.resolve()
+            restored_paths: set[Path] = set()
+            for rel in staged_rel_paths:
+                target = workspace_root / rel.as_posix()
+                cursor: Path = target
+                while cursor != workspace_root:
+                    if not cursor.is_relative_to(
+                        workspace_root
+                    ) or not cursor.resolve().is_relative_to(workspace_root):
+                        raise WorkspaceArtifactProjectionError(
+                            "checkpoint ownership target escapes workspace",
+                            code="WORKSPACE_AUTHORITY_MISMATCH",
+                        )
+                    restored_paths.add(cursor)
+                    cursor = cursor.parent
+            for target in restored_paths:
+                try:
+                    if not os.path.lexists(target):
+                        continue
+                    current = target.stat(follow_symlinks=False)
+                except OSError:
+                    continue
+                if (current.st_uid, current.st_gid) != (runtime_uid, runtime_gid):
+                    os.chown(
+                        target, runtime_uid, runtime_gid, follow_symlinks=False
+                    )
             manifest["overlayPolicy"] = overlay_policy
             return {**manifest, "neutralized": neutralized}
         except WorkspaceArtifactProjectionError:
@@ -1382,6 +1429,11 @@ class WorkspaceArtifactProjector:
                 or getattr(service, "_moonmind_metadata_less", False)
                 or required_workflow_id is not None
             ):
+                raise WorkspaceArtifactProjectionError(
+                    "source-artifact authorization requires linked artifact "
+                    "metadata",
+                    code="WORKSPACE_AUTHORITY_MISMATCH",
+                )
                 raise WorkspaceArtifactProjectionError(
                     "source-artifact authorization requires linked artifact "
                     "metadata",

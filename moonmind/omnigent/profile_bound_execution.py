@@ -1563,6 +1563,7 @@ class OmnigentProfileBoundExecutionCoordinator:
                         artifact_gateway=self._artifact_gateway,
                         run_store=self._run_store,
                         defer_bridge_terminal=True,
+                        allow_same_session_continuation=True,
                     ),
                     host_lease_ref=host_lease.lease_id,
                     ttl_seconds=int(effective_launch["limits"]["timeoutSeconds"]),
@@ -1729,6 +1730,9 @@ class OmnigentProfileBoundExecutionCoordinator:
                                         (request.parameters or {}).get("repository") or ""
                                     ).strip(),
                                     github_token=github_token,
+                                    accepted_published_head=(
+                                        request.parameters or {}
+                                    ).get("acceptedPublishedHead"),
                                 )
                         except Exception as exc:
                             code = str(
@@ -1951,6 +1955,7 @@ class OmnigentProfileBoundExecutionCoordinator:
                                 _REPOSITORY_PUBLICATION_CONTINUATION_PROMPT
                             ),
                             defer_bridge_terminal=True,
+                            allow_same_session_continuation=True,
                         ),
                         host_lease_ref=host_lease.lease_id,
                         ttl_seconds=int(

@@ -217,6 +217,13 @@ def build_bridge_session_proxy(
             "Unsupported Omnigent bridge host protocol mode."
         )
     client = OmnigentHttpClient(
+        # MoonLadderStudios/MoonMind#3884: deliberate separate lifecycle. This
+        # proxy composition is API-process-owned and long-lived, so it must
+        # never touch the worker-owned shared pool (no cross-process or
+        # cross-event-loop sharing). With no explicit httpx client, every
+        # request resolves a per-request bounded owned client that is closed
+        # after the call: no pooling across requests, but also no leakage and
+        # no contention with worker stream/control budgets.
         base_url=resolved_server_url(),
         api_token=resolved_api_token(),
         forward_headers=forward_headers,

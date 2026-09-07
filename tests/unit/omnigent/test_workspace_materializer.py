@@ -352,6 +352,70 @@ async def test_materializer_projects_checkpoint_and_declared_inputs_before_mount
     assert SandboxWorkspaceRecordStore(tmp_path).is_materialized(workspace_id)
 
 
+@pytest.mark.asyncio
+async def test_restored_publication_directory_uses_selected_runtime_owner(
+    tmp_path,
+    monkeypatch,
+):
+    """Replay mm:f23c3090: restored verifier output blocked the PR artifact."""
+    workspace_id = _workspace_id()
+    existing = tmp_path / "temporal_sandbox" / workspace_id / "repo"
+    existing.mkdir(parents=True)
+    archive = io.BytesIO()
+    with tarfile.open(fileobj=archive, mode="w:gz") as bundle:
+        member = tarfile.TarInfo("artifacts/github-issue-implement-verify.json")
+        payload = b'{"verdict":"FULLY_IMPLEMENTED"}'
+        member.size = len(payload)
+        bundle.addfile(member, io.BytesIO(payload))
+
+    class Artifacts:
+        async def get_metadata(self, **_kwargs):
+            return SimpleNamespace(size_bytes=len(archive.getvalue())), []
+
+        async def read_chunks(self, **_kwargs):
+            return SimpleNamespace(), iter((archive.getvalue(),))
+
+    selected_uid, selected_gid = os.getuid() + 1, os.getgid() + 1
+    assigned = []
+    monkeypatch.setattr(
+        os,
+        "chown",
+        lambda path, uid, gid, **kwargs: assigned.append((path, uid, gid, kwargs)),
+    )
+
+    await OmnigentWorkspaceMaterializer(
+        command_runner=None,
+        workspace_root=tmp_path,
+        artifact_service=Artifacts(),
+    ).materialize(
+        _request(
+            {
+                "workspaceLocator": {
+                    "kind": "sandbox",
+                    "workspaceId": workspace_id,
+                    "relativePath": "repo",
+                },
+                "workspaceCheckpointRestoreRef": "artifact://verifier-checkpoint",
+            }
+        ),
+        runtime_uid=selected_uid,
+        runtime_gid=selected_gid,
+    )
+    expected = {
+        existing / "artifacts",
+        existing / "artifacts/github-issue-implement-verify.json",
+    }
+    assert {
+        path
+        for path, uid, gid, options in assigned
+        if (uid, gid) == (selected_uid, selected_gid)
+        and options == {"follow_symlinks": False}
+    } == expected
+    assert (
+        existing / "artifacts/github-issue-implement-verify.json"
+    ).read_bytes() == payload
+
+
 def test_runtime_input_ownership_handoff_targets_selected_identity(
     tmp_path, monkeypatch
 ):

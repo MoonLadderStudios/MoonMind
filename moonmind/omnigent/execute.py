@@ -1283,10 +1283,95 @@ def _snapshot_confirms_current_turn_terminal(
     )
 
 
+def _marked_turn_failure_snapshot(
+    event: Mapping[str, Any],
+    snapshot: Mapping[str, Any],
+    *,
+    session_id: str,
+    marker: str,
+    arrived_after_message_post: bool,
+) -> dict[str, Any] | None:
+    """Accept a live native failure without requiring successful provider output.
+
+    Session status errors can precede every assistant/tool item. The live edge,
+    matching session, latest marked user message, and absence of an active
+    response own this failure together; a replayed edge or unrelated turn does
+    not. Preserve the error even if a later idle projection already erased it.
+    """
+    error = event.get("error")
+    if (
+        not arrived_after_message_post
+        or event.get("type") != "session.status"
+        or event.get("status") != "failed"
+        or event.get("conversation_id") != session_id
+        or not isinstance(error, Mapping)
+        or not isinstance(error.get("message"), str)
+        or not error["message"].strip()
+        or _snapshot_projects_active_response(snapshot)
+    ):
+        return None
+    items = snapshot.get("items")
+    if not isinstance(items, list):
+        return None
+    latest_user = next(
+        (
+            item
+            for item in reversed(items)
+            if isinstance(item, Mapping)
+            and item.get("type") == "message"
+            and isinstance(item.get("data"), Mapping)
+            and item["data"].get("role") == "user"
+        ),
+        None,
+    )
+    if latest_user is None or not _nested_value_contains_text(
+        latest_user, needle=marker
+    ):
+        return None
+    safe_error = redact_raw_events([dict(error)])[0]
+    return {
+        **snapshot,
+        "status": "failed",
+        "last_task_error": safe_error,
+        "summary": safe_error["message"],
+        "providerErrorCode": safe_error.get("code"),
+    }
+
+
 async def _unsupported_bundle_upload(bundle_ref: str) -> dict[str, Any]:
     raise OmnigentContractError(
         f"Omnigent bundleRef cannot be resolved by this activity: {bundle_ref}"
     )
+
+
+def _journaled_marked_turn_failure_snapshot(
+    raw_events: list[dict[str, Any]],
+    normalized_events: list[dict[str, Any]],
+    snapshot: Mapping[str, Any],
+    *,
+    session_id: str,
+    marker: str,
+) -> dict[str, Any] | None:
+    """Recover a native rejection using durably recorded dispatch provenance.
+
+    Old journals lack this observation and remain readable, but cannot prove
+    that a failure was live rather than replayed before message dispatch.
+    """
+    for event in reversed(normalized_events):
+        reconciliation = (event.get("metadata") or {}).get("reconciliation") or {}
+        index = reconciliation.get("postDispatchRawEventIndex")
+        if type(index) is not int or not 0 <= index < len(raw_events):
+            continue
+        failed_snapshot = _marked_turn_failure_snapshot(
+            raw_events[index],
+            snapshot,
+            session_id=session_id,
+            marker=marker,
+            arrived_after_message_post=True,
+        )
+        if failed_snapshot is not None:
+            return failed_snapshot
+    return None
 
 
 async def _maybe_await(value: Any) -> Any:
@@ -1413,6 +1498,7 @@ async def _await_marked_turn_terminal(
     tool_only_quiet_period_seconds: float = (_MARKED_TOOL_ONLY_QUIET_PERIOD_SECONDS),
     turn_start_timeout_seconds: float = _MARKED_TURN_START_TIMEOUT_SECONDS,
     start_watchdog: _MarkedTurnStartWatchdog | None = None,
+    allow_same_session_continuation: bool = False,
 ) -> tuple[str, dict[str, Any]]:
     """Wait until a terminal event is stably projected into the marked turn.
 
@@ -1426,11 +1512,12 @@ async def _await_marked_turn_terminal(
     OpenCode can leave the interactive session status at ``running`` after a
     post-dispatch terminal event when the bounded transcript ends with a tool
     output instead of final assistant text. After the longer tool-only quiet
-    period, that shape raises
+    period, an explicitly supplied continuation owner can receive
     :class:`OmnigentSameSessionContinuationRequired`; elapsed time never turns
     an active provider projection into terminal success. A profile-bound owner
     can use the typed signal to continue the same session without releasing the
-    authoritative workspace.
+    authoritative workspace. Without that owner, polling continues under the
+    existing timeout until the provider projects a terminal turn.
 
     A turn that never starts is distinct from a turn that is slow. The
     :class:`_MarkedTurnStartWatchdog` (the caller's dispatch-scoped instance
@@ -1514,7 +1601,13 @@ async def _await_marked_turn_terminal(
         stable_candidate = bool(
             progress
             and not turn_state["unfinishedToolCall"]
-            and (inactive or terminal_event_tool_only_candidate)
+            and (
+                inactive
+                or (
+                    terminal_event_tool_only_candidate
+                    and allow_same_session_continuation
+                )
+            )
         )
         signature = turn_state["signature"]
         if stable_candidate and isinstance(signature, tuple):
@@ -1717,9 +1810,23 @@ async def _enqueue_stream_events(
     session_id: str,
     queue: asyncio.Queue[tuple[dict[str, Any], bool] | BaseException | None],
     message_posted: asyncio.Event,
+    admitted: asyncio.Event | None = None,
 ) -> None:
     try:
-        async for event in client.stream_events(session_id):
+        if admitted is not None:
+            try:
+                stream = client.stream_events(
+                    session_id,
+                    on_admitted=admitted.set,  # type: ignore[call-arg]
+                )
+            except TypeError:
+                # Duck-typed test fakes predate the admission hook: there is
+                # no real admission to wait for, so mark it granted.
+                admitted.set()
+                stream = client.stream_events(session_id)
+        else:
+            stream = client.stream_events(session_id)
+        async for event in stream:
             await queue.put((event, message_posted.is_set()))
     except asyncio.CancelledError:
         raise
@@ -2044,6 +2151,7 @@ async def run_omnigent_execution(
     resume_session_id: str | None = None,
     first_message_text: str | None = None,
     defer_bridge_terminal: bool = False,
+    allow_same_session_continuation: bool = False,
     session_authority_sink: Any | None = None,
     transport_pool: Any | None = None,
 ) -> AgentRunResult:
@@ -2619,15 +2727,49 @@ async def run_omnigent_execution(
                 )
                 external_state["firstMessage"]["state"] = "posted"
             if not first_message_posted:
+                from moonmind.workflows.adapters.omnigent_client import (
+                    stream_admission_timeout_seconds,
+                )
+
                 stream_queue = asyncio.Queue()
+                stream_admitted = asyncio.Event()
                 stream_task = asyncio.create_task(
                     _enqueue_stream_events(
                         client=client,
                         session_id=session_id,
                         queue=stream_queue,
                         message_posted=message_posted_gate,
+                        admitted=stream_admitted,
                     )
                 )
+                # Reserve observation capacity before mutating provider
+                # state: when streams are saturated the admission timeout is
+                # dequeued here and the run fails before the first message is
+                # posted (safe retry, first_message_posted stays False)
+                # instead of reporting failure after provider work started.
+                admission_deadline = (
+                    asyncio.get_running_loop().time()
+                    + stream_admission_timeout_seconds()
+                )
+                while not stream_admitted.is_set() and not stream_task.done():
+                    if asyncio.get_running_loop().time() >= admission_deadline:
+                        break
+                    await asyncio.sleep(0.01)
+                if not stream_admitted.is_set():
+                    await _cancel_task(stream_task)
+                    queued: Any = None
+                    while not stream_queue.empty():
+                        item = stream_queue.get_nowait()
+                        if isinstance(item, BaseException):
+                            queued = item
+                            break
+                    if isinstance(queued, OmnigentClientError):
+                        raise queued
+                    raise OmnigentClientError(
+                        "Omnigent stream admission exhausted; control and "
+                        "cleanup operations remain available",
+                        failure_class="integration_error",
+                    )
                 await asyncio.sleep(0)
                 if run_store is not None:
                     await run_store.mark_posting(request.idempotency_key)
@@ -2745,6 +2887,13 @@ async def run_omnigent_execution(
                 ).strip()
                 if durable_summary:
                     terminal_snapshot_override["summary"] = durable_summary
+                if durable_terminal_status == "failed":
+                    # A later interactive turn's snapshot cannot replace the
+                    # already committed failure of this execution attempt.
+                    terminal_snapshot_override.pop("last_task_error", None)
+                    terminal_snapshot_override["providerErrorCode"] = (
+                        durable_terminal_refs.get("failureCode")
+                    )
                 external_state["terminalReconciliation"] = {
                     "source": "durable_bridge_terminal",
                     "status": durable_terminal_status,
@@ -2764,6 +2913,22 @@ async def run_omnigent_execution(
                 retry_state.get("turnTerminalResponseIds")
             )
             start_watchdog.restore_terminal_response_events(raw_events)
+            if terminal_status is None and isinstance(initial_snapshot, dict):
+                journaled_failure = _journaled_marked_turn_failure_snapshot(
+                    raw_events,
+                    normalized_events,
+                    initial_snapshot,
+                    session_id=session_id,
+                    marker=marker,
+                )
+                if journaled_failure is not None:
+                    terminal_status = "failed"
+                    terminal_snapshot_override = journaled_failure
+                    heartbeat_status["value"] = terminal_status
+                    external_state["terminalReconciliation"] = {
+                        "source": "journaled_native_failure",
+                        "status": terminal_status,
+                    }
             if (
                 terminal_status is None
                 and first_message_posted
@@ -2918,6 +3083,13 @@ async def run_omnigent_execution(
                         omnigent_session_id=session_id,
                         bridge_session_id=bridge_session_id,
                     )
+                    if arrived_after_message_post:
+                        # Persist observation provenance with the same journal
+                        # pair as the event, before any crash-prone snapshot or
+                        # harvest work. Provider payloads cannot set this field.
+                        normalized_bridge_event.event["metadata"]["reconciliation"][
+                            "postDispatchRawEventIndex"
+                        ] = (len(raw_events) - 1)
                     if normalized_bridge_event.diagnostic is not None:
                         event_diagnostics.append(normalized_bridge_event.diagnostic)
                     normalized_events.append(normalized_bridge_event.event)
@@ -2996,7 +3168,39 @@ async def run_omnigent_execution(
                         terminal_event_status = (
                             "completed" if normalized == "idle" else normalized
                         )
+                        terminal_observed_at = asyncio.get_running_loop().time()
                         terminal_snapshot = await client.get_session(session_id)
+                        failed_snapshot = _marked_turn_failure_snapshot(
+                            event,
+                            terminal_snapshot,
+                            session_id=session_id,
+                            marker=marker,
+                            arrived_after_message_post=arrived_after_message_post,
+                        )
+                        if failed_snapshot is not None:
+                            terminal_status = "failed"
+                            terminal_snapshot_override = failed_snapshot
+                            heartbeat_status["value"] = terminal_status
+                            break
+                        terminal_turn_state = _marked_turn_item_state(
+                            terminal_snapshot,
+                            marker=marker,
+                            baseline_item_ids=pre_dispatch_item_ids,
+                        )
+                        if (
+                            terminal_event_status == "completed"
+                            and isinstance(terminal_snapshot.get("items"), list)
+                            and not terminal_turn_state["progress"]
+                        ):
+                            # Message injection can complete before the native
+                            # harness starts. Keep consuming live failures and
+                            # progress; the shared watchdog still bounds silence.
+                            start_watchdog.observe(
+                                terminal_snapshot,
+                                terminal_turn_state,
+                                observation_started_at=terminal_observed_at,
+                            )
+                            continue
                         current_turn_progress = (
                             _snapshot_confirms_current_turn_terminal(
                                 terminal_snapshot,
@@ -3043,6 +3247,7 @@ async def run_omnigent_execution(
                             terminal_status=terminal_event_status,
                             timeout_seconds=marked_turn_timeout_seconds,
                             start_watchdog=start_watchdog,
+                            allow_same_session_continuation=allow_same_session_continuation,
                         )
                         if normalized == "idle" and terminal_status == "completed":
                             completed_snapshot = dict(
@@ -3151,11 +3356,13 @@ async def run_omnigent_execution(
                         event_count=event_count["value"],
                         terminal_status=(
                             normalized_snapshot
-                            if normalized_snapshot in {"failed", "canceled", "timed_out"}
+                            if normalized_snapshot
+                            in {"failed", "canceled", "timed_out"}
                             else "completed"
                         ),
                         timeout_seconds=marked_turn_timeout_seconds,
                         start_watchdog=start_watchdog,
+                        allow_same_session_continuation=allow_same_session_continuation,
                     )
                     external_state["terminalReconciliation"] = {
                         "source": "stream_closed_snapshot",
@@ -3199,6 +3406,7 @@ async def run_omnigent_execution(
                             terminal_status=normalized_snapshot,
                             timeout_seconds=marked_turn_timeout_seconds,
                             start_watchdog=start_watchdog,
+                            allow_same_session_continuation=allow_same_session_continuation,
                         )
                     else:
                         terminal_status = normalized_snapshot

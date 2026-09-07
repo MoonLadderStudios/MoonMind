@@ -134,6 +134,8 @@ export function WorkflowNativeChatRoute({
       <div className="wf-native-chat__surface">
         {mountFrame && iframeSrc ? (
           <NativeChatFrame
+            key={`${binding?.chatBindingId}:${iframeSrc}`}
+            chatBindingId={binding?.chatBindingId ?? ''}
             src={iframeSrc}
             title={`${workflowTitle} — Omnigent chat`}
             readOnly={readOnly}

@@ -320,6 +320,94 @@ async def test_resolve_pull_request_selector_rejects_cross_repo_url() -> None:
     assert result.resolved is False
     assert result.reason_code == "repository_mismatch"
 
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("branch", ["candidate", "123"])
+@pytest.mark.parametrize("observed_sha", ["a" * 40, "b" * 40, None])
+@pytest.mark.parametrize("matches", [1, 2])
+async def test_resolve_publication_branch_requires_exact_head(
+    branch, observed_sha, matches
+):
+    pull_request = {
+        "number": 3192,
+        "html_url": "https://github.com/o/r/pull/3192",
+        "head": {"ref": branch, "repo": {"full_name": "o/r"}, "sha": observed_sha},
+    }
+    mock_client = AsyncMock()
+    mock_client.get = AsyncMock(
+        return_value=_mock_get_response(200, [pull_request] * matches)
+    )
+    mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+    mock_client.__aexit__ = AsyncMock(return_value=False)
+    with patch(
+        "moonmind.workflows.adapters.github_service.httpx.AsyncClient",
+        return_value=mock_client,
+    ):
+        result = await GitHubService().resolve_pull_request_selector(
+            repo="o/r",
+            selector=branch,
+            github_token="fixture-credential",
+            expected_head_sha="a" * 40,
+        )
+    assert result.resolved is (matches == 1 and observed_sha == "a" * 40)
+    if matches == 2:
+        assert result.reason_code == "pull_request_ambiguous"
+    elif observed_sha != "a" * 40:
+        assert result.reason_code == "head_sha_mismatch"
+    assert mock_client.get.await_args.kwargs["params"]["head"] == f"o:{branch}"
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("branch", ["candidate", "123"])
+@pytest.mark.parametrize(
+    "fields, expectations, reason",
+    [
+        ({"base": {"ref": "main"}}, {"expected_base_branch": "main"}, "resolved"),
+        (
+            {"base": {"ref": "release"}},
+            {"expected_base_branch": "main"},
+            "base_branch_mismatch",
+        ),
+        ({"base": None}, {"expected_base_branch": "main"}, "base_branch_mismatch"),
+        ({"draft": False}, {"expected_draft": False}, "resolved"),
+        ({"draft": True}, {"expected_draft": False}, "draft_state_mismatch"),
+        ({"draft": "false"}, {"expected_draft": False}, "draft_state_mismatch"),
+        ({}, {"expected_draft": False}, "draft_state_mismatch"),
+        ({"draft": True}, {"expected_draft": True}, "resolved"),
+        ({}, {}, "resolved"),
+    ],
+)
+async def test_resolve_publication_branch_validates_base_and_draft(
+    branch,
+    fields,
+    expectations,
+    reason,
+):
+    pull_request = {
+        "number": 3192,
+        "html_url": "https://github.com/o/r/pull/3192",
+        "head": {"ref": branch, "repo": {"full_name": "o/r"}},
+        **fields,
+    }
+    mock_client = AsyncMock()
+    mock_client.get = AsyncMock(return_value=_mock_get_response(200, [pull_request]))
+    mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+    mock_client.__aexit__ = AsyncMock(return_value=False)
+    with patch(
+        "moonmind.workflows.adapters.github_service.httpx.AsyncClient",
+        return_value=mock_client,
+    ):
+        result = await GitHubService().resolve_pull_request_selector(
+            repo="o/r",
+            selector=branch,
+            github_token="fixture-credential",
+            **expectations,
+        )
+    assert result.resolved is (reason == "resolved")
+    assert result.reason_code == reason
+    if expectations:
+        assert mock_client.get.await_args.kwargs["params"]["head"] == f"o:{branch}"
+
+
 @pytest.mark.asyncio
 async def test_create_pr_uses_secret_ref_when_env_missing(monkeypatch):
     """Secret-ref fallback should be used when raw env token is absent."""
