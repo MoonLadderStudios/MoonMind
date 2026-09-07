@@ -59,18 +59,17 @@ This document defines the **Temporal-side contract**. Product-facing APIs and UI
 
 Namespace: `MoonMind.*`
 
-Current core workflow types:
-
-- `MoonMind.UserWorkflow`
-- `MoonMind.UserWorkflow`
-- `MoonMind.ManifestIngest`
-- `MoonMind.ProviderProfileManager`
-- `MoonMind.AgentRun`
-- `MoonMind.OmnigentSession`
-- `MoonMind.AgentSession`
-- `MoonMind.ManagedSessionReconcile`
-- `MoonMind.OAuthSession`
-- `MoonMind.MergeAutomation`
+The authoritative per-type inventory — exact Temporal type, module/class
+owner, and declared projection role for every current production
+registration — is the generated reference
+`WorkflowTypeCatalogGenerated.md`, produced mechanically from
+`moonmind/workflows/temporal/workflow_registry.py`
+(MoonLadderStudios/MoonMind#3959). Do not duplicate that enumeration here:
+a second handwritten list drifts (it previously listed
+`MoonMind.UserWorkflow` twice and omitted registered operator/excluded
+types). The product root enum `TemporalWorkflowType`
+(`api_service/db/models.py`) intentionally covers only user-submitted roots;
+it is not the registration inventory.
 
 Rules:
 
@@ -110,18 +109,28 @@ Rules:
 
 ## 4.1 Catalog overview
 
-| Workflow Type | Primary responsibility | Typical inputs | Typical outputs | Expected duration |
-| --- | --- | --- | --- | --- |
-| `MoonMind.UserWorkflow` | User-submitted, Step-ledger-owning Workflow Execution: plan work, own Step state/progress, orchestrate child agent runs, integrate results, produce artifacts | input refs, optional plan ref, parameters | output artifacts, summary, progress, Step refs | seconds → hours |
-| `MoonMind.UserWorkflow` | Current live implementation name for the user Workflow Execution path while the product model uses `MoonMind.UserWorkflow` terminology | input refs, optional plan ref, parameters | output artifacts, summary, progress, Step refs | seconds → hours |
-| `MoonMind.ManifestIngest` | Ingest a manifest artifact, validate, compile to a plan/graph, orchestrate execution, aggregate results | manifest artifact ref, policy params | aggregated outputs, per-node results | seconds → hours |
-| `MoonMind.ProviderProfileManager` | Coordinate provider-profile slot assignment, release, cooldowns, and reconciliation for managed runtimes | runtime/profile coordination inputs | slot assignment, lease state transitions | minutes → long-lived |
-| `MoonMind.AgentRun` | Own the durable lifecycle of one true managed or external agent execution | `AgentExecutionRequest`, refs, runtime metadata | canonical agent result, artifacts, lifecycle outcome | seconds → hours |
-| `MoonMind.OmnigentSession` | Own one canonical profile-bound Omnigent session, reconcile bounded provider observations and fenced commands, then harvest, clean up, and release leases | immutable owner identities, compiled-intent ref and digest, frozen feature/compatibility versions | compact canonical agent result and durable evidence refs | minutes → hours |
-| `MoonMind.AgentSession` | Own one workflow-scoped managed runtime session container, including launch, turn routing, clear/reset epoch changes, status, summary refs, and teardown | `ManagedSessionWorkflowInput` for the live session-capable runtime (`codex_cli`) | session handle/state, continuity refs, control/reset refs | minutes → hours |
-| `MoonMind.ManagedSessionReconcile` | Periodically reconcile managed-session supervision records and container state outside any one workflow step | reconciliation policy and runtime scope | reconciliation summary and cleanup actions | seconds → minutes per run |
-| `MoonMind.OAuthSession` | Manage browser-initiated OAuth or terminal-auth session lifecycle for managed runtimes | session config, runtime/provider context | auth/session status, profile registration side effects | minutes |
-| `MoonMind.MergeAutomation` | Wait for external pull request readiness after a published implementation run, then launch one resolver follow-up run when policy allows | parent run ref, compact pull request ref, optional Jira issue key, merge readiness policy | blocker summary, resolver run ref, terminal gate status | minutes → hours |
+The per-type inventory — exact type, module/class owner, and declared
+projection role for every registration — is the generated reference
+`WorkflowTypeCatalogGenerated.md`. The notes below explain the axes that the
+generated table keeps distinct; they are not a second inventory.
+
+- **Projection scope is not authorization.** `product` / `operator` /
+  `excluded` declares which executions may appear in product views. Updates,
+  Signals, and Cancels are still authorized by the MoonMind API layer (§12),
+  and operator-only types remain observable through Temporal and the owning
+  resource surfaces (`SourceOfTruthAndProjectionModel.md`).
+- **Projection scope is not action capability.** Valid controls differ per
+  type: only some workflows accept `Pause` / `Resume`, and acceptance never
+  implies a safe paused state (§6.2). Do not infer a universal control
+  contract from handler or type names.
+- **Registered type is not entry contract.** `MoonMind.ManifestIngest`
+  retains two entry contracts — the current catalogued-Activity path and the
+  historical `manifest_read` / `manifest_compile` commands kept for replay —
+  as inputs to one registered type, not as two catalog entries.
+- **Current routing is not historical routing.** The workflow-queue lane in
+  the generated reference separates the current handler lane from
+  historical-only handlers retained for pre-cutover histories; module
+  placement alone never proves Temporal Local Activity use.
 
 > Note: We intentionally do **not** model “Codex workflow,” “Gemini workflow,” “Jules workflow,” or “worker/system/manifest” as a top-level taxonomy. Provider/runtime choice is an execution concern, not a root orchestration category.
 
@@ -693,6 +702,22 @@ Representative lifecycle:
 * fail/cleanup if not
 
 This is a support workflow, not a general user workflow.
+
+## 11.9 `MoonMind.MergeAutomation` lifecycle
+
+Representative lifecycle:
+
+* wait for external pull request readiness after a published implementation run
+* evaluate merge readiness under policy (`merge_automation.*` activities)
+* launch one resolver follow-up run when policy allows
+* complete post-merge Jira/GitHub evidence and publish the terminal gate status
+
+Key notes:
+
+* inputs are a parent run ref, a compact pull request ref, an optional Jira
+  issue key, and the merge readiness policy — not a manifest or plan ref
+* outputs are a blocker summary, a resolver run ref, and the terminal gate
+  status; expected duration is minutes → hours
 
 ---
 
