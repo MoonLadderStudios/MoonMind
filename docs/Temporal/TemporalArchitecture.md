@@ -479,9 +479,8 @@ The list above is the current state, not the intended end state. The
 intended least-privilege boundary keeps the workflow fleet Temporal-only;
 whether checkpoint persistence belongs beside deterministic workflows is the
 implementation concern tracked in #3949. Do not read the registration as
-approval for broad workflow-fleet I/O. The full disposition (current
-registration vs intended boundary) lives in
-`ActivityCatalogAndWorkerTopology.md` §5.1 (issue #3960, finding 4).
+approval for broad workflow-fleet I/O. The current registration vs intended
+boundary is tabulated in `ActivityCatalogAndWorkerTopology.md` §5.1.
 
 If a helper grows into I/O-heavy work, provider mutation, artifact work, or runtime supervision, it must move to a capability-appropriate activity queue.
 

@@ -88,6 +88,22 @@ def test_only_user_workflow_exposes_control_state_query() -> None:
     assert "Accepted" in doc  # acceptance vs safe-point distinction present
 
 
+def test_pause_resume_validation_varies_by_workflow_type() -> None:
+    manifest_src = _read(MANIFEST_WF)
+    assert "@pause.validator" not in manifest_src
+    assert "@resume.validator" not in manifest_src
+    agent_src = _read(AGENT_RUN_WF)
+    assert "@pause.validator" in agent_src
+    assert "@resume.validator" in agent_src
+
+    doc = _normalized(_read(TYPE_CATALOG))
+    assert "validation varying by workflow type" in doc
+    assert "defines none and always accepts" in doc
+    # The old conflation must be gone: ACCEPTED stage vs handler completion.
+    assert "Accepted means the flag flipped" not in doc
+    assert "Temporal `ACCEPTED` only means" in doc
+
+
 def test_system_fan_out_targets_only_user_workflow_type() -> None:
     client = _read(CLIENT)
     assert 'WorkflowType="{RENAMED_USER_WORKFLOW_TYPE}"' in client
@@ -185,12 +201,36 @@ def test_queue_inventory_matches_client_scope() -> None:
     assert queues, "must derive the queue tuple from client.py"
     assert "mm.workflow.merge_automation" in queues
 
+    catalog_src = _read(CATALOG)
+    assert "def get_workflow_poll_task_queues" in catalog_src
+    settings_src = (
+        REPO_ROOT / "moonmind" / "config" / "settings.py"
+    ).read_text(encoding="utf-8")
+    assert "mm.workflow.user.v2" in settings_src
+
     doc = _normalized(_read(TOPOLOGY))
     for queue in queues:
         assert queue in doc, f"docs must list production queue {queue}"
     assert "mm.workflow.merge_automation" in doc
+    # Production poll topology is wider than the drain/fan-out tuple: the
+    # default start queue must be listed alongside the replay queue.
+    assert "mm.workflow.user.v2" in doc
+    assert "get_workflow_poll_task_queues()" in doc
     # Queue name vs worker vs process vs container vs profile stay distinct.
     assert "multiple replicas can serve one queue" in doc
+
+
+def test_materialization_non_mutation_gap_disclosed() -> None:
+    doc = _normalized(_read(TOPOLOGY))
+    assert "must not mutate checked-in source trees in place" in doc
+    assert "_project_builtin_support_directory" in doc
+
+
+def test_canonical_docs_carry_no_issue_dispositions() -> None:
+    for doc_path in (TOPOLOGY, TYPE_CATALOG, PAUSE_SYSTEM, ARCHITECTURE, SIGNALS):
+        assert "Disposition (issue #3960" not in _read(doc_path), (
+            f"{doc_path.name} must not carry issue-history disposition narratives"
+        )
 
 
 def test_finding_cross_links_present() -> None:
@@ -201,4 +241,3 @@ def test_finding_cross_links_present() -> None:
     )
     for ref in ("#3959", "#3953", "#3949"):
         assert ref in combined, f"docs must cross-link {ref}"
-    assert "#3960" in combined
