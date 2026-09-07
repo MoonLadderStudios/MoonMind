@@ -548,6 +548,20 @@ def _discard_stale_evidence(
         ) from exc
 
 
+#: The ambient run context :func:`durable_evidence_ref` derives a publication
+#: reference from when ``--evidence-base-ref`` is not supplied, in the order it
+#: reads them. Declared as one tuple because the fallback is only meaningful
+#: relative to what the function actually consults: a suite that means "no
+#: durable publication context" clears exactly this, and cannot drift out of
+#: agreement with the function by clearing a stale list of names.
+GITHUB_RUN_CONTEXT_ENV: tuple[str, ...] = (
+    "GITHUB_SERVER_URL",
+    "GITHUB_REPOSITORY",
+    "GITHUB_RUN_ID",
+    "GITHUB_RUN_ATTEMPT",
+)
+
+
 def durable_evidence_ref(args: argparse.Namespace, path: Path) -> str:
     """Return the reference a reader can resolve this observation from.
 
@@ -563,10 +577,11 @@ def durable_evidence_ref(args: argparse.Namespace, path: Path) -> str:
 
     base = str(getattr(args, "evidence_base_ref", "") or "").strip().rstrip("/")
     if not base:
-        server = os.getenv("GITHUB_SERVER_URL", "").strip().rstrip("/")
-        repository = os.getenv("GITHUB_REPOSITORY", "").strip()
-        run_id = os.getenv("GITHUB_RUN_ID", "").strip()
-        attempt = os.getenv("GITHUB_RUN_ATTEMPT", "").strip() or "1"
+        server, repository, run_id, attempt = (
+            os.getenv(name, "").strip() for name in GITHUB_RUN_CONTEXT_ENV
+        )
+        server = server.rstrip("/")
+        attempt = attempt or "1"
         if server and repository and run_id:
             base = f"{server}/{repository}/actions/runs/{run_id}/attempts/{attempt}"
     if not base:
