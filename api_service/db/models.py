@@ -3947,10 +3947,13 @@ class ProviderProfileSlotLease(Base):
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     runtime_id: Mapped[str] = mapped_column(String(64), nullable=False)
-    workflow_id: Mapped[str] = mapped_column(String(255), nullable=False)
+    # These are opaque identities from workflow/step/operation composition.
+    # Preserve them exactly: a storage-only length cap must not strand a grant,
+    # and hashing or truncating here would break retry and release authority.
+    workflow_id: Mapped[str] = mapped_column(Text, nullable=False)
     profile_id: Mapped[str] = mapped_column(String(128), nullable=False)
-    lease_id: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
-    owner_id: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    lease_id: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    owner_id: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     owner_kind: Mapped[str] = mapped_column(
         String(32), nullable=False, default="workflow", server_default=text("'workflow'")
     )
@@ -3966,9 +3969,9 @@ class ProviderProfileSlotLease(Base):
     owner_is_workflow: Mapped[bool] = mapped_column(
         Boolean, nullable=False, default=True, server_default=text("true")
     )
-    step_execution_id: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    step_execution_id: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     oauth_session_id: Mapped[Optional[str]] = mapped_column(String(128), nullable=True)
-    idempotency_key: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    idempotency_key: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     execution_plan_ref: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
     capacity_scope_ref: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
     scope_generation: Mapped[int] = mapped_column(

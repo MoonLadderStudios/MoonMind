@@ -43,7 +43,7 @@ The current repo baseline is:
 - The default artifact backend is MinIO / S3-compatible storage.
 - The worker topology is a small capability-based fleet set: `workflow`, `artifacts`, `llm`, `sandbox`, `integrations`, and `agent_runtime`.
 - The live registered workflow catalog includes `MoonMind.MergeAutomation` in addition to the previously documented core workflow types.
-- The workflow helper-activity exception is narrow; the concrete helper currently called out by the activity topology is `integration.resolve_adapter_metadata`.
+- The workflow helper-activity exception is narrow; the current registration is the seven handlers listed in §9.1 (four adapter/metadata helpers plus three replay-compatibility checkpoint handlers, owned by `workflow_registry.py`).
 - The shared Temporal data converter currently resolves to the Pydantic data converter. A payload-encryption codec is not currently visible as the shared converter contract and must not be assumed to exist.
 - Projection repair, run-history/rerun semantics, visibility semantics, type-safety rules, and error taxonomy are covered by adjacent docs and should be treated as part of this architecture.
 
@@ -470,9 +470,17 @@ A narrow helper-activity exception is allowed only when all of the following are
 - it does not block Workflow Task throughput under normal operation
 - it is explicitly listed in the activity topology
 
-Current repo-aligned example:
+Current repo-aligned registration (`workflow_registry.py::workflow_fleet_activity_handlers` — seven handlers, not one):
 
-- `integration.resolve_adapter_metadata`
+- adapter/metadata helpers from `workflows/agent_run.py`: `integration.resolve_adapter_metadata`, `integration.get_activity_route`, `integration.resolve_external_adapter`, `integration.external_adapter_execution_style`
+- checkpoint-persistence handlers from `workflows/checkpoint_branch_turn.py` (via `checkpoint_branch_activity_handlers()`): `checkpoint_branch.turn.mark_running`, `checkpoint_branch.turn.persist_terminal`, `checkpoint_branch.turn.persist_terminal_rejection` — retained for replay/in-flight compatibility of pre-cutover histories; no new calls route there.
+
+The list above is the current state, not the intended end state. The
+intended least-privilege boundary keeps the workflow fleet Temporal-only;
+whether checkpoint persistence belongs beside deterministic workflows is the
+implementation concern tracked in #3949. Do not read the registration as
+approval for broad workflow-fleet I/O. The current registration vs intended
+boundary is tabulated in `ActivityCatalogAndWorkerTopology.md` §5.1.
 
 If a helper grows into I/O-heavy work, provider mutation, artifact work, or runtime supervision, it must move to a capability-appropriate activity queue.
 

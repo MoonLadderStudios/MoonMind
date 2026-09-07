@@ -23,15 +23,17 @@ returns. Covered here:
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
 
 import pytest
 import pytest_asyncio
 from sqlalchemy import select, text
-from sqlalchemy.exc import IntegrityError
+from sqlalchemy.exc import DBAPIError, IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 from sqlalchemy.orm import sessionmaker
 
@@ -84,8 +86,8 @@ CREATE INDEX ix_provider_slot_leases_workflow
 """
 
 
-def _load_migration_module():
-    """Load the real ``369_provider_lease_incr_contract`` revision module.
+def _load_migration_module(revision="369_provider_lease_incr_contract"):
+    """Load a shipped revision module, rather than a copy of its DDL.
 
     Alembic revision files are not importable as a package (the directory has
     no ``__init__`` and the module name starts with a digit), so the real file
@@ -93,17 +95,16 @@ def _load_migration_module():
     """
 
     import importlib.util
-    from pathlib import Path
 
     path = (
         Path(__file__).resolve().parents[3]
         / "api_service"
         / "migrations"
         / "versions"
-        / "369_provider_lease_incr_contract.py"
+        / f"{revision}.py"
     )
     spec = importlib.util.spec_from_file_location(
-        "moonmind_test_migration_369", path
+        f"moonmind_test_migration_{revision}", path
     )
     assert spec is not None and spec.loader is not None
     module = importlib.util.module_from_spec(spec)
@@ -1162,3 +1163,157 @@ async def test_no_credential_value_is_persisted_on_a_lease_row(
         "releaseReason",
         "cleanupRequested",
     }
+
+
+def _remediation_grant() -> dict[str, Any]:
+    """Minimized 2026-09-07 production Activity payload (no credentials)."""
+    return json.loads(
+        (Path(__file__).parent / "fixtures/remediation_lease_grant.json").read_text()
+    )
+
+
+async def _migrate_identities(maker, direction: str) -> None:
+    from alembic.migration import MigrationContext
+    from alembic.operations import Operations
+
+    migration = _load_migration_module("373_lease_identity_text")
+
+    def migrate(conn):
+        with Operations.context(MigrationContext.configure(conn)):
+            getattr(migration, direction)()
+
+    async with maker.kw["bind"].begin() as conn:
+        await conn.run_sync(migrate)
+
+
+@pytest.mark.asyncio
+async def test_recorded_remediation_grant_resumes_unchanged_after_schema_upgrade(
+    lease_session_maker, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Reproduce the real failed handoff, migrate, then drain the same request.
+
+    No reset, new ID, synthetic slot signal or replacement grant is needed.
+    The manager runs its real queue and persistence code against PostgreSQL.
+    """
+    payload = _remediation_grant()
+    grant = payload["leases"][0]
+    owner = grant["lease_id"]
+    assert len(grant["stepExecutionId"]) == 254
+    assert len(grant["idempotencyKey"]) == 268
+
+    # Reconstruct the previous schema and retain a pre-existing short lease.
+    await _migrate_identities(lease_session_maker, "downgrade")
+    await _run("grant", [_grant("historical-owner", fence=4)])
+    with pytest.raises(DBAPIError, match="value too long"):
+        await _activity()(**payload)
+
+    manager = await _restore_manager(monkeypatch)
+    manager._profiles[grant["profile_id"]] = ProfileSlotState(
+        profile_id=grant["profile_id"],
+        max_parallel_runs=1,
+        cooldown_after_429_seconds=900,
+        rate_limit_policy="queue",
+        enabled=True,
+        purpose_aware_capacity=True,
+        capacity_scope_ref=grant["capacity_scope_ref"],
+    )
+    manager._lease_grant_sequence = 107
+    manager.request_slot(
+        {
+            "requester_workflow_id": owner,
+            "runtime_id": payload["runtime_id"],
+            "execution_profile_ref": grant["profile_id"],
+            "purpose": grant["purpose"],
+            "metadata": {
+                "workflowId": owner,
+                "ownerIsWorkflow": True,
+                "stepExecutionId": grant["stepExecutionId"],
+                "idempotencyKey": grant["idempotencyKey"],
+                "executionPlanRef": grant["executionPlanRef"],
+                "credentialGeneration": grant["credential_generation"],
+            },
+        }
+    )
+    await manager._drain_queue()
+    assert manager.reconnected == []
+    assert len(manager._pending_requests) == 1
+    assert await _run("describe", [{"lease_id": owner}]) == {
+        "found": False,
+        "lease_id": owner,
+    }
+
+    await _migrate_identities(lease_session_maker, "upgrade")
+    await manager._drain_queue()
+    assert manager.reconnected == [(owner, grant["profile_id"], 108)]
+    assert manager._pending_requests == []
+    rows = {row.lease_id: row for row in await _rows(lease_session_maker)}
+    assert set(rows) == {owner, "historical-owner"}
+    assert rows["historical-owner"].fencing_generation == 4
+    assert rows[owner].idempotency_key == grant["idempotencyKey"]
+    assert rows[owner].step_execution_id == grant["stepExecutionId"]
+    assert rows[owner].fencing_generation == 108
+    # The recorded failed Activity can also retry verbatim after migration.
+    assert await _activity()(**payload) == {"granted": True, "duplicate": True}
+
+    restarted = await _restore_manager(monkeypatch)
+    restarted._profiles[grant["profile_id"]] = ProfileSlotState(
+        profile_id=grant["profile_id"],
+        max_parallel_runs=1,
+        cooldown_after_429_seconds=900,
+        rate_limit_policy="queue",
+        enabled=True,
+        purpose_aware_capacity=True,
+        capacity_scope_ref=grant["capacity_scope_ref"],
+    )
+    assert await restarted._load_leases_from_db() is True
+    assert (owner, grant["profile_id"], 108) in restarted.reconnected
+    inspection = restarted.inspect_credential_lease({"lease_id": owner})
+    assert inspection["idempotencyKey"] == grant["idempotencyKey"]
+    assert inspection["stepExecutionId"] == grant["stepExecutionId"]
+    released = await _run(
+        "release_one", [{"lease_id": owner, "fencing_generation": 108}]
+    )
+    assert released["outcome"] == "released"
+    assert (
+        await _run("release_one", [{"lease_id": owner, "fencing_generation": 108}])
+    )["outcome"] == "already_released"
+
+
+@pytest.mark.parametrize("identity_length", [255, 256, 512, 1000])
+@pytest.mark.asyncio
+async def test_composed_identity_fields_round_trip_without_prefix_collisions(
+    lease_session_maker, identity_length: int
+) -> None:
+    await _migrate_identities(lease_session_maker, "downgrade")
+    await _migrate_identities(lease_session_maker, "upgrade")
+    # Opaque IDs need no table-specific 255/512 cap. Distinct long IDs with
+    # identical prefixes must keep independent retry and release authority.
+    for suffix in ("a", "b"):
+        identity = "w" * (identity_length - 1) + suffix
+        grant = {
+            **_grant(identity, fence=1),
+            "stepExecutionId": identity + ":step:execution:1",
+            "idempotencyKey": identity + ":step:execution:1:agent_execute",
+        }
+        assert (await _run("grant", [grant]))["duplicate"] is False
+        assert (await _run("grant", [grant]))["duplicate"] is True
+        row = await _run("describe", [{"lease_id": identity}])
+        assert row["found"] is True
+        stored = next(
+            r for r in await _rows(lease_session_maker) if r.lease_id == identity
+        )
+        assert stored.workflow_id == stored.owner_id == stored.lease_id == identity
+        assert stored.step_execution_id == grant["stepExecutionId"]
+        assert stored.idempotency_key == grant["idempotencyKey"]
+    assert len(await _rows(lease_session_maker)) == 2
+
+
+@pytest.mark.asyncio
+async def test_downgrade_refuses_to_truncate_retained_identity(
+    lease_session_maker,
+) -> None:
+    await _activity()(**_remediation_grant())
+    with pytest.raises(RuntimeError, match="Cannot downgrade lease identities"):
+        await _migrate_identities(lease_session_maker, "downgrade")
+    row = (await _rows(lease_session_maker))[0]
+    assert row.idempotency_key == _remediation_grant()["leases"][0]["idempotencyKey"]
