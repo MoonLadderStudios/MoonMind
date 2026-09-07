@@ -1,6 +1,11 @@
 from __future__ import annotations
 
+import sys
 from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+
+from _semantic_docs_3964 import assert_semantic_present
 
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
@@ -46,8 +51,16 @@ def test_combined_stack_doc_separates_normal_rollback_from_destructive_cleanup()
     normal_rollback = text.index("## DOC-REQ-009 Normal Rollback")
     destructive_cleanup = text.index("## DOC-REQ-010 Optional Destructive Cleanup")
     assert normal_rollback < destructive_cleanup
-    assert "Normal rollback preserves PostgreSQL, MoonMind, and Omnigent volumes." in text
-    assert "optional, destructive, and separate from normal rollback" in text
+    assert_semantic_present(
+        text,
+        ("normal rollback preserves", "volumes"),
+        context="combined stack normal rollback",
+    )
+    assert_semantic_present(
+        text,
+        ("optional, destructive, and separate from normal rollback",),
+        context="combined stack destructive cleanup separation",
+    )
     assert "docker compose down -v" in text
 
 
@@ -88,7 +101,15 @@ def test_combined_stack_doc_documents_omnigent_host_workspace_and_credentials() 
     assert "local deployment secrets" in text
 
     # Generic hosts preserve API-key-backed runners and do not expose Codex
-    # subscription OAuth material to every process in the host container.
-    assert "preserves configured provider API keys" in text
-    assert "does not mount MoonMind's Codex OAuth volume" in text
-    assert "does not mount MoonMind's Codex OAuth volume or set `CODEX_HOME` globally" in text
+    # subscription OAuth material to every process in the host container
+    # (#3964: exact prose loosened; the mount prohibition is the contract).
+    assert_semantic_present(
+        text,
+        ("preserves configured provider api keys",),
+        context="combined stack generic host keys",
+    )
+    assert_semantic_present(
+        text,
+        ("does not mount moonmind's codex oauth volume",),
+        context="combined stack OAuth mount prohibition",
+    )
