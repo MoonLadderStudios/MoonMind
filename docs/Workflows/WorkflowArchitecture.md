@@ -1,234 +1,137 @@
 # Workflow Architecture (Control Plane)
 
-Status: Active
-Owners: MoonMind Engineering
-Last updated: 2026-05-06
+**Document Class:** Canonical declarative  
+**Viewpoint:** Module Architecture View  
+**Status:** Draft  
+**Owners:** MoonMind Engineering  
+**Updated:** 2026-09-06  
+**Audience:** Workflow, API, runtime, recovery, and dashboard contributors  
+**Authority:** Workflow control-plane component responsibilities, authored snapshots, compilation, attachment targeting, and execution/recovery handoffs. Providing subsystem documents own their detailed schemas and policy contracts.  
+**Owning Surface:** Workflow admission/control plane and MoonMind.UserWorkflow integration  
+**Related Docs:** [Workflow Publishing](WorkflowPublishing.md), [Workflow Presets System](WorkflowPresetsSystem.md), [Create Page](../UI/CreatePage.md), [Input Schema Guidance](../Steps/InputSchemaGuidance.md), [Repository Access and Workspace Design](../RepositoryAccessAndWorkspaceDesign.md), [Lore VCS Integration Design](LoreVcsIntegrationDesign.md)  
+**Related Implementation:** `moonmind/workflows/executions/`, `moonmind/services/skill_step_inputs.py`, and `MoonMind.UserWorkflow`.
 
 ## 1. Purpose
 
-This document defines the high-level desired-state control-plane architecture for MoonMind Workflow Executions.
+MoonMind's control plane translates workflow objectives, typed steps, target-scoped attachments, runtime/profile selection, repository/source context, publication intent, presets, issue context, and dependencies into durable Temporal execution.
 
-It maps how the control plane translates user intent from the dashboard — including:
+The user authors repository/source context, one applicable branch, and publishing once for a workflow or batch. The compiler binds that context into step/child contracts without exposing duplicate settings. This is a long-term target, not a claim that current seed, API, or runtime implementations already conform.
 
-- Workflow objective text
-- step-authored instructions
-- objective-scoped and step-scoped input attachments
-- runtime and publish choices
-- repository and single authored branch selection
-- agent skill selection intent
-- presets, Jira imports, and dependency declarations
-
-into durable execution under Temporal.
-
-This document is architectural and declarative. Detailed page behavior belongs in `docs/UI/CreatePage.md`. Detailed image-input behavior belongs in `docs/Workflows/ImageSystem.md`.
-Required execution capability declaration, normalization, and pre-launch blocking semantics belong in `docs/Workflows/RequiredCapabilities.md`.
-
----
+Detailed page behavior belongs in `docs/UI/CreatePage.md`; publication semantics in `docs/Workflows/WorkflowPublishing.md`; source/save authority in `docs/RepositoryAccessAndWorkspaceDesign.md`; context binding in `docs/Steps/InputSchemaGuidance.md`; attachments in `docs/Workflows/ImageSystem.md`; and readiness in `docs/Workflows/RequiredCapabilities.md`.
 
 ## 2. System snapshot
 
-MoonMind uses a Temporal-backed execution model in which the dashboard acts as the control plane.
+MoonMind.UserWorkflow is the normal durable execution type. The control plane supports step-authored workflows, artifact-backed large/binary inputs, reusable presets, Runtime/Profile intent, and policy-checked pause/resume/cancel/approve/rerun actions.
 
-The control plane already centers on these product objects:
+Image attachments have explicit objective or step targets. Presets are recursively compiled authoring objects, not live runtime catalog instructions. Authored input snapshots preserve task text, attachments, selected definition evidence, context, policy, and flattened-step provenance.
 
-- `MoonMind.UserWorkflow` as the standard Workflow Execution type
-- first-class artifacts for large or binary inputs and outputs
-- step-authored Workflows rather than opaque queue jobs
-- reusable Workflow presets
-- runtime and provider selection intent
-- durable execution actions such as pause, resume, cancel, approve, and rerun
+The same architecture distinguishes full retry from failed-step recovery. Full retry starts the task again with confirmed or edited inputs under fresh admission. Failed-step Resume preserves original input and completed progress only when a durable ledger/checkpoint can restore it faithfully.
 
-Desired-state additions clarified by this document:
-
-- image inputs are first-class structured Workflow inputs
-- attachment targeting is explicit and durable
-- presets are recursively composable authoring objects resolved entirely in the control plane
-- create, edit, and rerun preserve attachment bindings through an authoritative Workflow input snapshot
-- submitted Workflows preserve authored preset metadata and flattened step provenance alongside resolved execution payloads
-- runtime preparation and prompt composition are target-aware rather than attachment-bucket-driven
-- failed-Workflow Execution recovery has two explicit user workflows:
-  - edit the Workflow input and retry the whole Workflow from the beginning
-  - press **Resume** to retry the last failed step with the work completed before that step preserved
-- failed-step resume depends on durable step ledgers, output refs, and workspace checkpoints rather than log parsing or UI reconstruction
-
----
+Publication adds no second orchestrator: the existing compiler resolves one scope intent; UserWorkflow owns orchestration/verdict; trusted publishers or resolved Skills own declared effects; artifact/save owners preserve useful work independently of publication.
 
 ## 3. Core architectural principles
 
 ### 3.1 Workflow-first control plane
 
-The user authors Workflows, not workflow internals.
-
-Rules:
-
-- the Create page defines user intent in Workflow terms
-- the control plane translates that Workflow intent into execution-plane contracts
-- the execution plane owns lifecycle progression, retries, waiting, and history
+Users author workflow objectives and task-specific steps. Internal effect roles, activities, credentials, and worker placement are compiled concerns. Runtime selection stays under its existing simple Runtime/Profile surface.
 
 ### 3.2 Artifact-first binary handling
 
-Rules:
-
-- binary inputs are stored as artifacts
-- binary inputs are referenced in execution contracts by lightweight refs
-- binary inputs are not embedded in workflow histories or text instructions
+Binary inputs and large outputs are artifacts referenced by compact IDs. Bytes are not embedded in Temporal histories or instruction text.
 
 ### 3.3 Explicit target binding
 
-Rules:
+Every attachment targets the workflow objective or a specific stable step. This binding survives create, reorder, preset expansion, edit, rerun, preparation, prompt composition, and detail display. Storage paths alone do not establish target meaning.
 
-- an input attachment must belong to an explicit target
-- the supported target kinds are:
-  - Workflow objective target
-  - step target
-- target binding must survive create, edit, rerun, prepare, prompt composition, and detail rendering
+Repository/branch bindings are likewise semantic, not name-based copying. Existing-PR targets can derive their head/base; distinct source/destination roles require an explicitly supported and authorized contract.
 
 ### 3.4 Durable reconstruction
 
-Rules:
-
-- Workflow input reconstruction uses an authoritative snapshot
-- text-only reconstruction is insufficient for attachment-aware Workflows
-- silent loss of attachment bindings is a contract violation
+The authoritative authored snapshot, not a lossy output projection, reconstructs input. Preserve authored values separately from defaults, context-bound projections, and compiled execution modes. A coordinator's local None cannot replace the batch's authored PR intent.
 
 ### 3.5 Separation of text from structured inputs
 
-Rules:
-
-- instruction text remains text
-- images remain structured inputs
-- derived image context is a secondary artifact, not the instruction field itself
+Instructions remain text, images remain structured references, and generated image context is a secondary artifact. Prompts explain authority but do not grant it, override explicit policy, or replace backend enforcement.
 
 ### 3.6 Failed-step resume is not full rerun
 
-Rules:
+Resume retries the failed step with original inputs and proven completed prior work. It does not open a form or silently change instructions, steps, attachments, runtime, publishing, branches, dependencies, or definition evidence. Missing/inconsistent restoration makes Resume unavailable or explicitly blocked, not an implicit full rerun.
 
-- failed-Workflow Execution recovery has two separate workflows, and the user's chosen workflow is explicit
-- **Edit and retry whole Workflow** loads the original Workflow snapshot into the authoring UI, permits edits, and starts execution from the beginning
-- **Resume** does not open an authoring form; it retries the last failed step using the original Workflow input and the durable work completed before that step
-- Resume must never silently edit instructions, steps, attachments, runtime, publish mode, branch, dependencies, or preset metadata
-- Resume is available only when the platform can identify the failed step and restore the work completed before it from durable evidence
-- if the prior work cannot be restored faithfully, Resume must be unavailable or fail explicitly with an operator-readable reason
+### 3.7 One authored publication scope
 
----
+One selection governs a workflow and its declared children. User-facing Auto/default resolves declared workflow behavior. Compiled Skill-owned Auto remains the agent-owned execution protocol, consuming the same provider-neutral publication evidence as managed publishing. Explicit None is never promoted in new authoring.
+
+The scope's intent survives every coordinator. The coordinator may have no deliverable and compile to local None, while implementation children publish PRs and resolver children execute Skill-owned Auto. Independent dependency links do not establish inheritance. One policy does not require one final push or identical actions everywhere; supported compositions declare staged effects and one owner per effect.
+
+The retired `workflow.default_publish_mode` and its environment aliases are not a second omission/default path. WorkflowPublishing and SettingsSystem section 10.6 own removal and preservation of configured operator intent. Unknown old effective origin requires review rather than silent adoption of a different default.
 
 ## 4. High-level architecture
 
 ```mermaid
 flowchart LR
-    U[Authenticated User] --> UI[Dashboard Create Page]
-
-    subgraph Control Plane
-        UI --> API[Executions API]
-        UI --> ART[Artifact API]
-        UI --> JIRA[Jira Browser API]
-        API --> SNAP[Authoritative Workflow Input Snapshot]
-        API --> PROF[Provider Profile + Runtime Defaults]
-        API --> PRESETS[Workflow Preset APIs]
-    end
-
-    subgraph Execution Plane
-        API -.-> RUN[MoonMind.UserWorkflow]
-        RUN --> PREP[Prepare / Artifact Activities]
-        RUN --> VISION[Vision Context Activity]
-        RUN --> STEP[Planner or Step Runtime]
-        RUN --> CHILD[MoonMind.AgentRun child workflow]
-        RUN --> CKPT[Step Ledger + Resume Checkpoints]
-    end
-
-    subgraph Blob Storage
-        ART -.-> S3[(Artifact Store)]
-        PREP -.-> S3
-        VISION -.-> S3
-    end
+  U[Authenticated user] --> UI[Shared workflow authoring]
+  UI --> API[Executions API]
+  UI --> ART[Artifact API]
+  UI --> ISSUE[Trusted issue APIs]
+  API --> SNAP[Authored input snapshot]
+  API --> COMP[Existing preset/context/policy compiler]
+  COMP --> PLAN[Immutable resolved plan]
+  PLAN --> RUN[MoonMind.UserWorkflow]
+  RUN --> PREP[Workspace and attachment preparation]
+  RUN --> STEP[Tool and AgentRun execution]
+  RUN --> CHILD[Scoped child admission]
+  RUN --> PUB[Existing publisher or Skill evidence boundary]
+  RUN --> SAVE[Step ledger and saved-work/checkpoint owners]
+  ART --> STORE[(Artifact store)]
+  PREP --> STORE
+  SAVE --> STORE
 ```
 
-Key boundary:
-
-- the control plane owns authoring intent, artifact refs, target binding, runtime choice, preset compilation, and snapshot durability
-- the execution plane owns lifecycle, step execution, step ledger state, and recovery checkpoint production over already resolved payloads
-- runtime adapters own provider-specific realization details
-
----
+The control plane owns intent, validation, selected definitions, bindings, and durable snapshots. Execution owns lifecycle and effect orchestration over admitted contracts. Runtime adapters realize provider mechanics. Portable Skills retain semantics. No new publication database, schema-expression engine, or competing coordinator is introduced.
 
 ## 5. Control-plane responsibilities
 
-The control plane is responsible for all of the following.
-
 ### 5.1 Authoring and validation
 
-- render the Create page
-- validate repository, runtime, publish mode, dependencies, and attachment policy
-- collect text fields, preset state, Jira imports, and input attachments into a coherent draft
-- render repository, Branch, and Publish Mode together in the Steps card. `Publish Mode` remains submission data; only its visual placement changes.
+Render one workflow repository/source and applicable branch control, one publishing selector, Runtime/Profile, task-specific step fields, issue context, dependencies, and attachments. Exact visual placement belongs to CreatePage. Equivalent context-bound Skill/Preset fields have read-only explanations, not additional editors in Advanced or raw JSON.
+
+Validate types, target roles, current access, policy, definition compatibility, and known child/handoff requirements before effects. Static conflicts cannot be deferred until after issue creation or parent launch merely because a helper will eventually submit children.
 
 ### 5.2 Artifact upload orchestration
 
-- create upload intents through MoonMind artifact APIs
-- upload browser-selected files before execution submission
-- finalize artifact creation and reject incomplete uploads
-- submit only structured attachment refs to the execution API
+Create upload intents, upload/finalize through MoonMind APIs, reject incomplete uploads, and submit only authorized structured refs. The browser does not acquire long-lived object-store credentials.
 
 ### 5.3 Workflow contract normalization
 
-- normalize the Workflow-shaped payload
-- preserve `task.inputAttachments` and `task.steps[].inputAttachments`
-- preserve step identity and order
-- preserve runtime and publish intent
-- preserve authored preset binding metadata, flattened step provenance, manual and preset-derived step order, and fully resolved execution payloads
-- preserve Jira provenance when those contracts allow it
+Preserve task.inputAttachments and task.steps[].inputAttachments, stable step identity/order, selected runtime, the single source/branch/publication intent, task-specific inputs, issue provenance, authored preset bindings, flattened ancestry, and detachment state.
+
+Context bindings resolve before required-input validation and expansion. Compiler-owned projected arguments remain separate from authored input. New callers cannot submit duplicates or forge resolved provenance. Historical equivalent copies may collapse only under the versioned decoder.
 
 ### 5.4 Preset compilation
 
-Preset compilation is a control-plane phase that completes before execution contract finalization.
+Load/pin definition evidence, validate safe binding/default rules and include trees, recursively expand Presets, flatten concrete Tool/Skill steps, resolve the one publication scope, validate required output/code handoffs, and derive per-execution capabilities/effect owners. The resulting plan executes without a live preset lookup.
 
-Rules:
-
-- presets are authoring objects, not execution-plane instructions
-- recursive preset composition is resolved in the control plane
-- preset compilation validates the include tree before producing worker-facing steps
-- compilation flattens manual and preset-derived steps into the final submitted order
-- compilation preserves provenance for preset-derived steps and detached template state
-- the resolved execution payload must remain executable without live preset catalog lookup
+Included assessment/read-only defaults do not disable the root's candidate publication. A coordinator role does not erase child intent. A child does not consult a later catalog default to reinterpret ancestor Auto. Incompatible independent publishers require a compatible declared composition or separate workflows.
 
 ### 5.5 Snapshot durability
 
-- persist an authoritative Workflow input snapshot for edit and rerun
-- reconstruct from that snapshot rather than from lossy derived projections
-- preserve attachment target binding in the snapshot
-- preserve pinned preset bindings, include-tree summary, per-step provenance, detachment state, and final submitted order in the snapshot
+Persist authored intent, input origins, selected definitions/content digests, include-tree/provenance, attachment targets, detachment state, and final submitted order. Store resolved scope/target/effect evidence in the existing plan/artifact boundary. Neither projection overwrites the other.
 
 ### 5.6 User-facing reads
 
-- expose previews and downloads through MoonMind APIs
-- surface attachment metadata by target in detail, edit, and rerun flows
-- expose enough diagnostics for operators to understand attachment-related failures
+Expose authorized previews/downloads and safe target/definition/policy explanations. Show the authored selection, local compiled behavior, and actual results separately. Batch enqueue success is not child publication success. Unknown evidence remains unavailable, not guessed from today's defaults.
 
-### 5.7 Failed-Workflow Execution recovery orchestration
+### 5.7 Failed-workflow recovery orchestration
 
-The control plane exposes distinct recovery actions instead of treating every recovery path as a generic rerun.
+Expose only backend-supported actions. Exact full retry, edited full retry through the shared form, and failed-step Resume remain distinct intentions; labels/routes and accepted lifecycle behavior are owned by WorkflowEditingSystem and the run-history contract.
 
-Rules:
+Resume requires the authoritative original snapshot; exact source workflowId/runId; the failed-step ledger; durable completed-step output refs; workspace/branch/commit or equivalent checkpoint immediately before the failed step; and matching plan identity. Missing, stale, unauthorized, or inconsistent evidence blocks before the step executes.
 
-- failed Workflow details may expose **Edit Workflow**, **Rerun**, and **Resume** as separate actions when their capability fields are true
-- **Edit Workflow** on a failed execution is the editable full retry path; submitting it creates a new execution from the beginning with a new authoritative Workflow input snapshot
-- **Rerun** is the exact full retry path; it starts from the beginning using the original Workflow input without edits
-- **Resume** is the failed-step recovery path; it starts a linked follow-up execution that imports completed prior progress and retries the last failed step
-- Resume eligibility must be computed by the backend, not inferred by the UI
-- Resume eligibility requires, at minimum:
-  - an authoritative original Workflow input snapshot
-  - a pinned source `workflowId` and `runId`
-  - a step ledger that identifies the last failed step
-  - durable refs for all completed steps before the failed step
-  - a workspace, branch, commit, or equivalent checkpoint representing the state immediately before the failed step
-  - a plan identity or digest proving that the restored progress belongs to the same planned step graph
-- Resume requests must be rejected explicitly when any required evidence is missing, stale, unauthorized, or inconsistent
-
----
+An active admitted scope and already-created children cannot be retargeted or receive broader publishing authority through an input patch at a nominal safe point. Material authority changes require a newly admitted path with lineage. Display/title and permitted non-authority updates keep their normal lifecycle.
 
 ## 6. Canonical Workflow-shaped contract
 
-Representative contract:
+The providing schemas define exact wire types. The following outline separates authored task data from compiled evidence:
 
 ```ts
 interface WorkflowInputAttachmentRef {
@@ -238,64 +141,10 @@ interface WorkflowInputAttachmentRef {
   sizeBytes: number;
 }
 
-interface WorkflowStepSource {
-  kind?: "manual" | "preset-derived" | "preset-include" | "detached";
-  presetId?: string;
-  presetSlug?: string;
-  version?: string;
-  includePath?: string[];
-  originalStepId?: string;
-}
-
-interface AuthoredPresetBinding {
-  presetId?: string;
-  presetSlug?: string;
-  version?: string;
-  alias?: string;
-  includePath?: string[];
-  inputMapping?: Record<string, unknown>;
-  scope?: string;
-}
-
-interface WorkflowStepPayload {
-  id?: string;
-  title?: string;
-  instructions?: string;
-  inputAttachments?: WorkflowInputAttachmentRef[];
-  source?: WorkflowStepSource;
-  skill?: {
-    id?: string;
-    args?: Record<string, unknown>;
-    requiredCapabilities?: string[];
-  };
-  skills?: {
-    include?: Array<{ name: string }>;
-  };
-}
-
-interface WorkflowExecutionPayload {
-  instructions?: string;
-  inputAttachments?: WorkflowInputAttachmentRef[];
-  steps?: WorkflowStepPayload[];
-  authoredPresets?: AuthoredPresetBinding[];
-  runtime?: {
-    mode?: string;
-    profileId?: string;
-    model?: string;
-    effort?: string;
-  };
-  publish?: {
-    mode?: "none" | "branch" | "pr";
-  };
-  git?: {
-    branch?: string;
-  };
-  appliedStepTemplates?: unknown[];
-  dependsOn?: string[];
-}
+type AuthoredPublishSelection = "default" | "none" | "branch" | "pr" | "pr_with_merge_automation";
+type CompiledPublishMode = "none" | "branch" | "pr" | "auto";
 
 type WorkflowRecoveryKind = "exact_full_rerun" | "edited_full_retry" | "recover_from_failed_step";
-
 interface WorkflowRecoveryProvenance {
   kind: WorkflowRecoveryKind;
   sourceWorkflowId: string;
@@ -303,7 +152,6 @@ interface WorkflowRecoveryProvenance {
   requestedBy?: string;
   requestedAt?: string;
 }
-
 interface ResumeFromFailedStepRef {
   kind: "recover_from_failed_step";
   sourceWorkflowId: string;
@@ -315,393 +163,124 @@ interface ResumeFromFailedStepRef {
   planRef?: string;
   planDigest?: string;
 }
-
-interface WorkflowExecutionPayloadWithRecovery extends WorkflowExecutionPayload {
-  recovery?: WorkflowRecoveryProvenance;
-  resume?: ResumeFromFailedStepRef;
-}
 ```
 
-Rules:
+Canonical Step Types and their Tool/Skill/Preset inputs come from StepTypes. Repository/source targets and the single applicable branch come from the repository/workspace contract, not a parallel string field in every step. Selected preset/Skill identity uses the providing slug/scope/selector contract plus content evidence, not another semantic-version selector.
 
-- `task.inputAttachments` is the objective-scoped input target
-- `task.steps[n].inputAttachments` is the step-scoped input target
-- `task.authoredPresets` preserves optional preset binding metadata used to compile the submitted Workflow
-- `task.steps[n].source` preserves optional source provenance for manual, preset-derived, included, or detached steps
-- these fields are part of the Workflow contract, not incidental UI metadata
-- the absence of attachments is valid
-- the presence of attachments must be preserved across create, detail, edit, and rerun
-- `task.git.branch` is the single authored branch field; new create, edit, and rerun payloads do not include `targetBranch`
-- for `publish.mode === "pr"`, `task.git.branch` is the selected repository branch / PR base and the PR head branch is runtime-generated or provider-managed
-- for `publish.mode === "branch"`, `task.git.branch` is the branch to update/push
-- `Publish Mode` remains part of Workflow submission semantics; only its Create page placement changes
-- the execution-facing payload is resolved before workers consume it; `authoredPresets` and `source` metadata are for reconstruction, audit, diagnostics, and safe rerun semantics
-- `task.recovery.kind === "edited_full_retry"` or `"exact_full_rerun"` means the new execution starts from the beginning
-- `task.resume.kind === "recover_from_failed_step"` means the new execution must restore completed progress from `recoveryCheckpointRef` and start at `failedStepId`
-- resume provenance must include both `sourceWorkflowId` and `sourceRunId` so a resume is pinned to the exact source run and cannot drift when the logical execution later changes
-- recovery checkpoint refs are execution-state refs, not editable authoring fields
+Objective attachments are task.inputAttachments; step attachments are task.steps[n].inputAttachments. task.authoredPresets and step source/provenance retain selected definitions, include path, task input mappings, and detachment evidence. These are durable contract fields, not incidental UI state.
 
----
+Authored task.publish.mode accepts default/omission as Auto. The compiled mode is resolved before execution; compound PR-and-merge becomes PR plus existing automation configuration. Historical literal auto retains its Skill-owned meaning under the recorded contract, while fresh resolver requests use default/omission and their explicit target.
+
+New requests have one branch role in the canonical repository/source target. Legacy task.git.branch, startingBranch, and targetBranch are decoded only through supported history rules and cannot compete with that target. This also applies to Checkpoint Branch and resolver authoring. PR mode uses the authored base plus a stable generated/provider head. Branch mode updates the authored branch. Existing-PR operations derive actual head/base from an explicit locator, not the coordinator's checkout branch.
+
+Recovery provenance always includes exact source workflow/run. Checkpoint refs are execution-state evidence, not user-editable branch or publication overrides.
 
 ## 7. Snapshot, full retry, and Resume architecture
 
-The original Workflow input snapshot is the authoritative representation of the authored draft.
-
-Rules:
-
-- it must preserve:
-  - Workflow objective text
-  - objective-scoped attachment refs
-  - step text
-  - step-scoped attachment refs
-  - step order and identity
-  - runtime and publish selections
-  - repository and single authored branch selection
-  - preset application metadata
-  - pinned preset bindings
-  - include-tree summary
-  - per-step provenance
-  - detachment state
-  - final submitted order after manual and preset-derived steps are flattened
-  - dependency declarations that remain part of the editable contract
-- edit, exact full rerun, edited full retry, and Resume all depend on this snapshot for the original authored Workflow input
-- edit and full retry derive their initial browser state from this snapshot
-- Resume reuses this snapshot without presenting it as an editable authoring surface
-- edit, rerun, full retry, and Resume must not depend on current live preset catalog correctness to reconstruct already submitted work
-- fallback evidence refs may assist diagnostics, but they are not an authoritative replacement for the snapshot
-- an attachment-aware execution without a reconstructible snapshot is degraded and must be treated as such explicitly
+The snapshot preserves objective/step text and attachment refs, identity/order, runtime/profile, source/repository/branch, authored publication selection and input origin, selected preset/Skill evidence, include ancestry, provenance/detachment, and dependencies. Missing attachment/context/policy evidence is explicit degradation, not reconstructible from prose alone.
 
 ### 7.1 Editable full retry
 
-Editable full retry is the workflow used when the user wants to change the overall instructions or any other Workflow input and then retry the Workflow.
+The shared Create form reconstructs original authored intent. Edits undergo normal binding/expansion/admission and produce a new immutable snapshot. The original failed execution, ledger, artifacts, checkpoints, and children remain unchanged. Full retry does not import completed progress unless a separately declared source/recovery operation calls for it.
 
-Rules:
-
-- the Create page opens in edit-for-rerun mode from the authoritative Workflow input snapshot
-- the user may edit instructions, steps, attachments, runtime, publish mode, branch, presets, dependencies, and other authoring fields subject to normal validation
-- submitting the form creates a new execution from the beginning
-- the edited execution gets its own authoritative Workflow input snapshot
-- the original failed execution, its snapshot, step ledger, artifacts, and checkpoints remain immutable
-- no completed execution progress is imported into the edited full retry
+A change in Auto's selected definition/default is reviewed visibly. Explicit None/Branch/PR remains explicit. Conflicting historical copies or mixed per-step policy require correction rather than silent normalization.
 
 ### 7.2 Exact full rerun
 
-Exact full rerun is the workflow used when the user wants to retry the whole Workflow with the same original Workflow input.
-
-Rules:
-
-- the original Workflow input snapshot is reused as the execution input
-- the Workflow starts from the beginning
-- prepare, prompt composition, planning or plan hydration, and all steps run again according to the normal execution path
-- no completed execution progress is imported from the failed source run
+Reuse confirmed original authored input and pinned definition/policy meaning, revalidate current authority, and start from the beginning under the lifecycle owner's new-run contract. Do not re-execute already accepted external effects blindly: existing idempotency/reconciliation controls remain applicable. Exact input does not restore revoked credentials.
 
 ### 7.3 Resume from failed step
 
-Resume is the workflow used when the user presses **Resume** on a failed Workflow Execution to retry the last failed step with the completed work up to that step preserved.
+Pin source workflow/run, validate the checkpoint/plan, restore the state before the failed step, import completed prior rows and semantic outputs as preserved, retry the failed step as a new attempt, and execute later steps normally. Preserved rows link their source run/step/attempt and are never displayed as freshly executed.
 
-Rules:
-
-- Resume is not an edit flow and must not allow Workflow input changes in v1
-- Resume pins the source execution with both `sourceWorkflowId` and `sourceRunId`
-- Resume identifies the last failed step from the source run's step ledger
-- Resume creates or resolves a `recoveryCheckpointRef` that records the completed steps, their output refs, the prepared input refs, and the workspace or branch state immediately before the failed step
-- the new execution imports completed prior steps as preserved progress rather than re-executing them
-- the failed step is retried as a new attempt in the new execution
-- later steps execute normally after the failed step succeeds
-- the Workflow detail view must show preserved prior steps as reused from the source run, not freshly executed by the resumed run
-- if checkpoint restoration is incomplete, corrupted, unauthorized, or inconsistent with the original Workflow input and plan digest, Resume must fail explicitly before executing the failed step
-
-Representative recovery checkpoint artifact:
-
-```json
-{
-  "schemaVersion": "v1",
-  "source": {
-    "workflowId": "mm:source",
-    "runId": "source-run-id"
-  },
-  "taskInputSnapshotRef": "art_original_task_snapshot",
-  "planRef": "art_original_plan",
-  "planDigest": "sha256:...",
-  "failedStep": {
-    "logicalStepId": "run-tests",
-    "order": 4,
-    "attempt": 1,
-    "title": "Run test suite"
-  },
-  "preservedSteps": [
-    {
-      "logicalStepId": "apply-patch",
-      "order": 3,
-      "status": "completed",
-      "sourceExecutionOrdinal": 1,
-      "outputRefs": {
-        "outputSummary": "art_step_summary",
-        "outputPrimary": "art_step_output"
-      }
-    }
-  ],
-  "recoveryWorkspace": {
-    "kind": "workspace_checkpoint",
-    "ref": "art_workspace_before_failed_step"
-  }
-}
-```
-
----
+The checkpoint includes schema identity, source workflow/run, original input/plan refs/digest, failed step identity/order/attempt, preserved step output refs, and a workspace/checkpoint locator. Corrupt/incomplete/unauthorized or wrong-plan restoration blocks rather than falling back to full rerun.
 
 ## 8. Execution-plane responsibilities
 
-The execution plane consumes the normalized Workflow contract after control-plane preset compilation has produced a resolved execution payload.
-
-Rules:
-
-- workers consume resolved steps and structured input refs
-- workers do not expand presets
-- workers do not read the live preset catalog to recover missing Workflow structure
-- workers do not depend on live preset catalog correctness for already submitted work
+Workers consume resolved steps, prepared context, and immutable scope/target/effect evidence. They do not expand live presets, parse new defaults from repository files, or recover missing authority by ambient fallback.
 
 ### 8.1 Workflow responsibilities
 
-`MoonMind.UserWorkflow` owns:
-
-- durable state progression
-- waiting, retry, and cancel semantics
-- prepare-time attachment handling
-- image context generation orchestration
-- passing target-aware context into the relevant planner or step runtime
-- preserving step ledger state and refs required for later Resume eligibility
+UserWorkflow owns durable lifecycle, waits/retries/cancellation, preparation/context orchestration, step ledger, child admission, compiled publication orchestration, evidence-derived outcome, and required save/checkpoint handoffs. Policy decisions stay in shared deterministic helpers, not a second giant provider-specific workflow.
 
 ### 8.2 Prepare responsibilities
 
-Prepare owns:
-
-- downloading objective-scoped and step-scoped attachments
-- writing a canonical attachments manifest
-- materializing raw files into stable workspace locations
-- producing target-aware image context artifacts
-- failing explicitly when attachment preparation is incomplete or invalid
+Prepare creates the contained source workspace, downloads authorized attachments, writes the canonical manifest, materializes stable paths, and generates target-aware image context. Incomplete preparation fails explicitly and does not promote an existing partial directory as ready.
 
 ### 8.3 Step execution responsibilities
 
-Step execution owns:
-
-- consuming Workflow-level objective context when relevant
-- consuming only the current step’s step-scoped image context by default
-- avoiding accidental leakage of unrelated step attachments into the wrong step execution
+Consume relevant objective context plus only the current step's scoped attachments by default. Preserve semantic outputs and candidate identity. Read-only step metadata cannot overwrite the run-owned reference to accepted unified repository-publication evidence or its exact candidate association.
 
 ### 8.4 Child workflow responsibilities
 
-If a step is executed through `MoonMind.AgentRun`, the parent-child boundary must preserve target-aware prepared context.
+AgentRun receives the prepared context for its step without broadening attachment or repository authority. Fan-out UserWorkflow children receive fresh child ownership and the parent's frozen scope intent through authenticated server validation, not copied credentials or the parent's entire execution plan.
 
-Rules:
-
-- parent workflow remains the source of truth for attachment target binding
-- child workflows receive only the prepared context relevant to the child step
-- child workflow logs and diagnostics do not redefine target binding semantics
+Per-PR head/base derivation is permitted through the declared target contract. An independent dependency edge is not inheritance. Coordinator-local None is not the child's policy. Static incompatibilities fail early; dynamic partial dispatch retains exact accepted IDs and errors.
 
 ### 8.5 Recovery checkpoint responsibilities
 
-The execution plane owns the durable evidence that makes Resume truthful.
+Record reusable prepared inputs, completed step output refs, and appropriate state checkpoints at mutation boundaries. Writes are idempotent and large data is artifact-backed. A completed step without required recoverable outputs/state is not eligible for preserved Resume.
 
-Rules:
-
-- after prepare succeeds, the workflow must record the prepared input refs needed to avoid repeating preparation during Resume when reuse is safe
-- after each step succeeds, the workflow must record bounded step state and semantic output refs needed by downstream steps
-- before or after each step boundary, the workflow must record a workspace, branch, commit, or equivalent state checkpoint when the runtime mutates working state
-- checkpoint writes must be idempotent because activities and workflow tasks may retry
-- checkpoint refs must remain outside large inline workflow histories when they are large or binary
-- a completed step without recoverable output refs or state checkpoint evidence is not eligible for Resume preservation
+Required useful work is saved before destructive cleanup under the repository/workspace contract. Artifact-backed saving can satisfy credentialless/None durability. None does not implicitly authorize a remote recovery push; an unqualified deployment rejects that incompatible new execution before work rather than deleting the sole copy or bypassing policy. Saved work never upgrades failed compute/publication.
 
 ### 8.6 Resume execution responsibilities
 
-When a new execution starts with `task.resume.kind === "recover_from_failed_step"`, `MoonMind.UserWorkflow` owns:
+Validate exact source snapshot/plan and checkpoint, restore safely, inject preserved outputs, retry only the failed/new work, and produce fresh attempt evidence. Restoration failure never silently reexecutes prior steps or broadens publish/credential authority.
 
-- loading and validating the recovery checkpoint
-- verifying the checkpoint source `workflowId`, `runId`, Workflow snapshot, and plan identity
-- materializing the restored workspace state before the failed step
-- marking completed prior steps as preserved from the source run without re-executing them
-- injecting preserved outputs so the failed step and downstream steps observe the same contracts as a continuous run
-- retrying the failed step as the first newly executed step of the resumed execution
-- producing fresh ledger rows, artifacts, and checkpoints for the retried failed step and all later steps
+### 8.7 Publication and code handoffs
 
-Rules:
+Managed publishers own admitted branch/PR mechanics. Portable Skills own compiled Auto effects. Both emit `moonmind.publish.repository.v1` under the providing repository contract, with actual connection/client evidence and exact provider revision proof. The existing terminal contract and trusted artifact ownership bind accepted results to the current attempt and target. UserWorkflow retains the accepted artifact reference and never duplicates Skill publishing or reconstructs proof from raw metadata. New writers and consumers do not retain `acceptedRepositoryEvidence` or `moonmind.publish.auto.v1` as live alternatives; those are frozen historical-read surfaces only.
 
-- the execution plane must not silently fall back to full rerun behavior when Resume restoration fails
-- the execution plane must not re-execute preserved prior steps unless a future UI explicitly asks for that behavior
-- preserved rows must carry provenance back to the source `workflowId`, `runId`, logical step ID, and attempt
-
----
+Parallel independent children cannot all update the same branch absent a qualified serial handoff. A successful prerequisite is not proof its code is on the next base: the composition needs verified merge, candidate/checkpoint transfer, or qualified shared-branch progression. PR-only, None, or fix-only choices must preserve that requirement or fail before known effects.
 
 ## 9. Artifact and authorization boundary
 
-The artifact system is the binary boundary of the control plane.
+The browser uses MoonMind's authorized preview/download interfaces, never long-lived object-store credentials or direct ungoverned provider file access. Worker reads are execution-scoped. Artifact target semantics are part of the snapshot, not inferred from filenames.
 
-Rules:
-
-- the browser never receives long-lived object-store credentials
-- user preview and download are authorized by execution ownership and view permissions
-- worker-side download and materialization use service credentials and execution authorization
-- artifact links are execution-scoped
-- target binding is preserved by Workflow contract and snapshot semantics, not inferred from storage paths alone
-
-Recommended metadata may include:
-
-- target kind
-- step reference
-- original filename
-- source import path such as upload or Jira import
-
-Rules:
-
-- metadata is helpful for observability
-- metadata must not be the only place where target meaning exists
-
----
+Metadata can include target kind, step, original filename, and safe import provenance, but it is not permission. Saved-work authorization survives source credential loss under the artifact policy. Restore does not restore leases, approvals, session ownership, or permission to repeat remote effects.
 
 ## 10. Runtime and prompt boundary
 
-The control plane does not dictate provider-native multimodal payloads.
+The control plane supplies normalized intent and references. Text-first runtimes use the canonical INPUT ATTACHMENTS context; qualified multimodal adapters can pass raw image refs without changing target semantics.
 
-Rules:
-
-- the control plane passes normalized Workflow intent plus artifact refs
-- text-first runtimes consume generated image context through the canonical `INPUT ATTACHMENTS` contract
-- multimodal runtimes may consume raw image refs through runtime adapters without changing the control-plane Workflow contract
-- runtime adapters must not invent new attachment targeting rules that the Create page cannot express
-
----
+Prompts describe the compiled role: coordinator dispatch without local publishing, managed candidate preparation without independent push, Skill-owned auto with required evidence, or explicit no-publication scope. Prompt text is not enforcement and cannot override policy. Unsupported provider combinations fail rather than changing publishing, runtime, profile, or billing route.
 
 ## 11. Invariants
 
-The following invariants define the desired-state Workflow Execution system.
+The system preserves binary-free histories, explicit attachment targets, no silent attachment loss, text/image separation, snapshot durability, compile-time preset expansion, definition/provenance preservation, server policy, MoonMind-owned browser APIs, target-aware context, and no hidden retargeting.
 
-1. **No binary payloads in Temporal history**
-   Image bytes do not belong in execution histories or inline create payload text.
+Recovery remains explicit: exact full retry, edited retry, and failed-step Resume are different intents. Resume keeps original input, requires durable prior work, never silently reexecutes preserved steps, and pins exact source workflow/run.
 
-2. **Explicit attachment targets**
-   Every input attachment belongs either to the Workflow objective target or to a declared step target.
-
-3. **No silent attachment loss**
-   Create, edit, rerun, and prepare must fail explicitly rather than silently dropping attachments.
-
-4. **Text remains text**
-   Instruction fields remain textual authoring surfaces. Images remain structured inputs.
-
-5. **Snapshot-based durability**
-   Attachment-aware edit and rerun require an authoritative Workflow input snapshot.
-
-6. **Compile-time preset composition**
-   Preset composition is compile-time control-plane behavior. Submitted execution payloads must not require live preset lookup.
-
-7. **Preset provenance durability**
-   Workflow snapshots preserve pinned bindings, include-tree summary, per-step provenance, detachment state, and final submitted order.
-
-8. **Server-defined policy**
-   Attachment policy is defined by server configuration and enforced by both browser and API.
-
-9. **MoonMind-owned browser APIs**
-   The browser talks only to MoonMind APIs, not directly to Jira, object storage, or provider-specific file endpoints.
-
-10. **Target-aware runtime consumption**
-   By default, step execution receives only its own step-scoped attachment context plus relevant objective-scoped context.
-
-11. **No hidden retargeting**
-   Reordering steps, applying presets, or changing text must not silently retarget an existing attachment to another step.
-
-12. **Compatibility without semantic drift**
-   Compatibility aliases and migration layers may exist, but they must not change the canonical meaning of objective-scoped versus step-scoped attachments.
-
-13. **Explicit recovery intent**
-   Full rerun, edited full retry, and Resume are distinct intents. The system must not infer Resume from a generic rerun request.
-
-14. **Resume preserves original inputs**
-   Resume uses the original Workflow input snapshot unchanged. Any user edit to instructions, steps, attachments, runtime, publish mode, branch, presets, or dependencies requires edited full retry instead.
-
-15. **Resume requires checkpointed progress**
-   Resume may be offered only when completed work before the failed step is recoverable from durable step refs and workspace or branch checkpoints.
-
-16. **No silent re-execution of preserved steps**
-   Resume must display and treat prior completed steps as preserved from the source run. Re-executing them without explicit user intent is a contract violation.
-
-17. **Pinned resume source**
-   Resume must pin both source `workflowId` and source `runId` so recovery cannot drift to a later run of the same logical execution.
-
----
+Publication adds the following architectural invariants: one authored context/policy; default Auto distinct from Skill-owned Auto; explicit None preserved; nested coordinators forward frozen scope rather than local None; per-role authority and one effect owner; one new-write provider evidence schema with exact candidate/attempt proof; code handoffs separate from dependency completion; and save-before-cleanup without a prohibited recovery push.
 
 ## 12. Workload-specific behavior
 
-### 12.1 `MoonMind.UserWorkflow`
+### 12.1 MoonMind.UserWorkflow
 
-This is the canonical attachment-aware Workflow type.
+The normal attachment/context-aware workflow owns its source, authored snapshot, step ledger, resolved scope, subordinate work, and evidence-derived completion. It can start from the beginning or restore a validated failed-step checkpoint under the lifecycle contract.
 
-Rules:
+### 12.2 MoonMind.AgentRun
 
-- attachment-aware Workflow authoring is defined against `MoonMind.UserWorkflow`
-- create, edit, rerun, and detail flows for attachment-aware Workflows are all modeled in Workflow-shaped `MoonMind.UserWorkflow` terms
-- `MoonMind.UserWorkflow` is the canonical workflow that produces step ledger state and recovery checkpoints for failed-step recovery
-- `MoonMind.UserWorkflow` may start from the beginning for full retry or start at a failed step when given a validated recovery checkpoint
-- checkpoint durability remains a parent `MoonMind.UserWorkflow` responsibility even when an individual step delegates work to `MoonMind.AgentRun`
-
-### 12.2 `MoonMind.AgentRun`
-
-This child workflow may execute a specific step.
-
-Rules:
-
-- when used, it consumes prepared context for the step it represents
-- it must not redefine or broaden its attachment scope beyond what the parent workflow prepared
+The subordinate runtime execution consumes only its admitted step context, Skill snapshot, target, and operation scope. It does not choose a conflicting final publication policy or invent attachment targeting.
 
 ### 12.3 Other workflow types
 
-Other Workflow types may reuse artifact infrastructure, but they do not redefine the Create-page attachment contract.
-
----
+Other types can reuse infrastructure without redefining Create authoring. MergeAutomation consumes the admitted PR/finish scope and schedules resolved Skill work; it is not a separate user-facing publication selector.
 
 ## 13. Observability and operator surfaces
 
-The architecture must support operator understanding without requiring raw history parsing.
+Details expose attachment metadata by target, relevant manifest/context refs, source/definition provenance, authored policy and effective explanation, local publication disposition, saved outputs, and child outcomes. Separate upload/validation/materialization/context errors and checkpoint validation/restore/output-injection/step failures.
 
-Rules:
-
-- Workflow detail should expose attachment metadata by target
-- diagnostics should expose manifest and generated context refs where appropriate
-- attachment failures should identify:
-  - which target failed
-  - whether the failure happened during upload, validation, materialization, or context generation
-- step-aware surfaces should identify the current step’s attachment context separately from unrelated step inputs
-- Workflow detail should identify resumed executions and show preserved prior steps as reused from the source run
-- diagnostics for failed Resume attempts should identify whether the failure happened during checkpoint validation, workspace restoration, preserved-output injection, or failed-step execution
-
----
+A resumed execution shows reused prior steps. A batch shows actual queued children separately from their completion/PR/merge state. A locally non-publishing coordinator does not appear to have disabled the user's PR batch. Verified saved or remote results survive auxiliary projection lag.
 
 ## 14. Boundary with page-level and subsystem docs
 
-Use this document to understand the architectural contract.
+CreatePage owns controls and validation UX; WorkflowDetailsPage owns results/actions; ImageSystem owns attachment preparation; SkillSystem owns portable resolution; StepTypes and InputSchemaGuidance own task inputs/bindings; WorkflowPublishing owns policy/effects; RepositoryAccessAndWorkspaceDesign owns source/credential/save roles; LoreVcsIntegrationDesign owns the unified provider evidence schema; Temporal lifecycle/run-history and StepLedgerAndProgressModel own run/recovery identity and progress.
 
-Use the related docs for detailed behavior:
+These remain providing owners. This architecture does not create parallel APIs, stores, publishers, or migration ledgers. Implementation sequencing and evidence stay in issues or temporary plans.
 
-- `docs/UI/CreatePage.md` for page sections, field behavior, Jira targeting, edit/rerun UX, and validation copy
-- `docs/UI/WorkflowDetailsPage.md` for failed-Workflow Execution action presentation, including **Resume**
-- `docs/Workflows/ImageSystem.md` for image-input upload, artifact storage, materialization, context generation, and preview/download behavior
-- `docs/Steps/SkillSystem.md` for skill selection and resolution
-- `docs/Temporal/TemporalArchitecture.md` for workflow lifecycle and worker topology
-- `docs/Temporal/WorkflowRunHistoryAndNewRunSemantics.md` for Workflow ID, Run ID, new-run, and failed-step recovery identity semantics
-- `docs/Temporal/StepLedgerAndProgressModel.md` for step ledger, preserved-step, and recovery checkpoint semantics
+## 15. Summary and conformance
 
----
+MoonMind's control plane is workflow-first, artifact-first, target-aware, and single-context. All producers pass the same definition/binding/publication compiler. Execution realizes role-appropriate actions without requiring duplicate user settings.
 
-## 15. Summary
-
-MoonMind’s control plane is Workflow-first, artifact-first, and target-aware.
-
-For image inputs that means:
-
-- the user authors text and image inputs in one draft
-- the control plane uploads and binds images to explicit targets
-- the Workflow contract and authoritative snapshot preserve those bindings
-- the execution plane prepares and injects target-aware context
-- detail, edit, and rerun surfaces can round-trip the same authored intent without semantic loss
-- failed-Workflow Execution **Resume** can retry the last failed step only when durable checkpoints can restore the work completed before that step
-
-That is the desired-state Workflow architecture contract.
+Conformance exercises actual Create/Apply/Reapply/Submit/API/MCP/schedule/edit/rerun/Resume and child boundaries. It covers attachment targeting, pinned definitions, contextual versus authored inputs, explicit None, Auto resolution and retired fallback handling, non-publishing parents with publishing descendants, non-default bases and per-PR heads, unified provider evidence, candidate handoffs, idempotent effects, safe preservation, and honest historical reconstruction. A form or documentation update alone is not runtime or deployment conformance.

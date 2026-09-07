@@ -1,22 +1,27 @@
 # Settings System
 
+**Document Class:** Canonical declarative  
+**Viewpoint:** Module Architecture View  
+**Status:** Draft  
+**Owners:** MoonMind Engineering  
+**Updated:** 2026-09-06  
+**Audience:** Settings, API, dashboard, runtime, and security contributors and operators  
+**Authority:** Settings catalog, scoped configuration resolution, persistence, audit, and retirement behavior. Workflow Publishing owns publication selection and composition-default semantics.  
+**Owning Surface:** Settings registry/resolver, scoped override services, and Settings UI  
+**Related Docs:** [SecretsSystem.md](./SecretsSystem.md), [ProviderProfiles.md](./ProviderProfiles.md), [OAuthTerminal.md](../ManagedAgents/OAuthTerminal.md), [ManagedAndExternalAgentExecutionModel.md](../Temporal/ManagedAndExternalAgentExecutionModel.md), [Codex via Omnigent Create-to-host contract](../Omnigent/CodexCreateToHostContract.md), [Workflow Publishing](../Workflows/WorkflowPublishing.md)  
+**Related Implementation:** `moonmind/config/settings.py`, `api_service/services/settings_migrations.py`, `api_service/services/settings_backup.py`.
+
 Omnigent settings bootstrap the persistent [Omnigent policy authority](../Omnigent/PolicyAuthority.md);
 environment values are not mutable per-run policy. Settings configure the Codex
 product path whose canonical identity is `agentKind=external`, `agentId=omnigent`,
 nested harness `codex-native`, reconciled end-to-end by
 [NormalCodexProductPathReconciliation.md](../Omnigent/NormalCodexProductPathReconciliation.md).
 
-**Related design documents:** [SecretsSystem.md](./SecretsSystem.md), [ProviderProfiles.md](./ProviderProfiles.md), [OAuthTerminal.md](../ManagedAgents/OAuthTerminal.md), [ManagedAndExternalAgentExecutionModel.md](../Temporal/ManagedAndExternalAgentExecutionModel.md), [Codex via Omnigent Create-to-host contract](../Omnigent/CodexCreateToHostContract.md)
-
-Status: **Desired-State Design**
-Owners: MoonMind Engineering
-Last Updated: 2026-04-27
-
 > [!NOTE]
 > This document defines the desired-state MoonMind Settings System.
 > It is a declarative contract for how the dashboard exposes, validates, persists, resolves, audits, and safely applies user, workspace, provider, secret, and operational configuration.
 >
-> This document is not an implementation checklist. Rollout sequencing, migration tasks, and backlog tickets belong in MoonSpec artifacts, gitignored handoffs, or `docs/tmp/` implementation plans.
+> This document is not an implementation checklist. Rollout sequencing, migration tasks, and backlog tickets belong in MoonSpec artifacts, gitignored handoffs, or `docs/tmp/` implementation plans. Publication-default retirement below is target behavior and requires coordinated implementation before new authoring is enabled.
 
 ---
 
@@ -130,6 +135,10 @@ Runtime strategies remain the semantic owner of:
 - runtime-specific capability checks
 
 Settings may influence runtime strategies through typed effective configuration, but they do not replace runtime-specific launch logic.
+
+### 2.6 What Workflow Publishing owns
+
+[Workflow Publishing](../Workflows/WorkflowPublishing.md) owns the single authored publication selection, composition-specific Auto resolution, child-scope inheritance, compiled effect roles, and compatibility with repository/approval policy. The generic Settings resolution chain is not an alternate publication compiler. Section 10.6 defines the retirement of the superseded workspace publish fallback without silently losing configured operator intent.
 
 ---
 
@@ -363,12 +372,13 @@ Examples:
 
 ```text
 workflow.default_runtime
-workflow.default_publish_mode
 skills.policy_mode
 skills.canary_percent
 integrations.github.token_ref
 operations.worker_pause_default_reason
 ```
+
+`workflow.default_publish_mode` is deliberately absent from active examples. It is a removed setting under section 10.6, not another source for new Auto/default resolution.
 
 Setting keys must be:
 
@@ -701,7 +711,7 @@ built-in default
   < user override
 ```
 
-The first item is weakest; the last applicable item wins.
+The first item is weakest; the last applicable item wins. This generic chain does not resolve a workflow's publication selection; that is the compiler-owned contract in section 10.6.
 
 ### 10.2 Operator-Locked Resolution Chain
 
@@ -753,6 +763,24 @@ The resolver must distinguish:
 - value is invalid after migration.
 
 These states should produce explicit diagnostics rather than silent fallback.
+
+### 10.6 Publication Default Ownership and Retired Setting
+
+The long-term design removes the active `workflow.default_publish_mode` setting and its `WORKFLOW_DEFAULT_PUBLISH_MODE` and `MOONMIND_DEFAULT_PUBLISH_MODE` environment aliases. It does not demote them to a fallback that still applies when a preset lacks metadata or a helper omits a field. The single publication compiler is authoritative for Create, API/MCP, preset expansion, schedules, Edit/Rerun, and scoped child admission.
+
+For new authoring, an explicit supported workflow selection is preserved. Omission and `default` both mean the same composition-specific Auto, resolved from pinned definition metadata and task inputs. Scoped children inherit the authenticated parent's frozen intent. Settings-owned allowed-operation/approval constraints may reject incompatible effects, but may not rewrite Auto to None/Branch/PR or silently alter an explicit choice. An unresolved declaration is a compiler error, not permission to consult the retired setting.
+
+Retirement preserves configured operator intent through the existing settings migration/audit owner:
+
+- Reject new writes to the removed setting with the established removed-key error. Do not expose an active Default Publish Mode control, return its value as an active fallback, or prefill a workflow with it as though it were explicitly selected.
+- Retain existing configured override rows as diagnostic-only evidence under section 24.2, with settings.migration.removed audit events. Detect explicitly configured legacy environment values as well as database overrides. Their continued presence is actionable retirement state, not runtime authority.
+- Preserve original admitted histories and recorded effective values. Their frozen decoder must not read today's workspace or environment fallback.
+- For saved drafts/definitions whose recorded input origin proves the fallback supplied their old publishing choice, preserve that choice as an explicit workflow selection with migration provenance and ordinary compatibility checks. Do not overwrite a previously explicit selection or an established child-policy distinction.
+- A configured fallback without sufficient per-input provenance, a conflicting policy, or an unattended definition whose meaning cannot be preserved requires visible review before affected new/defaulted launches are enabled. Show the old configured source/value and the proposed composition result. Do not silently discard a configured None or Branch and start publishing PRs, or replace a PR workflow with None.
+- The operator explicitly adopts composition Auto, saves a valid explicit policy for affected definitions, or retains an affected schedule blocked until reviewed. Record that disposition with existing setting/definition revisions and audit references. Resetting a diagnostic row alone does not certify every saved schedule or draft.
+- Backup/restore preserves the retirement records and review state. Restoring an old override or environment configuration cannot reactivate the fallback or bypass required review. No permanent new per-run toggle, replacement default setting, or second publication-policy store is introduced.
+
+The coordinated implementation removes the active backend descriptor/config field and aliases, Settings/UI/API readers, Create hydration, preset/helper fallbacks, and old-default tests before enabling the new contract. Only bounded history/retirement readers remain where needed. This docs-only change does not remove the current Python setting or enable the cutover by itself.
 
 ---
 
@@ -1186,7 +1214,6 @@ Workspace settings describe shared behavior for a workspace.
 Examples:
 
 - default agent runtime,
-- default publish mode,
 - workspace provider routing defaults,
 - skill policy mode,
 - allowed skill list,
@@ -1195,6 +1222,8 @@ Examples:
 - workspace Git defaults,
 - integration defaults, and
 - policy constraints.
+
+The workspace publish fallback is not an active setting in the target design. Publication uses the reviewed workflow/composition selection under section 10.6. Allowed publication operations remain policy constraints, not a replacement default selector.
 
 ### 16.3 Workspace Policy Constraints
 
@@ -1213,7 +1242,7 @@ Examples:
 
 User settings inherit workspace defaults unless explicitly overridden and permitted by policy.
 
-The UI must make inheritance visible.
+The UI must make inheritance visible. Generic setting inheritance does not override the publication compiler's distinct scope/default rules in section 10.6.
 
 ---
 
@@ -1521,6 +1550,8 @@ Settings often point at adjacent resources (managed secrets, OAuth volumes, prov
 
 The UI MUST surface these diagnostics clearly so operators can decide whether to re-create the missing dependency, point the override at a different reference, or reset the override.
 
+A restored removed publication-default override follows section 10.6's retirement/review contract. It is not reactivated by generic default or inheritance handling, and missing retirement provenance cannot be treated as consent to composition Auto.
+
 ### 23.4 Recovery rehearsal
 
 Operators are expected to rehearse the following recovery paths against a non-production environment:
@@ -1569,6 +1600,8 @@ Removing a setting requires:
 - avoiding silent loss of operator intent.
 
 Writes to removed or deprecated keys remain rejected at the request layer via the `setting_not_exposed` error path. The migration orchestrator's `apply_removal` helper preserves existing rows for diagnostic continuity (so the catalog's deprecated-override diagnostics keep surfacing them) and stamps a `settings.migration.removed` audit event for forensic visibility. Operators who want to retire stored rows can do so explicitly via `reset_override` once they have confirmed the values are no longer needed.
+
+For `workflow.default_publish_mode`, preservation is diagnostic/history-only, never an active fallback. The specific input/definition review and configured-environment handling in section 10.6 must be satisfied before affected new authoring uses composition Auto. Generic removal or reset alone cannot silently change a scheduled workflow's publication intent.
 
 ### 24.3 Changing Types
 
@@ -1620,6 +1653,10 @@ The desired-state Settings System should include tests for:
 21. Rename, type-change, and removal migrations preserve effective values, emit migration audit events, and never reinterpret JSON values ambiguously (covered by `tests/unit/services/test_settings_migrations.py`).
 22. Backup snapshots exclude managed-secret plaintext, preserve SecretRef references and migration audit events, and refuse to serialize redaction-flagged rows that still carry payloads (covered by `tests/unit/services/test_settings_backup.py` and `tests/integration/api/test_settings_backup_recovery_contract.py`).
 23. Partial-restore broken-reference scans surface every persisted override whose SecretRef or provider-profile target is missing or disabled (covered by the same test files).
+24. The removed publish setting and environment aliases cannot affect new omitted/default/explicit publication requests across UI, API, presets, helpers, or schedules.
+25. Configured historical None/Branch/PR values preserve proven effective input intent or produce an actionable review blocker; explicit workflow selections and frozen histories are unchanged.
+26. Retirement audit, reset, backup/restore, and unattended-definition handling cannot reactivate the fallback or treat missing review evidence as consent.
+27. Allowed-operation policy rejects incompatibility without silently substituting another publishing mode. New omission and explicit default resolve identically.
 
 ---
 
@@ -1806,3 +1843,4 @@ The Settings System is correct only if the following invariants hold:
 10. An operator lock cannot be overwritten by ordinary user/workspace writes.
 11. Operational commands are authorization-gated and audited.
 12. Catalog changes are testable and intentional.
+13. A removed publication-default setting is diagnostic/history-only. The workflow compiler has one new-authoring default path, and retirement cannot silently discard configured operator intent.

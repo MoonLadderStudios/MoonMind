@@ -1,11 +1,19 @@
 # Workflow Finish Summary System
 
-Status: Active  
-Owners: MoonMind Engineering  
-Last Updated: 2026-06-28
-Related: `docs/Workflows/WorkflowArchitecture.md`, `docs/Workflows/FollowUpWorkSystem.md`,
+**Document Class:** Canonical declarative  
+**Viewpoint:** Module Contract Specification  
+**Status:** Draft  
+**Owners:** MoonMind Engineering  
+**Updated:** 2026-09-06  
+**Audience:** Workflow finalization, artifact, API, and dashboard contributors and operators  
+**Authority:** Canonical finish-summary outcomes, failure diagnostics, bounded side-effect/child projections, and redaction. Workflow Publishing and its provider evidence owner supply policy and proof; summaries do not replace them.  
+**Owning Surface:** UserWorkflow finalization, reports/run_summary.json, and terminal result projections  
+**Related Implementation:** `MoonMind.UserWorkflow`, `execution.record_terminal_state`, and existing finish_outcome_code/finish_summary_json consumers.
+
+**Related Docs:** `docs/Workflows/WorkflowArchitecture.md`, `docs/Workflows/WorkflowPublishing.md`,
 `docs/Temporal/ErrorTaxonomy.md`, `docs/Temporal/StepLedgerAndProgressModel.md`,
-`docs/Workflows/NoCommitStatus.md`
+`docs/Workflows/NoCommitStatus.md`, `docs/RepositoryAccessAndWorkspaceDesign.md`,
+`docs/Workflows/LoreVcsIntegrationDesign.md`
 
 ---
 
@@ -14,20 +22,28 @@ Related: `docs/Workflows/WorkflowArchitecture.md`, `docs/Workflows/FollowUpWorkS
 MoonMind requires a clear "what happened?" summary at the end of every
 `MoonMind.UserWorkflow` execution so dashboard operators can quickly distinguish:
 
-* **Published output** (PR/branch updated successfully) vs
-* **No commit** (publish skipped because no repository commit was needed) vs
-* **Publish disabled** (intentionally set `publish.mode=none` for a dry run) vs
-* **Failure** (and at which Temporal Activity boundary) vs
-* **Cancelled**
+* **Published output**: verified PR, branch, or merge results.
+* **No commit**: a verified publishing-context no-op because no repository commit was needed.
+* **No local publication**: an explicit no-publication scope or an execution role without its own repository deliverable. These are different reasons and must be identified.
+* **Coordinator result**: actual children queued, no eligible targets, partial dispatch, or dispatch failure, separately from descendant completion.
+* **Failure**: the original cause and affected boundary, with independently verified saved work or remote results preserved.
+* **Cancelled**: the cancellation outcome, without implying rollback of already performed effects.
 
 `NO_COMMIT` replaces the older `NO_CHANGES` wording because workflows may still
 perform non-repository side effects such as Jira issue transitions, comments,
 verification records, or artifact publication. The finish summary must describe
 repository publication separately from those side effects.
 
-This document describes the finish-summary system executed during the workflow's
-finalization path. The system produces a structured, non-secret summary artifact
-and syncable result payload for rapid UI indexing.
+Explicit None is not dry run. A dry-run batch does not enqueue children; None
+can permit independently authorized tracker and dispatch operations but cannot
+permit repository publication by descendants. A non-publishing coordinator under
+a PR scope is not an explicit-None batch. User-facing Auto and the coordinator's
+or resolver's compiled mode are likewise different layers.
+
+This document describes the target finish-summary contract executed during
+finalization. It produces a structured, non-secret summary artifact and syncable
+result payload for rapid UI indexing. It does not claim that current runtime
+producers already implement every single-policy projection described here.
 
 ---
 
@@ -44,15 +60,27 @@ At the conclusion of a `MoonMind.UserWorkflow` Temporal Workflow, the system gua
 * `FAILED`
 * `CANCELLED`
 
-Legacy artifacts or compatibility adapters may still expose `NO_CHANGES`; new
-workflow histories and UI copy should treat that value as an alias for
-`NO_COMMIT` when the reason is that no repository commit was needed.
+Legacy artifacts or compatibility adapters may still expose `NO_CHANGES`; named
+historical readers normalize that alias to `NO_COMMIT` only when the reason is
+that no repository commit was needed. New domain writes use the canonical value.
 
-It also logs a `finishOutcomeStage` indicating which stage of the workflow it reached (for example, `prepare`, `llm_execution`, `publish`, or `finalizing`).
+`PUBLISH_DISABLED` describes local compiled publication disposition. Its reason
+must distinguish explicit scope-wide None from a coordinator/read-only role.
+It is not the whole objective summary of a successful batch. The existing bounded
+side-effect/child-result evidence supplies the coordinator's actual outcome;
+this design does not introduce another root lifecycle state or a new summary store.
+
+The system also logs `finishOutcomeStage` indicating the reached stage, such as
+`prepare`, `llm_execution`, `publish`, or `finalizing`. A later reporting failure
+cannot erase independently verified compute, save, push, PR, or merge evidence,
+although an unmet required objective remains failed or blocked.
 
 ### 2.2 JSON Artifact Shape
 
-The finish summary data is small and stored as JSON. A `reports/run_summary.json` is generated natively inside the Workflow and uploaded to the Artifact API before termination.
+Finish summary data is small and stored as JSON. `reports/run_summary.json` is
+generated through the native workflow finalization path and uploaded to the
+Artifact API before successful finalization. Required artifact failure is an
+explicit preservation/finalization failure, not a fabricated summary reference.
 
 ```json
 {
@@ -88,27 +116,39 @@ The finish summary data is small and stored as JSON. A `reports/run_summary.json
 }
 ```
 
+This existing summary example shows a compiled local result projection, not a
+complete new authored-input or repository-publication evidence schema. Historical
+jobId naming in a summary is not a new queue identity; workflow/run and
+exact-attempt references follow their owning contracts. New projection fields
+evolve under the summary's versioning rules, not by silently reinterpreting old
+bytes or hashes.
+
+New managed and agent-owned repository proof uses only
+`moonmind.publish.repository.v1` from LoreVcsIntegrationDesign section 3.13. The
+summary consumes an accepted artifact ref and exact-attempt/target association;
+its status/booleans/URLs are display projections, not replacements for provider
+revision, admitted connection/client, scan, and remote proof. None has no
+repository-publication evidence requirement. Frozen old-schema readers are only
+for recorded histories, never live alternate producers.
+
 The `sideEffects` block is optional and bounded, but it is the preferred way to
 make side effects visible when a run has no repository commit. A Jira Implement
-preset run that moves an issue to Done but creates no commit should therefore
-summarize as `NO_COMMIT`, not as "no changes." See
-`docs/Workflows/NoCommitStatus.md` for the full lifecycle contract.
+run that explicitly establishes the issue is already implemented, completes its
+trusted tracker operation, and creates no commit summarizes as `NO_COMMIT`, not
+"no changes." See `docs/Workflows/NoCommitStatus.md` for the full lifecycle contract.
 
 ### 2.3 Failure Diagnostics Contract
 
 Failed and canceled runs MUST include a bounded, redacted, operator-meaningful
-failure reason. Generic Temporal wrappers (for example `Activity task failed`,
-`Child Workflow execution failed`) are not acceptable as the operator-visible
-reason — the workflow MUST walk the exception chain and surface the deepest
-non-generic root cause.
+failure reason. Generic Temporal wrappers such as `Activity task failed` or
+`Child Workflow execution failed` are not acceptable as the operator-visible
+reason. Walk the exception chain and surface the deepest non-generic root cause.
 
-`finishOutcome.reason` is the canonical operator-facing failure string. When a
-run fails, it MUST be sourced from a structured failure diagnostic captured at
-the failure boundary, not reconstructed from the terminal `summary` field
-alone.
+`finishOutcome.reason` is the canonical operator-facing failure string. For a
+failed run it comes from structured failure diagnostics captured at the failure
+boundary, not reconstructed from the terminal `summary` field alone.
 
-Failed runs SHOULD additionally include a structured `failure` object alongside
-`finishOutcome`. The object is small, free of secrets, and shaped as:
+Failed runs SHOULD additionally include a small secret-free `failure` object:
 
 ```json
 {
@@ -128,34 +168,20 @@ Failed runs SHOULD additionally include a structured `failure` object alongside
 
 Field semantics:
 
-* `stage`: the workflow stage that was active when the failure was captured
-  (`prepare`, `planning`, `executing`, `publish`, `finalizing`).
-* `category`: aligns with `ExecutionTerminalStateInput.error_category` and the
-  policy categories in `docs/Temporal/ErrorTaxonomy.md`. Permitted values are
-  `user_error`, `integration_error`, `execution_error`, and `system_error`.
-  `ApplicationError.type` values such as `INVALID_INPUT`,
-  `UnsupportedStatus`, `ProfileResolutionError`, `SlotAcquisitionTimeout`, and
-  `RATE_LIMITED` are mapped onto these four categories.
-* `source`: where the failure originated — `child_workflow`, `activity`, or
-  `workflow`.
+* `stage`: the stage active at capture: prepare, planning, executing, publish, or finalizing.
+* `category`: aligns with `ExecutionTerminalStateInput.error_category` and `docs/Temporal/ErrorTaxonomy.md`: user_error, integration_error, execution_error, or system_error. ApplicationError types such as INVALID_INPUT, UnsupportedStatus, ProfileResolutionError, SlotAcquisitionTimeout, and RATE_LIMITED map to these categories.
+* `source`: child_workflow, activity, or workflow.
 * `stepId` / `stepTitle`: the failing plan node when applicable.
-* `childWorkflowId`: the child workflow id when the failure originated from a
-  child workflow.
-* `message`: the redacted, bounded operator-facing root cause. Truncated to
-  ~1000 characters.
-* `rootCauseType`: the deepest non-generic exception class name observed in
-  the failure chain.
-* `diagnosticsRef`: an optional artifact ref pointing at larger structured
-  diagnostics. Large diagnostic payloads MUST NOT be embedded inline — they
-  belong in artifacts. See `docs/Temporal/StepLedgerAndProgressModel.md` for
-  the same rule applied to per-step `lastError`.
+* `childWorkflowId`: the child identity when failure originated there.
+* `message`: redacted bounded root cause, truncated to approximately 1000 characters.
+* `rootCauseType`: the deepest non-generic observed exception class.
+* `diagnosticsRef`: optional larger artifact-backed diagnostics, never a large embedded payload. The same rule applies to per-step lastError under StepLedgerAndProgressModel.
 
-Failed runs MAY also include a `failureSummary` object. `failure` remains the
-low-level diagnostic captured at the failure boundary; `failureSummary` is the
-compact operator classification that the dashboard can render without parsing
-Markdown reports or long failure strings.
+Failed runs MAY also include `failureSummary`. The `failure` object remains the
+low-level captured diagnostic; `failureSummary` is the compact operator
+classification rendered without parsing Markdown or long strings.
 
-For MoonSpec publication gates, `failureSummary` uses this shape:
+For MoonSpec publication gates:
 
 ```json
 {
@@ -183,17 +209,13 @@ For MoonSpec publication gates, `failureSummary` uses this shape:
 }
 ```
 
-Allowed MoonSpec summary categories are:
+Allowed MoonSpec categories are validation_environment_blocked for unavailable
+required validation infrastructure, validation_evidence_missing for missing
+current-head CI/lane evidence, and verification_gaps_remaining for concrete
+implementation/validation gaps. These classifications cannot authorize a draft
+PR outside the admitted scope policy.
 
-* `validation_environment_blocked`: required local/CI validation
-  infrastructure is unavailable, for example native Unreal tooling is missing
-  or a required Docker registry pull is unauthorized.
-* `validation_evidence_missing`: implementation may be present, but required
-  current-head CI or lane evidence is missing.
-* `verification_gaps_remaining`: the verifier reported concrete remaining
-  implementation or validation gaps.
-
-For managed agent runtime failures, `failureSummary` uses:
+For managed agent runtime failures:
 
 ```json
 {
@@ -215,68 +237,130 @@ For managed agent runtime failures, `failureSummary` uses:
 }
 ```
 
-When a managed-runtime failure occurs after a publishable verification result or
-after a pull request has already been created, `partialSuccess` MUST preserve
-that evidence so the UI can distinguish "implementation verified but final
-runtime turn failed" from "implementation failed".
+When failure follows verified implementation or PR publication, preserve that
+evidence in partialSuccess so the UI distinguishes implementation success with a
+later failure from implementation failure. Such evidence must come from the
+canonical verifier/publisher, not untrusted step metadata or a PR-shaped URL.
 
-When a structured `failure` is present, the `lastStep` block SHOULD reflect
-the failure so operators see the failing tool, not a stale prior step:
+When `failure` exists, the `lastStep` block reflects the failing step rather than
+stale prior work: id equals stepId, summary equals the diagnostic message,
+lastError carries its category, and diagnosticsRef is included when available.
 
-* `lastStep.id` is set to the failing step's `stepId`.
-* `lastStep.summary` matches the diagnostic `message`.
-* `lastStep.lastError` carries the diagnostic `category` (mirroring the
-  step-ledger `lastError` semantics defined in
-  `docs/Temporal/StepLedgerAndProgressModel.md`).
-* `lastStep.diagnosticsRef` is set when the diagnostic carries one.
-
-The terminal-state activity (`execution.record_terminal_state`) uses the same
-diagnostic when recording the `summary` and `errorCategory` so the visibility
-projection and the finish-summary artifact never disagree about why a run
-failed.
+`execution.record_terminal_state` uses that same diagnostic for summary and
+errorCategory so the projection and artifact agree about why the run failed.
 
 #### First-failure-wins capture
 
-Failure diagnostics are captured at the first failure boundary that surfaces a
-non-generic root cause (for example the `except Exception` block around a
-`MoonMind.AgentRun` child workflow execution or a plan-step activity). Later
-generic re-raises in higher-level handlers MUST NOT overwrite an earlier,
-deeper diagnostic.
+Capture at the first boundary that identifies a non-generic root cause, such as
+the handler around AgentRun or a plan-step Activity. Later generic re-raises do
+not overwrite it. Independently verified results remain separately recorded;
+first-failure-wins is not permission to discard prior remote/save facts.
+
+### 2.4 Authored Policy, Local Disposition, and Descendant Results
+
+The summary/read projection preserves four different meanings through the
+existing input, plan, and result references:
+
+| Information | Authoritative source | Presentation |
+| --- | --- | --- |
+| Authored selection | Immutable authored workflow input | Auto/default, explicit None, Branch, PR, or PR-and-merge |
+| Resolved scope behavior | Pinned definition and compiler evidence | What this workflow/batch is admitted to produce, including finish/merge behavior |
+| Local publication | This execution's compiled role and exact result | None, managed Branch/PR, or Skill-owned Auto, with owner and evidence |
+| Descendant outcomes | Actual admitted child references and current/terminal results | Queued, pending, completed, published, merged, partial, blocked, failed, or unavailable as evidenced |
+
+Do not overwrite the authored selection with a local mode. A batch authored PR
+can have a coordinator with local None and PR-producing children. An Auto review
+workflow can have a non-publishing coordinator and Skill-owned Auto resolver
+children. Explicit root None, by contrast, forbids those publishing descendants.
+
+The terminal coordinator artifact records its objective at completion: targets,
+accepted child identities, policy/target provenance, skips, and errors. It does
+not become a mutable aggregate artifact rewritten when children finish. Existing
+live child-result projections may show later progress while the coordinator's
+historical enqueue result remains immutable.
+
+A successful enqueue is not proof of accepted publication evidence, child
+completion, or a merge. If a composition awaits child completion, its own
+terminal verdict includes that declared requirement. Otherwise, the summary
+states that the coordinator completed dispatch and children are separately
+inspectable. Partial dispatch includes every accepted child and the unresolved
+errors; it is not a fabricated rollback or whole-batch success.
+
+Skill-owned Auto consumes exact current-attempt unified publication and objective
+evidence. A verified push does not complete a merge-required resolver. `fix_only`
+can produce review_clean with pushed changes but must never report merged.
+Missing, malformed, or stale evidence is not No Commit or PUBLISH_DISABLED.
+Lore Content-only publication is not a no-op because a generated Git diff is
+empty; a pending required projection remains awaiting_external rather than PR
+success.
+
+Compute, artifact saving, local repository publication, merge automation, and
+cleanup results remain independent. A saved result after publication failure is
+usable saved work without successful publication. A retained local path is not
+verified durable saving. No-publication scope cannot be bypassed by describing a
+remote push as recovery; required save/cleanup follows the workspace contract.
+
+Useful operator examples are:
+
+> 12 child workflows queued. Each will create a PR against release/1.2. This coordinator publishes no repository changes.
+
+> No commit was needed. The canonical Jira issue was updated successfully.
+
+> Work was saved. Requested PR publication failed because destination access was revoked.
+
+> Review is clean and fixes were pushed. The PR remains open because Merge when ready was disabled.
+
+No generic “Publishing disabled” label may replace these materially different
+outcomes. None is not dry run, and Auto is not an unconditional promise to merge.
 
 ### 2.5 Secret Handling
 
-Finish summaries MUST NOT contain tokens, API keys, credential strings, or full command lines with secret arguments. All strings are passed through redaction mechanisms before sync.
-
-This rule applies to the structured `failure` diagnostic defined in §2.3 as
-well. The diagnostic `message` is passed through the same redaction policy
-used for `operatorSummary` and step summaries (for example
-`scrub_github_tokens`) before being written to `reports/run_summary.json` or
-sent to the terminal-state activity.
+Finish summaries MUST NOT contain tokens, API keys, credential strings, or full
+commands containing secret arguments. Redact strings before storage or sync.
+This applies to structured failure messages, operatorSummary, step summaries,
+policy provenance, and child metadata, including the established GitHub-token
+scrubbing boundary. Do not expose raw runtime/credential handles merely because
+they are useful for internal reconciliation.
 
 ### 2.6 Preset Summary Ownership
 
-Workflow presets do not own generic end-of-run narration. Presets may emit structured
-facts that are useful after execution, such as a Jira issue key, pull request
-URL, verification verdict, publish handoff, side-effect outcome, or no-commit
-data, but those facts are inputs to operator surfaces and workflow finalization
-rather than a replacement for the canonical finish summary.
+Presets do not own generic end-of-run narration. They emit structured facts such
+as issue keys, actual PR URLs, verdicts, publication handoffs, child identities,
+side-effect outcomes, and no-commit evidence. Those feed the canonical finalizer
+and operator surfaces, not a competing summary.
 
-For orchestration presets, the final operational step should be the last action
-needed by that preset, such as MoonSpec verification or a Jira workflow
-transition. A preset should not add a final agent-authored report step whose only
-purpose is to summarize normal completion. This keeps success, failure,
-cancellation, and no-commit runs on the same `reports/run_summary.json` contract
-even when late preset steps do not run.
+The final operational preset step is its last required action, such as
+verification or a tracker transition. Do not add an agent report step whose only
+purpose is normal completion narration. Success, failure, cancellation, no-commit,
+and coordinator outcomes stay on the same run_summary contract even when late
+preset steps do not run.
 
 ---
 
 ## 3. Worker Implementation (Temporal Workflow)
 
-Inside the Python Temporal workflow logic (`MoonMind.UserWorkflow`):
+UserWorkflow coordinates stage timing, captures failure/cancellation evidence,
+preserves independent compute/save/publication facts, and invokes the trusted
+artifact boundary for reports/run_summary.json. The typed terminal payload
+populates existing execution source/projection fields such as
+finish_outcome_code and finish_summary_json for UI indexing.
 
-1. The Workflow coordinates stage timings across all child Activities.
-2. Even in failure or `CancelledError` paths, a `finally:` or `except:` block captures the execution state.
-3. The Workflow saves `reports/run_summary.json` to the unified Artifacts API.
-4. The Workflow records the final typed terminal-state payload into the Postgres
-   execution source and projection columns (`finish_outcome_code`,
-   `finish_summary_json`) to make List queries faster in the UI.
+Only the finalizer derives the canonical outcome from admitted policy and
+validated evidence. The last step, a helper-local default, restored old artifact,
+or an auxiliary projection cannot redefine it. Summary upload/reporting retries
+reconcile exact identities without rerunning successful compute or remote
+publication. Required preservation failures remain actionable under the existing
+workspace/cleanup owner.
+
+## 4. Conformance
+
+Tests cross the production publisher/Skill/fan-out, finalizer, artifact, API, and
+UI-projection boundaries. They distinguish authored Auto from local Auto/None,
+explicit None from coordinator None, dry run from no-publication, actual enqueue
+from descendant success, verified no-op from missing evidence, and saved work
+from successful publication. They preserve root-cause diagnostics, first-failure
+capture, exact-attempt identities, secret redaction, historical aliases, and
+verified partial results through reporting failure. New managed/agent evidence
+uses one provider schema with its actual connection/client/remote proof rather
+than treating summary booleans as evidence. A rendered label or a summary-shaped
+object alone is not proof of those guarantees.
