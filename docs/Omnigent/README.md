@@ -35,8 +35,9 @@ interchangeable responsibilities.
 
 - A shared image never authorizes every installed runtime. Each Host Class
   declares only its own harness, runtime pack, and materializers.
-- Generic Codex and Claude Code combinations are explicit-only until their
-  exact protected-live evidence passes; explicit selection before qualification
+- Generic Codex and Claude Code combinations are `disabled` until their
+  exact protected-live evidence passes and the qualification flag promotes
+  them (see `RuntimeProviderRollout.md`); selection before qualification
   fails closed and never falls back to another runtime, profile, or host mode.
 - "Supported" means repository evidence or a protected live artifact proves the
   exact combination (image digest, harness, pack, materializer, model, policy,
@@ -65,7 +66,8 @@ interchangeable responsibilities.
 | Credential materializers and enrollment | [`OmnigentHostOAuth.md`](./OmnigentHostOAuth.md); ownership table in [`SharedHostImage.md`](./SharedHostImage.md) §4 |
 | Session and turn control | [`CanonicalTurnCommandBoundary.md`](./CanonicalTurnCommandBoundary.md); lifecycle decisions in [`OmnigentLifecycleReconciler.md`](./OmnigentLifecycleReconciler.md) |
 | Exact support evidence | [`ConformanceAndLiveSmoke.md`](./ConformanceAndLiveSmoke.md); Codex rows in [`CodexSupportAndCutover.md`](./CodexSupportAndCutover.md) |
-| Cleanup and recovery | [`SharedHostImage.md`](./SharedHostImage.md) §4 (ownership) with launch-order detail in [`OmnigentHostOAuth.md`](./OmnigentHostOAuth.md) §13+ |
+| Credential cleanup (materializer teardown, ownership) | [`SharedHostImage.md`](./SharedHostImage.md) §4 (ownership) with launch-order detail in [`OmnigentHostOAuth.md`](./OmnigentHostOAuth.md) §13+ |
+| Session recovery (retry, checkpoint restore, terminal evidence) | [`PrimaryRuntimeProviderStrategy.md`](./PrimaryRuntimeProviderStrategy.md) §5.11 with transition decisions in [`OmnigentLifecycleReconciler.md`](./OmnigentLifecycleReconciler.md) §§3–5 |
 | Module packages and dependency direction | [`OmnigentModuleArchitecture.md`](./OmnigentModuleArchitecture.md) |
 | Retirement of duplicate architecture | Code-owned `moonmind/omnigent/legacy_retirement.py`, described in [`OmnigentModuleArchitecture.md`](./OmnigentModuleArchitecture.md) §5 |
 

@@ -92,13 +92,15 @@ and the one-harness admission rule are owned by
 [`SharedHostImage.md`](./SharedHostImage.md) §3; separate Host Classes
 preserve independent support and rollout decisions.
 
-A representative OpenCode class remains:
+A representative OpenCode class remains (`omnigent-opencode@2` is the
+shared-image row; `@1` is the dedicated-image legacy row):
 
 ```yaml
 hostClassId: omnigent-opencode
-version: 1
+version: 2
 imageRef: ghcr.io/moonladderstudios/omnigent-host-moonmind@sha256:...
 omnigentBuildDigest: sha256:...
+runtimePackRef: opencode-native-pack@1
 declaredHarnessImplementations:
   - harnessId: opencode-native
     implementationRef: omnigent-harness-implementation:sha256:...
