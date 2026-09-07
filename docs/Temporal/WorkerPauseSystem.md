@@ -69,24 +69,19 @@ These endpoints enforce `operations.read` and `operations.invoke` permissions.
 Control evidence contains compact identities and reason codes, not provider
 credentials or raw exception messages.
 
-## Follow-up work and related issues
+## Operation-result durability and related contracts
 
-Disposition (issue #3960, finding 2): this document already distinguishes
-request, acceptance, safe-point completion, and unavailable/partial outcomes,
-and states that Update acceptance only establishes `accepted`. No Batch
-Operations or all-versions promises were found or added. The remaining gap is
-durable per-target operation-result tracking across restarts, which continues
-in #3953 (see below) — not an excuse to upgrade acceptance counts into
-safe-point evidence.
+Update acceptance only establishes `accepted`: request, acceptance,
+safe-point completion, and unavailable/partial outcomes are distinct, and
+acceptance counts must not be upgraded into safe-point evidence.
 
 - Durable per-target operation-result tracking (retries across restarts,
   long-lived outcome records beyond the audit row) continues in #3953. This
-  document describes today's fan-out and its partial/unknown limits honestly:
+  document describes today's fan-out and its partial/unknown limits:
   enumeration covers only running `MoonMind.UserWorkflow` executions, server
   Batch Operations are not used, and Update acceptance never proves a safe
   paused state.
 - The per-workflow-type Pause/Resume/Query protocol table lives in
-  `WorkflowTypeCatalogAndLifecycle.md` §6.2 (issue #3960, finding 1).
+  `WorkflowTypeCatalogAndLifecycle.md` §6.2.
 - Queue/worker inventory derivation lives in
-  `ActivityCatalogAndWorkerTopology.md` §4 (issue #3960, finding 5; generated
-  catalogs in #3959).
+  `ActivityCatalogAndWorkerTopology.md` §4 (generated catalogs in #3959).

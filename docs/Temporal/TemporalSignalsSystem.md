@@ -211,7 +211,7 @@ Desired-state callback path:
 
 > Note: `Pause`/`Resume` are **not** Signals on any workflow type. They are
 > Temporal Updates with per-type payload/ack semantics, tabulated in
-> `WorkflowTypeCatalogAndLifecycle.md` §6.2 (issue #3960, finding 1). The
+> `WorkflowTypeCatalogAndLifecycle.md` §6.2. The
 > operator API forwards operator pause/resume requests as Updates.
 
 ### Signals

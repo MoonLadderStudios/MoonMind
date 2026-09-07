@@ -175,7 +175,8 @@ production registries and resolved settings (see #3959).
 
 ### Workflow task queues
 
-- `mm.workflow` (default; `TemporalSettings.workflow_task_queue`)
+- `mm.workflow.user.v2` (default start queue; `TemporalSettings.user_workflow_v2_task_queue`; new `MoonMind.UserWorkflow` starts and replay-patched child workflows route here under the `renamed_contract` mode)
+- `mm.workflow` (replay/poll address; `TemporalSettings.workflow_task_queue`; the workflow fleet keeps polling it for pre-patch in-flight histories via `get_workflow_poll_task_queues()`)
 - `mm.workflow.merge_automation` (`TemporalSettings.merge_automation_workflow_task_queue`; hosts the merge-automation workflow registration in `workflow_registry.py`)
 
 ### Activity task queues
@@ -193,16 +194,15 @@ production registries and resolved settings (see #3959).
   only drain metrics and batch Pause/Resume fan-out, not the full worker
   topology.
 
-Disposition (issue #3960, finding 5): the previous queue list omitted
-`mm.workflow.merge_automation` and did not distinguish the
-drain/fan-out scope (`_MOONMIND_TASK_QUEUES` in `client.py`) from the full
-worker topology (resolved settings in `config/settings.py`, registrations in
-`workflow_registry.py`). Code owners: `client.py`, `config/settings.py`,
-`workflow_registry.py`. The intended contract derives the inventory from
-production registries and resolved settings through #3959 (generated
-catalogs); until that lands, the list above is hand-maintained against those
-three owners and must not be copied into a second numerical total elsewhere.
-Related: #3961 (consolidation), #3964 (meaningful documentation checks).
+The workflow poll topology (`get_workflow_poll_task_queues()` in
+`activity_catalog.py`: default start queue plus the replay queue) is wider
+than the drain/fan-out scope (`_MOONMIND_TASK_QUEUES` in `client.py`), which
+covers only drain metrics and batch Pause/Resume fan-out. The intended
+contract derives the inventory from production registries and resolved
+settings through #3959 (generated catalogs); until that lands, the list above
+is hand-maintained against `client.py`, `config/settings.py`, and
+`workflow_registry.py` and must not be copied into a second numerical total
+elsewhere.
 
 ## 4.2 Queue policy
 
@@ -225,7 +225,7 @@ The activity catalog maps activity types onto the following fleets.
 
 | Fleet | Queue(s) | Primary capabilities | Primary privileges |
 |---|---|---|---|
-| `workflow` | `mm.workflow` | workflow execution, limited helper activities | Temporal only |
+| `workflow` | `mm.workflow.user.v2`, `mm.workflow` | workflow execution, limited helper activities | Temporal only |
 | `artifacts` | `mm.activity.artifacts` | artifact lifecycle, provider-profile support, OAuth session support | artifact storage, DB-backed support services |
 | `llm` | `mm.activity.llm` | planning, validation, review, generic LLM work | model/provider credentials |
 | `sandbox` | `mm.activity.sandbox` | repo and command execution | isolated process execution |
@@ -633,16 +633,10 @@ be verified through production boundaries before any "supported" claim. The
 'supported' bar is a workflow-boundary test exercising the real invocation
 shape, not catalog membership or helper unit tests.
 
-Disposition (issue #3960, finding 3): the previous claim described
-`agent_skill.*` as a future family with three operations while the code
-already defined five. Code owners: `agent_skills_activities.py`
-(implementation), `activity_catalog.py` (registration),
-`activity_runtime.py` (worker bindings), `workflows/run.py` (sole production
-caller, `resolve` only). The intended contract keeps executable tool
-contracts and portable instruction bundles distinct and requires
-per-operation production-boundary verification; the table above records
-current wiring vs gaps. Related: #3947 (projection policy), #3948
-(ManifestIngest consolidation).
+The intended contract keeps executable tool contracts and portable
+instruction bundles distinct and requires per-operation
+production-boundary verification; the table above records current wiring
+vs gaps.
 
 ---
 
@@ -740,7 +734,7 @@ Rules:
 - artifact writes remain naturally retry-safe through integrity checks
 - external starts must not create duplicate jobs on retry
 - managed launches must not create duplicate runtime executions on retry
-- `agent_skill.materialize` must be safe under retry and must not mutate checked-in source trees in place
+- `agent_skill.materialize` must be safe under retry and must not mutate checked-in source trees in place. Known gap: when the workspace already contains a repo-authored `.agents/skills` directory, `AgentSkillMaterializer._project_builtin_support_directory()` still projects the `_shared` support directory into that repo-owned path, so the current implementation does not fully enforce the non-mutation invariant yet.
 
 ---
 
