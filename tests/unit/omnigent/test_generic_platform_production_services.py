@@ -2891,7 +2891,6 @@ def test_deployment_mounted_tool_names_come_from_locked_manifest(
     assert deployment_mounted_tool_names(manifest) == ("gh",)
 
 
-@pytest.mark.asyncio
 def _signed_grant_digest(workspace_id: str, *, secret: str) -> str:
     """Issue the fixture grant HMAC for the requesting workflow-1/idem-1."""
 
@@ -2914,6 +2913,7 @@ def _grant_expires_at() -> str:
     return (datetime.now(tz=UTC) + timedelta(hours=1)).isoformat()
 
 
+@pytest.mark.asyncio
 async def test_workspace_attachment_translates_to_daemon_visible_volume_path(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

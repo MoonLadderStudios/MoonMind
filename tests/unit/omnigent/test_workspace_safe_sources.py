@@ -266,7 +266,8 @@ def test_compiler_rejects_grant_with_competing_source():
         )
 
 
-def test_compiler_rejects_unsupported_runtime_combination():
+def test_compiler_rejects_unsupported_runtime_combination(monkeypatch):
+    monkeypatch.setenv("MOONMIND_WORKSPACE_GRANT_SECRET", "test-secret")
     with pytest.raises(
         WorkspaceSourceError, match="WORKSPACE_SOURCE_RUNTIME_UNSUPPORTED"
     ):
@@ -283,6 +284,16 @@ def test_compiler_rejects_unsupported_runtime_combination():
     with pytest.raises(
         WorkspaceSourceError, match="WORKSPACE_SOURCE_RUNTIME_UNSUPPORTED"
     ):
+        from moonmind.omnigent.workspace_sources import issue_existing_workspace_grant
+
+        _signed = issue_existing_workspace_grant(
+            workspace_id="ws-1",
+            owner_workflow_id="wf-1",
+            owner_step_execution_id="st-1",
+            grantee_workflow_id="wf-x",
+            mode="read_only",
+            secret="test-secret",
+        )
         compile_workspace_source(
             {
                 "workspaceSource": {
@@ -291,9 +302,16 @@ def test_compiler_rejects_unsupported_runtime_combination():
                         "workspaceId": "ws-1",
                         "ownerWorkflowId": "wf-1",
                         "ownerStepExecutionId": "st-1",
+                        "generation": 1,
+                        "mode": "read_only",
+                        "grantDigest": _signed.grant_digest,
+                        "expiresAt": _signed.expires_at.isoformat()
+                        if _signed.expires_at is not None
+                        else None,
                     },
                 }
             },
+            workflow_id="wf-x",
             runtime="codex_cli",
         )
 
