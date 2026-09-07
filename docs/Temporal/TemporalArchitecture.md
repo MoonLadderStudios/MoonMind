@@ -56,7 +56,11 @@ The architecture therefore avoids two inaccurate claims:
 
 ## 3. Related docs
 
-This document is the architecture hub. Detailed contracts live in:
+This document is the architecture hub. New readers should start at the short
+entrypoint [`TemporalModuleArchitecture.md`](./TemporalModuleArchitecture.md);
+full old-path → owner dispositions live in
+[`ContractOwnership.md`](./ContractOwnership.md)
+(MoonLadderStudios/MoonMind#3961). Detailed contracts live in:
 
 - `docs/Temporal/TemporalPlatformFoundation.md`
 - `docs/Temporal/WorkflowTypeCatalogAndLifecycle.md`
@@ -352,20 +356,11 @@ Rules:
 
 ## 7. Workflow catalog
 
-The live repo-aligned workflow catalog is:
-
-| Workflow Type | Role | Product visibility |
-| --- | --- | --- |
-| `MoonMind.UserWorkflow` | Current live root workflow implementation for user/service Workflow Executions; plans work, owns Step ledger, starts child agent runs, integrates outputs | Primary Workflow Execution surface |
-| `MoonMind.ManifestIngest` | Ingests, validates, compiles, and orchestrates manifest-backed work | User/system execution surface |
-| `MoonMind.AgentRun` | Durable lifecycle wrapper for one true managed or external agent execution | Child/internal, surfaced through parent details |
-| `MoonMind.AgentSession` | Workflow-scoped managed-session workflow; currently Codex-backed in the live session plane | Internal/operator/detail support |
-| `MoonMind.ManagedSessionReconcile` | Bounded operational reconciliation for managed sessions | Operational |
-| `MoonMind.ProviderProfileManager` | Long-lived provider-profile slot, lease, cooldown, and reconciliation manager | Internal/operator |
-| `MoonMind.OAuthSession` | OAuth / terminal-auth lifecycle support for managed runtimes | Support workflow |
-| `MoonMind.MergeAutomation` | PR readiness watcher and resolver follow-up launcher after publish-capable runs | Child/support workflow |
-
-Rules:
+The canonical workflow catalog lives in
+[`WorkflowTypeCatalogAndLifecycle.md`](./WorkflowTypeCatalogAndLifecycle.md)
+§4, which owns Workflow Type names, roles, and lifecycle behavior
+(MoonLadderStudios/MoonMind#3961). This hub does not restate that table; it
+records only the hub-level rules:
 
 - Workflow Type names are stable contracts.
 - Add new Workflow Types only when lifecycle behavior is materially distinct.
@@ -436,16 +431,11 @@ The exact per-type matrix belongs in `WorkflowTypeCatalogAndLifecycle.md` and `W
 
 ## 9. Worker and Task Queue topology
 
-MoonMind uses a small capability-based worker set.
-
-| Fleet | Queue | Primary responsibility |
-| --- | --- | --- |
-| `workflow` | `mm.workflow` | deterministic workflow code and narrow helper Activities |
-| `artifacts` | `mm.activity.artifacts` | artifact lifecycle, execution projections, support persistence, selected OAuth/provider-profile support work |
-| `llm` | `mm.activity.llm` | planning, validation, review, LLM-bound work |
-| `sandbox` | `mm.activity.sandbox` | isolated repo/process execution |
-| `integrations` | `mm.activity.integrations` | external provider APIs, repo, Jira/GitHub/provider calls, merge automation integration work |
-| `agent_runtime` | `mm.activity.agent_runtime` | managed runtime launch, supervision, auth runner, status, result, cleanup, Docker-backed managed runtime/workload boundary |
+Fleet, queue, and routing detail lives in
+[`ActivityCatalogAndWorkerTopology.md`](./ActivityCatalogAndWorkerTopology.md),
+which owns the canonical topology (MoonLadderStudios/MoonMind#3961). This hub
+keeps only the hub-level posture: MoonMind uses a small capability-based
+worker set; route by capability, not product noun.
 
 Rules:
 
@@ -492,24 +482,7 @@ Rules:
 
 Activity Type names are stable contracts. Prefer adding a new Activity Type over changing semantics incompatibly.
 
-Current activity families include:
-
-- `artifact.*`
-- `execution.*`
-- `manifest.*`
-- `plan.*`
-- `mm.skill.execute`
-- `sandbox.*`
-- `provider_profile.*`
-- `oauth_session.*`
-- `integration.<provider>.*`
-- `repo.*`
-- `merge_automation.*`
-- `agent_runtime.*`
-- `step.review`
-- future/target `agent_skill.*`
-
-The exact catalog, timeout defaults, retry policies, fleet routing, heartbeat requirements, and pending families are defined in `docs/Temporal/ActivityCatalogAndWorkerTopology.md`.
+The exact catalog, timeout defaults, retry policies, fleet routing, heartbeat requirements, and pending families are defined in `docs/Temporal/ActivityCatalogAndWorkerTopology.md` (MoonLadderStudios/MoonMind#3961); this hub does not restate that list.
 
 Rules:
 
@@ -551,51 +524,16 @@ Rules:
 
 Workflow history and workflow-owned state are canonical. Temporal Visibility is the canonical Temporal-backed list/filter/count index for bounded metadata.
 
-Required Search Attributes:
-
-- `mm_owner_id`
-- `mm_owner_type`
-- `mm_state`
-- `mm_updated_at`
-- `mm_entry`
-
-Common optional Search Attributes:
-
-- `mm_repo`
-- `mm_integration`
-- `mm_scheduled_for`
-
-Required Memo fields:
-
-- `title`
-- `summary`
-
-Rules:
-
-- list rows must render without artifact hydration
-- detail views may use Queries and artifacts for richer state
-- app DB projections must preserve Temporal-backed semantics
-- dashboard compatibility statuses must not redefine `mm_state`
-- ordinary workflow list views may scope to `MoonMind.UserWorkflow` and `mm_entry = run`
-- operator/admin views may expose broader workflow scopes
-- Search Attributes and Memo are visible to operators and must not contain secrets or sensitive prose
+The Search Attribute budget, query model, and Memo bounds live in
+[`VisibilityAndUiQueryModel.md`](./VisibilityAndUiQueryModel.md), which owns
+that contract (MoonLadderStudios/MoonMind#3961). This hub keeps only the
+posture: list rows render without artifact hydration; app DB projections
+preserve Temporal-backed semantics; Search Attributes and Memo never carry
+secrets.
 
 ### 11.1 Search Attribute governance
 
-MoonMind uses PostgreSQL Visibility. Custom Search Attribute count, type, and size budgets are finite. Treat the Search Attribute set as a governed schema.
-
-| Field | Required | Type intent | Update frequency |
-| --- | --- | --- | --- |
-| `mm_owner_type` | Yes | keyword | set at start; immutable |
-| `mm_owner_id` | Yes | keyword | set at start; immutable |
-| `mm_state` | Yes | keyword | domain-state transitions only |
-| `mm_updated_at` | Yes | datetime | meaningful user-visible mutations only |
-| `mm_entry` | Yes | keyword | set at start; immutable |
-| `mm_repo` | Optional | keyword | set when repo filtering is required |
-| `mm_integration` | Optional | keyword | set when integration filtering is required |
-| `mm_target_runtime` | Optional | keyword_list | one-item runtime facet; not sortable |
-| `mm_target_skill` | Optional | keyword_list | one-item primary skill facet; not sortable |
-| `mm_scheduled_for` | Optional | datetime | deferred/scheduled execution metadata |
+MoonMind uses PostgreSQL Visibility. Custom Search Attribute count, type, and size budgets are finite. Treat the Search Attribute set as a governed schema. The field-by-field budget table lives in [`VisibilityAndUiQueryModel.md`](./VisibilityAndUiQueryModel.md) (MoonLadderStudios/MoonMind#3961); this hub keeps only the governance posture.
 
 `mm_updated_at` is allowed, but it must not become a high-churn telemetry feed. It should move on meaningful user-visible mutations such as domain-state transitions, accepted Updates, visible Signal handling, terminal transitions, bounded progress checkpoints, and title/summary changes. It must not move on every heartbeat, log line, polling tick, low-level retry, or internal backoff detail.
 

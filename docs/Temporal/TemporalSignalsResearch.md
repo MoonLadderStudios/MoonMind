@@ -1,5 +1,14 @@
 # MoonMind Temporal Signals Deep Research Report
 
+**Document Class:** Research evidence (non-canonical; contracts live in `TemporalSignalsSystem.md`)
+
+> Authority note (MoonLadderStudios/MoonMind#3961): this is research
+> evidence, not the canonical contract. The authoritative per-workflow
+> Update/Signal shapes live in
+> [`TemporalSignalsSystem.md`](./TemporalSignalsSystem.md) §6. Desired-state
+> proposals below must be read against that owner; where they disagree, the
+> owner wins.
+
 ## Executive summary
 
 MoonMind’s Temporal implementation is **Python-first**, with `temporalio` pinned to `^1.23.0` and Python `>=3.10,<3.14`. citeturn60view1 The repository contains multiple Temporal workflows, a client adapter abstraction, and a higher-level execution service that mediates workflow lifecycle operations (start/describe/update/signal). citeturn39view3turn41view0

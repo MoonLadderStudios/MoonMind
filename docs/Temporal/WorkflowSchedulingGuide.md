@@ -1,5 +1,7 @@
 # Workflow Scheduling Guide
 
+**Document Class:** Module Contract Specification
+
 **Implementation tracking:** Rollout and backlog notes live under `docs/tmp/` or in gitignored local-only handoffs (for example `artifacts/`), not as migration checklists in canonical `docs/`.
 
 **Status:** Active
@@ -36,156 +38,16 @@ MoonMind supports three scheduling patterns for workflow execution:
 
 ## 4. Temporal-Managed Scheduling (Canonical)
 
-This section describes the canonical scheduling mechanisms for Temporal-managed workflows. These are the preferred paths for all new scheduling work.
+The canonical scheduling mechanisms — one-time deferred execution
+(`start_delay`), recurring Temporal Schedules, reschedulable deferred
+execution (updatable timer pattern), the mechanism matrix, DST/timezone
+guarantees, and API contracts — live in
+[`TemporalScheduling.md`](./TemporalScheduling.md) §§4–6, 11, which owns
+that contract (MoonLadderStudios/MoonMind#3961). This guide does not restate
+those mechanisms; it keeps only the dashboard UX over them (§5), how
+scheduled executions appear in Visibility and the dashboard (§6), and legacy
+compatibility (§7).
 
-### 4.1 One-Time Deferred Execution (workflow-level delay)
-
-Conceptually, Temporal's `start_delay` parameter on `client.start_workflow()` is the canonical way to implement one-time deferred execution. **MoonMind's current implementation does not use `start_delay`** for `MoonMind.UserWorkflow` workflows. Instead, it starts the workflow immediately and passes the scheduled time into the workflow, which then waits internally until that time before doing any work.
-
-When a deferred one-time execution is created:
-
-- Temporal creates the workflow execution record immediately.
-- The workflow is dispatched to the task queue as soon as a worker is available (there is no server-side `start_delay` deferring dispatch).
-- The workflow code acquires a worker slot and then waits/sleeps until the `scheduledFor` time before executing any business logic.
-- The workflow is visible in Temporal Visibility and the dashboard immediately.
-- Cancellation before the scheduled time stops further work, but the Temporal execution has already been started (and may appear as `RUNNING` while idle).
-- The detail page should show a "Scheduled to run at {time}" banner even though the underlying execution is already started and waiting.
-
-#### Backend behavior
-
-1. API validates `scheduledFor` is a valid future UTC timestamp.
-2. API includes `scheduledFor` in the workflow input/payload (e.g., as part of the `MoonMind.UserWorkflow` options).
-3. API calls `TemporalClientAdapter.start_workflow()` **without** the `start_delay` parameter.
-4. The workflow implementation's first step is to wait/sleep until `scheduledFor` before performing any activities or emitting user-visible side effects.
-5. The execution record can expose `mm_state=scheduled` until the start time for UI purposes, even though Temporal sees the execution as started and idle.
-6. In the dashboard, it appears in the workflow list with `dashboardStatus=queued` / "Scheduled" until `scheduledFor`, then transitions to the appropriate running/completed status.
-
-#### Response
-
-```json
-{
- "workflowId": "mm:01HX...",
- "runId": "temporal-run-uuid",
- "workflowType": "MoonMind.UserWorkflow",
- "state": "scheduled",
- "scheduledFor": "2026-03-19T02:00:00Z",
- "title": "Fix auth bug in login page",
- "startedAt": null,
- "redirectPath": "/workflows/mm:01HX...?source=temporal"
-}
-```
-
-#### Workflow identity rule
-
-For Temporal-backed deferred executions:
-
-- `taskId == workflowId`
-- the workflow execution appears in list views immediately with `state=scheduled` and `dashboardStatus=queued`
-- the detail page anchors to `taskId == workflowId`
-
-### 4.2 Recurring Schedules (Temporal Schedules)
-
-The canonical mechanism for recurring workflow execution is **Temporal Schedules**.
-
-Temporal Schedules are the authoritative recurring scheduling system for Temporal-managed workflows. They replace cron/beat-style external schedulers for Temporal-driven flows.
-
-#### What a Temporal Schedule does
-
-- defines a cron-like cadence
-- starts a new workflow execution each time the schedule fires
-- provides overlap, catchup, and jitter policies
-- is manageable via Temporal CLI and API
-- is visible in the Temporal UI and queryable through Temporal APIs
-
-#### Backend behavior
-
-1. API validates the cron expression, timezone, and policy.
-2. API creates a Temporal Schedule object that starts a workflow execution on each cadence tick.
-3. Each triggered workflow appears in Temporal Visibility as a normal execution with `mm_state=initializing` (or `scheduled` if `start_delay` is applied per-run).
-
-#### Schedule policy options
-
-| Policy | Description | Default |
-| --- | --- | --- |
-| `overlap` | `skip` prevents new runs while previous is active; `allow` permits concurrent | `skip` |
-| `catchup` | `none` skips missed runs; `last` runs only the most recent; `all` backtracks | `last` |
-| `jitter` | Random delay added to dispatch time to avoid thundering herd | `0` |
-
-#### API endpoints for recurring schedules
-
-| Method | Path | Purpose |
-| --- | --- | --- |
-| `GET` | `/api/recurring-workflows` | List schedule definitions |
-| `POST` | `/api/recurring-workflows` | Create a new schedule |
-| `GET` | `/api/recurring-workflows/{id}` | Get schedule detail |
-| `PATCH` | `/api/recurring-workflows/{id}` | Update schedule |
-| `POST` | `/api/recurring-workflows/{id}/run` | Trigger immediate manual run |
-| `GET` | `/api/recurring-workflows/{id}/runs` | List run history |
-| `DELETE` | `/api/recurring-workflows/{id}` | Delete schedule and stop future dispatch |
-
-#### Create payload
-
-```json
-{
- "name": "Nightly code scan",
- "description": "Run a security scan every night at 2 AM",
- "enabled": true,
- "cron": "0 2 * * *",
- "timezone": "America/Los_Angeles",
- "scopeType": "personal",
- "target": {
- "workflowType": "MoonMind.UserWorkflow",
- "initialParameters": {
- "runtime": "claude_code",
- "model": "gemini-2.5-pro",
- "repository": "MoonLadderStudios/MoonMind"
- }
- },
- "policy": {
- "overlap": "skip",
- "catchup": "last",
- "jitterSeconds": 30
- }
-}
-```
-
-#### Key fields
-
-| Field | Type | Required | Description |
-| --- | --- | --- | --- |
-| `name` | `string` | Yes | Human-readable schedule name |
-| `description` | `string` | No | Optional description |
-| `enabled` | `bool` | No (default: `true`) | Whether the schedule is active |
-| `cron` | `string` | Yes | Standard 5-field cron expression |
-| `timezone` | `string` | No (default: `UTC`) | IANA timezone name |
-| `scopeType` | `"personal"` or `"global"` | No (default: `"personal"`) | Scope — personal requires owner, global requires operator |
-| `target` | `object` | Yes | Target configuration |
-| `target.workflowType` | `string` | Yes | Workflow type to start (e.g., `MoonMind.UserWorkflow`) |
-| `target.initialParameters` | `object` | No | Runtime, model, effort, repository, publish mode |
-| `policy` | `object` | No | Overlap, catchup, jitter policies |
-
-#### Response
-
-```json
-{
- "scheduled": true,
- "definitionId": "def-uuid-123",
- "name": "Nightly code scan",
- "cron": "0 2 * * *",
- "timezone": "America/Los_Angeles",
- "nextRunAt": "2026-03-19T09:00:00Z",
- "redirectPath": "/schedules/def-uuid-123"
-}
-```
-
-#### Scoping and authorization
-
-| Scope | Who Can Manage | Visibility |
-| --- | --- | --- |
-| `personal` | Owner (matched by `owner_user_id`) | Only the owner |
-| `global` | Operators (requires `is_superuser`) | All operators |
-
----
 
 ## 5. One-Time Workflow Execution (Immediate)
 

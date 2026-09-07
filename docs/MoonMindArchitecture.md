@@ -613,6 +613,8 @@ Engine endpoint without changing public tools.
 
 ## 17. Canonical subsystem documents
 
+- [`Temporal/TemporalModuleArchitecture.md`](Temporal/TemporalModuleArchitecture.md): Temporal
+  module entrypoint and contract-owner routing (MoonLadderStudios/MoonMind#3961).
 - [`Temporal/TemporalArchitecture.md`](Temporal/TemporalArchitecture.md): Temporal
   topology and workflow/Activity authority.
 - [`Temporal/ManagedAndExternalAgentExecutionModel.md`](Temporal/ManagedAndExternalAgentExecutionModel.md): true agent execution lifecycle and canonical contracts.
