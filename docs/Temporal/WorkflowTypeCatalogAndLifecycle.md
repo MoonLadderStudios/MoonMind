@@ -339,9 +339,42 @@ Payload:
 - `approval_type: string`
 - `note?`
 
-### Signal: `Pause` / `Resume`
+### Update: `Pause` / `Resume` (+ Query `control_state`)
 
-Optional. Only expose if interactive long-run control is a product requirement.
+Pause and Resume are **Temporal Updates**, not Signals: they require
+validation and an acknowledged accepted/rejected response. Acceptance of the
+Update only establishes that the request was accepted; it does **not** prove
+the workflow reached a safe paused state. Only `MoonMind.UserWorkflow`
+exposes a `control_state` Query that lets a caller confirm a safe point. The
+operator API (`TemporalExecutionService`) accepts operator `Pause`/`Resume`
+requests and forwards them as Temporal Updates (`transport="temporal_update"`
+in the intervention audit), so the Signal/Update distinction below describes
+the workflow handler surface, not the operator entry point.
+
+Per-workflow-type control surface (verified against handler definitions):
+
+| Workflow type | `Pause` Update | `Resume` Update | `control_state` Query | Ack / completion semantics |
+|---|---|---|---|---|
+| `MoonMind.UserWorkflow` (`workflows/run.py`) | `@workflow.update(name="Pause")`, optional payload `{controlGeneration?: int}`; validator rejects invalid generation, in-progress transition, already-paused (no-generation path), or terminal state; forwards to the active `MoonMind.AgentRun` child and rolls back on forward failure | `@workflow.update(name="Resume")`, same payload shape; validator rejects invalid generation, in-progress transition, not-paused-and-not-awaiting-external (no-generation path), or terminal state; forwards to the active child | Yes: returns `{runId, paused, controlGeneration, safePoint, resumed}`; `safePoint` is true only while paused at the safe boundary with no active agent child and no transition in progress | Accepted ≠ paused. Safe-point completion requires a follow-up `control_state` Query on the same run observing `safePoint: true` (see `WorkerPauseSystem.md`) |
+| `MoonMind.AgentRun` (`workflows/agent_run.py`) | `@workflow.update(name="Pause")`, no payload; sets the local `_paused` flag; validator rejects already-paused or terminal runs | `@workflow.update(name="Resume")`, no payload; clears the flag; validator rejects not-paused or terminal runs | No | Accepted means the flag flipped. Reached only via parent forwarding or a direct Update; the system quiesce fan-out (`client.py`) does not enumerate this type |
+| `MoonMind.ManifestIngest` (`workflows/manifest_ingest.py`) | `@workflow.update(name="Pause")`, sets `_paused`, returns `{accepted: true, applied: "immediate"}` | `@workflow.update(name="Resume")`, clears `_paused`, returns `{accepted: true, applied: "immediate"}` | No | Accepted means the flag flipped; there is no safe-point notion. The system quiesce fan-out (`client.py`) does not enumerate this type |
+
+System quiesce (`client.py::_send_update_to_running_workflows`) enumerates
+only `WorkflowType="MoonMind.UserWorkflow"` executions over Visibility, so a
+system pause never assumes every registered workflow type accepts the same
+control. Shared-queue operator and manifest workflows are excluded from
+enumeration. Partial/unknown outcomes are retained per target; see
+`WorkerPauseSystem.md` and the durable operation-result work in #3953.
+
+Disposition (issue #3960, finding 1): the previous claim above described
+`Pause`/`Resume` as an "Optional" Signal. The actual code owners are
+`workflows/run.py` (generation-aware Update + `control_state` Query),
+`workflows/agent_run.py` (flag-only Update), and
+`workflows/manifest_ingest.py` (flag-only Update returning applied-immediate).
+The intended contract keeps pause/resume on the Update path with per-type
+payload/ack semantics; the table above records it. Remaining implementation
+gap: none for documentation; durable per-target outcome tracking continues in
+#3953.
 
 ### Signal: provider-profile coordination signals
 
@@ -702,7 +735,7 @@ This document is “done” when:
 1. Do we expose raw Workflow Type names directly in the UI, or map them to product-friendly labels?
 2. Does the detail page always point to the latest run, or should run history be first-class in the UI?
 3. For `RequestRerun`, when do we use Continue-As-New vs a brand-new Workflow ID?
-4. Do we need `Pause/Resume` in v1?
+4. ~~Do we need `Pause/Resume` in v1?~~ Resolved: yes — `Pause`/`Resume` Updates are implemented per §6.2 (generation-aware on `MoonMind.UserWorkflow`, flag-only on `MoonMind.AgentRun` and `MoonMind.ManifestIngest`).
 5. Should `mm_updated_at` track any state transition, progress updates, or both under a bounded policy?
 Product visibility is defined by each registration's `projection_scope` in
 `workflow_registry.py`. UserWorkflow and ManifestIngest are product executions.

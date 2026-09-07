@@ -209,6 +209,11 @@ Desired-state callback path:
 
 `MoonMind.UserWorkflow` is the primary orchestration workflow and exposes a narrow signal surface.
 
+> Note: `Pause`/`Resume` are **not** Signals on any workflow type. They are
+> Temporal Updates with per-type payload/ack semantics, tabulated in
+> `WorkflowTypeCatalogAndLifecycle.md` §6.2 (issue #3960, finding 1). The
+> operator API forwards operator pause/resume requests as Updates.
+
 ### Signals
 
 #### `ExternalEvent`
