@@ -1398,6 +1398,30 @@ class GitHubSettings(BaseSettings):
 
     model_config = SettingsConfigDict(populate_by_name=True, env_prefix="")
 
+
+class GitHubAppSettings(BaseSettings):
+    """Inbound GitHub App webhook settings (MoonLadderStudios/MoonMind#3967).
+
+    Restrictive by default: the integration is disabled until the operator
+    opts in, binds an installation, and configures trigger mappings. Raw
+    private keys and webhook secrets live in the Secrets System; only
+    SecretRef names appear here and in workflow payloads.
+    """
+
+    github_app_enabled: bool = Field(False, alias="GITHUB_APP_ENABLED")
+    github_app_id: Optional[str] = Field(None, alias="GITHUB_APP_ID")
+    github_app_private_key_secret_ref: Optional[str] = Field(
+        None, alias="GITHUB_APP_PRIVATE_KEY_SECRET_REF"
+    )
+    github_app_webhook_secret_ref: Optional[str] = Field(
+        None, alias="GITHUB_APP_WEBHOOK_SECRET_REF"
+    )
+    github_app_max_payload_bytes: int = Field(
+        1_000_000, alias="GITHUB_APP_MAX_PAYLOAD_BYTES"
+    )
+
+    model_config = SettingsConfigDict(populate_by_name=True, env_prefix="")
+
 class GoogleDriveSettings(BaseSettings):
     """Google credentials available to manifest reader adapters."""
 
@@ -2333,6 +2357,7 @@ class AppSettings(BaseSettings):
     openai: OpenAISettings = Field(default_factory=OpenAISettings)
     anthropic: AnthropicSettings = Field(default_factory=AnthropicSettings)
     github: GitHubSettings = Field(default_factory=GitHubSettings)
+    github_app: GitHubAppSettings = Field(default_factory=GitHubAppSettings)
     google_drive: GoogleDriveSettings = Field(default_factory=GoogleDriveSettings)
     qdrant: QdrantSettings = Field(default_factory=QdrantSettings)
     rag: RAGSettings = Field(default_factory=RAGSettings)
