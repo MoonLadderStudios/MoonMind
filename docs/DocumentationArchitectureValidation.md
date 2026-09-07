@@ -2,9 +2,9 @@
 
 **Document Class:** Cross-Cutting Concept View
 **Status:** Current standard and target direction
-**Updated:** 2026-06-25
+**Updated:** 2026-09-07
 **Audience:** Anyone authoring or reviewing durable documentation, or wiring documentation checks into tooling
-**Purpose:** Describe the **advisory, non-blocking** validation that flags obvious drift from the [MoonSpec Documentation Architecture Standard](DocumentationArchitecture.md) and the [MoonSpec Document Model](Workflows/MoonSpecDocumentModel.md), so reviewers catch documentation-architecture problems early.
+**Purpose:** Describe advisory architecture validation against the [MoonSpec Documentation Architecture Standard](DocumentationArchitecture.md) and the [MoonSpec Document Model](Workflows/MoonSpecDocumentModel.md), together with required local link and anchor checks.
 
 > **Traceability:** This is the deliverable of **MM-908** (source design **MM-900**, "Implement MoonSpec Documentation Architecture Standard"); it covers **DESIGN-REQ-018**. It builds on the taxonomy authored in **MM-902**. Stable canonical claim ID validation is added under **MM-929**, preserving source issue **MM-927** traceability.
 
@@ -12,7 +12,7 @@
 
 ## 1. Advisory only in v1
 
-This validation is **advisory only**. It **does not block CI** and is **not** added to any required pipeline in this story. Its job is to surface likely documentation-architecture issues so a human reviewer can decide. Findings are emitted as **structured warnings** (stable rule ids + a `severity` field) precisely so the convention can later be **promoted to a blocking CI gate** — once it proves stable — without reworking callers.
+The architecture checker is **advisory only**. It surfaces likely documentation-architecture issues for human review as **structured warnings** with stable rule ids and a `severity` field. Required local link checks have separate ownership, described below.
 
 The helper exits `0` regardless of findings. A future promotion can run it with `--strict` (which exits non-zero when findings exist); v1 CI must not.
 
@@ -42,9 +42,9 @@ Local link and anchor correctness is **not** covered by the architecture
 checker above: a zero exit code there is not zero broken links. Bounded
 local-link validation lives in the separate helper
 `tools/check_documentation_links.py` (deliverable of
-MoonLadderStudios/MoonMind#3966), also **advisory-only** (exits `0`
-regardless of findings; `--strict` is reserved for a future gate and must
-not run in CI):
+MoonLadderStudios/MoonMind#3966). Its standalone CLI remains advisory by
+default and exits `0` regardless of findings; `--strict` explicitly requests
+a non-zero exit when findings exist:
 
 ```bash
 # Advisory scan of docs changed vs origin/main (default):
@@ -67,6 +67,14 @@ never fetched. Rules: `broken-local-link` (relative paths, images,
 reference-definition targets; case-sensitive on the Linux checkout),
 `broken-local-anchor` (GitHub-slug heading or explicit `<a name|id>`
 match), and `undefined-link-reference`.
+
+Required `unit_fast` CI calls the same checker over this canonical scope in
+`tests/unit/docs/test_documentation_verifier_regressions.py` and fails on any
+local link or anchor finding. Markdown changes select that existing shard
+through `tools/select_test_suites.py`. The shard also owns the documentation
+metadata, executable-example, registry-reference, and shipped Skill contract
+checks. Negative controls prove malformed inputs remain detectable; external
+URLs remain outside the network-free CI check.
 
 ## 3. What it checks
 
