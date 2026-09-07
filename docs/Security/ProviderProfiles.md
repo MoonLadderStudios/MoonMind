@@ -2174,6 +2174,29 @@ command_behavior:
   default_codex_profile_name: "m27"
 ```
 
+### 15.8 OpenCode Zen free route (credentialless, priced explicitly)
+
+The existing `opencode-zen-free` profile keeps its identity and `none@1`
+materializer. It becomes *eligible* only through the qualification in
+`moonmind/omnigent/bootstrap/free_route_qualification.py`: an exact
+`opencode/...` catalog ID, zero-charge evidence across every applicable
+pricing dimension, the permitted data-use policy decision, and required
+tool/modality/effort capability. A disappeared or repriced free service
+surfaces `no_eligible_free_model` with separate availability, pricing,
+capability, and privacy reasons instead of a repository-credential error.
+
+```yaml
+profile_id: opencode-zen-free
+runtime_id: opencode
+provider_id: opencode
+credential_source: none
+runtime_materialization_mode: composite
+enabled: true
+is_default: true
+auth_state: connected
+default_model: "opencode/muse-spark-1.3-contributor-free"
+```
+
 ---
 
 ## 16. Migration Plan

@@ -285,13 +285,15 @@ explicit `opencode-go` profile and must never be inherited by the Zen profile.
 
 When the image also contains Codex and Claude Code, an OpenCode execution must still receive only the OpenCode credential attachment.
 
-Exact-host conformance must prove:
+Exact-host conformance must prove (one entry per launchable materializer class):
 
 - `/home/app/.codex` is not mounted from a Codex Provider Profile
 - Claude credential paths are not mounted
 - no Codex or Claude API-key environment is inherited
 - the selected runtime pack is `opencode-native-pack@1`
-- the selected materializer is `opencode-auth-json@1`
+- the selected materializer is the one the launch authorizes:
+  `none@1` for the credentialless Zen route, `opencode-auth-json@1`
+  for the key-backed Go route
 - only `opencode-native` is admitted by the selected Host Class
 
 The presence of the other binaries is not a support or authorization signal.
@@ -319,11 +321,28 @@ model against the exact pinned host and publishes the same deployment evidence
 required by key-backed profiles. An existing explicit operator disable remains
 authoritative.
 
+The seeded name is a configured default, not a guarantee. MoonMind
+distinguishes five states for the free route, and the normal
+Runtime/Profile UI reports the current state with a clear reason plus an
+explicit valid alternative (no extra mandatory free-model controls):
+
+- configured seed (`opencode-zen-free` / `none@1` with its default model);
+- observed catalog (what the exact pinned host actually lists);
+- qualified runtime (exact-host attestation for the selected model);
+- eligible pricing/privacy (zero-charge evidence plus the permitted
+  data-use policy decision in
+  `moonmind/omnigent/bootstrap/free_route_qualification.py`);
+- temporary availability (provider/host capacity is a wait state, and a
+  disappeared free service surfaces `no_eligible_free_model` with
+  separate availability, pricing, capability, and privacy reasons).
+
+No live model availability, pricing, terms, or inference is implied by the
+seeded name or by this guide.
+
 The seed declares `isDefault: true`, so it holds runtime-default authority for
 `opencode` from first start rather than inheriting it only while it happens to
 be the sole launch-ready profile. Two things release that authority, and nothing
 else does:
-
 - an explicit operator disable of `opencode-zen-free`, which removes it from the
   launch-ready set and hands the default to the next ranked profile; or
 - an explicit default selection on another profile (the Settings
