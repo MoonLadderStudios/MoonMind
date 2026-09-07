@@ -7,9 +7,9 @@ from __future__ import annotations
 
 import pytest
 
-from moonmind.omnigent.faultlab import FaultPlan, minimize_plan
-from moonmind.omnigent.faultlab.harness import ObservationFault
-from moonmind.omnigent.faultlab.scenario import (
+from tools.omnigent_faultlab import FaultPlan, minimize_plan
+from tools.omnigent_faultlab.harness import ObservationFault
+from tools.omnigent_faultlab.scenario import (
     CommandWindow,
     LogicalOperation,
     ResponseBehavior,

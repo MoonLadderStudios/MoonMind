@@ -4,7 +4,7 @@ Source issue: MoonLadderStudios/MoonMind#3709 (acceptance criterion 8).
 
 Two things are proven here:
 
-* The seed-range *policy* (:mod:`moonmind.omnigent.faultlab.ci_seeds`) is
+* The seed-range *policy* (:mod:`tools.omnigent_faultlab.ci_seeds`) is
   hermetic and deterministic: with no environment it is the fixed PR corpus; with
   the namespaced rotating vars it is a bounded ``range(offset, offset + count)``;
   malformed budgets fail fast. These tests run in required PR CI (fast).
@@ -26,7 +26,7 @@ from pathlib import Path
 
 import pytest
 
-from moonmind.omnigent.faultlab import (
+from tools.omnigent_faultlab import (
     PR_CI_SEED_COUNT,
     generate_plan,
     is_deterministic,
@@ -37,17 +37,17 @@ from moonmind.omnigent.faultlab import (
     rotating_seeds,
     run_plan,
 )
-from moonmind.omnigent.faultlab.ci_seeds import (
+from tools.omnigent_faultlab.ci_seeds import (
     DEFAULT_ROTATING_COUNT,
     ROTATING_COUNT_ENV,
     ROTATING_ENABLED_ENV,
     ROTATING_OFFSET_ENV,
 )
-from moonmind.omnigent.faultlab.diagnostics import (
+from tools.omnigent_faultlab.diagnostics import (
     build_diagnostic_bundle,
     write_diagnostic_bundle,
 )
-from moonmind.omnigent.faultlab.invariants import violations
+from tools.omnigent_faultlab.invariants import violations
 
 # ---------------------------------------------------------------------------
 # Seed-range policy (hermetic; runs in required PR CI)

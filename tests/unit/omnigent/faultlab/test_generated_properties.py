@@ -16,16 +16,16 @@ from pathlib import Path
 
 import pytest
 
-from moonmind.omnigent.faultlab import (
+from tools.omnigent_faultlab import (
     generate_plan,
     is_deterministic,
     run_plan,
 )
-from moonmind.omnigent.faultlab.diagnostics import (
+from tools.omnigent_faultlab.diagnostics import (
     build_diagnostic_bundle,
     write_diagnostic_bundle,
 )
-from moonmind.omnigent.faultlab.invariants import check_all, violations
+from tools.omnigent_faultlab.invariants import check_all, violations
 
 #: The deterministic bounded corpus that runs in required PR CI.
 PR_CI_SEEDS = range(400)

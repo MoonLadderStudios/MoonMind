@@ -8,10 +8,17 @@ included, not only the developer checkout).
 This module is the *portable core* of the exact-image smoke: it runs a bounded,
 seed-selected fault matrix (the same generator, reducer, reference model, and
 invariants the pure-domain suite uses) and produces a secret-safe report. The
-deployable image supplies only the runtime — the CI job runs this exact module
-*inside* the built API/worker image, so a divergence between the checkout and the
-image (a missing dependency, a different Python, a stripped module) surfaces as a
-failed matrix rather than passing silently.
+faultlab package lives under ``tools/`` (MoonLadderStudios/MoonMind#3958) and is
+deliberately absent from the production ``moonmind`` package and deployable
+image. The ``omnigent-fault-image-smoke`` workflow mounts only the checkout's
+``tools/`` tree into the built API/worker image at ``/src/tools`` and runs this
+exact module there with ``PYTHONPATH=/app:/src``: ``moonmind`` (including the
+production reconciler under test) resolves from the image's own ``/app`` while
+``tools`` resolves from the mounted checkout, so a divergence between the
+checkout and the image (a missing dependency, a different Python, a stripped
+module) surfaces as a failed matrix rather than passing silently. Mounting only
+``tools/`` keeps ``/src/moonmind`` and ``/src/api_service`` off ``PYTHONPATH``;
+the driver additionally fails unless production imports resolve under ``/app``.
 
 The report is digest-only and bounded (seed, invariant-violation count,
 determinism flag) so retained smoke evidence never carries raw payloads or
@@ -98,6 +105,55 @@ def verify_role_entrypoint(role: str) -> str:
             "image; the shipped runtime is missing its role dependency"
         )
     return module
+
+
+#: Production top-level packages that must resolve from the image's own
+#: ``/app`` install, never from a workflow-checkout mount on ``PYTHONPATH``.
+_IMAGE_PRODUCTION_PACKAGES = ("moonmind", "api_service")
+
+
+def verify_production_imports_from_image(*, enforce: bool | None = None) -> None:
+    """Fail unless production packages resolve beneath the image's ``/app``.
+
+    The smoke workflow mounts only ``tools/`` at ``/src/tools``, so
+    ``/src/moonmind`` and ``/src/api_service`` must not exist on the probe
+    path. If a future workflow change ever re-exposes checkout production
+    sources on ``PYTHONPATH``, a broken image could pass by falling back to
+    checkout copies; this guard turns that misconfiguration into a hard
+    failure instead of a false-passing report.
+
+    When ``enforce`` is ``None`` (default) the check auto-detects: it enforces
+    only when an image-like ``/app`` install is present (``/app/moonmind`` or
+    ``/app/api_service`` exists), and skips in a plain developer checkout or
+    unit-test environment where production packages legitimately resolve from
+    the working tree. Pass ``enforce=True`` to require ``/app`` resolution
+    unconditionally (for example in hermetic tests of this guard itself).
+    """
+
+    app_root = Path("/app")
+    image_like = (app_root / "moonmind").is_dir() or (
+        app_root / "api_service"
+    ).is_dir()
+    if enforce is None and not image_like:
+        return
+    if enforce is False:
+        return
+    offenders: list[str] = []
+    for package in _IMAGE_PRODUCTION_PACKAGES:
+        spec = importlib.util.find_spec(package)
+        if spec is None or spec.origin is None:
+            offenders.append(f"{package} is not importable in this image")
+            continue
+        origin = os.path.realpath(spec.origin)
+        if not (origin == "/app" or origin.startswith("/app/")):
+            offenders.append(
+                f"{package} resolves to {spec.origin}, not the image's /app install"
+            )
+    if offenders:
+        raise ImportError(
+            "production imports must resolve beneath /app in this image: "
+            + "; ".join(offenders)
+        )
 
 
 @dataclass(frozen=True)
@@ -187,6 +243,7 @@ def run_image_fault_matrix(
     image_ref: str | None = None,
     role: str | None = None,
     build_id_file: str | os.PathLike[str] | None = None,
+    verify_image_authority: bool | None = None,
 ) -> ImageSmokeReport:
     """Run the bounded fault matrix on the current (in-image) runtime.
 
@@ -196,8 +253,12 @@ def run_image_fault_matrix(
     role-specific dependency missing from the shipped runtime fails the smoke. The
     result is a bounded, secret-safe report the CI job uploads as the exact-image
     smoke evidence, stamped with the image's own verified build identity.
+    Production packages are verified to resolve beneath the image's ``/app``
+    install before the matrix runs, so checkout sources can never mask a broken
+    image.
     """
 
+    verify_production_imports_from_image(enforce=verify_image_authority)
     if role is not None:
         verify_role_entrypoint(role)
 
@@ -231,11 +292,14 @@ def run_image_fault_matrix(
 def main(argv: list[str] | None = None) -> int:
     """CLI entrypoint: run the fault matrix inside the exact deployable image.
 
-    Runnable as ``python -m moonmind.omnigent.faultlab.image_smoke`` so the
-    ``omnigent-fault-image-smoke`` workflow invokes the packaged module that ships
-    in the image's own ``moonmind`` install, rather than a ``tools/`` driver that
-    the production image never copies (#3694). Writes a secret-safe report and
-    exits non-zero on any invariant violation or nondeterminism.
+    Runnable as ``python -m tools.omnigent_faultlab.image_smoke`` from a checkout.
+    The ``omnigent-fault-image-smoke`` workflow mounts only ``tools/`` at
+    ``/src/tools`` and runs this module inside the image with
+    ``PYTHONPATH=/app:/src`` so the production reconciler and role entrypoints
+    resolve from the image's own ``/app`` install while the test-only faultlab
+    harness resolves from the mount (MoonLadderStudios/MoonMind#3958). Writes a
+    secret-safe report and exits non-zero on any invariant violation or
+    nondeterminism.
     """
 
     import argparse
@@ -300,6 +364,7 @@ __all__ = [
     "ImageSmokeReport",
     "UnknownImageSmokeRoleError",
     "read_image_build_id",
+    "verify_production_imports_from_image",
     "verify_role_entrypoint",
     "run_image_fault_matrix",
     "main",

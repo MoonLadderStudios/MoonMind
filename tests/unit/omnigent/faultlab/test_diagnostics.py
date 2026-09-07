@@ -7,14 +7,14 @@ from __future__ import annotations
 
 import pytest
 
-from moonmind.omnigent.faultlab import FaultPlan, run_plan
-from moonmind.omnigent.faultlab.diagnostics import (
+from tools.omnigent_faultlab import FaultPlan, run_plan
+from tools.omnigent_faultlab.diagnostics import (
     SecretLeakError,
     _assert_no_secrets,
     build_diagnostic_bundle,
 )
-from moonmind.omnigent.faultlab.harness import ObservationFault
-from moonmind.omnigent.faultlab.scenario import ResponseBehavior
+from tools.omnigent_faultlab.harness import ObservationFault
+from tools.omnigent_faultlab.scenario import ResponseBehavior
 
 
 def test_bundle_contains_reproduction_evidence():

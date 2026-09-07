@@ -5,10 +5,10 @@ representative scenarios must cross the PostgreSQL repository/concurrency
 boundary, not only the pure domain).
 
 This binding replays the *same* fault scenarios the pure-domain suite drives
-against the reducer (``moonmind.omnigent.faultlab``) onto the **real** Omnigent
+against the reducer (``tools.omnigent_faultlab``) onto the **real** Omnigent
 control-plane repositories (``moonmind.omnigent.control_plane`` over
 ``api_service.db.models``). It is a thin adapter: the fault framework produces a
-boundary-neutral :class:`~moonmind.omnigent.faultlab.ProjectedRun` (the durable
+boundary-neutral :class:`~tools.omnigent_faultlab.ProjectedRun` (the durable
 logical command stream plus the independent provider ledger), and this module
 maps each projected command onto ``record`` / ``claim_command`` /
 ``record_command_delivery`` / ``update_lifecycle`` / ``mark_terminal`` /
@@ -58,15 +58,15 @@ from moonmind.omnigent.control_plane import (
     OmnigentControlPlaneStore,
     TerminalSessionOverwriteError,
 )
-from moonmind.omnigent.faultlab import (
+from tools.omnigent_faultlab import (
     FaultPlan,
     ProjectedRun,
     generate_plan,
     project_run,
     run_plan,
 )
-from moonmind.omnigent.faultlab.corpus import INITIAL_CORPUS
-from moonmind.omnigent.faultlab.scenario import CommandWindow, LogicalOperation
+from tools.omnigent_faultlab.corpus import INITIAL_CORPUS
+from tools.omnigent_faultlab.scenario import CommandWindow, LogicalOperation
 
 pytestmark = [pytest.mark.integration]
 
