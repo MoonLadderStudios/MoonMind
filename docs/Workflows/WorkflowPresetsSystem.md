@@ -1,64 +1,54 @@
 # Workflow Presets System
 
-## Status
+**Document Class:** Canonical declarative  
+**Viewpoint:** Module Architecture View  
+**Status:** Draft  
+**Owners:** MoonMind Engineering  
+**Updated:** 2026-09-06  
+**Audience:** Preset/catalog, workflow compiler, API, and dashboard contributors  
+**Authority:** Preset catalog, task-input composition, expansion/default metadata, nested provenance, and their integration with the shared publication compiler. Workflow Publishing owns publication semantics and Input Schema Guidance owns binding keys.  
+**Owning Surface:** Preset authoring/catalog and backend expansion boundary  
+**Related Implementation:** `api_service/data/presets/`, `.agents/skills/_shared/batch_workflows.py`, and existing preset expansion services.
 
-Desired-state architecture.
+This document defines the schema-driven composition layer for reusable workflows. Presets collect task-specific inputs, expand into executable steps, and preserve provenance. Repository, branch, and publication are single workflow-level choices, not repeated preset inputs.
 
-This document defines MoonMind's Workflow preset system as a declarative, schema-driven composition layer. Presets are reusable step plans that may request typed inputs from the user, expand into one or more executable steps, and preserve provenance so Workflow runs remain understandable after expansion.
+**Related Docs:** [Workflow Publishing](WorkflowPublishing.md), [Create Page](../UI/CreatePage.md), [Input Schema Guidance](../Steps/InputSchemaGuidance.md), [Step Types](../Steps/StepTypes.md), [Skill System](../Steps/SkillSystem.md), [Jira Integration](../Steps/JiraIntegration.md), [Workflow Architecture](WorkflowArchitecture.md), [Workflow Editing System](WorkflowEditingSystem.md), [Settings System](../Security/SettingsSystem.md).
 
-## Purpose
+The document specifies the long-term design. Current seed files and helpers are implementation artifacts, not exceptions that override this contract. Rollout status belongs in issues or temporary execution notes.
 
-Workflow presets let a user start from a known workflow shape without manually authoring every step. A preset may represent a simple one-step action, a multi-step coding workflow, a Jira-driven orchestration flow, a remediation flow, or another composed Workflow pattern.
+## Purpose and Goals
 
-The preset system must make the Create page easier to use without making the Create page responsible for knowing the details of every preset. Presets describe their own inputs through a machine-readable schema. The Create page renders those inputs automatically from the schema, validates them, and passes the collected values to the shared preset expansion path.
+Presets let a user start with a known workflow shape without authoring every step. A preset may describe a simple action, coding workflow, Jira/GitHub orchestration, remediation, or bounded fan-out.
 
-## Design Goals
+The Create page is not responsible for knowing each preset's behavior. It reads a normalized catalog contract and renders task-specific inputs with shared widgets. Backend expansion and validation are authoritative.
 
-- Presets are first-class step types, not a separate Create page mode.
-- A preset may remain unexpanded while the user configures it.
-- The user may submit a Workflow Execution with unexpanded preset steps; submission expands them automatically after validation.
-- The Create page never hard-codes preset-specific forms such as `if presetId === "jira-orchestrate"`.
-- Each preset declares its expected inputs with an `input_schema` that can drive UI generation, API validation, apply, reapply, and submit-time expansion.
-- Preset input schemas align with the same direction as MoonMind skill input schemas and Agent Skills-style declarative capability metadata.
-- Presets may compose other presets without losing input validation, provenance, or debuggability.
-- Expansion is deterministic and backend-owned.
+The system preserves these properties:
 
-## Non-Goals
+- Presets are first-class step types, not a separate Create-page mode.
+- A configured preset can remain unexpanded until submission.
+- Apply, Reapply, unexpanded Submit, API, MCP, schedules, edit/rerun, and goal-selected presets use the same backend expansion/compiler path.
+- Input schemas align with Skill schemas and remain declarative and portable.
+- Nested presets preserve validation, ancestry, and content evidence.
+- One authored repository/branch/publication context remains authoritative throughout expansion and child dispatch.
+- Preset metadata supplies defaults and requirements, never permission to override explicit user intent.
 
-- Presets are not a replacement for skills. A skill is a reusable agent capability or instruction bundle. A preset is a reusable Workflow/step composition that may invoke skills, scripts, managed agents, external agents, or other presets.
-- Presets do not require custom React code for each preset. Only reusable field widgets may have custom components.
-- Presets do not require the user to manually expand them before Workflow Execution creation.
-- Presets do not grant arbitrary execution rights. Expanded steps still pass through the same validation, policy, runtime, and publishing controls as manually authored steps.
+Presets do not replace Skills, require per-preset React forms, grant execution rights, or create a second publishing engine. Their expanded steps pass the normal policy, runtime, repository, and publication boundaries.
 
 ## Core Concepts
 
-### Preset
-
-A preset is a catalog entry that defines metadata, optional user inputs, and an expansion plan. It may expand into one or more concrete steps or into nested preset steps that are recursively expanded.
-
-### Preset Step
-
-A preset step is a step on the Create page with `type: preset`, a `preset_slug`, optional scope, and collected `inputs`. It can be configured and submitted before it is expanded.
-
-### Input Schema
-
-`input_schema` is the canonical machine-readable contract for the inputs a preset expects. It is JSON Schema-compatible and intentionally similar to the input schemas used by MoonMind skills and Agent Skills-style skill manifests.
-
-### UI Schema
-
-`ui_schema` is optional metadata that gives the Create page hints about presentation and widgets without changing validation semantics. The Create page may use `ui_schema` and recognized `x-moonmind-*` extensions to select reusable components such as a Jira issue picker.
-
-### Expansion
-
-Expansion transforms a preset step plus validated inputs into concrete child steps. The backend owns expansion so apply, submit, API-driven Workflow Execution creation, and re-run flows share the same behavior.
-
-### Provenance
-
-Provenance records which preset slug and scope produced each expanded step, which content digest evidenced the preset definition, and which input values or redacted input references influenced expansion.
+| Concept | Meaning |
+| --- | --- |
+| Preset | Catalog entry with identity, metadata, task inputs, context bindings, publication-role/default metadata, and an expansion plan |
+| Preset step | Authored `type: preset` selection with `preset_slug`, scope, and task-specific inputs |
+| Input schema | JSON Schema-compatible contract for value shape and required inputs |
+| Context binding | Authoritative projection from workflow context, not an editable copied default |
+| UI schema | Optional safe presentation hints, not semantic or authorization authority |
+| Expansion | Backend transformation of a selected definition and validated context into concrete steps |
+| Provenance | Preset slug/scope, definition digest, ancestry, authored inputs, bound-source evidence, and compiler derivation |
 
 ## Preset Catalog Contract
 
-A preset catalog entry should follow this shape:
+A representative entry is:
 
 ```yaml
 id: jira-orchestrate
@@ -66,40 +56,23 @@ kind: preset
 label: Jira Orchestrate
 description: Build and execute an implementation workflow from a Jira issue.
 category: issue-tracker
-
 input_schema:
   type: object
-  required:
-    - jira_issue
+  required: [jira_issue]
   properties:
     jira_issue:
       type: object
       title: Jira issue
-      description: Select the Jira issue that should seed the workflow instructions.
-      required:
-        - key
+      required: [key]
       properties:
-        key:
-          type: string
-          title: Issue key
-        summary:
-          type: string
-          title: Summary
-        description:
-          type: string
-          title: Description
-        url:
-          type: string
-          title: URL
-          format: uri
-
+        key: {type: string}
+        summary: {type: string}
+        description: {type: string}
+        url: {type: string, format: uri}
 ui_schema:
   jira_issue:
     widget: jira.issue-picker
     placeholder: Select a Jira issue
-    data_source: jira.issues
-    display_template: "{{ key }} — {{ summary }}"
-
 expansion:
   steps:
     - type: skill
@@ -112,38 +85,32 @@ expansion:
         jira_issue_url: "{{ inputs.jira_issue.url }}"
 ```
 
-The exact persisted representation may evolve, but these concepts are required:
+Examples illustrate the contract rather than asserting a particular seed is implemented that way. Stable identity, description, category/tags, definition evidence, schema, optional UI hints, deterministic expansion, and provenance are required concepts. Internal preset identity is slug plus scope, not a semantic version selector. Content digests identify the resolved definition.
 
-- stable preset identity
-- human-readable label and description
-- semantic category or tags
-- content digest or source reference evidence
-- JSON Schema-compatible `input_schema`
-- optional `ui_schema`
-- deterministic expansion definition
-- provenance metadata for expanded steps
+API responses may use camelCase while storage uses snake_case. Mapping is lossless. Presets, Skills, and Tools share one normalized input model such as:
+
+```json
+{
+  "id": "jira-orchestrate",
+  "kind": "preset",
+  "label": "Jira Orchestrate",
+  "inputSchema": {},
+  "uiSchema": {},
+  "defaults": {},
+  "contractDigest": "sha256:...",
+  "capabilities": {"apply": true, "submitTimeExpansion": true}
+}
+```
+
+Publication-role/default and context-binding metadata are included in the normalized definition and its digest. They do not become independently editable browser configuration.
 
 ## Input Schema Strategy
 
-`input_schema` is the source of truth for generated inputs. The Create page renders fields by inspecting the selected preset's schema. A preset that expects a Jira issue, branch name, provider profile, model override, boolean option, enum, file reference, or nested object should be able to declare that requirement without adding preset-specific logic to the Create page.
+Schemas describe task-specific values: issue references, document paths, verification choices, discovery filters, review settings, constraints, and meaningful comparison or destination roles. Equivalent repository, branch, runtime/profile, and publication passthrough inputs use workflow context rather than another ordinary control.
 
-The schema must support at least:
+The shared practical subset includes `type`, `title`, `description`, `default`, `required`, `properties`, `items`, `enum`, `oneOf`/`anyOf`, standard formats, and safe namespaced semantic extensions. Optional schemas remain compatible with the Skill adoption policy in [Input Schema Guidance](../Steps/InputSchemaGuidance.md).
 
-- `type`
-- `title`
-- `description`
-- `default`
-- `required`
-- `properties`
-- `items`
-- `enum`
-- `oneOf` / `anyOf` where needed for advanced forms
-- `format` for standard strings such as URI, email, date, date-time, and path-like values
-- custom extension fields prefixed with `x-moonmind-*` when metadata belongs with the schema
-
-The preferred default is standard JSON Schema plus optional `ui_schema`. MoonMind-specific behavior should be expressed as reusable semantic widget hints rather than preset-specific frontend branches.
-
-Valid:
+A widget can be selected through safe semantic hints or a registered UI identifier:
 
 ```yaml
 ui_schema:
@@ -151,19 +118,7 @@ ui_schema:
     widget: jira.issue-picker
 ```
 
-Also valid when colocating the hint is more convenient:
-
-```yaml
-input_schema:
-  type: object
-  properties:
-    jira_issue:
-      type: object
-      title: Jira issue
-      x-moonmind-widget: jira.issue-picker
-```
-
-Not valid as an architecture pattern:
+A new preset must not require:
 
 ```tsx
 if (preset.id === "jira-orchestrate") {
@@ -171,246 +126,124 @@ if (preset.id === "jira-orchestrate") {
 }
 ```
 
-The Create page may contain a reusable widget registry. It may map `jira.issue-picker` to a Jira issue picker component, `github.branch-picker` to a branch picker, or `provider.profile-picker` to a provider profile selector. That is generic field rendering, not preset-specific logic.
+The reusable widget registry may include text, textarea/markdown, number, checkbox, select, multi-select, structured JSON, Jira/GitHub issue pickers, repository/branch pickers, profile/model pickers, and file-reference pickers. The existence of a widget does not authorize adding a duplicate workflow-level selection to every preset.
 
-## Alignment With Skills and Agent Skills
+## Context-Bound Inputs
 
-Preset input schemas should align with MoonMind skill input schemas so the same schema-form renderer can be reused for both presets and skills.
+The workflow owns its repository/source target, branch role, and publication selection. A portable preset or helper can retain arguments such as `repository` or `publish_mode`, but MoonMind supplies them at the adapter boundary from validated context.
 
-The desired direction is compatible with Agent Skills-style manifests:
-
-- a capability declares metadata in a machine-readable manifest
-- the manifest includes a typed input contract
-- UI and orchestration layers can discover expected inputs without custom code for every capability
-- richer behavior is expressed through portable schema fields and clearly namespaced extensions
-- runtime-specific or product-specific UI hints are optional and do not change the core input contract
-
-MoonMind should normalize preset and skill manifests into a shared internal capability input model. MoonMind's internal canonical fields are `preset_slug` and optional scope for presets, `skill_name` for Skills, and `input_schema` for preset inputs. Preset selection payloads do not carry semantic preset versions; content digests provide definition evidence.
-
-The shared internal model should be able to represent:
+A normalized field can declare:
 
 ```yaml
-preset_slug: jira-orchestrate
-capability_type: preset
-input_schema: {}
-ui_schema: {}
-defaults: {}
+repository:
+  type: string
+  x-moonmind-context-binding: repository.name
 ```
 
-and:
+The semantic binding keys, validation, and portability rules are owned by [Input Schema Guidance](../Steps/InputSchemaGuidance.md). `publication.policy` projects the frozen scope intent to the target's typed contract, never the coordinator's local publication mode and never an unresolved Auto string.
 
-```yaml
-skill_name: moonspec-breakdown
-capability_type: skill
-input_schema: {}
-ui_schema: {}
-defaults: {}
-```
+Bound values are resolved before required-field validation. They are absent from editable preset forms and authored input snapshots. Compiler-produced execution inputs retain source provenance. Conflicting caller-supplied copies are rejected; proven equivalent historical copies can be collapsed by the versioned reconstruction boundary.
 
-The Create page should not care whether the selected step type is a preset or a skill when rendering the input form. It should receive a normalized schema contract and render the appropriate fields.
+Do not infer binding by field name. A source document repository, issue identity, comparison branch, or separately authorized publication destination may have a distinct role. The supported operation must declare and visibly name that role. An ordinary same-repository batch is not a hidden multi-repository workflow.
+
+Changing workflow context invalidates dependent lookups, previews, and generated bindings. Apply/Reapply and Submit cannot retain an old repository/base embedded in generated instructions after the user changed the visible control.
 
 ## UI Generation Rules
 
-When a user selects a preset on the Create page:
+When a preset is selected, the frontend loads its normalized metadata, task inputs, defaults, existing draft values, and context bindings. It renders the remaining authored fields through the shared schema renderer and exposes bound-context explanations without duplicate editors. Local feedback is followed by authoritative backend validation.
 
-1. The frontend loads the preset metadata from the catalog API.
-2. The frontend reads `input_schema`, `ui_schema`, defaults, and any already-collected values.
-3. The generic schema-form renderer creates fields for required and optional inputs.
-4. Fields are validated locally for immediate feedback.
-5. The same values are validated again by the backend before apply or submit.
-6. The configured preset step stores the input values while remaining unexpanded if the user has not chosen to apply expansion.
+Supported draft states include no preset, missing required input, configured but unexpanded, applied with editable generated task content, submitted without manual expansion, and expansion failure. Values and provenance survive validation failures.
 
-The Create page must support these states:
-
-- no preset selected
-- preset selected but required inputs missing
-- preset configured but not expanded
-- preset applied into editable child steps
-- preset submitted without manual expansion
-- preset expansion failed due to invalid inputs or backend validation errors
-
-The Create page may group fields, show descriptions, display examples, and use custom widgets. It must not require a custom code path for each preset.
-
-## Generic Widget Registry
-
-The schema-form renderer uses a reusable widget registry. Initial widgets should include:
-
-| Widget | Purpose |
-| --- | --- |
-| `text` | single-line string input |
-| `textarea` | multi-line string input |
-| `number` | numeric input |
-| `checkbox` | boolean input |
-| `select` | enum / one-of selector |
-| `multi-select` | array of enum values |
-| `json` | advanced structured object editor |
-| `jira.issue-picker` | Jira issue search and selection |
-| `github.branch-picker` | repository branch selection |
-| `provider.profile-picker` | provider profile selection |
-| `model-picker` | model selection constrained by provider/runtime |
-| `file-reference-picker` | artifact or uploaded file reference selection |
-
-Only widgets are allowed to have custom UI components. Presets consume widgets declaratively through schema metadata.
-
-## GitHub Issue Search
-
-The `github-issue-search-and-implement` preset resolves its optional repository
-input from the workflow repository during expansion. Its first typed
-`github.load_issue_preset_brief` operation accepts `issueSearch`: a nonempty
-query selects GitHub's best available open issue match, skipping issues already
-marked status in-progress; an empty query scans open issues
-in descending creation order for the first candidate without blocker evidence
-and without an in-progress status.
-The scan is bounded to five pages of 100 candidates, excludes pull requests,
-and records pages and candidates examined. Missing, malformed, incomplete, or
-exhausted evidence stops the run before implementation or issue mutation.
-
-Explicit `Depends on`, `Completion depends on`, and `Integration prerequisites:`
-sentences contribute issue prerequisite evidence. Short issue references,
-qualified repository references, GitHub issue URLs, and inclusive numeric ranges
-are resolved through the selected repository's authorized GitHub access, with
-at most 100 declared prerequisites per candidate. The candidate scan shares a
-100-request prerequisite lookup budget and reuses validated state for repeated
-repository-and-issue identities. Exhausting that budget stops selection with an
-actionable request to select an explicit issue or narrow the search. Confirming
-the selected issue uses fresh prerequisite reads with its own 100-request budget
-and re-fetches current issue detail to reject an in-progress status added
-between search and brief loading;
-the later pre-implementation blocker check also fetches current state. An open
-prerequisite blocks admission; closed prerequisites do not. Only the leading
-reference list after a declaration contributes dependencies; subsequent prose,
-including parent and related references, does not. Unavailable or unknown
-evidence stops admission. These checks do not modify issue labels or issue content.
-
-The selected issue and brief travel through the workflow's trusted issue
-context and durable brief attachment. Downstream blocker and status tools
-resolve the same issue from that context and reject conflicting identities.
-Tool instructions do not perform dynamic input binding or read agent-local
-files. Existing explicit `repository` / `issueNumber` tool inputs retain their
-direct lookup behavior. Preset changes apply to newly expanded runs; an old
-pinned plan must be resubmitted with the current preset to use search resolution.
+Generated-step editing does not reopen repository/branch/publish override controls. Material changes to a generated step are revalidated against the single workflow policy. An incompatible combination requires a supported composition or separate workflows, not a hidden override.
 
 ## Jira Issue Input Pattern
 
-A Jira-driven preset should request a Jira issue as an input object rather than relying only on free-text instructions. This allows the Create page to display a picker, the backend to validate the issue reference, and the expansion layer to bind the issue fields into child steps.
-
-Recommended schema:
+Jira-driven presets request an issue object rather than relying only on prose:
 
 ```yaml
 input_schema:
   type: object
-  required:
-    - jira_issue
+  required: [jira_issue]
   properties:
     jira_issue:
       type: object
       title: Jira issue
-      description: Issue that will seed the workflow instructions and orchestration context.
-      required:
-        - key
+      required: [key]
       properties:
-        key:
-          type: string
-        summary:
-          type: string
-        description:
-          type: string
-        url:
-          type: string
-          format: uri
-        status:
-          type: string
-        assignee:
-          type: string
-
+        key: {type: string}
+        summary: {type: string}
+        description: {type: string}
+        url: {type: string, format: uri}
+        status: {type: string}
+        assignee: {type: string}
 ui_schema:
   jira_issue:
     widget: jira.issue-picker
-    data_source: jira.issues
-    search_placeholder: Search Jira issues
     allow_manual_key_entry: true
 ```
 
-The Jira widget may enrich the selected value with summary, description, URL, status, and assignee, but the minimum durable input is the issue key. Expansion must tolerate missing optional enrichment fields by fetching or summarizing the issue during backend validation when possible.
+The durable minimum is the issue key. Optional enrichment is fetched/validated through trusted integration operations when needed. A picker label or untrusted description does not provide issue-transition authority.
 
-## Preset Step Shape
+## GitHub Issue Search
 
-Before expansion, a preset step should be representable as:
+`github-issue-search-and-implement` uses the workflow repository binding. Its typed `github.load_issue_preset_brief` operation accepts `issueSearch`: a nonempty query selects GitHub's best available open issue match, skipping issues already marked status in-progress; an empty query scans open issues in descending creation order for the first candidate without blocker evidence and without an in-progress status. The scan is bounded to five pages of 100 candidates, excludes pull requests, and records pages/candidates examined. Missing, malformed, incomplete, or exhausted evidence stops before implementation or issue mutation.
+
+Explicit `Depends on`, `Completion depends on`, and `Integration prerequisites:` sentences contribute prerequisite evidence. Short references, qualified references, issue URLs, and inclusive numeric ranges are resolved through the selected repository's authorized access, with at most 100 declared prerequisites per candidate. The scan shares a 100-request prerequisite-lookup budget and reuses validated repeated identities. Exhaustion requests an explicit issue or narrower search. Confirmation uses fresh prerequisite reads with its own 100-request budget and re-fetches current issue detail to reject an in-progress status added between search and brief loading; the later implementation preflight also checks current state.
+
+Open prerequisites block admission; closed prerequisites do not. Only the leading reference list after a declaration contributes dependencies, not subsequent parent/related prose. Unknown or unavailable evidence blocks. These checks do not edit labels or issue content.
+
+The selected issue and brief travel through trusted context and a durable attachment. Downstream blocker/status tools use the same identity and reject conflicts. Instructions do not perform dynamic binding or read agent-local files. Explicit resolved tool repository/issue inputs remain execution arguments, not competing user-level overrides. A pinned historical plan keeps its old search/selection behavior until newly admitted authoring selects the current definition.
+
+## Preset Step and Provenance
+
+An authored step contains task-specific inputs:
 
 ```json
 {
   "type": "preset",
   "preset_slug": "jira-orchestrate",
   "title": "Jira Orchestrate",
-  "inputs": {
-    "jira_issue": {
-      "key": "MOON-123",
-      "summary": "Add schema-driven preset inputs",
-      "url": "https://example.atlassian.net/browse/MOON-123"
-    }
-  },
+  "inputs": {"jira_issue": {"key": "MOON-123"}},
   "expansion_state": "not_expanded"
 }
 ```
 
-After apply or submit-time expansion, generated steps should include provenance:
+Expanded steps retain definition and input evidence:
 
 ```json
 {
   "type": "skill",
   "skill_name": "jira-orchestrate",
   "title": "Implement MOON-123",
-  "inputs": {
-    "jira_issue_key": "MOON-123"
-  },
+  "inputs": {"jira_issue_key": "MOON-123"},
   "provenance": {
     "source_type": "preset",
     "preset_slug": "jira-orchestrate",
     "preset_digest": "sha256:...",
-    "input_snapshot": {
-      "jira_issue": {
-        "key": "MOON-123"
-      }
-    }
+    "input_snapshot": {"jira_issue": {"key": "MOON-123"}}
   }
 }
 ```
 
+Context and policy derivation are retained in existing snapshot/plan evidence separately from user-entered task inputs. A generated `none` step or coordinator mode never overwrites the user's authored publication selection in that snapshot.
+
 ## Expansion Semantics
 
-Preset expansion must be available through one shared backend path:
+One shared backend path owns expansion:
 
 ```text
 expandPreset(preset_slug, scope, inputs, context) -> expanded_steps
 ```
 
-The same path is used by:
+It serves Apply, Reapply, unexpanded Submit, API/MCP, edit/rerun, scheduled authoring, and goal-selected presets.
 
-- preset apply
-- preset reapply
-- Workflow Execution submission with unexpanded presets
-- API-created Workflow Executions
-- Workflow Execution edit and re-run flows that reconstruct preset-originated steps
-- goal-only Workflow Execution submissions that are first mapped to a seeded preset
+The compiler loads and pins definition evidence, resolves context bindings, applies semantic defaults to unbound inputs, validates the complete input contract, recursively expands nested presets, resolves the single publication scope, validates the concrete plan and required handoffs, and returns field-addressable diagnostics. Validation happens before effects. External target acquisition records its source and immutable resolved result through trusted boundaries rather than hiding non-deterministic lookup inside a template expression.
 
-Expansion must:
+Identical definitions, inputs, context, and recorded external evidence produce identical expansion. Large evidence remains artifact-backed.
 
-1. Load the preset by slug and scope.
-2. Validate inputs against `input_schema`.
-3. Apply defaults.
-4. Resolve allowed contextual values such as repository, branch, issue tracker connection, or provider profile.
-5. Expand nested presets recursively.
-6. Produce concrete executable steps.
-7. Attach provenance.
-8. Return validation errors in a field-addressable format the Create page can display next to generated inputs.
+## Input Binding Expressions
 
-Expansion must be deterministic for the same preset slug, scope, content digest, inputs, and context. If expansion requires fresh external data, the expansion output must record which external references were used.
-
-## Input Binding
-
-Preset expansion binds input values into generated steps through explicit expressions. Bindings must not rely on the frontend mutating instructions after expansion.
-
-Example:
+Task-value mappings use a safe deterministic expression language:
 
 ```yaml
 steps:
@@ -419,210 +252,112 @@ steps:
     inputs:
       jira_issue_key: "{{ inputs.jira_issue.key }}"
       jira_issue_summary: "{{ inputs.jira_issue.summary }}"
-      jira_issue_description: "{{ inputs.jira_issue.description }}"
 ```
 
-Bindings should be limited to a safe deterministic expression language. They should support reading from:
+Bindings may read admitted `inputs`, safe project/repository/branch context, safe user metadata, and declared defaults. They do not execute arbitrary code or grant access to secrets. Template bindings to portable arguments do not make those arguments independently authored fields.
 
-- `inputs.*`
-- `context.project.*`
-- `context.repository.*`
-- `context.branch.*`
-- `context.user.*` where safe
-- `defaults.*`
+## Workflow-Level Publication Metadata
 
-Bindings must not execute arbitrary code.
+[Workflow Publishing](WorkflowPublishing.md) is canonical for policy semantics and the complete built-in matrix. Presets use the existing `workflowPublish` annotation as definition metadata for role, default behavior, supported choices, and derived stage/child responsibilities. They do not own another root selection.
 
-## Workflow-Level Publish Policy
-
-A preset may declare workflow-level publish policy through its `workflowPublish`
-annotation. Expansion attaches it to the expanded workflow payload as
-`workflow.publish`, so a preset can own the publish mode and any parent-owned
-publish behavior such as merge automation without the Create page hard-coding it.
-
-`workflowPublish` uses the same deterministic binding expressions as steps, so
-operator-facing controls stay declarative:
+The target normalized metadata separates **role** from **default output policy**. For example:
 
 ```yaml
 annotations:
   workflowPublish:
-    mode: none
-    mergeAutomation:
-      enabled: true
-      mergeMethod: "{{ inputs.merge_method }}"
-      reviewLoop:
-        enabled: true
-        provider: "{{ inputs.review_provider }}"
-        maxCycles: "{{ inputs.max_review_cycles }}"
-```
-
-An explicitly submitted `workflow.publish` payload always wins over the preset
-annotation. Workflow-level publish policy is still validated by the same publish
-and merge-automation contracts as a manually authored submission; a preset cannot
-grant publish rights that a submitted payload could not.
-
-Expansion reads `workflowPublish` from the **root** preset only. A preset that is
-included as a child keeps its own annotation for the case where an operator runs
-it directly, and that annotation never overwrites the including workflow's policy.
-
-A preset expanded at submit time supplies the workflow publish mode only while
-the visible Publish Mode control still shows a derived value. Once the operator
-changes that control, their selection is an explicit override and wins over the
-annotation, exactly as it does for a preset that was expanded before submit.
-
-A preset declares `mode: none` when the workflow itself publishes nothing to the
-repository:
-
-- parent orchestrators whose only repository work happens in child workflows,
-  each of which carries its own publish policy;
-- workflows whose side effects are external, such as creating tracker issues;
-- repository reads that only write local handoff artifacts for later steps.
-
-A preset that edits the repository and expects MoonMind to push and open the pull
-request declares no `workflowPublish` annotation and stays a managed `pr`
-workflow. That includes a preset whose final step creates or identifies the pull
-request early because a later trusted side effect needs its URL: the step's PR
-instructions override the generic commit-only instruction for that step, and the
-workflow remains managed.
-
-`mode: auto` is reserved for a root capability that declares agent-owned
-publication and produces execution-bound `artifacts/publish_result.json`
-evidence, such as `pr-resolver`, `fix-comments`, `fix-ci`, and
-`fix-merge-conflicts`. Declaring `auto` for any other preset would require valid
-publish evidence on every terminal path, including no-change and blocked runs,
-and would otherwise finish as `auto_publish_evidence_missing`.
-
-## Dependent Input Defaults
-
-An input's default may follow another operator selection instead of a single
-static value. A preset declares this with `uiSchema.<field>.defaultFrom`:
-
-```yaml
-uiSchema:
-  publish_mode:
-    widget: select
-    defaultFrom:
+    role: coordinator
+    defaultModeFrom:
       field: run_ref
       map:
         'skill:jira-verify': none
         'preset:jira-implement': pr
         'preset:jira-orchestrate': pr
+    children: inherit
 ```
 
-The Create page and expansion derive the same value from the same rule, so an
-omitted input resolves identically whether a run is authored in the UI or
-submitted through the API. Only an omitted or blank value is derived: an
-explicitly submitted value, including one the operator changed away from the
-derived default, is never replaced. A source value with no entry in `map` falls
-back to the field's static default.
+A fixed default uses `defaultMode` instead of `defaultModeFrom`. These are mutually exclusive sources of the recommendation. An internal declared default `auto` means the selected consumer requires the Skill-owned publication protocol; it is not the user-facing generic Auto string. Catalog validation requires the relevant Skill/provider-evidence and finish contracts. All new managed and agent-owned publication evidence follows the unified repository schema, not a preset-specific format.
 
-A `defaultFrom` rule is validated against the preset's own inputs when the
-preset is seeded, rather than silently falling back to the static default when
-an operator runs it. Seeding fails when the rule is malformed, when its target
-or source names an input the preset does not declare, when a `map` key is not a
-value the source field can hold, or when a mapped value is one the target field
-would reject. Only a declared `map` entry supplies a default, so a source value
-that happens to name an inherited object member resolves nothing.
+The exact seed serialization can be normalized by the catalog, but it must preserve these semantics:
+
+- An explicit workflow-level selection wins over recommendations and is validated, not coerced.
+- Omission or authored `default` displays Auto and resolves the selected composition's declared behavior.
+- A coordinator role derives its own compiled `none`; it does not force the authored workflow or descendants to None.
+- Included presets contribute their step roles and requirements. Their standalone defaults do not override the enclosing scope.
+- Children inherit the frozen scope intent. They do not re-evaluate the latest child preset default or inherit local coordinator `none`.
+- Managed implementation explicitly declares its output behavior instead of depending on absence of metadata as an implicit PR default.
+- A plan with early PR handoff, read-only verification, tracker updates, or merge automation retains one policy and one owner per effect.
+- Capability metadata and schema expressions cannot broaden permissions, choose another repository, or duplicate Skill semantics.
+
+The retired `workflow.default_publish_mode` and environment aliases are not fallback sources for missing preset/default metadata or helper arguments. [Settings System section 10.6](../Security/SettingsSystem.md#106-publication-default-ownership-and-retired-setting) preserves configured historical intent through proven explicit reconstruction or visible review. New/defaulted expansion follows only the publication compiler, and missing authority-sensitive declarations fail rather than selecting the old workspace default.
+
+A read-only assessment included within implementation remains read-only without disabling publication of the implementation's cumulative candidate. A workflow with both its own repository deliverable and fan-out declares both responsibilities rather than using coordinator status to suppress its output.
+
+## Built-in Batch and Resolver Contracts
+
+The detailed policy matrix is in [Workflow Publishing, section 6](WorkflowPublishing.md#6-built-in-behavior-matrix). Catalog expansion must cover all of the following, not just the two presets named Batch:
+
+| Family | Definition obligations |
+| --- | --- |
+| Batch Jira | Auto follows Run: Verify uses None, Implement/Orchestrate use PR. Query/status/verification options remain inputs; repository/publish overrides do not. |
+| Batch GitHub | Both supported issue runs default to PR. The selected repository/base survives issue-range discovery and child creation. |
+| GitHub breakdown Implement/Orchestrate | Non-publishing issue/child creation with PR children; consistent PR-and-merge support requires the real child payload and lifecycle, not only an enum edit. |
+| Jira breakdown Implement/Orchestrate | Preserve PR-and-merge child defaults and required predecessor-code handoffs. |
+| Document update orchestration | Non-publishing discovery with PR-and-merge children; discovery and child source context agree. |
+| PR and Dependabot batches | Existing-PR children use Skill-owned Auto on each discovered head/base. Preserve eligibility, caps, dry run, and deduplication. |
+| Direct resolver and fix Skills | Preserve portable agent-owned publication and exact terminal evidence; `fix_only` still pushes and is not None. |
+| Fix and Review Loop | Adopt the existing PR; the coordinator and resolver have derived roles under one scope. Optional final merge remains off by default. |
+
+Jira/GitHub Orchestrate implementation presets produce repository work even though their name includes Orchestrate. Classification must follow metadata and plan responsibilities, not names.
+
+A batch's options are constrained by the selected child contract. Parallel children cannot all publish to one selected branch without a qualified serialized handoff. A dependent batch cannot switch off merging or publication when its next child requires predecessor code unless another explicit candidate/checkpoint handoff is provided. PR-URL-required flows cannot pretend to support None by silently skipping required tracker semantics.
+
+Static incompatibility is detected before creating issues or launching the parent. Dynamic targets are validated before each child dispatch, with truthful partial outcomes after external failure. Enqueue evidence does not prove child completion. The fan-out API independently checks parent authority, pinned policy, target derivation, and idempotency consistency.
+
+## Dependent Defaults
+
+A task-specific default can depend on another input through a validated semantic default rule. The UI can display the rule, but execution semantics cannot exist only in `uiSchema`.
+
+Only an unauthored value is defaulted. Explicit values are preserved and validated. Rule source/target names, maps, types, allowed enum values, and cycles are validated with the definition. A map contains declared own entries only, never inherited object members. A legitimate task-input rule can have a declared static fallback; missing authority-sensitive publication mappings instead block rather than guessing.
+
+Publication's old `uiSchema.publish_mode.defaultFrom` is replaced by workflow-level publication recommendation metadata. The form has one Auto selection, not a hidden dependent preset field plus a second workflow selector.
 
 ## Nested Presets
 
-A preset may include child preset steps. Parent presets must explicitly map inputs into child presets.
+A parent explicitly maps task inputs into child presets:
 
 ```yaml
 steps:
   - type: preset
-    preset_slug: pr-with-merge-automation
+    preset_slug: jira-implement
     inputs:
       jira_issue: "{{ inputs.jira_issue }}"
-      publish_mode: "pr_with_merge_automation"
 ```
 
-Rules:
+Repository/branch/publishing flow through the enclosing context, not nested input overrides. Each child schema is validated, missing required inputs include ancestry, cycles fail safely, and provenance records the full preset ancestry. Nested preset expansion and dynamically created workflow children remain different operations; both preserve the same publication authority rules.
 
-- Child presets are validated with their own `input_schema`.
-- Parent-to-child input mappings are explicit.
-- Missing required child inputs are reported with a path that identifies the parent preset and child preset.
-- Recursive expansion must detect cycles and fail safely.
-- Provenance records both parent and child preset ancestry.
+## Jira Breakdown Reconciliation
 
-## Jira Breakdown Orchestrate Reconciliation
+Jira Breakdown Orchestrate includes repository reconciliation between MoonSpec breakdown and issue creation. Fully implemented stories are skipped, partially implemented stories retain traceability and `remainingWork`, and unverifiable stories are marked for manual review rather than automatically converted to implementation work.
 
-`jira-breakdown-orchestrate` includes a repository reconciliation stage between
-MoonSpec breakdown and Jira creation. The reconciliation agent compares each
-generated story with the current repository state and annotates the story
-breakdown before any Jira mutation occurs:
+The deterministic story-output tool consumes only eligible reconciled stories. Downstream workflow creation consumes only issue mappings actually created or reused. Policy changes cannot turn a skipped or unresolved story into a fabricated child target.
 
-- fully implemented stories are marked for skip and do not create Jira issues or
-  downstream Jira Orchestrate Workflow Executions
-- partially implemented stories keep their original traceability but add
-  `remainingWork`, so Jira tracks only the unmet behavior
-- unverifiable stories are marked for manual review and are not automatically
-  converted into implementation work
+## Submit-Time Auto-Expansion and Goal Selection
 
-The deterministic Jira story-output tool consumes only eligible reconciled
-stories, then the downstream Jira Orchestrate Workflow Execution creator consumes only the
-Jira issue mappings that were actually created or reused.
+Start Workflow validates non-preset fields, resolves and validates preset inputs/context, expands all unexpanded presets, checks the final policy/plan, and submits through normal admission. Errors identify the relevant workflow control or task input and preserve the draft.
 
-## Submit-Time Auto-Expansion
+A goal-only request without authored steps, plan, tool/Skill, or explicit preset may be mapped conservatively to a seeded preset. Jira-key goals select the relevant Jira implementation/orchestration shape, breakdown goals select breakdown orchestration, and general implementation goals select MoonSpec Orchestrate under the existing goal selector. This does not authorize a model to choose a more permissive publication mode.
 
-The user may click Create Workflow while one or more preset steps are still unexpanded. The submit path must:
-
-1. Validate all non-preset step fields.
-2. Validate each preset step's collected inputs.
-3. Expand all unexpanded preset steps through the backend expansion path.
-4. Re-run final Workflow Execution validation on the fully expanded step list.
-5. Submit the Workflow Execution.
-
-If a required preset input is missing, Create Workflow is blocked and the missing field is highlighted. If backend expansion fails, the Create page displays the field-addressable errors and preserves the user's entered values.
-
-## Goal-Driven Preset Scheduling
-
-When a Workflow Execution is submitted with a plain `goal` and without already-authored
-steps, an explicit plan, a selected tool/skill, or a selected preset, MoonMind
-may map that goal to a seeded preset before normal submit-time expansion. This
-keeps the fast path from requiring manual preset selection while preserving the
-same deterministic expansion, validation, and provenance used by explicit
-preset submissions.
-
-The initial selector is deterministic and conservative:
-
-- a goal containing a Jira issue key maps to a Jira implementation or
-  orchestration preset, depending on the goal wording
-- a breakdown/story-generation goal maps to the Jira breakdown orchestration
-  preset
-- a general implementation goal maps to MoonSpec Orchestrate
-
-The submitted Workflow Execution records `presetSchedule` metadata with the goal source,
-selected preset slug, scope, content digest, and reason. Once the preset is selected, the
-normal backend expansion service owns the executable step list.
+`presetSchedule` records goal source, selected slug/scope, content digest, and reason. The ordinary compiler then resolves inputs, context, and publishing. Explicit execution shape takes precedence over goal inference.
 
 ## Apply and Reapply
 
-Apply replaces or augments the draft with generated child steps, depending on the selected UX mode.
+Apply replaces or augments the selected draft segment according to the declared UI mode. Generated task content remains editable with provenance; editing does not mutate the template or create independent authority controls.
 
-When applied, generated steps remain editable, but MoonMind must preserve provenance and the original preset input snapshot. Editing generated steps does not mutate the preset template.
+Reapply uses the saved selected definition and task inputs unless the user selects a new definition/input. It resolves bindings against current authored workflow context, invalidates stale previews, and preserves explicit publication selection. A policy/default or target change requiring new authority is visible and revalidated before submission. Historical immutable execution snapshots are never rewritten during draft reconstruction.
 
-Reapply should use the saved preset slug, scope, content digest, and input snapshot unless the user explicitly changes inputs.
+## Validation and Errors
 
-## Validation and Error Shape
-
-Validation errors must be field-addressable so the schema-form renderer can display them next to the right input.
-
-Example:
-
-```json
-{
-  "errors": [
-    {
-      "path": "inputs.jira_issue.key",
-      "message": "A Jira issue is required.",
-      "code": "required"
-    }
-  ]
-}
-```
-
-Nested preset errors should include ancestry:
+Errors are field-addressable and include ancestry when applicable:
 
 ```json
 {
@@ -637,98 +372,32 @@ Nested preset errors should include ancestry:
 }
 ```
 
-## API Requirements
+A bound-field error points to the editable workflow repository, branch, publication, or target control and identifies the consuming step. An incompatible publishing objective is a policy error, not a request to fill a hidden `publish_mode` field. Duplicate or conflicting caller-owned bindings are rejected even through API/raw JSON.
 
-The preset catalog API must expose enough metadata for schema-driven UI generation:
+## API, Security, and Persistence
 
-```json
-{
-  "id": "jira-orchestrate",
-  "kind": "preset",
-  "label": "Jira Orchestrate",
-  "description": "Build and execute an implementation workflow from a Jira issue.",
-  "inputSchema": {},
-  "uiSchema": {},
-  "defaults": {},
-  "capabilities": {
-    "apply": true,
-    "submitTimeExpansion": true
-  }
-}
-```
+Catalog operations list/read definitions, validate inputs, preview expansion, and expand for submission. The API exposes enough metadata for the shared form and explainable publication preview without exposing credentials or executing arbitrary schemas.
 
-The API may expose camelCase to the frontend while storing snake_case internally, but the mapping must be lossless.
+Widget names are allowlisted, markdown is sanitized, expressions use the safe interpreter, and secrets never appear in defaults or provenance. Binding/default declarations are untrusted data until normalized and admitted. Unsupported authority-bearing metadata blocks execution rather than degrading to a permissive editor.
 
-Required endpoints or equivalent service operations:
+Persist authored task inputs, selected definition evidence, context/policy intent, expanded-step provenance, and derived target/effect contracts in existing workflow artifacts. Definition evidence is immutable for admitted runs. A preset update changes its content digest, not the old run. A new draft may review and adopt the change; a retry or child cannot silently do so.
 
-- list presets
-- read preset details
-- validate preset inputs
-- expand preset for submission
+Versioned reconstruction distinguishes equal historical passthrough values, conflicting copies, coordinator-local None, old Skill-owned Auto, and mixed per-step policies. Equal proven copies can collapse; ambiguous intent requires review. Supported historical replay retains original bytes and semantics. New authoring has no permanent override aliases.
 
-## Security and Policy
+## Conformance
 
-Input schemas and UI schemas are untrusted catalog data. The frontend must treat them as data, not executable code.
+Required coverage exercises the real catalog, expansion, compiler, fan-out, and form boundaries:
 
-Requirements:
+- New supported schemas render without per-preset frontend branches.
+- Required fields, alternatives, safe widgets, task defaults, and nested errors behave consistently for Skills and Presets.
+- Apply/Reapply and unexpanded Submit produce equivalent targets, policy, and provenance.
+- Changing repository/base/Run/publishing invalidates stale generated values without losing explicit user choices.
+- No editable repository/branch/publish passthrough duplicates exist in guided or Advanced preset settings.
+- Every built-in family in the matrix produces its declared Auto behavior, supported explicit choices, and required code handoffs.
+- Coordinators preserve descendant PR/Auto intent through arbitrary supported nesting without acquiring unnecessary publication authority themselves.
+- A child or included assessment cannot replace the scope policy. A contradictory composition fails before effects.
+- Partial dispatch, duplicate requests, policy-conflicting idempotency reuse, dry run, and zero-target runs retain truthful outcomes.
+- Schedules, edit/rerun, MCP/API, legacy reconstruction, and immutable-history replay preserve the correct contract and definition evidence.
+- Retired workspace/default aliases cannot affect new expansion, and historical configured choices are preserved or reviewed rather than silently replaced.
 
-- Widget names resolve only through a local allowlist registry.
-- Markdown descriptions are sanitized before rendering.
-- Binding expressions are evaluated by a safe deterministic interpreter.
-- Secrets are never exposed through schema defaults.
-- Sensitive input values are redacted from provenance unless explicitly classified as safe.
-- Expanded steps pass through the same policy checks as manually created steps.
-
-## Persistence
-
-MoonMind should persist both the configured preset step and the expanded step provenance when useful.
-
-Persisted records should support:
-
-- draft reconstruction
-- edit and re-run
-- audit/debugging
-- comparison between original preset inputs and edited generated steps
-- future migrations when preset content changes
-
-Preset content evidence is immutable once Workflow Executions have been created from it. Updating a preset creates a new content digest while the preset remains identified by slug and scope.
-
-## Implementation Requirements
-
-To fully realize this design, MoonMind needs:
-
-1. A canonical preset manifest model with `input_schema`, optional `ui_schema`, defaults, expansion rules, and content-addressed evidence.
-2. Backend validation of preset inputs using the same schema returned to the frontend.
-3. A generic schema-form renderer on the Create page.
-4. A reusable widget registry for semantic widgets such as Jira issue picker.
-5. Removal of preset-specific Create page branches.
-6. A shared backend expansion service used by apply, reapply, submit-time auto-expansion, and API-created Workflow Executions.
-7. Provenance on expanded steps.
-8. Recursive expansion support with cycle detection.
-9. Field-addressable validation errors.
-10. Tests that prove new presets can add inputs without changing Create page logic.
-
-## Testing Strategy
-
-Tests should cover:
-
-- catalog loading of a preset with `input_schema`
-- frontend rendering of required and optional fields from schema
-- Jira issue picker selection populating the configured preset input object
-- validation failures for missing required fields
-- submit-time auto-expansion for unexpanded preset steps
-- nested preset input mapping
-- cycle detection
-- provenance on expanded steps
-- adding a new preset with a new schema that uses existing widgets without modifying Create page preset logic
-
-The key acceptance test is: a developer can add a new preset manifest with a supported schema and widget hints, and the Create page renders the required inputs automatically without any new preset-specific React code.
-
-## Related Documents
-
-- `docs/UI/CreatePage.md`
-- `docs/Steps/StepTypes.md`
-- `docs/Steps/SkillSystem.md`
-- `docs/Steps/JiraIntegration.md`
-- `docs/Workflows/WorkflowArchitecture.md`
-- `docs/Workflows/WorkflowEditingSystem.md`
+Implementation backlogs and rollout checklists belong outside this canonical design. A documentation or seed update alone is not proof of conformance.

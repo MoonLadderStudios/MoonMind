@@ -3,20 +3,20 @@
 **Document Class:** Canonical declarative  
 **Viewpoint:** System / Feature Design View  
 **Status:** Proposed  
-**Updated:** 2026-09-04  
+**Updated:** 2026-09-06  
 **Audience:** Workflow and runtime authors, integration authors, security reviewers, operators, and dashboard contributors  
 **Authority:** Feature-level target behavior for optional repository access, connection-bound authentication, durable workspace results, and independently authorized publication  
 **Owning Surface:** Workflow admission, repository access, workspace materialization, publishing, Secrets System, and runtime integration boundaries  
-**Related Docs:** [MoonMind Architecture](MoonMindArchitecture.md), [Workflow Architecture](Workflows/WorkflowArchitecture.md), [Lore VCS Integration](Workflows/LoreVcsIntegrationDesign.md), [Workflow Publishing](Workflows/WorkflowPublishing.md), [Workspace Locators](Workflows/WorkspaceLocators.md), [Secrets System](Security/SecretsSystem.md), [Provider Profiles](Security/ProviderProfiles.md), [Omnigent Harness Platform](Omnigent/OmnigentHarnessPlatformDesign.md), [OpenCode Host](Omnigent/OpenCodeHost.md), [MoonSpec Document Model](Workflows/MoonSpecDocumentModel.md)  
+**Related Docs:** [MoonMind Architecture](MoonMindArchitecture.md), [Workflow Architecture](Workflows/WorkflowArchitecture.md), [Lore VCS Integration](Workflows/LoreVcsIntegrationDesign.md), [Workflow Publishing](Workflows/WorkflowPublishing.md), [Workspace Locators](Workflows/WorkspaceLocators.md), [Secrets System](Security/SecretsSystem.md), [Provider Profiles](Security/ProviderProfiles.md), [Omnigent Harness Platform](Omnigent/OmnigentHarnessPlatformDesign.md), [OpenCode Host](Omnigent/OpenCodeHost.md), [MoonSpec Document Model](Workflows/MoonSpecDocumentModel.md), [Create Page](UI/CreatePage.md), [Input Schema Guidance](Steps/InputSchemaGuidance.md)  
 **Related Implementation:** [`repository_contract.py`](../moonmind/workflows/executions/repository_contract.py), [`workspace_intent.py`](../moonmind/omnigent/workspace_intent.py), [`moonmind/auth/`](../moonmind/auth/), [`moonmind/publish/`](../moonmind/publish/), [`moonmind/omnigent/host_services/`](../moonmind/omnigent/host_services/), and [`SecretsService`](../api_service/services/secrets.py)
 
-> This document describes proposed desired state, not implemented API support or deployment evidence. It expresses the consolidated multi-PAT and workspace-decoupling design. Sequencing, current-state findings, migration inventories, and qualification procedures live in the [temporary implementation plan](tmp/RepositoryAccessAndWorkspaceDecouplingPlan.md), which derives from this design rather than defining a competing target.
+> This document describes proposed desired state, not implemented API support or deployment evidence. It expresses the consolidated multi-PAT and workspace-decoupling design. Sequencing, current-state findings, migration inventories, and qualification procedures live in the [temporary implementation plan](tmp/RepositoryAccessAndWorkspaceDecouplingPlan.md), which derives from this design rather than defining a competing target. The single-context publication contract is owned by Workflow Publishing; current helper or seed defaults do not override it.
 
 ## Advance organizer
 
 **One sentence:** Repository access is an optional execution capability, while saved work is durable independently of repository credentials and remote publication.
 
-**One paragraph:** A repository is one workspace source, GitHub is one Git hosting service, a PAT is one authentication mechanism, and a pull request is one publication result. None is a prerequisite for agent compute. MoonMind prepares a contained scratch, repository, artifact, checkpoint, or explicitly authorized existing workspace, runs the selected agent, and preserves useful output through its artifact and checkpoint systems. Named `RepositoryConnection` records select repository authority deterministically. Immediate and deferred publication use that same authority boundary. Model Provider Profiles, repository credentials, registry authentication, and artifact permissions remain separate.
+**One paragraph:** A repository is one workspace source, GitHub is one Git hosting service, a PAT is one authentication mechanism, and a pull request is one publication result. None is a prerequisite for agent compute. MoonMind prepares a contained scratch, repository, artifact, checkpoint, or explicitly authorized existing workspace, runs the selected agent, and preserves useful output through its artifact and checkpoint systems. Named `RepositoryConnection` records select repository authority deterministically. Immediate and deferred publication use that same authority boundary. Model Provider Profiles, repository credentials, registry authentication, and artifact permissions remain separate. Ordinary same-repository workflows and their batches author repository, branch, and publication once; steps and children receive role-appropriate derived contracts.
 
 ## 1. Purpose and ownership
 
@@ -30,18 +30,18 @@ The design establishes one consumer boundary for repository authentication. PATs
 
 | Responsibility | Owner and relationship |
 | --- | --- |
-| Authored and resolved repository targets, endpoint/client policy, connections, and repository capabilities | Existing workflow repository contracts. `provider: git \| lore` retains its VCS meaning. A hosting-service discriminator does not replace it. |
+| Authored and resolved repository targets, endpoint/client policy, connections, and repository capabilities | Existing workflow repository contracts. `provider: git | lore` retains its VCS meaning. A hosting-service discriminator does not replace it. |
 | Source intent and contained workspace ownership | Existing execution/workspace-intent contracts and workspace materializers. Scratch does not introduce a parallel workspace hierarchy. |
 | Secret references, encrypted storage, revision lifecycle, and secret-use authorization | Secrets System. Connections reference it and do not copy token values into another store. |
 | Model account, model policy, runtime profile, and model capacity | Provider Profiles. Repository identities are not model-provider profiles. |
 | Immutable execution bindings, runtime delivery, attestation, and cleanup | Existing managed and Omnigent execution boundaries. Repository bindings extend the existing envelope. |
 | Saved content, checkpoints, access control, retention, and restore | Artifact and checkpoint systems. A saved-work manifest indexes their evidence rather than replacing them. |
-| Candidate construction, remote mutation, and publication evidence | Existing publisher and repository-provider adapters. Deferred publication is not a second publishing engine. |
+| Authored publication intent, compiled roles, candidate construction, remote mutation, and evidence | Existing UserWorkflow compiler, publisher, and repository-provider adapters. Deferred publication is not a second publishing engine. |
 | Image acquisition | Deployment registry authentication. Source credentials are not a registry fallback. |
 
 This view owns the feature's desired integration behavior. Formal module interfaces remain with their providing modules. It does not duplicate the Secrets System parser, Lore source-authority rules, Skill semantics, or provider-specific publication evidence schemas.
 
-The target explicitly extends repository-required authoring and remote-only recovery assumptions. `none` preserves results without a final repository publication, and verified artifact storage provides the credentialless durability handoff. These are proposed changes to the owning contracts and guidance, not claims that an existing mandatory gate may already be bypassed. Settled architecture is promoted into its owning views under the [Documentation Architecture Standard](DocumentationArchitecture.md).
+The target explicitly extends repository-required authoring and remote-only recovery assumptions. `none` preserves results without repository publication, and verified artifact storage provides the credentialless durability handoff. These are target changes to the owning contracts and guidance, not claims that an existing mandatory gate may already be bypassed. A deployment lacking a qualified artifact-preservation path must reject an incompatible new None/scratch execution before mutation rather than discard work or grant a recovery push. Settled architecture is promoted into its owning views under the [Documentation Architecture Standard](DocumentationArchitecture.md).
 
 ### INV-001 Authority is never inferred from an available credential
 
@@ -65,9 +65,9 @@ Missing, ambiguous, disabled, revoked, or insufficient authority never causes cr
 | Publish now or later | Separately admitted destination and mutation operations | Verified branch or PR evidence linked to saved work |
 | Use an existing local workspace | Explicit locator and ownership grant | Policy-approved outputs without an arbitrary host-path shortcut |
 
-A task requesting immediate remote publication is not silently converted into save-only work when credentials are missing. The operator can choose that adaptation explicitly. A save-only task is not blocked by hypothetical future publication requirements.
+An execution requesting immediate remote publication is not silently converted into save-only work when credentials are missing. The operator can choose that adaptation explicitly. A save-only execution is not blocked by hypothetical future publication requirements.
 
-The default experience is a new blank workspace, results saved in MoonMind, no publication, and the existing automatic agent default. Free/anonymous model availability is governed by Section 11, not by repository setup.
+The blank-workspace default is results saved in MoonMind, no publication, and the existing automatic agent default. User-facing Auto resolves to that declared no-publication behavior for scratch work unless the selected task composition explicitly declares and admits a different output. Free/anonymous model availability is governed by Section 11, not by repository setup.
 
 ## 3. Authoring and capability contracts
 
@@ -112,9 +112,11 @@ publish:
   mode: none
 ```
 
-The top-level authored `repository` compiles to the existing runtime `repositoryTarget` projection. Worker `publishMode` is likewise a compilation result, not another input authority. Conflicting new-write aliases are rejected before external access.
+The authored `repository` compiles to the runtime `repositoryTarget` projection. Worker `publishMode` is likewise a compilation result, not another input authority. Conflicting new-write aliases are rejected before external access.
 
 An omitted source branch requests the remote default branch. The trusted preparation boundary records the observed branch and exact revision rather than assuming `main`. Immutable Git/Lore revision selectors retain their provider-specific semantics. Empty remotes, missing branches, and inaccessible repositories remain distinct outcomes.
+
+Ordinary same-repository work presents one repository and one applicable authored branch. Equivalent Skill/Preset arguments bind to this context and are not copied into independent editable fields. A managed PR uses the authored base and a generated head; branch publication updates the authored branch. Existing-PR work derives head/base from its validated PR target, and each PR-batch child uses its own target. Discovery cannot replace an explicitly selected implementation base with a repository default. Source, comparison, collaboration, and destination roles are kept distinct only when genuinely required and independently authorized by the supported operation.
 
 ### CONTRACT-003 Authentication intent precedes acquisition
 
@@ -134,15 +136,21 @@ The shared capability compiler derives requirements from source kind, resolved S
 
 Scratch reports need neither Git nor `gh`. Scratch Git exports require local Git but no remote credential. Anonymous Git input requires approved transport and repository-read capability, not an unrelated GitHub user or PR API probe. Branch publication requires branch/write authority without automatically demanding PR or issue-write permission.
 
-`publish.mode=none` disables final repository publication, not all task side effects. An issue-editing Skill still needs its declared issue authority. `auto` uses the resolved Skill's declared operations and terminal evidence contract. Publication mode does not select a native reimplementation of Skill behavior.
+Explicit authored None forbids repository publication in the scoped workflow tree, not all task side effects. An issue-editing Skill still needs its declared issue authority. Compiled `auto` uses the resolved Skill's declared operations and terminal evidence contract. Publication mode does not select a native reimplementation of Skill behavior.
+
+Requirements are derived per execution role. A coordinator's inherited PR policy does not inject destination-write credentials into its own discovery session. The child publisher acquires only its admitted authority. Conversely, a read-only step cannot erase the parent scope's publication objective or a later step's valid requirements. Explicit None combined with a Skill requiring push/merge fails before execution rather than being treated as permission to run its effects anyway.
 
 Friendly indexing, readiness, publish, and full-PR-automation profiles are presets for versioned capability bundles, not an ordered privilege ladder. Workflow-file writes, issue writes, reviews, checks, and merges are required only where declared behavior needs them.
 
 ### INV-002 Explicit publication intent is preserved
 
-The publication modes remain `none`, `branch`, `pr`, and agent-owned `auto`. A new explicit `none` cannot silently become `auto`. An incompatible Skill selection receives a visible correction before submission. Historical decoding does not reopen that normalization for new authoring.
+[Workflow Publishing](Workflows/WorkflowPublishing.md) defines one authored selection per workflow or batch: `default`, `none`, `branch`, `pr`, or `pr_with_merge_automation`. Omission and `default` display as Auto and resolve declared workflow behavior. Compiled worker modes remain `none`, `branch`, `pr`, and Skill-owned `auto`; PR-and-merge compiles to PR plus existing automation configuration. The authored snapshot and compiled plan are separate projections of one intent, not competing settings.
 
-Omitted publication mode follows the selected Skill's documented default. Blank-workspace defaults resolve to `none`; a Skill declaring agent-owned publication can resolve omission to `auto`. The effective objective and required authority are visible before submission.
+A new explicit `none` cannot silently become Auto or authorize descendant push/merge. An incompatible Skill selection receives a visible correction. Historical literal `auto` retains its recorded Skill-owned meaning; historical decoding does not reinterpret it as general default or reopen None-to-Auto normalization for new authoring.
+
+A coordinator can compile its own publication to None while forwarding the frozen scope's PR or Skill-owned intent to children. Inheritance survives intermediate coordinators and is enforced against authenticated parent authority at child admission. A dependency edge to an independently authored workflow does not change that workflow's policy. Task options such as resolver `fix_only` narrow finish behavior but still require push authority; they do not mean None.
+
+Blank-workspace defaults resolve to no publication. Implementation and batch defaults follow their declared output matrix. The effective objective, scope, and merge behavior are visible before submission. Definition changes, retries, and helper-local defaults cannot silently re-resolve already admitted intent. Parallel shared-branch output and dependent-code handoffs obey the restrictions in Workflow Publishing.
 
 ## 4. Repository connections and routing
 
@@ -184,14 +192,14 @@ For connection-backed access, the principal is authorized before candidate ident
 
 The selected route and policy are persisted before repository access. Exact provider identity and source observations are verified through that selection before mutation. A failing selected route is not removed so another PAT can be tried. Authentication errors, access denial, a hidden-or-missing repository, network failure, and throttling never reroute the execution.
 
-A simple same-repository workflow normally uses one connection for its declared operations. Separate source, collaboration, and destination identities require explicit role policy. Batch children resolve their own repository authority or inherit a verified compatible binding, never a parent's raw PAT.
+A simple same-repository workflow normally uses one connection for its declared operations. Separate source, collaboration, and destination identities require explicit role policy. Batch children resolve their own permitted repository authority or inherit a verified compatible binding, never a parent's raw PAT. They cannot choose another repository/connection to escape the frozen publication scope. Target-derived PR branches remain validated target roles, not user-authored per-child overrides.
 
 ### QUALITY-001 Validation evidence is not an authorization grant
 
 | Dimension | Meaning |
 | --- | --- |
 | MoonMind authorization | Mandatory policy describing permitted repositories and operations |
-| Observed provider capability | Repository/operation evidence with `verified`, `denied`, `unknown`, or `stale` status |
+| Observed provider capability | Repository/operation evidence with verified, denied, unknown, or stale status |
 | Authentication condition | Validity, expiry, revocation, approval requirement, or unknown condition |
 | Operational condition | Throttling or temporary unavailability without a change of identity |
 
@@ -272,9 +280,9 @@ Where a CLI requires authentication for a declared operation, the selected runti
 
 The routing guarantee covers MoonMind-controlled operations: they use the admitted repository, operation, and identity. A raw PAT exposed to agent code retains its provider-granted scope, even if MoonMind's routing allowlist is narrower.
 
-Confinement against arbitrary code requires credentials limited to the admitted scope or mediation that exposes no broader credential and has no credential/network bypass. A token-returning broker or agent-readable `gh` configuration alone does not prove confinement. `publish.mode=none` is not a sandbox when the agent can access a broad write token.
+Confinement against arbitrary code requires credentials limited to the admitted scope or mediation that exposes no broader credential and has no credential/network bypass. A token-returning broker or agent-readable `gh` configuration alone does not prove confinement. A None selection or prompt is not a sandbox when the agent can access a broad write token. The target's strict publication policy requires a qualified enforcement boundary or rejection of the unsupported combination, not a stronger UI promise than the runtime can honor.
 
-MoonMind-managed publication keeps destination write credentials outside the agent and acquires them at the publisher boundary. Agent-owned `auto` execution needs a qualified mediated path or an explicitly accepted credential-exposing policy. High-security mode rejects unsupported confinement rather than reducing isolation silently.
+MoonMind-managed publication keeps destination write credentials outside the agent and acquires them at the publisher boundary. Skill-owned `auto` execution needs a qualified mediated path or an explicitly accepted credential-exposing policy. High-security mode rejects unsupported confinement rather than reducing isolation silently.
 
 ### INV-005 Anonymous access does not remove source-safety controls
 
@@ -301,6 +309,8 @@ A self-contained saved result restores under artifact authorization without its 
 Once an exact source snapshot is prepared, local compute and save-only finalization do not reacquire source credentials unless a declared operation needs them. Source-token expiry alone does not discard authorized local work. Current execution policy still governs whether a disabled execution can continue.
 
 Continuation creates a fresh execution owner and re-admits requested external operations. Workspace restoration and provider-session reattachment are separately qualified capabilities. Restored content never revives leases, approvals, or permission to repeat external side effects.
+
+A dependency's successful completion does not itself transfer its candidate into another workspace. A dependent batch names a verified merge/common-base, candidate/checkpoint-transfer, or qualified shared-branch handoff. Changing its publishing selection cannot silently remove that required source relationship.
 
 ## 8. Saved work and finalization
 
@@ -342,13 +352,13 @@ quiesced workspace
   -> remaining workspace/cleanup release
 ```
 
-This is a durability dependency, not a second publisher. Agent-owned `auto` mutations remain owned by the Skill during execution; finalization validates their canonical evidence and preserves results without replaying the Skill's decisions.
+This is a durability dependency, not a second publisher. Skill-owned `auto` mutations remain owned by the Skill during execution; finalization validates canonical evidence and preserves results without replaying its decisions.
 
 Compute, save, and publication outcomes remain separate. Failed/cancelled compute can still save useful work without becoming successful compute. Publication failure does not overwrite verified compute/save evidence. Process exit, prose, or a dashboard projection is not proof of durable saving or remote publication.
 
 Save failure retries the same capture with stable idempotency and retains the authoritative workspace under bounded recovery. Ordinary cleanup cannot destroy the only copy because a report or status projection failed. Credentials no longer needed are released independently of workspace retention.
 
-A credentialless execution completes its durability handoff through verified artifact storage. A remote recovery branch requires an already admitted destination and mutation authority. Missing GitHub credentials are not a reason to skip saving or acquire an unrequested remote identity.
+A credentialless or explicit-None execution completes its durability handoff through verified artifact storage. A remote recovery branch requires an already admitted destination and mutation authority compatible with the scope policy. None cannot be bypassed by calling a push a checkpoint. Missing GitHub credentials are not a reason to skip saving or acquire an unrequested remote identity. A retained local path is not a verified saved result.
 
 ### QUALITY-005 Retention and access follow saved-work ownership
 
@@ -360,11 +370,13 @@ Quotas, bounded failed-work retention, and cleanup ownership prevent unbounded s
 
 ### CONTRACT-013 Publish Saved Work uses the existing publisher
 
-Publication-only execution accepts an immutable `savedWorkRef`, an authorized destination target, supported existing publication mode, and explicit application policy. It does not rerun the agent by default and does not introduce a separate publication token setting.
+Publication-only execution accepts an immutable `savedWorkRef`, an authorized destination target, a supported managed publication objective, and explicit application policy. It does not rerun the agent by default and does not introduce a separate publication token setting.
 
 The saved result's authorization, digest, and completeness are verified. Destination repository/branch, connection, operations, client/policy snapshot, and remote expectation are newly admitted. A clean contained workspace receives content without old credentials or approvals. Candidate construction is deterministic, provenance-preserving, and scanned under current destination policy.
 
 Mutation uses the existing protected-branch and compare-and-set/lease controls. The exact remote revision is verified, and a PR is created or adopted only when requested and supported. Canonical provider-aware publication evidence links the saved-work digest and destination authority. A self-contained result requires no original source PAT.
+
+The one-control authoring contract does not replay an old workflow's Auto to choose new side effects. Publish Saved Work admits its own explicit Branch/PR objective and supported automation, if any, under the same compiler. None is deliberate non-publication. An old Skill-owned Auto result cannot be converted into a publication-only Skill execution or a claim that unrelated resolver/tracker effects completed.
 
 ### INV-008 Destination relationships determine safe application
 
@@ -385,7 +397,7 @@ Publication idempotency includes saved-work digest, admitted destination, applic
 
 A stale baseline or conflict blocks publication while preserving original saved work. Replanning onto a newer base produces a new candidate/attempt and required approval. Changing connection or destination requires re-admission. The original saved artifact and compute outcome are immutable.
 
-Ordinary `auto` execution remains Skill-owned. Publication-only recovery does not rerun or replace its semantic decisions, accept another attempt's stale evidence, or claim that an independently authorized branch publication completes unrelated Skill side effects.
+Compiled `auto` remains Skill-owned. Publication-only recovery does not rerun or replace its semantic decisions, accept another attempt's stale evidence, or claim that an independently authorized branch publication completes unrelated Skill side effects.
 
 ## 10. Compatibility and observability
 
@@ -394,6 +406,8 @@ Ordinary `auto` execution remains Skill-owned. Publication-only recovery does no
 Changed contracts are versioned at their actual owning boundary, not duplicated as a parallel `RepositoryTargetV2` domain. Historical binding loaders verify original parsing and digest rules before interpretation. New-write producers use one canonical contract and reject historical aliases.
 
 Recorded workflows retain compatible deterministic decisions and worker support. Versioned execution cannot fall back to a singleton resolver. `repository-connection:git-default` remains the compatibility identity for an explicitly bound effective legacy source, not a live chain of guessed credentials. Detailed migration and retirement mechanics belong in the temporary plan.
+
+Reconstruction preserves authored, bound, and derived values separately. Proven equal repository/branch copies can collapse; conflicts or unknown origins require review. A coordinator-local None with proven child PR intent reconstructs as one PR scope, not a global None selection. Old literal Auto and recorded None-to-Auto coercion retain their historical execution interpretation but do not become new authoring defaults. Schedule edits and reruns re-admit reviewed intent without rewriting existing children or historical hashes.
 
 ### QUALITY-007 Failures identify the responsible boundary
 
@@ -427,19 +441,23 @@ When the provider is unavailable or no model satisfies policy, the application r
 
 ### DOC-REQ-004 Setup exposes choices without exposing credential plumbing
 
-The normal creation view presents workspace source, saved results, publication, and agent selection. Scratch and anonymous public reads have no mandatory GitHub connection dialog. Repository/artifact/checkpoint input and advanced local-workspace access are alternative sources, not hidden prerequisites.
+The normal creation view presents workspace source, saved results, one publication selection, Runtime, and one ordinary Profile. Scratch and anonymous public reads have no mandatory GitHub connection dialog. Repository/artifact/checkpoint input and advanced local-workspace access are alternative sources, not hidden prerequisites.
+
+For ordinary repository work, Skill/Preset settings do not repeat repository, branch, or publish-mode controls. Typed context bindings supply equivalent arguments. Read-only explanations identify the workflow context or resolved PR target. Meaningful task options such as filters, verification, review provider, and Merge when ready remain available. Auto explains the selected batch's child outputs and possible merges while distinguishing its coordinator's own no-publication role.
 
 The Source Control wizard accepts a name and token, verifies the actor, selects repositories, and saves/tests the connection. It creates a Managed Secret internally. Authorized reuse of an existing secret is an advanced action. Actor, resource owner, repositories, health, and expiry are prominent; revisions, materializers, detailed probes, and per-operation routing are progressively disclosed.
 
-Repository discovery uses a connection the principal may use, deduplicates by endpoint/provider identity, and never depends on a global token. Public URL entry does not require authenticated discovery. Simple routing presents one default; separate read/publication identities remain explicit advanced choices.
+Repository discovery uses a connection the principal may use, deduplicates by endpoint/provider identity, and never depends on a global token. Public URL entry does not require authenticated discovery. Simple routing presents one default; separate read/publication identities remain explicit advanced choices when genuinely required.
 
-Creation and Workflow Detail always show resolved identity, even when no selector is necessary. Anonymous source plus no publication is labeled as such. Connected work identifies the named connection and authenticated actor, with separate roles when they differ.
+Creation and Workflow Detail always show resolved identity, even when no selector is necessary. Anonymous source plus no publication is labeled as such. Connected work identifies the named connection and authenticated actor, with separate roles when they differ. Stale lookup responses cannot replace a changed source, base, PR, or connection.
 
 ### DOC-REQ-005 Results distinguish saving from publishing
 
 Result views expose actual reports, available downloads, completeness, retention, Continue working, and Publish Saved Work. Inapplicable formats do not appear as broken buttons. Saved-but-not-published is a successful save state, not a credential failure.
 
 Compute, save, and publication status remain separately inspectable. Blocked publication offers publication-only recovery. Failed saving reports preserved-workspace and bounded retry state without claiming durable artifacts exist. A change from requested publication to save-only requires an explicit operator choice.
+
+The displayed authored selection is not replaced by a coordinator's derived None or a resolver's internal Auto. Batch enqueue success is distinct from child publication progress. Details link the actual child outcomes and explain the applicable scope policy. No new editable policy field or duplicate result store is introduced.
 
 ## 13. Conformance obligations
 
@@ -449,19 +467,21 @@ Every advertised runtime × source × access mode × output/publication combinat
 
 Required CI is hermetic and exercises production boundaries with local remotes, controlled identity/expiry endpoints, clocks, and artifact/database services as appropriate. Live provider qualification is separately labeled. A mocked catalog or profile-seeding test alone cannot prove the no-account product journey.
 
+Coverage includes the single authored context and policy across Create, Apply/Reapply, unexpanded Submit, API/MCP, schedules, edit/rerun, and child admission. Coordinator None with PR/Auto descendants, non-default bases, per-PR heads, explicit None, shared-branch conflicts, and required candidate handoffs use the production compiler rather than UI-only fixtures.
+
 ### TEST-002 Credential isolation survives concurrency and lifecycle changes
 
 Conformance proves that explicit connection B wins over ambient PAT A across clone, API, CLI, publication, and recovery, or fails closed. Concurrent identities cannot share configuration or cleanup authority. Conflicting defaults fail transactionally, and reducing connection count never restores ambient fallback.
 
 Rotation races preserve correct revision attribution; a failed replacement leaves the active credential usable. Expiring-issuance conformance demonstrates scope-preserving refresh, bounded concurrent renewal, and revocation through the same consumer boundary used for PATs. This evidence does not wait for live App enrollment support.
 
-Unauthorized discovery/probing/secret attachment leaks neither metadata nor secrets. Public GET success cannot falsely verify write/private access. High-security policy rejects unproven confinement. Historical histories retain original meaning and digests while new writes reject superseded aliases.
+Unauthorized discovery/probing/secret attachment leaks neither metadata nor secrets. Public GET success cannot falsely verify write/private access. High-security policy rejects unproven confinement. Historical histories retain original meaning and digests while new writes reject superseded aliases. Inherited policy never hands a coordinator unnecessary child publication credentials.
 
 ### TEST-003 Saved work survives host and credential loss
 
 Scratch/report and anonymous-repository journeys produce verified required outputs without repository credential resolution. A host can be removed and a self-contained result downloaded/restored without its source PAT. Unsafe imports, exports, redirects, and undeclared dependencies do not escape their boundaries.
 
-Preparation crashes cannot promote partial directories. Failed/cancelled compute retains its primary outcome while capture is attempted. Save failures preserve bounded recoverable state without ordinary cleanup destroying the sole copy. Save success remains valid when publication fails.
+Preparation crashes cannot promote partial directories. Failed/cancelled compute retains its primary outcome while capture is attempted. Save failures preserve bounded recoverable state without ordinary cleanup destroying the sole copy. Save success remains valid when publication fails. Explicit None cannot trigger a remote recovery push to satisfy preservation.
 
 Deferred publication covers known-baseline deltas, unrelated-repository imports, conflicts, empty-target races, and lost push/PR responses. Destination files absent from scratch input are preserved by default. Recovery neither reruns the agent nor mutates the original saved result.
 
@@ -469,25 +489,26 @@ Deferred publication covers known-baseline deltas, unrelated-repository imports,
 
 Under controlled eligible-model availability, a clean documented deployment with no GitHub/model credentials or login caches starts, acquires public images, admits the qualified free route, submits the default scratch workflow, saves a useful result, and restores it after host removal. The same admission path supports anonymous public input and later connection-backed publication without agent rerun.
 
-With no eligible model, the app stays usable and reports the correct boundary without spending money, accepting privacy terms, or requesting a PAT. Separate live smoke evidence records actual third-party availability and exact runtime behavior. Upgrade evidence preserves operator defaults, saved-draft intent, and active-history interpretation.
+With no eligible model, the app stays usable and reports the correct boundary without spending money, accepting privacy terms, or requesting a PAT. Separate live smoke evidence records actual third-party availability and exact runtime behavior. Upgrade evidence preserves operator defaults, saved-draft intent, and active-history interpretation, including the distinction between authoring Auto and compiled Skill-owned Auto.
 
 ## 14. Rationale and scope boundaries
 
 ### NON-GOAL-001 Decoupling is not a universal integration platform
 
-This design does not require arbitrary host mounts, all repository providers, user-scope inheritance, a free-model marketplace, a new blob store, a second publisher, a general credential microservice, or another always-on container. GitHub Apps, OAuth, SSH, enterprise endpoints, and other hosts are explicit capabilities with their own enrollment/qualification, not unimplemented options shown as ready.
+This design does not require arbitrary host mounts, all repository providers, user-scope inheritance, a free-model marketplace, a new blob store, a second publisher, a general credential microservice, or another always-on container. GitHub Apps, OAuth, SSH, enterprise endpoints, and other hosts are explicit capabilities with their own enrollment/qualification, not unimplemented options shown as ready. The single-context contract does not introduce arbitrary multi-repository agent workspaces or per-step authority overrides.
 
 ### QUALITY-009 Existing authorities keep the overhaul maintainable
 
 | Choice | Rationale and rejected alternative |
 | --- | --- |
-| Extend `RepositoryConnection` | Avoid duplicate connection identity, policy lookup, and synchronization with a new Source Control domain. |
+| Extend RepositoryConnection | Avoid duplicate connection identity, policy lookup, and synchronization with a new Source Control domain. |
 | Bind clients to admitted roles | Avoid per-call PAT plumbing, probing every token, and accidental source/destination identity changes. |
 | Separate revision from issuance | Support PAT rotation and short-lived token refresh without conflating them or retaining old secrets indefinitely. |
 | Artifact-first saved work | Preserve output without a GitHub dependency or unrequested recovery push. |
 | Conditional local Git exports | Support reports and ordinary files without fake Git identities or unsafe whole-history export. |
 | One immediate/deferred publisher | Keep destination policy, remote verification, and recovery semantics consistent. |
+| One authored policy with derived execution roles | Remove duplicate controls without forcing non-publishing coordinators to create PRs or stripping children of their intent. |
 | Runtime-specific credential delivery | Reuse qualified brokers/materializers instead of imposing one token-file mechanism everywhere. |
 | Explicit free-model policy | Avoid silent cost/privacy changes and impossible promises about external availability. |
 
-The completion property is architectural: repository-independent work never enters repository credential resolution; authenticated operations follow one admitted authority chain; saved work outlives hosts and credentials; and new authentication adapters can satisfy the same execution/publication boundary without PAT-specific consumer changes.
+The completion property is architectural: repository-independent work never enters repository credential resolution; authenticated operations follow one admitted authority chain; saved work outlives hosts and credentials; and new authentication adapters satisfy the same execution/publication boundary without PAT-specific consumer changes.
