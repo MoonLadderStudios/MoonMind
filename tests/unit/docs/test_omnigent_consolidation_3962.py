@@ -54,11 +54,12 @@ def test_entrypoint_exists_with_startup_path_and_limitations() -> None:
     ):
         assert term in text, term
     # A shared image never authorizes every installed harness (#3964: exact
-    # "never authorizes every installed runtime" wording loosened to the
-    # authorization contract so rewording does not break the guard).
+    # "never authorizes every installed runtime" wording loosened to
+    # stem-level authorization-contract terms so every->all or
+    # authorizes->grant-authorization rewording does not break the guard).
     assert_semantic_present(
         text,
-        ("never", "authoriz", "every installed"),
+        ("never", "authoriz", "installed", "runtime"),
         context="entrypoint shared-image authorization limit",
     )
     # Credential ownership distinction is summarized, not merged (#3964:

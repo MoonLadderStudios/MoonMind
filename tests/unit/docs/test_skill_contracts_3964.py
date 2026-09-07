@@ -134,7 +134,7 @@ def test_semantic_helper_survives_harmless_rewording() -> None:
     original = "The shared image never authorizes every installed runtime."
     reworded = "A  shared\nimage   must NEVER grant authorization to all installed runtimes!"
     assert_semantic_present(
-        reworded, ("never", "authoriz", "every installed"), context="reword"
+        reworded, ("never", "authoriz", "installed", "runtime"), context="reword"
     )
     assert original != reworded  # the wordings genuinely differ
 
@@ -143,7 +143,9 @@ def test_semantic_helper_still_detects_concept_removal() -> None:
     mutated = "The shared image supports several installed runtimes."
     with pytest.raises(AssertionError, match="missing required concept"):
         assert_semantic_present(
-            mutated, ("never", "authoriz", "every installed"), context="mutated"
+            mutated,
+            ("never", "authoriz", "installed", "runtime"),
+            context="mutated",
         )
 
 
