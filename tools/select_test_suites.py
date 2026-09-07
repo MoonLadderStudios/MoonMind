@@ -84,6 +84,14 @@ API_COMPONENT_GLOBS = ("api_service/auth*",)
 
 TEMPORAL_BOUNDARY_EXACT = {
     "moonmind/schemas/managed_session_models.py",
+    # MoonLadderStudios/MoonMind#3959: the mechanical catalog generator, its
+    # generated reference, and the canonical lifecycle doc carrying the
+    # lifecycle anchors the generator links must select the drift and
+    # composition checks (tests/unit/workflows/temporal/
+    # test_workflow_catalog_generator.py).
+    "tools/generate_temporal_catalog.py",
+    "docs/Temporal/WorkflowTypeCatalogGenerated.md",
+    "docs/Temporal/WorkflowTypeCatalogAndLifecycle.md",
 }
 
 TEMPORAL_BOUNDARY_PREFIXES = (
