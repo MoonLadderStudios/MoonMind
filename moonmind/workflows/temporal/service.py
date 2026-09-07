@@ -3677,6 +3677,7 @@ class TemporalExecutionService:
                 finish_outcome_code=finish_outcome_code,
                 finish_summary=finish_summary,
             )
+            self._attach_terminal_governance_report(record)
             if record.close_status is None:
                 self._set_state(record, target_state, close_status=target_close_status)
                 if isinstance(record, TemporalExecutionCanonicalRecord):
@@ -3694,6 +3695,7 @@ class TemporalExecutionService:
             finish_outcome_code=finish_outcome_code,
             finish_summary=finish_summary,
         )
+        self._attach_terminal_governance_report(record)
         if summary:
             if target_state is MoonMindWorkflowState.FAILED:
                 category = str(error_category or "execution_error").strip()
@@ -3715,6 +3717,54 @@ class TemporalExecutionService:
             return record
         await self._fan_out_dependency_resolution(record)
         return await self._sync_projection_best_effort(record)
+
+    def _attach_terminal_governance_report(
+        self,
+        record: TemporalExecutionCanonicalRecord | TemporalExecutionRecord,
+    ) -> None:
+        """Attach an auxiliary per-run governance report at the terminal handoff.
+
+        Reporting failure is auxiliary: the canonical terminal state,
+        close status, and finish summary are always preserved, and no
+        exception escapes. The report (or its recoverable generation
+        status) is stored inside ``finish_summary_json["governanceReport"]``
+        so it is durable and projected through the existing execution API.
+        """
+
+        try:
+            from moonmind.governance.execution_integration import (
+                finalize_governance_for_terminal_execution,
+            )
+
+            payload = {
+                "workflow_id": getattr(record, "workflow_id", None),
+                "run_id": getattr(record, "run_id", None),
+                "state": getattr(getattr(record, "state", None), "value", getattr(record, "state", None)),
+                "close_status": getattr(
+                    getattr(record, "close_status", None), "value", getattr(record, "close_status", None)
+                ),
+                "owner_id": getattr(record, "owner_id", None),
+            }
+            result = finalize_governance_for_terminal_execution(payload)
+            current = getattr(record, "finish_summary_json", None)
+            summary = dict(current) if isinstance(current, Mapping) else {}
+            existing = summary.get("governanceReport")
+            if isinstance(existing, Mapping) and existing.get("report_id"):
+                return
+            report = result.get("report")
+            block: dict[str, Any] = {
+                "canonical_outcome": result.get("canonical_outcome"),
+                "generation_status": result.get("generation_status"),
+                "link": result.get("link"),
+            }
+            if isinstance(report, Mapping):
+                block["report_id"] = report.get("report_id")
+                block["status"] = report.get("status")
+                block["evidence_cutoff"] = report.get("evidence_cutoff")
+            summary["governanceReport"] = block
+            record.finish_summary_json = summary
+        except Exception:
+            return
 
     def _record_finish_summary(
         self,
