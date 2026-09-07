@@ -1,5 +1,6 @@
 # Workflow Image Input System
 
+**Document Class:** Module Contract Specification
 Status: Proposed
 Owners: MoonMind Engineering
 Last updated: 2026-04-16
@@ -28,7 +29,7 @@ This document is declarative. It defines the target system contract. It is not a
 - `docs/Workflows/WorkflowArchitecture.md`
 - `docs/Temporal/TemporalArchitecture.md`
 - `docs/Temporal/WorkflowTypeCatalogAndLifecycle.md`
-- `docs/Temporal/ArtifactPresentationContract.md`
+- `docs/Artifacts/ArtifactPresentationContract.md`
 
 ---
 

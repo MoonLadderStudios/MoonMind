@@ -1,5 +1,6 @@
 # Live Logs and Session-Aware Run Observability in MoonMind
 
+**Document Class:** Module Contract Specification
 Status: Desired state
 Owners: MoonMind Platform
 Last updated: 2026-04-08
@@ -9,9 +10,9 @@ Last updated: 2026-04-08
 - `specs/084-live-log-tailing/spec.md`
 
 **Related:**
-- [`docs/ManagedAgents/CodexCliManagedSessions.md`](./CodexCliManagedSessions.md)
+- [`docs/ManagedAgents/CodexCliManagedSessions.md`](../ManagedAgents/CodexCliManagedSessions.md)
 - [`docs/Temporal/ManagedAndExternalAgentExecutionModel.md`](../Temporal/ManagedAndExternalAgentExecutionModel.md)
-- [`docs/Temporal/ArtifactPresentationContract.md`](../Temporal/ArtifactPresentationContract.md)
+- [`docs/Artifacts/ArtifactPresentationContract.md`](../Artifacts/ArtifactPresentationContract.md)
 - 
 
 ## 1. Summary

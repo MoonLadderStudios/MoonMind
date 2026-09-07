@@ -1,5 +1,6 @@
 # OAuth Terminal and Managed Session Auth Volumes
 
+**Document Class:** Module Contract Specification
 **Replaces:** `docs/ManagedAgents/TmateArchitecture.md`
 **Status:** Desired state, Codex CLI and Claude Code session target
 **Owners:** MoonMind Engineering
@@ -10,7 +11,7 @@ Related:
 - [`docs/ManagedAgents/DockerOutOfDocker.md`](./DockerOutOfDocker.md)
 - [`docs/Security/ProviderProfiles.md`](../Security/ProviderProfiles.md)
 - [`docs/Temporal/ManagedAndExternalAgentExecutionModel.md`](../Temporal/ManagedAndExternalAgentExecutionModel.md)
-- [`docs/ManagedAgents/LiveLogs.md`](./LiveLogs.md)
+- [`docs/Observability/LiveLogs.md`](../Observability/LiveLogs.md)
 
 ## 1. Purpose
 
