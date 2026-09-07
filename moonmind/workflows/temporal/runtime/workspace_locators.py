@@ -246,6 +246,9 @@ class SandboxWorkspaceRecordStore:
                 try:
                     mutex.unlink()
                 except OSError:
+                    # Lost the reclaim race to a competing worker: fall
+                    # through to re-acquire below instead of proceeding
+                    # beside the new owner.
                     pass
                 continue
             with os.fdopen(descriptor, "w", encoding="utf-8") as stream:

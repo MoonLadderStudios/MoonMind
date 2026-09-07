@@ -19,10 +19,10 @@ from types import SimpleNamespace
 
 import pytest
 
-import moonmind.omnigent.workspace_artifacts as workspace_artifacts_module
 from moonmind.omnigent.harness_platform.failures import HarnessPlatformError
 from moonmind.omnigent.host_services.workspace import OmnigentWorkspaceMaterializer
 from moonmind.omnigent.workspace_artifacts import (
+    MAX_FILE_BYTES,
     WorkspaceArtifactProjectionError,
     WorkspaceArtifactProjector,
     cleanup_import_staging,
@@ -533,7 +533,7 @@ async def test_per_file_and_expanded_budgets_are_enforced(tmp_path, monkeypatch)
     import gzip
 
     raw = _tar_bytes([("big.bin", b"tiny", "file")], compress=False)
-    claimed = workspace_artifacts_module.MAX_FILE_BYTES + 1
+    claimed = MAX_FILE_BYTES + 1
     patched = bytearray(raw)
     patched[124:136] = f"{claimed:011o}\x00".encode("ascii")
     # Repair the header checksum (offset 148) so the claim reaches the
@@ -556,7 +556,9 @@ async def test_per_file_and_expanded_budgets_are_enforced(tmp_path, monkeypatch)
             runtime_gid=os.getgid(),
         )
 
-    monkeypatch.setattr(workspace_artifacts_module, "MAX_EXPANDED_BYTES", 10)
+    monkeypatch.setattr(
+        "moonmind.omnigent.workspace_artifacts.MAX_EXPANDED_BYTES", 10
+    )
     small = _tar_bytes([("a.txt", b"0123456789abcdef", "file")])
     service = WorkspaceArtifactProjector(FakeArtifactService({"c": small}))
     with pytest.raises(
