@@ -152,6 +152,39 @@ def is_complete_open_issue(payload: Any, repository: str) -> bool:
     )
 
 
+_IN_PROGRESS_LABELS = frozenset(
+    {
+        "status: in-progress",
+        "status:in-progress",
+        "status/in-progress",
+        "status_in-progress",
+        "status in-progress",
+        "status: in progress",
+        "status: inprogress",
+        "in-progress",
+        "in_progress",
+        "in progress",
+    }
+)
+
+
+def has_in_progress_status(issue: Mapping[str, Any]) -> bool:
+    """Return True when the issue already carries an in-progress status label."""
+    labels = issue.get("labels")
+    if not isinstance(labels, list):
+        return False
+    for label in labels:
+        if isinstance(label, Mapping):
+            name = label.get("name")
+        else:
+            name = label
+        if not isinstance(name, str):
+            continue
+        if name.strip().lower() in _IN_PROGRESS_LABELS:
+            return True
+    return False
+
+
 async def resolve_issue(
     *,
     repository: str,
@@ -159,7 +192,11 @@ async def resolve_issue(
     github_service: GitHubService,
     blockers_from_issue: Callable[[Mapping[str, Any]], Awaitable[list[dict[str, Any]]]],
 ) -> tuple[int | None, dict[str, Any]]:
-    """Select the best search match, or first unblocked open issue, within 500 rows."""
+    """Select the best search match, or first unblocked open issue, within 500 rows.
+
+    The default selector skips issues already marked with an in-progress status
+    label so concurrent work is not selected twice.
+    """
 
     if not re.fullmatch(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+", repository):
         raise ValueError(
@@ -241,6 +278,8 @@ async def resolve_issue(
                 normalized = dict(candidate)
                 labels = candidate["labels"]
                 normalized["labels"] = [label["name"] for label in labels]
+                if has_in_progress_status(normalized):
+                    continue
                 if not query and await blockers_from_issue(normalized):
                     continue
                 return candidate["number"], evidence

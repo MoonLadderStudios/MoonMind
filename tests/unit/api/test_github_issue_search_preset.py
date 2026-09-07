@@ -572,6 +572,32 @@ async def test_incomplete_selected_details_cannot_produce_a_trusted_brief(
     assert not any(request.method != "GET" for request in activity_boundary.requests)
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize("query", ["", "dashboard"])
+async def test_search_skips_in_progress_issues_and_revalidates_fresh_detail(
+    activity_boundary, query
+):
+    activity_boundary.pages[:] = [
+        [issue(4026, labels=[{"name": "status: in-progress"}]), issue()]
+    ]
+    result = await activity_boundary.execute(
+        "github.load_issue_preset_brief",
+        {"repository": REPOSITORY, "issueSearch": query},
+    )
+    assert result.status == "COMPLETED"
+    assert result.outputs["issue"]["number"] == 4025
+    assert result.outputs["searchEvidence"]["candidatesExamined"] == 2
+    # A label added between search and brief loading must fail confirmation.
+    activity_boundary.detail.update({"labels": [{"name": "status: in-progress"}]})
+    result = await activity_boundary.execute(
+        "github.load_issue_preset_brief",
+        {"repository": REPOSITORY, "issueSearch": query},
+    )
+    assert result.status == "FAILED"
+    assert "could not be confirmed" in result.outputs["error"]
+    assert "trustedSource" not in result.outputs
+
+
 def test_compact_issue_context_preserves_search_evidence():
     import json
 
