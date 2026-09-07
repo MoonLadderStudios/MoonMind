@@ -13,7 +13,7 @@ from __future__ import annotations
 
 import pytest
 
-from moonmind.omnigent.faultlab.image_smoke import (
+from tools.omnigent_faultlab.image_smoke import (
     BUILD_ID_FILE_ENV,
     IMAGE_SMOKE_SCHEMA_VERSION,
     UnknownImageSmokeRoleError,

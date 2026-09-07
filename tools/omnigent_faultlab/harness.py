@@ -102,7 +102,7 @@ class FaultPlan:
     """A concrete, executable fault plan (the harness's primary input).
 
     A plan is the programmatic sibling of the declarative
-    :class:`~moonmind.omnigent.faultlab.scenario.FaultScenario`; the two round-trip
+    :class:`~tools.omnigent_faultlab.scenario.FaultScenario`; the two round-trip
     via ``plan_to_scenario`` / ``scenario_to_plan`` so a failing plan can be
     serialized, minimized, and replayed from a seed.
     """

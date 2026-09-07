@@ -8,10 +8,15 @@ included, not only the developer checkout).
 This module is the *portable core* of the exact-image smoke: it runs a bounded,
 seed-selected fault matrix (the same generator, reducer, reference model, and
 invariants the pure-domain suite uses) and produces a secret-safe report. The
-deployable image supplies only the runtime — the CI job runs this exact module
-*inside* the built API/worker image, so a divergence between the checkout and the
-image (a missing dependency, a different Python, a stripped module) surfaces as a
-failed matrix rather than passing silently.
+faultlab package lives under ``tools/`` (MoonLadderStudios/MoonMind#3958) and is
+deliberately absent from the production ``moonmind`` package and deployable
+image. The ``omnigent-fault-image-smoke`` workflow mounts the checkout's
+``tools/omnigent_faultlab`` into the built API/worker image and runs this exact
+module there with ``PYTHONPATH=/app:/src``: ``moonmind`` (including the
+production reconciler under test) resolves from the image's own ``/app`` while
+``tools`` resolves from the mounted checkout, so a divergence between the
+checkout and the image (a missing dependency, a different Python, a stripped
+module) surfaces as a failed matrix rather than passing silently.
 
 The report is digest-only and bounded (seed, invariant-violation count,
 determinism flag) so retained smoke evidence never carries raw payloads or
@@ -231,10 +236,12 @@ def run_image_fault_matrix(
 def main(argv: list[str] | None = None) -> int:
     """CLI entrypoint: run the fault matrix inside the exact deployable image.
 
-    Runnable as ``python -m moonmind.omnigent.faultlab.image_smoke`` so the
-    ``omnigent-fault-image-smoke`` workflow invokes the packaged module that ships
-    in the image's own ``moonmind`` install, rather than a ``tools/`` driver that
-    the production image never copies (#3694). Writes a secret-safe report and
+    Runnable as ``python -m tools.omnigent_faultlab.image_smoke`` from a checkout.
+    The ``omnigent-fault-image-smoke`` workflow mounts the checkout at ``/src``
+    and runs this module inside the image with ``PYTHONPATH=/app:/src`` so the
+    production reconciler and role entrypoints resolve from the image's own
+    ``/app`` install while the test-only faultlab harness resolves from the
+    mount (MoonLadderStudios/MoonMind#3958). Writes a secret-safe report and
     exits non-zero on any invariant violation or nondeterminism.
     """
 

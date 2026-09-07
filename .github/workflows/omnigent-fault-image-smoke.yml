@@ -5,11 +5,14 @@ name: Provider / Omnigent Fault Image Smoke
 # the deployable API and worker images so image authority drift (#3694) and
 # process/runtime-dependency differences fail the smoke rather than passing on a
 # developer checkout. The matrix core lives in
-# moonmind/omnigent/faultlab/image_smoke.py and is invoked as the packaged module
-# `python -m moonmind.omnigent.faultlab.image_smoke` (which ships in the image's
-# own moonmind install; tools/run_omnigent_fault_image_smoke.py is only a local
-# wrapper); the same logic is proven hermetically in
-# tests/unit/omnigent/faultlab/test_image_smoke.py on every PR.
+# tools/omnigent_faultlab/image_smoke.py (test-only tooling, absent from the
+# production image per MoonLadderStudios/MoonMind#3958) and is mounted into the
+# image at /src, then invoked as `python -m tools.omnigent_faultlab.image_smoke`
+# with PYTHONPATH=/app:/src so production modules resolve from the image's own
+# /app install while the harness resolves from the mount;
+# tools/run_omnigent_fault_image_smoke.py is only a local wrapper; the same logic
+# is proven hermetically in tests/unit/omnigent/faultlab/test_image_smoke.py on
+# every PR.
 
 on:
   schedule:
@@ -63,19 +66,25 @@ jobs:
           ROLE: ${{ matrix.role }}
         run: |
           mkdir -p artifacts/omnigent-fault-image-smoke
-          # Execute the packaged module from the image's own installed moonmind
-          # (never a tools/ path the production image does not copy) so a missing
-          # dependency, wrong interpreter, or stripped module in the shipped image
-          # fails the smoke (#3694). ``--role`` resolves that role's real startup
-          # module inside the image so a role-specific stripped dependency fails
-          # too, and ``--image-ref`` records the exact pinned digest as provenance
+          # Mount the checkout's test-only faultlab harness at /src and run it
+          # inside the image with PYTHONPATH=/app:/src (MoonLadderStudios/MoonMind#3958):
+          # ``moonmind`` and ``api_service`` resolve from the image's own /app
+          # install, so a missing dependency, wrong interpreter, or stripped
+          # module in the shipped image fails the smoke (#3694), while ``tools``
+          # resolves from the mount because the production image never copies
+          # test tooling. ``--role`` resolves that role's real startup module
+          # inside the image so a role-specific stripped dependency fails too,
+          # and ``--image-ref`` records the exact pinned digest as provenance
           # instead of an unrelated workflow-checkout commit; the driver also
           # self-stamps the image's own build id read from inside the image.
           docker run --rm \
             --entrypoint python \
+            -v "$PWD:/src:ro" \
             -v "$PWD/artifacts/omnigent-fault-image-smoke:/out" \
+            -w /app \
+            -e PYTHONPATH=/app:/src \
             "$APP_IMAGE" \
-            -m moonmind.omnigent.faultlab.image_smoke \
+            -m tools.omnigent_faultlab.image_smoke \
             --output "/out/report-${ROLE}.json" \
             --role "$ROLE" \
             --image-ref "$APP_IMAGE"
