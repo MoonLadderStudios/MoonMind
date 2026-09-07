@@ -17,6 +17,11 @@ authority, and complete failure matrix that this support state qualifies are
 reconciled in
 [Normal Codex product-path reconciliation](./NormalCodexProductPathReconciliation.md).
 
+Ownership note: this document owns the Codex exact support rows, cutover
+phases, and operator remediation matrix. The versioned rollout mechanism that
+promotes every combination (states, canary, rollback, migration status) is
+owned by [Runtime-Provider Rollout Policy](./RuntimeProviderRollout.md).
+
 ## Compatibility inventory
 
 | Direct Codex surface | Classification | Owner and supported behavior | Evidence contract / control | Removal condition | Rollback implication |
