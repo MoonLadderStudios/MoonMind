@@ -59,15 +59,23 @@ CANONICAL_DOC = (
 class _CatalogGeneratorTestOnlyWorkflow:
     """Intentional test/replay-only class; never a production registration."""
 
+    @workflow.run
+    async def run(self) -> None:
+        """Test-only entry point; never executed."""
+
 
 @workflow.defn(name="MoonMind.CatalogGeneratorDuplicate")
 class _CatalogGeneratorDuplicateWorkflowA:
-    pass
+    @workflow.run
+    async def run(self) -> None:
+        """Test-only entry point; never executed."""
 
 
 @workflow.defn(name="MoonMind.CatalogGeneratorDuplicate")
 class _CatalogGeneratorDuplicateWorkflowB:
-    pass
+    @workflow.run
+    async def run(self) -> None:
+        """Test-only entry point; never executed."""
 
 
 def _test_only_registration() -> WorkflowRegistration:
@@ -214,15 +222,43 @@ def test_stale_cached_maps_do_not_hide_new_registrations(
 
 
 def test_activity_routes_come_from_catalog_and_bindings_agree():
-    """Catalog routes and runtime bindings validate as one composition."""
+    """Catalog routes plus per-fleet skill aliases validate as one composition."""
+
+    from tools.generate_temporal_catalog import _SKILL_EXECUTION_ALIASES
 
     catalog = build_default_activity_catalog()
     validate_activity_catalog_runtime_bindings(catalog)
     rows = collect_activities()
-    assert {row.activity_type for row in rows} == {
-        definition.activity_type for definition in catalog.activities
+    row_keys = {
+        (row.activity_type, row.fleet, row.task_queue) for row in rows
     }
-    assert len(rows) == len({row.activity_type for row in rows})
+    catalog_keys = {
+        (definition.activity_type, definition.fleet)
+        for definition in catalog.activities
+    }
+    expected_aliases = {
+        (alias, fleet.fleet, fleet.task_queues[0])
+        for alias in _SKILL_EXECUTION_ALIASES
+        for fleet in catalog.fleets
+        if fleet.fleet != "workflow" and (alias, fleet.fleet) not in catalog_keys
+    }
+    assert row_keys == {
+        (
+            definition.activity_type,
+            definition.fleet,
+            definition.task_queue,
+        )
+        for definition in catalog.activities
+    } | expected_aliases
+    assert len(rows) == len({(row.activity_type, row.fleet) for row in rows})
+    # The aliases are real worker registrations (bound by
+    # build_activity_bindings whenever skill activities are present), not
+    # catalog definitions: every non-workflow fleet carries both.
+    deployment_queue = next(
+        fleet.task_queues[0] for fleet in catalog.fleets if fleet.fleet == "deployment"
+    )
+    assert ("mm.tool.execute", "deployment", deployment_queue) in row_keys
+    assert ("mm.skill.execute", "deployment", deployment_queue) in row_keys
 
 
 def test_unsupported_activity_route_binding_fails():
@@ -278,11 +314,24 @@ def test_workflow_fleet_handlers_split_current_and_historical():
 
 
 def test_search_attributes_come_from_registration_owners():
-    required, _optional = collect_search_attributes()
+    required, optional = collect_search_attributes()
     names = [name for name, _ in required]
     assert MM_SCHEDULED_FOR_SEARCH_ATTRIBUTE in names
-    for name in ("mm_state", "mm_entry", "mm_owner_id"):
+    for name in ("mm_state", "mm_entry", "mm_owner_id", "mm_started_at"):
         assert name in names
+    optional_names = [name for name, _ in optional]
+    for name in (
+        "mm_title",
+        "mm_has_dependencies",
+        "mm_dependency_count",
+        "AgentRunId",
+        "RuntimeId",
+        "SessionId",
+        "SessionEpoch",
+        "SessionStatus",
+        "IsDegraded",
+    ):
+        assert name in optional_names
 
 
 def test_generated_output_marks_itself_and_leaks_no_secrets_or_paths():

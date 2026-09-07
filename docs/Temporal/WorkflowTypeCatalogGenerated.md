@@ -19,8 +19,10 @@ Providing owners:
 - Worker construction: `moonmind/workflows/temporal/worker_entrypoint.py`
   and `moonmind/workflows/temporal/worker_runtime.py` via
   `moonmind/workflows/temporal/workers.py`
-- Search Attributes: `moonmind/workflows/temporal/service.py` and
-  `moonmind/workflows/temporal/scheduled_start.py`
+- Search Attributes: `moonmind/workflows/temporal/service.py`,
+  `moonmind/workflows/temporal/scheduled_start.py`,
+  `moonmind/workflows/temporal/workflows/run.py`, and
+  `moonmind/workflows/temporal/workflows/managed_runtime_workspace_cleanup.py`
 - Authored lifecycle semantics:
   `docs/Temporal/WorkflowTypeCatalogAndLifecycle.md`
 
@@ -185,6 +187,17 @@ with deterministic workflow code, not Temporal Local Activities.
 | `merge_automation.evaluate_readiness` | `integrations` | `mm.activity.integrations` |
 | `merge_automation.request_automated_review` | `integrations` | `mm.activity.integrations` |
 | `mm.skill.execute` | `llm` | `mm.activity.llm` |
+| `mm.skill.execute` | `agent_runtime` | `mm.activity.agent_runtime` |
+| `mm.skill.execute` | `artifacts` | `mm.activity.artifacts` |
+| `mm.skill.execute` | `deployment` | `mm.activity.deployment` |
+| `mm.skill.execute` | `integrations` | `mm.activity.integrations` |
+| `mm.skill.execute` | `sandbox` | `mm.activity.sandbox` |
+| `mm.tool.execute` | `agent_runtime` | `mm.activity.agent_runtime` |
+| `mm.tool.execute` | `artifacts` | `mm.activity.artifacts` |
+| `mm.tool.execute` | `deployment` | `mm.activity.deployment` |
+| `mm.tool.execute` | `integrations` | `mm.activity.integrations` |
+| `mm.tool.execute` | `llm` | `mm.activity.llm` |
+| `mm.tool.execute` | `sandbox` | `mm.activity.sandbox` |
 | `oauth_session.cleanup_stale` | `artifacts` | `mm.activity.artifacts` |
 | `oauth_session.ensure_volume` | `agent_runtime` | `mm.activity.agent_runtime` |
 | `oauth_session.mark_failed` | `artifacts` | `mm.activity.artifacts` |
@@ -271,6 +284,7 @@ Required:
 - `mm_updated_at` (owner: `moonmind/workflows/temporal/service.py`)
 - `mm_entry` (owner: `moonmind/workflows/temporal/service.py`)
 - `mm_scheduled_for` (owner: `moonmind/workflows/temporal/scheduled_start.py`)
+- `mm_started_at` (owner: `moonmind/workflows/temporal/workflows/run.py`)
 
 Optional (only when product filtering requires them):
 
@@ -279,6 +293,15 @@ Optional (only when product filtering requires them):
 - `mm_target_runtime` (owner: `moonmind/workflows/temporal/service.py`)
 - `mm_target_skill` (owner: `moonmind/workflows/temporal/service.py`)
 - `mm_stage` (owner: `docs/Temporal/WorkflowTypeCatalogAndLifecycle.md §5.2`)
+- `mm_title` (owner: `moonmind/workflows/temporal/service.py`)
+- `mm_has_dependencies` (owner: `moonmind/workflows/temporal/workflows/run.py`)
+- `mm_dependency_count` (owner: `moonmind/workflows/temporal/workflows/run.py`)
+- `AgentRunId` (owner: `moonmind/workflows/temporal/workflows/run.py`)
+- `RuntimeId` (owner: `moonmind/workflows/temporal/workflows/run.py`)
+- `SessionId` (owner: `moonmind/workflows/temporal/workflows/run.py`)
+- `SessionEpoch` (owner: `moonmind/workflows/temporal/workflows/run.py`)
+- `SessionStatus` (owner: `moonmind/workflows/temporal/workflows/run.py`)
+- `IsDegraded` (owner: `moonmind/workflows/temporal/workflows/managed_runtime_workspace_cleanup.py`)
 
 Runtime and primary-skill attributes must be registered before API
 filters or facets query them.

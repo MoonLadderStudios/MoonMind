@@ -211,6 +211,7 @@ def test_temporal_catalog_generator_change_selects_temporal_boundary() -> None:
         "docs/Temporal/WorkflowTypeCatalogGenerated.md",
         "docs/Temporal/WorkflowTypeCatalogAndLifecycle.md",
         "tests/unit/workflows/temporal/test_workflow_catalog_generator.py",
+        "services/temporal/scripts/bootstrap-namespace.sh",
     ):
         outputs = _outputs([path])
 

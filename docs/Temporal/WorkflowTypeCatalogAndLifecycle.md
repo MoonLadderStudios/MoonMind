@@ -114,6 +114,10 @@ projection role for every registration — is the generated reference
 `WorkflowTypeCatalogGenerated.md`. The notes below explain the axes that the
 generated table keeps distinct; they are not a second inventory.
 
+- **User workflow root.** `MoonMind.UserWorkflow` is the User-submitted, Step-ledger-owning Workflow Execution: it plans work, owns Step
+  state/progress, orchestrates child agent runs, integrates results, and
+  produces artifacts. There is exactly one live user-workflow registration;
+  no separate implementation name exists beside it.
 - **Projection scope is not authorization.** `product` / `operator` /
   `excluded` declares which executions may appear in product views. Updates,
   Signals, and Cancels are still authorized by the MoonMind API layer (§12),
