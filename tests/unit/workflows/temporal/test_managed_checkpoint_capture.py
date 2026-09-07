@@ -148,7 +148,9 @@ async def test_managed_capture_trusts_the_resolved_workspace_for_every_git_comma
     )
 
     assert result["workspace"]["archiveRef"].startswith("artifact://")
-    assert len(commands) == 4
+    # Quiescence boundary (issue #4015): pre rev-parse + pre status, then
+    # ls-files, post rev-parse, post branch, post status.
+    assert len(commands) == 6
     assert all(command[: len(expected_prefix)] == expected_prefix for command in commands)
 
 
