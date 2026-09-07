@@ -948,10 +948,8 @@ class AdmittedProviderCapacity(BaseModel):
     ] = Field(ADMITTED_PROVIDER_CAPACITY_SCHEMA_V2, alias="schemaVersion")
     #: The manager-visible owner of every lease below. One owner across grant,
     #: scheduling, consumption and cleanup (#3880 remaining implementation 3).
-    #: Composed identities must retain the same unbounded text accepted by the
-    #: request and lease ledger, including when retrying an in-flight grant.
     lease_owner_id: str = Field(
-        ..., alias="leaseOwnerId", min_length=1
+        ..., alias="leaseOwnerId", min_length=1, max_length=255
     )
     profiles: tuple[AdmittedProviderProfileCapacity, ...] = Field(
         ..., alias="profiles", min_length=1, max_length=16
@@ -961,17 +959,19 @@ class AdmittedProviderCapacity(BaseModel):
         None, alias="executionPlanRef", max_length=255
     )
     agent_run_workflow_id: str | None = Field(
-        None, alias="agentRunWorkflowId"
+        None, alias="agentRunWorkflowId", max_length=255
     )
     agent_run_run_id: str | None = Field(
         None, alias="agentRunRunId", max_length=255
     )
     step_execution_id: str | None = Field(
-        None, alias="stepExecutionId"
+        None, alias="stepExecutionId", max_length=255
     )
     #: Immutable request identity the manager recorded with the grant. Together
     #: with the owner and plan refs this is the durable lease fence: it survives
     #: a manager restart because it is persisted on the lease row.
+    #: Preserve composed request keys; the workflow bounds the complete
+    #: serialized handoff before taking capacity, rather than truncating keys.
     idempotency_key: str | None = Field(
         None, alias="idempotencyKey"
     )
