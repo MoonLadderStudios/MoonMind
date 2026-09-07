@@ -126,6 +126,20 @@ class ClaudeCodeStrategy(ManagedRuntimeStrategy):
     def effort_application_status(self, effort: str | None) -> str:
         return "applied" if effort else "metadata_only"
 
+    def shape_environment(
+        self,
+        base_env: dict[str, str],
+        profile: Any,
+    ) -> dict[str, str]:
+        env = super().shape_environment(base_env, profile)
+        # Every launch from this strategy uses -p. Background Bash/subagent
+        # callbacks have no owner after that process exits, just like the
+        # deferred wakeup tools denied in build_command. Enforce the provider's
+        # foreground-only mode after profile materialization, including when
+        # a profile attempts to re-enable background tasks.
+        env["CLAUDE_CODE_DISABLE_BACKGROUND_TASKS"] = "1"
+        return env
+
     def classify_exit(
         self,
         exit_code: int | None,
