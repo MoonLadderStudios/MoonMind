@@ -8,11 +8,12 @@ This is a thin local-convenience wrapper around the test-tooling CLI in
 ``tools.omnigent_faultlab.image_smoke`` (MoonLadderStudios/MoonMind#3958: the
 faultlab harness lives under ``tools/`` and is absent from the production
 ``moonmind`` package and deployable image). The ``omnigent-fault-image-smoke``
-workflow mounts the checkout into the built API/worker image and runs
-``python -m tools.omnigent_faultlab.image_smoke`` there with
-``PYTHONPATH=/app:/src`` so production modules resolve from the image while the
-test-only harness resolves from the mount; image authority drift (#3694) still
-fails the smoke. This wrapper only makes the checkout importable and delegates.
+workflow mounts only the checkout's ``tools/`` at ``/src/tools`` into the built
+API/worker image and runs ``python -m tools.omnigent_faultlab.image_smoke``
+there with ``PYTHONPATH=/app:/src`` so production modules resolve from the
+image while the test-only harness resolves from the mount; image authority
+drift (#3694) still fails the smoke. This wrapper only makes the checkout
+importable and delegates.
 """
 
 from __future__ import annotations
