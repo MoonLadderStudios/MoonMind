@@ -84,7 +84,6 @@ QUALIFICATION_SHARDS = (
 )
 
 _FULL_SHA = re.compile(r"^[0-9a-f]{40}$")
-_SHORT_SHA = re.compile(r"^[0-9a-f]{7,40}$")
 
 
 class UpstreamPinUpdateError(ValueError):
