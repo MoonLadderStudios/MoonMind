@@ -107,3 +107,61 @@ def validate_effort(effort: str, available_efforts: list[str] | None = None) -> 
     if available_efforts is not None and normalized not in {e.lower() for e in available_efforts}:
         raise ValueError(f"effort {effort!r} is not supported by the selected model")
     return normalized
+
+
+def resolve_exact_model_for_execution(
+    requested: str,
+    available_models: list[dict[str, Any]] | None,
+) -> dict[str, str]:
+    """Resolve one model for execution using exact qualified IDs only.
+
+    MoonLadderStudios/MoonMind#4021 req-03: friendly labels and the
+    punctuation-insensitive alias table may help display or classified
+    historical loading, but they must never choose a different
+    model/provider for execution. Only a byte-exact qualified ID present
+    in the exact runtime catalog selects; anything else raises an
+    actionable error instead of silently substituting.
+    """
+
+    from moonmind.omnigent.bootstrap.free_route_qualification import (
+        NO_ELIGIBLE_FREE_MODEL,
+        resolve_exact_free_model,
+    )
+
+    catalog_ids = [
+        str(m.get("qualifiedId") or "").strip()
+        for m in (available_models or [])
+        if isinstance(m, dict) and str(m.get("qualifiedId") or "").strip()
+    ]
+    try:
+        exact = resolve_exact_free_model(requested, catalog_qualified_ids=catalog_ids)
+    except ValueError as exc:
+        # Preserve the free-route taxonomy for the credentialless route;
+        # keyed-route callers still receive an actionable unavailability error.
+        message = str(exc)
+        if NO_ELIGIBLE_FREE_MODEL in message:
+            raise
+        raise ValueError(
+            f"Requested model {requested!r} is unavailable: select an exact "
+            "observed qualified ID"
+        ) from exc
+    provider_model_id = exact.split("/", 1)[-1] if "/" in exact else exact
+    return {
+        "displayName": exact,
+        "providerModelId": provider_model_id,
+        "qualifiedId": exact,
+    }
+
+
+def validate_effort_for_model(effort: str, supported_efforts: list[str]) -> str:
+    """Validate effort against the selected model's actual supported values.
+
+    MoonLadderStudios/MoonMind#4021 req-03: the seeded ``xhigh`` default
+    must not be assumed to apply everywhere.
+    """
+
+    from moonmind.omnigent.bootstrap.free_route_qualification import (
+        validate_effort_for_model as _validate_for_model,
+    )
+
+    return _validate_for_model(effort, supported_efforts=tuple(supported_efforts))
