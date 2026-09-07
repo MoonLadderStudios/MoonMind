@@ -4972,3 +4972,65 @@ class MergeAutomationReviewRequestRecord(Base):
         server_default=func.now(),
         onupdate=func.now(),
     )
+
+
+class GitHubAppDeliveryRecord(Base):
+    """Durable inbox record for one inbound GitHub App webhook delivery.
+
+    Persisted before the receipt endpoint acknowledges GitHub, so a crash
+    after acknowledgment never loses the delivery. ``scoped_delivery_id``
+    (installation + GitHub delivery GUID) is the primary key: redeliveries
+    of identical bytes dedupe idempotently, while a duplicate with changed
+    content is held as a conflict for operator review instead of being
+    treated as the same authorized request.
+
+    Only bounded, non-sensitive data is stored: digests, identities, reason
+    codes, and safe summaries. Raw payloads beyond a bounded excerpt, and
+    any installation token or webhook secret, must never be stored here.
+
+    Source issue: MoonLadderStudios/MoonMind#3967.
+    """
+
+    __tablename__ = "github_app_deliveries"
+    __table_args__ = (
+        Index(
+            "ix_github_app_deliveries_state",
+            "state",
+        ),
+        Index(
+            "ix_github_app_deliveries_repository",
+            "repository",
+        ),
+    )
+
+    scoped_delivery_id: Mapped[str] = mapped_column(String(255), primary_key=True)
+    delivery_guid: Mapped[str] = mapped_column(String(128), nullable=False)
+    installation_id: Mapped[Optional[int]] = mapped_column(BigInteger, nullable=True)
+    event: Mapped[str] = mapped_column(String(64), nullable=False)
+    action: Mapped[str] = mapped_column(String(64), nullable=False, default="")
+    repository: Mapped[str] = mapped_column(String(255), nullable=False, default="")
+    actor_login: Mapped[str] = mapped_column(String(255), nullable=False, default="")
+    payload_digest: Mapped[str] = mapped_column(String(64), nullable=False)
+    state: Mapped[str] = mapped_column(
+        String(32), nullable=False, default="pending", server_default="pending"
+    )
+    reason_code: Mapped[Optional[str]] = mapped_column(String(128), nullable=True)
+    safe_summary: Mapped[Optional[str]] = mapped_column(String(1000), nullable=True)
+    preset_slug: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    dispatch_key: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    workflow_ref: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    retry_count: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=0, server_default="0"
+    )
+    payload_excerpt: Mapped[Optional[dict[str, Any]]] = mapped_column(
+        JSON, nullable=True
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=func.now(),
+        onupdate=func.now(),
+    )
