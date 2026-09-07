@@ -98,7 +98,6 @@ def test_internal_links_and_anchors_resolve() -> None:
     checked = 0
     for path in sorted(OMNIGENT.glob("*.md")):
         text = _read(path)
-        anchors = _slugs(text)
         for match in re.finditer(r"\]\(([^)]+)\)", text):
             link = match.group(1)
             if link.startswith(("http", "mailto:")) or link.startswith("#"):
