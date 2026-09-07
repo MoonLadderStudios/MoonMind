@@ -47,8 +47,8 @@ August 139 → pre-repair 166 → **154 post-repair** advisory findings (`missin
 `duplicate-claim-id`, `imperative-plan-in-canonical-area`), exit 0
 (advisory-only posture preserved; no rule added, removed, or weakened).
 
-- `missing-document-class` (122): incremental adoption continues — this
-  change adds correct markers to the 10 substantively edited docs that
+- `missing-document-class` (110): incremental adoption continues — this
+  change adds correct markers to the 12 substantively edited docs that
   lacked them (Module/System Architecture View and Module Contract
   Specification per §3 viewpoints). No metadata-only sweep, no misleading
   classifications. Remaining debt stays advisory and is owned by future

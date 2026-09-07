@@ -24,6 +24,12 @@ Scope (documented per MoonLadderStudios/MoonMind#3966):
   fetched: no indiscriminate network probing.
 * Existence checks use the OS filesystem, which is case-sensitive on the
   Linux checkout, so case mismatches fail like any other missing target.
+* Link destinations that normalize outside the repository root are
+  rejected before any filesystem access.
+* Default ``--scope changed`` scans only added/modified/renamed docs, but
+  falls back to a full scan when a ``docs/**.md`` link target was deleted
+  or renamed away, so unchanged callers of the removed target are still
+  rescanned.
 
 Finding rules (stable ids, ``advisory`` severity):
 
@@ -82,10 +88,11 @@ FROZEN_EVIDENCE_DIRS = ("docs/tmp/historical",)
 SEVERITY_ADVISORY = "advisory"
 
 _FENCE_RE = re.compile(r"^\s{0,3}(```|~~~)")
-_INLINE_LINK_RE = re.compile(r"!?\[[^\]]*\]\(([^)]+)\)")
+_INLINE_LINK_OPEN_RE = re.compile(r"!?\[[^\]]*\]\(")
 _REF_DEF_RE = re.compile(r"^\s{0,3}\[[^\]]+\]:\s*(\S+)")
 _REF_USE_RE = re.compile(r"\[[^\]]*\]\[([^\]]*)\]")
 _HEADING_RE = re.compile(r"^\s{0,3}#{1,6}\s+(.*)$")
+_SETEXT_UNDERLINE_RE = re.compile(r"^\s{0,3}(=+|-+)\s*$")
 _EXPLICIT_ANCHOR_RE = re.compile(
     r'<a\s+[^>]*(?:name|id)\s*=\s*["\']([^"\']+)["\']', re.IGNORECASE
 )
@@ -153,21 +160,91 @@ def _github_slug(heading: str) -> str:
 
 def document_anchors(text: str) -> set[str]:
     anchors: set[str] = set()
-    for line in _strip_fences(text).splitlines():
+    stripped = _strip_fences(text)
+    lines = stripped.splitlines()
+    # GitHub appends "-1", "-2", ... to later occurrences of a repeated
+    # heading slug, so track occurrence counts and record the same suffixes.
+    slug_counts: dict[str, int] = {}
+
+    def _add_heading(heading: str) -> None:
+        slug = _github_slug(heading)
+        if not slug:
+            return
+        seen = slug_counts.get(slug, 0)
+        anchors.add(slug if seen == 0 else f"{slug}-{seen}")
+        slug_counts[slug] = seen + 1
+
+    previous: str | None = None
+    for line in lines:
         match = _HEADING_RE.match(line)
         if match:
-            anchors.add(_github_slug(match.group(1)))
-    for match in _EXPLICIT_ANCHOR_RE.finditer(text):
+            _add_heading(match.group(1))
+            previous = None
+            continue
+        if _SETEXT_UNDERLINE_RE.match(line):
+            # A Setext underline applies to the preceding paragraph line;
+            # GitHub also generates anchors for these H1/H2 headings.
+            if previous is not None:
+                _add_heading(previous)
+            previous = None
+            continue
+        previous = line if line.strip() else None
+    # Explicit anchors are searched in the fence-stripped body too: an
+    # ``<a id="...">`` inside a fenced example is not a rendered anchor.
+    for match in _EXPLICIT_ANCHOR_RE.finditer(stripped):
         anchors.add(match.group(1))
     return anchors
 
 
+def _extract_link_destination(inner: str) -> str:
+    """Return the destination of an inline-link ``( ... )`` body.
+
+    Markdown allows an optional title after the destination
+    (``[x](Target.md "title")``) and destinations containing balanced
+    parentheses or ``<angle-bracket>`` wrapping. Only the destination part
+    is link-checked; the title is ignored.
+    """
+    inner = inner.strip()
+    if not inner:
+        return ""
+    if inner.startswith("<"):
+        end = inner.find(">")
+        if end != -1:
+            return inner[1:end].strip()
+        return inner
+    return inner.split(None, 1)[0]
+
+
 def _iter_link_targets(body: str) -> list[tuple[str, bool]]:
-    """Return ``(raw_target, is_image)`` for inline links and images."""
+    """Return ``(raw_target, is_image)`` for inline links and images.
+
+    The ``( ... )`` body is scanned with balanced-parenthesis counting so
+    destinations containing parentheses are not truncated, and the optional
+    title is stripped before the destination is returned.
+    """
     targets: list[tuple[str, bool]] = []
-    for match in _INLINE_LINK_RE.finditer(body):
-        full = match.group(0)
-        targets.append((match.group(1).strip(), full.startswith("!")))
+    for match in _INLINE_LINK_OPEN_RE.finditer(body):
+        is_image = body[match.start()] == "!"
+        depth = 1
+        in_angle = False
+        i = match.end()
+        while i < len(body):
+            char = body[i]
+            if in_angle:
+                if char == ">":
+                    in_angle = False
+            elif char == "<":
+                in_angle = True
+            elif char == "(":
+                depth += 1
+            elif char == ")":
+                depth -= 1
+                if depth == 0:
+                    break
+            i += 1
+        if depth != 0:
+            continue  # Unbalanced; not a well-formed inline link.
+        targets.append((_extract_link_destination(body[match.end() : i]), is_image))
     return targets
 
 
@@ -251,6 +328,23 @@ def check_doc(
         path_part, anchor = _split_target(raw)
         if path_part:
             resolved = os.path.normpath(os.path.join(base, path_part))
+            resolved_path = Path(resolved)
+            try:
+                resolved_path.relative_to(root)
+            except ValueError:
+                findings.append(
+                    Finding(
+                        rule="broken-local-link",
+                        severity=SEVERITY_ADVISORY,
+                        path=doc.path,
+                        message=(
+                            f"Local link target `{raw}` resolves outside "
+                            "the repository and is rejected."
+                        ),
+                        detail=f"resolved: {resolved}",
+                    )
+                )
+                continue
             if not (root / resolved).exists():
                 findings.append(
                     Finding(
@@ -386,6 +480,40 @@ def changed_doc_paths(base_ref: str, *, root: Path = REPO_ROOT) -> list[str] | N
     return sorted(paths)
 
 
+def _parse_removed_targets(lines: Iterable[str]) -> list[str]:
+    """Extract deleted/renamed-away ``docs/**.md`` targets from name-status."""
+    removed: set[str] = set()
+    for line in lines:
+        parts = line.split("\t")
+        if not parts or not parts[0]:
+            continue
+        status = parts[0].strip()
+        if status.startswith("D") and len(parts) >= 2:
+            removed.add(parts[1].strip())
+        elif status.startswith("R") and len(parts) >= 3:
+            # ``R100\told\tnew``: the old path is the removed link target.
+            removed.add(parts[1].strip())
+    return sorted(
+        {path for path in removed if path.endswith(".md") and path.startswith("docs/")}
+    )
+
+
+def removed_doc_targets(base_ref: str, *, root: Path = REPO_ROOT) -> list[str] | None:
+    """Return ``docs/**.md`` paths deleted or renamed away vs ``base_ref``.
+
+    ``None`` means git was unavailable. These removed paths can never appear
+    in the changed-file set, but unchanged callers may still link to them,
+    so the caller must rescan inbound references (a full scan) when any
+    exist.
+    """
+    lines = _git_lines(
+        ["diff", "--name-status", "--diff-filter=DMR", base_ref, "--"], root=root
+    )
+    if lines is None:
+        return None
+    return _parse_removed_targets(lines)
+
+
 def _format_text(
     findings: Sequence[Finding], *, scope: str, external_count: int
 ) -> str:
@@ -479,11 +607,43 @@ def main(argv: list[str] | None = None) -> int:
             focus_paths = None
             context_paths = all_doc_paths()
         else:
-            scope = f"changed vs {args.base}"
-            focus_paths = changed
-            context_paths = sorted(set(changed) | set(all_doc_paths()))
+            # A changed-only reportable set suppresses unchanged callers, so
+            # when a link target was deleted or renamed away, fall back to a
+            # full scan that rescan inbound references to the removed target.
+            removed = removed_doc_targets(args.base)
+            if removed:
+                scope = (
+                    f"changed vs {args.base} (link target(s) removed: "
+                    f"{', '.join(removed)}; fell back to full scan)"
+                )
+                focus_paths = None
+                context_paths = all_doc_paths()
+            else:
+                scope = f"changed vs {args.base}"
+                focus_paths = changed
+                context_paths = sorted(set(changed) | set(all_doc_paths()))
 
     docs = load_docs(context_paths)
+    if args.paths:
+        # An explicitly requested path that is missing or unreadable is a
+        # caller error, not a clean bill of health: fail loudly instead of
+        # reporting "No advisory findings".
+        loaded = {os.path.normpath(doc.path) for doc in docs}
+        missing = sorted(
+            {
+                os.path.normpath(path)
+                for path in focus_paths
+                if path.endswith(".md")
+                and os.path.normpath(path) not in loaded
+            }
+        )
+        if missing:
+            print(
+                f"error: explicit input path(s) not found or unreadable: "
+                f"{', '.join(missing)}",
+                file=sys.stderr,
+            )
+            return 2
     findings, external_count = run_checks(docs, focus_paths=focus_paths)
 
     if args.format == "json":
