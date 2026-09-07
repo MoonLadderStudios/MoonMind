@@ -224,9 +224,13 @@ def test_stale_cached_maps_do_not_hide_new_registrations(
 def test_activity_routes_come_from_catalog_and_bindings_agree():
     """Catalog routes plus per-fleet skill aliases validate as one composition."""
 
-    from tools.generate_temporal_catalog import _SKILL_EXECUTION_ALIASES
+    from tools.generate_temporal_catalog import (
+        _SKILL_EXECUTION_ALIASES,
+        default_temporal_settings,
+    )
 
-    catalog = build_default_activity_catalog()
+    cfg = default_temporal_settings()
+    catalog = build_default_activity_catalog(cfg)  # type: ignore[arg-type]
     validate_activity_catalog_runtime_bindings(catalog)
     rows = collect_activities()
     row_keys = {
