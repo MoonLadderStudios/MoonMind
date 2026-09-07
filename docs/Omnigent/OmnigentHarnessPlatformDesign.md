@@ -547,6 +547,8 @@ The `skills` list in an Agent Profile identifies desired Skill names and constra
 
 Before plan commitment, MoonMind resolves Skill intent through the canonical Skill System into one immutable per-run snapshot.
 
+Admission and scheduled authority refresh read the same workflow intent as execution: a non-empty `workflow` envelope takes precedence over the persisted `task` envelope. The snapshot includes selected step Skills and the Skills declared by dynamic remediation contracts before any step launches. The same envelope governs Skill exclusions, remediation policy, and explicit runtime target validation. Persisted schedule inputs remain immutable; historical execution plans retain their admitted snapshots and dispatch never silently expands them.
+
 ### 10.2 Plan references
 
 The execution plan carries compact references only:

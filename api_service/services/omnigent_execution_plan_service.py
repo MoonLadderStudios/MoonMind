@@ -378,11 +378,24 @@ class PersistedOmnigentExecutionPlan:
     runtime_provider_rollout: dict[str, Any] | None = None
 
 
+def _workflow_payload(initial_parameters: Mapping[str, Any]) -> Mapping[str, Any]:
+    """Read workflow intent, including the persisted schedule task envelope.
+
+    Match execution's precedence without rewriting immutable authored inputs.
+    Existing schedule definitions retain their task envelope across refreshes.
+    """
+
+    workflow = initial_parameters.get("workflow")
+    if isinstance(workflow, Mapping) and workflow:
+        return workflow
+    task = initial_parameters.get("task")
+    return task if isinstance(task, Mapping) else {}
+
+
 def selected_skill_names(initial_parameters: Mapping[str, Any]) -> list[str]:
     """Collect the workflow's MoonMind Skill intent for one run snapshot."""
 
-    workflow = initial_parameters.get("workflow")
-    workflow_mapping = dict(workflow) if isinstance(workflow, Mapping) else {}
+    workflow_mapping = _workflow_payload(initial_parameters)
     names: list[str] = []
 
     def add(raw: Any) -> None:
@@ -432,8 +445,7 @@ def selected_skill_names(initial_parameters: Mapping[str, Any]) -> list[str]:
 
 
 def _skill_selector(initial_parameters: Mapping[str, Any]) -> SkillSelector:
-    workflow = initial_parameters.get("workflow")
-    workflow_mapping = dict(workflow) if isinstance(workflow, Mapping) else {}
+    workflow_mapping = _workflow_payload(initial_parameters)
     selectors = workflow_mapping.get("skills")
     selector_mapping = dict(selectors) if isinstance(selectors, Mapping) else {}
     excluded = sorted(
@@ -1054,10 +1066,7 @@ async def compile_and_persist_execution_plan(
     repository_intent_ref = _digest_ref(
         "repository-intent", {"repository": repository, "workspace": workspace}
     )
-    workflow_payload = initial_parameters.get("workflow")
-    workflow_mapping = (
-        dict(workflow_payload) if isinstance(workflow_payload, Mapping) else {}
-    )
+    workflow_mapping = _workflow_payload(initial_parameters)
     authority = {
         "authoredRequestRef": authored_request_ref,
         "authoredRequestDigest": authored_request_digest,
@@ -1154,8 +1163,7 @@ async def compile_and_persist_execution_plan(
     )
     # A client may name an exact rollout row, but only the compiled Profile,
     # policy and harness can establish it. Validate before persisting the plan.
-    workflow = initial_parameters.get("workflow") or {}
-    runtime = workflow.get("runtime") or {}
+    runtime = workflow_mapping.get("runtime") or {}
     requested_target_id = runtime.get("targetId")
     if requested_target_id and (
         plan.payload.runtimeProviderRollout is None
