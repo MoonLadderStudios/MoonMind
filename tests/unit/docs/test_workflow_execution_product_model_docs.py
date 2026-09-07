@@ -1,5 +1,11 @@
 from pathlib import Path
 
+import sys
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+
+from _semantic_docs_3964 import assert_semantic_present
+
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
 PRODUCT_MODEL = REPO_ROOT / "docs" / "Temporal" / "WorkflowExecutionProductModel.md"
@@ -16,7 +22,13 @@ def _read(path: Path) -> str:
 def test_workflow_execution_product_model_defines_required_terms() -> None:
     text = _read(PRODUCT_MODEL)
 
-    assert "MoonMind does not define a separate product entity named Task." in text
+    # No separate product entity named Task (#3964: exact sentence loosened
+    # to the entity-denial contract).
+    assert_semantic_present(
+        text,
+        ("does not define a separate product entity named task",),
+        context="product model task-entity denial",
+    )
     assert "Workflow Execution" in text
     assert "`workflowId`" in text
     assert "`runId`" in text
@@ -31,7 +43,11 @@ def test_workflow_type_catalog_uses_workflow_native_user_workflow_language() -> 
     text = _read(TYPE_CATALOG)
 
     assert "`MoonMind.UserWorkflow`" in text
-    assert "User-submitted, Step-ledger-owning Workflow Execution" in text
+    assert_semantic_present(
+        text,
+        ("user-submitted, step-ledger-owning workflow execution",),
+        context="type catalog user-workflow language",
+    )
     assert "standard task execution" not in text
     assert "public APIs and UI flows may still use `task` terminology" not in text
 

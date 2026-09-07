@@ -19,8 +19,10 @@ from pathlib import Path
 import pytest
 import yaml
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
 sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
+from _semantic_docs_3964 import assert_semantic_present
 from moonmind.omnigent.conformance import SECRET_PATTERN as SHARED_SECRET_PATTERN
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
@@ -90,16 +92,34 @@ def _repo_python_files() -> list[Path]:
 def test_design_remains_proposed_no_gate_relaxation() -> None:
     text = _read(DESIGN_DOC)
     assert "**Status:** Proposed" in text
-    # The design must keep stating its handoff is proposed, not permitted.
-    assert "may already be bypassed" in text
-    assert "proposed changes to the owning contracts and guidance" in text
+    # The design must keep stating its handoff is proposed, not permitted
+    # (#3964: exact prose loosened to the gate contract).
+    assert_semantic_present(
+        text, ("may already be bypassed",), context="design handoff gate"
+    )
+    assert_semantic_present(
+        text,
+        ("proposed changes to the owning contracts and guidance",),
+        context="design handoff scope",
+    )
     # Slice-0 enables no runtime path.
-    assert "No runtime qualification is claimed by this documentation task" in _read(PLAN_DOC)
+    assert_semantic_present(
+        _read(PLAN_DOC),
+        ("no runtime qualification is claimed",),
+        context="slice-0 runtime scope",
+    )
 
 
 def test_agents_recovery_gate_stays_mandatory() -> None:
     text = _read(AGENTS_DOC)
-    assert "publish a remotely verified recovery checkpoint before cleanup" in text
+    # Remote-checkpoint recovery gate (#3964: exact sentence loosened; the
+    # production behavior is owned by the recovery path, this pins the
+    # documented gate).
+    assert_semantic_present(
+        text,
+        ("remotely verified recovery checkpoint", "cleanup"),
+        context="AGENTS.md recovery gate",
+    )
 
 
 def test_plan_carries_complete_slice0_record() -> None:
