@@ -82,6 +82,8 @@ except ImportError:  # pragma: no cover - fallback when tools/ is not on sys.pat
 
 # Frozen review evidence: dispositioned, never repaired in place (see
 # docs/tmp/DocsReviewRevalidationMM3966.md). Excluded from link findings.
+# docs/tmp/historical/ was disposed under MoonLadderStudios/MoonMind#3963;
+# the exclusion is retained so any future archived evidence stays out of scope.
 FROZEN_EVIDENCE_PATHS = ("docs/DocsReview.md",)
 FROZEN_EVIDENCE_DIRS = ("docs/tmp/historical",)
 
