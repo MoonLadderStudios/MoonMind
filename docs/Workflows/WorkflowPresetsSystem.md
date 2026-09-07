@@ -196,6 +196,8 @@ The selected issue and brief travel through trusted context and a durable attach
 
 The initial assessment controls whether an issue needs implementation and a PR. A later `FULLY_IMPLEMENTED` verifier result approves the candidate for publication; a clean restored work branch or an already-pushed commit does not make that candidate a no-change outcome. The search preset declares the same `code-review-handoff` role as explicit issue implementation. Before updating issue status, the workflow creates or adopts a missing PR from its accepted remote branch and carries the confirmed URL into the trusted status tool. The resolved issue identity supplies the PR closing reference and post-merge completion target.
 
+Remediation Continue-As-New carries the compact trusted issue identity, initial assessment verdict, assessment/brief artifact references, and assessed repository/branch alongside the accepted candidate head. The resumed run restores that authority before publication or issue finalization; issue bodies and detailed requirements remain in artifacts.
+
 ## Preset Step and Provenance
 
 An authored step contains task-specific inputs:

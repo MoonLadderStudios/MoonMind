@@ -29,6 +29,7 @@
     "Expand the seeded search preset with omitted or explicit default inputs",
     "Load the selected issue through the registered GitHub tool",
     "Restore the accepted publication head and independent assessment/verifier evidence",
+    "Carry compact issue and assessment authority through repeated Continue-As-New before the verifier passes",
     "Resume the compiled finalization step after the agent omitted its PR",
     "Create or adopt the PR before the registered issue status activity mutates GitHub"
   ],

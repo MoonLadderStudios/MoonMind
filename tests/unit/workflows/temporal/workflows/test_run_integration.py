@@ -41,6 +41,7 @@ from moonmind.workflows.temporal.workflows.run import (
     RUN_REMEDIATION_MANAGED_SESSION_SOURCE_IDENTITY_PATCH,
     RUN_REMEDIATION_CONTINUE_MANAGED_SESSION_PATCH,
     RUN_REMEDIATION_STABLE_PROGRESS_IDENTITY_PATCH,
+    RUN_REMEDIATION_ISSUE_AUTHORITY_CONTINUATION_PATCH,
     RUN_RUNTIME_EXECUTION_CAPABILITIES_PATCH,
     RUN_AGENT_RUNTIME_RETRY_CLASSIFICATION_PATCH,
     RUN_STEP_RETRY_OVERRIDES_PATCH,
@@ -5350,6 +5351,69 @@ def test_continue_as_new_preserves_stable_progress_identity_only_after_patch(
     )["remediation_loop_continuation"]
 
     assert "latestProgressSignature" not in legacy["state"]
+
+
+@pytest.mark.parametrize("patch_enabled", [False, True])
+@pytest.mark.parametrize("provider", ["github", "jira"])
+def test_continue_as_new_carries_only_compact_issue_authority(
+    mock_run_workflow, monkeypatch, patch_enabled, provider
+):
+    from moonmind.workflows.temporal.remediation_loop import (
+        RemediationLoopSpec,
+        RemediationLoopState,
+    )
+
+    spec = RemediationLoopSpec.model_validate(_dynamic_loop_spec_payload())
+    mock_run_workflow._remediation_loop_spec = spec
+    mock_run_workflow._remediation_loop_state = RemediationLoopState(
+        loopId=spec.loop_id, phase="verification_pending", consumedBudgets={}
+    )
+    context = {
+        "trustedSource": f"moonmind.{provider}.get_issue",
+        "presetBrief": "Large issue content belongs in artifacts.",
+    }
+    if provider == "github":
+        context["issue"] = {
+            "repository": "org/repo",
+            "number": 3963,
+            "body": "Large issue body",
+        }
+    else:
+        context["jiraIssueKey"] = "MM-123"
+    mock_run_workflow._record_trusted_issue_context(context)
+    assessment = {
+        "assessmentVerdict": "NOT_IMPLEMENTED",
+        "assessmentArtifactRef": "art_assessment",
+        "briefArtifactRef": "art_brief",
+    }
+    mock_run_workflow._assessment_context = {
+        **assessment,
+        "requirements": "Large requirements",
+    }
+    monkeypatch.setattr(
+        run_workflow_module.workflow,
+        "patched",
+        lambda patch_id: patch_enabled
+        and patch_id == RUN_REMEDIATION_ISSUE_AUTHORITY_CONTINUATION_PATCH,
+    )
+    carried = mock_run_workflow._build_remediation_loop_continue_as_new_input(
+        ordered_nodes=[]
+    )["remediation_loop_continuation"]
+    if patch_enabled:
+        assert carried["assessmentContext"] == assessment
+        assert "Large" not in str(carried["trustedIssueContext"])
+    else:
+        assert "assessmentContext" not in carried
+        assert "trustedIssueContext" not in carried
+    restored = MoonMindRunWorkflow()
+    restored._remediation_loop_spec = spec
+    restored._remediation_loop_continuation = carried
+    restored._restore_remediation_loop_continuation(ordered_nodes=[])
+    assert restored._assessment_context == (assessment if patch_enabled else {})
+    if patch_enabled:
+        assert restored._trusted_issue_context == carried["trustedIssueContext"]
+    else:
+        assert restored._trusted_issue_context is None
 
 
 def test_continuation_written_without_a_head_still_restores(
