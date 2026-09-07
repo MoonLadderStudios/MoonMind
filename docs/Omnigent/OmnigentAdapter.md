@@ -15,6 +15,8 @@ The normal product selection and request-compilation boundary for **Codex via Om
 
 ## Related documents
 
+- [`docs/Omnigent/README.md`](./README.md) — module entrypoint and contract owners
+- [`docs/Omnigent/ContractOwnership.md`](./ContractOwnership.md) — per-file ownership map
 - [`docs/Omnigent/OmnigentBridge.md`](./OmnigentBridge.md)
 - [`docs/Omnigent/OmnigentHostOAuth.md`](./OmnigentHostOAuth.md)
 - [`docs/Omnigent/CombinedStackValidationAndRollback.md`](./CombinedStackValidationAndRollback.md)

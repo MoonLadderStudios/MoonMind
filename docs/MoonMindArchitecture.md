@@ -453,6 +453,9 @@ normal agent interface.
 
 ## 9. Omnigent integration
 
+Start at the [Omnigent module entrypoint](./Omnigent/README.md) for the
+supported startup path, exact limitations, and contract owners.
+
 Omnigent provides a common host and orchestration layer over multiple coding
 harnesses. MoonMind integration preserves the following boundary:
 

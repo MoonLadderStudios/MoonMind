@@ -8,6 +8,8 @@
 
 ## Related documents
 
+- [`docs/Omnigent/README.md`](./README.md) — module entrypoint and contract owners
+- [`docs/Omnigent/ContractOwnership.md`](./ContractOwnership.md) — per-file ownership map
 - [`docs/MoonMindArchitecture.md`](../MoonMindArchitecture.md)
 - [`docs/MoonMindRoadmap.md`](../MoonMindRoadmap.md)
 - [`docs/Omnigent/OmnigentHarnessPlatformDesign.md`](./OmnigentHarnessPlatformDesign.md)
@@ -367,54 +369,24 @@ Provider-specific logic stops at the registered runtime pack, credential materia
 
 ## 7. Shared image contract
 
-The shared image must:
-
-- derive from an immutable compatible Omnigent host base
-- contain the exact approved Codex, Claude Code, and OpenCode runtimes
-- install runtimes at image-build time, never during a workflow launch
-- run as the normal non-root Omnigent host user
-- preserve the generic `/home/app` runtime contract
-- publish an SBOM and provenance
-- publish the portable Omnigent build identity label
-- expose immutable multi-architecture manifest digests
-- verify every required CLI and Omnigent harness during build and release tests
-- avoid embedding provider credentials
-- avoid making every installed CLI active by default
-
-The image release record should identify each runtime independently. An OpenCode upgrade can produce a new image digest without asserting that the Codex or Claude support row has been requalified.
+The shared-image rules are owned by
+[`SharedHostImage.md`](./SharedHostImage.md) §1. The durable rule this
+strategy relies on: the image derives from an immutable compatible base,
+installs runtimes at build time only, publishes SBOM/provenance and immutable
+multi-architecture digests, embeds no provider credentials, and never makes
+every installed CLI active by default. An OpenCode upgrade may produce a new
+image digest without asserting that the Codex or Claude support row has been
+requalified.
 
 ## 8. Runtime-pack contract
 
-A representative trusted descriptor is:
-
-```yaml
-schemaVersion: moonmind.omnigent-harness-runtime-pack.v1
-ref: codex-native-pack@1
-harnessId: codex-native
-providerRuntimeId: codex_cli
-binary:
-  command: codex
-  supportedVersion: ">=<minimum>,<maximum>"
-credentialMaterializers:
-  - codex-oauth-home@1
-forbiddenAmbientEnvironment:
-  - OPENAI_API_KEY
-probes:
-  version: codex --version
-  authentication: codex login status
-hostModes:
-  - static-connected
-  - on-demand
-```
-
-The exact schema may evolve. The durable rules are:
-
-- references are versioned
-- descriptors contain no secrets
-- descriptors are not workflow-authored
-- commands are bounded and allowlisted by trusted code
-- the execution plan records the selected runtime-pack ref
-- exact-host evidence records the observed pack and runtime identity
+The runtime-pack descriptor rules are owned by
+[`SharedHostImage.md`](./SharedHostImage.md) §2, which holds the per-pack
+table (harness, vendor range, credential home). The durable rules this
+strategy relies on: references are versioned, descriptors contain no secrets
+and are never workflow-authored, commands are bounded and allowlisted by
+trusted code, the execution plan records the selected runtime-pack ref, and
+exact-host evidence records the observed pack and runtime identity.
 
 ## 9. Product selection and defaults
 

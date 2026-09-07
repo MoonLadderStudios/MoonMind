@@ -941,7 +941,10 @@ runtime, artifact collection, and cleanup.
 
 Omnigent and MoonMind managed sessions use the same tools and job contract. An
 agent runtime does not need a Docker CLI to run repository tests and must not
-advertise a session-local `DOCKER_HOST`.
+advertise a session-local `DOCKER_HOST`. The Omnigent side of this contract —
+supported startup path, Host Classes, credential materializers, and session
+control — is owned by the [Omnigent module entrypoint](../Omnigent/README.md);
+this section owns only the container-job and MCP tooling both sides share.
 
 The default profile-bound Omnigent host receives a host-lease-scoped bearer
 capability and a dependency-free `moonmind` CLI projection. Its capability pins
