@@ -1,0 +1,11 @@
+{
+  "incidentWorkflowId": "mm:9886cfcb-ef6f-48be-9e9d-67ae45263d22",
+  "repository": "MoonLadderStudios/MoonMind",
+  "issueNumber": 4004,
+  "assessmentVerdict": "NOT_IMPLEMENTED",
+  "verificationVerdict": "FULLY_IMPLEMENTED",
+  "acceptedBranch": "moonmind-job-8cd0a8f6",
+  "pullRequestNumber": 4052,
+  "pullRequestUrl": "https://github.com/MoonLadderStudios/MoonMind/pull/4052",
+  "failure": "The final publisher generated moonmind-job-78721278 for an unchanged accepted head, then searched that branch for the PR already created on the accepted branch. Issue finalization failed without authoritative PR evidence."
+}

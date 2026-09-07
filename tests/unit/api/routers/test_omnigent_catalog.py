@@ -1752,3 +1752,51 @@ def test_support_reasons_flag_unversioned_projection(monkeypatch, tmp_path):
     )
     codes = {reason.code for reason in catalog._support_reasons()}
     assert "live_verification_stale" in codes
+
+
+def test_a_queueing_busy_profile_is_not_reported_as_capacity_pressure(monkeypatch):
+    """MoonLadderStudios/MoonMind#3885: queued work is not saturation.
+
+    A busy profile that queues can still accept new work, so the readiness
+    projection must not report the deployment as capacity-blocked.
+    """
+
+    profile = _profile(profile_id="busy")
+    slot = SimpleNamespace(
+        profile_id="busy", expires_at=datetime.now(UTC) + timedelta(minutes=5)
+    )
+    body = (
+        TestClient(_app(monkeypatch, session=_Session([profile], slots=[slot])))
+        .get("/api/omnigent/codex-catalog-readiness")
+        .json()
+    )
+
+    admission = body["admissionReadiness"]
+    assert admission["transientBlocking"] == []
+    assert admission["waitForCapacity"] is False
+
+
+def test_a_saturated_deployment_waits_instead_of_reporting_unsupported(monkeypatch):
+    """Every launch-ready profile busy and non-queueing is a capacity wait."""
+
+    profile = _profile(
+        profile_id="busy", rate_limit_policy=SimpleNamespace(value="reject")
+    )
+    slot = SimpleNamespace(
+        profile_id="busy", expires_at=datetime.now(UTC) + timedelta(minutes=5)
+    )
+    body = (
+        TestClient(_app(monkeypatch, session=_Session([profile], slots=[slot])))
+        .get("/api/omnigent/codex-catalog-readiness")
+        .json()
+    )
+
+    admission = body["admissionReadiness"]
+    assert admission["transientBlocking"] == ["provider_capacity"]
+    assert admission["waitForCapacity"] is True
+    # The installation stays structurally qualified while it is merely full, so
+    # nothing reads this as a reason to substitute another profile or runtime.
+    assert admission["structurallySupported"] is True
+    assert "provider_capacity" not in admission["structuralBlocking"]
+    codes = {reason["code"] for reason in body["gateReasons"]}
+    assert "omnigent_admission_readiness_failed" not in codes

@@ -30,6 +30,7 @@ from moonmind.workflows.skills.tool_plan_contracts import ToolResult
 from moonmind.workflows.temporal.github_issue_search import (
     PrerequisiteLookup,
     check_prerequisites,
+    has_in_progress_status,
     is_complete_open_issue,
     resolve_issue,
 )
@@ -4527,6 +4528,7 @@ async def load_github_issue_preset_brief(
         not is_complete_open_issue(issue_data, repository)
         or issue_data["number"] != issue_number
         or (not _string(inputs.get("issueSearch")) and selected_blockers)
+        or has_in_progress_status(issue_data)
     ):
         return ToolResult(
             status="FAILED",

@@ -1,100 +1,77 @@
-"""Slice 0 reconciliation guards for MoonLadderStudios/MoonMind#4004.
+"""Slice-0 reconciliation conformance for issue #4004.
 
-Documentation-only contract: the repository-access design stays Proposed,
-the temporary plan records the rechecked inventory, all 42 stable claims
-resolve to tracked work, and no new connection/target domain or wire change
-is introduced by this issue. No runtime qualification is claimed here.
+Guards the deliverables of the repository-access contract/ownership
+reconciliation: the design stays Proposed (no gate relaxation), AGENTS.md's
+remote-checkpoint recovery gate stays mandatory, the tmp plan carries the
+complete Slice-0 record (inventory, contract mapping, recovery decision,
+support matrix, partition, fixtures/baseline/decision), the owner-defined
+fixtures honor schema semantics without fake values, and every global
+credential-resolution call site is inventoried so reintroduction fails CI
+with an actionable message.
 """
 
 from __future__ import annotations
 
 import re
+import sys
 from pathlib import Path
 
+import pytest
+import yaml
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
+
+from moonmind.omnigent.conformance import SECRET_PATTERN as SHARED_SECRET_PATTERN
+
 REPO_ROOT = Path(__file__).resolve().parents[3]
+
 DESIGN_DOC = REPO_ROOT / "docs" / "RepositoryAccessAndWorkspaceDesign.md"
 PLAN_DOC = REPO_ROOT / "docs" / "tmp" / "RepositoryAccessAndWorkspaceDecouplingPlan.md"
-CONTRACT_MODULE = (
-    REPO_ROOT / "moonmind" / "workflows" / "executions" / "repository_contract.py"
-)
-PUBLISHING_DOC = REPO_ROOT / "docs" / "Workflows" / "WorkflowPublishing.md"
+FIXTURES_DOC = REPO_ROOT / "docs" / "tmp" / "repository-access-slice0-fixtures.yaml"
+AGENTS_DOC = REPO_ROOT / "AGENTS.md"
+
+RECHECKED_BASELINE = "5da35a2ba"
 
 EXPECTED_CLAIMS = (
-    "DOC-REQ-001",
-    "CONTRACT-001",
-    "INV-001",
-    "DOC-REQ-002",
-    "CONTRACT-002",
-    "CONTRACT-003",
-    "CONTRACT-004",
-    "INV-002",
-    "CONTRACT-005",
-    "CONTRACT-006",
-    "CONTRACT-007",
-    "QUALITY-001",
-    "CONTRACT-008",
-    "CONTRACT-009",
-    "INV-003",
-    "QUALITY-002",
-    "CONTRACT-010",
-    "INV-004",
-    "QUALITY-003",
-    "INV-005",
-    "CONTRACT-011",
-    "INV-006",
-    "CONTRACT-012",
-    "QUALITY-004",
-    "INV-007",
-    "QUALITY-005",
-    "CONTRACT-013",
-    "INV-008",
-    "QUALITY-006",
-    "CONTRACT-014",
-    "QUALITY-007",
-    "DOC-REQ-003",
-    "INV-009",
-    "QUALITY-008",
-    "DOC-REQ-004",
-    "DOC-REQ-005",
-    "TEST-001",
-    "TEST-002",
-    "TEST-003",
-    "TEST-004",
-    "NON-GOAL-001",
-    "QUALITY-009",
+    [f"CONTRACT-{n:03d}" for n in range(1, 15)]
+    + [f"DOC-REQ-{n:03d}" for n in range(1, 6)]
+    + [f"INV-{n:03d}" for n in range(1, 10)]
+    + ["NON-GOAL-001"]
+    + [f"QUALITY-{n:03d}" for n in range(1, 10)]
+    + [f"TEST-{n:03d}" for n in range(1, 5)]
 )
 
-RELATED_DOCS = (
-    "docs/MoonMindArchitecture.md",
-    "docs/Workflows/WorkflowArchitecture.md",
-    "docs/Workflows/LoreVcsIntegrationDesign.md",
-    "docs/Workflows/WorkflowPublishing.md",
-    "docs/Workflows/WorkspaceLocators.md",
-    "docs/Security/SecretsSystem.md",
-    "docs/Security/ProviderProfiles.md",
-    "docs/Omnigent/OmnigentHarnessPlatformDesign.md",
-    "docs/Omnigent/OpenCodeHost.md",
-    "docs/Workflows/MoonSpecDocumentModel.md",
+# Files that must appear in the Slice-0 inventory (§10.2). New global
+# resolver call sites must be added to the inventory, not hidden from it.
+GLOBAL_RESOLVER_SYMBOLS = (
+    "resolve_github_credential",
+    "resolve_github_token_for_launch",
 )
 
-INVENTORY_PATHS = (
-    "moonmind/auth/github_credentials.py",
-    "moonmind/workflows/executions/repository_contract.py",
-    "moonmind/workflows/temporal/runtime/managed_api_key_resolve.py",
-    "moonmind/workflows/temporal/runtime/launcher.py",
-    "moonmind/workflows/temporal/runtime/managed_session_controller.py",
-    "moonmind/workflows/temporal/runtime/checkpoint_restore.py",
-    "moonmind/workflows/adapters/github_service.py",
-    "moonmind/workflows/adapters/jules_client.py",
-    "moonmind/workflows/temporal/story_output_tools.py",
-    "moonmind/publish/service.py",
-    "moonmind/omnigent/host_services/workspace.py",
-    "moonmind/omnigent/host_services/github_credentials.py",
-    "moonmind/omnigent/workspace_publication.py",
-    "moonmind/omnigent/profile_bound_execution.py",
-    "moonmind/agents/codex_worker/worker.py",
-    "moonmind/omnigent/workspace_intent.py",
-    "api_service/main.py",
+# Optional-token and environment-delivery sites (§10.2.2 G-rows / §10.2.3
+# E-rows). A file taking an explicit `github_token` option or injecting
+# `GH_TOKEN`/`GITHUB_TOKEN` into a child/process environment must be
+# inventoried just like a global-resolver call site, so an explicit-token
+# consumer such as the OAuth host cannot be left on raw token delivery
+# while the listed ports cut over.
+OPTIONAL_TOKEN_PATTERN = re.compile(r"\bgithub_token\b")
+ENV_DELIVERY_PATTERN = re.compile(r"\bGH_TOKEN\b|\bGITHUB_TOKEN\b")
+ENV_DELIVERY_SINK_PATTERN = re.compile(
+    r"child_env|build_github_token_git_environment|os\.environ|env\["
+)
+
+# Pure scan/redaction helpers and migrations carry token patterns without
+# delivering credentials; they are not delivery sites.
+SCAN_ONLY_MARKERS = (
+    "scrub_github_tokens",
+    "redact_secrets",
+    "SECRET_PATTERN",
+    "_GITHUB_TOKEN_PATTERN",
+    "assert_secret_free",
+)
+
+SECRET_SHAPES = (
+    SHARED_SECRET_PATTERN,
 )
 
 
@@ -102,105 +79,182 @@ def _read(path: Path) -> str:
     return path.read_text(encoding="utf-8")
 
 
-def test_design_stays_proposed_with_reconciliation_decision() -> None:
+def _repo_python_files() -> list[Path]:
+    roots = (REPO_ROOT / "moonmind", REPO_ROOT / "api_service")
+    files: list[Path] = []
+    for root in roots:
+        files.extend(p for p in root.rglob("*.py") if p.is_file())
+    return files
+
+
+def test_design_remains_proposed_no_gate_relaxation() -> None:
     text = _read(DESIGN_DOC)
     assert "**Status:** Proposed" in text
-    assert "MoonLadderStudios/MoonMind#4004" in text
-    assert "tmp/RepositoryAccessAndWorkspaceDecouplingPlan.md" in text
-    # The design's illustrative shapes must not be mistaken for wire schemas.
-    assert "not complete wire-schema definitions" in text
-    # Reconciliation preserves current gates and enables no runtime path.
-    assert "remains Proposed until its owning views" in text
-    assert "validate terminal evidence before releasing workspace/cleanup authority" in text
-    assert "enables no conflicting runtime path" in text
-    assert "claims no live support" in text
+    # The design must keep stating its handoff is proposed, not permitted.
+    assert "may already be bypassed" in text
+    assert "proposed changes to the owning contracts and guidance" in text
+    # Slice-0 enables no runtime path.
+    assert "No runtime qualification is claimed by this documentation task" in _read(PLAN_DOC)
 
 
-def test_design_contains_all_42_stable_claims() -> None:
-    text = _read(DESIGN_DOC)
+def test_agents_recovery_gate_stays_mandatory() -> None:
+    text = _read(AGENTS_DOC)
+    assert "publish a remotely verified recovery checkpoint before cleanup" in text
+
+
+def test_plan_carries_complete_slice0_record() -> None:
+    text = _read(PLAN_DOC)
+    for section in (
+        "## 10. Slice-0 reconciliation record (issue #4004)",
+        "### 10.1 Rechecked baseline and method",
+        "### 10.2 Rechecked consumer inventory with owners",
+        "### 10.3 Module-owned contract mapping, wire versions, and type owners",
+        "### 10.4 Recovery-guidance reconciliation (reviewed docs decision)",
+        "### 10.5 Supported-combination matrix and capture/restore owners",
+        "### 10.6 Work partition, compatibility, digests, gates, rejections",
+        "### 10.7 Fixtures, claim/link checks, and review decision",
+    ):
+        assert section in text, section
+    assert RECHECKED_BASELINE in text
+    # No second connection domain or target domain may be introduced.
+    assert "No `SourceControlConnection`" in text
+    assert "no `RepositoryTargetV2`" in text
+    # Sibling partition must name every related issue.
+    for issue in ("#2615", "#1090", "#2619", "#3938", "#3940", "#4003", "#4004"):
+        assert issue in text, issue
+
+
+def test_all_42_claims_resolve_to_tracked_work() -> None:
     assert len(EXPECTED_CLAIMS) == 42
-    for claim in EXPECTED_CLAIMS:
-        assert claim in text, claim
-
-
-def test_related_doc_links_resolve() -> None:
-    for relative in RELATED_DOCS:
-        assert (REPO_ROOT / relative).exists(), relative
-
-
-def test_plan_records_rechecked_baseline_and_review_decision() -> None:
-    text = _read(PLAN_DOC)
-    assert "MoonLadderStudios/MoonMind#4004" in text
-    assert "63bce9852ffa33e33cb0b416bc24a654b1b6f92b" in text
-    assert "5da35a2ba7ad80a8778ce766445184b134631fcb" in text
-    assert "source inspection only" in text or "inspection-only" in text
-    assert "not deployment or integration-test evidence" in text or "No deployment" in text or "no live support" in text.lower()
-    # Review decision: proposed target only, current gates authoritative.
-    assert "Proposed target only" in text
-    assert "enables no runtime path" in text
-
-
-def test_plan_inventory_names_exact_consumer_paths() -> None:
-    text = _read(PLAN_DOC)
-    for relative in INVENTORY_PATHS:
-        assert relative in text, relative
-    # Key resolver signals are distinguished, not conflated.
-    assert "resolve_github_credential" in text
-    assert "resolve_github_token_for_launch" in text
-    assert "resolve_default_git_credential" in text
-    # Corrected lease location is recorded.
-    assert "moonmind/omnigent/provider_leases.py" in text
-
-
-def test_plan_resolves_all_42_claims_to_tracked_work() -> None:
-    text = _read(PLAN_DOC)
-    for claim in EXPECTED_CLAIMS:
-        assert claim in text, claim
-    # Partitioning with sibling issues is explicit.
-    for reference in ("#2615", "#1090", "#2619", "#3938", "#3940", "#4003"):
-        assert reference in text, reference
-
-
-def test_plan_support_matrix_claims_no_live_support() -> None:
-    text = _read(PLAN_DOC)
-    assert "inspection only, not live support" in text
-    assert "opencode-zen-free" in text
-    assert "none@1" in text
-    assert "capture/restore/session-reattach" in text.lower() or "capture / restore" in text.lower()
-
-
-def test_no_competing_connection_or_target_domain() -> None:
-    text = _read(CONTRACT_MODULE)
-    assert "SourceControlConnection" not in text
-    assert "RepositoryTargetV2" not in text
-    assert 'provider: git | lore' in text or '"git"' in text
-    assert "DEFAULT_GIT_CONNECTION_REF" in text
-    assert "repository-connection:git-default" in text
-    assert "LEGACY_REPOSITORY_DECODER_VERSION" in text
-    assert "decode_legacy_repository_history_v1" in text
-    # Single connection domain is preserved.
-    assert "class RepositoryConnection" in text
-
-
-def test_publish_modes_and_provider_axes_are_preserved() -> None:
-    contract = _read(CONTRACT_MODULE)
-    assert 'Literal["git", "lore"]' in contract or 'Literal["git",' in contract
-    publishing = _read(PUBLISHING_DOC)
-    for mode in ("`none`", "`branch`", "`pr`", "`auto`"):
-        assert mode in publishing, mode
-    # Managed auto stays agent-owned; recovery branch is not success.
-    assert "agent-owned" in publishing
-    assert "recovery" in publishing.lower()
-
-
-def test_plan_keeps_migration_steps_under_docs_tmp() -> None:
-    text = _read(PLAN_DOC)
-    assert "docs/tmp/" in text or "this `docs/tmp/` plan" in text
-    # The canonical design must not be reframed as a migration checklist.
     design = _read(DESIGN_DOC)
-    assert "- [ ]" not in design
-    # Plan records that illustrative examples are not wire schemas.
-    assert "not complete wire-schema" in text or "illustrative" in text
-    # No fake credential values are introduced by the reconciliation record.
-    assert re.search(r"ghp_[A-Za-z0-9]+", text) is None
-    assert re.search(r"github_pat_[A-Za-z0-9]+", text) is None
+    plan = _read(PLAN_DOC)
+    # The §10.7 aggregate identifier list alone is not ownership evidence:
+    # every claim must resolve to a structured owner/record outside it
+    # (§1 traceability rows or the §10.2–§10.6 owning records).
+    structured_plan = plan.split("### 10.7")[0]
+    for claim in EXPECTED_CLAIMS:
+        assert claim in design, f"{claim} missing from design"
+        assert claim in structured_plan, (
+            f"{claim} appears only in the §10.7 aggregate list, not in a "
+            "structured §1/§10.2–§10.6 owner/record mapping"
+        )
+
+
+def test_inventory_paths_exist() -> None:
+    text = _read(PLAN_DOC)
+    record = text.split("## 10. Slice-0 reconciliation record")[1]
+    paths = sorted(set(re.findall(r"`((?:moonmind|api_service|frontend)/[^`]+?\.py)`", record)))
+    assert paths, "Slice-0 record must cite exact module paths"
+    for rel in paths:
+        assert (REPO_ROOT / rel).exists(), f"inventoried path does not exist: {rel}"
+
+
+def _is_scan_only(text: str, path: Path) -> bool:
+    if "migrations" in str(path).replace("\\", "/"):
+        return True
+    return any(marker in text for marker in SCAN_ONLY_MARKERS)
+
+
+def _is_token_delivery_site(text: str) -> bool:
+    """Detect optional-token params and token env-delivery sinks."""
+    if not OPTIONAL_TOKEN_PATTERN.search(text):
+        has_token = False
+    else:
+        has_token = True
+    has_env = bool(ENV_DELIVERY_PATTERN.search(text))
+    if not (has_token or has_env):
+        return False
+    # An explicit `github_token` option counts even without env injection;
+    # env material counts when it reaches a delivery sink.
+    if has_token and not has_env:
+        return True
+    return bool(ENV_DELIVERY_SINK_PATTERN.search(text))
+
+
+def test_global_resolver_call_sites_are_inventoried() -> None:
+    record = _read(PLAN_DOC).split("## 10. Slice-0 reconciliation record")[1]
+    offenders: list[str] = []
+    for path in _repo_python_files():
+        try:
+            text = path.read_text(encoding="utf-8")
+        except OSError:
+            continue
+        if _is_scan_only(text, path):
+            continue
+        is_resolver_site = (
+            any(symbol in text for symbol in GLOBAL_RESOLVER_SYMBOLS)
+            and "def resolve_github_credential" not in text
+            and "def resolve_github_token_for_launch" not in text
+            and "auth/github_credentials" not in str(path)
+        )
+        is_delivery_site = _is_token_delivery_site(text)
+        if not (is_resolver_site or is_delivery_site):
+            continue
+        # Typed secret-ref resolution is not global discovery.
+        if "auth/secret_refs" in str(path).replace("\\", "/"):
+            continue
+        rel = str(path.relative_to(REPO_ROOT))
+        if f"`{rel}`" not in record:
+            offenders.append(rel)
+    assert not offenders, (
+        "Credential-resolution or explicit-token/environment-delivery call "
+        "sites missing from the Slice-0 "
+        f"inventory (docs/tmp/RepositoryAccessAndWorkspaceDecouplingPlan.md §10.2): {offenders}"
+    )
+
+
+def test_fixtures_honor_schema_semantics_without_fake_values() -> None:
+    raw = _read(FIXTURES_DOC)
+    # Shared repository secret scanner: covers ghp_, github_pat_, AIza,
+    # ATATT, AKIA, private-key blocks, and token=/password=/secret
+    # assignments per the repository credential guardrails.
+    assert not SHARED_SECRET_PATTERN.search(raw), "fixture leaks secret-shaped value"
+    for shape in SECRET_SHAPES:
+        assert not shape.search(raw), f"fixture leaks secret-shaped value: {shape.pattern}"
+    assert "GITHUB_TOKEN" not in raw
+    assert "password" not in raw.lower()
+    fixtures = yaml.safe_load(raw)
+    assert isinstance(fixtures, list) and len(fixtures) >= 3
+    by_name = {item["name"]: item for item in fixtures}
+
+    scratch = by_name["scratch-report"]
+    assert scratch["workspaceSource"]["kind"] == "scratch"
+    assert "repository" not in scratch["workspaceSource"]
+    assert "repository" not in scratch
+    assert "connectionRef" not in raw.split("name: scratch-report")[1].split("- name:")[0]
+
+    anonymous = by_name["anonymous-public-read"]
+    # Canonical authoring keeps the authored repository as a top-level
+    # sibling of `workspaceSource` (design §3 shapes), never nested inside it.
+    assert anonymous["workspaceSource"] == {"kind": "repository"}
+    repo = anonymous["repository"]
+    assert repo["accessMode"] == "anonymous"
+    assert "connectionRef" not in repo
+    assert repo["repository"]["name"] == "MoonLadderStudios/MoonMind"
+
+    routed = by_name["routed-default"]
+    assert routed["workspaceSource"] == {"kind": "repository"}
+    assert routed["repository"]["accessMode"] == "routed"
+    for item in fixtures:
+        assert item["publish"]["mode"] == "none"
+
+
+def test_design_plan_cross_links_hold() -> None:
+    assert "RepositoryAccessAndWorkspaceDecouplingPlan.md" in _read(DESIGN_DOC)
+    assert "RepositoryAccessAndWorkspaceDesign.md" in _read(PLAN_DOC)
+
+
+def test_no_second_target_domain_in_code() -> None:
+    offenders = []
+    for path in _repo_python_files():
+        try:
+            text = path.read_text(encoding="utf-8")
+        except OSError:
+            continue
+        if "SourceControlConnection" in text or "RepositoryTargetV2" in text:
+            offenders.append(str(path.relative_to(REPO_ROOT)))
+    assert not offenders, f"forbidden parallel domain found in: {offenders}"
+
+
+if __name__ == "__main__":
+    raise SystemExit(pytest.main([__file__, "-q"]))

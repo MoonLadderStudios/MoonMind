@@ -1,0 +1,59 @@
+# Owner-defined Slice-0 authoring fixtures (issue #4004).
+#
+# These are illustrative desired-state examples for the design's authoring
+# semantics (docs/RepositoryAccessAndWorkspaceDesign.md, Section 3). They are
+# NOT complete wire-schema definitions and claim no runtime support: the
+# `workspaceSource` union and `accessMode` do not exist in code yet (see the
+# Slice-0 record in docs/tmp/RepositoryAccessAndWorkspaceDecouplingPlan.md).
+#
+# Schema-semantics rules enforced by
+# tests/unit/docs/test_repository_access_slice0_reconciliation.py:
+# - `scratch` carries no repository keys, no connectionRef, no credential.
+# - `anonymous` carries a top-level repository target with accessMode
+#   `anonymous` (sibling of `workspaceSource`, per
+#   docs/RepositoryAccessAndWorkspaceDesign.md:88-115), no connectionRef,
+#   and no credential material.
+# - No fixture contains raw tokens, secret values, or environment
+#   credential values anywhere.
+# - Repository names use the real, existing MoonMind repository so examples
+#   never invent fake repository identities.
+
+- name: scratch-report
+  description: Contained scratch workspace, no repository access, save-only.
+  workspaceSource:
+    kind: scratch
+  outputPolicy:
+    savedWork: required
+    formatProfile: portable
+  publish:
+    mode: none
+
+- name: anonymous-public-read
+  description: Explicit anonymous read of a real public repository; no credential lookup.
+  workspaceSource:
+    kind: repository
+  repository:
+    provider: git
+    repository:
+      name: MoonLadderStudios/MoonMind
+    accessMode: anonymous
+  outputPolicy:
+    savedWork: required
+    formatProfile: portable
+  publish:
+    mode: none
+
+- name: routed-default
+  description: Connected repository picker authoring routed access; omitted branch requests the remote default.
+  workspaceSource:
+    kind: repository
+  repository:
+    provider: git
+    repository:
+      name: MoonLadderStudios/MoonMind
+    accessMode: routed
+  outputPolicy:
+    savedWork: required
+    formatProfile: portable
+  publish:
+    mode: none
