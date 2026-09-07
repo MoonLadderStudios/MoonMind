@@ -1,5 +1,6 @@
 # MoonMind Architecture
 
+**Document Class:** System Architecture View
 Codex managed-runtime support is governed by the versioned
 [`CodexSupportAndCutover`](./Omnigent/CodexSupportAndCutover.md) contract.
 Codex-through-Omnigent is currently opt-in pending complete protected-live
@@ -614,7 +615,7 @@ Engine endpoint without changing public tools.
 - [`Temporal/ManagedAndExternalAgentExecutionModel.md`](Temporal/ManagedAndExternalAgentExecutionModel.md): true agent execution lifecycle and canonical contracts.
 - [`ManagedAgents/ManagedAgentArchitecture.md`](ManagedAgents/ManagedAgentArchitecture.md): managed-agent and managed-session subsystem.
 - [`ManagedAgents/CodexCliManagedSessions.md`](ManagedAgents/CodexCliManagedSessions.md): Codex session binding.
-- [`ManagedAgents/LiveLogs.md`](ManagedAgents/LiveLogs.md): session-aware log and
+- [`Observability/LiveLogs.md`](Observability/LiveLogs.md): session-aware log and
   observability contract.
 - [`ManagedAgents/DockerBackendService.md`](ManagedAgents/DockerBackendService.md):
   container-job API, backend, image cache, workspace, and cleanup contract.
