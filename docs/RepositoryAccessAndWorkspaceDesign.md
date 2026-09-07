@@ -43,8 +43,6 @@ This view owns the feature's desired integration behavior. Formal module interfa
 
 The target explicitly extends repository-required authoring and remote-only recovery assumptions. `none` preserves results without a final repository publication, and verified artifact storage provides the credentialless durability handoff. These are proposed changes to the owning contracts and guidance, not claims that an existing mandatory gate may already be bypassed. Settled architecture is promoted into its owning views under the [Documentation Architecture Standard](DocumentationArchitecture.md).
 
-Slice 0 reconciliation decision (MoonLadderStudios/MoonMind#4004): the artifact-backed durability handoff remains Proposed until its owning views — AGENTS.md authority-handoff guidance, [Workflow Publishing](Workflows/WorkflowPublishing.md) save/recovery rules, and the workspace/checkpoint restore contracts — explicitly accept it. Until then the current gates stay authoritative: validate terminal evidence before releasing workspace/cleanup authority, and admit remote recovery/publication authority before any remote branch. This issue enables no conflicting runtime path, claims no live support, and keeps all migration steps under the [temporary implementation plan](tmp/RepositoryAccessAndWorkspaceDecouplingPlan.md).
-
 ### INV-001 Authority is never inferred from an available credential
 
 A scratch execution without repository tools or publication has no repository target, repository credential binding, GitHub resolver call, `gh` requirement, or GitHub readiness probe. Local Git history does not create a remote identity or push permission.
