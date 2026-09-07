@@ -1,12 +1,13 @@
 # Codex CLI Managed Sessions
 
+**Document Class:** Module Contract Specification
 Status: Desired state  
 Owners: MoonMind Platform  
 Last updated: 2026-08-10
 Related:
 
 - [`docs/Temporal/ManagedAndExternalAgentExecutionModel.md`](../Temporal/ManagedAndExternalAgentExecutionModel.md)
-- [`docs/Temporal/ArtifactPresentationContract.md`](../Temporal/ArtifactPresentationContract.md)
+- [`docs/Artifacts/ArtifactPresentationContract.md`](../Artifacts/ArtifactPresentationContract.md)
 - [`docs/ManagedAgents/DockerBackendService.md`](./DockerBackendService.md)
 - [`docs/Steps/SkillSystem.md`](../Steps/SkillSystem.md)
 

@@ -1,5 +1,6 @@
 # Managed Agent Architecture
 
+**Document Class:** Module Architecture View
 - **Status:** Desired state
 - **Audience:** Contributors, operators, runtime authors, and integration authors
 - **Purpose:** Subsystem architecture entrypoint for MoonMind managed agents and managed sessions
@@ -12,7 +13,7 @@
 - [`docs/ManagedAgents/CodexManagedSessionPlane.md`](./CodexManagedSessionPlane.md)
 - [`docs/ManagedAgents/CodexCliManagedSessions.md`](./CodexCliManagedSessions.md)
 - [`docs/ManagedAgents/ClaudeCodeManagedSessions.md`](./ClaudeCodeManagedSessions.md)
-- [`docs/ManagedAgents/LiveLogs.md`](./LiveLogs.md)
+- [`docs/Observability/LiveLogs.md`](../Observability/LiveLogs.md)
 - [`docs/ManagedAgents/DockerBackendService.md`](./DockerBackendService.md)
 - [`docs/ManagedAgents/OAuthTerminal.md`](./OAuthTerminal.md)
 - [`docs/Security/ProviderProfiles.md`](../Security/ProviderProfiles.md)

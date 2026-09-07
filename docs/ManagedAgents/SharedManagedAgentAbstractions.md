@@ -1,5 +1,6 @@
 # Shared Managed Agent Abstractions
 
+**Document Class:** Module Contract Specification
 - **Status:** Desired state
 - **Audience:** Runtime authors, workflow authors, adapter authors, and dashboard authors
 - **Purpose:** Runtime-neutral contract layer underneath the managed-agent architecture entrypoint
@@ -10,7 +11,7 @@
 - [`docs/ManagedAgents/CodexManagedSessionPlane.md`](./CodexManagedSessionPlane.md)
 - [`docs/ManagedAgents/CodexCliManagedSessions.md`](./CodexCliManagedSessions.md)
 - [`docs/ManagedAgents/ClaudeCodeManagedSessions.md`](./ClaudeCodeManagedSessions.md)
-- [`docs/ManagedAgents/LiveLogs.md`](./LiveLogs.md)
+- [`docs/Observability/LiveLogs.md`](../Observability/LiveLogs.md)
 - [`docs/ManagedAgents/DockerOutOfDocker.md`](./DockerOutOfDocker.md)
 - [`docs/Security/ProviderProfiles.md`](../Security/ProviderProfiles.md)
 - [`docs/Security/SecretsSystem.md`](../Security/SecretsSystem.md)
@@ -634,6 +635,6 @@ Use the managed-agent docs as follows:
 - [`CodexManagedSessionPlane.md`](./CodexManagedSessionPlane.md) is the current Codex runtime-specific architecture entrypoint.
 - [`CodexCliManagedSessions.md`](./CodexCliManagedSessions.md) defines Codex-specific session details.
 - [`ClaudeCodeManagedSessions.md`](./ClaudeCodeManagedSessions.md) defines Claude Code-specific session details.
-- [`LiveLogs.md`](./LiveLogs.md) defines session-aware observability.
+- [`LiveLogs.md`](../Observability/LiveLogs.md) defines session-aware observability.
 
 Canonical docs should stay focused on target architecture and contracts. Migration notes, rollout sequencing, and incomplete implementation checklists belong under `local-only handoffs`.

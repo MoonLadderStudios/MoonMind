@@ -1,5 +1,6 @@
 # Workflow Console Architecture
 
+**Document Class:** Module Architecture View
 Status: Active
 Owners: MoonMind Engineering
 Last updated: 2026-06-10
@@ -36,7 +37,7 @@ Detailed backend contracts live in the Temporal docs. This document defines the 
 - `docs/Temporal/StepLedgerAndProgressModel.md`
 - `docs/Temporal/VisibilityAndUiQueryModel.md`
 - `docs/Temporal/WorkflowArtifactSystemDesign.md`
-- `docs/ManagedAgents/LiveLogs.md` — canonical design for artifact-first logs, MoonMind-owned observability APIs, SSE live follow, and the non-terminal log viewer UI
+- `docs/Observability/LiveLogs.md` — canonical design for artifact-first logs, MoonMind-owned observability APIs, SSE live follow, and the non-terminal log viewer UI
 - `docs/Steps/SkillSystem.md`
 - `docs/UI/DashboardDesignSystem.md`
 - `docs/UI/WorkflowWorkspaceSidebar.md` — addendum for desktop workspace shell, sidebar navigation, list-context preservation, and mobile standalone detail presentation

@@ -13,7 +13,7 @@
 - [`docs/ManagedAgents/DockerSidecarRuntime.md`](./DockerSidecarRuntime.md)
 - [`docs/ManagedAgents/CodexManagedSessionPlane.md`](./CodexManagedSessionPlane.md)
 - [`docs/ManagedAgents/CodexCliManagedSessions.md`](./CodexCliManagedSessions.md)
-- [`docs/ManagedAgents/LiveLogs.md`](./LiveLogs.md)
+- [`docs/Observability/LiveLogs.md`](../Observability/LiveLogs.md)
 - [`docs/Temporal/ManagedAndExternalAgentExecutionModel.md`](../Temporal/ManagedAndExternalAgentExecutionModel.md)
 
 ---
