@@ -2892,6 +2892,28 @@ def test_deployment_mounted_tool_names_come_from_locked_manifest(
 
 
 @pytest.mark.asyncio
+def _signed_grant_digest(workspace_id: str, *, secret: str) -> str:
+    """Issue the fixture grant HMAC for the requesting workflow-1/idem-1."""
+
+    from moonmind.omnigent.workspace_sources import issue_existing_workspace_grant
+
+    return issue_existing_workspace_grant(
+        workspace_id=workspace_id,
+        owner_workflow_id="workflow-1",
+        owner_step_execution_id="idem-1",
+        grantee_workflow_id="workflow-1",
+        mode="exclusive",
+        generation=1,
+        secret=secret,
+    ).grant_digest or ""
+
+
+def _grant_expires_at() -> str:
+    from datetime import UTC, datetime, timedelta
+
+    return (datetime.now(tz=UTC) + timedelta(hours=1)).isoformat()
+
+
 async def test_workspace_attachment_translates_to_daemon_visible_volume_path(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -2907,6 +2929,11 @@ async def test_workspace_attachment_translates_to_daemon_visible_volume_path(
     # MoonLadderStudios/MoonMind#4014 removed raw workspacePath precedence:
     # an existing workspace needs a server-issued ownership/use grant. The
     # daemon translation below exercises the granted path, not a raw mount.
+    # Newly authored grants must carry an HMAC issuance signature bound to
+    # the target workflow, so the fixture issues a signed grant.
+    monkeypatch.setenv(
+        "MOONMIND_WORKSPACE_GRANT_SECRET", "test-workspace-grant-secret"
+    )
     workspace_id = "granted-ws-1"
     granted = workspace_root / "temporal_sandbox" / workspace_id / "repo"
     granted.mkdir(parents=True)
@@ -2936,6 +2963,11 @@ async def test_workspace_attachment_translates_to_daemon_visible_volume_path(
                         "ownerStepExecutionId": "idem-1",
                         "generation": 1,
                         "mode": "exclusive",
+                        "grantDigest": _signed_grant_digest(
+                            workspace_id,
+                            secret="test-workspace-grant-secret",
+                        ),
+                        "expiresAt": _grant_expires_at(),
                     },
                 }
             }

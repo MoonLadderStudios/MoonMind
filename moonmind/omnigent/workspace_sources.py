@@ -345,8 +345,17 @@ def resolve_workspace_backend() -> str:
         return "docker_remote"
     if mode == "local":
         return "docker_local"
-    daemon_root = os.getenv("WORKFLOW_WORKSPACE_DAEMON_ROOT", "").strip()
-    return "docker_remote" if daemon_root else "docker_local"
+    if not mode:
+        daemon_root = os.getenv("WORKFLOW_WORKSPACE_DAEMON_ROOT", "").strip()
+        return "docker_remote" if daemon_root else "docker_local"
+    # An unknown explicit mode is a configuration error, not a local daemon:
+    # silently treating a typo (e.g. ``sidecar``) as local would pass the
+    # pre-launch backend check and allow workspace mutation before the
+    # daemon-path resolver rejects the configuration.
+    raise WorkspaceSourceError(
+        WORKSPACE_SOURCE_RUNTIME_UNSUPPORTED,
+        "WORKFLOW_DOCKER_DAEMON_MODE must be 'local' or 'remote'",
+    )
 
 
 def _grant_signature_payload(
@@ -380,7 +389,7 @@ def issue_existing_workspace_grant(
     workspace_id: str,
     owner_workflow_id: str,
     owner_step_execution_id: str,
-    grantee_workflow_id: str = "",
+    grantee_workflow_id: str,
     mode: str = "exclusive",
     generation: int = 1,
     lifetime_seconds: int = 3600,
@@ -389,7 +398,11 @@ def issue_existing_workspace_grant(
     """Issue a server-side HMAC-authenticated ownership/use grant.
 
     The HMAC in ``grant_digest`` authenticates issuance so a forged grant
-    cannot pass verification; agents never see the server secret.
+    cannot pass verification; agents never see the server secret. The
+    grantee is required explicitly because the HMAC binds it: a defaulted
+    (empty) grantee would issue a grant that fails verification for every
+    executable request, whose materializer always verifies against the
+    nonempty target workflow.
     """
 
     key = secret if secret is not None else os.getenv(_GRANT_HMAC_ENV, "")
@@ -823,6 +836,23 @@ def compile_workspace_source(
             raise WorkspaceSourceError(
                 WORKSPACE_SOURCE_GRANT_INVALID,
                 "existingWorkspaceGrant has expired",
+            )
+        if authored_kind == "existing_workspace":
+            # Newly authored grants must carry a server-issued HMAC: the
+            # materializer treats every non-HMAC digest as a historical
+            # grant, so accepting an unsigned (or digest-downgraded) grant
+            # here would keep newly authored sources forgeable. In-flight
+            # historical payloads without an explicit kind keep the
+            # tolerant path; a carried signature is still verified below.
+            digest = str(grant.grant_digest or "")
+            if not digest.startswith("hmac-sha256:"):
+                raise WorkspaceSourceError(
+                    WORKSPACE_SOURCE_GRANT_INVALID,
+                    "authored existingWorkspaceGrant requires a server-issued "
+                    "HMAC grantDigest",
+                )
+            verify_existing_workspace_grant_signature(
+                grant, grantee_workflow_id=workflow_id
             )
         check_source_runtime_supported("existing_workspace", runtime)
         return CompiledWorkspaceSource(

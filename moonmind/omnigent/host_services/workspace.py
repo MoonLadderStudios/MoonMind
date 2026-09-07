@@ -311,18 +311,6 @@ class OmnigentWorkspaceMaterializer:
         expected_workspace_id = hashlib.sha256(
             f"{owner_workflow_id}:{owner_step_execution_id}".encode("utf-8")
         ).hexdigest()[:24]
-        try:
-            candidate = resolve_sandbox_workspace_locator(
-                sandbox_locator,
-                workspace_root=self._root,
-                expected_workspace_id=expected_workspace_id,
-                must_exist=False,
-            )
-        except Exception as exc:
-            raise HarnessPlatformError(
-                f"sandbox workspace locator cannot be resolved: {exc}",
-                code=HarnessPlatformFailure.OMNIGENT_HOST_LAUNCH_FAILED,
-            ) from exc
         owner_record = SandboxWorkspaceRecord(
             workspace_id=sandbox_locator.workspace_id,
             workflow_id=owner_workflow_id,
@@ -423,22 +411,25 @@ class OmnigentWorkspaceMaterializer:
                 "another workflow",
                 code=HarnessPlatformFailure.OMNIGENT_HOST_LAUNCH_FAILED,
             )
-        # Stale generations fail before any filesystem use; the ledger lives
-        # beside the owner records, never inside a materialized workspace.
+        # A signed grant carries issuance authenticity: authenticate the
+        # grant before mutating the ledger. Admitting first would let a
+        # forged high-generation HMAC grant poison the recorded generation
+        # before the signature check rejects it, failing later legitimate
+        # grants as stale. Historical unsigned grants keep the
+        # owner/generation/expiry checks above.
         try:
-            ExistingWorkspaceGrantLedger(record_store.store_root).admit(grant)
+            verify_existing_workspace_grant_signature(
+                grant, grantee_workflow_id=target_workflow_id
+            )
         except WorkspaceSourceError as exc:
             raise HarnessPlatformError(
                 str(exc),
                 code=HarnessPlatformFailure.OMNIGENT_HOST_LAUNCH_FAILED,
             ) from exc
-        # A signed grant carries issuance authenticity: forged signatures fail
-        # closed here. Historical unsigned grants keep the owner/generation /
-        # expiry checks above.
+        # Stale generations fail before any filesystem use; the ledger lives
+        # beside the owner records, never inside a materialized workspace.
         try:
-            verify_existing_workspace_grant_signature(
-                grant, grantee_workflow_id=target_workflow_id
-            )
+            ExistingWorkspaceGrantLedger(record_store.store_root).admit(grant)
         except WorkspaceSourceError as exc:
             raise HarnessPlatformError(
                 str(exc),

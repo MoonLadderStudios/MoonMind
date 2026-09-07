@@ -783,9 +783,11 @@ async def test_restored_git_is_usable_without_imported_authority(tmp_path):
             (
                 ".gitmodules",
                 b'[submodule "x"]\n'
+                b"\tpath = x\n"
                 b"\turl = https://example.com/x.git\n",
                 "file",
             ),
+            ("x/ok.txt", b"submodule content\n", "file"),
             (".aws/credentials", b"[default]\n", "file"),
             (".netrc", b"machine example.com password s3cr3t\n", "file"),
             (".moonmind/session-lease.json", b'{"lease": true}\n', "file"),
@@ -965,17 +967,42 @@ def _ensure_owned_workspace(root: Path, workspace_id: str, owner=(),
     return workspace
 
 
+_TEST_GRANT_SECRET = "test-workspace-grant-secret"
+
+
 def _grant_spec(workspace_id: str, owner=("workflow-1", "step-1"),
-                generation=1, mode="exclusive") -> dict:
+                generation=1, mode="exclusive", grantee="workflow-1") -> dict:
+    """Build an authored existing-workspace source with a server-issued grant.
+
+    Newly authored grants must carry an HMAC issuance signature bound to
+    the target (grantee) workflow; unsigned mappings are rejected at
+    compile time so downgraded digests cannot verify as historical.
+    """
+
+    from moonmind.omnigent.workspace_sources import issue_existing_workspace_grant
+
+    grant = issue_existing_workspace_grant(
+        workspace_id=workspace_id,
+        owner_workflow_id=owner[0],
+        owner_step_execution_id=owner[1],
+        grantee_workflow_id=grantee,
+        mode=mode,
+        generation=generation,
+        secret=_TEST_GRANT_SECRET,
+    )
     return {
         "workspaceSource": {
             "kind": "existing_workspace",
             "existingWorkspaceGrant": {
-                "workspaceId": workspace_id,
-                "ownerWorkflowId": owner[0],
-                "ownerStepExecutionId": owner[1],
-                "generation": generation,
-                "mode": mode,
+                "workspaceId": grant.workspace_id,
+                "ownerWorkflowId": grant.owner_workflow_id,
+                "ownerStepExecutionId": grant.owner_step_execution_id,
+                "generation": grant.generation,
+                "mode": grant.mode,
+                "grantDigest": grant.grant_digest,
+                "expiresAt": grant.expires_at.isoformat()
+                if grant.expires_at is not None
+                else None,
             },
         }
     }
@@ -1005,17 +1032,24 @@ async def test_sibling_directory_without_grant_is_rejected(tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_existing_workspace_grant_positive_and_negative(tmp_path):
+async def test_existing_workspace_grant_positive_and_negative(tmp_path, monkeypatch):
+    monkeypatch.setenv("MOONMIND_WORKSPACE_GRANT_SECRET", _TEST_GRANT_SECRET)
     workspace_id = "shared-ws"
     _ensure_owned_workspace(tmp_path, workspace_id, owner=("owner-wf", "owner-st"))
     materializer = OmnigentWorkspaceMaterializer(
         command_runner=_never_clone, workspace_root=tmp_path
     )
-    # Exclusive grant for another workflow fails: no sibling reuse.
+    # Exclusive grant for another workflow fails: no sibling reuse. The
+    # grant is issued to the intruder so the signature verifies and the
+    # exclusive-use fence is what rejects it.
     with pytest.raises(HarnessPlatformError, match="exclusive"):
         await materializer.materialize(
             _request(
-                _grant_spec(workspace_id, owner=("owner-wf", "owner-st")),
+                _grant_spec(
+                    workspace_id,
+                    owner=("owner-wf", "owner-st"),
+                    grantee="intruder-wf",
+                ),
                 workflow_id="intruder-wf",
                 step_id="intruder-st",
             ),
@@ -1023,9 +1057,15 @@ async def test_existing_workspace_grant_positive_and_negative(tmp_path):
             runtime_gid=os.getgid(),
         )
     # Read-only sharing with another workflow succeeds as read-only.
+    reader_grant = _grant_spec(
+        workspace_id,
+        owner=("owner-wf", "owner-st"),
+        mode="read_only",
+        grantee="reader-wf",
+    )
     shared = await materializer.materialize(
         _request(
-            _grant_spec(workspace_id, owner=("owner-wf", "owner-st"), mode="read_only"),
+            reader_grant,
             workflow_id="reader-wf",
             step_id="reader-st",
         ),
@@ -1035,10 +1075,26 @@ async def test_existing_workspace_grant_positive_and_negative(tmp_path):
     assert shared["accessMode"] == "read-only"
     workspace = tmp_path / "temporal_sandbox" / workspace_id / "repo"
     assert (workspace / "owned.txt").read_text() == "owner content\n"
-    # Owner exclusive use succeeds read-write.
+    # The reader's finalized execution releases its claim; owner exclusive
+    # use then succeeds read-write instead of conflicting indefinitely.
+    from moonmind.omnigent.workspace_sources import parse_existing_workspace_grant
+    from moonmind.workflows.temporal.runtime.workspace_locators import (
+        SandboxWorkspaceRecordStore as _RecordStore,
+    )
+
+    _store = _RecordStore(tmp_path)
+    _parsed = parse_existing_workspace_grant(
+        reader_grant["workspaceSource"]["existingWorkspaceGrant"]
+    )
+    _claim_id, _ = _RecordStore._grant_claim_identity(_parsed)
+    _store.release_existing_workspace(workspace_id, _claim_id)
     owned = await materializer.materialize(
         _request(
-            _grant_spec(workspace_id, owner=("owner-wf", "owner-st")),
+            _grant_spec(
+                workspace_id,
+                owner=("owner-wf", "owner-st"),
+                grantee="owner-wf",
+            ),
             workflow_id="owner-wf",
             step_id="owner-st",
         ),
@@ -1049,7 +1105,8 @@ async def test_existing_workspace_grant_positive_and_negative(tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_stale_grant_generation_fails_after_advance(tmp_path):
+async def test_stale_grant_generation_fails_after_advance(tmp_path, monkeypatch):
+    monkeypatch.setenv("MOONMIND_WORKSPACE_GRANT_SECRET", _TEST_GRANT_SECRET)
     workspace_id = "gen-ws"
     _ensure_owned_workspace(tmp_path, workspace_id, owner=("owner-wf", "owner-st"))
     materializer = OmnigentWorkspaceMaterializer(
@@ -1057,7 +1114,12 @@ async def test_stale_grant_generation_fails_after_advance(tmp_path):
     )
     await materializer.materialize(
         _request(
-            _grant_spec(workspace_id, owner=("owner-wf", "owner-st"), generation=2),
+            _grant_spec(
+                workspace_id,
+                owner=("owner-wf", "owner-st"),
+                generation=2,
+                grantee="owner-wf",
+            ),
             workflow_id="owner-wf",
             step_id="owner-st",
         ),
@@ -1067,13 +1129,124 @@ async def test_stale_grant_generation_fails_after_advance(tmp_path):
     with pytest.raises(HarnessPlatformError, match="stale"):
         await materializer.materialize(
             _request(
-                _grant_spec(workspace_id, owner=("owner-wf", "owner-st"), generation=1),
+                _grant_spec(
+                    workspace_id,
+                    owner=("owner-wf", "owner-st"),
+                    generation=1,
+                    grantee="owner-wf",
+                ),
                 workflow_id="owner-wf",
                 step_id="owner-st",
             ),
             runtime_uid=os.getuid(),
             runtime_gid=os.getgid(),
         )
+
+
+@pytest.mark.asyncio
+async def test_authored_grant_without_hmac_is_rejected(tmp_path, monkeypatch):
+    """Newly authored grants must carry a server-issued HMAC signature."""
+
+    monkeypatch.setenv("MOONMIND_WORKSPACE_GRANT_SECRET", _TEST_GRANT_SECRET)
+    workspace_id = "hmac-ws"
+    _ensure_owned_workspace(tmp_path, workspace_id, owner=("owner-wf", "owner-st"))
+    materializer = OmnigentWorkspaceMaterializer(
+        command_runner=_never_clone, workspace_root=tmp_path
+    )
+    unsigned = {
+        "workspaceSource": {
+            "kind": "existing_workspace",
+            "existingWorkspaceGrant": {
+                "workspaceId": workspace_id,
+                "ownerWorkflowId": "owner-wf",
+                "ownerStepExecutionId": "owner-st",
+                "generation": 1,
+                "mode": "read_only",
+            },
+        }
+    }
+    with pytest.raises(HarnessPlatformError, match="HMAC"):
+        await materializer.materialize(
+            _request(unsigned, workflow_id="reader-wf", step_id="reader-st"),
+            runtime_uid=os.getuid(),
+            runtime_gid=os.getgid(),
+        )
+    downgraded = {
+        "workspaceSource": {
+            "kind": "existing_workspace",
+            "existingWorkspaceGrant": {
+                "workspaceId": workspace_id,
+                "ownerWorkflowId": "owner-wf",
+                "ownerStepExecutionId": "owner-st",
+                "generation": 1,
+                "mode": "read_only",
+                "grantDigest": "sha256:" + "0" * 64,
+            },
+        }
+    }
+    with pytest.raises(HarnessPlatformError, match="HMAC"):
+        await materializer.materialize(
+            _request(downgraded, workflow_id="reader-wf", step_id="reader-st"),
+            runtime_uid=os.getuid(),
+            runtime_gid=os.getgid(),
+        )
+
+
+@pytest.mark.asyncio
+async def test_forged_grant_does_not_poison_generation_ledger(tmp_path, monkeypatch):
+    """A forged HMAC grant fails before advancing the recorded generation."""
+
+    monkeypatch.setenv("MOONMIND_WORKSPACE_GRANT_SECRET", _TEST_GRANT_SECRET)
+    workspace_id = "poison-ws"
+    _ensure_owned_workspace(tmp_path, workspace_id, owner=("owner-wf", "owner-st"))
+    materializer = OmnigentWorkspaceMaterializer(
+        command_runner=_never_clone, workspace_root=tmp_path
+    )
+    forged = {
+        "workspaceSource": {
+            "kind": "existing_workspace",
+            "existingWorkspaceGrant": {
+                "workspaceId": workspace_id,
+                "ownerWorkflowId": "owner-wf",
+                "ownerStepExecutionId": "owner-st",
+                "generation": 99,
+                "mode": "read_only",
+                "grantDigest": "hmac-sha256:" + "0" * 64,
+                "expiresAt": "2099-01-01T00:00:00+00:00",
+            },
+        }
+    }
+    with pytest.raises(HarnessPlatformError, match="signature"):
+        await materializer.materialize(
+            _request(forged, workflow_id="reader-wf", step_id="reader-st"),
+            runtime_uid=os.getuid(),
+            runtime_gid=os.getgid(),
+        )
+    # The legitimate generation-1 grant still admits: the forged
+    # high generation never reached the ledger.
+    from moonmind.omnigent.workspace_sources import ExistingWorkspaceGrantLedger
+
+    assert (
+        ExistingWorkspaceGrantLedger(
+            SandboxWorkspaceRecordStore(tmp_path).store_root
+        ).admitted_generation(workspace_id)
+        is None
+    )
+    shared = await materializer.materialize(
+        _request(
+            _grant_spec(
+                workspace_id,
+                owner=("owner-wf", "owner-st"),
+                mode="read_only",
+                grantee="reader-wf",
+            ),
+            workflow_id="reader-wf",
+            step_id="reader-st",
+        ),
+        runtime_uid=os.getuid(),
+        runtime_gid=os.getgid(),
+    )
+    assert shared["accessMode"] == "read-only"
 
 
 @pytest.mark.asyncio
@@ -1111,3 +1284,244 @@ async def test_invalid_runtime_identity_fails_before_mutation(tmp_path):
             runtime_uid=-1,
             runtime_gid=-1,
         )
+
+
+# ---------------------------------------------------------------------------
+# Review remediation: import exclusion, strict links, LFS identity,
+# submodule worktrees, promisor state, daemon modes, grant issuance.
+# ---------------------------------------------------------------------------
+
+
+def test_import_lock_mutual_exclusion_and_takeover(tmp_path):
+    from moonmind.omnigent.workspace_artifacts import WorkspaceArtifactProjector as P
+
+    workspace = tmp_path / "ws"
+    workspace.mkdir()
+    lock = P._import_lock_path(workspace)
+    # The lock name must not match the staging cleanup prefix, or reaping
+    # leftover generations could delete an active import lock.
+    assert not lock.name.startswith(".moonmind-import-")
+    P._acquire_import_lock(lock, token="t1")
+    # A foreign token fails closed.
+    with pytest.raises(WorkspaceArtifactProjectionError, match="in flight"):
+        P._acquire_import_lock(lock, token="t2")
+    # The owner releases; a non-owner never unlinks a foreign lock.
+    P._release_import_lock(lock, token="t2")
+    assert lock.exists()
+    P._release_import_lock(lock, token="t1")
+    assert not lock.exists()
+    # A stale lock from a crashed attempt is taken over for the same token.
+    lock.write_text("t9\n99999999\n", encoding="utf-8")
+    P._acquire_import_lock(lock, token="t9")
+    P._release_import_lock(lock, token="t9")
+    assert not lock.exists()
+
+
+@pytest.mark.asyncio
+async def test_dangling_staged_symlink_fails_closed(tmp_path):
+    payload = _tar_bytes(
+        [
+            ("real.txt", b"data\n", "file"),
+            ("dangling.txt", b"", "symlink", "removed.txt"),
+        ]
+    )
+    service = FakeArtifactService({"checkpoint": payload})
+    workspace = tmp_path / "ws"
+    workspace.mkdir()
+    with pytest.raises(WorkspaceArtifactProjectionError, match="unresolvable"):
+        await WorkspaceArtifactProjector(service).project(
+            workspace,
+            checkpoint_ref="artifact://checkpoint",
+            checkpoint_digest=_digest(payload),
+            workflow_id="workflow-1",
+            runtime_uid=os.getuid(),
+            runtime_gid=os.getgid(),
+            strict_admission=True,
+        )
+    assert not any(workspace.iterdir())
+
+
+@pytest.mark.asyncio
+async def test_lfs_pointer_requires_its_own_object(tmp_path):
+    oid = "ab" * 32
+    pointer = (
+        b"version https://git-lfs.github.com/spec/v1\n"
+        b"oid sha256:" + oid.encode() + b"\nsize 3\n"
+    )
+    service = FakeArtifactService({})
+    workspace = tmp_path / "ws"
+    workspace.mkdir()
+
+    async def _fails(payload: bytes) -> None:
+        ref = f"artifact://case-{len(service.payloads)}"
+        service.payloads[ref.removeprefix("artifact://")] = payload
+        with pytest.raises(
+            WorkspaceArtifactProjectionError, match="large-file objects"
+        ):
+            await WorkspaceArtifactProjector(service).project(
+                workspace,
+                checkpoint_ref=ref,
+                checkpoint_digest=_digest(payload),
+                workflow_id="workflow-1",
+                runtime_uid=os.getuid(),
+                runtime_gid=os.getgid(),
+                strict_admission=True,
+            )
+
+    # No object at all, and an unrelated object, both fail.
+    await _fails(_tar_bytes([("big.bin", pointer, "file")]))
+    await _fails(
+        _tar_bytes(
+            [
+                (".git/lfs/objects/cd/cd/" + "cd" * 32, b"OTHER", "file"),
+                ("big.bin", pointer, "file"),
+            ]
+        )
+    )
+    # The matching object admits the restore.
+    payload = _tar_bytes(
+        [
+            (f".git/lfs/objects/ab/ab/{oid}", b"OBJ", "file"),
+            ("big.bin", pointer, "file"),
+        ]
+    )
+    ref = "artifact://good"
+    service.payloads["good"] = payload
+    evidence = await WorkspaceArtifactProjector(service).project(
+        workspace,
+        checkpoint_ref=ref,
+        checkpoint_digest=_digest(payload),
+        workflow_id="workflow-1",
+        runtime_uid=os.getuid(),
+        runtime_gid=os.getgid(),
+        strict_admission=True,
+    )
+    assert evidence["checkpointManifest"]["fileCount"] == 2
+
+
+@pytest.mark.asyncio
+async def test_submodule_requires_populated_worktree(tmp_path):
+    payload = _tar_bytes(
+        [
+            (".git/HEAD", b"ref: refs/heads/main\n", "file"),
+            (".git/modules/x/HEAD", b"ref: refs/heads/main\n", "file"),
+            (
+                ".gitmodules",
+                b'[submodule "x"]\n\tpath = x\n'
+                b"\turl = https://example.com/x.git\n",
+                "file",
+            ),
+        ]
+    )
+    service = FakeArtifactService({"checkpoint": payload})
+    workspace = tmp_path / "ws"
+    workspace.mkdir()
+    with pytest.raises(WorkspaceArtifactProjectionError, match="submodule"):
+        await WorkspaceArtifactProjector(service).project(
+            workspace,
+            checkpoint_ref="artifact://checkpoint",
+            checkpoint_digest=_digest(payload),
+            workflow_id="workflow-1",
+            runtime_uid=os.getuid(),
+            runtime_gid=os.getgid(),
+            strict_admission=True,
+        )
+    assert not any(workspace.iterdir())
+
+
+@pytest.mark.asyncio
+async def test_partial_clone_promisor_fails_closed(tmp_path):
+    payload = _tar_bytes(
+        [
+            (".git/HEAD", b"ref: refs/heads/main\n", "file"),
+            (
+                ".git/config",
+                b"[core]\n\trepositoryformatversion = 1\n"
+                b'[remote "origin"]\n'
+                b"\turl = https://example.com/r.git\n"
+                b"\tpromisor = true\n",
+                "file",
+            ),
+        ]
+    )
+    service = FakeArtifactService({"checkpoint": payload})
+    workspace = tmp_path / "ws"
+    workspace.mkdir()
+    with pytest.raises(WorkspaceArtifactProjectionError, match="promisor"):
+        await WorkspaceArtifactProjector(service).project(
+            workspace,
+            checkpoint_ref="artifact://checkpoint",
+            checkpoint_digest=_digest(payload),
+            workflow_id="workflow-1",
+            runtime_uid=os.getuid(),
+            runtime_gid=os.getgid(),
+            strict_admission=True,
+        )
+    assert not any(workspace.iterdir())
+
+
+def test_workspace_backend_rejects_unknown_daemon_mode(monkeypatch):
+    from moonmind.omnigent.workspace_sources import (
+        WorkspaceSourceError,
+        resolve_workspace_backend,
+    )
+
+    monkeypatch.setenv("WORKFLOW_DOCKER_DAEMON_MODE", "sidecar")
+    monkeypatch.delenv("WORKFLOW_WORKSPACE_DAEMON_ROOT", raising=False)
+    with pytest.raises(WorkspaceSourceError, match="must be 'local' or 'remote'"):
+        resolve_workspace_backend()
+    monkeypatch.setenv("WORKFLOW_DOCKER_DAEMON_MODE", "local")
+    assert resolve_workspace_backend() == "docker_local"
+    monkeypatch.setenv("WORKFLOW_DOCKER_DAEMON_MODE", "remote")
+    assert resolve_workspace_backend() == "docker_remote"
+
+
+def test_grant_issuance_requires_explicit_grantee():
+    from moonmind.omnigent.workspace_sources import issue_existing_workspace_grant
+
+    with pytest.raises(TypeError):
+        issue_existing_workspace_grant(
+            workspace_id="w",
+            owner_workflow_id="o",
+            owner_step_execution_id="s",
+            secret="test-secret",
+        )
+
+
+@pytest.mark.asyncio
+async def test_expired_claim_is_reaped_for_new_grant(tmp_path, monkeypatch):
+    """An unreleased expired claim cannot conflict indefinitely."""
+
+    monkeypatch.setenv("MOONMIND_WORKSPACE_GRANT_SECRET", _TEST_GRANT_SECRET)
+    workspace_id = "reap-ws"
+    _ensure_owned_workspace(tmp_path, workspace_id, owner=("owner-wf", "owner-st"))
+    materializer = OmnigentWorkspaceMaterializer(
+        command_runner=_never_clone, workspace_root=tmp_path
+    )
+    store = SandboxWorkspaceRecordStore(tmp_path)
+    expired = SimpleNamespace(
+        workspace_id=workspace_id,
+        owner_workflow_id="owner-wf",
+        owner_step_execution_id="owner-st",
+        generation=1,
+        mode="exclusive",
+        grant_digest=None,
+        expires_at=datetime.now(tz=UTC) - timedelta(hours=2),
+        expected_generation=None,
+        grantee_workflow_id="",
+    )
+    store.claim_existing_workspace(workspace_id, expired)
+    owned = await materializer.materialize(
+        _request(
+            _grant_spec(
+                workspace_id,
+                owner=("owner-wf", "owner-st"),
+                grantee="owner-wf",
+            ),
+            workflow_id="owner-wf",
+            step_id="owner-st",
+        ),
+        runtime_uid=os.getuid(),
+        runtime_gid=os.getgid(),
+    )
+    assert owned["accessMode"] == "read-write"
