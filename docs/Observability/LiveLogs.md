@@ -6,8 +6,10 @@ Owners: MoonMind Platform
 Last updated: 2026-04-08
 
 **Replaces or substantially rewrites:**
-- `docs/tmp/historical/LiveWorkflowManagement.md`
 - `specs/084-live-log-tailing/spec.md`
+
+> Provenance: the legacy terminal-session observability pattern disposed
+> under MoonLadderStudios/MoonMind#3963 remains available in git history.
 
 **Related:**
 - [`docs/ManagedAgents/CodexCliManagedSessions.md`](../ManagedAgents/CodexCliManagedSessions.md)

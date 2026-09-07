@@ -1,5 +1,13 @@
 Status: rollout note (2026-06-24)
 
+**Owning issue:** MoonLadderStudios/MoonMind#3963 (retained as active
+in-flight compatibility evidence; patch `run-status-memo-upsert-v1` still
+enforced in `moonmind/workflows/temporal/workflows/run.py`).
+**Delete/Archive Trigger:** Delete once no supported Temporal namespace can
+hold a history predating the `run-status-memo-upsert-v1` marker (retention
+proof required); merge any enduring replay rule into the Temporal
+deployment/replay docs in the same change.
+
 # Run Status Memo Upsert Cutover
 
 ## Context
