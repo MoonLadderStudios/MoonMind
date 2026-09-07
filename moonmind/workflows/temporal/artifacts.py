@@ -1460,6 +1460,32 @@ class TemporalArtifactService:
                 "size_bytes mismatch during upload completion"
             )
 
+    def _validate_complete_reuse_matches_candidate(
+        self,
+        artifact: db_models.TemporalArtifact,
+        *,
+        digest: str,
+        size_bytes: int,
+    ) -> None:
+        """Reject reusing a COMPLETE artifact for conflicting candidate bytes.
+
+        Saved-work orchestration binds retry identity to the expected
+        capture; a successful repeat call is proof of storage only when the
+        newly supplied payload matches the stored result (issue #4015).
+        Concurrent first writes, lost upload acknowledgments, and reused
+        COMPLETE artifacts must not associate different bytes with one
+        claimed manifest.
+        """
+        expected_sha = _validate_sha256(artifact.sha256)
+        if expected_sha is not None and digest != expected_sha:
+            raise TemporalArtifactValidationError(
+                "sha256 mismatch: COMPLETE artifact already stores different bytes"
+            )
+        if artifact.size_bytes is not None and artifact.size_bytes != size_bytes:
+            raise TemporalArtifactValidationError(
+                "size_bytes mismatch: COMPLETE artifact already stores different bytes"
+            )
+
     async def _create_preview_if_required(
         self,
         *,
@@ -1741,6 +1767,10 @@ class TemporalArtifactService:
         if artifact.status is db_models.TemporalArtifactStatus.DELETED:
             raise TemporalArtifactStateError("artifact is deleted")
         if artifact.status is db_models.TemporalArtifactStatus.COMPLETE:
+            digest, actual_size = self._compute_digest_and_size(payload)
+            self._validate_complete_reuse_matches_candidate(
+                artifact, digest=digest, size_bytes=actual_size
+            )
             return artifact
 
         if artifact.upload_mode is db_models.TemporalArtifactUploadMode.MULTIPART:
@@ -1842,6 +1872,10 @@ class TemporalArtifactService:
                 content_type=content_type,
             )
         if artifact.status is db_models.TemporalArtifactStatus.COMPLETE:
+            digest, actual_size = self._compute_digest_and_size(payload)
+            self._validate_complete_reuse_matches_candidate(
+                artifact, digest=digest, size_bytes=actual_size
+            )
             return artifact
         if artifact.status is db_models.TemporalArtifactStatus.DELETED:
             raise TemporalArtifactStateError("artifact is deleted")

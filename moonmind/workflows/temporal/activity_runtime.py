@@ -5841,6 +5841,40 @@ class TemporalAgentRuntimeActivities:
         record: Any,
     ) -> dict[str, Any]:
         policy = model.capture_policy
+        # Stable capture generation (issue #4015, req 3): fingerprint HEAD +
+        # status before enumeration and re-verify after the archive is built.
+        # Reading HEAD/files at different times without a consistency
+        # boundary cannot establish one snapshot, so a mismatch retries or
+        # blocks explicitly instead of claiming a mixed-generation capture.
+        from moonmind.workflows.temporal.saved_work import (
+            bind_scan_evidence,
+            capture_generation_fingerprint,
+            verify_quiescent_capture,
+            verify_returned_evidence,
+        )
+
+        async def _git_text(*args: str) -> str:
+            command = self._workspace_git_command(str(workspace), *args)
+            return (await _run_command(command)).stdout.strip()
+
+        pre_head = await _git_text("rev-parse", "HEAD")
+        pre_status_raw = (
+            await _run_command(
+                self._workspace_git_command(
+                    str(workspace),
+                    "status",
+                    "--porcelain=v1",
+                    "-z",
+                    "--untracked-files=all",
+                ),
+            )
+        ).stdout
+        pre_status_digest = "sha256:" + hashlib.sha256(
+            pre_status_raw.encode()
+        ).hexdigest()
+        pre_generation = capture_generation_fingerprint(
+            head_commit=pre_head, status_digest=pre_status_digest
+        )
         enumerate_args = ["ls-files", "-z", "--cached"]
         if policy.include_untracked:
             enumerate_args.extend(["--others", "--exclude-standard"])
@@ -5991,6 +6025,21 @@ class TemporalAgentRuntimeActivities:
         }
         workspace_digest = _workspace_content_digest(manifest["entries"])
         manifest["workspaceDigest"] = workspace_digest
+        post_generation = capture_generation_fingerprint(
+            head_commit=head,
+            status_digest="sha256:" + hashlib.sha256(status.encode()).hexdigest(),
+        )
+        try:
+            capture_generation = verify_quiescent_capture(
+                pre_generation=pre_generation, post_generation=post_generation
+            )
+        except ValueError as exc:
+            raise temporal_exceptions.ApplicationError(
+                str(exc),
+                type="CHECKPOINT_CAPTURE_MUTATED",
+                non_retryable=False,
+            ) from exc
+        manifest["captureGeneration"] = capture_generation
         manifest_payload = _json_bytes(manifest)
         scan = scan_outbound_bundle(
             [
@@ -6004,6 +6053,30 @@ class TemporalAgentRuntimeActivities:
                 type="CHECKPOINT_CAPTURE_SECRET_DETECTED",
                 non_retryable=True,
             )
+        # Export-bytes/history-bound scan evidence (issue #4015, req 7): only
+        # the manifest text is scanned. The gzip archive bytes and any
+        # reachable history are binary/uninspected, recorded explicitly here
+        # instead of a fabricated clean scan. The added block carries only
+        # digests, counts, and the constant policy ref -- no new secrets.
+        export_scan = bind_scan_evidence(
+            export_digest=archive_digest,
+            scanned_bytes=len(manifest_payload),
+            unscanned_bytes=len(archive_payload),
+            blocked=False,
+            limitations=(
+                "archive_payload bytes are binary and outside text inspection",
+                "reachable Git history not inspected",
+            ),
+        )
+        manifest["savedWorkScan"] = {
+            "disposition": export_scan.disposition,
+            "policyRef": export_scan.policy_ref,
+            "exportDigest": export_scan.export_digest,
+            "scannedBytes": export_scan.scanned_bytes,
+            "unscannedBytes": export_scan.unscanned_bytes,
+            "limitations": list(export_scan.limitations),
+        }
+        manifest_payload = _json_bytes(manifest)
         manifest_digest = "sha256:" + hashlib.sha256(manifest_payload).hexdigest()
         manifest_ref = await self._put_managed_checkpoint_artifact(
             manifest_payload,
@@ -6042,6 +6115,35 @@ class TemporalAgentRuntimeActivities:
                 metadata_json={"artifact_kind": artifact_kind},
             )
         )
+        # Retry-identity binding (issue #4015, req 5): a successful repeat
+        # call proves storage of *this* candidate only when the returned
+        # digest/size/status match the expected capture. Never associate
+        # different bytes with one claimed manifest.
+        from moonmind.workflows.temporal.saved_work import verify_returned_evidence
+
+        expected_digest = "sha256:" + hashlib.sha256(payload).hexdigest()
+        raw_status = getattr(completed, "status", "complete")
+        returned_status = (
+            raw_status.value if hasattr(raw_status, "value") else str(raw_status)
+        )
+        returned_digest = str(getattr(completed, "sha256", "") or "")
+        if returned_digest and not returned_digest.startswith("sha256:"):
+            returned_digest = "sha256:" + returned_digest
+        try:
+            verify_returned_evidence(
+                expected_digest=expected_digest,
+                expected_size=len(payload),
+                expected_status="complete",
+                returned_digest=returned_digest,
+                returned_size=getattr(completed, "size_bytes", None),
+                returned_status=returned_status,
+            )
+        except ValueError as exc:
+            raise temporal_exceptions.ApplicationError(
+                str(exc),
+                type="CHECKPOINT_EVIDENCE_MISMATCH",
+                non_retryable=True,
+            ) from exc
         return _compact_artifact_ref_text(build_artifact_ref(completed))
 
     async def agent_runtime_restore_workspace_checkpoint(
