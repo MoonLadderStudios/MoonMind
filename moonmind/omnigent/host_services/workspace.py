@@ -15,6 +15,17 @@ from moonmind.omnigent.harness_platform.failures import (
 from moonmind.omnigent.workspace_artifacts import (
     WorkspaceArtifactProjectionError,
     WorkspaceArtifactProjector,
+    cleanup_import_staging,
+)
+from moonmind.omnigent.workspace_sources import (
+    CompiledWorkspaceSource,
+    ExistingWorkspaceGrantLedger,
+    WorkspaceSourceError,
+    check_source_backend_supported,
+    compile_workspace_source,
+    resolve_workspace_backend,
+    verify_existing_workspace_grant,
+    verify_existing_workspace_grant_signature,
 )
 from moonmind.schemas.agent_runtime_models import AgentExecutionRequest
 from moonmind.schemas.workspace_locator_models import SandboxWorkspaceLocator
@@ -115,10 +126,19 @@ class OmnigentWorkspaceMaterializer:
                 "workspace mutation policy is unsupported",
                 code=HarnessPlatformFailure.OMNIGENT_HOST_LAUNCH_FAILED,
             )
+        if not isinstance(runtime_uid, int) or not isinstance(runtime_gid, int):
+            raise HarnessPlatformError(
+                "workspace runtime identity is invalid",
+                code=HarnessPlatformFailure.OMNIGENT_HOST_LAUNCH_FAILED,
+            )
+        if runtime_uid < 0 or runtime_gid < 0:
+            raise HarnessPlatformError(
+                "workspace runtime identity is invalid",
+                code=HarnessPlatformFailure.OMNIGENT_HOST_LAUNCH_FAILED,
+            )
         spec = (
             request.workspace_spec if isinstance(request.workspace_spec, dict) else {}
         )
-        locator = spec.get("workspaceLocator")
         step_execution = getattr(request, "step_execution", None)
         owner_workflow_id = str(
             getattr(step_execution, "workflow_id", None)
@@ -128,112 +148,103 @@ class OmnigentWorkspaceMaterializer:
             getattr(step_execution, "step_execution_id", None)
             or getattr(request, "idempotency_key", "")
         ).strip()
-        record_store: SandboxWorkspaceRecordStore | None = None
-        workspace_id: str | None = None
-        authored = str(spec.get("workspacePath") or spec.get("path") or "").strip()
-        if authored:
-            candidate = Path(authored).resolve()
-            preexisting_authority = True
-        elif isinstance(locator, dict):
-            try:
-                sandbox_locator = SandboxWorkspaceLocator.model_validate(locator)
-            except ValueError as exc:
-                raise HarnessPlatformError(
-                    "sandbox workspace locator is invalid",
-                    code=HarnessPlatformFailure.OMNIGENT_HOST_LAUNCH_FAILED,
-                ) from exc
-            if not owner_workflow_id or not owner_step_execution_id:
-                raise HarnessPlatformError(
-                    "sandbox workspace owner identity is unavailable",
-                    code=HarnessPlatformFailure.OMNIGENT_HOST_LAUNCH_FAILED,
-                )
-            expected_workspace_id = hashlib.sha256(
-                f"{owner_workflow_id}:{owner_step_execution_id}".encode("utf-8")
-            ).hexdigest()[:24]
-            candidate = resolve_sandbox_workspace_locator(
-                sandbox_locator,
-                workspace_root=self._root,
-                expected_workspace_id=expected_workspace_id,
-                must_exist=False,
-            )
-            owner_record = SandboxWorkspaceRecord(
-                workspace_id=sandbox_locator.workspace_id,
+        # Compile exactly one source plus its explicit overlay/input policy
+        # before any read or filesystem mutation. Raw workspacePath/path
+        # aliases are rejected here as a normal route; conflicting aliases
+        # fail before the locator, clone, or projection boundaries run.
+        try:
+            source = compile_workspace_source(
+                spec,
                 workflow_id=owner_workflow_id,
                 step_execution_id=owner_step_execution_id,
-                relative_path=sandbox_locator.relative_path,
+                runtime="omnigent",
             )
-            record_store = SandboxWorkspaceRecordStore(self._root)
-            workspace_id = sandbox_locator.workspace_id
-            record_store.ensure(owner_record)
-            resolve_sandbox_workspace_locator(
-                sandbox_locator,
-                workspace_root=self._root,
-                expected_workspace_id=expected_workspace_id,
-                owner_record=owner_record,
-                expected_workflow_id=owner_workflow_id,
-                expected_step_execution_id=owner_step_execution_id,
-                must_exist=False,
-            )
-            # Sandbox workspaces are runtime-owned: when the authoritative
-            # checkout does not exist yet, this lifecycle materializes it by
-            # cloning the requested repository branch with launch-time auth.
-            preexisting_authority = False
-        else:
+        except WorkspaceSourceError as exc:
             raise HarnessPlatformError(
-                "generic Omnigent execution requires an authoritative workspace locator",
+                str(exc),
                 code=HarnessPlatformFailure.OMNIGENT_HOST_LAUNCH_FAILED,
+            ) from exc
+        # Unsupported backend/platform/source combinations fail before launch:
+        # an exclusive writable grant cannot be honored on a remote daemon
+        # view that cannot fence the owner's live checkout.
+        try:
+            check_source_backend_supported(
+                source.kind,
+                resolve_workspace_backend(),
+                grant_mode=(
+                    source.existing_grant.mode
+                    if source.existing_grant is not None
+                    else None
+                ),
             )
+        except WorkspaceSourceError as exc:
+            raise HarnessPlatformError(
+                str(exc),
+                code=HarnessPlatformFailure.OMNIGENT_HOST_LAUNCH_FAILED,
+            ) from exc
+        record_store: SandboxWorkspaceRecordStore | None = None
+        workspace_id: str | None = None
+        candidate, record_store, workspace_id = await self._resolve_source_directory(
+            source,
+            spec=spec,
+            owner_workflow_id=owner_workflow_id,
+            owner_step_execution_id=owner_step_execution_id,
+            runtime_uid=runtime_uid,
+            runtime_gid=runtime_gid,
+        )
         if candidate == self._root or not candidate.is_relative_to(self._root):
             raise HarnessPlatformError(
                 "workspace attachment escapes the configured workspace root",
                 code=HarnessPlatformFailure.OMNIGENT_HOST_LAUNCH_FAILED,
-            )
-        if not candidate.exists():
-            if preexisting_authority:
-                raise HarnessPlatformError(
-                    "authoritative workspace path does not exist",
-                    code=HarnessPlatformFailure.OMNIGENT_HOST_LAUNCH_FAILED,
-                )
-            await self._prepare_sandbox_workspace(
-                candidate,
-                spec=spec,
-                runtime_uid=runtime_uid,
-                runtime_gid=runtime_gid,
             )
         if not candidate.is_dir() or candidate.is_symlink():
             raise HarnessPlatformError(
                 "authoritative workspace is unavailable or unsafe",
                 code=HarnessPlatformFailure.OMNIGENT_HOST_LAUNCH_FAILED,
             )
+        fingerprint = source.readiness_fingerprint(
+            target_owner_workflow_id=owner_workflow_id,
+            attempt_id=owner_step_execution_id,
+        )
         materialization_complete = bool(
             record_store is not None
             and workspace_id is not None
-            and record_store.is_materialized(workspace_id)
+            and record_store.is_ready(workspace_id, fingerprint)
         )
         if not materialization_complete:
+            # A retry reconciles the same generation; changed inputs are an
+            # explicit new import that is fully re-admitted, staged, and
+            # verified before the ready generation is replaced. A previous
+            # ready marker never authorizes changed inputs.
             restore_refs = spec.get("restoreInputRefs")
             if not isinstance(restore_refs, (list, tuple)):
                 restore_refs = ()
             attachment_refs = getattr(request, "input_refs", ())
             if not isinstance(attachment_refs, (list, tuple)):
                 attachment_refs = ()
-            checkpoint_ref = str(
-                spec.get("workspaceCheckpointRestoreRef") or ""
-            ).strip()
+            checkpoint_ref = source.checkpoint_ref or source.artifact_ref
             try:
                 await self._artifact_projector.project(
                     candidate,
-                    checkpoint_ref=checkpoint_ref or None,
+                    checkpoint_ref=checkpoint_ref,
+                    checkpoint_digest=source.artifact_digest,
+                    checkpoint_contract=source.restore_contract,
                     restore_refs=tuple(str(ref) for ref in restore_refs),
                     attachment_refs=tuple(str(ref) for ref in attachment_refs),
                     workflow_id=owner_workflow_id,
                     runtime_uid=runtime_uid,
                     runtime_gid=runtime_gid,
+                    strict_admission=not source.historical
+                    and source.kind in {"artifact", "checkpoint"},
+                    overlay_policy=source.overlay_policy,
                 )
             except WorkspaceArtifactProjectionError as exc:
                 raise HarnessPlatformError(str(exc), code=exc.code) from exc
             if record_store is not None and workspace_id is not None:
-                record_store.mark_materialized(workspace_id)
+                record_store.mark_ready(workspace_id, fingerprint)
+        # An advanced selected directory is never permission for an arbitrary
+        # host mount: the qualified locator/daemon mapping below is the only
+        # path from a worker path to a daemon-visible bind path.
         daemon_root = await resolve_daemon_workspace_root(
             runner=self._runner,
             workspace_volume=self._workspace_volume,
@@ -247,28 +258,242 @@ class OmnigentWorkspaceMaterializer:
                 "workspace cannot be translated to the selected Docker daemon",
                 code=HarnessPlatformFailure.OMNIGENT_HOST_LAUNCH_FAILED,
             ) from exc
+        access_mode = "read-only" if mutation == "read_only" else "read-write"
+        if source.kind == "existing_workspace" and source.existing_grant is not None:
+            if source.existing_grant.mode == "read_only":
+                access_mode = "read-only"
+            elif mutation == "read_only":
+                pass
         return {
             "kind": "bind",
             "sourceRef": str(daemon_candidate),
             "targetPath": "/workspaces/run",
-            "accessMode": "read-only" if mutation == "read_only" else "read-write",
+            "accessMode": access_mode,
             "cleanupRef": None,
         }
+
+    async def _resolve_source_directory(
+        self,
+        source: CompiledWorkspaceSource,
+        *,
+        spec: dict[str, Any],
+        owner_workflow_id: str,
+        owner_step_execution_id: str,
+        runtime_uid: int,
+        runtime_gid: int,
+    ) -> tuple[Path, SandboxWorkspaceRecordStore | None, str | None]:
+        """Resolve the attempt-owned directory for the single compiled source."""
+
+        if source.kind == "existing_workspace":
+            return await self._resolve_granted_workspace(
+                source,
+                target_workflow_id=owner_workflow_id,
+                target_step_execution_id=owner_step_execution_id,
+            )
+        locator = spec.get("workspaceLocator")
+        if not isinstance(locator, dict):
+            raise HarnessPlatformError(
+                "generic Omnigent execution requires an authoritative workspace locator",
+                code=HarnessPlatformFailure.OMNIGENT_HOST_LAUNCH_FAILED,
+            )
+        try:
+            sandbox_locator = SandboxWorkspaceLocator.model_validate(locator)
+        except ValueError as exc:
+            raise HarnessPlatformError(
+                "sandbox workspace locator is invalid",
+                code=HarnessPlatformFailure.OMNIGENT_HOST_LAUNCH_FAILED,
+            ) from exc
+        if not owner_workflow_id or not owner_step_execution_id:
+            raise HarnessPlatformError(
+                "sandbox workspace owner identity is unavailable",
+                code=HarnessPlatformFailure.OMNIGENT_HOST_LAUNCH_FAILED,
+            )
+        expected_workspace_id = hashlib.sha256(
+            f"{owner_workflow_id}:{owner_step_execution_id}".encode("utf-8")
+        ).hexdigest()[:24]
+        owner_record = SandboxWorkspaceRecord(
+            workspace_id=sandbox_locator.workspace_id,
+            workflow_id=owner_workflow_id,
+            step_execution_id=owner_step_execution_id,
+            relative_path=sandbox_locator.relative_path,
+        )
+        record_store = SandboxWorkspaceRecordStore(self._root)
+        try:
+            record_store.ensure(owner_record)
+            candidate = resolve_sandbox_workspace_locator(
+                sandbox_locator,
+                workspace_root=self._root,
+                expected_workspace_id=expected_workspace_id,
+                owner_record=owner_record,
+                expected_workflow_id=owner_workflow_id,
+                expected_step_execution_id=owner_step_execution_id,
+                must_exist=False,
+            )
+        except Exception as exc:
+            raise HarnessPlatformError(
+                f"sandbox workspace owner identity cannot be verified: {exc}",
+                code=HarnessPlatformFailure.OMNIGENT_HOST_LAUNCH_FAILED,
+            ) from exc
+        if not candidate.exists():
+            if source.kind == "repository" or (
+                source.kind in {"artifact", "checkpoint"}
+                and source.repository_ref
+                and source.repository_branch
+            ):
+                # A repository source clones; a content source with an
+                # admitted repository base clones that base before the
+                # overlay is projected. Self-contained content sources (no
+                # base) never clone or reacquire source credentials as a
+                # prerequisite for restoring saved work.
+                clone_spec = dict(spec)
+                if source.kind in {"artifact", "checkpoint"}:
+                    clone_spec["repository"] = source.repository_ref
+                    clone_spec["branch"] = source.repository_branch
+                await self._prepare_sandbox_workspace(
+                    candidate,
+                    spec=clone_spec,
+                    source=source,
+                    runtime_uid=runtime_uid,
+                    runtime_gid=runtime_gid,
+                )
+            else:
+                candidate.mkdir(mode=0o700, parents=True, exist_ok=True)
+        else:
+            # Reclaim leftover import-owned staging from a crashed attempt.
+            # This touches only `.moonmind-import-*` generations, never the
+            # live authorized workspace or another owner's content.
+            cleanup_import_staging(candidate.parent)
+        return candidate, record_store, sandbox_locator.workspace_id
+
+    async def _resolve_granted_workspace(
+        self,
+        source: CompiledWorkspaceSource,
+        *,
+        target_workflow_id: str,
+        target_step_execution_id: str,
+    ) -> tuple[Path, SandboxWorkspaceRecordStore | None, str | None]:
+        """Resolve an explicitly granted existing workspace, never a raw path."""
+
+        grant = source.existing_grant
+        if grant is None:  # pragma: no cover - compiler guarantees presence
+            raise HarnessPlatformError(
+                "existing workspace use requires a server-issued grant",
+                code=HarnessPlatformFailure.OMNIGENT_HOST_LAUNCH_FAILED,
+            )
+        record_store = SandboxWorkspaceRecordStore(self._root)
+        try:
+            record = record_store.load(grant.workspace_id)
+        except Exception as exc:
+            raise HarnessPlatformError(
+                "existing workspace grant cannot be verified",
+                code=HarnessPlatformFailure.OMNIGENT_HOST_LAUNCH_FAILED,
+            ) from exc
+        if record is None:
+            raise HarnessPlatformError(
+                "existing workspace grant names an unknown workspace",
+                code=HarnessPlatformFailure.OMNIGENT_HOST_LAUNCH_FAILED,
+            )
+        try:
+            verify_existing_workspace_grant(
+                grant,
+                target_workflow_id=target_workflow_id,
+                target_step_execution_id=target_step_execution_id,
+                record_owner_workflow_id=record.workflow_id,
+            )
+        except WorkspaceSourceError as exc:
+            raise HarnessPlatformError(
+                str(exc),
+                code=HarnessPlatformFailure.OMNIGENT_HOST_LAUNCH_FAILED,
+            ) from exc
+        if grant.mode == "exclusive" and grant.owner_workflow_id != target_workflow_id:
+            raise HarnessPlatformError(
+                "existing workspace grant does not permit exclusive use by "
+                "another workflow",
+                code=HarnessPlatformFailure.OMNIGENT_HOST_LAUNCH_FAILED,
+            )
+        # A signed grant carries issuance authenticity: authenticate the
+        # grant before mutating the ledger. Admitting first would let a
+        # forged high-generation HMAC grant poison the recorded generation
+        # before the signature check rejects it, failing later legitimate
+        # grants as stale. Historical unsigned grants keep the
+        # owner/generation/expiry checks above.
+        try:
+            verify_existing_workspace_grant_signature(
+                grant, grantee_workflow_id=target_workflow_id
+            )
+        except WorkspaceSourceError as exc:
+            raise HarnessPlatformError(
+                str(exc),
+                code=HarnessPlatformFailure.OMNIGENT_HOST_LAUNCH_FAILED,
+            ) from exc
+        # Stale generations fail before any filesystem use; the ledger lives
+        # beside the owner records, never inside a materialized workspace.
+        try:
+            ExistingWorkspaceGrantLedger(record_store.store_root).admit(grant)
+        except WorkspaceSourceError as exc:
+            raise HarnessPlatformError(
+                str(exc),
+                code=HarnessPlatformFailure.OMNIGENT_HOST_LAUNCH_FAILED,
+            ) from exc
+        # Fence exclusive use: an exclusive claim conflicts with any other
+        # active claim, while read-only claims coexist only with read-only
+        # claims. Reclaiming the same grant is idempotent for retries.
+        try:
+            record_store.claim_existing_workspace(grant.workspace_id, grant)
+        except Exception as exc:
+            raise HarnessPlatformError(
+                f"existing workspace is already granted elsewhere: {exc}",
+                code=HarnessPlatformFailure.OMNIGENT_HOST_LAUNCH_FAILED,
+            ) from exc
+        authority = (self._root / "temporal_sandbox").resolve()
+        owned_root = (authority / grant.workspace_id).resolve()
+        if owned_root.parent != authority:
+            raise HarnessPlatformError(
+                "existing workspace grant escapes its authority",
+                code=HarnessPlatformFailure.OMNIGENT_HOST_LAUNCH_FAILED,
+            )
+        # The granted workspace is the recorded owner-relative path, resolved
+        # under the same authority as sandbox locators. An advanced selected
+        # directory never becomes permission for an arbitrary host mount.
+        candidate = (owned_root / record.relative_path).resolve()
+        if not candidate.is_relative_to(owned_root):
+            raise HarnessPlatformError(
+                "existing workspace grant escapes its authority",
+                code=HarnessPlatformFailure.OMNIGENT_HOST_LAUNCH_FAILED,
+            )
+        if not candidate.exists():
+            raise HarnessPlatformError(
+                "granted existing workspace is unavailable",
+                code=HarnessPlatformFailure.OMNIGENT_HOST_LAUNCH_FAILED,
+            )
+        return candidate, record_store, grant.workspace_id
 
     async def _prepare_sandbox_workspace(
         self,
         candidate: Path,
         *,
         spec: dict[str, Any],
+        source: CompiledWorkspaceSource,
         runtime_uid: int,
         runtime_gid: int,
     ) -> None:
         """Clone the requested repository branch into a fresh sandbox dir.
 
-        The directory is created only inside the validated root and only for
-        sandbox locators, so an operator-authored absolute path can never be
-        materialized implicitly.
+        Only a repository source — or a content source with an admitted
+        repository base — clones. The directory is created only inside
+        the validated root and only for sandbox locators, so an
+        operator-authored absolute path can never be materialized implicitly.
         """
+
+        if source.kind not in {"repository", "artifact", "checkpoint"} or (
+            source.kind in {"artifact", "checkpoint"}
+            and not (source.repository_ref and source.repository_branch)
+        ):
+            # Self-contained artifact/checkpoint restores and scratch sources
+            # prepare an empty attempt-owned directory with no clone and no
+            # source-credential lookup.
+            candidate.mkdir(mode=0o700, parents=True, exist_ok=True)
+            return
 
         repository_target = (
             spec.get("repositoryTarget")
