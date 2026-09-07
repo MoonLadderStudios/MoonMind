@@ -84,6 +84,12 @@ The target design is governed by these decisions:
 9. **Missing required tools fail before session creation or mutation.** MoonMind must not start an Omnigent runner and let the Skill discover the missing executable after reasoning has begun.
 10. **Mounted tools remain a small-tool solution.** When a capability needs extensive system changes, MoonMind should prefer an upstream host-image addition or an explicitly justified derived image rather than stretching this mechanism into a package distribution system.
 
+Submission admission collects requirements from the workflow, its normalized
+Skill and Tool steps, and resolved Skill metadata before compiling the immutable
+execution plan. Omitting a duplicate workflow-level declaration must not drop a
+step's required CLI or its readiness checks. Existing admitted plans retain their
+frozen tool authority; changing requirements requires a newly admitted execution.
+
 ---
 
 ## 4. Canonical tool bundle

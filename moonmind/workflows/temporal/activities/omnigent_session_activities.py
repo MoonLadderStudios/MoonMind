@@ -418,6 +418,12 @@ async def omnigent_admit_generic_host_capacity_activity(
     stable runtime binding, not taken from a caller-supplied boolean. A retry
     or a requeue after a lost slot therefore reuses the reservation the ledger
     already records and is never refused by the capacity it is counted in.
+
+    MoonLadderStudios/MoonMind#3881: the read also reports the shared machine
+    ledger's oldest-waiter age and reconciliation health, and refuses to report
+    free capacity while the container backend's own state is unprovable. It
+    still reserves nothing, so the durable allocation may legitimately refuse a
+    race this read admitted and return the workflow to waiting.
     """
 
     from api_service.db.base import async_session_maker
@@ -448,8 +454,11 @@ async def _run_already_holds_generic_host(payload: Mapping[str, Any]) -> bool:
     idempotency_key = str(payload.get("idempotencyKey") or "").strip()
     host_class_ref = str(payload.get("hostClassRef") or "").strip()
     if not (execution_plan_ref and idempotency_key and host_class_ref):
-        # A caller that cannot name its binding has no reservation to reuse.
-        return bool(payload.get("alreadyAllocated"))
+        # MoonLadderStudios/MoonMind#3881: a caller that cannot name its binding
+        # has no reservation to reuse, and its own assertion is not evidence of
+        # one. Trusting the flag here would let a forged or stale claim bypass
+        # both the host count and the machine accounting.
+        return False
     try:
         admission_epoch = int(payload.get("admissionEpoch") or 0)
     except (TypeError, ValueError):
@@ -2914,6 +2923,19 @@ async def omnigent_ensure_provider_profile_lease_activity(
     return settled
 
 
+class _SharedPoolClientCloser:
+    """No-op closer for the worker-owned shared pool client.
+
+    Call sites keep the ``(http_client, client)`` contract and still
+    ``await http_client.aclose()`` in a ``finally``; closing a worker-owned
+    pool per activity would break every concurrent run sharing it, so the
+    close is a no-op and the worker owns the lifecycle.
+    """
+
+    async def aclose(self) -> None:
+        return None
+
+
 async def _omnigent_client_context():
     import httpx
     from moonmind.omnigent.settings import (
@@ -2921,9 +2943,26 @@ async def _omnigent_client_context():
         resolved_proxy_forward_headers,
         resolved_server_url,
     )
-    from moonmind.workflows.adapters.omnigent_client import OmnigentHttpClient
+    from moonmind.workflows.adapters.omnigent_client import (
+        OmnigentHttpClient,
+        default_omnigent_pool_limits,
+        shared_pool_client,
+    )
 
-    http_client = httpx.AsyncClient()
+    # MoonLadderStudios/MoonMind#3884: resolve the worker-owned shared pool
+    # when present so concurrent runs share one bounded transport; otherwise
+    # fall back to one owned client with the same bounded limits for this
+    # activity composition (closed by the caller's existing finally).
+    pooled = shared_pool_client()
+    if pooled is not None:
+        client = OmnigentHttpClient(
+            base_url=resolved_server_url(),
+            api_token=resolved_api_token(),
+            client=pooled,
+            upstream_header_allowlist=resolved_proxy_forward_headers(),
+        )
+        return _SharedPoolClientCloser(), client
+    http_client = httpx.AsyncClient(limits=default_omnigent_pool_limits())
     client = OmnigentHttpClient(
         base_url=resolved_server_url(),
         api_token=resolved_api_token(),
@@ -4846,6 +4885,9 @@ async def omnigent_publish_workspace_activity(
                     (agent_request.parameters or {}).get("repository") or ""
                 ).strip(),
                 github_token=github_token,
+                accepted_published_head=(agent_request.parameters or {}).get(
+                    "acceptedPublishedHead"
+                ),
             )
         finally:
             await http_client.aclose()

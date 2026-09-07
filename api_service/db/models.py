@@ -3922,10 +3922,27 @@ class ProviderProfileSlotLease(Base):
         Index("ix_provider_slot_leases_owner", "owner_id"),
         Index("ix_provider_slot_leases_profile", "profile_id"),
         Index("ix_provider_slot_leases_scope", "capacity_scope_ref"),
-        UniqueConstraint(
-            "runtime_id", "workflow_id", name="uq_provider_slot_lease_runtime_workflow"
+        # MoonLadderStudios/MoonMind#3883: the owning workflow is an identity
+        # only for a workflow-owned lease. One Activity-owned step legitimately
+        # binds several Provider Profiles from the same runtime, giving each
+        # lease its own owner ID while recording the same owning workflow purely
+        # so the manager can verify liveness, so uniqueness is partial.
+        Index(
+            "uq_provider_slot_lease_runtime_workflow",
+            "runtime_id",
+            "workflow_id",
+            unique=True,
+            postgresql_where=text("owner_is_workflow"),
+            sqlite_where=text("owner_is_workflow"),
         ),
-        UniqueConstraint("lease_id", name="uq_provider_slot_lease_lease_id"),
+        # MoonLadderStudios/MoonMind#3883: a lease ID is unique *within* the
+        # runtime that issued it. Pre-contract rows backfill ``lease_id`` from
+        # ``workflow_id``, and one workflow can legitimately hold a lease on
+        # two runtimes, so a global constraint would either fail the backfill
+        # or force a rewrite that breaks the identity existing holders quote.
+        UniqueConstraint(
+            "runtime_id", "lease_id", name="uq_provider_slot_lease_lease_id"
+        ),
     )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
@@ -4657,6 +4674,90 @@ class OmnigentHostLeaseRecordV2(Base):
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=func.now()
     )
+    expires_at: Mapped[Optional[datetime]] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=func.now(),
+        onupdate=func.now(),
+    )
+
+
+class MachineCapacityReservation(Base):
+    """Durable machine resource reservation shared by every managed launch.
+
+    Source issue: MoonLadderStudios/MoonMind#3881.
+
+    Counting host rows bounds how many containers exist; it says nothing about
+    whether the machine can carry their CPU, memory, process and temporary
+    storage demand. This is the one deployment-owned accounting ledger those
+    demands are reserved in, so generic Omnigent hosts and container jobs
+    cannot each spend the same physical budget independently. Owned launch
+    classes that do not reserve — OAuth credential-authority hosts, credential
+    validators, managed sessions and workload containers — are accounted here
+    too, from observed daemon state rather than from a reservation.
+
+    Rows are scoped by ``backend_ref``: two independent Docker backends have
+    two independent budgets and are never pooled.
+    """
+
+    __tablename__ = "machine_capacity_reservations"
+    __table_args__ = (
+        UniqueConstraint(
+            "backend_ref",
+            "owner_kind",
+            "owner_ref",
+            "generation",
+            name="uq_machine_capacity_reservation_owner",
+        ),
+        Index("ix_machine_capacity_reservations_state", "backend_ref", "state"),
+        Index("ix_machine_capacity_reservations_expiry", "expires_at"),
+    )
+
+    reservation_id: Mapped[str] = mapped_column(String(255), primary_key=True)
+    #: Exact Docker backend identity. Reservations never cross backends. The
+    #: width is the existing backend-ref contract width — ``ContainerJob`` and
+    #: ``ResolvedContainerLaunchPlan`` both admit 255 characters, so a narrower
+    #: column here would fail an already-valid launch plan at its first durable
+    #: reservation.
+    backend_ref: Mapped[str] = mapped_column(String(255), nullable=False)
+    workload_class: Mapped[str] = mapped_column(String(32), nullable=False)
+    owner_kind: Mapped[str] = mapped_column(String(32), nullable=False)
+    owner_ref: Mapped[str] = mapped_column(String(255), nullable=False)
+    #: Exact fence: a late readiness or cleanup for an older generation must
+    #: never write through the reservation a newer attempt owns.
+    generation: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=1, server_default=text("1")
+    )
+    state: Mapped[str] = mapped_column(String(32), nullable=False)
+    plan_ref: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    host_class_ref: Mapped[Optional[str]] = mapped_column(String(128), nullable=True)
+    launch_policy_ref: Mapped[Optional[str]] = mapped_column(
+        String(128), nullable=True
+    )
+    #: Integer units only. Fractional CPU is expressed in millis.
+    cpu_millis: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=0, server_default=text("0")
+    )
+    memory_mib: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=0, server_default=text("0")
+    )
+    processes: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=0, server_default=text("0")
+    )
+    temporary_storage_mib: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=0, server_default=text("0")
+    )
+    #: Set once the reservation's consumer exists on the backend, so an owned
+    #: live container is always discoverable from its accounting record.
+    container_ref: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+    #: Bound on a provisional prelaunch reservation or a waiter marker. A live
+    #: consumer is never reclaimed by this clock.
     expires_at: Mapped[Optional[datetime]] = mapped_column(
         DateTime(timezone=True), nullable=True
     )

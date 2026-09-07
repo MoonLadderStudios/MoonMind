@@ -33,6 +33,9 @@ def test_current_workflows_have_stable_names() -> None:
         "docker-publish.yml": "Release / Build App Image",
         "docker-publish-moonmind-host.yml": "Release / Build omnigent-host-moonmind Image",
         "docker-publish-opencode-host.yml": "Release / Build omnigent-host-opencode Image",
+        "omnigent-concurrency-qualification.yml": (
+            "Provider / Omnigent Concurrency Qualification"
+        ),
         "omnigent-live-conformance.yml": "Provider / Omnigent Live Conformance",
         "omnigent-embedded-acceptance.yml": "Provider / Omnigent Embedded Acceptance",
         "omnigent-fault-image-smoke.yml": "Provider / Omnigent Fault Image Smoke",

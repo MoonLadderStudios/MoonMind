@@ -311,9 +311,20 @@ async def test_generic_dispatch_projects_typed_turn_not_started_code() -> None:
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("code", "recommendation"),
+    [
+        ("OMNIGENT_CURRENT_TURN_NOT_STARTED", "retry_step_execution"),
+        ("codex_reauth_required", "reauthenticate"),
+    ],
+)
 @patch("moonmind.omnigent.execute.run_omnigent_execution")
 async def test_unprofiled_activity_passes_through_typed_turn_not_started_result(
-    mock_run, monkeypatch: pytest.MonkeyPatch, isolated_control_plane
+    mock_run,
+    monkeypatch: pytest.MonkeyPatch,
+    isolated_control_plane,
+    code,
+    recommendation,
 ) -> None:
     """The direct (non-plan) path consumes the typed terminal result unchanged.
 
@@ -325,8 +336,8 @@ async def test_unprofiled_activity_passes_through_typed_turn_not_started_result(
     typed = AgentRunResult(
         summary="Omnigent accepted the marked turn but the provider never started it",
         failureClass="integration_error",
-        providerErrorCode="OMNIGENT_CURRENT_TURN_NOT_STARTED",
-        retryRecommendation="retry_step_execution",
+        providerErrorCode=code,
+        retryRecommendation=recommendation,
         diagnosticsRef="artifact://diagnostics-never-started",
         outputRefs=["artifact://output-never-started"],
         metadata={"normalizedStatus": "failed", "omnigentSessionId": "session-1"},
@@ -346,8 +357,8 @@ async def test_unprofiled_activity_passes_through_typed_turn_not_started_result(
     result = await ActivityEnvironment().run(omnigent_execute_activity, req)
 
     assert result.failure_class == "integration_error"
-    assert result.provider_error_code == "OMNIGENT_CURRENT_TURN_NOT_STARTED"
-    assert result.retry_recommendation == "retry_step_execution"
+    assert result.provider_error_code == code
+    assert result.retry_recommendation == recommendation
     assert result.diagnostics_ref == "artifact://diagnostics-never-started"
     assert result.output_refs == ["artifact://output-never-started"]
     assert result.metadata["omnigentSessionId"] == "session-1"

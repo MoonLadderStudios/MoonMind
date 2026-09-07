@@ -21,6 +21,7 @@ construction; it never crosses a public contract.
 from __future__ import annotations
 
 import asyncio
+import dataclasses
 import hashlib
 import json
 import mimetypes
@@ -38,6 +39,23 @@ from logging import getLogger
 from pathlib import Path
 from typing import Awaitable, Callable, Protocol, Sequence, runtime_checkable
 
+from moonmind.capacity import (
+    WORKLOAD_CLASS_CONTAINER_JOB,
+    MachineCapacityConflict,
+    MachineCapacityLedger,
+    MachineCapacityUnavailable,
+    MachineResourceBudget,
+    MachineUsage,
+    OwnedContainerInventory,
+    ReleaseEvidence,
+    ReservationRequest,
+    ResourceAdmissionDecision,
+    ResourceDemand,
+    evaluate_resource_admission,
+    machine_budget_from_runner,
+    probe_owned_containers,
+    record_machine_capacity_observation,
+)
 from moonmind.config.container_backend_settings import (
     ContainerBackendReadinessError,
     ContainerBackendSettings,
@@ -57,6 +75,7 @@ from moonmind.schemas.container_job_models import (
     ContainerJobBackendError,
     ContainerJobState,
     ContainerJobLogEntry,
+    ContainerJobSpec,
     MAX_LOG_PAGE_ENTRIES,
     RegistryAuthorization,
     ContainerJobFailureClass,
@@ -192,10 +211,12 @@ _GPU_LAUNCH_FAILURE_CLASSES: dict[
     "device_request_unsupported": ContainerJobFailureClass.GPU_BACKEND_UNSUPPORTED,
     "gpu_device_request_rejected": ContainerJobFailureClass.GPU_BACKEND_UNSUPPORTED,
 }
-_MIB = 1024 * 1024
-_AUTO_ACTIVE_MEMORY_FRACTION = 0.70
 _CAPACITY_LOCK_WAIT_SECONDS = 45.0
 _CAPACITY_LOCK_POLL_SECONDS = 0.1
+_MIB = 1024 * 1024
+#: Docker's answer when the object an ``inspect`` names does not exist. Any
+#: other failure means the daemon did not answer the question at all.
+_DOCKER_NOT_FOUND_MARKERS = ("no such object", "no such container")
 
 
 @dataclass(frozen=True)
@@ -482,6 +503,7 @@ class DockerContainerJobBackend:
         auth_root: str | Path | None = None,
         image_lock: ImageAcquisitionLock | None = None,
         capacity_lock: CapacityAdmissionLock | None = None,
+        machine_capacity: MachineCapacityLedger | None = None,
         image_lock_root: str | Path | None = None,
         pull_lease_ttl_seconds: float = 240.0,
         pull_lock_poll_seconds: float = 2.0,
@@ -522,6 +544,11 @@ class DockerContainerJobBackend:
         self._capacity_lock = capacity_lock or FilesystemCapacityAdmissionLock(
             lock_root / "capacity"
         )
+        # MoonLadderStudios/MoonMind#3881: the deployment-owned machine ledger
+        # generic Omnigent hosts also reserve in. Absent it, the ceiling is
+        # still enforced from directly observed running containers, but a host
+        # reservation that has not created its container yet is invisible.
+        self._machine_capacity = machine_capacity
         self._pull_lease_ttl_seconds = pull_lease_ttl_seconds
         self._pull_lock_poll_seconds = pull_lock_poll_seconds
         self._pull_lock_max_wait_seconds = pull_lock_max_wait_seconds
@@ -608,15 +635,28 @@ class DockerContainerJobBackend:
     async def _owned_ownership_label(self, name: str) -> str | None:
         """Return the ownership label of an existing container, or ``None``.
 
-        A missing container yields ``None``. A container that exists but carries
-        no MoonMind ownership label yields an empty string so callers can treat
-        it as a foreign collision.
+        A container the daemon confirms does not exist yields ``None``. A
+        container that exists but carries no MoonMind ownership label yields an
+        empty string so callers can treat it as a foreign collision.
+
+        Only a confirmed not-found answer is absence. An unreachable daemon, a
+        timeout, or any other ``inspect`` failure proves nothing about the
+        container, and callers release machine accounting on this answer, so
+        those fail closed instead of reading as a vanished consumer.
         """
 
-        code, stdout, _ = await self._runner(
+        code, stdout, stderr = await self._runner(
             ("inspect", "--format", "{{json .Config.Labels}}", name)
         )
         if code:
+            detail = stderr.decode(errors="replace").strip()
+            lowered = detail.lower()
+            if not any(marker in lowered for marker in _DOCKER_NOT_FOUND_MARKERS):
+                raise ContainerJobBackendError(
+                    ContainerJobFailureClass.INFRASTRUCTURE,
+                    "container ownership could not be read from the container "
+                    "backend",
+                )
             return None
         try:
             labels = json.loads(stdout.decode(errors="replace").strip())
@@ -786,102 +826,187 @@ class DockerContainerJobBackend:
                 "container-job capacity admission remained busy",
             ) from exc
 
-    async def _active_memory_budget_mib(self) -> int:
-        code, stdout, _ = await self._runner(
-            ("info", "--format", "{{.MemTotal}}")
-        )
+    async def _machine_budget(self) -> MachineResourceBudget:
+        """Resolve the machine budget this backend's daemon can carry.
+
+        MoonLadderStudios/MoonMind#3881: the ceiling is the shared, deployment
+        -owned one in ``moonmind.capacity``, not a container-job-private
+        number, so execution hosts and container jobs cannot each spend the
+        whole machine.
+
+        ``MOONMIND_CONTAINER_BACKEND_MAX_ACTIVE_MEMORY_MIB`` is documented as
+        *lowering* this deployment's container-job memory ceiling, so it is
+        clamped to the shared utilization share rather than substituted for it.
+        Letting it raise the ceiling would erode the documented control-plane
+        and cleanup headroom through a setting that promises the opposite.
+        """
+
         try:
-            daemon_memory_bytes = int(stdout.decode(errors="replace").strip())
-        except ValueError as exc:
-            raise ContainerJobBackendError(
-                ContainerJobFailureClass.INFRASTRUCTURE,
-                "container backend did not report a valid memory capacity",
-            ) from exc
-        daemon_memory_mib = daemon_memory_bytes // _MIB
-        if code or daemon_memory_mib < 16:
+            budget = await machine_budget_from_runner(self._runner)
+        except MachineCapacityUnavailable as exc:
             raise ContainerJobBackendError(
                 ContainerJobFailureClass.INFRASTRUCTURE,
                 "container backend memory capacity is unavailable",
-            )
-        configured = self._settings.max_active_memory_mib
-        automatic = max(
-            16, int(daemon_memory_mib * _AUTO_ACTIVE_MEMORY_FRACTION)
-        )
-        if configured is None:
-            return automatic
-        if configured > daemon_memory_mib:
-            raise ContainerJobBackendError(
-                ContainerJobFailureClass.RESOURCE_LIMIT_EXCEEDED,
-                "configured active container-job memory exceeds daemon capacity",
-            )
-        return min(configured, automatic)
-
-    async def _active_container_memory_mib(self, *, exclude: str) -> int:
-        code, stdout, _ = await self._runner(
-            (
-                "ps",
-                "--all",
-                "--filter",
-                f"label={LABEL_CONTAINER_JOB}",
-                "--filter",
-                "status=running",
-                "--format",
-                "{{.Names}}",
-            )
-        )
-        if code:
-            raise ContainerJobBackendError(
-                ContainerJobFailureClass.INFRASTRUCTURE,
-                "active container-job inventory is unavailable",
-            )
-        names = tuple(
-            name
-            for name in stdout.decode(errors="replace").splitlines()
-            if name and name != exclude
-        )
-        if not names:
-            return 0
-        code, stdout, _ = await self._runner(
-            (
-                "inspect",
-                "--format",
-                "{{.HostConfig.Memory}}",
-                *names,
-            )
-        )
-        if code:
-            raise ContainerJobBackendError(
-                ContainerJobFailureClass.INFRASTRUCTURE,
-                "active container-job memory limits are unavailable",
-            )
-        total_bytes = 0
-        try:
-            for raw_limit in stdout.decode(errors="replace").splitlines():
-                memory_bytes = int(raw_limit.strip())
-                if memory_bytes <= 0:
-                    raise ValueError("unbounded memory limit")
-                total_bytes += memory_bytes
+            ) from exc
         except ValueError as exc:
             raise ContainerJobBackendError(
-                ContainerJobFailureClass.INFRASTRUCTURE,
-                "active container-job memory limits are invalid",
+                ContainerJobFailureClass.RESOURCE_LIMIT_EXCEEDED,
+                "configured machine capacity ceiling is not usable on this "
+                "container backend",
             ) from exc
-        return (total_bytes + _MIB - 1) // _MIB
-
-    async def _enforce_active_memory_budget(
-        self, request: ContainerJobActivityRequest, *, container_name: str
-    ) -> None:
-        budget_mib = await self._active_memory_budget_mib()
-        active_mib = await self._active_container_memory_mib(
-            exclude=container_name
+        configured = self._settings.max_active_memory_mib
+        if configured is None:
+            return budget
+        return dataclasses.replace(
+            budget, memory_mib=min(budget.memory_mib, int(configured))
         )
-        requested_mib = request.request.spec.resources.memory_mib
-        if active_mib + requested_mib > budget_mib:
+
+    async def _owned_inventory(self) -> OwnedContainerInventory:
+        """Return every running MoonMind-owned container on this backend.
+
+        MoonLadderStudios/MoonMind#3881 (FINDING-1): reconciliation releases the
+        accounting of consumers that are absent from the inventory it is given,
+        so a container-job-label-only enumeration would release the accounting
+        of every live generic Omnigent host on the same daemon. The canonical
+        owned inventory in ``moonmind.capacity.docker_inventory`` is the one
+        answer both this path and the janitor use, and it is handed on
+        unfiltered so it keeps speaking for every launch class it enumerated.
+
+        Only running containers are reported: a created-but-unstarted container
+        consumes no CPU, memory or processes. Foreign containers are never in
+        this inventory and are never touched. An unreadable daemon fails closed
+        rather than reading as an empty machine.
+        """
+
+        inventory = await probe_owned_containers(self._runner)
+        if inventory is None:
+            raise ContainerJobBackendError(
+                ContainerJobFailureClass.INFRASTRUCTURE,
+                "owned container inventory is unavailable",
+            )
+        return inventory
+
+    def _resolved_shm_size_mib(self, spec: ContainerJobSpec) -> int:
+        """Return the shared-memory size ``create_container`` will realize.
+
+        Every container job gets ``--shm-size``: the caller's value once the
+        deployment ceiling has admitted it, otherwise the deployment default.
+        """
+
+        requested = spec.resources.shm_size
+        if requested:
+            size_bytes = parse_size_bytes(requested)
+        else:
+            size_bytes = int(self._settings.shm_size_mib) * _MIB
+        return (int(size_bytes) + _MIB - 1) // _MIB
+
+    def _machine_reservation(
+        self, request: ContainerJobActivityRequest, *, container_name: str | None = None
+    ) -> ReservationRequest:
+        spec = request.request.spec
+        resources = spec.resources
+        return ReservationRequest(
+            backend_ref=self._backend_ref,
+            workload_class=WORKLOAD_CLASS_CONTAINER_JOB,
+            owner_kind="container_job",
+            owner_ref=str(request.job_id),
+            # One job id owns exactly one container, so an Activity retry
+            # reconciles with the reservation it already holds rather than
+            # taking a second one.
+            generation=1,
+            demand=ResourceDemand(
+                cpu_millis=int(resources.cpu_millis),
+                memory_mib=int(resources.memory_mib),
+                processes=int(resources.pids),
+                # MoonLadderStudios/MoonMind#3881: ``--shm-size`` is RAM-backed
+                # tmpfs, which is exactly what the machine temporary-storage
+                # budget accounts. Leaving it at zero would let arbitrarily many
+                # container jobs pass that ceiling without ever contributing to
+                # it.
+                temporary_storage_mib=self._resolved_shm_size_mib(spec),
+            ),
+            # Naming the container before the Docker mutation keeps a launch
+            # that outlives its prelaunch window out of the clock-reclaim path.
+            container_ref=(
+                container_name or request.container_ref or self._name(request)
+            ),
+        )
+
+    async def _reserve_machine_capacity(
+        self, request: ContainerJobActivityRequest, *, container_name: str
+    ) -> ReservationRequest | None:
+        """Reserve this job's resources in the shared machine ledger.
+
+        The caller holds the cross-process capacity lock, and the ledger takes
+        the shared PostgreSQL advisory lock, so a container job and a generic
+        host cannot both observe the same free capacity (#3881 AC3).
+        """
+
+        budget = await self._machine_budget()
+        inventory = await self._owned_inventory()
+        reservation = self._machine_reservation(request, container_name=container_name)
+        if self._machine_capacity is None:
+            # No durable ledger is wired: the ceiling is still enforced, but
+            # only against directly observed running containers. This job's own
+            # container may already be running from a prior attempt, and its
+            # demand is this request's own, so it is summed once rather than
+            # twice. The exclusion narrows the view's scope with it, so a
+            # filtered inventory can never be mistaken for a full enumeration.
+            usage = MachineUsage()
+            for owned in inventory.excluding(container_name).containers.values():
+                demand = owned.demand
+                usage = MachineUsage(
+                    reserved_cpu_millis=usage.reserved_cpu_millis + demand.cpu_millis,
+                    reserved_memory_mib=usage.reserved_memory_mib + demand.memory_mib,
+                    reserved_processes=usage.reserved_processes + demand.processes,
+                )
+            decision = evaluate_resource_admission(
+                demand=reservation.demand,
+                budget=budget,
+                usage=usage,
+                workload_class=WORKLOAD_CLASS_CONTAINER_JOB,
+            )
+            self._record_machine_capacity(decision)
+            if not decision.admitted:
+                raise ContainerJobBackendError(
+                    ContainerJobFailureClass.RESOURCE_LIMIT_EXCEEDED,
+                    f"container-job machine admission refused: {decision.reason}",
+                )
+            return None
+        # An owned live container missing its accounting record is a
+        # reconciliation fault, not free capacity, so adopt it before counting.
+        # The inventory is passed whole: reconcile skips a row whose container
+        # is live and skips adopting a ref an accounted row already names, so
+        # this job's own running container reconciles with the reservation it
+        # already holds instead of being released as a vanished consumer.
+        await self._machine_capacity.reconcile(
+            backend_ref=self._backend_ref, inventory=inventory
+        )
+        outcome = await self._machine_capacity.reserve(
+            request=reservation, budget=budget
+        )
+        self._record_machine_capacity(outcome.decision)
+        if not outcome.admitted:
             raise ContainerJobBackendError(
                 ContainerJobFailureClass.RESOURCE_LIMIT_EXCEEDED,
-                "container-job active memory budget is exhausted; retry after "
-                "another container job finishes or request less memory",
+                "container-job machine admission refused: "
+                f"{outcome.decision.reason}",
             )
+        return reservation
+
+    @staticmethod
+    def _record_machine_capacity(decision: ResourceAdmissionDecision) -> None:
+        """Publish the identity-free machine-capacity view for this admission.
+
+        MoonLadderStudios/MoonMind#3881 remaining implementation 8: the
+        container-job boundary is an enforcing admission point, so the
+        utilization, ceilings, limiting resource, oldest-waiter age and
+        reconciliation health it established must be observable here too.
+        Telemetry is never authority; the shared emitter swallows its own
+        failures.
+        """
+
+        record_machine_capacity_observation(machine=decision)
 
     @staticmethod
     def _reject_forbidden_launch_args(
@@ -2150,9 +2275,21 @@ class DockerContainerJobBackend:
         started_at = datetime.now(timezone.utc)
         capacity_lease = await self._acquire_capacity_lock()
         try:
-            await self._enforce_active_memory_budget(
+            reservation = await self._reserve_machine_capacity(
                 request, container_name=container_name
             )
+            if reservation is not None and self._machine_capacity is not None:
+                # A read-only precheck is advisory. Re-verify the exact
+                # reservation fence immediately before the Docker mutation.
+                if not await self._machine_capacity.verify(
+                    reservation_id=reservation.reservation_id,
+                    generation=reservation.generation,
+                ):
+                    raise ContainerJobBackendError(
+                        ContainerJobFailureClass.RESOURCE_LIMIT_EXCEEDED,
+                        "container-job machine reservation no longer holds; "
+                        "retry after another managed launch finishes",
+                    )
             code, _, start_stderr = await self._runner(("start", container_name))
             if code:
                 # The daemon resolves a device request when the container
@@ -2163,6 +2300,26 @@ class DockerContainerJobBackend:
                 )
                 detail = start_stderr.decode(errors="replace").strip()[:1000]
                 raise RuntimeError(f"docker start failed: {detail}")
+            if reservation is not None and self._machine_capacity is not None:
+                # The consumer now exists, so the reservation stops being
+                # clock-reclaimable and is discoverable from the container. A
+                # reservation whose compute was reclaimed mid-launch is
+                # re-accounted and refused: the container is running and must be
+                # accounted, but the capacity it held may already belong to
+                # another launch, so this one is torn down rather than allowed
+                # to push accounted usage past the machine ceiling.
+                try:
+                    await self._machine_capacity.confirm(
+                        reservation_id=reservation.reservation_id,
+                        generation=reservation.generation,
+                        container_ref=container_name,
+                    )
+                except MachineCapacityConflict as exc:
+                    raise ContainerJobBackendError(
+                        ContainerJobFailureClass.RESOURCE_LIMIT_EXCEEDED,
+                        "container-job machine reservation no longer holds; "
+                        "retry after another managed launch finishes",
+                    ) from exc
         finally:
             try:
                 await self._capacity_lock.release(capacity_lease)
@@ -2379,11 +2536,43 @@ class DockerContainerJobBackend:
         ref = request.container_ref or self._name(request)
         ownership = await self._owned_ownership_label(ref)
         if ownership is None:
+            # Already gone. The observation itself is proof the daemon answered,
+            # so the machine accounting for this job is released here too.
+            await self._release_machine_capacity(request)
             return ContainerJobActivityResult()
         if ownership != request.ownership_token:
             raise RuntimeError("container job ownership mismatch; refusing removal")
         await self._checked("rm", "--force", ref)
+        # MoonLadderStudios/MoonMind#3881: capacity accounting observes the
+        # removal this method just proved; it never performs teardown itself.
+        await self._release_machine_capacity(request)
         return ContainerJobActivityResult()
+
+    async def _release_machine_capacity(
+        self, request: ContainerJobActivityRequest
+    ) -> None:
+        """Release this job's machine accounting exactly once, on evidence.
+
+        Only ``remove_container`` calls this, and only after it has positively
+        established from the daemon that the container is gone. Both of its
+        paths are that proof: the container was already absent, or this method's
+        caller removed it.
+        """
+
+        if self._machine_capacity is None:
+            return
+        reservation = self._machine_reservation(request)
+        await self._machine_capacity.release(
+            reservation_id=reservation.reservation_id,
+            generation=reservation.generation,
+            evidence=ReleaseEvidence(
+                daemon_observed=True,
+                consumer_removed=True,
+                # A container job's workspace is caller-owned and is not part of
+                # this reservation's temporary-storage accounting.
+                storage_retained=False,
+            ),
+        )
 
     @staticmethod
     def _bound_tail(data: bytes, limit: int) -> bytes:

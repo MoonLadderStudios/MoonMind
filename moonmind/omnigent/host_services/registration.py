@@ -4,10 +4,12 @@ from __future__ import annotations
 
 import asyncio
 import random
+import time
 from datetime import UTC, datetime
 from typing import Any
 from uuid import UUID
 
+from moonmind.omnigent.control_plane.metrics import record_safely
 from moonmind.omnigent.harness_platform.failures import (
     HarnessPlatformError,
     HarnessPlatformFailure,
@@ -37,6 +39,24 @@ _HOST_REGISTRATION_MAX_DELAY_SECONDS = 2.0
 # clock, and registration stalls until the attempt budget is spent. Callers that
 # genuinely want a reuse window pass ``ttl_seconds`` explicitly.
 HOST_INVENTORY_COALESCE_SECONDS = 0.0
+
+#: Retirement condition for the no-``expected_host_id`` compat registration
+#: path (MoonLadderStudios/MoonMind#3884, owned by #3835).
+#:
+#: New launches always carry the generation-fenced ``expected_host_id`` and
+#: use targeted ``get_host`` only; the compat list-and-filter path exists
+#: solely so in-flight persisted launches recorded before targeted
+#: registration can still replay. Remove ``_wait_for_compat_registration``
+#: (and the ``expected_host_id is None`` branch of
+#: :meth:`OmnigentHostRegistrationService.wait_for_registration`) once #3835
+#: presents evidence that no persisted launch without an expected host ID
+#: remains, i.e. ``lookupMode="compat"`` has been absent from
+#: ``omnigent_concurrency_registration_attempts`` for the retention window
+#: #3835 defines. Until then the compat path stays observable via
+#: ``lookupMode`` but is never a fallback: a targeted lookup that times out,
+#: fails authorization, or mismatches identity raises instead of scanning the
+#: inventory.
+COMPAT_REGISTRATION_RETIREMENT_TRACKER = "MoonLadderStudios/MoonMind#3835"
 
 
 class OmnigentHostInventoryReader:
@@ -182,19 +202,40 @@ class OmnigentHostRegistrationService:
         under another ID is never accepted by name alone. When absent (old
         histories), fall back to the legacy list-and-filter path so replay
         remains compatible; the fallback is observable via ``lookupMode``.
+        A targeted failure (timeout, authorization failure, or identity
+        mismatch) never falls back to scanning the inventory.
         """
+        from moonmind.omnigent.control_plane.metrics import (
+            record_concurrency_registration,
+        )
+
+        started = time.monotonic()
         if expected_host_id:
-            return await self._wait_for_targeted_registration(
+            try:
+                return await self._wait_for_targeted_registration(
+                    correlation_name=correlation_name,
+                    harness_id=harness_id,
+                    credentialless=credentialless,
+                    expected_host_id=expected_host_id,
+                )
+            finally:
+                record_safely(
+                    record_concurrency_registration,
+                    lookup_mode="targeted",
+                    latency_seconds=time.monotonic() - started,
+                )
+        try:
+            return await self._wait_for_compat_registration(
                 correlation_name=correlation_name,
                 harness_id=harness_id,
                 credentialless=credentialless,
-                expected_host_id=expected_host_id,
             )
-        return await self._wait_for_compat_registration(
-            correlation_name=correlation_name,
-            harness_id=harness_id,
-            credentialless=credentialless,
-        )
+        finally:
+            record_safely(
+                record_concurrency_registration,
+                lookup_mode="compat",
+                latency_seconds=time.monotonic() - started,
+            )
 
     def _registration_delay(self, attempt: int) -> float:
         base = _HOST_REGISTRATION_BASE_DELAY_SECONDS * (2.0**min(attempt, 3))
@@ -375,6 +416,7 @@ class OmnigentHostRegistrationService:
 
 
 __all__ = [
+    "COMPAT_REGISTRATION_RETIREMENT_TRACKER",
     "HOST_INVENTORY_COALESCE_SECONDS",
     "HOST_REGISTRATION_ATTEMPTS",
     "HOST_REGISTRATION_INTERVAL_SECONDS",

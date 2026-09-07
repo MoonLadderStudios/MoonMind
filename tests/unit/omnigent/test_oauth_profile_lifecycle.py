@@ -4342,6 +4342,7 @@ async def test_coordinator_continues_same_session_until_terminal_answer() -> Non
     assert runner_calls[1][1]["resume_session_id"] == "session-1"
     assert "Continue the current task" in runner_calls[1][1]["first_message_text"]
     assert runner_calls[1][1]["defer_bridge_terminal"] is True
+    assert all(call[1]["allow_same_session_continuation"] is True for call in runner_calls)
     assert "repository_continuation_1" in ordered
     checkpoint = metadata["omnigentCheckpointCapture"]
     assert checkpoint["bridgeSessionId"] == "bridge-2"

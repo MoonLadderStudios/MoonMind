@@ -1,9 +1,9 @@
 # Omnigent Primary Runtime Provider Strategy
 
-**Status:** Canonical desired state (stages 1-5 implemented; stage 6 retirement outstanding)  
+**Status:** Canonical desired state; support, default promotion, and retirement are evidence-gated per combination  
 **Document Class:** System / Product Architecture  
 **Owners:** MoonMind Platform  
-**Last updated:** 2026-09-04  
+**Last updated:** 2026-09-06  
 **Authority:** Long-term runtime-provider direction for MoonMind
 
 ## Related documents
@@ -15,6 +15,8 @@
 - [`docs/Omnigent/OpenCodeHost.md`](./OpenCodeHost.md)
 - [`docs/Omnigent/SharedHostImage.md`](./SharedHostImage.md)
 - [`docs/Omnigent/RuntimeProviderRollout.md`](./RuntimeProviderRollout.md)
+- [`docs/Omnigent/AgentProfiles.md`](./AgentProfiles.md)
+- [`docs/UI/WorkflowChatPanel.md`](../UI/WorkflowChatPanel.md)
 - [`docs/Omnigent/CodexSupportAndCutover.md`](./CodexSupportAndCutover.md)
 - [`docs/Omnigent/ControlPlaneAggregates.md`](./ControlPlaneAggregates.md)
 - [`docs/Omnigent/ControlPlaneConcurrencyAndFencing.md`](./ControlPlaneConcurrencyAndFencing.md)
@@ -37,6 +39,22 @@ MoonMind adopts the following long-term product and architecture decision:
 This is a directional commitment, not an immediate claim that every runtime has already completed cutover. A runtime becomes the default Omnigent-backed path only after its exact image, harness, credential, model, policy, lifecycle, and user journey have passing support evidence.
 
 The destination is not a MoonMind runtime implementation for every provider CLI. The destination is one MoonMind-to-Omnigent platform boundary with registered harness integrations.
+
+### 1.1 Seven required product outcomes
+
+These outcomes govern implementation and acceptance. They are not a claim that every deployment or harness already satisfies them.
+
+| Outcome | Required behavior |
+| --- | --- |
+| Primary runtime container | The Omnigent host is the normal execution container for qualified MoonMind coding-agent work. It does not absorb the API, Temporal orchestration, artifact service, or other control-plane services. |
+| On-demand Codex, Claude Code, and OpenCode | Each supported harness can launch in an attempt-owned Omnigent host through the same generic lifecycle. Ordinary use does not require a permanently running host for each vendor. Static-connected hosts remain an explicitly selected, separately qualified deployment option. |
+| Workflow Detail interactions | Workflow Detail exposes the bound Omnigent session through the provider-maintained native chat, including supported turns, events, tools, approvals, terminals, and resources under MoonMind authority. Loading HTML alone is not readiness. Essential failures must be visible, terminal evidence must remain reachable, and no second MoonMind composer or unrestricted host-management UI is introduced. |
+| Retry, checkpoint, and artifact parity | Omnigent sessions participate in the same MoonMind recovery and durable-evidence contracts as other runtimes. Bounded retry, authorized continuation or restore, checkpointing, and preservation of useful artifacts must survive worker or host loss where the recorded recovery authority permits. See section 5.11. |
+| Shared implementation | Planning, admission, leases, host lifecycle, workspace handling, session/turn mutation, recovery, evidence, and cleanup have shared owners. Runtime packs, credential materializers, and truthful capability adapters contain only genuine harness differences. |
+| Reusable OAuth Provider Profiles | An existing Codex or Claude Code OAuth Provider Profile is usable with the corresponding qualified Omnigent harness. MoonMind reuses its identity, enrollment-owned credential state, generation, and capacity authority. A second account, copied OAuth home, or Omnigent-specific login is not required. |
+| One ordinary Profile choice | Runtime stays visible and names a stable family. One user-facing Profile selects the account and resolves its compatible execution configuration. Internal Agent Profile, Host Class, runtime pack, materializer, launch policy, and realizer details do not become additional required choices, including behind Advanced mode. |
+
+Support is demonstrated through the complete applicable user journey, not inferred from a registered harness, installed binary, successful unit suite, or closed implementation issue. Source implementation, exact-artifact qualification, protected-live qualification, default promotion, and legacy retirement remain distinct outcomes. Existing providing documents and the primary-runtime epic own the detailed contracts and evidence; this outcome contract does not create another rollout system.
 
 ## 2. What “primary runtime provider” means
 
@@ -205,7 +223,8 @@ The intended initial set is:
 
 | Harness | Materializer | Credential ownership | Runtime behavior |
 | --- | --- | --- | --- |
-| OpenCode | `opencode-auth-json@1` | Run-owned | Read-only source is staged into a writable runtime home and destroyed after cleanup |
+| OpenCode, keyed Go route | `opencode-auth-json@1` | Run-owned | Read-only source is staged into a writable runtime home and destroyed after cleanup |
+| OpenCode, credentialless Zen route | `none@1` | None | No credential state or dummy secret is created; the selected Provider Profile still owns routing and capacity policy |
 | Codex | `codex-oauth-home@1` | Provider Profile-owned | Writable OAuth home is mounted exclusively for the acquired generation |
 | Claude Code | `claude-oauth-home@1` | Provider Profile-owned | Writable credential bundle supports every required Claude user-level path |
 
@@ -217,7 +236,7 @@ profile_owned
 host_owned
 ```
 
-Cleanup follows that ownership. Run-owned secrets are destroyed. Profile-owned OAuth homes are unmounted and released but are not deleted by ordinary run cleanup. Host-owned authentication is observed but not copied or claimed by MoonMind.
+Cleanup follows that ownership. Run-owned secrets are destroyed. Profile-owned OAuth homes are unmounted and released but are not deleted by ordinary run cleanup. Host-owned authentication is observed but not copied or claimed by MoonMind. The `none@1` route creates no credential state to clean up and must not inherit another route's credentials or billing authority.
 
 ### 5.6 MoonMind owns OAuth enrollment
 
@@ -236,6 +255,8 @@ Settings OAuth connection
 ```
 
 An Omnigent host must not start another interactive login ceremony. It consumes only the Provider Profile generation selected and leased by MoonMind.
+
+The same Codex `codex_cli` / `openai` or Claude Code `claude_code` / `anthropic` Provider Profile remains the account authority for its compatible Omnigent execution configuration. A subordinate Omnigent Agent Profile describes execution, not a second user account or a second OAuth enrollment. Direct compatibility and Omnigent consumers must honor the same credential-generation and capacity owner. Sharing an image or supporting both paths does not authorize concurrent writers to a mutable OAuth home.
 
 ### 5.7 Credential isolation is stricter than image isolation
 
@@ -302,6 +323,18 @@ Legacy modules may remain as bounded replay-visible wrappers after new selection
 - historical Workflow Detail and artifacts remain readable
 - rollback no longer depends on them
 - retention policy permits removal
+
+### 5.11 Recovery and preservation parity
+
+Omnigent execution is not exempt from MoonMind's common retry, remediation, checkpoint, and artifact contracts. Recovery is derived from the selected capabilities and recorded authority, not implemented as another Codex-, Claude-, or OpenCode-specific workflow. The existing Temporal, session/turn, workspace, artifact, publication, and cleanup owners retain their responsibilities.
+
+An Activity retry reconciles the recorded execution plan, runtime binding, terminal evidence, and remaining side effects before starting work again. An authorized live-session continuation and a fresh session restored from a checkpoint are different operations. Restoring files does not recreate a provider session, lease, approval, or credential generation. Unsupported reattachment must produce an explicit supported recovery path or an actionable unavailable result, never silently substitute another runtime or account.
+
+Finalization preserves independently verified compute evidence before a publication failure can erase that handoff. Required checkpoint and artifact preservation must be verified before cleanup destroys the sole useful workspace copy. A successful save does not turn failed or cancelled compute into success, and failed remote publication does not erase an already verified saved result. Transcripts, logs, output artifacts, and checkpoint references remain readable under their access and retention policies after the host is removed. A live host path, process exit, uploaded object without its required manifest, or successful cleanup report is not sufficient durability evidence.
+
+This requirement does not silently replace the existing recovery-checkpoint policy or declare artifact-backed recovery implemented. Any change to what satisfies a required checkpoint must be reconciled in the canonical recovery and workspace contracts. Where preservation cannot complete, retain only bounded, fenced, recoverable work under an explicit existing owner and expose its pending or unavailable state. Worker restart and janitor execution must honor the same durable preservation decision.
+
+Stopping credential consumers, retaining non-sensitive work, and deleting runtime resources are distinct obligations. Credentials and capacity are released only after verified consumer teardown and the durable release decision, not merely because a workflow is terminal. Retaining saved work must not require keeping model credentials or a live agent indefinitely. Recovery and cleanup remain idempotent and generation-fenced, with no second finalization coordinator.
 
 ## 6. Target topology
 
@@ -445,6 +478,8 @@ See [`docs/Omnigent/RuntimeProviderRollout.md`](./RuntimeProviderRollout.md) for
 
 ## 10. Migration stages
 
+These stages define dependency and acceptance boundaries, not a blanket completion claim. Implemented mechanisms, qualified support rows, deployment promotion, and actual removal must be reported separately through their existing owners. In particular, a required-row catalog is not protected-live evidence, and a retirement inventory is not retired code.
+
 ### Stage 1: Reuse the image without changing execution ownership
 
 - Publish the OpenCode-derived image under a neutral shared name.
@@ -464,7 +499,7 @@ See [`docs/Omnigent/RuntimeProviderRollout.md`](./RuntimeProviderRollout.md) for
 - Add credential ownership to materialization handles.
 - Complete `codex-oauth-home@1` for the generic realizer.
 - Complete `claude-oauth-home@1` for the generic realizer.
-- Preserve OpenCode's run-owned API-key materialization.
+- Preserve OpenCode's run-owned keyed materialization and credentialless `none@1` route without cross-route fallback.
 - Prove rotation, fencing, cleanup, and cross-runtime isolation.
 
 ### Stage 4: Qualify and canary generic Codex and Claude
@@ -476,7 +511,7 @@ See [`docs/Omnigent/RuntimeProviderRollout.md`](./RuntimeProviderRollout.md) for
 
 ### Stage 5: Make Omnigent the normal default
 
-**Implemented.** The mechanism is in place and the promoted rows are deployment-owned:
+**Rollout mechanism implemented; promotion remains per combination.** The mechanism is in place and the promoted rows are deployment-owned:
 
 - A versioned runtime-provider rollout policy controls each exact combination, and the decision plus its generation is frozen into the immutable execution plan.
 - One shared selection and admission boundary serves Workflow Create, presets, schedules, edit, rerun, retry as a fresh execution, Checkpoint Branch, remediation, linked continuation, and API/MCP submissions.
@@ -517,9 +552,11 @@ The strategy is complete only when all applicable gates pass:
 - The generic host lifecycle contains no top-level provider-specific orchestration branches.
 - Codex and Claude OAuth enrollment remains owned by MoonMind Settings.
 - Generic Codex and Claude materializers preserve exclusive writable OAuth state and acquired generation fencing.
-- OpenCode run-owned credentials remain isolated and are destroyed after cleanup.
+- OpenCode run-owned credentials remain isolated and are destroyed after cleanup; credentialless execution creates no credential material and never inherits the keyed route.
 - Non-selected runtime credentials are absent from every exact host.
 - Codex, Claude, and OpenCode normal product journeys run through `generic-omnigent-host@1` for supported combinations.
+- Each claimed on-demand combination demonstrates launch, native Workflow Detail interaction, authorized recovery, artifact/checkpoint access after host removal, and verified cleanup through its actual production boundaries.
+- Fault-injection evidence covers interrupted execution/finalization, publication failure, cancellation, worker restart, stale generations, and janitor recovery without losing the required durable handoff or duplicating completed compute.
 - Continuations and other follow-up sources use one canonical session and turn-command boundary.
 - Exact-artifact and protected-live reports identify image, harness, runtime pack, materializer, model, policy, and realizer.
 - New authoring defaults prefer Omnigent only for qualified combinations, through one versioned per-combination rollout policy and one shared selection and admission boundary.

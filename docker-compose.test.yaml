@@ -47,6 +47,9 @@ services:
       - MOONMIND_ALLOW_LOCAL_ENCRYPTION_KEY_GENERATION=${MOONMIND_ALLOW_LOCAL_ENCRYPTION_KEY_GENERATION:-1}
     volumes:
       - ./:/app
+      # Startup probes must neither consume nor overwrite deployment evidence
+      # through the repository bind mount. --rm removes this test-owned volume.
+      - /app/var
     working_dir: /app
     # Run all tests (Python + frontend) inside the container. The runtime image
     # includes npm, so frontend tests are fully supported without --python-only.

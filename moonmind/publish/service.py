@@ -291,8 +291,30 @@ class PublishService:
             remote_line = str(remote_result.stdout or "").strip().splitlines()
             if remote_line:
                 remote_sha = remote_line[0].split(maxsplit=1)[0].strip()
+            if branch_name == base_branch:
+                if getattr(remote_result, "returncode", 1) != 0 or not re.fullmatch(
+                    r"(?:[0-9a-f]{40}|[0-9a-f]{64})", remote_sha
+                ):
+                    raise RuntimeError("selected publication branch has no remote head")
+                ancestry = await run_command(
+                    [
+                        self._git_binary,
+                        "merge-base",
+                        "--is-ancestor",
+                        remote_sha,
+                        branch_name,
+                    ],
+                    cwd=repo_dir,
+                    check=False,
+                )
+                if getattr(ancestry, "returncode", 1) != 0:
+                    raise RuntimeError(
+                        "selected publication branch is not a fast-forward of the remote head"
+                    )
         push_command = [self._git_binary, "push", "-u"]
         if verify_remote:
+            # The ancestry check protects shared history; the exact-tip lease
+            # also rejects deletion or replacement between inspection and push.
             push_command.append(
                 f"--force-with-lease=refs/heads/{branch_name}:{remote_sha}"
             )

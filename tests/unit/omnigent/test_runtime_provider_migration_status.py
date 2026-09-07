@@ -6,6 +6,7 @@ Source issue: MoonLadderStudios/MoonMind#3833 (required work 10 and 11).
 from __future__ import annotations
 
 import json
+from datetime import UTC, datetime, timedelta
 
 import pytest
 
@@ -19,6 +20,11 @@ from moonmind.omnigent.runtime_provider_rollout import (
     RolloutState,
     RuntimeProviderRollbackControl,
     default_runtime_provider_rollout_policy,
+)
+from tests.unit.omnigent.support_evidence_fixtures import (
+    concurrency_record,
+    support_plan,
+    support_row,
 )
 
 _CODEX_GATE = "MOONMIND_OMNIGENT_GENERIC_CODEX_QUALIFIED"
@@ -304,3 +310,217 @@ def test_rollback_activation_metric_uses_the_closed_control_vocabulary():
     }
     assert len(recorded) == len(list(RuntimeProviderRollbackControl))
     assert not any("other" in key for key in recorded)
+
+
+# --- Protected support projection -------------------------------------------
+
+_SUPPORT_INDEX_ENV = "MOONMIND_OMNIGENT_EXECUTION_SUPPORT_EVIDENCE"
+
+
+def _publish_index(tmp_path, entries, monkeypatch) -> None:
+    path = tmp_path / "execution-support-evidence.json"
+    path.write_text(json.dumps({"entries": list(entries)}), encoding="utf-8")
+    monkeypatch.setenv(_SUPPORT_INDEX_ENV, str(path))
+
+
+def _generic_row(target: str = "codex.generic-omnigent"):
+    def _select(status):
+        return {row.target_id: row for row in status.combinations}[target]
+
+    return _select
+
+
+@pytest.mark.parametrize(
+    "status", ["failed", "skipped", "blocked", "unavailable", "partial"]
+)
+def test_a_newer_non_pass_row_never_displaces_the_last_pass(
+    status: str, tmp_path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The projection reports what *backs* a rule, not merely what is newest.
+
+    MoonLadderStudios/MoonMind#3885 made non-pass rows recordable. Being the
+    newest entry for a combination, such a row would otherwise win
+    ``_newest_matching`` and replace the last real pass as the evidence the
+    operator view says backs the rule.
+    """
+
+    plan = support_plan()
+    passed_at = datetime.now(UTC) - timedelta(hours=6)
+    monkeypatch.setenv(_SUPPORT_INDEX_ENV, "")
+    _publish_index(
+        tmp_path,
+        [
+            support_row(plan, generated_at=passed_at),
+            support_row(plan, generated_at=datetime.now(UTC), status=status),
+        ],
+        monkeypatch,
+    )
+
+    row = _generic_row()(
+        build_runtime_provider_migration_status(policy=_policy({_CODEX_GATE: "true"}))
+    )
+
+    assert row.protected_evidence is not None
+    assert row.protected_evidence.generated_at == passed_at
+    assert row.last_successful_canary_at == passed_at
+
+
+def test_an_index_of_only_non_pass_rows_backs_nothing(
+    tmp_path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A readable index with no pass is "nothing backs this", not "no source"."""
+
+    plan = support_plan()
+    _publish_index(
+        tmp_path,
+        [
+            support_row(plan, status="failed"),
+            support_row(plan, status="blocked"),
+        ],
+        monkeypatch,
+    )
+
+    status = build_runtime_provider_migration_status(
+        policy=_policy({_CODEX_GATE: "true"})
+    )
+    row = _generic_row()(status)
+
+    assert row.protected_evidence is None
+    assert row.last_successful_canary_at is None
+    # The document itself was readable, so the operator is told the source is
+    # available and simply carries no passing row.
+    assert status.evidence_sources_available["protectedLive"] is True
+
+
+# --- Advertised concurrency --------------------------------------------------
+
+
+def test_advertised_concurrency_never_exceeds_the_validated_level(
+    tmp_path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A deployment configured for 16 advertises only what it validated."""
+
+    plan = support_plan()
+    entry = support_row(plan)
+    entry["concurrency"] = concurrency_record(plan, level=4)
+    _publish_index(tmp_path, [entry], monkeypatch)
+    monkeypatch.setenv("MOONMIND_OMNIGENT_GENERIC_HOST_CAPACITY", "16")
+
+    row = _generic_row()(
+        build_runtime_provider_migration_status(policy=_policy({_CODEX_GATE: "true"}))
+    )
+
+    assert row.advertised_concurrency.validated_level == 4
+    assert row.advertised_concurrency.advertised_level == 4
+    # The configured value is reported unchanged; nothing rewrote it.
+    assert row.advertised_concurrency.operator_ceiling == 16
+    assert row.advertised_concurrency.limited_by == "qualified_level"
+
+
+def test_advertised_concurrency_never_exceeds_a_lower_operator_ceiling(
+    tmp_path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    plan = support_plan()
+    entry = support_row(plan)
+    entry["concurrency"] = concurrency_record(plan, level=4)
+    _publish_index(tmp_path, [entry], monkeypatch)
+    monkeypatch.setenv("MOONMIND_OMNIGENT_GENERIC_HOST_CAPACITY", "2")
+
+    row = _generic_row()(
+        build_runtime_provider_migration_status(policy=_policy({_CODEX_GATE: "true"}))
+    )
+
+    assert row.advertised_concurrency.validated_level == 4
+    assert row.advertised_concurrency.advertised_level == 2
+    assert row.advertised_concurrency.limited_by == "operator_ceiling"
+
+
+def test_a_combination_without_current_concurrency_evidence_advertises_nothing(
+    tmp_path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Unqualified is zero, and an expired row stops advertising its level."""
+
+    plan = support_plan()
+    monkeypatch.setenv("MOONMIND_OMNIGENT_GENERIC_HOST_CAPACITY", "8")
+
+    # No concurrency dimension at all.
+    _publish_index(tmp_path, [support_row(plan)], monkeypatch)
+    row = _generic_row()(
+        build_runtime_provider_migration_status(policy=_policy({_CODEX_GATE: "true"}))
+    )
+    assert row.advertised_concurrency.advertised_level == 0
+    assert row.advertised_concurrency.validated_level == 0
+    assert row.advertised_concurrency.limited_by == "unqualified"
+
+    # A qualified but expired row: the concurrency dimension inherits the
+    # freshness of the support row that carries it.
+    expired = support_row(
+        plan,
+        generated_at=datetime.now(UTC) - timedelta(days=10),
+        ttl=timedelta(days=1),
+    )
+    expired["concurrency"] = concurrency_record(plan, level=4)
+    _publish_index(tmp_path, [expired], monkeypatch)
+    row = _generic_row()(
+        build_runtime_provider_migration_status(policy=_policy({_CODEX_GATE: "true"}))
+    )
+    assert row.protected_evidence is not None
+    assert row.protected_evidence.expired is True
+    assert row.advertised_concurrency.advertised_level == 0
+    assert row.advertised_concurrency.limited_by == "unqualified"
+
+
+def test_no_published_index_advertises_nothing_rather_than_failing(
+    monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The default deployment path has no protected index and must still work."""
+
+    monkeypatch.delenv(_SUPPORT_INDEX_ENV, raising=False)
+
+    status = build_runtime_provider_migration_status(
+        policy=_policy({_CODEX_GATE: "true"})
+    )
+
+    assert status.evidence_sources_available["protectedLive"] is False
+    for row in status.combinations:
+        assert row.advertised_concurrency.advertised_level == 0
+        assert row.advertised_concurrency.limited_by == "unqualified"
+
+
+def test_an_over_age_row_advertises_nothing_even_though_it_has_not_expired(
+    tmp_path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The advertisement must not outlive the admission window.
+
+    A row generated beyond ``MAX_EXECUTION_SUPPORT_EVIDENCE_AGE`` but carrying a
+    longer ``expiresAt`` is refused by admission and reported as *not expired*
+    by the evidence view. Deciding freshness here instead of asking admission is
+    how a projection ends up advertising a peak that execution will refuse.
+    """
+
+    from moonmind.omnigent.execution_support_evidence import (
+        MAX_EXECUTION_SUPPORT_EVIDENCE_AGE,
+    )
+
+    plan = support_plan()
+    over_age = support_row(
+        plan,
+        generated_at=datetime.now(UTC) - (MAX_EXECUTION_SUPPORT_EVIDENCE_AGE
+                                          + timedelta(days=1)),
+        ttl=MAX_EXECUTION_SUPPORT_EVIDENCE_AGE + timedelta(days=30),
+    )
+    over_age["concurrency"] = concurrency_record(plan, level=4)
+    _publish_index(tmp_path, [over_age], monkeypatch)
+    monkeypatch.setenv("MOONMIND_OMNIGENT_GENERIC_HOST_CAPACITY", "8")
+
+    row = _generic_row()(
+        build_runtime_provider_migration_status(policy=_policy({_CODEX_GATE: "true"}))
+    )
+
+    assert row.protected_evidence is not None
+    # The document itself has not reached its own expiry...
+    assert row.protected_evidence.expired is False
+    # ...but admission refuses it, so it advertises nothing.
+    assert row.advertised_concurrency.advertised_level == 0
+    assert row.advertised_concurrency.validated_level == 0
+    assert row.advertised_concurrency.limited_by == "unqualified"

@@ -17,8 +17,10 @@ from __future__ import annotations
 
 import ast
 import inspect
+import json
 import textwrap
 from datetime import UTC, datetime
+from pathlib import Path
 from unittest.mock import patch
 
 import pytest
@@ -33,11 +35,11 @@ from moonmind.omnigent.control_plane import (
     OmnigentControlPlaneStore,
     TurnSource,
 )
-from moonmind.omnigent.control_plane.turn_admission import (
-    RemediationAuthorityBroadenedError,
-)
 from moonmind.omnigent.control_plane.identities import (
     canonical_omnigent_session_id,
+)
+from moonmind.omnigent.control_plane.turn_admission import (
+    RemediationAuthorityBroadenedError,
 )
 from moonmind.omnigent.control_plane.turn_commands import CanonicalTurnCommandService
 from moonmind.omnigent.harness_platform.agent_profile import OmnigentAgentProfileV2
@@ -68,11 +70,12 @@ from moonmind.workflows.temporal.remediation_workspace_head import (
     RemediationWorkspaceHead,
 )
 from moonmind.workflows.temporal.workflows.run import (
+    RUN_ACCEPTED_PUBLISHED_BRANCH_HANDOFF_PATCH,
     RUN_CANONICAL_TURN_LINEAGE_PATCH,
     RUN_OMNIGENT_EXECUTION_PLAN_REF_PATCH,
+    RUN_PUBLISHED_BRANCH_HANDOFF_PATCH,
     MoonMindRunWorkflow,
 )
-
 
 PROVIDER_PROFILE_REF = "codex-profile-1"
 
@@ -380,7 +383,11 @@ def _remediation_node(*, ordinal: int, publish_mode: str) -> dict:
 
 
 def _dispatch_request(
-    wf: MoonMindRunWorkflow, node: dict, *, plan_ref: str
+    wf: MoonMindRunWorkflow,
+    node: dict,
+    *,
+    plan_ref: str,
+    extra_patches: tuple[str, ...] = (),
 ) -> AgentExecutionRequest:
     """Build the request exactly as the run workflow's dispatch loop does.
 
@@ -399,6 +406,7 @@ def _dispatch_request(
         in {
             RUN_OMNIGENT_EXECUTION_PLAN_REF_PATCH,
             RUN_CANONICAL_TURN_LINEAGE_PATCH,
+            *extra_patches,
         },
     ):
         wf._record_canonical_turn_lineage(node=node, node_id=node_id)
@@ -543,6 +551,221 @@ def test_a_forged_remediation_node_without_loop_state_gets_no_lineage(plan) -> N
 # --- RW-5: the production remediation producer -------------------------------
 
 
+@pytest.mark.parametrize("current_history", [False, True])
+def test_published_handoff_replay_keeps_legacy_metadata_path(current_history) -> None:
+    wf = _run_workflow(base_step_execution_id=None)
+    wf._publish_context.update(
+        pushStatus="pushed", branch="legacy-head", headSha="a" * 40
+    )
+    with patch(
+        "moonmind.workflows.temporal.workflows.run.workflow.patched",
+        side_effect=lambda patch_id: current_history
+        and patch_id == RUN_ACCEPTED_PUBLISHED_BRANCH_HANDOFF_PATCH,
+    ):
+        # Current requests cannot establish authority using unaccepted metadata.
+        expected = None if current_history else ("legacy-head", "a" * 40)
+        assert wf._workflow_verified_published_head() == expected
+        payload = wf._build_remediation_loop_continue_as_new_input(ordered_nodes=[])
+        assert "acceptedPublishedHead" not in payload["remediation_loop_continuation"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("later_status", [None, "no_commits", "", "unknown"])
+@pytest.mark.parametrize("continue_as_new", [False, True])
+async def test_escaped_publication_base_survives_remediation_dispatch(
+    turn_commands, session_factory, plan, later_status, continue_as_new
+) -> None:
+    """Replay the publication handoff that drifted from a job branch to main."""
+    fixture = json.loads(
+        (Path(__file__).parent / "fixtures/remediation-branch-handoff.json").read_text()
+    )
+    wf = _run_workflow(base_step_execution_id=BASE_STEP_EXECUTION_ID)
+    realizer, lifecycles = _realizer(turn_commands, session_factory)
+    base_node = _base_node(publish_mode="branch")
+    base_node["inputs"].update(
+        repository="MoonLadderStudios/MoonMind", startingBranch="main"
+    )
+    base = _dispatch_request(wf, base_node, plan_ref=plan.planRef)
+    await realizer.execute(base, plan)
+    patches = (
+        RUN_PUBLISHED_BRANCH_HANDOFF_PATCH,
+        RUN_ACCEPTED_PUBLISHED_BRANCH_HANDOFF_PATCH,
+    )
+    with patch(
+        "moonmind.workflows.temporal.workflows.run.workflow.patched",
+        side_effect=lambda patch_id: patch_id in patches,
+    ), patch(
+        "moonmind.workflows.temporal.workflows.run.workflow.info",
+        return_value=_MockWorkflowInfo(),
+    ), patch(
+        "moonmind.workflows.temporal.workflows.run.workflow.now",
+        return_value=datetime(2026, 9, 6, tzinfo=UTC),
+    ):
+        wf._record_execution_context(
+            node_id="implement",
+            execution_result={"outputs": fixture["publicationOutputs"]},
+        )
+        wf._record_execution_context(
+            node_id="verify",
+            execution_result={"outputs": {"push_status": later_status}},
+        )
+        if continue_as_new:
+            payload = wf._build_remediation_loop_continue_as_new_input(ordered_nodes=[])
+            restored = _run_workflow(base_step_execution_id=None)
+            restored._remediation_loop_continuation = payload[
+                "remediation_loop_continuation"
+            ]
+            restored._restore_remediation_loop_continuation(ordered_nodes=[])
+            wf = restored
+    node = _remediation_node(ordinal=1, publish_mode="branch")
+    node["inputs"].update(
+        repository="MoonLadderStudios/MoonMind", startingBranch="main"
+    )
+    request = _dispatch_request(wf, node, plan_ref=plan.planRef, extra_patches=patches)
+    assert request.workspace_spec["startingBranch"] == "main"
+    assert (
+        request.workspace_spec["repositoryTarget"]["revision"]["commitSha"]
+        == fixture["publicationOutputs"]["push_head_sha"]
+    )
+    assert (
+        request.workspace_spec["targetBranch"]
+        == fixture["publicationOutputs"]["push_branch"]
+    )
+    result = await realizer.execute(request, plan)
+    assert result.failure_class is None
+    assert len(lifecycles) == 2
+    turns, commands, _ = await _turn_journal(session_factory, _session_id_for(request))
+    assert [turn.lineage_kind for turn in turns] == [TurnSource.REMEDIATION.value]
+    assert len(commands) == 1
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("accepted_handoff", [True, False])
+async def test_escaped_second_attempt_continues_the_head_its_predecessor_published(
+    turn_commands, session_factory, plan, accepted_handoff
+) -> None:
+    """Replay ``mm:f794b242-604d-557e-9c1c-524caf1f4969``.
+
+    Remediation attempt 1 ran from the authored base and published its
+    candidate. Attempt 2 must continue that published head *and* stay inside
+    attempt 1's recorded authority. The escaped dispatch pinned attempt 2's
+    starting branch to the published job branch because the publication outputs
+    named their base as ``push_base_branch``, which the legacy base-ref recorder
+    never read; the AC6 guard then refused the attempt as broadening
+    ``repositoryBranch``.
+
+    ``accepted_handoff=True`` is every current history: the accepted publication
+    record carries the base atomically and the attempt is admitted.
+    ``accepted_handoff=False`` is the legacy handoff the escaped run executed;
+    it reproduces the refusal so this fixture is known to discriminate.
+    """
+
+    fixture = json.loads(
+        (
+            Path(__file__).parent / "fixtures/remediation-second-attempt-handoff.json"
+        ).read_text()
+    )
+    publication = fixture["publicationOutputs"]
+    patches = (RUN_PUBLISHED_BRANCH_HANDOFF_PATCH,)
+    if accepted_handoff:
+        patches += (RUN_ACCEPTED_PUBLISHED_BRANCH_HANDOFF_PATCH,)
+    authored = {"repository": "MoonLadderStudios/MoonMind", "startingBranch": "main"}
+    realizer, lifecycles = _realizer(turn_commands, session_factory)
+
+    # Attempt 1 repairs the authored implementation; nothing has published yet.
+    wf = _run_workflow(base_step_execution_id=BASE_STEP_EXECUTION_ID)
+    base_node = _base_node(publish_mode="branch")
+    base_node["inputs"].update(authored)
+    base = _dispatch_request(
+        wf, base_node, plan_ref=plan.planRef, extra_patches=patches
+    )
+    await realizer.execute(base, plan)
+    first_node, first_verifier = materialize_attempt_nodes(
+        spec=_loop_spec(),
+        workflow_id=WORKFLOW_ID,
+        run_id=TEMPORAL_RUN_ID,
+        ordinal=1,
+        workspace_head_ref="artifact://loop-head/1",
+        runtime={"mode": "omnigent", "executionProfileRef": PROVIDER_PROFILE_REF},
+        remediation_inputs={"publishMode": "branch"},
+    )
+    first_node["inputs"].update(authored)
+    first = _dispatch_request(
+        wf, first_node, plan_ref=plan.planRef, extra_patches=patches
+    )
+    assert first.workspace_spec["startingBranch"] == "main"
+    assert (await realizer.execute(first, plan)).failure_class is None
+    assert len(lifecycles) == 2
+
+    # Attempt 1 publishes its candidate; the read-only verifier publishes nothing.
+    with patch(
+        "moonmind.workflows.temporal.workflows.run.workflow.patched",
+        side_effect=lambda patch_id: patch_id in patches,
+    ), patch(
+        "moonmind.workflows.temporal.workflows.run.workflow.info",
+        return_value=_MockWorkflowInfo(),
+    ), patch(
+        "moonmind.workflows.temporal.workflows.run.workflow.now",
+        return_value=datetime(2026, 9, 6, tzinfo=UTC),
+    ):
+        wf._record_execution_context(
+            node_id=str(first_node["id"]),
+            execution_result={"outputs": publication},
+        )
+        wf._record_execution_context(
+            node_id=str(first_verifier["id"]),
+            execution_result={"outputs": {"push_status": None}},
+        )
+
+    # Attempt 2 continues the head attempt 1 produced and is bounded by it.
+    wf._remediation_loop_state = RemediationLoopState(
+        loopId=LOOP_ID,
+        attemptOrdinal=2,
+        phase=RemediationLoopPhase.REMEDIATION_RUNNING,
+        consumedBudgets=ConsumedRemediationBudgets(attempts=2),
+    )
+    wf._remediation_workspace_head = _loop_head(
+        base_step_execution_id=first.step_execution.step_execution_id
+    )
+    second_node = _remediation_node(ordinal=2, publish_mode="branch")
+    second_node["inputs"].update(authored)
+    second = _dispatch_request(
+        wf, second_node, plan_ref=plan.planRef, extra_patches=patches
+    )
+    lineage = second.step_execution.canonical_turn_lineage
+    assert lineage is not None
+    assert lineage.base_step_execution_id == first.step_execution.step_execution_id
+    workspace = second.workspace_spec
+    assert workspace["targetBranch"] == publication["push_branch"]
+    assert workspace["repositoryTarget"]["branch"]["name"] == publication["push_branch"]
+    assert (
+        workspace["repositoryTarget"]["revision"]["commitSha"]
+        == publication["push_head_sha"]
+    )
+
+    if not accepted_handoff:
+        # The escaped shape: the published branch became the starting branch,
+        # so the attempt asserted a branch its predecessor never held.
+        assert workspace["startingBranch"] == publication["push_branch"]
+        with pytest.raises(RemediationAuthorityBroadenedError) as excinfo:
+            await realizer.execute(second, plan)
+        assert excinfo.value.broadened == ("repositoryBranch",)
+        assert str(excinfo.value) == fixture["escapedDispatchError"]
+        # Refused before provider mutation.
+        assert len(lifecycles) == 2
+        _, commands, _ = await _turn_journal(session_factory, _session_id_for(second))
+        assert commands == []
+        return
+
+    assert workspace["startingBranch"] == "main"
+    result = await realizer.execute(second, plan)
+    assert result.failure_class is None
+    assert len(lifecycles) == 3 and lifecycles[2].requests == [second]
+    turns, commands, _ = await _turn_journal(session_factory, _session_id_for(second))
+    assert [turn.lineage_kind for turn in turns] == [TurnSource.REMEDIATION.value]
+    assert len(commands) == 1
+
+
 @pytest.mark.asyncio
 async def test_remediation_dispatched_through_the_realizer_journals_remediation(
     turn_commands, session_factory, plan
@@ -625,9 +848,7 @@ async def test_the_delivered_provider_session_is_attached_to_canonical_authority
     session_id = _session_id("attach-run")
     async with store.transaction() as repos:
         session = await repos.sessions.get(session_id)
-        by_scope = await repos.sessions.get_by_scope(
-            "attach-run", "provider-session-1"
-        )
+        by_scope = await repos.sessions.get_by_scope("attach-run", "provider-session-1")
 
     assert session.provider_session_ref == "provider-session-1"
     assert by_scope is not None and by_scope.session_id == session_id
@@ -843,15 +1064,19 @@ def test_every_trusted_realizer_is_covered_by_the_routing_assertion() -> None:
     assert set(_PRODUCTION_REALIZERS) == set(KNOWN_REALIZERS)
 
 
-@pytest.mark.parametrize("realizer_class", sorted(
-    _PRODUCTION_REALIZERS.values(), key=lambda cls: cls.ref
-))
+@pytest.mark.parametrize(
+    "realizer_class", sorted(_PRODUCTION_REALIZERS.values(), key=lambda cls: cls.ref)
+)
 def test_no_production_realizer_names_its_own_turn_source(realizer_class) -> None:
     """The wrapper derives the source; a realizer may not assert one."""
 
     tree = ast.parse(textwrap.dedent(inspect.getsource(realizer_class.execute)))
     body = tree.body[0].body
-    if body and isinstance(body[0], ast.Expr) and isinstance(body[0].value, ast.Constant):
+    if (
+        body
+        and isinstance(body[0], ast.Expr)
+        and isinstance(body[0].value, ast.Constant)
+    ):
         body = body[1:]  # the docstring may legitimately name the vocabulary
     code = "\n".join(ast.unparse(node) for node in body)
     assert "deliver_canonical_turn(" in code

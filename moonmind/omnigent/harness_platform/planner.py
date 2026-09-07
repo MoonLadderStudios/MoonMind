@@ -293,9 +293,10 @@ def _build_rollout_selection_context(
     Every value is derived from the immutable objects this compilation already
     resolved. Support-evidence provenance is read through the same tiers and the
     same matching identity admission uses, so a promoted row is demoted here for
-    exactly the evidence admission will refuse to accept -- missing, expired, or
-    older than the tier's maximum age -- instead of being frozen into the plan as
-    promoted and failing later without a rollout reason.
+    exactly the evidence admission will refuse to accept -- missing, expired,
+    older than the tier's maximum age, or recorded as a non-pass outcome --
+    instead of being frozen into the plan as promoted and failing later without
+    a rollout reason.
 
     The remaining dimensions restate gates this compiler has already enforced by
     raising. They are supplied so the frozen rollout decision names the same
@@ -342,6 +343,11 @@ def _build_rollout_selection_context(
             "supportEvidenceRef": freshness.evidence_ref,
             "supportEvidenceAgeSeconds": freshness.age_seconds,
             "supportEvidenceExpired": freshness.expired,
+            # The recorded row outcome travels with the ref it belongs to. A
+            # non-pass row is present and unexpired, so dropping this dimension
+            # here is what let a demoted combination freeze into the plan as
+            # promoted (MoonLadderStudios/MoonMind#3885).
+            "supportEvidenceUsable": freshness.usable,
             "launchReady": (
                 is_launchable_trust(trust_record.trustState)
                 and launch_policy.allows_host_class(host_class)

@@ -354,6 +354,10 @@ _REASONS: dict[str, tuple[str, str]] = {
         "Restore the blocked Omnigent runtime capability or refresh its protected evidence.",
         "/settings#omnigent",
     ),
+    "omnigent_capacity_wait": (
+        "Omnigent capacity is fully utilized; new work waits for a free slot.",
+        "/settings#provider-profiles",
+    ),
     "exact_artifact_evidence_unavailable": (
         "Publish current Tier-1 exact deployable-artifact conformance for this source commit.",
         "/settings#omnigent",
@@ -1019,6 +1023,7 @@ async def get_omnigent_codex_catalog_readiness(
     eligible: list[EligibleProviderProfile] = []
     eligible_by_runtime: dict[str, int] = {}
     ineligible: list[IneligibleProviderProfile] = []
+    saturated_by_profile: dict[str, bool] = {}
     for row in rows:
         raw_runtime_id = getattr(row, "runtime_id", "codex_cli")
         runtime_id = str(getattr(raw_runtime_id, "value", raw_runtime_id))
@@ -1058,6 +1063,10 @@ async def get_omnigent_codex_catalog_readiness(
             and materialization in {"composite", "api_key_env", "config_bundle"}
             and row.provider_id in {"opencode-go", "opencode"}
         )
+        if compatible and readiness["launch_ready"]:
+            # A busy profile that queues can still accept new work, so it is
+            # not saturated from the admission surface's point of view.
+            saturated_by_profile[row.profile_id] = busy and not queue_when_busy
         if compatible and readiness["launch_ready"] and (not busy or queue_when_busy):
             eligible_by_runtime[runtime_id] = eligible_by_runtime.get(runtime_id, 0) + 1
             eligible.append(
@@ -1089,6 +1098,16 @@ async def get_omnigent_codex_catalog_readiness(
                     ],
                 )
             )
+
+    # MoonLadderStudios/MoonMind#3885: provider saturation is *transient*
+    # pressure, not a qualification defect. It is only observed when this
+    # deployment has launch-ready profiles and every one of them is currently
+    # unable to take new work; with no launch-ready profile at all the blocker
+    # is structural and is already reported by the per-profile gate reasons
+    # above.
+    provider_capacity_available: bool | None = None
+    if saturated_by_profile:
+        provider_capacity_available = not all(saturated_by_profile.values())
 
     bindings = list(
         (await session.execute(select(OmnigentOAuthHostBindingRecord))).scalars().all()
@@ -1425,6 +1444,7 @@ async def get_omnigent_codex_catalog_readiness(
             janitor_healthy=janitor_healthy,
             exact_image_conformant=exact_image_conformant,
             protected_live_evidence_age=protected_evidence_age,
+            provider_capacity_available=provider_capacity_available,
         )
     )
     for capability in admission.capabilities:
@@ -1446,7 +1466,16 @@ async def get_omnigent_codex_catalog_readiness(
         except Exception:
             pass  # Telemetry failures must not affect lifecycle authority
     if not admission.admit_new:
-        gate = _reason("omnigent_admission_readiness_failed")
+        # A structurally qualified deployment that is merely saturated reports a
+        # waiting reason, not a qualification failure: telling an operator to
+        # "restore the blocked capability" when the only problem is that every
+        # slot is in use is both wrong and an invitation to substitute a
+        # different profile or runtime.
+        gate = _reason(
+            "omnigent_capacity_wait"
+            if admission.wait_for_capacity
+            else "omnigent_admission_readiness_failed"
+        )
         profile_views = [
             item.model_copy(
                 update={

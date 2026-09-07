@@ -8624,11 +8624,18 @@ async def _enrich_deployment_skill_metadata(
     return metadata_by_skill
 
 
-def _merge_deployment_skill_required_capabilities(
+def _merge_workflow_required_capabilities(
     required_capabilities: list[str],
     metadata_by_skill: Mapping[str, Mapping[str, Any]],
+    *,
+    normalized_tool: Mapping[str, Any] | None = None,
+    steps: Sequence[Mapping[str, Any]] = (),
 ) -> list[str]:
-    """Flatten trusted deployment Skill requirements into the canonical plane."""
+    """Collect authored and resolved requirements before immutable admission.
+
+    Requirements request capabilities; the plan compiler still verifies their
+    availability against deployment-owned declarations and launch authority.
+    """
 
     merged: list[str] = []
     seen: set[str] = set()
@@ -8641,6 +8648,20 @@ def _merge_deployment_skill_required_capabilities(
                 merged.append(capability)
 
     append(required_capabilities)
+    contracts = [("payload.workflow.tool", normalized_tool)]
+    for index, step in enumerate(steps):
+        for kind in ("skill", "tool"):
+            contracts.append(
+                (f"payload.workflow.steps[{index}].{kind}", step.get(kind))
+            )
+    for path, contract in contracts:
+        if isinstance(contract, Mapping):
+            append(
+                _coerce_string_list(
+                    contract.get("requiredCapabilities"),
+                    field_name=f"{path}.requiredCapabilities",
+                )
+            )
     for skill_name in sorted(metadata_by_skill):
         metadata = metadata_by_skill[skill_name]
         append(
@@ -9391,6 +9412,13 @@ def _normalize_task_tool(task_payload: dict[str, Any]) -> dict[str, Any] | None:
         inline_inputs = selected_payload.get("args")
     if isinstance(inline_inputs, dict) and inline_inputs:
         normalized["inputs"] = dict(inline_inputs)
+    raw_caps = selected_payload.get("requiredCapabilities")
+    if raw_caps is not None:
+        normalized_caps = _coerce_string_list(
+            raw_caps, field_name="payload.workflow.tool.requiredCapabilities"
+        )
+        if normalized_caps:
+            normalized["requiredCapabilities"] = normalized_caps
     _copy_skill_contract_metadata(source=selected_payload, target=normalized)
     return normalized
 
@@ -10947,9 +10975,11 @@ async def _create_execution_from_workflow_request(
         normalized_tool=normalized_tool,
         steps=normalized_steps,
     )
-    required_capabilities = _merge_deployment_skill_required_capabilities(
+    required_capabilities = _merge_workflow_required_capabilities(
         required_capabilities,
         deployment_skill_metadata,
+        normalized_tool=normalized_tool,
+        steps=normalized_steps,
     )
     publish_skill_id = _workflow_publish_skill_id(task_payload, normalized_tool)
     publish_skill_metadata = deployment_skill_metadata.get(

@@ -1,0 +1,25 @@
+{
+  "sourceWorkflowId": "mm:f794b242-604d-557e-9c1c-524caf1f4969",
+  "escapedDispatchError": "remediation may not broaden execution authority: repositoryBranch",
+  "publicationOutputs": {
+    "push_status": "pushed",
+    "push_branch": "moonmind-job-e5dbb4c7",
+    "push_base_branch": "main",
+    "push_head_sha": "1a4683921ca9f33921dc80fa2c31bea3bd591ff3",
+    "push_commit_count": 1,
+    "remote_verified": true,
+    "acceptedRepositoryEvidence": {
+      "schemaVersion": "accepted-repository-evidence/v1",
+      "pushStatus": "pushed",
+      "branch": "moonmind-job-e5dbb4c7",
+      "baseBranch": "main",
+      "headSha": "1a4683921ca9f33921dc80fa2c31bea3bd591ff3",
+      "commitsAheadOfBase": 1,
+      "repositoryChanged": true,
+      "publicationAuthorized": true,
+      "candidateContaminated": false,
+      "remoteVerified": true,
+      "authority": "omnigent.generic_host_execution"
+    }
+  }
+}
