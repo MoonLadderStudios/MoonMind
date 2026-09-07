@@ -1411,6 +1411,15 @@ it globally unique would break the handle its holder already quotes on release:
 that release would resolve the other runtime's row, be refused as a profile
 conflict, and leave the rewritten row permanently active.
 
+Workflow, lease, owner, step-execution and idempotency identities in the lease
+ledger are opaque text. Storage preserves the full value admitted by the
+originating contract, including composed remediation identifiers longer than
+255 characters. Persistence never truncates, hashes or renames an identity:
+in-flight grants, retries, inspection and release all quote the same value.
+Schema upgrades preserve existing rows and indexes so a retained grant can
+retry unchanged after migration. A downgrade to bounded columns must refuse
+while any retained identity exceeds that bound.
+
 The owning workflow is an identity for a **workflow-owned** lease only, and a
 partial unique index enforces it there. One Activity-owned step legitimately
 binds several Provider Profiles from the same runtime — each lease gets its own
