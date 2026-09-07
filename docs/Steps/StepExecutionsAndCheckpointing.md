@@ -1,5 +1,11 @@
 # Step Executions and Checkpointing
 
+Status: Desired State
+Owners: MoonMind Engineering
+Last Updated: 2026-06-13
+Canonical for: semantic step reattempts, checkpointed side-effect policy, gated iteration, failed-step recovery primitive, autonomous story loops
+Related: `docs/Steps/StepTypes.md`, `docs/Workflows/WorkflowArchitecture.md`, `docs/Workflows/WorkflowRemediation.md`, `docs/Temporal/StepLedgerAndProgressModel.md`, `docs/Temporal/ManagedAndExternalAgentExecutionModel.md`, `docs/Temporal/WorkflowRunHistoryAndNewRunSemantics.md`, `docs/Temporal/ActivityCatalogAndWorkerTopology.md`, `docs/Artifacts/ArtifactPresentationContract.md`
+
 ## Plane-aware checkpoints
 
 Policy callers select session state, workspace state, or both. Session evidence
@@ -10,12 +16,6 @@ git metadata, generated tests, or uncommitted changes. Omnigent workspace bounda
 therefore use MoonMind `worktree_archive` checkpoints and
 `workspace.apply_checkpoint`, while replay consumes the recorded capability snapshot
 instead of performing a mutable registry lookup.
-
-Status: Desired State
-Owners: MoonMind Engineering
-Last Updated: 2026-06-13
-Canonical for: semantic step reattempts, checkpointed side-effect policy, gated iteration, failed-step recovery primitive, autonomous story loops
-Related: `docs/Steps/StepTypes.md`, `docs/Workflows/WorkflowArchitecture.md`, `docs/Workflows/WorkflowRemediation.md`, `docs/Temporal/StepLedgerAndProgressModel.md`, `docs/Temporal/ManagedAndExternalAgentExecutionModel.md`, `docs/Temporal/WorkflowRunHistoryAndNewRunSemantics.md`, `docs/Temporal/ActivityCatalogAndWorkerTopology.md`, `docs/Artifacts/ArtifactPresentationContract.md`
 
 ---
 

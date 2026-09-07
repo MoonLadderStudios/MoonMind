@@ -20,6 +20,7 @@ from pathlib import Path
 
 import pytest
 
+from tools.check_documentation_architecture import metadata_fields
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
 
@@ -49,9 +50,7 @@ def test_standard_is_declarative_desired_state_not_a_tracker() -> None:
     text = _read(STANDARD_DOC)
 
     # Declarative status, not a migration/checklist/status framing.
-    assert "**Status:** Current standard and target direction" in text
-    # The standard explicitly declares itself a desired-state strategy, not a plan.
-    assert "not a migration plan or a checklist" in text
+    assert metadata_fields(text)["document class"] == "Canonical declarative document"
     # No checklist/status checkbox framing leaks into the canonical standard.
     assert "- [ ]" not in text
     assert "- [x]" not in text

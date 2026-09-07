@@ -1,5 +1,6 @@
 # MoonSpec Documentation Architecture Standard
 
+**Document Class:** Canonical declarative document
 **Status:** Current standard and target direction
 **Updated:** 2026-06-24
 **Audience:** Anyone authoring, classifying, reviewing, or reorganizing durable documentation in a MoonSpec project

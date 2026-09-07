@@ -75,6 +75,7 @@ Each check maps to one acceptance criterion of MM-908 and emits a finding with a
 | Rule id | Flags | Reference |
 |---------|-------|-----------|
 | `missing-document-class` | A canonical doc under `docs/` that declares no Document Class (no `Document Class:` marker and no recognized base-class/viewpoint name). | [Standard §3](DocumentationArchitecture.md), [Document Model — Document Classes](Workflows/MoonSpecDocumentModel.md) |
+| `invalid-document-class` | An explicit header field is empty or names no recognized document class/viewpoint. Header fields tolerate Markdown decoration; body prose cannot repair an invalid explicit header. | [Standard §11](DocumentationArchitecture.md#11-metadata-headers) |
 | `imperative-plan-in-canonical-area` | A `*Plan.md` (or `*Tracker.md` / `*Checklist.md` / `*Backlog.md`) placed in a canonical folder instead of `docs/tmp/` (or another approved imperative working area). | [Standard §4](DocumentationArchitecture.md) |
 | `duplicate-canonical-authority` | Two canonical docs sharing an H1 title (overlapping authority), or more than one root-level System Architecture View. | [Standard §3.1](DocumentationArchitecture.md), [Document Model — Precedence](Workflows/MoonSpecDocumentModel.md) |
 | `contract-missing-authority-statement` | A contract doc (`*Contract.md` / `*Contracts.md`) with no authority statement naming its single authoritative owner / source of truth. | [Standard §6.1](DocumentationArchitecture.md) |

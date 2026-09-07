@@ -3,6 +3,7 @@ from __future__ import annotations
 import re
 from pathlib import Path
 
+from tools.check_documentation_architecture import metadata_fields
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
 
@@ -56,14 +57,11 @@ def test_canonical_docs_are_declarative_not_migration_tracking_surfaces() -> Non
         text = _read(path)
         assert "Implementation tracking:" not in text, path
         assert "migration checklists in canonical `docs/`" not in text, path
-        assert re.search(
-            r"^Last [Uu]pdated: 20\d{2}-\d{2}-\d{2}$",
-            text,
-            flags=re.MULTILINE,
-        ), path
+        metadata = metadata_fields(text)
+        assert re.fullmatch(r"20\d{2}-\d{2}-\d{2}", metadata["last updated"]), path
 
-    assert "**Status:** Draft" not in _read(RUN_HISTORY_DOC)
-    assert "Status: Normative" in _read(LEDGER_DOC)
+    assert metadata_fields(_read(RUN_HISTORY_DOC))["status"] != "Draft"
+    assert metadata_fields(_read(LEDGER_DOC))["status"] == "Normative"
 
 
 def test_manifest_consolidation_claims_follow_current_code_evidence() -> None:

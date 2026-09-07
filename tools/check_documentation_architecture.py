@@ -31,6 +31,8 @@ Enumerated advisory checks:
                                      stable IDs.
   7. ``duplicate-claim-id``          stable canonical claim IDs reused across
                                      canonical docs.
+  8. ``invalid-document-class``     explicit header with an empty or unknown
+                                     document class.
 """
 
 from __future__ import annotations
@@ -43,7 +45,6 @@ import sys
 from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Iterable, Sequence
-
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 
@@ -63,7 +64,7 @@ APPROVED_IMPERATIVE_DIRS = ("docs/tmp",)
 DOCUMENT_CLASS_MARKER_RE = re.compile(r"document\s+class\s*[:|]", re.IGNORECASE)
 DOCUMENT_CLASS_TERMS = (
     # Document Model base classes.
-    "canonical declarative document",
+    "canonical declarative",
     "temporary execution artifact",
     "imperative working document",
     # Documentation Architecture Standard viewpoints.
@@ -75,7 +76,8 @@ DOCUMENT_CLASS_TERMS = (
     "cross-cutting concept view",
 )
 DOCUMENT_CLASS_TERMS_RE = re.compile(
-    "|".join(re.escape(term) for term in DOCUMENT_CLASS_TERMS), re.IGNORECASE
+    "(?:" + "|".join(re.escape(term) for term in DOCUMENT_CLASS_TERMS) + r")\b",
+    re.IGNORECASE,
 )
 
 # ``*Plan.md`` plus Status / Checklist Tracker naming (imperative working docs).
@@ -157,6 +159,26 @@ class DocFile:
         return self.path.rsplit("/", 1)[-1]
 
 
+def metadata_fields(text: str) -> dict[str, str]:
+    """Read the human-facing header independently of Markdown decoration.
+
+    Only the header before the first section or code fence is metadata. Prose
+    and example headers in the body cannot satisfy a missing header field.
+    Field names are case-insensitive; their values retain the author's text.
+    """
+    fields: dict[str, str] = {}
+    for line in text.splitlines():
+        stripped = line.strip()
+        if re.match(r"(?:#{2,6}\s|`{3}|~{3})", stripped):
+            break
+        stripped = re.sub(r"^(?:[-*]\s+|>\s*)", "", stripped)
+        stripped = stripped.replace("**", "")
+        match = re.fullmatch(r"([A-Za-z][A-Za-z /-]*):\s*(.*)", stripped)
+        if match:
+            fields[match[1].strip().lower()] = match[2].strip()
+    return fields
+
+
 def _is_under(path: str, prefix: str) -> bool:
     return path == prefix or path.startswith(prefix + "/")
 
@@ -188,6 +210,18 @@ def check_missing_document_class(docs: Sequence[DocFile]) -> list[Finding]:
     findings: list[Finding] = []
     for doc in docs:
         if not is_canonical_doc(doc.path):
+            continue
+        header = metadata_fields(doc.text)
+        if "document class" in header:
+            if not DOCUMENT_CLASS_TERMS_RE.match(header["document class"]):
+                findings.append(
+                    Finding(
+                        rule="invalid-document-class",
+                        severity=SEVERITY_ADVISORY,
+                        path=doc.path,
+                        message="Document Class must name a recognized document class or viewpoint.",
+                    )
+                )
             continue
         if DOCUMENT_CLASS_MARKER_RE.search(doc.text):
             continue

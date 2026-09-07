@@ -578,7 +578,11 @@ def select_suites(
         for path in paths
     )
     selection = SuiteSelection(
-        unit_fast=bool(backend_paths) or profile_authoring_changed,
+        # Markdown includes executable examples, Skill contracts, metadata,
+        # and internal links. The existing fast shard owns those checks.
+        unit_fast=bool(backend_paths)
+        or profile_authoring_changed
+        or any(path.endswith(".md") for path in paths),
         unit_slow=any(
             _matches(path, prefixes=UNIT_SLOW_PREFIXES) for path in backend_paths
         ),
