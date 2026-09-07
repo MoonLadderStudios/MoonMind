@@ -10,6 +10,9 @@ Implementation progress belongs in the roadmap, issues, and pull requests. This 
 
 ## Related documents
 
+- [`docs/Omnigent/README.md`](./README.md) — module entrypoint and contract owners
+- [`docs/Omnigent/ContractOwnership.md`](./ContractOwnership.md) — per-file ownership map
+- [`docs/Omnigent/SharedHostImage.md`](./SharedHostImage.md) — shared image, runtime packs, Host Classes, credential ownership
 - [`docs/Omnigent/PrimaryRuntimeProviderStrategy.md`](./PrimaryRuntimeProviderStrategy.md)
 - [`docs/Omnigent/OmnigentHarnessPlatformDesign.md`](./OmnigentHarnessPlatformDesign.md)
 - [`docs/Omnigent/CodexCreateToHostContract.md`](./CodexCreateToHostContract.md)
@@ -299,47 +302,25 @@ The same Provider Profile capacity, generation, fencing, cleanup, and release-la
 
 ## 10. Shared-image isolation
 
-The shared MoonMind Omnigent host image may contain Codex, Claude Code, and OpenCode binaries. The selected host receives only one runtime's credentials.
-
-A Codex host must prove:
-
-- the Codex materializer and generation are present
-- Claude and OpenCode credential attachments are absent
-- conflicting API-key selectors are absent
-- the Host Class declares `codex-native`
-- the runtime pack is the selected Codex pack
-
-A Claude host must prove the equivalent Claude-only credential state.
-
-An OpenCode host must prove that neither OAuth home is mounted.
-
-The image itself is never credential or harness authority.
+Shared-image isolation is owned by [`SharedHostImage.md`](./SharedHostImage.md)
+§§3–4: separate Host Classes on one digest, one runtime's credentials per
+selected host, and the rule that the image itself is never credential or
+harness authority. This document owns the materializer mechanisms (§§6–9)
+that enforce that isolation at launch. Preserved guarantee: a Codex host
+carries the Codex materializer and generation with no Claude/OpenCode
+credential attachments and no conflicting API-key selectors (and symmetrically
+for Claude and OpenCode hosts).
 
 ## 11. Host Classes and runtime packs
 
-Separate Host Classes may reference one shared image digest:
-
-```text
-omnigent-codex@1
-omnigent-claude@1
-omnigent-opencode@2
-```
-
-Each class declares only its approved harness implementations, runtime dependencies, materializers, architectures, integration modes, and features.
-
-The immutable execution plan records:
-
-- harness implementation ref
-- Host Class ref
-- shared image ref
-- runtime-pack ref
-- credential materializer ref
-- Provider Profile selection
-- launch policy
-- model configuration
-- execution realizer
-
-A Host Class that points to the shared image does not authorize every runtime in that image.
+The Host Class inventory on the shared digest is owned by
+[`SharedHostImage.md`](./SharedHostImage.md) §3. The durable rules this
+document relies on: each class declares only its approved harness
+implementations, runtime dependencies, materializers, architectures,
+integration modes, and features; the immutable execution plan records the
+harness, Host Class, shared image, runtime-pack, materializer, Profile,
+launch policy, model, and realizer refs; and a Host Class that points to the
+shared image does not authorize every runtime in that image.
 
 ## 12. Durable host binding and lease
 

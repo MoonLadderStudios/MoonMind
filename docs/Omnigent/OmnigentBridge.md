@@ -9,6 +9,8 @@ Last updated: 2026-09-05
 
 ## Related docs
 
+- [`docs/Omnigent/README.md`](./README.md) — module entrypoint and contract owners
+- [`docs/Omnigent/ContractOwnership.md`](./ContractOwnership.md) — per-file ownership map
 - [`docs/UI/WorkflowChatPanel.md`](../UI/WorkflowChatPanel.md)
 - [`docs/Omnigent/AgentProfiles.md`](./AgentProfiles.md)
 - [`docs/Omnigent/CodexCreateToHostContract.md`](./CodexCreateToHostContract.md)

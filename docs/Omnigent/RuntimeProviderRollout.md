@@ -8,6 +8,8 @@
 
 ## Related documents
 
+- [`docs/Omnigent/README.md`](./README.md) — module entrypoint and contract owners
+- [`docs/Omnigent/ContractOwnership.md`](./ContractOwnership.md) — per-file ownership map
 - [`docs/Omnigent/PrimaryRuntimeProviderStrategy.md`](./PrimaryRuntimeProviderStrategy.md)
 - [`docs/Omnigent/SharedHostImage.md`](./SharedHostImage.md)
 - [`docs/Omnigent/CanonicalTurnCommandBoundary.md`](./CanonicalTurnCommandBoundary.md)
