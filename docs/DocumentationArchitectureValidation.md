@@ -36,6 +36,38 @@ python tools/check_documentation_architecture.py docs/MyNewView.md
 
 By default it scopes to **new/changed** docs (`git diff` vs `--base`, default `origin/main`) so it focuses on what a change introduces; `--scope all` audits the full tree. If git is unavailable it falls back to a full scan.
 
+## 3b. Bounded local link validation (separate helper)
+
+Local link and anchor correctness is **not** covered by the architecture
+checker above: a zero exit code there is not zero broken links. Bounded
+local-link validation lives in the separate helper
+`tools/check_documentation_links.py` (deliverable of
+MoonLadderStudios/MoonMind#3966), also **advisory-only** (exits `0`
+regardless of findings; `--strict` is reserved for a future gate and must
+not run in CI):
+
+```bash
+# Advisory scan of docs changed vs origin/main (default):
+python tools/check_documentation_links.py
+
+# Scan the canonical in-scope docs/ tree:
+python tools/check_documentation_links.py --scope all
+
+# Machine-readable output (structured warnings):
+python tools/check_documentation_links.py --scope all --format json
+```
+
+Documented scope: canonical docs per the same `is_canonical_doc`
+definition, minus frozen review evidence that is dispositioned rather than
+repaired in place (`docs/DocsReview.md`, the 2026-08-11 review snapshot,
+and `docs/tmp/historical/`). Fenced code examples are classified
+separately, not link-checked (an `../X.md` path inside an example may be
+correct for a `docs/tmp/` working document). External URLs are counted,
+never fetched. Rules: `broken-local-link` (relative paths, images,
+reference-definition targets; case-sensitive on the Linux checkout),
+`broken-local-anchor` (GitHub-slug heading or explicit `<a name|id>`
+match), and `undefined-link-reference`.
+
 ## 3. What it checks
 
 Each check maps to one acceptance criterion of MM-908 and emits a finding with a stable `rule` id:

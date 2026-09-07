@@ -19,7 +19,7 @@ phase stays available without rewriting those immutable per-run snapshots.
 **Audience:** Local and self-hosted MoonMind operators  
 **Authority:** Operator-facing startup, validation, rollback, and troubleshooting behavior for the combined MoonMind plus Omnigent Docker Compose stack  
 **Owning Surface:** Canonical `docker-compose.yaml`, its supported profiles, and workflow-requested profile-bound Codex hosts  
-**Related Docs:** [MoonMind vs Omnigent](MoonMindVsOmnigent.md), [MoonMind Architecture](../MoonMindArchitecture.md), [Omnigent Adapter](OmnigentAdapter.md), [Omnigent Host OAuth](OmnigentHostOAuth.md), [Omnigent Conformance](ConformanceAndLiveSmoke.md)  
+**Related Docs:** [MoonMind Architecture](../MoonMindArchitecture.md), [Omnigent Adapter](OmnigentAdapter.md), [Omnigent Host OAuth](OmnigentHostOAuth.md), [Omnigent Conformance](ConformanceAndLiveSmoke.md)  
 **Related Implementation:** MM-972, source issue MM-968, coverage DESIGN-REQ-019 through DESIGN-REQ-022, DESIGN-REQ-010, DESIGN-REQ-018
 
 ## Purpose

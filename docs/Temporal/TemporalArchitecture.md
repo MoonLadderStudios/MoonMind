@@ -1,5 +1,6 @@
 # Temporal Architecture
 
+**Document Class:** Module Architecture View
 **Implementation tracking:** Rollout, backlog, one-off implementation notes, migration checklists, and work sequencing live under `docs/tmp/`, issues, pull requests, gitignored handoffs, or local-only files. Canonical `docs/` files describe durable architecture and product contracts.
 
 **Status:** Normative architecture hub (Temporal-native; compatibility projections and hardening work remain repo-visible)
@@ -63,7 +64,7 @@ This document is the architecture hub. Detailed contracts live in:
 - `docs/Temporal/ManagedAndExternalAgentExecutionModel.md`
 - `docs/Temporal/VisibilityAndUiQueryModel.md`
 - `docs/Temporal/WorkflowArtifactSystemDesign.md`
-- `docs/Temporal/ArtifactPresentationContract.md`
+- `docs/Artifacts/ArtifactPresentationContract.md`
 - `docs/Temporal/SourceOfTruthAndProjectionModel.md`
 - `docs/Temporal/WorkflowExecutionProductModel.md`
 - `docs/Temporal/TemporalTypeSafety.md`
@@ -74,7 +75,7 @@ This document is the architecture hub. Detailed contracts live in:
 - `docs/Security/SecretsSystem.md`
 - `docs/ManagedAgents/ManagedAgentArchitecture.md`
 - `docs/ManagedAgents/CodexCliManagedSessions.md`
-- `docs/ManagedAgents/LiveLogs.md`
+- `docs/Observability/LiveLogs.md`
 - `docs/ManagedAgents/DockerOutOfDocker.md`
 - `docs/Steps/SkillSystem.md`
 - `docs/MoonMindArchitecture.md`

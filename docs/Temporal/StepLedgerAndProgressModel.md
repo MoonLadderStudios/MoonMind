@@ -1,5 +1,6 @@
 # Step Ledger and Progress Model
 
+**Document Class:** Module Contract Specification
 Status: Normative  
 Owners: MoonMind Platform + Dashboard  
 Last updated: 2026-06-13
@@ -22,7 +23,7 @@ This document does **not** redefine plan syntax, artifact storage internals, or 
 
 - `docs/Workflows/SkillAndPlanContracts.md`
 - `docs/Temporal/WorkflowArtifactSystemDesign.md`
-- `docs/ManagedAgents/LiveLogs.md`
+- `docs/Observability/LiveLogs.md`
 
 ## 2. Core model
 

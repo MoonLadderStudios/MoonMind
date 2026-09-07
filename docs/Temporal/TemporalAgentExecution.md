@@ -1,5 +1,6 @@
 # Temporal Agent Execution
 
+**Document Class:** Module Architecture View
 **Status:** Active design
 **Owner:** MoonMind Platform  
 **Last updated:** 2026-03-19
@@ -13,12 +14,11 @@ receive agent work - whether a registered **tool** invocation (currently a
 execute it end to end.
 
 It maps every step from HTTP submission through the Temporal workflow, into the
-relevant activity workers, and back. Open migration gaps are tracked in
-`docs/Temporal/RemainingWork.md`.
+relevant activity workers, and back. Completed migration cutovers are recorded in
+the [`MM-730 hard-switch cutover release note`](../ReleaseNotes/MM-730-hard-switch-cutover.md).
 
 For broader architecture context see
-[TemporalArchitecture.md](TemporalArchitecture.md) and
-[RemainingWork.md](RemainingWork.md). Required execution capability semantics
+[TemporalArchitecture.md](TemporalArchitecture.md). Required execution capability semantics
 are canonical in [RequiredCapabilities.md](../Workflows/RequiredCapabilities.md):
 the normalized `requiredCapabilities` list is a hard pre-launch readiness
 contract, not an authorization grant or informational label.
@@ -279,9 +279,9 @@ Serialized payload form (legacy accepted): `{ id, skill: { name }, inputs: {...}
 
 ## 5. Remaining Work
 
-The execution-stage work items formerly listed here are now implemented. The
-canonical open backlog is maintained in
-[`docs/Temporal/RemainingWork.md`](RemainingWork.md).
+The execution-stage work items formerly listed here are now implemented. Open
+product and rollout sequencing, if any, belongs in `docs/tmp/` or the owning
+module tracker — not in a `RemainingWork.md` file that no longer exists.
 
 ---
 

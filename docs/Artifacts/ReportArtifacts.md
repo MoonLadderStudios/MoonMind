@@ -1,5 +1,6 @@
 # Report Artifacts
 
+**Document Class:** Module Contract Specification
 Status: Adopted (implemented)
 Owners: MoonMind Platform + Dashboard
 Last updated: 2026-05-15
@@ -37,9 +38,9 @@ Instead, it defines:
 
 - `docs/Temporal/WorkflowArtifactSystemDesign.md`
   - Owns artifact identity, storage, linkage, retention, authorization, and lifecycle.
-- `docs/Temporal/ArtifactPresentationContract.md`
+- `docs/Artifacts/ArtifactPresentationContract.md`
   - Owns generic artifact presentation, preview behavior, metadata hints, and rendering rules.
-- `docs/ManagedAgents/LiveLogs.md`
+- `docs/Observability/LiveLogs.md`
   - Owns observability, live tails, stdout/stderr, diagnostics, and session-aware run timelines.
 - `docs/Temporal/ManagedAndExternalAgentExecutionModel.md`
   - Owns canonical runtime result contracts such as `AgentRunHandle`, `AgentRunStatus`, and `AgentRunResult`.
