@@ -967,6 +967,11 @@ RUN_ISSUE_IMPLEMENT_PR_HANDOFF_AUTHORITY_PATCH = (
 # Search-driven workflows resolve the issue after admission. Preserve the old
 # PR and merge-handoff payloads when replaying histories without this marker.
 RUN_TRUSTED_GITHUB_ISSUE_IDENTITY_PATCH = "run-trusted-github-issue-identity-v1"
+# Continue-As-New must retain the initial issue/assessment authority without
+# carrying issue bodies, requirements, or other artifact-owned content.
+RUN_REMEDIATION_ISSUE_AUTHORITY_CONTINUATION_PATCH = (
+    "run-remediation-issue-authority-continuation-v1"
+)
 # Carry only the atomic, accepted publication head into a downstream publisher.
 # Existing histories retain requests without this optional no-commit authority.
 RUN_ACCEPTED_PUBLICATION_HEAD_HANDOFF_PATCH = (
@@ -4011,6 +4016,13 @@ class MoonMindRunWorkflow:
             published_head = continuation.get("acceptedPublishedHead")
             if isinstance(published_head, Mapping):
                 self._publish_context["acceptedPublishedHead"] = dict(published_head)
+        if workflow.patched(RUN_REMEDIATION_ISSUE_AUTHORITY_CONTINUATION_PATCH):
+            assessment = continuation.get("assessmentContext")
+            if isinstance(assessment, Mapping):
+                self._assessment_context = dict(assessment)
+            trusted_issue = continuation.get("trustedIssueContext")
+            if isinstance(trusted_issue, Mapping):
+                self._record_trusted_issue_context(trusted_issue)
         carried_session = continuation.get("managedSessionBinding")
         if isinstance(carried_session, Mapping) and workflow.patched(
             RUN_REMEDIATION_CONTINUE_MANAGED_SESSION_PATCH
@@ -4067,6 +4079,38 @@ class MoonMindRunWorkflow:
             published_head = self._publish_context.get("acceptedPublishedHead")
             if isinstance(published_head, Mapping):
                 continuation["acceptedPublishedHead"] = dict(published_head)
+        if workflow.patched(RUN_REMEDIATION_ISSUE_AUTHORITY_CONTINUATION_PATCH):
+            continuation["assessmentContext"] = {
+                key: value
+                for key, value in self._assessment_context.items()
+                if isinstance(value, str)
+                and key in {
+                    "assessmentArtifactRef",
+                    "assessment_artifact_ref",
+                    "assessmentVerdict",
+                    "assessment_verdict",
+                    "briefArtifactRef",
+                    "brief_artifact_ref",
+                    "assessedRepository",
+                    "assessedBranch",
+                }
+            }
+            trusted_issue = self._trusted_issue_context or {}
+            compact_issue = {
+                key: trusted_issue[key]
+                for key in ("trustedSource", "jiraIssueKey")
+                if isinstance(trusted_issue.get(key), str)
+            }
+            for key in ("issue", "githubIssue"):
+                issue = trusted_issue.get(key)
+                if isinstance(issue, Mapping):
+                    compact_issue[key] = {
+                        field: issue[field]
+                        for field in ("repository", "number", "url")
+                        if field in issue
+                    }
+            if compact_issue:
+                continuation["trustedIssueContext"] = compact_issue
         binding = self._codex_session_binding
         if binding is not None and workflow.patched(
             RUN_REMEDIATION_CONTINUE_MANAGED_SESSION_PATCH
