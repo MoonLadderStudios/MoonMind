@@ -92,6 +92,10 @@ TEMPORAL_BOUNDARY_EXACT = {
     "tools/generate_temporal_catalog.py",
     "docs/Temporal/WorkflowTypeCatalogGenerated.md",
     "docs/Temporal/WorkflowTypeCatalogAndLifecycle.md",
+    # The namespace bootstrap script is the Search Attribute registration
+    # authority the generator cites; registry edits must re-run the drift and
+    # composition checks.
+    "services/temporal/scripts/bootstrap-namespace.sh",
 }
 
 TEMPORAL_BOUNDARY_PREFIXES = (

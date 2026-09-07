@@ -41,6 +41,17 @@ ISSUE_REF = "MoonLadderStudios/MoonMind#3959"
 CANONICAL_DOC = Path("docs/Temporal/WorkflowTypeCatalogAndLifecycle.md")
 OPERATOR_SURFACE_DOC = Path("docs/Temporal/SourceOfTruthAndProjectionModel.md")
 
+#: Capability-routed skill aliases bound on every non-workflow fleet by
+#: ``moonmind.workflows.temporal.activity_runtime.build_activity_bindings``
+#: whenever skill activities are present. Mirrored here so the generated
+#: reference enumerates the real per-fleet registrations; update with the
+#: binding owner.
+_SKILL_EXECUTION_ALIASES = ("mm.tool.execute", "mm.skill.execute")
+
+#: Fleet name excluded from alias enumeration (workflow code hosts handlers,
+#: it does not execute skill activities).
+_WORKFLOW_FLEET_NAME = "workflow"
+
 #: Workflow types with a human-authored lifecycle section in the canonical doc.
 #: Types without an entry link to their generated anchor only; a missing
 #: authored section must never drop a registered type from the reference.
@@ -163,7 +174,18 @@ def collect_workflows(
 
 
 def collect_activities() -> tuple[ActivityRow, ...]:
-    """Enumerate Activity routes from the canonical Activity catalog owner."""
+    """Enumerate Activity routes plus the real per-fleet skill aliases.
+
+    The catalog owner defines one row per Activity definition; the worker
+    binding owner
+    (``moonmind.workflows.temporal.activity_runtime.build_activity_bindings``)
+    additionally binds the ``mm.tool.execute`` / ``mm.skill.execute``
+    capability-routed aliases on every non-workflow fleet's first task queue
+    whenever skill activities are present (all production fleets receive
+    them). Those alias rows are enumerated here from the production catalog
+    fleets so the generated reference omits no real registration; the alias
+    pair mirrors the binding owner and must be updated with it.
+    """
 
     from moonmind.workflows.temporal.activity_catalog import (
         build_default_activity_catalog,
@@ -175,6 +197,26 @@ def collect_activities() -> tuple[ActivityRow, ...]:
     catalog = build_default_activity_catalog(default_temporal_settings())  # type: ignore[arg-type]
     # Fail on unsupported route bindings before formatting anything.
     validate_activity_catalog_runtime_bindings(catalog)
+    bound = {
+        (definition.activity_type, definition.fleet)
+        for definition in catalog.activities
+    }
+    alias_rows = tuple(
+        sorted(
+            (
+                ActivityRow(
+                    activity_type=alias,
+                    fleet=fleet.fleet,
+                    task_queue=fleet.task_queues[0],
+                )
+                for alias in _SKILL_EXECUTION_ALIASES
+                for fleet in catalog.fleets
+                if fleet.fleet != _WORKFLOW_FLEET_NAME
+                and (alias, fleet.fleet) not in bound
+            ),
+            key=lambda row: (row.activity_type, row.fleet),
+        )
+    )
     rows = tuple(
         ActivityRow(
             activity_type=definition.activity_type,
@@ -182,7 +224,7 @@ def collect_activities() -> tuple[ActivityRow, ...]:
             task_queue=definition.task_queue,
         )
         for definition in catalog.activities
-    )
+    ) + alias_rows
     return tuple(sorted(rows, key=lambda row: row.activity_type))
 
 
@@ -217,7 +259,14 @@ def collect_workflow_fleet_handlers() -> tuple[
 
 
 def collect_search_attributes() -> tuple[tuple[str, str], tuple[str, str]]:
-    """Return required and optional Search Attributes with their owner refs."""
+    """Return required and optional Search Attributes with their owner refs.
+
+    The registration authority is
+    ``services/temporal/scripts/bootstrap-namespace.sh``; owner refs below
+    name the production code that writes each attribute. The lists must stay
+    complete against that registry: a second partial list lets the reference
+    stay green while real executions carry attributes it omits.
+    """
 
     from moonmind.workflows.temporal.scheduled_start import (
         MM_SCHEDULED_FOR_SEARCH_ATTRIBUTE,
@@ -240,6 +289,10 @@ def collect_search_attributes() -> tuple[tuple[str, str], tuple[str, str]]:
             scheduled_for,
             "moonmind/workflows/temporal/scheduled_start.py",
         ),
+        (
+            "mm_started_at",
+            "moonmind/workflows/temporal/workflows/run.py",
+        ),
     )
     optional = (
         ("mm_repo", "moonmind/workflows/temporal/service.py"),
@@ -247,6 +300,24 @@ def collect_search_attributes() -> tuple[tuple[str, str], tuple[str, str]]:
         ("mm_target_runtime", "moonmind/workflows/temporal/service.py"),
         ("mm_target_skill", "moonmind/workflows/temporal/service.py"),
         ("mm_stage", "docs/Temporal/WorkflowTypeCatalogAndLifecycle.md §5.2"),
+        ("mm_title", "moonmind/workflows/temporal/service.py"),
+        (
+            "mm_has_dependencies",
+            "moonmind/workflows/temporal/workflows/run.py",
+        ),
+        (
+            "mm_dependency_count",
+            "moonmind/workflows/temporal/workflows/run.py",
+        ),
+        ("AgentRunId", "moonmind/workflows/temporal/workflows/run.py"),
+        ("RuntimeId", "moonmind/workflows/temporal/workflows/run.py"),
+        ("SessionId", "moonmind/workflows/temporal/workflows/run.py"),
+        ("SessionEpoch", "moonmind/workflows/temporal/workflows/run.py"),
+        ("SessionStatus", "moonmind/workflows/temporal/workflows/run.py"),
+        (
+            "IsDegraded",
+            "moonmind/workflows/temporal/workflows/managed_runtime_workspace_cleanup.py",
+        ),
     )
     return (required, optional)
 
@@ -334,8 +405,8 @@ def render_reference(
         "registration owners. Do not edit by hand; regenerate with:",
         "",
         "```",
-        "python tools/generate_temporal_catalog.py "
-        "--out docs/Temporal/WorkflowTypeCatalogGenerated.md",
+        "python tools/generate_temporal_catalog.py --out "
+        + "docs/Temporal/WorkflowTypeCatalogGenerated.md",
         "```",
         "",
         "Providing owners:",
@@ -349,8 +420,10 @@ def render_reference(
         "- Worker construction: `moonmind/workflows/temporal/worker_entrypoint.py`",
         "  and `moonmind/workflows/temporal/worker_runtime.py` via",
         "  `moonmind/workflows/temporal/workers.py`",
-        "- Search Attributes: `moonmind/workflows/temporal/service.py` and",
-        "  `moonmind/workflows/temporal/scheduled_start.py`",
+        "- Search Attributes: `moonmind/workflows/temporal/service.py`,",
+        "  `moonmind/workflows/temporal/scheduled_start.py`,",
+        "  `moonmind/workflows/temporal/workflows/run.py`, and",
+        "  `moonmind/workflows/temporal/workflows/managed_runtime_workspace_cleanup.py`",
         "- Authored lifecycle semantics:",
         f"  `{CANONICAL_DOC.as_posix()}`",
         "",
@@ -504,7 +577,13 @@ def main(argv: Sequence[str] | None = None) -> int:
     try:
         rendered = generate()
     except Exception as exc:
-        print(f"temporal catalog generation failed: {exc}", file=sys.stderr)
+        # Never echo the raw exception: Pydantic settings validation errors
+        # embed rejected input values, which may carry secret-bearing
+        # settings (MoonLadderStudios/MoonMind#3959 review). Log the error
+        # class only; rerunning the command reproduces the full message
+        # locally without persisting secrets to CI logs.
+        failure = f"temporal catalog generation failed: {type(exc).__name__}"
+        print(f"{failure} (settings inputs withheld)", file=sys.stderr)
         return 1
 
     if args.check:
