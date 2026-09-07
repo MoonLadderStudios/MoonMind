@@ -1,5 +1,7 @@
 # MoonMind Workflow Run History and New Run Semantics
 
+Last updated: 2026-09-07
+
 **Document class:** Canonical declarative lifecycle contract.
 **Owner:** MoonMind Platform.
 **Audience:** Backend, dashboard, workflow authors, and API owners.
@@ -145,6 +147,8 @@ Commit the recovery intent and deterministic destination/restore identity before
 ### 7A.3 Recovery input changes
 
 Unchanged-input recovery preserves instruction, Skill, attachment, plan, runtime/harness, Profile, model/effort, configuration/policy, source/retrieval, and publication intent. Changed immutable choices require an authorized branch or edited retry. The recovery endpoint must not accept hidden instruction overrides.
+
+A scoped child or branch turn retains its parent's frozen publication intent. Its isolated work branch is not another authored publication selector. Changing publication mode or destination requires explicit independent normal admission by an authorized operator, not a per-turn override or a child capability granting itself wider authority. The Checkpoint Branch and publication owners retain that distinction across remediation, continue, and fork.
 
 Separate source evidence from destination use authority. Cold restoration may acquire a currently authorized credential generation for the same explicitly selected Profile and compatible recorded execution intent. That is not account substitution or restoration of old credentials. A rotated generation invalidates old live reattachment; it does not automatically invalidate non-sensitive checkpoint bytes. If compatibility or current permission cannot be established, stop and offer explicit re-admission/branch guidance.
 
