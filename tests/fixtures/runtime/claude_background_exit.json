@@ -1,0 +1,8 @@
+{
+  "workflowId": "mm:1ca0601f-68de-44fc-bfdd-c3ab724c3eb3",
+  "tool": "Bash",
+  "input": {"run_in_background": true},
+  "resolverReason": "ci_signal_degraded",
+  "exitCode": 0,
+  "terminalStatus": "blocked"
+}

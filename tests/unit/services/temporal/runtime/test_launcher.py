@@ -3,6 +3,7 @@ import hashlib
 import json
 import os
 import subprocess
+import sys
 import time
 from pathlib import Path
 from unittest.mock import AsyncMock, patch
@@ -3628,6 +3629,58 @@ async def test_launch_pretrusts_claude_code_without_privilege_drop(
     assert captured_launches[-1][0][0] == "claude"
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("background_setting", [None, "0", "1"])
+async def test_claude_one_shot_launch_disables_background_callbacks(
+    tmp_path, monkeypatch, background_setting
+):
+    """Replay the pending-CI exit through materialization and a real subprocess."""
+    incident = json.loads(
+        (Path(__file__).parents[4] / "fixtures/runtime/claude_background_exit.json")
+        .read_text()
+    )
+    monkeypatch.setattr(os, "geteuid", lambda: 1000)
+    monkeypatch.setattr(
+        ManagedRuntimeLauncher, "_build_managed_runtime_base_env",
+        staticmethod(lambda: {"PATH": os.defpath, "HOME": str(tmp_path)}),
+    )
+    monkeypatch.setattr(
+        "moonmind.workflows.temporal.runtime.launcher.resolve_github_token_for_launch",
+        AsyncMock(return_value=None),
+    )
+    probe = tmp_path / "claude_probe.py"
+    probe.write_text(
+        "import json, os, sys\n"
+        "background_available = os.environ.get('CLAUDE_CODE_DISABLE_BACKGROUND_TASKS') != '1'\n"
+        "print(json.dumps({'backgroundAvailable': background_available, 'args': sys.argv[1:]}))\n"
+    )
+    overrides = (
+        {} if background_setting is None else
+        {"CLAUDE_CODE_DISABLE_BACKGROUND_TASKS": background_setting}
+    )
+    profile = _make_profile(
+        runtime_id="claude_code",
+        command_template=[sys.executable, str(probe)],
+        env_overrides=overrides,
+        passthrough_env_keys=[],
+    )
+    launcher = ManagedRuntimeLauncher(ManagedRunStore(tmp_path / "managed_runs"))
+    workspace = tmp_path / "workspace" / "repo"
+    workspace.mkdir(parents=True)
+    _record, process, _cleanup, _deferred_cleanup = await launcher.launch(
+        run_id="background-exit-replay",
+        request=_make_request(),
+        profile=profile,
+        workspace_path=str(workspace),
+    )
+    stdout, stderr = await process.communicate()
+    assert process.returncode == incident["exitCode"], stderr.decode()
+    observed = json.loads(stdout)
+    assert incident["input"]["run_in_background"] is True
+    assert observed["backgroundAvailable"] is False
+    assert "-p" in observed["args"]
+    assert "ScheduleWakeup" in observed["args"]
+
+@pytest.mark.asyncio
 async def test_launch_privilege_drop_for_claude_code_as_root(tmp_path, monkeypatch):
     """When launched as root for claude_code runtime, the process should:
     1. chown the full run workspace root to app:app so the app user can write
@@ -3759,6 +3812,7 @@ async def test_launch_privilege_drop_for_claude_code_as_root(tmp_path, monkeypat
     env_kwargs = runuser_kwargs.get("env")
     assert isinstance(env_kwargs, dict)
     assert env_kwargs["MY_CUSTOM_VAR"] == "test-value"
+    assert env_kwargs["CLAUDE_CODE_DISABLE_BACKGROUND_TASKS"] == "1"
     assert env_kwargs["HOME"] == "/home/app"
     assert env_kwargs["USER"] == "app"
     assert env_kwargs["LOGNAME"] == "app"
