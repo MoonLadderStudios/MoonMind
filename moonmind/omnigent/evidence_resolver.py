@@ -62,13 +62,29 @@ class SupportEvidenceFreshness:
     ``tier`` is empty when no entry was found at all. ``expired`` is reported
     separately from a missing entry so a readiness decision can name the exact
     actionable reason instead of collapsing "never qualified" and "qualification
-    lapsed" into one message.
+    lapsed" into one message. ``status`` carries the recorded row outcome
+    (MoonLadderStudios/MoonMind#3885) so a blocked or unavailable protected row
+    is likewise distinguishable from an absent one.
     """
 
     tier: str = ""
     evidence_ref: str = ""
     age_seconds: float | None = None
     expired: bool = False
+    #: The recorded row outcome. Empty means the tier does not record one.
+    status: str = ""
+
+    @property
+    def usable(self) -> bool:
+        """Whether this evidence would also satisfy admission.
+
+        Admission accepts only a current, passing row, so a lapsed row and a
+        recorded non-pass row are both unusable here. Reporting either as
+        usable would make the rollout gate disagree with what execution will
+        actually accept.
+        """
+
+        return not self.expired and self.status in {"", "passed"}
 
 
 def _freshness(
@@ -80,6 +96,7 @@ def _freshness(
     now: datetime,
 ) -> SupportEvidenceFreshness:
     age = max(0.0, (now - entry.generated_at).total_seconds())
+    status = getattr(entry, "status", "")
     return SupportEvidenceFreshness(
         tier=tier,
         # A found entry always reports a non-empty ref so a readiness gate can
@@ -87,6 +104,7 @@ def _freshness(
         evidence_ref=evidence_ref or tier,
         age_seconds=age,
         expired=(entry.expires_at <= now or age > max_age_seconds),
+        status=str(getattr(status, "value", status) or ""),
     )
 
 
@@ -152,8 +170,9 @@ def resolve_support_evidence_freshness(
     next tier when the preferred one is unusable. A rollout demotion therefore
     never disagrees with what admission will accept.
 
-    When every allowed tier found only lapsed evidence, the first tier's lapse is
-    reported so the denial reason is "stale" rather than "missing".
+    When every allowed tier found only unusable evidence, the first tier's
+    result is reported so the denial reason is "stale" or the recorded non-pass
+    status rather than "missing".
 
     It never raises and never admits anything: admission authority stays with
     :func:`resolve_execution_evidence`, which fails closed.
@@ -167,7 +186,7 @@ def resolve_support_evidence_freshness(
     if selected_policy in {"deployment", "either"}:
         probes.append(_deployment_freshness)
 
-    lapsed: SupportEvidenceFreshness | None = None
+    unusable: SupportEvidenceFreshness | None = None
     for probe in probes:
         try:
             observed = probe(support_identity, observed_at)
@@ -180,10 +199,10 @@ def resolve_support_evidence_freshness(
             continue
         if observed is None:
             continue
-        if not observed.expired:
+        if observed.usable:
             return observed
-        lapsed = lapsed or observed
-    return lapsed or SupportEvidenceFreshness()
+        unusable = unusable or observed
+    return unusable or SupportEvidenceFreshness()
 
 
 def evidence_policy_allows_deployment(*, policy: str | None = None) -> bool:

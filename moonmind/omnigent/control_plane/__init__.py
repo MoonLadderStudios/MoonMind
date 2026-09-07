@@ -18,12 +18,16 @@ from .backfill import (
     run_backfill,
 )
 from .readiness import (
+    STRUCTURAL_CAPABILITIES,
+    TRANSIENT_CAPABILITIES,
     AdmissionReadiness,
     CapabilityReadiness,
     ReadinessCapability,
+    ReadinessClass,
     ReadinessInputs,
     ReadinessState,
     evaluate_admission_readiness,
+    readiness_class,
 )
 from .spans import (
     OMNIGENT_SPANS,
@@ -269,7 +273,11 @@ __all__ = [
     "AdmissionReadiness",
     "CapabilityReadiness",
     "ReadinessCapability",
+    "ReadinessClass",
     "ReadinessInputs",
     "ReadinessState",
+    "STRUCTURAL_CAPABILITIES",
+    "TRANSIENT_CAPABILITIES",
     "evaluate_admission_readiness",
+    "readiness_class",
 ]
