@@ -7,7 +7,7 @@ from __future__ import annotations
 
 import pytest
 
-from moonmind.omnigent.faultlab.scenario import (
+from tools.omnigent_faultlab.scenario import (
     FAULT_SCENARIO_SCHEMA_VERSION,
     CommandWindow,
     FaultScenario,
@@ -130,7 +130,7 @@ def test_scenario_to_plan_rejects_unrepresentable_observation_step():
     """A declarative fault a FaultPlan cannot encode fails conversion, not silently
     replays fault-free."""
 
-    from moonmind.omnigent.faultlab.conversions import (
+    from tools.omnigent_faultlab.conversions import (
         UnrepresentableScenarioStepError,
         scenario_to_plan,
     )
@@ -153,11 +153,11 @@ def test_scenario_to_plan_rejects_snapshot_fault_with_extra_transport_disorder()
     """A canonical observation fault carrying extra duplicate/reorder disorder is
     not silently decoded as the plain fault."""
 
-    from moonmind.omnigent.faultlab.conversions import (
+    from tools.omnigent_faultlab.conversions import (
         UnrepresentableScenarioStepError,
         scenario_to_plan,
     )
-    from moonmind.omnigent.faultlab.scenario import SnapshotReturn
+    from tools.omnigent_faultlab.scenario import SnapshotReturn
 
     scenario = FaultScenario(
         seed=1,
@@ -174,7 +174,7 @@ def test_scenario_to_plan_rejects_snapshot_fault_with_extra_transport_disorder()
 
 
 def test_scenario_to_plan_rejects_unrepresentable_submit_step():
-    from moonmind.omnigent.faultlab.conversions import (
+    from tools.omnigent_faultlab.conversions import (
         UnrepresentableScenarioStepError,
         scenario_to_plan,
     )

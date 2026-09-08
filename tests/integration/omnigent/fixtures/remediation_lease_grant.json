@@ -1,0 +1,24 @@
+{
+  "runtime_id": "opencode",
+  "action": "grant",
+  "leases": [
+    {
+      "lease_id": "mm:6901d5c7-1389-49fb-b066-6a3a1ed8568c-2026-09-07T15:49:37Z:agent:mm:6901d5c7-1389-49fb-b066-6a3a1ed8568c-2026-09-07T15:49:37Z:01a07c8f-8b35-7956-acf4-2f5bd33f8e56:issue-implementation-remediation:remediation:1",
+      "workflow_id": "mm:6901d5c7-1389-49fb-b066-6a3a1ed8568c-2026-09-07T15:49:37Z:agent:mm:6901d5c7-1389-49fb-b066-6a3a1ed8568c-2026-09-07T15:49:37Z:01a07c8f-8b35-7956-acf4-2f5bd33f8e56:issue-implementation-remediation:remediation:1",
+      "profile_id": "opencode-go-default",
+      "owner_id": "mm:6901d5c7-1389-49fb-b066-6a3a1ed8568c-2026-09-07T15:49:37Z:agent:mm:6901d5c7-1389-49fb-b066-6a3a1ed8568c-2026-09-07T15:49:37Z:01a07c8f-8b35-7956-acf4-2f5bd33f8e56:issue-implementation-remediation:remediation:1",
+      "owner_kind": "workflow",
+      "purpose": "execution_direct",
+      "compatibility_class": "shared_execution",
+      "fencing_generation": 108,
+      "scope_generation": 1,
+      "capacity_scope_ref": "provider-profile:opencode-go-default",
+      "lease_state": "held",
+      "stepExecutionId": "mm:6901d5c7-1389-49fb-b066-6a3a1ed8568c-2026-09-07T15:49:37Z:01a07c8f-8b35-7956-acf4-2f5bd33f8e56:mm:6901d5c7-1389-49fb-b066-6a3a1ed8568c-2026-09-07T15:49:37Z:01a07c8f-8b35-7956-acf4-2f5bd33f8e56:issue-implementation-remediation:remediation:1:execution:1",
+      "idempotencyKey": "mm:6901d5c7-1389-49fb-b066-6a3a1ed8568c-2026-09-07T15:49:37Z:01a07c8f-8b35-7956-acf4-2f5bd33f8e56:mm:6901d5c7-1389-49fb-b066-6a3a1ed8568c-2026-09-07T15:49:37Z:01a07c8f-8b35-7956-acf4-2f5bd33f8e56:issue-implementation-remediation:remediation:1:execution:1:agent_execute",
+      "executionPlanRef": "omnigent-execution-plan:sha256:73991882b9a91ced3b55948dc89218bf580d419e17f8eb21b34f8a20dd3696f5",
+      "credential_generation": 1,
+      "ownerIsWorkflow": true
+    }
+  ]
+}

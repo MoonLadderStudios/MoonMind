@@ -970,8 +970,10 @@ class AdmittedProviderCapacity(BaseModel):
     #: Immutable request identity the manager recorded with the grant. Together
     #: with the owner and plan refs this is the durable lease fence: it survives
     #: a manager restart because it is persisted on the lease row.
+    #: Preserve composed request keys; the workflow bounds the complete
+    #: serialized handoff before taking capacity, rather than truncating keys.
     idempotency_key: str | None = Field(
-        None, alias="idempotencyKey", max_length=255
+        None, alias="idempotencyKey"
     )
     #: Monotonic per-run admission counter. A deliberate re-admission bumps it,
     #: so operators and diagnostics can order attempts at one authority.

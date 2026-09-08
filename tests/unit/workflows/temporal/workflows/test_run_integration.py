@@ -25,6 +25,7 @@ from moonmind.workflows.temporal.workflows.run import (
     RUN_HEADLESS_REMEDIATION_VERIFIED_WORKSPACE_PATCH,
     RUN_HEADLESS_REMEDIATION_EXECUTION_PATCH,
     RUN_ISSUE_IMPLEMENT_PR_HANDOFF_AUTHORITY_PATCH,
+    RUN_TRUSTED_GITHUB_ISSUE_IDENTITY_PATCH,
     RUN_LATE_REMEDIATION_HEAD_ATTEMPT_ORDINAL_PATCH,
     RUN_MANAGED_SESSION_CHECKPOINT_LOCATOR_PATCH,
     RUN_MOONSPEC_GATE_PREVIOUS_OUTPUTS_HANDOFF_PATCH,
@@ -40,6 +41,7 @@ from moonmind.workflows.temporal.workflows.run import (
     RUN_REMEDIATION_MANAGED_SESSION_SOURCE_IDENTITY_PATCH,
     RUN_REMEDIATION_CONTINUE_MANAGED_SESSION_PATCH,
     RUN_REMEDIATION_STABLE_PROGRESS_IDENTITY_PATCH,
+    RUN_REMEDIATION_ISSUE_AUTHORITY_CONTINUATION_PATCH,
     RUN_RUNTIME_EXECUTION_CAPABILITIES_PATCH,
     RUN_AGENT_RUNTIME_RETRY_CLASSIFICATION_PATCH,
     RUN_STEP_RETRY_OVERRIDES_PATCH,
@@ -5351,6 +5353,69 @@ def test_continue_as_new_preserves_stable_progress_identity_only_after_patch(
     assert "latestProgressSignature" not in legacy["state"]
 
 
+@pytest.mark.parametrize("patch_enabled", [False, True])
+@pytest.mark.parametrize("provider", ["github", "jira"])
+def test_continue_as_new_carries_only_compact_issue_authority(
+    mock_run_workflow, monkeypatch, patch_enabled, provider
+):
+    from moonmind.workflows.temporal.remediation_loop import (
+        RemediationLoopSpec,
+        RemediationLoopState,
+    )
+
+    spec = RemediationLoopSpec.model_validate(_dynamic_loop_spec_payload())
+    mock_run_workflow._remediation_loop_spec = spec
+    mock_run_workflow._remediation_loop_state = RemediationLoopState(
+        loopId=spec.loop_id, phase="verification_pending", consumedBudgets={}
+    )
+    context = {
+        "trustedSource": f"moonmind.{provider}.get_issue",
+        "presetBrief": "Large issue content belongs in artifacts.",
+    }
+    if provider == "github":
+        context["issue"] = {
+            "repository": "org/repo",
+            "number": 3963,
+            "body": "Large issue body",
+        }
+    else:
+        context["jiraIssueKey"] = "MM-123"
+    mock_run_workflow._record_trusted_issue_context(context)
+    assessment = {
+        "assessmentVerdict": "NOT_IMPLEMENTED",
+        "assessmentArtifactRef": "art_assessment",
+        "briefArtifactRef": "art_brief",
+    }
+    mock_run_workflow._assessment_context = {
+        **assessment,
+        "requirements": "Large requirements",
+    }
+    monkeypatch.setattr(
+        run_workflow_module.workflow,
+        "patched",
+        lambda patch_id: patch_enabled
+        and patch_id == RUN_REMEDIATION_ISSUE_AUTHORITY_CONTINUATION_PATCH,
+    )
+    carried = mock_run_workflow._build_remediation_loop_continue_as_new_input(
+        ordered_nodes=[]
+    )["remediation_loop_continuation"]
+    if patch_enabled:
+        assert carried["assessmentContext"] == assessment
+        assert "Large" not in str(carried["trustedIssueContext"])
+    else:
+        assert "assessmentContext" not in carried
+        assert "trustedIssueContext" not in carried
+    restored = MoonMindRunWorkflow()
+    restored._remediation_loop_spec = spec
+    restored._remediation_loop_continuation = carried
+    restored._restore_remediation_loop_continuation(ordered_nodes=[])
+    assert restored._assessment_context == (assessment if patch_enabled else {})
+    if patch_enabled:
+        assert restored._trusted_issue_context == carried["trustedIssueContext"]
+    else:
+        assert restored._trusted_issue_context is None
+
+
 def test_continuation_written_without_a_head_still_restores(
     mock_run_workflow: MoonMindRunWorkflow,
 ) -> None:
@@ -6703,6 +6768,59 @@ async def test_issue_implement_status_handoff_does_not_create_pr_for_fully_imple
 
     assert url is None
     execute_activity.assert_not_awaited()
+
+
+@pytest.mark.parametrize("patch_enabled", [False, True])
+def test_search_issue_identity_preserves_historical_publication_payloads(
+    mock_run_workflow, monkeypatch, patch_enabled
+):
+    mock_run_workflow._record_trusted_issue_context(
+        {
+            "trustedSource": "moonmind.github.get_issue",
+            "issue": {"repository": "org/repo", "number": 3963},
+        }
+    )
+    monkeypatch.setattr(
+        run_workflow_module.workflow,
+        "patched",
+        lambda patch_id: patch_enabled
+        and patch_id == RUN_TRUSTED_GITHUB_ISSUE_IDENTITY_PATCH,
+    )
+    assert mock_run_workflow._github_issue_ref_from_parameters({}) == (
+        "org/repo#3963" if patch_enabled else None
+    )
+    assert mock_run_workflow._canonical_github_issue_from_parameters({}) == (
+        {"repository": "org/repo", "issueNumber": 3963} if patch_enabled else None
+    )
+    # Explicit issue input retains the same identity on both history paths.
+    explicit = {
+        "workflow": {
+            "inputs": {
+                "github_issue": {"repository": "org/repo", "number": 123},
+            }
+        }
+    }
+    assert (
+        mock_run_workflow._github_issue_ref_from_parameters(explicit) == "org/repo#123"
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("verdict", ["", "UNKNOWN", "BLOCKED", "NEW_PROVIDER_STATUS"])
+async def test_issue_handoff_does_not_infer_publication_from_unknown_assessment(
+    mock_run_workflow, monkeypatch, verdict
+):
+    mock_run_workflow._assessment_context = {"assessmentVerdict": verdict}
+    create_pr = AsyncMock()
+    monkeypatch.setattr(run_workflow_module.workflow, "execute_activity", create_pr)
+    assert (
+        await mock_run_workflow._ensure_issue_implement_pr_before_status(
+            node={"annotations": {"issueImplementRole": "code-review-handoff"}},
+            parameters={"publishMode": "pr"},
+        )
+        is None
+    )
+    create_pr.assert_not_awaited()
 
 
 def test_partial_issue_implementation_no_commits_cannot_satisfy_pr_handoff(
