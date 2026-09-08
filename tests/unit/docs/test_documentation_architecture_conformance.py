@@ -56,7 +56,7 @@ def test_standard_is_declarative_desired_state_not_a_tracker() -> None:
     text = _read(STANDARD_DOC)
 
     # Declarative status, not a migration/checklist/status framing.
-    assert metadata_fields(text)["document class"] == "Canonical declarative document"
+    assert metadata_fields(text)["document class"] == "Canonical declarative"
     # No checklist/status checkbox framing leaks into the canonical standard.
     assert "- [ ]" not in text
     assert "- [x]" not in text

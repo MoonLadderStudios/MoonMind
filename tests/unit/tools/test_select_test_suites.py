@@ -428,6 +428,15 @@ def test_docs_only_change_never_selects_omnigent_gate() -> None:
         assert outputs[key] == ("true" if key == "unit_fast" else "false"), key
 
 
+def test_markdown_renamed_away_still_selects_unit_fast() -> None:
+    # compute_changed_files.sh reports both rename endpoints, so the removed
+    # Markdown target keeps selecting the fast shard that owns the link,
+    # metadata, and contract checks for unchanged callers.
+    outputs = _outputs(["docs/Guide.md", "docs/Guide.txt"])
+
+    assert outputs["unit_fast"] == "true"
+
+
 # --- Tier-1 exact deployable-artifact gate (MoonLadderStudios/MoonMind#3710) ---
 
 
