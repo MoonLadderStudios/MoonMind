@@ -390,8 +390,13 @@ and `OMNIGENT_HOST_IMAGE_REF` values explicitly.
 
 Bootstrap-owned policy defaults advance through a new immutable version when
 those resolved repository digests move; operator-authored defaults are never
-rewritten by bootstrap. Registry refresh runs in the lifespan-owned background
-reconciler; API startup readiness performs only bounded local inspection. A
+rewritten by bootstrap. Image resolution, registry refresh, provider validation,
+and deployment qualification run in the lifespan-owned background reconciler.
+API startup does not wait for this runtime maintenance or for credential leases
+held by active workflows. The reconciler starts automatically after local
+startup, retries with bounded backoff, and is cancelled and awaited on shutdown.
+HTTP health reports API/database availability; execution admission continues to
+require the selected runtime's validated evidence. A
 server policy cutover uses the running Compose container's observed repository
 digest, never a newly pulled tag whose container is not running yet. Bindings
 with active host leases remain on their immutable prior authority and are
