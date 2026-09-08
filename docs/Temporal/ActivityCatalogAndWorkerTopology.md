@@ -242,6 +242,36 @@ verified against the function body — seven handlers, not one):
 - adapter/metadata helpers from `workflows/agent_run.py`: `integration.resolve_adapter_metadata`, `integration.get_activity_route`, `integration.resolve_external_adapter`, `integration.external_adapter_execution_style`
 - checkpoint-persistence handlers from `workflows/checkpoint_branch_turn.py` (via `checkpoint_branch_activity_handlers()`): `checkpoint_branch.turn.mark_running`, `checkpoint_branch.turn.persist_terminal`, `checkpoint_branch.turn.persist_terminal_rejection` — retained for replay/in-flight compatibility of pre-cutover histories; no new calls route there.
 
+Checkpoint-branch routing states (MoonLadderStudios/MoonMind#3949):
+
+- **Current new-write routing:** histories patched with
+  `checkpoint-branch-artifact-fleet-v1` schedule all three
+  `checkpoint_branch.turn.*` persistence activities on the artifacts fleet
+  (`mm.activity.artifacts`, capability class `artifacts`) via
+  `CheckpointBranchTurn._persistence_route_options`. The catalog maps the
+  same three types to the artifacts fleet with stable timeouts/retries, and
+  the artifacts worker binds the same handler implementations with their
+  required artifact-store/database dependencies.
+- **Retained compatibility:** pre-marker histories keep their recorded
+  workflow-queue behavior and execute against the retained
+  `workflow_fleet_activity_handlers`. Fixture replay
+  (`test_checkpoint_queue_replay.py`, `checkpoint_before_artifacts_fleet/`)
+  proves history compatibility only — never deployed drainage.
+- **Drain-gated retirement:** removal of the retained workflow-queue
+  handlers, dead dependency injection, and now-unneeded permissions happens
+  together only after old tasks, retained histories, and supported resets
+  have a verified disposition through existing mechanisms (Temporal
+  Visibility drain metrics, worker-versioning build/deployment identity),
+  not another topology mode or service. See
+  `workflow_registry.py::checkpoint_branch_persistence_contract` and
+  `::workflow_fleet_capability_inventory` for the executable contract.
+- **Final isolated topology:** the workflow fleet keeps only the four
+  metadata/adapter helpers (`workflow` capability, Temporal-only privilege);
+  the artifacts fleet owns the single persistence implementation. Queue
+  separation is not privilege separation: the actual boundary is the
+  fleet service (`temporal-worker-workflow` vs `temporal-worker-artifacts`)
+  with its capabilities, privileges, secrets, mounts, and egress policy.
+
 This registration is the current state, not the intended end state. The
 intended least-privilege boundary keeps the workflow fleet Temporal-only with
 no artifact, provider-mutation, or runtime-supervision I/O; whether
@@ -864,7 +894,10 @@ Disallowed. Workflows own visibility state.
 Allowed only as a narrow exception. Current registration: the seven handlers
 listed in §5.1 (four adapter/metadata helpers plus three
 replay-compatibility checkpoint handlers). The intended boundary stays
-least-privilege; see #3949 for the checkpoint-persistence question.
+least-privilege; the checkpoint-persistence cutover, compatibility retention,
+drain gate, and final isolated topology are pinned in §5.1 and in
+`workflow_registry.py::checkpoint_branch_persistence_contract` /
+`::workflow_fleet_capability_inventory` (MoonLadderStudios/MoonMind#3949).
 
 ### 15.5 Canonical runtime contract enforcement
 
