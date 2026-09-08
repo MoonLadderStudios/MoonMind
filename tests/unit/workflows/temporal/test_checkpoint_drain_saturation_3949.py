@@ -41,7 +41,9 @@ from moonmind.gates.checkpoint_compat_drain import (
     retention_reason,
 )
 
-pytestmark = pytest.mark.unit_fast
+# No explicit shard mark: tests/conftest.py owns every test under
+# tests/unit/workflows/temporal/ to the temporal-boundary shard. Do not add
+# pytest.mark.unit_fast here; it conflicts with that ownership.
 
 
 @pytest.mark.asyncio

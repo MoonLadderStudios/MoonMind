@@ -18,7 +18,6 @@ import ast
 import json
 from pathlib import Path
 
-import pytest
 from temporalio import activity
 
 from moonmind.workflows.temporal.activity_catalog import (
@@ -36,7 +35,9 @@ from moonmind.workflows.temporal.workflow_registry import (
     workflow_fleet_activity_handlers,
 )
 
-pytestmark = pytest.mark.unit_fast
+# No explicit shard mark: tests/conftest.py owns every test under
+# tests/unit/workflows/temporal/ to the temporal-boundary shard. Do not add
+# pytest.mark.unit_fast here; it conflicts with that ownership.
 
 WORKFLOW_SRC = (
     Path(__file__).resolve().parents[4]

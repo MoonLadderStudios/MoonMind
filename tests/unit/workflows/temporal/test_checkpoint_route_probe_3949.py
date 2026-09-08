@@ -6,13 +6,16 @@ without executing it. These tests execute the real production routing
 method — ``MoonMindCheckpointBranchTurnWorkflow._persistence_route_options``
 — instead of a mock:
 
-- ``unit_fast``: both patch branches of the real method run with
+- ``temporal_boundary``: both patch branches of the real method run with
   ``workflow.patched`` stubbed, proving patched histories select the
-  artifacts queue and pre-marker histories keep their recorded queue.
-- ``temporal_boundary``: a time-skipping Temporal server records a patched
-  execution of a probe workflow that calls the real method, asserts the
+  artifacts queue and pre-marker histories keep their recorded queue; a
+  time-skipping Temporal server then records a patched execution of a
+  probe workflow that calls the real method, asserts the
   recorded route and patch marker, and replays the history against the
   current build — proving the durable marker semantics a deployment sees.
+  Every test in this module is owned by the temporal-boundary shard via
+  tests/conftest.py; do not add ``pytest.mark.unit_fast`` here, it
+  conflicts with that ownership.
 
 Full success/failure/cancellation/retry journeys against a live
 artifacts worker (database, sandbox, child workflows) remain integration
@@ -45,7 +48,6 @@ class _CheckpointRouteProbe:
         return {"route": turn._persistence_route_options()}
 
 
-@pytest.mark.unit_fast
 def test_real_route_options_select_artifacts_queue_when_patched(monkeypatch):
     monkeypatch.setattr(
         turn_module.workflow, "patched", lambda _patch_id: True
@@ -55,7 +57,6 @@ def test_real_route_options_select_artifacts_queue_when_patched(monkeypatch):
     }
 
 
-@pytest.mark.unit_fast
 def test_real_route_options_keep_recorded_queue_when_unpatched(monkeypatch):
     monkeypatch.setattr(
         turn_module.workflow, "patched", lambda _patch_id: False
@@ -63,7 +64,6 @@ def test_real_route_options_keep_recorded_queue_when_unpatched(monkeypatch):
     assert MoonMindCheckpointBranchTurnWorkflow()._persistence_route_options() == {}
 
 
-@pytest.mark.unit_fast
 def test_route_probe_uses_the_real_production_method():
     import inspect
 

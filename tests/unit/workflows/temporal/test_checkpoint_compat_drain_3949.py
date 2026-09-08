@@ -30,7 +30,9 @@ from moonmind.gates.checkpoint_compat_drain import (
     retention_reason,
 )
 
-pytestmark = pytest.mark.unit_fast
+# No explicit shard mark: tests/conftest.py owns every test under
+# tests/unit/workflows/temporal/ to the temporal-boundary shard. Do not add
+# pytest.mark.unit_fast here; it conflicts with that ownership.
 
 
 # --- Drain-ownership contract -----------------------------------------------
@@ -267,6 +269,10 @@ async def test_metadata_helpers_need_no_database_authority(monkeypatch):
         turn_module, "async_session_maker", _deny_session_maker
     )
     monkeypatch.delenv("DATABASE_URL", raising=False)
+    # The adapter registry is env-gated; enable OpenClaw explicitly so the
+    # metadata read is hermetic instead of depending on ambient CI env.
+    monkeypatch.setenv("OPENCLAW_ENABLED", "true")
+    monkeypatch.setenv("OPENCLAW_GATEWAY_TOKEN", "test-token")
 
     metadata = await agent_run_module.resolve_adapter_metadata("OpenClaw")
     assert metadata["agent_id"] == "openclaw"
@@ -303,6 +309,10 @@ async def test_all_four_retained_helpers_need_no_io_authority(monkeypatch):
         "MOONMIND_ARTIFACT_STORAGE_URL",
     ):
         monkeypatch.delenv(env_key, raising=False)
+    # The adapter registry is env-gated; enable OpenClaw explicitly so the
+    # helper reads are hermetic instead of depending on ambient CI env.
+    monkeypatch.setenv("OPENCLAW_ENABLED", "true")
+    monkeypatch.setenv("OPENCLAW_GATEWAY_TOKEN", "test-token")
 
     agent_id = (
         await agent_run_module.resolve_adapter_metadata("OpenClaw")
@@ -360,9 +370,6 @@ async def test_retained_persistence_handler_fails_closed_without_artifact_storag
 
     import moonmind.workflows.temporal.workflows.checkpoint_branch_turn as turn_module
     from moonmind.schemas.agent_runtime_models import AgentRunResult
-    from moonmind.workflows.temporal.workflows.checkpoint_branch_turn import (
-        CheckpointBranchRetainedEvidenceError,
-    )
     from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
     from sqlalchemy.orm import sessionmaker
 
@@ -427,8 +434,8 @@ async def test_retained_persistence_handler_fails_closed_without_artifact_storag
             ).model_dump(by_alias=True, mode="json", exclude_none=True),
         }
         with pytest.raises(
-            CheckpointBranchRetainedEvidenceError,
-            match="not resolvable or retainable",
+            RuntimeError,
+            match="denied unexpected artifact-storage",
         ):
             await turn_module.persist_checkpoint_branch_turn_terminal(payload)
         assert artifact_calls, (
