@@ -285,19 +285,21 @@ def test_legacy_keycloak_mode_fixture_retired() -> None:
 def test_authenticated_mode_test_selector_is_centralized() -> None:
     """Named-file migration guard (rw-7): one constant owns the test literal.
 
-    The artifact and submission boundaries branch on
+    The artifact, submission, and execution boundaries branch on
     ``AUTH_PROVIDER != "disabled"``, so the named test modules select "any
     authenticated mode" through a single ``_AUTHENTICATED_PROVIDER_MODE``
     constant each. A raw ``setattr(..., "AUTH_PROVIDER", "keycloak")`` outside
     that constant is a regression: the cutover must repoint the constant,
     not scatter new literals. Coverage itself is preserved — every module
-    below still exercises the non-disabled path and the
+    below still exercises the non-disabled path and (where applicable) the
     ``TemporalArtifactAuthorizationError`` negative assertions.
     """
     for relative in (
         "tests/integration/temporal/test_temporal_artifact_authorization.py",
         "tests/integration/temporal/test_task_shaped_submission_normalization.py",
         "tests/unit/workflows/temporal/test_artifacts.py",
+        "tests/unit/api/routers/test_executions.py",
+        "tests/integration/reliability/test_api_startup_provider_maintenance.py",
     ):
         src = _read(relative)
         assert '_AUTHENTICATED_PROVIDER_MODE = "keycloak"' in src, relative

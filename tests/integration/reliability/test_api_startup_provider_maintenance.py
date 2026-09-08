@@ -20,6 +20,13 @@ from tests.integration.reliability.helpers import load_replay
 
 pytestmark = [pytest.mark.asyncio, pytest.mark.integration, pytest.mark.integration_ci]
 
+# Pre-cutover authenticated-mode selector (MoonLadderStudios/MoonMind#4128
+# rw-7): the startup path branches on the authenticated provider mode, so this
+# literal means "any authenticated mode", not Keycloak specifically. The
+# Keycloak-removal cutover (#4118-4127) must repoint this constant to the
+# production accounts/OIDC/header mode literal instead of editing each test.
+_AUTHENTICATED_PROVIDER_MODE = "keycloak"
+
 
 @pytest.mark.parametrize(
     ("blocked_stage", "enabled_setting", "release_wait"),
@@ -49,7 +56,7 @@ async def test_http_serves_while_bootstrap_waits_and_lifespan_owns_cleanup(
     assert match is not None
     monkeypatch.setenv("OMNIGENT_ENABLED", enabled_setting or match[1])
     monkeypatch.setenv("OMNIGENT_SERVER_URL", "http://unused.invalid")
-    monkeypatch.setattr(api_main.settings.oidc, "AUTH_PROVIDER", "keycloak")
+    monkeypatch.setattr(api_main.settings.oidc, "AUTH_PROVIDER", _AUTHENTICATED_PROVIDER_MODE)
     monkeypatch.delattr(
         api_main.app.state, "omnigent_bootstrap_reconciliation_task", raising=False
     )
