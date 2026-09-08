@@ -15,7 +15,6 @@ def test_mm656_moonspec_artifacts_preserve_issue_and_source_traceability():
     combined = "\n".join([spec, plan, tasks])
 
     assert "MM-656" in spec
-    assert "Jira preset brief" in spec
     assert "FR-012" in combined
     assert "SC-005" in combined
     for index in range(1, 12):

@@ -1,0 +1,29 @@
+{
+  "incidentWorkflowId": "mm:f6e27bc6-a251-49c6-b9e2-a7ba17c8d4df",
+  "description": "The verifier requested human input for an out-of-scope dependency, but artifact publication replaced the canonical action with reattempt_current_step and both loop controllers admitted more attempts.",
+  "verifierPayload": {
+    "schemaVersion": "moonspec-verification/v1",
+    "verdict": "ADDITIONAL_WORK_NEEDED",
+    "recommendedNextAction": "needs_human",
+    "recoverableInCurrentRuntime": false,
+    "confidence": "high",
+    "remainingWork": [
+      {
+        "id": "RW1",
+        "gapType": "implementation",
+        "remainingWork": "Connect the production adapter after the owning authoritative lobby/start API is supplied.",
+        "dependency": "Implementing the absent owner exceeds the issue's explicit scope.",
+        "recoverableInCurrentRuntime": false,
+        "verifierRerunCanResolve": false
+      },
+      {
+        "id": "RW2",
+        "gapType": "verification",
+        "dependsOn": ["RW1"],
+        "remainingWork": "Exercise production adoption and resource cleanup after the owning API exists.",
+        "recoverableInCurrentRuntime": false,
+        "verifierRerunCanResolve": false
+      }
+    ]
+  }
+}

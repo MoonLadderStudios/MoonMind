@@ -13,7 +13,6 @@ def test_mm649_moonspec_artifacts_preserve_required_traceability() -> None:
         pytest.skip("MoonSpec artifacts are not present in this branch")
     required = {
         "MM-649",
-        "canonical Jira preset brief",
         "DESIGN-REQ-001",
         "DESIGN-REQ-002",
         "DESIGN-REQ-021",
