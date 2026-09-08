@@ -91,11 +91,11 @@ class TemporalSettings(BaseSettings):
         validation_alias="TEMPORAL_USER_WORKFLOW_V2_TASK_QUEUE",
     )
     user_workflow_cutover_record_path: str | None = Field(
-        "config/temporal/mm-730-hard-switch-cutover.example.json",
+        None,
         validation_alias="TEMPORAL_USER_WORKFLOW_CUTOVER_RECORD_PATH",
     )
     user_workflow_release_notes_path: str | None = Field(
-        "docs/ReleaseNotes/MM-730-hard-switch-cutover.md",
+        None,
         validation_alias="TEMPORAL_USER_WORKFLOW_RELEASE_NOTES_PATH",
     )
     activity_artifacts_task_queue: str = Field(
@@ -247,6 +247,21 @@ class TemporalSettings(BaseSettings):
     @classmethod
     def _normalize_user_workflow_contract_mode(cls, value: Any) -> str:
         return str(value or "renamed_contract").strip().lower()
+
+    @field_validator(
+        "user_workflow_cutover_record_path",
+        "user_workflow_release_notes_path",
+        mode="before",
+    )
+    @classmethod
+    def _normalize_obsolete_cutover_path(cls, value: Any) -> str | None:
+        # MM-3951: cutover settings are retired. Blank/whitespace normalizes
+        # to None (canonical fresh installs); any non-blank value is preserved
+        # so hard_switch_cutover can fail fast with an actionable error.
+        if value is None:
+            return None
+        normalized = str(value).strip()
+        return normalized or None
 
 class TemporalDashboardSettings(BaseSettings):
     """Workflow-console Temporal source contract and rollout flags."""

@@ -1,4 +1,35 @@
-"""Versioned Temporal hard-switch cutover helpers for MM-730."""
+"""Canonical Temporal UserWorkflow start contract (MM-730 retired, MM-3951).
+
+Classification for MoonLadderStudios/MoonMind#3951:
+
+- ``hard_switch_cutover.py`` had two responsibilities: (a) live startup
+  responsibility — resolving the current UserWorkflow start type/queue used by
+  ``client.py``, ``service.py``, ``activity_catalog.py`` and
+  ``api_service/api/routers/executions.py``; (b) migration-only execution —
+  validating the MM-730 cutover JSON record and release-note prose
+  (``MM730_RELEASE_NOTE_TEXT`` plus compatibility-redirect/alias wording).
+- Minimal surviving responsibility is (a) only: the canonical production
+  contract ``MoonMind.UserWorkflow`` on the configured distinct v2 task queue.
+  Fresh API/worker startup must not require cutover files or release-note
+  wording as runtime configuration.
+- The file/prose validators below are retained as an explicit opt-in
+  deployment/retirement-boundary check (``validate_hard_switch_cutover_inputs``)
+  for environments that still need to verify a real scoped cutover record with
+  real evidence. They are no longer on the startup path.
+- ``moonmind/statuses/compat.py`` is a separate historical-read concern
+  (persisted ``no_changes``/``NO_CHANGES`` in Visibility ``mm_state``, DB rows,
+  automation runs, memo/finish-summary JSON). It is retained as the small
+  explicit historical loader; new writes use canonical ``no_commit``/``NO_COMMIT``.
+- ``transition_mm658.py``/``transition_mm667.py`` are one-shot Jira
+  ``MM-658``/``MM-667`` -> ``In Progress`` operational helpers, not Temporal
+  workflow-type transition scaffolding. They have no production callers and no
+  stored Temporal inputs; they are left untouched in this slice to avoid one
+  blanket deletion condition for unrelated migrations.
+- ``config/temporal/mm-730-hard-switch-cutover.example.json`` is sample-only.
+  It is no longer referenced by defaults or startup. The real release history
+  (``docs/ReleaseNotes/MM-730-hard-switch-cutover.md`` and its ``.json``
+  companion) is retained for readers.
+"""
 
 from __future__ import annotations
 
@@ -14,6 +45,9 @@ from moonmind.config.settings import TemporalSettings
 LEGACY_USER_WORKFLOW_TYPE = "MoonMind.Run"
 RENAMED_USER_WORKFLOW_TYPE = "MoonMind.UserWorkflow"
 RENAMED_USER_WORKFLOW_CONTRACT = "renamed_contract"
+# Historical only: required wording for the MM-730 release-notes document when
+# an operator explicitly verifies a legacy cutover record via
+# validate_hard_switch_cutover_inputs. Not consulted on startup.
 MM730_RELEASE_NOTE_TEXT = (
     "MoonMind no longer exposes Tasks as a product/runtime concept. "
     "Use Workflow Execution, workflowId, runId, and Step Execution."
@@ -34,7 +68,7 @@ _REQUIRED_AFFECTED_CONTRACT_KINDS = {
 
 
 class HardSwitchCutoverError(ValueError):
-    """Raised when the MM-730 cutover contract is incomplete."""
+    """Raised when the UserWorkflow start contract is incomplete."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -58,19 +92,68 @@ def normalize_user_workflow_contract_mode(value: Any) -> str:
     return normalized
 
 
+def _obsolete_cutover_path(value: Any) -> str:
+    return str(value or "").strip()
+
+
+def _reject_obsolete_cutover_paths_if_configured(
+    *,
+    cutover_record_path: Any,
+    release_notes_path: Any,
+) -> None:
+    """Fail fast with an actionable error when obsolete settings are supplied.
+
+    The MM-730 cutover record/release-notes settings are retired (#3951).
+    Startup uses the canonical production contract and must not silently
+    ignore operator-supplied migration files. Existing deployments preserve
+    their routing by unsetting both variables; no hidden fallback or second
+    workflow start is introduced.
+    """
+
+    record = _obsolete_cutover_path(cutover_record_path)
+    notes = _obsolete_cutover_path(release_notes_path)
+    if not record and not notes:
+        return
+    configured = []
+    if record:
+        configured.append("TEMPORAL_USER_WORKFLOW_CUTOVER_RECORD_PATH")
+    if notes:
+        configured.append("TEMPORAL_USER_WORKFLOW_RELEASE_NOTES_PATH")
+    raise HardSwitchCutoverError(
+        f"{' and '.join(configured)} {'is' if len(configured) == 1 else 'are'} "
+        "obsolete and no longer honored (MoonLadderStudios/MoonMind#3951). "
+        "Unset both variables: new UserWorkflow starts use the canonical "
+        "contract MoonMind.UserWorkflow on TEMPORAL_USER_WORKFLOW_V2_TASK_QUEUE, "
+        "which preserves the currently configured routing. "
+        "To explicitly verify a real historical cutover record with scoped "
+        "evidence, call validate_hard_switch_cutover_inputs directly instead "
+        "of setting startup configuration."
+    )
+
+
 def resolve_user_workflow_start_contract(
     temporal_settings: TemporalSettings,
 ) -> UserWorkflowStartContract:
-    """Resolve the Temporal workflow type and queue for new user starts."""
+    """Resolve the Temporal workflow type and queue for new user starts.
 
+    Canonical production path for #3951: no cutover-file or release-note
+    validation. Obsolete cutover settings fail fast with an actionable error
+    so an operator receives an explicit supported cutover action (unset both
+    variables) instead of a silent behavior change.
+    """
+
+    _reject_obsolete_cutover_paths_if_configured(
+        cutover_record_path=temporal_settings.user_workflow_cutover_record_path,
+        release_notes_path=temporal_settings.user_workflow_release_notes_path,
+    )
     mode = normalize_user_workflow_contract_mode(
         temporal_settings.user_workflow_contract_mode
     )
     return _resolve_renamed_user_workflow_start_contract(
         workflow_task_queue=str(temporal_settings.workflow_task_queue),
         user_workflow_v2_task_queue=str(temporal_settings.user_workflow_v2_task_queue),
-        cutover_record_path=temporal_settings.user_workflow_cutover_record_path,
-        release_notes_path=temporal_settings.user_workflow_release_notes_path,
+        cutover_record_path=None,
+        release_notes_path=None,
     )
 
 
@@ -82,9 +165,14 @@ def _resolve_renamed_user_workflow_start_contract(
     cutover_record_path: str | None,
     release_notes_path: str | None,
 ) -> UserWorkflowStartContract:
-    """Resolve and cache the validated renamed user-workflow start contract."""
+    """Resolve and cache the canonical renamed user-workflow start contract.
 
-    _validate_hard_switch_cutover_input_paths(
+    ``cutover_record_path``/``release_notes_path`` are accepted for
+    backward-compatible cache keys only. Any non-blank value is rejected as
+    obsolete; pass ``None`` on the canonical path.
+    """
+
+    _reject_obsolete_cutover_paths_if_configured(
         cutover_record_path=cutover_record_path,
         release_notes_path=release_notes_path,
     )
@@ -113,8 +201,24 @@ def registered_user_workflow_type(temporal_settings: TemporalSettings) -> str:
 
 
 def validate_hard_switch_cutover_inputs(temporal_settings: TemporalSettings) -> None:
-    """Validate release and environment records before enabling the hard switch."""
+    """Explicitly verify a real legacy cutover record with scoped evidence.
 
+    Opt-in deployment/retirement-boundary check only — not called on startup.
+    No-ops when no cutover paths are configured (canonical fresh installs).
+    When paths are configured, validates the cutover JSON schema and MM-730
+    release-note prose with real files rather than sample declarations. Do not
+    add callers on the API/worker startup path and do not build another
+    migration framework around it.
+    """
+
+    record_path = _obsolete_cutover_path(
+        temporal_settings.user_workflow_cutover_record_path
+    )
+    notes_path = _obsolete_cutover_path(
+        temporal_settings.user_workflow_release_notes_path
+    )
+    if not record_path and not notes_path:
+        return
     _validate_hard_switch_cutover_input_paths(
         cutover_record_path=temporal_settings.user_workflow_cutover_record_path,
         release_notes_path=temporal_settings.user_workflow_release_notes_path,

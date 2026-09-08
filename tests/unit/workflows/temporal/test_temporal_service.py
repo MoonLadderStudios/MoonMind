@@ -715,13 +715,13 @@ async def test_create_execution_routes_user_workflow_after_mm730_cutover(
     mock_client_adapter,
     monkeypatch,
 ):
-    release_notes, cutover_record = _write_mm730_cutover_files(tmp_path)
+    # MM-3951: canonical startup resolves without cutover files or prose.
     temporal_settings = settings.temporal.model_copy(
         update={
             "user_workflow_contract_mode": "renamed_contract",
             "user_workflow_v2_task_queue": "mm.workflow.user.v2",
-            "user_workflow_release_notes_path": str(release_notes),
-            "user_workflow_cutover_record_path": str(cutover_record),
+            "user_workflow_release_notes_path": None,
+            "user_workflow_cutover_record_path": None,
         }
     )
     monkeypatch.setattr(settings, "temporal", temporal_settings)
