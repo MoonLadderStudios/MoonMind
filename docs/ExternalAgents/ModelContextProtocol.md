@@ -16,7 +16,7 @@ Implementation: [`api_service/api/routers/mcp_tools.py`](../../api_service/api/r
 
 ## Authentication
 
-All MCP routes use the same `get_current_user()` dependency as the rest of the API. When `AUTH_PROVIDER` is enabled, clients must send the configured bearer credential. When authentication is disabled, the API resolves the default database user so downstream calls retain a stable owner identity.
+All MCP routes use the same `get_current_user()` dependency as the rest of the API. In `disabled` mode the API resolves the default database user so downstream calls retain a stable owner identity. In non-`disabled` modes (shipped: `keycloak` legacy opt-in) clients must send the configured FastAPI Users JWT bearer credential. The proposed `accounts` / `oidc` / `header` modes are not shipped; see the canonical [AuthenticationSystem.md](../Security/AuthenticationSystem.md).
 
 ## Streamable HTTP
 

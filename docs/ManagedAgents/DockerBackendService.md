@@ -1011,9 +1011,9 @@ Managed agents run targeted Python verification with:
 moonmind container python-tests tests/unit/path/test_file.py
 ```
 
-When `AUTH_PROVIDER` requires authentication, the managed-session credential
+When `AUTH_PROVIDER` is non-`disabled` (shipped: `keycloak` legacy opt-in), the managed-session credential
 boundary supplies a scoped Bearer credential as
-`MOONMIND_CONTAINER_JOBS_BEARER_TOKEN`; the CLI sends it on every MCP request.
+`MOONMIND_CONTAINER_JOBS_BEARER_TOKEN`; the CLI sends it on every MCP request. Canonical user-versus-machine boundaries: [AuthenticationSystem.md](../Security/AuthenticationSystem.md).
 An authenticated deployment must not expose a shared or deployment-wide token
 to managed sessions. The token is signed by the trusted session launcher,
 expires with the bounded session lifetime, and is accepted only by
