@@ -67,6 +67,10 @@ def _route_path(route: dict[str, object]) -> str:
         ("(?P<runner_id>[^/]+)", "runner-1"),
         ("(?P<elicitation_id>[^/]+)", "elicitation-1"),
         ("(?:/.*)?", ""),
+        (
+            "(?:action_request|action_claim/[^/]+|action_result/[^/]+)",
+            "action_request",
+        ),
     ):
         path = path.replace(placeholder, value)
     return path
