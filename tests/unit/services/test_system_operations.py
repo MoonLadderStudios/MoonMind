@@ -535,6 +535,60 @@ async def test_command_refreshes_state_loaded_before_another_session_commits(
 
 
 @pytest.mark.asyncio
+async def test_paused_admission_state_gates_new_commands_with_new_generation(
+    system_operations_session_maker,
+):
+    """A pause marks admission paused; the opposite command reopens it cleanly.
+
+    New work arriving mid-pause follows the admission policy surfaced through
+    command availability: while paused, pause/drain/quiesce stay unavailable
+    and resume stays available. The opposite (resume) command allocates a new
+    monotonic generation under a new request identity, so stale observations
+    from the pause generation cannot overwrite the resumed state. Schedule,
+    continuation, and child-start paths inside an already-running workflow are
+    not new API admissions and are quiesced only at the workflow safe boundary
+    (see WorkerPauseSystem.md); shared-queue operator/manifest workflows are
+    excluded from enumeration by the UserWorkflow-only selection policy.
+    """
+    async with system_operations_session_maker() as session:
+        service = SystemOperationsService(session, temporal_service=FakeTemporalService())
+        paused = await service.submit(
+            WorkerOperationCommand(
+                action="pause", mode="quiesce", reason="Guard admission",
+                confirmation="pause", idempotencyKey="admission-pause",
+            ),
+            actor_user_id=None,
+        )
+        assert paused.system.workers_paused is True
+        pause_generation = paused.control.generation
+        by_id = {command.id: command for command in paused.commands}
+        for command_id in ("pause-workers", "drain-queue", "quiesce-runtime-family"):
+            assert by_id[command_id].available is False
+            assert by_id[command_id].unavailable_reason == (
+                "Submission admission is already paused."
+            )
+        assert by_id["resume-workers"].available is True
+        assert by_id["resume-workers"].unavailable_reason is None
+
+        resumed = await service.submit(
+            WorkerOperationCommand(
+                action="resume", reason="Reopen admission",
+                idempotencyKey="admission-resume",
+            ),
+            actor_user_id=None,
+        )
+        assert resumed.system.workers_paused is False
+        assert resumed.control.request_id == "admission-resume"
+        assert resumed.control.generation == pause_generation + 1
+        reopened = {command.id: command for command in resumed.commands}
+        assert reopened["pause-workers"].available is True
+        assert reopened["resume-workers"].available is False
+        assert reopened["resume-workers"].unavailable_reason == (
+            "Submission admission is already open."
+        )
+
+
+@pytest.mark.asyncio
 async def test_terminal_control_batches_skip_snapshot_reconciliation(
     system_operations_session_maker,
 ):

@@ -391,6 +391,32 @@ async def test_control_empty_enumeration_reports_empty_not_succeeded(adapter):
     assert "not an atomic snapshot" in batch.selection_policy
 
 
+async def test_control_enumeration_scopes_to_user_workflow_only(adapter):
+    """Enumeration selects running UserWorkflows; operator/manifest stay out.
+
+    Operator and manifest workflows share the task queues, so queue membership
+    alone cannot scope the pause. The Visibility query pins the UserWorkflow
+    type, and the recorded selection policy carries that query plus the
+    not-atomic disclaimer instead of claiming a system snapshot.
+    """
+    captured: dict[str, str] = {}
+
+    async def _fake_list(query):
+        captured["query"] = query
+        return
+        yield  # pragma: no cover - empty Visibility selection
+
+    adapter._client.list_workflows = _fake_list
+
+    batch = await adapter.send_batch_pause_update(request_id="scoped-selection")
+
+    assert 'ExecutionStatus="Running"' in captured["query"]
+    assert 'WorkflowType="MoonMind.UserWorkflow"' in captured["query"]
+    assert batch.selection_policy is not None
+    assert 'WorkflowType="MoonMind.UserWorkflow"' in batch.selection_policy
+    assert "not an atomic snapshot" in batch.selection_policy
+
+
 async def test_control_enumeration_dedupes_checkpoint_and_bounds_pages(adapter, monkeypatch):
     """Paged enumeration dedupes runs, checkpoints pages, and honors budgets."""
     from moonmind.schemas.workflow_control_models import WorkflowControlBatch
