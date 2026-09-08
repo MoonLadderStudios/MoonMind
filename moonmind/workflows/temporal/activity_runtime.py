@@ -7664,7 +7664,7 @@ class TemporalAgentRuntimeActivities:
         def _canonicalize_moonspec_verify_gate_payload(
             gate_payload: Mapping[str, Any],
         ) -> dict[str, Any]:
-            """Derive MoonSpec gate action from verdict, preserving model output."""
+            """Preserve the Skill's canonical action; repair missing/invalid values."""
 
             canonical_payload = dict(gate_payload)
             recoverable_raw = (
@@ -7688,6 +7688,10 @@ class TemporalAgentRuntimeActivities:
             raw_action_text = (
                 raw_action.strip() if isinstance(raw_action, str) else None
             )
+            if raw_action_text in recommended_next_actions():
+                canonical_payload["recommendedNextAction"] = raw_action_text
+                canonical_payload.pop("recommended_next_action", None)
+                return canonical_payload
             if raw_action is not None and raw_action_text != canonical_action:
                 canonical_payload.setdefault(
                     "rawRecommendedNextAction",
@@ -7951,7 +7955,12 @@ class TemporalAgentRuntimeActivities:
                 == "reattempt_current_step"
             )
             remaining_work = gate_payload.get("remainingWork")
-            if additional_work_declared and isinstance(remaining_work, list):
+            remaining_work_declared = additional_work_declared or (
+                str(declared_verdict or "").strip().upper() == "NO_DETERMINATION"
+                and gate_payload.get("recommendedNextAction") in {"needs_human", "blocked"}
+                and isinstance(remaining_work, list)
+            )
+            if remaining_work_declared and isinstance(remaining_work, list):
                 # Workflow history carries only a stable semantic digest; the
                 # resolved verifier's full structured gaps remain in its
                 # artifact. This lets the progress gate compare attempts
@@ -8011,7 +8020,7 @@ class TemporalAgentRuntimeActivities:
                 gate_payload,
                 "remainingWorkRef",
                 "remaining_work_ref",
-            ) and additional_work_declared:
+            ) and remaining_work_declared:
                 # The resolved verifier bundle owns the remaining-work
                 # semantics. Its published JSON is therefore the durable
                 # evidence when the portable contract emits structured
@@ -9680,21 +9689,26 @@ class TemporalAgentRuntimeActivities:
             "`recoverableInCurrentRuntime`, and `remainingWork` fields.\n"
             f"- `verdict` must be exactly one of: {verdict_values}.\n"
             f"- `recommendedNextAction` must be exactly one of: {next_action_values}. "
-            "Any other model-authored value is contract drift; MoonMind preserves "
+            "Any unknown model-authored value is contract drift; MoonMind preserves "
             "it as a raw diagnostic and derives the canonical action from the "
-            "verdict.\n"
+            "verdict. A canonical value that contradicts its verdict fails "
+            "contract validation; it is not silently replaced with a default.\n"
             '- For `FULLY_IMPLEMENTED`, set `recommendedNextAction` to "advance"; '
             "do not encode pull request creation or any other workflow-specific "
             "destination in this field.\n"
-            "- `recommendedNextAction` is advisory semantic metadata. The workflow "
-            "runtime owns routing and selects the next logical plan node. Never "
+            "- Follow the resolved Skill's continuation decision. The workflow "
+            "runtime owns routing and honors explicit `needs_human` or `blocked` "
+            "stops for `ADDITIONAL_WORK_NEEDED` and `NO_DETERMINATION`; these stop "
+            "automatic verifier retry and implementation remediation. Never "
             "encode a remediation node, publication node, or pull request destination.\n"
             "- For `ADDITIONAL_WORK_NEEDED`, include bounded concrete remaining "
             "work, recoverability, and evidence references. A read-only verifier "
             "must not ask its own rerun to perform implementation remediation.\n"
-            '- Use "reattempt_current_step" only when rerunning this verifier can '
-            "obtain different evidence, especially for a recoverable "
-            "`NO_DETERMINATION`.\n"
+            '- For `ADDITIONAL_WORK_NEEDED`, "reattempt_current_step" permits a '
+            "separate authorized remediation step. For `NO_DETERMINATION`, use "
+            '"reattempt_current_step" only when rerunning this verifier can '
+            "obtain different controlling evidence. `recoverableInCurrentRuntime: "
+            "false` alone does not prohibit separate remediation.\n"
             "- Treat integration, e2e, smoke, quickstart, map-entry, UI/browser, "
             "deployment, and external-service checks as advisory when they depend "
             "on unavailable non-repo assets, services, credentials, or tooling; "

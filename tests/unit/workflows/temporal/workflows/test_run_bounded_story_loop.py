@@ -465,6 +465,54 @@ def test_parent_loop_continues_from_structured_gate_when_remediation_remains(
     assert decision["gate"]["progressSignature"]
 
 
+@pytest.mark.parametrize("stop_patch_enabled", [False, True])
+@pytest.mark.parametrize(
+    "action", [None, "reattempt_current_step", "needs_human", "blocked"]
+)
+def test_parent_loop_honors_explicit_stop_with_legacy_replay_default(
+    monkeypatch,
+    stop_patch_enabled,
+    action,
+):
+    parent = MoonMindRunWorkflow()
+    monkeypatch.setattr(
+        parent,
+        "_patched_or_false_outside_workflow",
+        lambda patch: (
+            stop_patch_enabled
+            if patch == (run_module.RUN_VERIFIER_REMEDIATION_STOP_AUTHORITY_PATCH)
+            else True
+        ),
+    )
+    gate = StepGateResult(
+        verdict="ADDITIONAL_WORK_NEEDED",
+        remaining_work_ref="artifact://remaining/latest",
+        recommended_next_action=action,
+    )
+    decision = parent._bounded_story_loop_continuation_decision(
+        logical_step_id="verify",
+        gate_result=gate,
+        gate_result_ref="artifact://gate/latest",
+        current_index=0,
+        ordered_nodes=[
+            {"id": "verify", "inputs": {"selectedSkill": "moonspec-verify"}},
+            {
+                "id": "repair",
+                "inputs": {
+                    "annotations": {"jiraOrchestrateRole": "moonspec-remediation"}
+                },
+            },
+            {"id": "verify-next", "inputs": {"selectedSkill": "moonspec-verify"}},
+        ],
+    )
+    should_stop = stop_patch_enabled and action in {"needs_human", "blocked"}
+    assert decision["continueLoop"] is not should_stop
+    assert decision["remainingWorkRef"] == gate.remaining_work_ref
+    if should_stop:
+        assert decision["state"] == action
+        assert decision["reason"] == f"verification_requested_{action}"
+
+
 def test_parent_loop_stops_when_verification_makes_no_progress(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

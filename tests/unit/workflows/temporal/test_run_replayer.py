@@ -106,6 +106,71 @@ async def test_accepted_publication_handoff_pre_and_post_patch_histories_replay(
         await replayer.replay_workflow(history)
 
 
+@workflow.defn(name="VerifierStopAuthorityReplayFixture")
+class _LegacyVerifierStopReplayFixture:
+    @workflow.run
+    async def run(self) -> bool:
+        # The old controller admitted another attempt despite needs_human.
+        await workflow.sleep(1)
+        return True
+
+
+@workflow.defn(name="VerifierStopAuthorityReplayFixture")
+class _CurrentVerifierStopReplayFixture:
+    @workflow.run
+    async def run(self) -> bool:
+        parent = MoonMindRunWorkflow()
+        decision = parent._bounded_story_loop_continuation_decision(
+            logical_step_id="verify",
+            gate_result=StepGateResult(
+                verdict="ADDITIONAL_WORK_NEEDED",
+                remaining_work_ref="artifact://remaining/latest",
+                recommended_next_action="needs_human",
+            ),
+            gate_result_ref="artifact://gate/latest",
+            current_index=0,
+            ordered_nodes=[
+                {"id": "verify", "inputs": {"selectedSkill": "moonspec-verify"}},
+                {
+                    "id": "repair",
+                    "annotations": {"issueImplementRole": "moonspec-remediation"},
+                },
+                {"id": "verify-next", "inputs": {"selectedSkill": "moonspec-verify"}},
+            ],
+        )
+        if decision["continueLoop"]:
+            # A replay must preserve the old scheduling command, while new
+            # executions stop before scheduling another attempt.
+            await workflow.sleep(1)
+        return decision["continueLoop"]
+
+
+@pytest.mark.asyncio
+async def test_verifier_stop_authority_pre_and_post_patch_histories_replay():
+    histories = []
+    async with await WorkflowEnvironment.start_time_skipping() as env:
+        for kind, implementation, expected in (
+            ("legacy", _LegacyVerifierStopReplayFixture, True),
+            ("current", _CurrentVerifierStopReplayFixture, False),
+        ):
+            queue = f"verifier-stop-{kind}"
+            async with Worker(
+                env.client, task_queue=queue, workflows=[implementation],
+                workflow_runner=UnsandboxedWorkflowRunner(),
+            ):
+                handle = await env.client.start_workflow(
+                    implementation.run, id=queue, task_queue=queue,
+                )
+                assert await handle.result() is expected
+                histories.append(await handle.fetch_history())
+    replayer = Replayer(
+        workflows=[_CurrentVerifierStopReplayFixture],
+        workflow_runner=UnsandboxedWorkflowRunner(),
+    )
+    for history in histories:
+        await replayer.replay_workflow(history)
+
+
 @workflow.defn(name="MM3238RemediationReplayFixture")
 class _LegacyRemediationReplayFixture:
     @workflow.run

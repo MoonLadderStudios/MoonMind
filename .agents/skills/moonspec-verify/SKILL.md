@@ -366,6 +366,41 @@ Distinguish implementation gaps from verification gaps:
 
 Emit concrete `remainingWork` for every `ADDITIONAL_WORK_NEEDED` result. Each item must be bounded enough for a remediation step to act on without reinterpreting the whole report.
 
+## Continuation Decision
+
+Include the continuation decision and its evidence in the report. When structured
+JSON is requested, use `recommendedNextAction` and
+`recoverableInCurrentRuntime` alongside `verdict` and `remainingWork`:
+
+- `FULLY_IMPLEMENTED` uses `advance`; `BLOCKED` and `FAILED_UNRECOVERABLE` use `blocked`.
+- `ADDITIONAL_WORK_NEEDED` and `NO_DETERMINATION` may use
+  `reattempt_current_step`, `needs_human`, or `blocked`.
+- Any other verdict/action pairing is invalid and fails contract validation.
+  Correct the inconsistent verdict or action using the evidence; do not expect
+  the caller to silently replace a contradictory decision with a default.
+- For `ADDITIONAL_WORK_NEEDED`, use `reattempt_current_step` when the remaining
+  work is bounded, authorized, and executable by a separate remediation step.
+  The verifier remains read-only; it must not rerun itself to implement the fix.
+- For `NO_DETERMINATION`, use `reattempt_current_step` only when another
+  verification attempt can obtain different controlling evidence.
+- Use `needs_human` when progress requires a scope or authority decision, or an
+  external dependency that an authorized remediation step cannot supply. Use
+  `blocked` when no authorized execution path can currently proceed. Explain
+  what must change and preserve the evidence and concrete remaining work.
+
+An explicit `needs_human` or `blocked` decision for `ADDITIONAL_WORK_NEEDED` or
+`NO_DETERMINATION` stops automatic verifier retry and implementation remediation.
+It does not discard verified progress or authorize publication; the caller's
+existing publication policy governs any draft or checkpoint handoff. The caller
+owns plan-node routing and must honor this stop decision without substituting a
+retry merely because budget remains. Never encode a remediation node, publication
+node, or pull request destination in `recommendedNextAction`.
+
+`recoverableInCurrentRuntime` describes the current verifier's ability to recover;
+`false` alone is not a stop decision. A read-only verifier can identify work that
+a separate authorized remediation step can complete. If the action is omitted,
+the caller retains its verdict-based default; omission is not an explicit stop.
+
 ## Report
 
 Return a Markdown report in the response. Do not write a file unless the user explicitly asks for one.
@@ -453,6 +488,8 @@ Use this structured form for each Remaining Work item:
 
 ## Decision
 
+- Recommended Next Action: advance | reattempt_current_step | needs_human | blocked
+- Recoverable In Current Runtime: true | false
 - [Final recommendation and smallest credible next step if not complete]
 ```
 
