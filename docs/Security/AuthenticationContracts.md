@@ -211,12 +211,15 @@ verified `(issuer, subject)` identity resolution before session minting with
 case-sensitive subjects and no email-based linking; async-safe
 `AsyncAccountStore` resolution of a validated identity to an existing
 `User.id`; MoonMind-purpose sessions with algorithm/expiry validation, live
-revocation and principal-status checks on every validation including cache
-hits, conflicting cookie/bearer rejection, and explicit rejection of
+revocation checks on every validation including cache hits, conflicting
+cookie/bearer rejection, and explicit rejection of
 refresh/delegated/runner surfaces without broadening the upstream delegated
-allowlist. A missing or incompatible password hash is a controlled
-enrollment/reset requirement. Upstream admin-roster semantics are never
-promoted into MoonMind superuser authority.
+allowlist. Principal status (`is_active`) is enforced at authenticate/mint
+time and on full validation; cache-hit status staleness is bounded by the
+300s session-cache cap, inside the §5 5-minute propagation bound. A missing
+or incompatible password hash is a controlled enrollment/reset requirement.
+Upstream admin-roster semantics are never promoted into MoonMind superuser
+authority.
 
 Conformance is proven by
 `tests/unit/security/test_omnigent_qualification_4118.py` (21 tests: real
