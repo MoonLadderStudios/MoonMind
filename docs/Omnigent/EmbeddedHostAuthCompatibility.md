@@ -10,7 +10,10 @@
 > mode silently. Existing sessions retain their recorded bridge mode,
 > endpoint, and cleanup owner until drained, and retained rows keep decoding
 > their recorded `hostProtocolMode` for historical reads and evidence. Proxy
-> mode is the supported topology. The remainder of this document is the
+> mode is the supported topology. The live drain disposition (active embedded
+> sessions and host leases with blocker names, no identities or credentials)
+> is reported by `GET /embedded-transport-drain`; transport removal stays
+> gated on that probe reporting drained. The remainder of this document is the
 > historical reference for those retained sessions and their evidence — it is
 > not an offer of new embedded capacity. The native Workflow Chat `embedded=1`
 > presentation option is unrelated and stays supported.

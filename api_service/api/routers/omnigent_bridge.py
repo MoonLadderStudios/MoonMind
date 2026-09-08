@@ -64,6 +64,7 @@ from api_service.api.routers.omnigent_bridge_composition import (
     connected_host_frame_is_authorized,
     evaluate_active_host_auth_readiness,
     evaluate_embedded_host_auth_readiness,
+    probe_embedded_transport_drain,
     project_upstream_inventory,
     project_upstream_inventory_failure,
     resolve_default_bridge_policy_snapshot,
@@ -424,6 +425,44 @@ async def get_omnigent_bridge_readiness(
         policy_authority=policy_authority,
     )
     return readiness
+
+
+@router.get("/embedded-transport-drain", response_model=dict)
+async def get_omnigent_embedded_transport_drain(
+    config: OmnigentBridgeConfig = Depends(_require_bridge_enabled),
+    _user: User = Depends(get_current_user()),
+) -> dict[str, Any]:
+    """Report the live drain disposition for the retired embedded transport.
+
+    MoonLadderStudios/MoonMind#3955 (plan step 2): the production caller that
+    wires durable counts into the drain summary — active embedded sessions
+    from ``active_host_protocol_modes`` and active embedded host leases from
+    ``list_embedded_host_readiness`` via
+    :func:`omnigent_bridge_composition.probe_embedded_transport_drain`.
+    Transport removal stays gated on this probe reporting drained.
+
+    Mode-neutral and read-only: it works in proxy and embedded mode, projects
+    only counts and blocker names (no session/host identities, endpoints, or
+    credentials), and never imports the embedded launch modules. A durable
+    store failure returns 503 with a bounded code instead of implying drain:
+    missing evidence is a blocker, never an implicit drain.
+    """
+
+    try:
+        return await probe_embedded_transport_drain()
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail={
+                "code": "omnigent_embedded_drain_unavailable",
+                "message": (
+                    "The embedded-transport drain disposition is unavailable; "
+                    "removal stays blocked until the probe succeeds."
+                ),
+            },
+        ) from exc
 
 
 _PROXY_ROLLBACK_RECOMMENDATION = (
