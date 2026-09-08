@@ -32,6 +32,13 @@ from moonmind.workflows.temporal.artifacts import (
 
 pytestmark = [pytest.mark.asyncio, pytest.mark.integration, pytest.mark.integration_ci]
 
+# Pre-cutover authenticated-mode selector (MoonLadderStudios/MoonMind#4128
+# rw-7): the artifact service branches on ``AUTH_PROVIDER != "disabled"``, so
+# this literal means "any authenticated mode", not Keycloak specifically. The
+# Keycloak-removal cutover (#4118-4127) must repoint this constant to the
+# production accounts/OIDC/header mode literal instead of editing each test.
+_AUTHENTICATED_PROVIDER_MODE = "keycloak"
+
 @asynccontextmanager
 async def _db(tmp_path: Path):
     url = f"sqlite+aiosqlite:///{tmp_path}/temporal_artifact_authz.db"
@@ -53,7 +60,7 @@ class TestArtifactAuthorizationBoundaries:
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
         """When OIDC is enabled, a non-owner principal must be denied read access."""
-        monkeypatch.setattr(settings.oidc, "AUTH_PROVIDER", "keycloak")
+        monkeypatch.setattr(settings.oidc, "AUTH_PROVIDER", _AUTHENTICATED_PROVIDER_MODE)
         async with _db(tmp_path) as maker:
             async with maker() as session:
                 service = TemporalArtifactService(
@@ -92,7 +99,7 @@ class TestArtifactAuthorizationBoundaries:
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
         """Service principals (service:*) bypass ownership checks for reads."""
-        monkeypatch.setattr(settings.oidc, "AUTH_PROVIDER", "keycloak")
+        monkeypatch.setattr(settings.oidc, "AUTH_PROVIDER", _AUTHENTICATED_PROVIDER_MODE)
         async with _db(tmp_path) as maker:
             async with maker() as session:
                 service = TemporalArtifactService(
@@ -122,7 +129,7 @@ class TestArtifactAuthorizationBoundaries:
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
         """When OIDC is enabled, a non-owner principal must be denied mutation access."""
-        monkeypatch.setattr(settings.oidc, "AUTH_PROVIDER", "keycloak")
+        monkeypatch.setattr(settings.oidc, "AUTH_PROVIDER", _AUTHENTICATED_PROVIDER_MODE)
         async with _db(tmp_path) as maker:
             async with maker() as session:
                 service = TemporalArtifactService(
@@ -215,7 +222,7 @@ class TestArtifactAuthorizationBoundaries:
     ) -> None:
         """MM-628: linked input attachment reads are authorized by execution owner."""
 
-        monkeypatch.setattr(settings.oidc, "AUTH_PROVIDER", "keycloak")
+        monkeypatch.setattr(settings.oidc, "AUTH_PROVIDER", _AUTHENTICATED_PROVIDER_MODE)
         async with _db(tmp_path) as maker:
             async with maker() as session:
                 service = TemporalArtifactService(

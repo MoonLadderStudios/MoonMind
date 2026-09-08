@@ -46,6 +46,13 @@ from moonmind.workflows.temporal.report_artifacts import (
 
 pytestmark = [pytest.mark.asyncio]
 
+# Pre-cutover authenticated-mode selector (MoonLadderStudios/MoonMind#4128
+# rw-7): the artifact service branches on ``AUTH_PROVIDER != "disabled"``, so
+# this literal means "any authenticated mode", not Keycloak specifically. The
+# Keycloak-removal cutover (#4118-4127) must repoint this constant to the
+# production accounts/OIDC/header mode literal instead of editing each test.
+_AUTHENTICATED_PROVIDER_MODE = "keycloak"
+
 @asynccontextmanager
 async def temporal_db(tmp_path: Path):
     """Provide isolated async sqlite DB for Temporal artifact tests."""
@@ -1689,7 +1696,7 @@ async def test_execution_owner_can_read_linked_artifact_from_other_principal(
 ) -> None:
     """MM-628: browser reads may use execution ownership, not storage ownership alone."""
 
-    monkeypatch.setattr(artifact_module.settings.oidc, "AUTH_PROVIDER", "keycloak")
+    monkeypatch.setattr(artifact_module.settings.oidc, "AUTH_PROVIDER", _AUTHENTICATED_PROVIDER_MODE)
     async with temporal_db(tmp_path) as session_maker:
         async with session_maker() as session:
             repo = TemporalArtifactRepository(session)

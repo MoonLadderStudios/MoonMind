@@ -264,3 +264,115 @@ def test_no_hardcoded_keycloak_secrets_in_compose_and_env_template() -> None:
     for lineno, line in enumerate(compose_src.splitlines(), start=1):
         if "changeme" in line:
             assert "${" in line, f"docker-compose.yaml:{lineno} hardcoded secret"
+
+
+def test_legacy_keycloak_mode_fixture_retired() -> None:
+    """Named-file migration guard (rw-7): the obsolete fixture is gone.
+
+    ``tests/conftest.py`` no longer defines the pre-cutover ``keycloak_mode``
+    fixture (it had no consumers; the authenticated-mode coverage lives in
+    the named test modules through ``_AUTHENTICATED_PROVIDER_MODE``).
+    Reintroducing a Keycloak-named fixture without a test owner here is a
+    regression. The cutover must not resurrect it under a new name to
+    bypass the centralized selector.
+    """
+    conftest_src = _read("tests/conftest.py")
+
+    assert "def keycloak_mode" not in conftest_src
+    assert "keycloak_mode" not in conftest_src
+
+
+def test_authenticated_mode_test_selector_is_centralized() -> None:
+    """Named-file migration guard (rw-7): one constant owns the test literal.
+
+    The artifact and submission boundaries branch on
+    ``AUTH_PROVIDER != "disabled"``, so the named test modules select "any
+    authenticated mode" through a single ``_AUTHENTICATED_PROVIDER_MODE``
+    constant each. A raw ``setattr(..., "AUTH_PROVIDER", "keycloak")`` outside
+    that constant is a regression: the cutover must repoint the constant,
+    not scatter new literals. Coverage itself is preserved — every module
+    below still exercises the non-disabled path and the
+    ``TemporalArtifactAuthorizationError`` negative assertions.
+    """
+    for relative in (
+        "tests/integration/temporal/test_temporal_artifact_authorization.py",
+        "tests/integration/temporal/test_task_shaped_submission_normalization.py",
+        "tests/unit/workflows/temporal/test_artifacts.py",
+    ):
+        src = _read(relative)
+        assert '_AUTHENTICATED_PROVIDER_MODE = "keycloak"' in src, relative
+        assert (
+            len(
+                re.findall(
+                    r"setattr\([^)]*\"AUTH_PROVIDER\",\s*\"keycloak\"\)", src
+                )
+            )
+            == 0
+        ), f"{relative} raw authenticated-mode literal outside the constant"
+        assert "_AUTHENTICATED_PROVIDER_MODE" in src, relative
+
+
+def test_generated_frontend_client_has_no_keycloak_auth_references() -> None:
+    """Built-frontend input guard (rw-9 remainder): generated transport.
+
+    The exact upstream inputs to the built frontend assets — the generated
+    OpenAPI client and the tooling that produces it — must carry no Keycloak
+    route, token, or hostname references. A Keycloak auth reference in the
+    generated transport without a test owner here is a regression. This is a
+    static input guard, not a substitute for the built-artifact
+    qualification owned by the #4118-4127 feature work.
+    """
+    for relative in (
+        "frontend/src/generated/openapi.ts",
+        "tools/export_openapi.py",
+        "tools/generate_openapi_types.py",
+    ):
+        src = _read(relative)
+        assert "keycloak" not in src.lower(), relative
+        assert "/auth/keycloak" not in src, relative
+
+
+def test_compose_default_profile_has_no_keycloak_dependency() -> None:
+    """Topology guard (rw-9 remainder): default-profile services stand alone.
+
+    Pre-cutover inventory: only the profile-gated ``keycloak`` service itself
+    may reference the Keycloak hostname/realm material. Every default-profile
+    service must start without Keycloak: no ``depends_on`` entry, no
+    ``keycloak:8080`` endpoint except the documented ``OIDC_ISSUER_URL``
+    local-mode example default, and no ``./keycloak`` content mount except
+    the documented api-service mount tagged for removal. Widening the
+    default-profile Keycloak footprint without updating this test is a
+    regression. Removal must delete the service and update this test in the
+    same change.
+    """
+    import yaml
+
+    compose = yaml.safe_load((REPO_ROOT / "docker-compose.yaml").read_text(encoding="utf-8"))
+    services = compose.get("services", {})
+    assert "keycloak" in services, "pre-cutover baseline still ships Keycloak topology"
+
+    for name, service in services.items():
+        if name == "keycloak":
+            continue
+        if "keycloak" in service.get("profiles", []):
+            continue
+        depends = service.get("depends_on", {}) or {}
+        assert "keycloak" not in depends, f"service {name} depends on keycloak"
+        for entry in service.get("environment", []) or []:
+            if "keycloak:8080" in str(entry):
+                assert str(entry).startswith("OIDC_ISSUER_URL="), (
+                    f"service {name} unexpected keycloak endpoint: {entry}"
+                )
+
+    # Exactly one documented pre-cutover content mount outside the keycloak
+    # service itself (api service, tagged for removal in its inline comment).
+    # The ``- ./keycloak:`` source match excludes the keycloak service's own
+    # ``./keycloak/realm-export.json`` import line.
+    compose_src = _read("docker-compose.yaml")
+    api_mount_lines = [
+        line.strip()
+        for line in compose_src.splitlines()
+        if "- ./keycloak:" in line
+    ]
+    assert len(api_mount_lines) == 1, api_mount_lines
+    assert "remove if only for keycloak service" in api_mount_lines[0]
