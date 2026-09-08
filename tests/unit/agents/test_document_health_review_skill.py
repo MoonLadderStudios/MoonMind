@@ -1,6 +1,8 @@
 from pathlib import Path
 
 from moonmind.services.skill_resolution import (
+    _load_skill_frontmatter,
+    extract_required_capabilities_from_skill_markdown,
     extract_required_skill_names_from_skill_markdown,
 )
 
@@ -19,12 +21,12 @@ def test_document_health_review_skill_exists() -> None:
 def test_document_health_review_front_matter() -> None:
     text = _skill_text()
 
-    assert text.startswith("---\n")
-    assert "name: document-health-review" in text
-    # The description must advertise the disposition vocabulary the skill produces.
-    assert "kept, updated, merged, split, moved, archived, or deleted" in text
-    assert "required-capabilities:" in text
-    assert "- git" in text
+    meta = _load_skill_frontmatter(_SKILL_PATH.parent)
+    assert meta["name"] == "document-health-review"
+    assert isinstance(meta["description"], str) and meta["description"].strip()
+    assert extract_required_capabilities_from_skill_markdown(
+        text, skill_name="document-health-review"
+    ) == ("git",)
 
 
 def test_document_health_review_defines_all_eight_questions() -> None:

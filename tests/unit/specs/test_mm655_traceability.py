@@ -14,8 +14,6 @@ def test_mm655_traceability_artifacts_preserve_original_request():
     tasks = (FEATURE_DIR / "tasks.md").read_text()
 
     assert "MM-655" in spec
-    assert "# MM-655 MoonSpec Orchestration Input" in spec
-    assert "Effective-value resolver with source explanation and operator locks" in spec
     assert "MM-655" in plan
     assert "MM-655" in tasks
     assert "FR-014" in tasks

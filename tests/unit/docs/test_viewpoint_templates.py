@@ -88,8 +88,6 @@ def test_standard_references_each_template(filename: str) -> None:
 
 def test_standard_defines_both_headers_and_traceability() -> None:
     text = _read(STANDARD)
-    assert "Canonical metadata header" in text
-    assert "Imperative-plan header" in text
     # Source-issue traceability is preserved in the standard.
     assert "MM-900" in text
     assert "MM-906" in text

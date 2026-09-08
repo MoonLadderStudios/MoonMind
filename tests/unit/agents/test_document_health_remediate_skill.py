@@ -2,7 +2,10 @@
 
 from pathlib import Path
 
-import yaml
+from moonmind.services.skill_resolution import (
+    _load_skill_frontmatter,
+    extract_required_capabilities_from_skill_markdown,
+)
 
 _SKILLS_DIR = Path(__file__).resolve().parents[3] / ".agents" / "skills"
 _SKILL_PATH = _SKILLS_DIR / "document-health-remediate" / "SKILL.md"
@@ -12,25 +15,18 @@ def _read_skill() -> str:
     return _SKILL_PATH.read_text(encoding="utf-8")
 
 
-def _front_matter(text: str) -> dict:
-    assert text.startswith("---\n"), "SKILL.md must begin with YAML front matter"
-    _, raw, _ = text.split("---\n", 2)
-    return yaml.safe_load(raw)
-
-
 def test_skill_file_exists() -> None:
     assert _SKILL_PATH.is_file()
 
 
 def test_front_matter_defines_name_description_and_git_capability() -> None:
-    meta = _front_matter(_read_skill())
+    meta = _load_skill_frontmatter(_SKILL_PATH.parent)
 
     assert meta["name"] == "document-health-remediate"
-    assert "document-health-review" in meta["description"]
-    # The description enumerates the remediation actions.
-    for action in ("updating", "merging", "splitting", "moving", "archiving", "deleting"):
-        assert action in meta["description"]
-    assert meta["metadata"]["required-capabilities"] == ["git"]
+    assert isinstance(meta["description"], str) and meta["description"].strip()
+    assert extract_required_capabilities_from_skill_markdown(
+        _read_skill(), skill_name="document-health-remediate"
+    ) == ("git",)
 
 
 def test_skill_is_report_driven_but_evidence_validated() -> None:

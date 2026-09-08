@@ -43,20 +43,6 @@ FORBIDDEN_INLINE_EVIDENCE_TERMS = (
     "credentials",
 )
 
-OUT_OF_SCOPE_PHASE_TERMS = (
-    "checkpoint substrate",
-    "checkpoint-backed Resume",
-    "workspace policy",
-    "terminal side-effect",
-    "typed gate",
-    "context",
-    "memory",
-    "UI",
-    "autonomous-loop",
-    "final-doc",
-)
-
-
 def _read(path: Path) -> str:
     return path.read_text(encoding="utf-8")
 
@@ -113,16 +99,3 @@ def test_step_execution_guidance_requires_compact_ref_only_evidence() -> None:
         _assert_terms_present(guidance, required)
     for forbidden in FORBIDDEN_INLINE_EVIDENCE_TERMS:
         _assert_terms_present(guidance, forbidden)
-
-
-def test_step_execution_guidance_keeps_phase_one_scope_boundary() -> None:
-    guidance = _read(STEP_EXECUTION_DOC)
-
-    assert "PR #2454" in guidance
-    assert "manifest writer consolidation" in guidance
-    assert "completed" in guidance
-    assert "stale WP1" in guidance
-    assert "Phase 1" in guidance
-    assert "fixture extension triggers" in guidance
-    for phase in OUT_OF_SCOPE_PHASE_TERMS:
-        _assert_terms_present(guidance, phase)

@@ -2,6 +2,9 @@ import json
 import re
 from pathlib import Path
 
+import pytest
+from pydantic import ValidationError
+
 from moonmind.schemas.agent_runtime_models import AgentExecutionRequest
 
 
@@ -9,8 +12,14 @@ CONTRACT = Path(__file__).resolve().parents[3] / "docs/Omnigent/CodexCreateToHos
 ADAPTER = Path(__file__).resolve().parents[3] / "docs/Omnigent/OmnigentAdapter.md"
 
 
-def _json_example(text: str, heading: str) -> dict[str, object]:
-    match = re.search(rf"### {re.escape(heading)}\n\n```json\n(.*?)\n```", text, re.DOTALL)
+def _json_example(text: str, section: str) -> dict[str, object]:
+    # Section numbers identify wire examples; their explanatory titles and
+    # spacing are free to change.
+    match = re.search(
+        rf"^###\s+{re.escape(section)}\s+[^\n]*\n\s*```json\s*\n(.*?)\n```",
+        text,
+        re.DOTALL | re.MULTILINE,
+    )
     assert match is not None
     return json.loads(match.group(1))
 
@@ -30,7 +39,7 @@ def test_identity_and_versioned_wire_contract_are_pinned() -> None:
 
 def test_agent_execution_request_example_matches_canonical_model() -> None:
     text = CONTRACT.read_text(encoding="utf-8")
-    payload = _json_example(text, "4.3 AgentExecutionRequest")
+    payload = _json_example(text, "4.3")
 
     request = AgentExecutionRequest.model_validate(payload)
 
@@ -41,8 +50,8 @@ def test_agent_execution_request_example_matches_canonical_model() -> None:
 
 def test_launch_snapshot_and_terminal_authority_are_pinned() -> None:
     text = CONTRACT.read_text(encoding="utf-8")
-    snapshot = _json_example(text, "4.4 Effective launch snapshot")
-    detail = _json_example(text, "4.5 Workflow Detail projection")
+    snapshot = _json_example(text, "4.4")
+    detail = _json_example(text, "4.5")
 
     assert snapshot["executionProfileRef"] == "provider-profile:codex-primary:v7"
     assert snapshot["credentialGeneration"] == 7
@@ -82,3 +91,29 @@ def test_explicit_selection_is_fail_closed_without_substitution() -> None:
         "OMNIGENT_EVIDENCE_PUBLICATION_FAILED",
     ):
         assert code in text
+
+
+def test_example_heading_can_be_reworded_without_changing_request() -> None:
+    text = CONTRACT.read_text(encoding="utf-8")
+    rewritten = text.replace(
+        "### 4.3 AgentExecutionRequest", "### 4.3 Request sent to the selected agent\n"
+    )
+    assert rewritten != text
+    request = AgentExecutionRequest.model_validate(_json_example(rewritten, "4.3"))
+    assert request.agent_id == "omnigent"
+
+
+@pytest.mark.parametrize("mutation", ["invalid-kind", "missing-agent", "invalid-json"])
+def test_incorrect_executable_request_example_is_rejected(mutation: str) -> None:
+    text = CONTRACT.read_text(encoding="utf-8")
+    payload = _json_example(text, "4.3")
+    if mutation == "invalid-kind":
+        payload["agentKind"] = "unsupported-kind"
+    elif mutation == "missing-agent":
+        del payload["agentId"]
+    else:
+        with pytest.raises(json.JSONDecodeError):
+            _json_example("### 4.3 Any title\n\n```json\n{broken}\n```", "4.3")
+        return
+    with pytest.raises(ValidationError):
+        AgentExecutionRequest.model_validate(payload)
