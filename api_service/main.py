@@ -897,6 +897,9 @@ async def _initialize_oidc_provider(app: FastAPI):
             raise RuntimeError(str(exc)) from exc
     app.state.auth_production_mode = production_mode
     app.state.auth_classification = classification
+    from moonmind.security.auth_modes_4120 import set_active_production_mode as _set_active_mode
+
+    _set_active_mode(production_mode)
     logger.info(
         "Auth modes initialized: %s",
         redacted_diagnostics(
