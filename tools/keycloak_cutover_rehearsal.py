@@ -919,6 +919,14 @@ def run_gate(
     results.append(check_backup_freeze_drain())
     results.append(check_failure_injection())
     results.append(check_dual_issuance(False, True))
+    # Same hermetic guards as CLI `--mode all`: rollback-scope refusal and
+    # retirement-plan textual safety. Execution still requires owner approval.
+    results.append(
+        check_rollback_plan("matching app/config/key restore with reconciliation")
+    )
+    results.append(
+        check_retirement_plan(["stop service keycloak (identified from inventory)"])
+    )
     return results
 
 
