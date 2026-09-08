@@ -155,8 +155,11 @@ def test_omitted_loads_durable_key_and_restart_retains(tmp_path):
 def test_concurrent_bootstrap_shares_one_generation(tmp_path):
     # Simulate a replica winning the race: pre-create the key file, then
     # resolve from a second "process" that must read the winner's key.
+    # Fixed material (no leading/trailing ASCII whitespace) keeps the read
+    # deterministic: the resolver strips provisioned padding on read, so
+    # random bytes with edge whitespace would flake this assertion.
     path = tmp_path / "moonmind_session_key"
-    winner = secrets.token_bytes(32)
+    winner = b"K" * m._MIN_SECRET_BYTES
     path.write_bytes(winner)
     loser = m.resolve_session_secret(explicit_secret=None, key_path=path)
     assert loser == winner
