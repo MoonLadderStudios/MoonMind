@@ -2,6 +2,19 @@
 
 **Document Class:** Canonical declarative
 
+> **Retirement notice (MoonLadderStudios/MoonMind#3955):** the experimental
+> embedded host/runner transport no longer admits new work. Session creation
+> and host registration through it are rejected with
+> `omnigent_embedded_transport_retired` and an actionable proxy alternative
+> (`upstream_omnigent_server_proxy`); the rejection never substitutes proxy
+> mode silently. Existing sessions retain their recorded bridge mode,
+> endpoint, and cleanup owner until drained, and retained rows keep decoding
+> their recorded `hostProtocolMode` for historical reads and evidence. Proxy
+> mode is the supported topology. The remainder of this document is the
+> historical reference for those retained sessions and their evidence — it is
+> not an offer of new embedded capacity. The native Workflow Chat `embedded=1`
+> presentation option is unrelated and stays supported.
+
 **Compatibility declaration:** `omnigent.server.v1` with embedded runner
 authentication profile `omnigent.runner_tunnel.983c93c6`, verified against
 upstream Omnigent source commit
@@ -116,11 +129,13 @@ to close code 4401, disabled/revoked or stale connected authority to 4403,
 transient verifier/configuration failure to 1013, and accepted-frame protocol
 failure to 4400.
 
-Embedded mode remains experimental and must not be presented as production
-ready until all three configured evidence claims (proxy conformance, live
-stock-host smoke, and host-auth conformance) resolve independently, pass schema
-and secret-scan validation, match the active MoonMind build/configuration and
-immutable image identities, and remain unexpired. Proxy mode remains the
+Embedded mode is retired for new work (see the notice above) and must not be
+presented as production ready. It remains observable only so in-flight
+sessions can drain: until all three configured evidence claims (proxy
+conformance, live stock-host smoke, and host-auth conformance) resolve
+independently, pass schema and secret-scan validation, match the active
+MoonMind build/configuration and immutable image identities, and remain
+unexpired, even drain-time continuity stays gated. Proxy mode remains the
 production default and supported topology until the full #3519 matrix passes.
 
 ## Launch modes, rollout, and rollback
@@ -131,9 +146,10 @@ and cleanup contract before it can be advertised for embedded mode. An
 unproven row is unavailable with an actionable readiness reason; success in one
 mode does not imply support for the other.
 
-Selecting embedded mode is explicit and versioned. Missing, stale, revoked, or
-incompatible evidence gates readiness before a new session starts. Rollback
-selects `upstream_omnigent_server_proxy` for new sessions only. An in-flight
+Selecting embedded mode was explicit and versioned; since #3955 it is retired
+for new sessions and only retained sessions drain. Missing, stale, revoked, or
+incompatible evidence gates readiness before retained-session continuity work
+starts. Rollback selects `upstream_omnigent_server_proxy` for new sessions only. An in-flight
 session stays with its recorded endpoint and bridge mode, and historical
 records retain their actual compatibility profile and evidence references.
 MoonMind never redirects an in-flight session between modes.

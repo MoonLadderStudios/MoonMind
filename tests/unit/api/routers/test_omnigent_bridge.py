@@ -1781,7 +1781,11 @@ def test_superuser_owns_any_workflow() -> None:
     assert len(proxy.created) == 1
 
 
-def test_create_session_available_in_embedded_mode() -> None:
+def test_create_session_rejected_in_retired_embedded_mode() -> None:
+    # MoonLadderStudios/MoonMind#3955: the experimental embedded transport no
+    # longer admits new sessions. Creation fails with an explicit retired
+    # error (never a silent proxy substitution) before any session or
+    # credential-consumer side effect.
     app = FastAPI()
     app.include_router(router, prefix=OMNIGENT_BRIDGE_MOUNT_PATH)
     facade = _FakeEmbeddedFacade()
@@ -1811,11 +1815,12 @@ def test_create_session_available_in_embedded_mode() -> None:
         json=_create_body(host_type="external", host_id="host-1", workspace="/repo"),
     )
 
-    assert resp.status_code == 200
-    assert resp.json()["id"] == "emb_brs_1"
-    assert resp.json()["moonmind"]["bridgeLocal"] is True
-    assert len(facade.created) == 1
-    assert facade.created[0]["binding"].workflow_id == "mm:w1"
+    assert resp.status_code == 410
+    detail = resp.json()["detail"]
+    assert detail["code"] == "omnigent_embedded_transport_retired"
+    assert detail["supportedAlternative"] == "upstream_omnigent_server_proxy"
+    assert "upstream_omnigent_server_proxy" in detail["message"]
+    assert not facade.created
 
 
 def test_stop_session_event_dispatches_to_embedded_exact_host_facade() -> None:

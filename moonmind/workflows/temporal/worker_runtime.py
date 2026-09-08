@@ -3106,6 +3106,24 @@ async def main_async() -> None:
     # worker alone would produce no deprecation warning and could later accept a
     # variable the API rejects.
     enforce_obsolete_configuration_at_startup(logger)
+    try:
+        # MoonLadderStudios/MoonMind#3955: the worker is separately
+        # restartable, so it detects a retired embedded transport selection
+        # itself rather than relying on the API to log it. Advisory only:
+        # the deployment still boots so in-flight sessions drain.
+        from moonmind.omnigent.bridge_config import (
+            embedded_transport_retirement_notice,
+            resolve_bridge_config,
+        )
+
+        _retirement_notice = embedded_transport_retirement_notice(
+            resolve_bridge_config()
+        )
+    except Exception as exc:  # noqa: BLE001 - detection must not block startup
+        logger.warning("Omnigent bridge retirement detection skipped: %s", exc)
+        _retirement_notice = None
+    if _retirement_notice:
+        logger.warning("Retired Omnigent transport selected: %s", _retirement_notice)
     topology = describe_configured_worker()
     _enforce_codex_config_for_managed_fleet(topology.fleet)
 
