@@ -33,9 +33,12 @@ codecs and native presentation are already delegated. The remaining inspected
 representations have MoonMind consumers or governance semantics without a
 verified equivalent replacement at this pin. No SDK migration, data drain,
 runtime retirement, or new compatibility framework is justified by this audit.
-Five additional stream-to-journal regression cases preserve a concrete reason
-the current transport cannot simply be replaced by the SDK parser. Runtime
-behavior, generated schemas, UI code, and workflow payloads are unchanged.
+Three additional stream-to-journal regression cases preserve a concrete reason
+the current transport cannot simply be replaced by the SDK parser. Malformed
+SSE frames remain covered at the client parse contract; the bounded batch
+activity degrades transport parse errors to `readStatus="unavailable"` while
+the authoritative snapshot remains terminal authority (residual, see T1).
+Runtime behavior, generated schemas, UI code, and workflow payloads are unchanged.
 
 ## Pinned upstream contracts inspected
 
@@ -130,14 +133,21 @@ drain evidence was available or inferred here.
 The following existing tests are the proof obligations for retained behavior,
 not a claim of cross-host equivalence or live provider qualification. The new
 T1 test covers the audited transport/journal handoff with the actual public
-client and normalizer, substituting only the HTTP peer. It sends fragmented
-malformed JSON, a non-object frame, an unknown event, an unknown status and a
-blank status before a valid completion; each must fail before normalization
-can accept completion.
+client and normalizer, substituting only the HTTP peer. It sends an unknown
+event, an unknown status and a blank status before a valid completion; each
+must fail before normalization can accept completion. These are the drift
+cases the production Temporal handoff propagates: the batch activity
+normalizes collected events outside its bounded stream-read block, so contract
+errors fail the activity. Malformed JSON and non-object frames instead raise
+from `stream_events()` inside `collect_bounded_batch()` and are degraded to
+`readStatus="unavailable"` (the supervisor gates only on the snapshot status);
+they remain covered at the client parse contract by the existing
+`parse_sse_line` rejection test. This transport-parse degradation is a
+recorded residual, not a passing claim for the Temporal path.
 
 | Ref | Executable evidence and boundary covered |
 | --- | --- |
-| T1 | [HTTP client tests](../../tests/unit/workflows/adapters/test_omnigent_client.py): new `test_stream_to_journal_rejects_critical_drift` (five cases); existing pagination, credential-header isolation, timeout/pool and redaction tests. [Bridge event tests](../../tests/unit/omnigent/test_bridge_events.py) distinguish critical failure from bounded optional-resource diagnostics. This is why the pinned SDK's skip-on-unknown parser is not an equivalent replacement. |
+| T1 | [HTTP client tests](../../tests/unit/workflows/adapters/test_omnigent_client.py): new `test_stream_to_journal_rejects_critical_drift` (three contract-drift cases); existing `test_parse_sse_line_redacts_payload_and_rejects_malformed_frames` covers malformed-frame rejection at the parse contract, plus pagination, credential-header isolation, timeout/pool and redaction tests. [Bridge event tests](../../tests/unit/omnigent/test_bridge_events.py) distinguish critical failure from bounded optional-resource diagnostics. This is why the pinned SDK's skip-on-unknown parser is not an equivalent replacement. |
 | T2 | [Host codec tests](../../tests/unit/omnigent/test_host_protocol_adapter.py) execute pinned upstream frames and reject incompatible/misdirected/oversized frames; [embedded channel tests](../../tests/unit/omnigent/test_embedded_host_channel.py) cover correlation, disconnect and substituted runner identity. |
 | T3 | [Native compatibility tests](../../tests/unit/omnigent/test_native_ui_compat.py) bind the source pin/digests to the route manifest; [unknown-route tests](../../tests/unit/omnigent/test_omnigent_facade_unknown_route_fails_closed.py) cover denial. [Workflow chat router tests](../../tests/unit/api/routers/test_omnigent_workflow_chat.py), including `test_non_owner_gets_non_enumerating_binding_unknown` and `test_terminal_items_page_uses_captured_snapshot_after_provider_cleanup`, cover ownership and artifact-backed terminal reads. |
 | T4 | [Catalog repository tests](../../tests/unit/omnigent/test_harness_catalog_repository.py) exercise SQL persistence, fresh re-observation and pinned-history retention; [profile service tests](../../tests/unit/services/test_omnigent_agent_profile_service.py) cover projection freshness/compatibility. [Profile router tests](../../tests/unit/api/routers/test_omnigent_agent_profiles.py) and [harness-platform tests](../../tests/unit/omnigent/test_harness_platform.py) retain owner/admission coverage. |
@@ -179,8 +189,8 @@ checks do not substitute for pytest execution.
 | Candidate groups dispositioned | 0 → 14 in this audit | Each row joins production callers, state consumers, pinned upstream surface, surviving owner and tests. Existing documentation/retirement inventories remain their own authorities. |
 | Current `omnigent_*` ORM tables | 29 → 29 | S1–S13 enumerate all 29. No table or field had a demonstrated replacement plus consumer-drain evidence. |
 | Production code/schema/UI/config lines removed or added | 0 / 0 | Existing upstream delegation is not counted as a new reduction. No quota overrides ownership. |
-| New regression cases | 0 → 5 | Transport-to-journal critical drift. Execution is blocked as recorded above. |
-| New audit reports | 0 → 1 | This working report owns only the revision-specific findings; canonical desired-state contracts are unchanged. |
+| New regression cases | 0 → 3 | Transport-to-journal critical drift (unknown event/status/blank). Malformed-frame rejection stays covered at the client parse contract; transport-parse degradation in the batch activity is a recorded residual. Execution is blocked as recorded above. |
+| New audit reports | 0 → 1 | This working report owns only the revision-specific findings; the bridge contract gains a scope clarification only (bridge binding store vs control-plane session authority, O8), with no behavior change. |
 
 Reproduce the table count by reading `__tablename__` assignments beginning with
 `omnigent_` in `api_service/db/models.py`; compare production changes with
