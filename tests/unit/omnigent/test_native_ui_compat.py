@@ -281,6 +281,29 @@ def test_subprotocol_negotiation_rejects_unlisted_protocol() -> None:
     assert exc.value.status_code == 403
 
 
+@pytest.mark.parametrize("path", [
+    "v1/sessions/b1/items",
+    "v1/sessions/b1/resources/terminals",
+])
+def test_pagination_rejects_simultaneous_cursors(path: str) -> None:
+    """`after` + `before` together must fail closed pre-I/O, mirroring the
+    durable replay validator (`_terminal_items_query`)."""
+
+    match = compat.classify_native_ui_http("GET", path)
+    assert match is not None
+    with pytest.raises(compat.NativeUiCompatibilityError):
+        compat.validate_native_ui_http_fields(
+            match,
+            method="GET",
+            query=[("after", "a"), ("before", "b")],
+            body=None,
+        )
+    # A single cursor remains admitted.
+    compat.validate_native_ui_http_fields(
+        match, method="GET", query=[("after", "a")], body=None,
+    )
+
+
 def test_native_http_inventory_has_real_pinned_upstream_entrypoints() -> None:
     """Do not label invented endpoints as supported based on mocked responses."""
     import ast
