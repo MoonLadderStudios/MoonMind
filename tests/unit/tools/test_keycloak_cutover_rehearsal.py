@@ -149,12 +149,17 @@ def test_build_pins_collect_exact_versions_and_topology() -> None:
     assert pins["auth_provider_default"] == "disabled"
     assert isinstance(pins["alembic_revisions"], int) and pins["alembic_revisions"] > 0
     assert pins["plan_status"] == "Proposed"
+    assert pins["app_image_default"].startswith("ghcr.io/")
+    assert pins["root_package_version"] == "1.0.0"
     result = rehearsal.check_build_pins()
     assert result.status == "completed"
     assert "never attempted" in result.evidence or "Never attempted" in result.evidence or "never attempted" in result.evidence.lower()
 
 
 def test_backup_envelope_requires_scopes_and_restore_verifies(tmp_path: Path) -> None:
+    import os
+    import stat
+
     entries = {
         "identity:users": "sanitized-user-count=2",
         "config:auth-provider": "disabled",
@@ -164,6 +169,10 @@ def test_backup_envelope_requires_scopes_and_restore_verifies(tmp_path: Path) ->
     assert envelope["encryption"] == "operator-kms-required"
     assert rehearsal.verify_backup_envelope(envelope, entries)
     assert not rehearsal.verify_backup_envelope(envelope, {**entries, "identity:users": "tampered"})
+    persisted = tmp_path / "b1.json"
+    assert persisted.exists()
+    mode = stat.S_IMODE(os.stat(persisted).st_mode)
+    assert mode == 0o600, f"backup envelope must persist access-restricted, got {oct(mode)}"
     try:
         rehearsal.create_backup_envelope({"identity:users": "x"}, "b2")
     except ValueError:
@@ -207,6 +216,10 @@ def test_failure_injection_contains_each_step_and_records_boundary() -> None:
         run = rehearsal.run_cutover_sequence(fail_at=step)
         assert run["steps"][step] == "failed-injected"
         assert run["backward_compatible_point"] == rehearsal.LAST_BACKWARD_COMPATIBLE_POINT
+    clean = rehearsal.run_cutover_sequence()
+    assert "invalidate" in clean["rollback_rule"]
+    assert "never whole shared DB" in clean["rollback_rule"]
+    assert "never silent disabled-auth" in clean["rollback_rule"]
     try:
         rehearsal.run_cutover_sequence(fail_at="nope")
     except ValueError:
@@ -223,6 +236,62 @@ def test_auth_boundary_replay_records_no_boundary_change() -> None:
     assert "No persisted/history boundary change" in ok.evidence
     after = [dict(r, owner_id="00000000-0000-0000-0000-000000000000") for r in before]
     assert rehearsal.check_auth_boundary_replay(before, after, boundary_changed=True).status == "failed"
+
+
+def test_auth_boundary_replay_with_changed_boundary_and_exact_evidence() -> None:
+    # A future auth change that alters a persisted boundary must supply exact
+    # replay evidence: identical owner IDs + command order completes.
+    fixture = rehearsal.build_sanitized_fixture("kc-to-accounts")
+    before = [dict(r, commands=list(r["commands"])) for r in fixture["workflow_owner_refs"]]
+    after = [dict(r, commands=list(r["commands"])) for r in fixture["workflow_owner_refs"]]
+    ok = rehearsal.check_auth_boundary_replay(before, after, boundary_changed=True)
+    assert ok.status == "completed"
+    assert "exact replay evidence verified" in ok.evidence
+
+
+def test_capability_probes_flip_when_sibling_capability_lands(tmp_path: Path) -> None:
+    # At HEAD the repo-observable prerequisites stay blocked (fail-closed).
+    assert not rehearsal._capability_present("4119-mapping-revision")
+    assert not rehearsal._capability_present("4120-mode-key-setup")
+    assert not rehearsal._capability_present("4122-protected-recovery")
+    assert not rehearsal._capability_present("4129-removal")
+    # #4119: a Keycloak migration outside this gate flips the probe.
+    versions = tmp_path / "api_service/migrations/versions"
+    versions.mkdir(parents=True)
+    (versions / "999_keycloak_identity_map.py").write_text("# sibling #4119 migration\n")
+    assert rehearsal._capability_present("4119-mapping-revision", tmp_path)
+    by_name = {s.name: s for s in rehearsal.check_prerequisites(tmp_path)}
+    assert by_name["prerequisite-4119-mapping-revision"].status == "completed"
+    # #4120: a new AUTH_PROVIDER literal flips the probe.
+    settings_dir = tmp_path / "moonmind/config"
+    settings_dir.mkdir(parents=True)
+    (settings_dir / "settings.py").write_text("MODES = ('disabled', 'local')\n")
+    assert rehearsal._capability_present("4120-mode-key-setup", tmp_path)
+    # #4122: a recovery tool outside this gate flips the probe.
+    tools_dir = tmp_path / "tools"
+    tools_dir.mkdir(parents=True)
+    (tools_dir / "identity_recovery.py").write_text("# sibling #4122 recovery\n")
+    assert rehearsal._capability_present("4122-protected-recovery", tmp_path)
+
+
+def test_capability_probes_flip_when_keycloak_surfaces_removed(tmp_path: Path) -> None:
+    (tmp_path / "docker-compose.yaml").write_text("services:\n  api:\n    image: app:latest\n")
+    assert rehearsal._capability_present("4129-removal", tmp_path)
+    by_name = {s.name: s for s in rehearsal.check_prerequisites(tmp_path)}
+    assert by_name["prerequisite-4129-removal"].status == "completed"
+
+
+def test_owner_and_deployment_gates_never_flip_hermetically(tmp_path: Path) -> None:
+    for pid in (
+        "4117-inventory",
+        "4128-qualification",
+        "4130-operator-contracts",
+        "named-owner-approval",
+        "live-idp-mfa-qualification",
+    ):
+        assert not rehearsal._capability_present(pid, tmp_path)
+        by_name = {s.name: s for s in rehearsal.check_prerequisites(tmp_path)}
+        assert by_name[f"prerequisite-{pid}"].status == "blocked"
 
 
 def test_run_gate_includes_new_hermetic_steps_and_stays_deployment_blocked() -> None:
