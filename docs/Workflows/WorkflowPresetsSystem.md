@@ -34,6 +34,17 @@ The system preserves these properties:
 
 Presets do not replace Skills, require per-preset React forms, grant execution rights, or create a second publishing engine. Their expanded steps pass the normal policy, runtime, repository, and publication boundaries.
 
+Trusted issue loaders persist the complete GitHub or Jira brief as a linked JSON
+artifact before returning to the workflow. The existing `briefArtifactRef` carries
+that source into the first assessment and subsequent implementation, remediation,
+and verification workspaces. Inline context may be shortened for history limits;
+the full attachment remains authoritative. Agent-generated copies do not replace
+the loader's brief. Artifact storage failure stops the handoff before assessment.
+
+GitHub implementation presets declare `docker` for their repository verification
+work. Admission validates Docker readiness; agents use the
+scoped Docker Backend Service to execute tests.
+
 ## Core Concepts
 
 | Concept | Meaning |

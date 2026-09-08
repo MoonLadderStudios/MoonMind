@@ -1,0 +1,12 @@
+{
+  "incidentWorkflowId": "mm:6901d5c7-1389-49fb-b066-6a3a1ed8568c-2026-09-08T04:20:00Z",
+  "invariant": "The loader persists the complete trusted issue before prompt compaction, and the first assessment receives it as an authorized attachment.",
+  "bodyPrefix": "Required journey A: exercise the production boundary.\n",
+  "repeatCount": 180,
+  "acceptanceTail": "\nRequired journey B and final acceptance must remain available to the verifier.",
+  "containerSubmission": {
+    "observedFailure": "MOONMIND_RUNTIME_ID is required; run this command inside a MoonMind managed workflow",
+    "requiredCapabilities": ["git", "gh", "docker"],
+    "testTargets": ["tests/unit/test_pytest_unit_workflow.py"]
+  }
+}

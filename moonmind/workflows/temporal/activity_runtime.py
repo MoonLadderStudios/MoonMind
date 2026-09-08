@@ -23,7 +23,7 @@ import tempfile
 import threading
 import time
 import tarfile
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import UTC, datetime, timedelta
 from io import BytesIO
 from pathlib import Path
@@ -2559,7 +2559,7 @@ class TemporalSkillActivities:
             )
 
         try:
-            return await execute_skill_activity(
+            result = await execute_skill_activity(
                 invocation_payload=invocation_payload,
                 registry_snapshot=resolved_snapshot,
                 dispatcher=self._dispatcher,
@@ -2567,6 +2567,53 @@ class TemporalSkillActivities:
             )
         except ToolFailure as exc:
             raise _tool_failure_application_error(exc) from exc
+
+        # The trusted loader owns the complete brief. Persist it before the
+        # workflow compacts inline context, rather than asking an assessment
+        # agent in a fresh workspace to reconstruct that source from a preview.
+        outputs = result.outputs
+        if (
+            result.status == "COMPLETED"
+            and outputs.get("trustedSource")
+            in {"moonmind.github.get_issue", "moonmind.jira.get_issue"}
+            and outputs.get("artifactPath")
+        ):
+            if resolved_artifact_service is None:
+                raise TemporalActivityRuntimeError(
+                    "Trusted issue brief requires durable artifact storage"
+                )
+            from temporalio import activity
+
+            try:
+                info = activity.info()
+            except RuntimeError:
+                info = None
+            brief_ref = await _write_json_artifact(
+                resolved_artifact_service,
+                principal=principal or "system:agent_runtime",
+                payload=dict(outputs),
+                execution_ref=(
+                    ExecutionRef(
+                        namespace=info.namespace,
+                        workflow_id=info.workflow_id,
+                        run_id=info.workflow_run_id,
+                        link_type="input.issue_brief_handoff",
+                    )
+                    if info is not None
+                    else None
+                ),
+                metadata_json={
+                    "name": "issue-brief.json",
+                    "path": outputs["artifactPath"],
+                    "producer": "activity:mm.tool.execute",
+                    "labels": ["issue_brief"],
+                },
+            )
+            result = replace(
+                result,
+                outputs={**outputs, "briefArtifactRef": brief_ref.artifact_id},
+            )
+        return result
 
     async def mm_tool_execute(
         self,
