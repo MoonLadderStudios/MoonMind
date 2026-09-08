@@ -1312,14 +1312,14 @@ Before any field deletion ships, this hard switch requires an explicit versioned
 
 This is consistent with the constitution's Temporal-facing contract rules in `AGENTS.md`: workflow/activity/update/signal payload shapes are compatibility-sensitive, and any non-additive change must preserve worker-bound invocation compatibility for in-flight runs or be versioned with an explicit migration/cutover plan. The Phase 10 release notes MUST link to the per-environment cutover record before the breaking release is published.
 
-MM-730 implements this cutover as an explicit runtime gate:
+MM-730 implements this cutover as an explicit runtime gate (superseded by MoonLadderStudios/MoonMind#3951 for current builds):
 
 - `TEMPORAL_USER_WORKFLOW_CONTRACT_MODE=legacy_run` is the default and serves only `MoonMind.UserWorkflow` on the legacy workflow Task Queue.
 - `TEMPORAL_USER_WORKFLOW_CONTRACT_MODE=renamed_contract` serves only `MoonMind.UserWorkflow` for new user Workflow Execution starts and requires `TEMPORAL_USER_WORKFLOW_V2_TASK_QUEUE` to be distinct from `TEMPORAL_WORKFLOW_TASK_QUEUE`.
-- `renamed_contract` startup fails unless `TEMPORAL_USER_WORKFLOW_CUTOVER_RECORD_PATH` points to a JSON record for MM-730 that lists every environment's `drain`, `pause_resume`, or `terminate_restart` decision and includes workflow, activity, signal, and update cutover strategies.
-- `renamed_contract` startup also requires `TEMPORAL_USER_WORKFLOW_RELEASE_NOTES_PATH` to include the breaking release note that Tasks are no longer exposed as a product/runtime concept and compatibility redirects/aliases are not kept.
+- Current `renamed_contract` startup rejects `TEMPORAL_USER_WORKFLOW_CUTOVER_RECORD_PATH` and `TEMPORAL_USER_WORKFLOW_RELEASE_NOTES_PATH` as obsolete (MoonLadderStudios/MoonMind#3951). The MM-730 cutover-record and release-note gating below is historical: do not configure those variables on current builds.
+- Historically, `renamed_contract` startup failed unless `TEMPORAL_USER_WORKFLOW_CUTOVER_RECORD_PATH` pointed to a JSON record for MM-730 that listed every environment's `drain`, `pause_resume`, or `terminate_restart` decision and included workflow, activity, signal, and update cutover strategies, and unless `TEMPORAL_USER_WORKFLOW_RELEASE_NOTES_PATH` included the breaking release note that Tasks are no longer exposed as a product/runtime concept and compatibility redirects/aliases are not kept.
 
-The example cutover record lives at `config/temporal/mm-730-hard-switch-cutover.example.json`. Operators must copy it and record the real environment decisions before enabling the renamed-contract worker.
+The example cutover record lives at `config/temporal/mm-730-hard-switch-cutover.example.json`. It is a historical reference retained for replay audits; operators on current builds must not configure the removed variables (physical disposal tracked in MoonLadderStudios/MoonMind#3963/MoonLadderStudios/MoonMind#3964).
 
 ### Phase 4: Rename Backend Services and Routes
 
