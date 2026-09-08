@@ -99,6 +99,15 @@ def test_enforce_retired_vector_retrieval_allows_absent() -> None:
     )
 
 
+def test_enforce_retired_vector_retrieval_blocks_zero_budget() -> None:
+    """Zero budgets are explicit retired content (0 == False in Python)."""
+    with pytest.raises(OmnigentOAuthHostError) as excinfo:
+        enforce_required_follow_up_retrieval(
+            {"maxContextTokens": 0}, {"enabled": False}
+        )
+    assert excinfo.value.code == "OMNIGENT_RETIRED_VECTOR_RETRIEVAL"
+
+
 def test_gateway_issuance_from_enabled_snapshot_is_retired() -> None:
     """New capability issuance from a retired enabled snapshot fails 410."""
     row = type(

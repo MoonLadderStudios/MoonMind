@@ -10858,6 +10858,33 @@ def test_recurring_target_preserves_omnigent_selection_in_initial_parameters() -
     }
 
 
+def test_build_recurring_target_rejects_retired_vector_in_task_path() -> None:
+    """MoonLadderStudios/MoonMind#4105: task-shaped recurring targets reject retired vectors."""
+    with pytest.raises(HTTPException) as excinfo:
+        _build_recurring_target(
+            {
+                "workflowType": "MoonMind.UserWorkflow",
+                "workflow": {
+                    "instructions": "Run nightly",
+                    "followUpRetrieval": {"enabled": True, "collections": ["repo"]},
+                },
+            }
+        )
+    assert "4105" in str(excinfo.value.detail)
+
+    with pytest.raises(HTTPException) as excinfo:
+        _build_recurring_target(
+            {
+                "workflowType": "MoonMind.UserWorkflow",
+                "task": {
+                    "instructions": "Run nightly",
+                    "rag": {"collections": ["docs"]},
+                },
+            }
+        )
+    assert "4105" in str(excinfo.value.detail)
+
+
 @pytest.mark.asyncio
 async def test_recurring_target_persists_normalized_tier_previews() -> None:
     request_payload = {
