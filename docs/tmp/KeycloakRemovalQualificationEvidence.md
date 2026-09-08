@@ -3,6 +3,35 @@
 Run-local handoff for the `remediate-issue` remediation step. This is execution
 scaffolding, not canonical desired-state documentation.
 
+## Re-verification pass (2026-09-08, on head `adcdfc9e8`, zero working-tree delta)
+
+- Checklist re-run against the verifier's remaining work (gate
+  `art_01M20FGBG7162AM3C68964E3EN`): rw-1..rw-6 remain BLOCKED — each requires
+  production behavior owned by the unlanded #4118–4127 feature work (new auth
+  modes, session issuance, identity migration, browser/two-replica harnesses,
+  Keycloak deletion). Implementing any of them here would fork feature-owner
+  scope and break the currently passing pre-cutover negative coverage, so the
+  candidate is preserved unchanged per the skill's terminal rules.
+- rw-7 fully closed as far as the pre-cutover state allows: all 5 named modules
+  centralize via `_AUTHENTICATED_PROVIDER_MODE`, zero raw
+  `setattr(..., "AUTH_PROVIDER", "keycloak")` literals repository-wide outside
+  the conformance guard itself, `keycloak_mode` fixture retired. Repointing the
+  constant awaits the production cutover.
+- impl-8 re-verified intact (see commands table below). rw-9 unchanged: narrow
+  pre-cutover pins pass; post-cutover topology/route/token qualification and the
+  full matrix record still require the integrated candidate.
+
+## Commands and results (re-verification pass, hermetic sandbox, head `adcdfc9e8`)
+
+| Command | Result |
+|---|---|
+| `python3 -m py_compile` on the conformance module, `tests/conftest.py`, all 5 centralized modules, `tests/unit/test_integration_test_taxonomy.py`, `tools/select_test_suites.py` | PASS |
+| Direct execution of all 17 functions in `tests/unit/auth/test_keycloak_removal_conformance.py` | 17/17 PASS |
+| Direct `select_suites([...], event_name="pull_request")` for `api_service/auth_providers.py`, `moonmind/config/settings.py`, `api_service/main.py`, `api_service/api/routers/worker_auth.py`, `docker-compose.yaml` | All select `integration_ci=true`; impl-8 VERIFIED gate intact |
+| `git status --porcelain` | Clean — zero working-tree delta, candidate head preserved |
+| `./tools/test_unit.sh`, `moonmind container python-tests`, `./tools/test_integration.sh` | NOT RUN / UNEXECUTED — no `pytest` module, no `MOONMIND_RUNTIME_ID`, no Docker/Compose backend in this sandbox (environment blockers, not assertion failures) |
+| Live IdP / MFA / operator cutover | EXTERNAL — separate evidence category per the issue brief; never part of merge CI |
+
 ## Follow-up pass (2026-09-08, on head `6629af16`)
 
 - Working-tree delta of this pass (3 files, behavior-preserving):
