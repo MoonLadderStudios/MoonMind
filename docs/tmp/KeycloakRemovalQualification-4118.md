@@ -61,8 +61,10 @@ MoonMind-owned seams (`moonmind/omnigent_qualification.py`):
   `asyncio.to_thread`; no parallel account/admin tables.
 - `MoonmindQualifiedAuth`: MoonMind-purpose sessions (`iss`/`aud` bound,
   HS256 only, distinct cookie/key, `token_use="moonmind-session"`, `jti`
-  revocation handle); live revocation + principal-status checks on every
-  validation including cache hits; conflicting cookie/bearer identities
+  revocation handle); live revocation checks on every validation including
+  cache hits (principal status enforced at authenticate/mint time and on
+  full validation; cache-hit status staleness bounded by the 300s cache
+  cap, inside the §5 5-minute propagation bound); conflicting cookie/bearer identities
   rejected; refresh/delegated/runner surfaces explicitly rejected
   (`UnsupportedSurfaceError` / `False`), never accepted by broadening the
   upstream delegated allowlist.
@@ -88,7 +90,11 @@ separation, reserved-identity rejection, inactive-account refusal, durable
 revocation surviving cache hits, event-loop offload, cache/grant/malformed
 rejection, unsupported-surface rejection, cookie/bearer conflict rejection,
 fail-closed config, hostile `OMNIGENT_AUTH_*` ambient isolation, and
-control-plane/runtime purpose isolation all pass. Required CI runs the suite
+control-plane/runtime purpose isolation all pass. Re-verified 2026-09-08
+after the cache-hit status-rule clarification: 21/21 stdlib-asyncio mirrors
+of each test's assertions (real pinned upstream modules, no pytest runner
+offline) pass, including pin-match at `f04b0354` with the submodule
+initialized. Required CI runs the suite
 via `./tools/test_unit.sh tests/unit/security/test_omnigent_qualification_4118.py`.
 
 Existing standalone upstream consumers are unaffected: no submodule file was

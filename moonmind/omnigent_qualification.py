@@ -29,8 +29,10 @@ What MoonMind owns here (thin adapter at the boundary):
   upstream store work is offloaded with ``asyncio.to_thread``; no parallel
   account/admin tables are created.
 - MoonMind-purpose session tokens (``iss``/``aud`` bound, HS256, distinct
-  cookie name and key, live revocation + principal-status checks on every
-  validation including cache hits).
+  cookie name and key, live revocation checks on every validation including
+  cache hits; principal status enforced at authenticate/mint time and on
+  full validation, with cache-hit status staleness bounded by the 300s
+  cache cap inside the 5-minute propagation bound).
 - Explicit rejection of unsupported refresh/delegated/runner-minting
   surfaces. Upstream's Omnigent-specific delegated allowlist is never
   broadened for MoonMind paths.
@@ -467,7 +469,10 @@ class MoonmindQualifiedAuth:
         cached = self._cache.get(cache_key)
         if cached is not None and cached[1] > time.monotonic():
             cached_user_id, _, cached_jti = cached
-            # Cache hits still enforce revocation + principal status + scope.
+            # Cache hits recheck revocation live. Principal status
+            # (is_active) was enforced at authenticate/mint time and is
+            # rechecked on full validation; cache-hit status staleness is
+            # bounded by the 300s cache cap (inside the 5-minute bound).
             if await self.store.is_revoked(cached_jti):
                 return ValidationResult(None, "auth_invalid", cache_hit=True)
             try:
