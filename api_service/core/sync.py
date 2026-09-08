@@ -512,6 +512,7 @@ async def mutate_execution_projection(
     if latest is not None:
         records = [latest, *(record for record in records if record is not latest)]
     stale = False
+    closes_current_run = False
     if latest is not None and not patch_only:
         previous_time = _projection_semantic_time(latest.updated_at, latest.search_attributes)
         incoming_time = _semantic_time(incoming.get("updated_at"))
@@ -524,10 +525,7 @@ async def mutate_execution_projection(
             and not latest.close_status
             and latest.run_id == incoming.get("run_id")
         )
-        stale = bool(
-            previous_time and incoming_time and incoming_time < previous_time
-            and not closes_current_run
-        )
+        stale = bool(previous_time and incoming_time and incoming_time < previous_time)
         # A stale RUNNING describe with no semantic timestamp cannot reopen a
         # terminal execution in the same run.
         stale = stale or bool(latest.close_status and not incoming.get("close_status") and latest.run_id == incoming.get("run_id"))
@@ -539,6 +537,18 @@ async def mutate_execution_projection(
         if not patch_only and not stale:
             merged = {column.name: getattr(latest, column.name) for column in TemporalExecutionCanonicalRecord.__table__.columns if hasattr(TemporalExecutionRecord, column.name)}
             merged.update({key: value for key, value in incoming.items() if key in CORE_TEMPORAL_SYNC_FIELDS})
+    if stale and closes_current_run:
+        # Closure can advance lifecycle without making an older memo current.
+        # Keep the stored metadata and semantic timestamp, including API-owned
+        # counters, attention flags, parameters, and pending integration work.
+        merged.update({
+            key: value for key, value in incoming.items()
+            if key in CORE_TEMPORAL_SYNC_FIELDS and key != "updated_at"
+        })
+        merged["search_attributes"] = {
+            **(merged.get("search_attributes") or {}),
+            "mm_state": [incoming["state"]],
+        }
     merged["workflow_id"] = workflow_id
     merged["updated_at"] = (
         _projection_semantic_time(merged.get("updated_at"), merged.get("search_attributes"))

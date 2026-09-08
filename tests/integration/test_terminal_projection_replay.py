@@ -140,7 +140,8 @@ async def test_terminal_describe_repairs_metadata_skew(
         assert detail["state"] == detail["rawState"] == expected
         assert detail["closeStatus"] == expected
         assert detail["closedAt"]
-        assert detail["summary"] == "Terminal result"
+        # The older Temporal memo cannot replace newer database metadata.
+        assert detail["summary"] == "Launching agent..."
         listing = await client.get("/api/executions")
         assert listing.status_code == 200, listing.text
         assert listing.json()["items"][0]["state"] == detail["state"]
@@ -160,6 +161,53 @@ async def test_terminal_describe_repairs_metadata_skew(
         assert record.state.value == expected
         assert record.close_status.value == expected
         assert record.finish_outcome_code == expected.upper()
+
+
+async def test_older_closure_preserves_newer_database_metadata(session):
+    updated = datetime.fromisoformat(REPLAY["metadataUpdatedAt"])
+    workflow_id = REPLAY["incidentWorkflowId"]
+    source = TemporalExecutionCanonicalRecord(
+        workflow_id=workflow_id, run_id="current-run", namespace="default",
+        workflow_type="MoonMind.UserWorkflow", owner_id="owner", owner_type="user",
+        entry="user_workflow", state="executing", close_status=None,
+        memo={"summary": "Newer outcome", "parameters": {"version": "new"}},
+        parameters={"version": "new"}, artifact_refs=[],
+        search_attributes={"mm_state": ["executing"], "custom": ["preserve"]},
+        updated_at=updated, integration_state={"pr": "published"},
+        pending_parameters_patch={"version": "pending"}, attention_required=True,
+        step_count=12, wait_cycle_count=3, rerun_count=2,
+    )
+    session.add(source)
+    await session.commit()
+    desc = Mock(spec=WorkflowExecutionDescription)
+    desc.id, desc.run_id = workflow_id, "current-run"
+    desc.namespace, desc.workflow_type = "default", "MoonMind.UserWorkflow"
+    desc.status = WorkflowExecutionStatus.FAILED
+    desc.start_time = desc.execution_time = datetime.fromisoformat(REPLAY["startedAt"])
+    desc.close_time = datetime.fromisoformat(REPLAY["closedAt"])
+    desc.search_attributes = {
+        "mm_state": ["failed"],
+        "mm_updated_at": [datetime.fromisoformat(REPLAY["terminalUpdatedAt"])],
+    }
+    desc.memo = AsyncMock(return_value={
+        "summary": "Older outcome", "parameters": {"version": "old"},
+        "integration_state": {"pr": "pending"}, "step_count": 1,
+    })
+    await sync_execution_projection(session, desc)
+    await session.commit()
+    for model in (TemporalExecutionCanonicalRecord, TemporalExecutionRecord):
+        record = await session.get(model, workflow_id, populate_existing=True)
+        assert record.state.value == record.close_status.value == "failed"
+        assert record.closed_at is not None
+        assert record.updated_at.replace(tzinfo=updated.tzinfo) == updated
+        assert record.memo["summary"] == "Newer outcome"
+        assert record.parameters == {"version": "new"}
+        assert record.integration_state == {"pr": "published"}
+        assert record.pending_parameters_patch == {"version": "pending"}
+        assert record.attention_required is True
+        assert (record.step_count, record.wait_cycle_count, record.rerun_count) == (12, 3, 2)
+        assert record.search_attributes["custom"] == ["preserve"]
+        assert record.search_attributes["mm_state"] == ["failed"]
 
 
 @pytest.mark.parametrize(
