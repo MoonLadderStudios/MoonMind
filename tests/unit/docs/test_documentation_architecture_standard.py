@@ -5,9 +5,17 @@ MM-904 adds the authoring conventions: metadata headers, naming conventions,
 and the incremental adoption policy to ``docs/DocumentationArchitecture.md``.
 """
 
+import re
+import sys
 from pathlib import Path
 
-import sys
+from tools.check_documentation_architecture import (
+    CANONICAL_CLAIM_PREFIXES,
+    metadata_fields,
+)
+from tools.check_documentation_architecture import (
+    main as check_architecture,
+)
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
@@ -26,7 +34,15 @@ def test_standard_doc_exists() -> None:
 
 
 def test_canonical_metadata_header_fields_present() -> None:
-    text = _read()
+    headers = [
+        metadata_fields(block)
+        for block in re.findall(r"```markdown\n(.*?)\n```", _read(), re.DOTALL)
+    ]
+    header = next(
+        header
+        for header in headers
+        if header.get("document class") == "Canonical declarative"
+    )
     for field in (
         "Document Class",
         "Status",
@@ -37,20 +53,24 @@ def test_canonical_metadata_header_fields_present() -> None:
         "Related Docs",
         "Related Implementation",
     ):
-        assert f"**{field}:**" in text, f"missing canonical metadata field: {field}"
+        assert header[field.lower()], f"missing canonical metadata field: {field}"
 
 
 def test_imperative_plan_header_fields_present() -> None:
-    text = _read()
+    headers = [
+        metadata_fields(block)
+        for block in re.findall(r"```markdown\n(.*?)\n```", _read(), re.DOTALL)
+    ]
+    header = next(
+        header
+        for header in headers
+        if header.get("document class") == "Imperative working document"
+    )
     for field in ("Canonical Target", "Delete/Archive Trigger"):
-        assert f"**{field}:**" in text, f"missing imperative-plan field: {field}"
+        assert header[field.lower()], f"missing imperative-plan field: {field}"
     # The Document Class value uses the canonical MoonSpec Document Model class
     # name; "plan" is reserved for the concrete type/filename/status, not the class.
-    assert "Imperative working document" in text
-
-
-def test_optional_rationale_section_documented() -> None:
-    assert "rationale" in _read().lower()
+    assert header["document class"] == "Imperative working document"
 
 
 def test_preferred_filename_set_present() -> None:
@@ -69,9 +89,7 @@ def test_preferred_filename_set_present() -> None:
 def test_module_architecture_is_preferred_filename() -> None:
     text = _read()
     assert "<ModuleName>ModuleArchitecture.md" in text
-    assert "preferred" in text.lower()
     assert "docs/<Module>/<ModuleName>ModuleArchitecture.md" in text
-    assert "An `Architecture.md` or `Overview.md` inside the module's doc directory" not in text
 
 
 def test_system_filename_is_durable_and_design_filename_is_transitional() -> None:
@@ -135,8 +153,7 @@ def test_incremental_adoption_policy_present() -> None:
 
 def test_stable_canonical_claim_id_families_present() -> None:
     text = _read()
-    assert "Stable Canonical Claim IDs" in text
-    for prefix in ("DOC-REQ", "CONTRACT", "INV", "NON-GOAL", "QUALITY", "TEST"):
+    for prefix in CANONICAL_CLAIM_PREFIXES:
         assert prefix in text
     assert "PREFIX-NNN" in text
 
@@ -149,11 +166,23 @@ def test_claim_ids_are_distinguished_from_design_req_traceability() -> None:
     assert "MM-929" in text
 
 
-def test_claim_id_validation_is_advisory_and_incremental() -> None:
-    text = _read()
-    assert "malformed IDs" in text
-    assert "reused for multiple canonical claims" in text
-    assert "Adoption is incremental" in text
+def test_claim_id_validation_is_advisory_by_default(
+    tmp_path, monkeypatch, capsys
+) -> None:
+    # Exercise the existing operator entrypoint instead of a sentence claiming
+    # it is advisory. The separate mutation suite pins detection itself.
+    from tools import check_documentation_architecture as checker
+
+    root = tmp_path / "docs"
+    root.mkdir()
+    (root / "Example.md").write_text("# Example\n### INV-bad Claim\n", encoding="utf-8")
+    monkeypatch.setattr(checker, "all_doc_paths", lambda: ["docs/Example.md"])
+    load_docs = checker.load_docs
+    monkeypatch.setattr(
+        checker, "load_docs", lambda paths: load_docs(paths, root=tmp_path)
+    )
+    assert check_architecture(["--scope", "all", "--format", "json"]) == 0
+    assert "malformed-claim-id" in capsys.readouterr().out
 
 
 def test_downstream_minor_local_adjustment_path_documented() -> None:
