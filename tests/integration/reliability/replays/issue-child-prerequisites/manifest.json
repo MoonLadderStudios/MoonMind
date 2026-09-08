@@ -1,0 +1,14 @@
+{
+  "incidentWorkflowId": "mm:6901d5c7-1389-49fb-b066-6a3a1ed8568c-2026-09-08T13:20:00Z",
+  "observedSelection": 4116,
+  "observedOutcome": "ADDITIONAL_WORK_NEEDED after six remediation attempts; partial work preserved in PR 4139",
+  "invariant": "Explicit child issue lists participate in the same fresh, bounded prerequisite checks as Depends on declarations before implementation admission.",
+  "parent": {
+    "number": 4116,
+    "title": "[Epic] Remove Keycloak through an identity-safe Omnigent authentication cutover",
+    "body": "## Child issues\n\n- [ ] #4117 — Inventory authentication entrypoints.\n- [ ] #4118 — Qualify portable authentication interfaces.\n- [ ] #4119 — Preserve user UUIDs.\n\n## Related existing work\n\n- #4103 owns independent Qdrant removal.\n\n## Epic completion gates\n\n- [ ] All children are complete with concrete evidence."
+  },
+  "childNumbers": [4117, 4118, 4119],
+  "eligibleLeaf": 4101,
+  "faults": ["open_child", "checked_but_open_child", "child_reopened_at_confirmation", "unknown_child_state"]
+}

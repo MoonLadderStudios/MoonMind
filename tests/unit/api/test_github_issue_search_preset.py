@@ -331,6 +331,129 @@ def test_prerequisite_ranges_are_bounded(body):
         declared_prerequisites(body, REPOSITORY)
 
 
+@pytest.fixture
+def child_issue_replay():
+    return json.loads(
+        (
+            Path(__file__).resolve().parents[2]
+            / "integration/reliability/replays/issue-child-prerequisites/manifest.json"
+        ).read_text()
+    )
+
+
+@pytest.mark.parametrize("heading", ["## Child issues", "### Sub-issues ###"])
+@pytest.mark.parametrize(
+    "related_heading", ["## Related issues", "#### Related issues"]
+)
+@pytest.mark.parametrize("marker", ["- [ ]", "- [x]", "* [X]", "-", "1."])
+def test_child_issue_lists_preserve_identity_and_ignore_context(
+    heading, related_heading, marker
+):
+    body = (
+        "Parent epic: #90. Related #91.\n"
+        f"{heading}\n\n"
+        f"{marker} #10 — implement with help from #92.\n"
+        f"{marker} other/project#11 — preserve identity.\n"
+        f"{marker} https://github.com/other/project/issues/12 — qualify.\n"
+        f"{marker} [Child task](https://github.com/other/project/issues/13).\n"
+        f"{related_heading}\n- [ ] #93\n"
+    )
+    assert declared_prerequisites(body, REPOSITORY) == [
+        (REPOSITORY, 10),
+        ("other/project", 11),
+        ("other/project", 12),
+        ("other/project", 13),
+    ]
+
+
+def test_child_prerequisites_share_deduplication_and_bounds():
+    assert declared_prerequisites(
+        "Depends on #10.\n## Child issues\n- [ ] #10–#12\n", REPOSITORY
+    ) == [(REPOSITORY, number) for number in range(10, 13)]
+    with pytest.raises(ValueError, match="declaration exceeds 100"):
+        declared_prerequisites(
+            "Depends on #1–#100.\n## Child issues\n- [ ] #101\n", REPOSITORY
+        )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("checked", [False, True])
+@pytest.mark.parametrize("child_state", ["open", "closed"])
+async def test_child_issue_replay_selection_and_fresh_preflight(
+    activity_boundary, child_issue_replay, child_state, checked
+):
+    replay = child_issue_replay
+    parent = issue(**replay["parent"])
+    if checked:
+        parent["body"] = parent["body"].replace("[ ]", "[x]")
+    leaf = issue(replay["eligibleLeaf"])
+    activity_boundary.pages[:] = [[parent, leaf]]
+    expected = parent if child_state == "closed" else leaf
+    activity_boundary.detail.update(expected)
+    for number in replay["childNumbers"]:
+        activity_boundary.dependency_details[f"/repos/{REPOSITORY}/issues/{number}"] = (
+            issue(number, state=child_state)
+        )
+    result = await activity_boundary.execute(
+        "github.load_issue_preset_brief", {"repository": REPOSITORY, "issueSearch": ""}
+    )
+    assert result.status == "COMPLETED"
+    assert result.outputs["issue"]["number"] == expected["number"]
+    assert result.outputs["searchEvidence"]["candidatesExamined"] == (
+        1 if child_state == "closed" else 2
+    )
+    # Explicit selection and an already-loaded brief must also see reopened
+    # children at the shared preflight, before marking the parent in progress.
+    activity_boundary.detail.update(parent)
+    first_child = replay["childNumbers"][0]
+    activity_boundary.dependency_details[
+        f"/repos/{REPOSITORY}/issues/{first_child}"
+    ] = issue(first_child, state="open")
+    preflight = await activity_boundary.execute(
+        "github.check_issue_blockers",
+        {"repository": REPOSITORY, "issueNumber": parent["number"]},
+    )
+    assert preflight.outputs["decision"] == "blocked"
+    assert preflight.outputs["blockingIssues"][0]["number"] == first_child
+    assert not any(
+        request.url.path.endswith("/4103") for request in activity_boundary.requests
+    )
+    assert all(request.method == "GET" for request in activity_boundary.requests)
+
+
+@pytest.mark.asyncio
+async def test_child_reopening_at_confirmation_cannot_admit_parent(activity_boundary):
+    parent = issue(body="## Child issues\n- [x] #10\n")
+    activity_boundary.pages[:] = [[parent]]
+    activity_boundary.detail.update(parent)
+    states = iter(["closed", "open"])
+    activity_boundary.dependency_details[f"/repos/{REPOSITORY}/issues/10"] = (
+        lambda: issue(10, state=next(states))
+    )
+    result = await activity_boundary.execute(
+        "github.load_issue_preset_brief", {"repository": REPOSITORY, "issueSearch": ""}
+    )
+    assert result.status == "FAILED"
+    assert "changed or could not be confirmed" in result.outputs["error"]
+    activity_boundary.artifact_service.create.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("state", ["unknown", "", "archived"])
+async def test_unknown_child_state_cannot_admit_parent(activity_boundary, state):
+    activity_boundary.pages[:] = [[issue(body="## Child issues\n- [ ] #10\n")]]
+    activity_boundary.dependency_details[f"/repos/{REPOSITORY}/issues/10"] = issue(
+        10, state=state
+    )
+    result = await activity_boundary.execute(
+        "github.load_issue_preset_brief", {"repository": REPOSITORY, "issueSearch": ""}
+    )
+    assert result.status == "FAILED"
+    assert "prerequisite identity or state is invalid" in result.outputs["error"]
+    assert all(request.method == "GET" for request in activity_boundary.requests)
+    activity_boundary.artifact_service.create.assert_not_awaited()
+
+
 @pytest.mark.parametrize(
     "context",
     [
