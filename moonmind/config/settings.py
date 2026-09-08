@@ -1763,7 +1763,7 @@ class OIDCSettings(BaseSettings):
 
     AUTH_PROVIDER: str = Field(
         "disabled",
-        description="Authentication provider selector (MoonLadderStudios/MoonMind#4116). Legacy values: 'disabled', 'default', 'keycloak', 'google'. Planned cutover values: 'accounts', 'oidc', 'header'. Unknown values refuse startup; never silently disable authentication.",
+        description="Authentication provider selector (MoonLadderStudios/MoonMind#4116). Legacy values: 'disabled', 'default', 'keycloak', 'google'. Planned cutover values 'accounts', 'oidc', 'header' are recognized but not yet implemented (K3/K4 own the cutover) and refuse startup/requests fail-closed. Unknown values refuse startup; never silently disable authentication.",
         alias="AUTH_PROVIDER",
     )
     OIDC_ISSUER_URL: Optional[str] = Field(

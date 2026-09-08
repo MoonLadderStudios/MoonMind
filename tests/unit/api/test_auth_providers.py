@@ -7,8 +7,11 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 import api_service.auth_providers as auth_providers
 from api_service.auth_providers import (
+    get_auth_router,
     get_current_user,
+    get_current_user_optional,
     get_default_user_from_db,
+    is_planned_auth_provider,
     validate_auth_provider,
 )
 from api_service.db.models import User
@@ -139,3 +142,38 @@ async def test_disabled_auth_missing_row_fails_closed(monkeypatch):
         await dependency()
     assert exc.value.status_code == 503
     monkeypatch.setattr(auth_providers, "_cached_current_user_dependency", None)
+
+
+@pytest.mark.parametrize("provider", ["accounts", "oidc", "header"])
+def test_planned_modes_are_recognized_but_have_no_behavior(provider):
+    """MoonLadderStudios/MoonMind#4116 K3: planned names validate but flag planned."""
+    assert validate_auth_provider(provider) == provider
+    assert is_planned_auth_provider(provider) is True
+    assert is_planned_auth_provider("disabled") is False
+
+
+@pytest.mark.parametrize("provider", ["accounts", "oidc", "header"])
+@pytest.mark.asyncio
+async def test_planned_modes_fail_closed_at_request_boundary(monkeypatch, provider):
+    """Planned modes must never resolve to a user via a substitute authority."""
+    monkeypatch.setattr(settings.oidc, "AUTH_PROVIDER", provider)
+    monkeypatch.setattr(auth_providers, "_cached_current_user_dependency", None)
+
+    dependency = get_current_user()
+    with pytest.raises(HTTPException) as exc:
+        await dependency()
+    assert exc.value.status_code == 503
+
+    optional_dependency = get_current_user_optional()
+    with pytest.raises(HTTPException) as exc:
+        await optional_dependency()
+    assert exc.value.status_code == 503
+    monkeypatch.setattr(auth_providers, "_cached_current_user_dependency", None)
+
+
+@pytest.mark.parametrize("provider", ["accounts", "oidc", "header"])
+def test_planned_modes_mount_no_legacy_auth_routes(monkeypatch, provider):
+    """Planned modes must not mount legacy FastAPI Users issuance paths."""
+    monkeypatch.setattr(settings.oidc, "AUTH_PROVIDER", provider)
+    router = get_auth_router()
+    assert [route.path for route in router.routes] == []

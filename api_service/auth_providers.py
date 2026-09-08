@@ -31,10 +31,36 @@ _cached_current_user_dependency = None
 # with migration guidance and must never silently become disabled auth.
 SUPPORTED_AUTH_PROVIDERS = frozenset({"disabled", "default", "keycloak", "google"})
 
-# Target selector values from docs/tmp/KeycloakRemovalPlan.md §3. Accepted
-# here alongside legacy literals so operators can adopt the new names before
-# the full K3/K4 cutover; unknown values still fail fast.
+# Target selector values from docs/tmp/KeycloakRemovalPlan.md §3. Recognized
+# here alongside legacy literals so operators get an explicit "not yet
+# implemented" failure instead of an "unknown value" error; there is no
+# behavior behind them yet (K3/K4 own the cutover). Request and router
+# boundaries must fail closed for these values, never silently use the
+# FastAPI Users authority.
 _PLANNED_AUTH_PROVIDERS = frozenset({"accounts", "oidc", "header"})
+
+
+def is_planned_auth_provider(provider: str | None = None) -> bool:
+    """Return True when the selector names a planned mode with no behavior yet."""
+    value = provider if provider is not None else settings.oidc.AUTH_PROVIDER
+    return (value or "").strip().lower() in _PLANNED_AUTH_PROVIDERS
+
+
+async def _planned_mode_unavailable() -> None:
+    """Fail closed for planned modes (MoonLadderStudios/MoonMind#4116 K3/K4).
+
+    Defense in depth for the case where startup validation is bypassed
+    (e.g. settings mutated after startup in tests): a planned mode must
+    never resolve to a user principal.
+    """
+    raise HTTPException(
+        status_code=503,
+        detail=(
+            "Authentication mode is not yet implemented; "
+            "see docs/tmp/KeycloakRemovalPlan.md K3/K4. "
+            "Refusing to authenticate rather than using a substitute authority."
+        ),
+    )
 
 
 def validate_auth_provider(provider: str | None = None) -> str:
@@ -114,6 +140,11 @@ def get_current_user():
     """
 
     global _cached_current_user_dependency
+    if is_planned_auth_provider():
+        # MoonLadderStudios/MoonMind#4116 K3/K4: planned modes have no
+        # behavior yet. Fail closed rather than silently resolving through
+        # the FastAPI Users authority.
+        return _planned_mode_unavailable
     if settings.oidc.AUTH_PROVIDER != "disabled":
         # Keycloak / default auth modes – just use the fastapi-users dependency
         return current_active_user
@@ -177,6 +208,8 @@ def get_current_user_optional():
     are not blocked by FastAPI resolving a strict bearer-auth dependency first.
     """
 
+    if is_planned_auth_provider():
+        return _planned_mode_unavailable
     if settings.oidc.AUTH_PROVIDER != "disabled":
         return current_active_user_optional
     return get_current_user()
@@ -191,6 +224,10 @@ async def get_auth_manager(
 
 def get_auth_router():
     router = APIRouter()
+    if is_planned_auth_provider():
+        # K3/K4 own the replacement routes. Mount nothing rather than the
+        # legacy FastAPI Users issuance/registration paths.
+        return router
     if settings.oidc.AUTH_PROVIDER == "keycloak":
         # Keycloak routes would be included here
         pass

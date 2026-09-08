@@ -684,7 +684,16 @@ async def _initialize_oidc_provider(app: FastAPI):
 
     # MoonLadderStudios/MoonMind#4116: reject unknown/retired selectors at
     # startup with migration guidance; never silently disable auth.
+    # Planned accounts/oidc/header names are recognized but have no behavior
+    # yet (K3/K4 own the cutover): refuse startup rather than running the
+    # deployment on a substitute authority.
     provider = validate_auth_provider(settings.oidc.AUTH_PROVIDER)
+    if provider in ("accounts", "oidc", "header"):
+        raise RuntimeError(
+            f"AUTH_PROVIDER '{provider}' is recognized but not yet implemented "
+            "(see docs/tmp/KeycloakRemovalPlan.md K3/K4). Refusing to start "
+            "rather than authenticating through a substitute authority."
+        )
     if provider == "google":
         logger.info("Initializing Google OIDC provider...")
         try:
@@ -872,7 +881,19 @@ if _ENABLE_TEST_UI_ROUTE:
 # Auth routers
 API_AUTH_PREFIX = "/api/v1/auth"  # Defined a constant for clarity
 
-if settings.oidc.AUTH_PROVIDER != "keycloak":
+# MoonLadderStudios/MoonMind#4116 K3/K4: planned accounts/oidc/header modes
+# have no auth-route behavior yet; mounting the legacy FastAPI Users
+# issuance/registration paths there would silently use the wrong authority.
+_AUTH_PLANNED_MODES = ("accounts", "oidc", "header")
+
+if settings.oidc.AUTH_PROVIDER in _AUTH_PLANNED_MODES:
+    logger.warning(
+        "AUTH_PROVIDER is '%s', which is not yet implemented; skipping "
+        "fastapi-users auth routers rather than mounting a substitute "
+        "authority.",
+        settings.oidc.AUTH_PROVIDER,
+    )
+elif settings.oidc.AUTH_PROVIDER != "keycloak":
     logger.info(
         f"AUTH_PROVIDER is '{settings.oidc.AUTH_PROVIDER}'. Including fastapi-users auth routers."
     )
