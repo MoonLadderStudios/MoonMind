@@ -17,6 +17,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from api_service.db import base as db_base
 from api_service.db.base import get_async_session
 from api_service.db.models import User
+from api_service.services.identity_service import ControlledEnrollmentRequiredError
 from api_service.services.profile_service import ProfileService
 from moonmind.config.settings import settings
 
@@ -88,6 +89,37 @@ async def get_user_manager_context(
 _DEFAULT_USER_ID = "00000000-0000-0000-0000-000000000000"
 _DEFAULT_USER_EMAIL = "default@example.com"
 
+
+class DefaultAdminClaimAuthorizationError(PermissionError):
+    """Reserved default administrator claimed without operator authorization."""
+
+
+async def claim_default_admin(
+    db_session: AsyncSession,
+    user_manager: UserManager,
+    *,
+    operator_authorized: bool,
+) -> User:
+    """Claim the reserved default administrator through operator authorization.
+
+    K3 (#4119): an existing local administrator is never claimable by whoever
+    reaches a setup page first. This entrypoint refuses unless the caller
+    passes explicit ``operator_authorized=True`` (held by the operator-held,
+    expiring, one-use bootstrap capability or a local administrative setup
+    operation owned by account lifecycle). Fresh installs create the reserved
+    default row; mismatched existing rows raise
+    :class:`ControlledEnrollmentRequiredError` for the K3 migration path.
+    """
+    if not operator_authorized:
+        raise DefaultAdminClaimAuthorizationError(
+            "claiming the reserved default administrator requires explicit "
+            "operator authorization"
+        )
+    return await get_or_create_default_user(
+        db_session=db_session, user_manager=user_manager
+    )
+
+
 async def get_or_create_default_user(
     db_session: AsyncSession, user_manager: UserManager
 ) -> User:
@@ -111,23 +143,27 @@ async def get_or_create_default_user(
     ):  # Catch potential errors if user_manager.get fails for non-existent user (though it usually returns None)
         pass  # User not found by ID, proceed to check by email or create
 
-    # Attempt to get user by email if not found by ID
-    # This handles cases where ID might change or not be the primary lookup for creation path
+    # Attempt to get user by email if not found by ID.
+    # K3 (#4119): an email owned by a different UUID is an explicit
+    # controlled-enrollment requirement, never a silent match. Returning the
+    # email-matched row here would let whoever holds that email claim the
+    # reserved default administrator, so mismatch fails closed with protected
+    # operator-claim guidance instead.
     try:
         user_by_email = await user_manager.get_by_email(default_email)
         if user_by_email:
-            # If user exists by email but ID doesn't match, this is a conflict.
-            # For simplicity, we'll assume if email matches, it's the intended default user.
-            # Ideally, ID should be authoritative.
             if user_by_email.id != default_user_uuid:
-                # Log a warning about ID mismatch if logging is available
-                print(
-                    f"Warning: Default user email {default_email} exists with ID {user_by_email.id}, but expected ID {default_user_uuid}."
+                raise ControlledEnrollmentRequiredError(
+                    "default_id_mismatch",
+                    "The configured default email is owned by a different user "
+                    "ID. Protected operator claim is required: bind the "
+                    "reserved default UUID through the K3 identity migration "
+                    "or an authorized operator claim instead of silently "
+                    "replacing it.",
                 )
-                # Potentially update the existing user's ID if that's desired and feasible,
-                # or raise an error. For now, we'll return the user found by email.
-                pass  # Or handle more robustly
             return user_by_email
+    except ControlledEnrollmentRequiredError:
+        raise
     except Exception:
         pass  # User not found by email, proceed to create
 
@@ -166,8 +202,11 @@ async def get_or_create_default_user(
     try:
         existing_user_by_email = await user_manager.get_by_email(default_email)
         if existing_user_by_email and existing_user_by_email.id != default_user_uuid:
-            raise ValueError(
-                f"A user with email {default_email} already exists but with a different ID ({existing_user_by_email.id}) than the configured DEFAULT_USER_ID ({default_user_uuid})."
+            raise ControlledEnrollmentRequiredError(
+                "default_id_mismatch",
+                f"A user with the default email already exists with a different ID "
+                "than the configured DEFAULT_USER_ID. Protected operator claim "
+                "is required; refusing to silently replace the reserved default.",
             )
         elif existing_user_by_email and existing_user_by_email.id == default_user_uuid:
             return existing_user_by_email  # Should have been caught by user_manager.get(default_user_uuid)

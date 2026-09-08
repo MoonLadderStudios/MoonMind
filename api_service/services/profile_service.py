@@ -4,6 +4,7 @@ from typing import Optional
 
 from fastapi import HTTPException, status
 from sqlalchemy import and_, func, update
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.future import select
 
@@ -97,6 +98,18 @@ class ProfileService:
     ) -> UserProfileReadSanitized:
         try:
             await db_session.commit()
+        except IntegrityError:
+            # Concurrent first login won the one-profile-per-user race: converge
+            # on the winner instead of failing the transaction (#4119).
+            profile = await self._commit_profile_creation_after_conflict(
+                db_session, user_id
+            )
+            if profile is not None:
+                return profile
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail="Failed to create profile.",
+            )
         except Exception:
             logger.error(
                 "Failed to commit transaction while creating profile", exc_info=True
@@ -133,6 +146,13 @@ class ProfileService:
         db_session.add(new_profile)
         return await self._commit_profile_creation(db_session, user_id)
 
+    async def _commit_profile_creation_after_conflict(
+        self, db_session: AsyncSession, user_id: uuid.UUID
+    ) -> UserProfileReadSanitized | None:
+        """Re-read after a concurrent creator won the one-profile race."""
+        await db_session.rollback()
+        return await self.get_sanitized_profile_by_user_id(db_session, user_id)
+
     async def get_or_create_profile(
         self, db_session: AsyncSession, user_id: uuid.UUID
     ) -> UserProfileRead:
@@ -151,6 +171,15 @@ class ProfileService:
             try:
                 await db_session.commit()
                 await db_session.refresh(profile)
+            except IntegrityError:
+                # Concurrent first login won the race: converge on the winner.
+                await db_session.rollback()
+                profile = await self.get_profile_by_user_id(db_session, user_id)
+                if profile is None:
+                    raise HTTPException(
+                        status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                        detail="Failed to create profile.",
+                    )
             except Exception:
                 logger.error(
                     "Failed to commit transaction while creating profile", exc_info=True
@@ -219,6 +248,28 @@ class ProfileService:
 
         try:
             await db_session.commit()
+        except IntegrityError:
+            # Concurrent creator won the one-profile race after our
+            # existence check: converge, then apply the update once (#4119).
+            await db_session.rollback()
+            if update_data:
+                await db_session.execute(
+                    update(UserProfile)
+                    .where(UserProfile.user_id == user_id)
+                    .values(**update_data)
+                )
+                try:
+                    await db_session.commit()
+                except Exception:
+                    logger.error(
+                        "Failed to commit transaction while updating profile",
+                        exc_info=True,
+                    )
+                    await db_session.rollback()
+                    raise HTTPException(
+                        status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                        detail="Failed to update profile.",
+                    )
         except Exception:
             logger.error(
                 "Failed to commit transaction while updating profile", exc_info=True
