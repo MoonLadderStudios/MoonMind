@@ -125,12 +125,13 @@ def check_prerequisites(repo_root: Path = REPO_ROOT) -> list[StepResult]:
 
     Each prerequisite probes the actual checkout for the owning capability
     (#4119 dry-run/apply entrypoint, #4120 mode/key setup, #4122 recovery,
-    #4128 qualification, #4129 removal, #4130 contracts, protected inventory,
-    owner approval, live IdP/MFA). A repo checkout cannot supply protected
-    inventory exports, live IdP/MFA checks, owner approvals, or coordinated
-    release evidence, so each item stays honestly ``blocked`` — but the
-    evidence now names the exact files probed instead of a static list, so a
-    future checkout that gains the capability flips that probe to completed.
+    #4129 removal, #4130 contracts, protected inventory, owner approval,
+    live IdP/MFA). Repo-observable capabilities (4119/4120/4122/4129) flip
+    to ``completed`` when the owning sibling change lands in the checkout;
+    owner-held or deployment-side items (4117 inventory, 4128 qualification,
+    4130 contracts, owner approval, live IdP/MFA) stay honestly ``blocked``
+    hermetically and name the missing evidence. Hermetic fixture
+    verification is never gated on these prerequisites.
     """
     presence = detect_capability_presence(repo_root)
     owners = {
@@ -147,15 +148,63 @@ def check_prerequisites(repo_root: Path = REPO_ROOT) -> list[StepResult]:
     results = []
     for pid in PREREQUISITE_IDS:
         probed = presence.get(pid, "unchecked")
-        results.append(
-            StepResult(
-                f"prerequisite-{pid}", "blocked",
-                f"Missing in repo checkout; owned by {owners[pid]}. "
-                f"Repo probe: {probed}. "
-                "Blocks deployment qualification, not hermetic rehearsal.",
+        if _capability_present(pid, repo_root):
+            results.append(
+                StepResult(
+                    f"prerequisite-{pid}", "completed",
+                    f"Capability present in repo checkout; owned by {owners[pid]}. "
+                    f"Repo probe: {probed}.",
+                )
             )
-        )
+        else:
+            results.append(
+                StepResult(
+                    f"prerequisite-{pid}", "blocked",
+                    f"Missing in repo checkout; owned by {owners[pid]}. "
+                    f"Repo probe: {probed}. "
+                    "Blocks deployment qualification, not hermetic rehearsal.",
+                )
+            )
     return results
+
+
+def _capability_present(pid: str, repo_root: Path = REPO_ROOT) -> bool:
+    """Whether a prerequisite's owning capability is observable in the checkout.
+
+    Only repo-observable capabilities may flip: a #4119 Keycloak migration or
+    dry-run/apply entrypoint outside this gate, a new AUTH_PROVIDER mode
+    beyond disabled/keycloak (#4120), a recovery tool outside this gate
+    (#4122), or the absence of all Keycloak surfaces after integrated
+    removal (#4129). Owner-held and deployment-side items (4117 protected
+    inventory, 4128 qualification, 4130 contracts, named-owner approval,
+    live IdP/MFA) never flip hermetically and always return False.
+    """
+    if pid == "4119-mapping-revision":
+        candidates = (
+            "api_service/migrations/versions/*keycloak*",
+            "tools/*keycloak*apply*",
+            "tools/*keycloak*dry*",
+        )
+        gate_name = Path(__file__).name
+        return any(
+            p.name != gate_name
+            for pat in candidates
+            for p in sorted(repo_root.glob(pat))
+        )
+    if pid == "4120-mode-key-setup":
+        settings_text = _read_text(repo_root / "moonmind/config/settings.py") or ""
+        modes = set(
+            re.findall(r"'(disabled|keycloak|local|accounts|oidc|header)'", settings_text)
+        )
+        return bool(modes - {"disabled", "keycloak"})
+    if pid == "4122-protected-recovery":
+        tools_dir = repo_root / "tools"
+        if not tools_dir.exists():
+            return False
+        return bool(sorted(tools_dir.glob("*recover*")))
+    if pid == "4129-removal":
+        return not collect_inventory_survey(repo_root).get("keycloak_surfaces")
+    return False
 
 
 # -- R1: protected inventory survey (sanitized, no identity exports) ---------
@@ -312,7 +361,11 @@ def detect_capability_presence(repo_root: Path = REPO_ROOT) -> dict[str, str]:
         "record; none present (deployment-side evidence)"
     )
     presence["4129-removal"] = (
-        "Keycloak service/branches still present in compose and api_service "
+        "no keycloak surfaces in inventory-survey "
+        "(compose service, realm export, api_service branches all absent); "
+        "integrated removal appears landed"
+        if not collect_inventory_survey(repo_root).get("keycloak_surfaces")
+        else "Keycloak service/branches still present in compose and api_service "
         "(see inventory-survey); integrated removal not landed"
     )
     presence["4130-operator-contracts"] = (
@@ -419,10 +472,11 @@ EVIDENCE_SEPARATION_NOTE = (
 def collect_build_pins(repo_root: Path = REPO_ROOT) -> dict[str, Any]:
     """Collect exact-version pins and topology from real repo files.
 
-    Covers: Keycloak image pin (compose), AUTH_PROVIDER default literal,
-    Alembic revision count/heads present in the checkout, realm clients,
-    compose service topology, and removal-plan status. All values are
-    sanitized (pins and counts, no credentials).
+    Covers: Keycloak image pin (compose), app/dashboard image defaults,
+    AUTH_PROVIDER default literal, Alembic revision count/heads present in
+    the checkout, realm clients, compose service topology, root package
+    version, and removal-plan status. All values are sanitized (pins and
+    counts, no credentials).
     """
     pins: dict[str, Any] = {}
     compose = _read_text(repo_root / "docker-compose.yaml") or ""
@@ -430,6 +484,23 @@ def collect_build_pins(repo_root: Path = REPO_ROOT) -> dict[str, Any]:
     pins["keycloak_image"] = m.group(1) if m else "absent"
     services = re.findall(r"^  ([a-zA-Z0-9_-]+):\s*$", compose, re.MULTILINE)
     pins["compose_services"] = len(set(services))
+    m = re.search(
+        r"image:\s*\$\{MOONMIND_IMAGE:-(ghcr\.io/[^\s}]+)\}", compose
+    )
+    pins["app_image_default"] = m.group(1) if m else "unknown"
+    m = re.search(r"image:\s*postgres:([^\s]+)", compose)
+    raw = m.group(1) if m else ""
+    dm = re.search(r":-([^}]+)\}", raw)
+    pins["postgres_image"] = dm.group(1) if dm else (raw or "unknown")
+    m = re.search(r"image:\s*temporalio/auto-setup:([^\s]+)", compose)
+    raw = m.group(1) if m else ""
+    dm = re.search(r":-([^}]+)\}", raw)
+    pins["temporal_image"] = dm.group(1) if dm else (raw or "unknown")
+    try:
+        root_pkg = json.loads(_read_text(repo_root / "package.json") or "{}")
+        pins["root_package_version"] = str(root_pkg.get("version", "unknown"))
+    except (json.JSONDecodeError, AttributeError):
+        pins["root_package_version"] = "unparseable"
     settings_text = _read_text(repo_root / "moonmind/config/settings.py") or ""
     m = re.search(r"AUTH_PROVIDER:\s*str\s*=\s*Field\(\s*\"([^\"]+)\"", settings_text)
     pins["auth_provider_default"] = m.group(1) if m else "unknown"
@@ -467,6 +538,10 @@ def check_build_pins(repo_root: Path = REPO_ROOT) -> StepResult:
     return StepResult(
         "build-pins", "completed",
         f"Pins collected: keycloak_image={pins['keycloak_image']}, "
+        f"app_image_default={pins['app_image_default']}, "
+        f"postgres={pins['postgres_image']}, "
+        f"temporal={pins['temporal_image']}, "
+        f"root_package={pins['root_package_version']}, "
         f"AUTH_PROVIDER default={pins['auth_provider_default']!r}, "
         f"{pins['alembic_revisions']} alembic revisions "
         f"(latest {pins['alembic_latest']}), "
