@@ -1,0 +1,16 @@
+{
+  "incident": "LAN outage on API restart while OpenCode provider validation waited for an active workflow's credential lease",
+  "runtime": "omnigent",
+  "protocol": "ASGI lifespan over HTTP",
+  "events": [
+    "An existing workflow retains its provider lease across an API restart",
+    "Bootstrap reconciliation requests credential validation and waits",
+    "The API completes startup and serves HTTP while reconciliation waits",
+    "Reconciliation resumes when the resource becomes available or is cancelled during API shutdown"
+  ],
+  "expected": {
+    "healthStatus": 200,
+    "reconciliationOwnedByLifespan": true,
+    "providerLeasePreserved": true
+  }
+}

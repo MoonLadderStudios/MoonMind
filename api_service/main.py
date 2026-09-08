@@ -656,10 +656,10 @@ async def _reconcile_omnigent_bootstrap_once(
     )
 
 
-async def _maintain_omnigent_bootstrap_reconciliation(*, initial_ready: bool) -> None:
-    """Retry with capped backoff and keep observed agent inventory fresh."""
+async def _maintain_omnigent_bootstrap_reconciliation() -> None:
+    """Own bootstrap and refresh work without blocking HTTP availability."""
 
-    ready = initial_ready
+    ready = False
     retry_delay_seconds = 5
     # Registry-acquiring image refresh is bound to image-policy readiness
     # alone. An unrelated catalog or schedule outage must not re-pull images
@@ -726,11 +726,7 @@ async def lifespan(app: FastAPI):
 
     if build_omnigent_gate().enabled:
         app.state.omnigent_bootstrap_reconciliation_task = asyncio.create_task(
-            _maintain_omnigent_bootstrap_reconciliation(
-                initial_ready=bool(
-                    getattr(app.state, "omnigent_bootstrap_initial_ready", False)
-                ),
-            ),
+            _maintain_omnigent_bootstrap_reconciliation(),
             name="omnigent-bootstrap-reconciliation",
         )
     try:
@@ -2479,12 +2475,10 @@ async def startup_event():
     # them before the first reconciliation pass so a fresh restart can validate
     # and advertise the credentialless OpenCode Zen route immediately.
     await _auto_seed_provider_profiles()
-    # Readiness uses only bounded local image inspection. Registry refresh runs
-    # in the lifespan-owned reconciler after the API can serve health checks.
-    omnigent_bootstrap_ready = (
-        await _reconcile_omnigent_bootstrap_once(refresh_images=False)
-    ).ready
-    app.state.omnigent_bootstrap_initial_ready = omnigent_bootstrap_ready
+    # Omnigent reconciliation belongs to the lifespan-owned background task.
+    # Image resolution, provider validation and qualification can wait on
+    # external services or leases held by active workflows. None may hold the
+    # HTTP listener closed; execution admission still requires their evidence.
     await _sync_env_managed_secrets()
     # MoonLadderStudios/MoonMind#3955 retired the experimental embedded host
     # transport: startup no longer runs an embedded host-auth preflight or
