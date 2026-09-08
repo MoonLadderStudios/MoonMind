@@ -25,7 +25,7 @@ from moonmind.omnigent.upstream_pin_update import (
     select_candidate,
 )
 
-REPO_ROOT = Path(__file__).resolve().parents[2]
+REPO_ROOT = Path(__file__).resolve().parents[3]
 
 CURRENT = "f04b0354fb5344c1ea8b92795ceb6760a9ad7595"
 NEWER = "a" * 40
