@@ -1027,6 +1027,40 @@ def test_retired_mode_rejects_proxy_only_native_transport() -> None:
     assert response.json()["detail"]["code"] == "omnigent_bridge_mode_unsupported"
 
 
+def test_retained_embedded_row_never_dispatches_to_proxy() -> None:
+    # A retained embedded-transport row keeps readable history but its retired
+    # provider-session id must never reach the proxy endpoint
+    # (MoonLadderStudios/MoonMind#3955).
+    grants = {name: True for name in CAPABILITY_NAMES}
+    row = _row(
+        metadata_={
+            "callerAuthorities": {str(_USER_ID): grants},
+            "capabilityAuthority": {
+                "fresh": True,
+                "providerProfileGeneration": 4,
+                "upstream": grants,
+                "agentProfile": grants,
+                "launchPolicy": grants,
+                "state": {"sessionEpoch": 2, "capabilities": grants},
+            },
+            "hostProtocolMode": RETIRED_HOST_PROTOCOL_MODE_EMBEDDED,
+        }
+    )
+    client, proxy, _store = _build(store=_FakeStore(row=row))
+
+    response = client.get(_path("v1/agents"))
+
+    assert response.status_code == 410
+    assert (
+        response.json()["detail"]["code"]
+        == "omnigent_embedded_transport_retired"
+    )
+    assert response.json()["detail"]["supportedTransport"] == (
+        HOST_PROTOCOL_MODE_PROXY
+    )
+    assert proxy.sessions == []
+
+
 def test_identity_substitution_in_query_is_rejected() -> None:
     client, _proxy, _store = _build()
 
