@@ -16,10 +16,14 @@ remaining verifier work:
   absence from a default flag.
 
 The durable counting itself stays with the adapters that own the I/O
-(:meth:`OmnigentBridgeSessionStore.active_host_protocol_modes` for sessions
-and :meth:`OmnigentBridgeSessionStore.list_embedded_host_readiness` for
-leases); this module owns only the aggregation rule so workflow code can
-carry it without embedding launch behavior.
+(:meth:`OmnigentBridgeSessionStore.active_host_protocol_modes` for sessions,
+:meth:`OmnigentBridgeSessionStore.list_embedded_host_readiness` plus
+:meth:`OmnigentBridgeSessionStore.count_active_embedded_host_leases` for
+leases, and
+:meth:`OmnigentBridgeSessionStore.cleanup_required_host_lease_refs` for
+outstanding janitor cleanup authority); this module owns only the
+aggregation rule so workflow code can carry it without embedding launch
+behavior.
 
 This module deliberately imports no launch, store, channel, evidence, or DB
 modules — only the declarative config constants. Anything that needs live
@@ -104,18 +108,28 @@ def summarize_embedded_drain(
     active_embedded_sessions: int,
     active_embedded_leases: int,
     historical_decoding_available: bool = True,
+    pending_cleanup_host_leases: int = 0,
+    lease_list_truncated: bool = False,
 ) -> dict[str, Any]:
     """Aggregate durable embedded counts into a bounded drain disposition.
 
-    ``drained`` is true only when no active embedded session and no active
-    embedded host lease remains *and* read-only historical decoding is
-    available for the retained rows. Every other shape names its blockers;
-    missing evidence is a blocker, never an implicit drain.
+    ``drained`` is true only when no active embedded session, no active
+    embedded host lease, and no pending janitor cleanup authority remains
+    *and* read-only historical decoding is available for the retained rows.
+    Every other shape names its blockers; missing evidence is a blocker,
+    never an implicit drain.
+
+    ``active_embedded_leases`` must be the uncapped durable total (the
+    bounded readiness list is capped for payload safety, so it cannot serve
+    as the total). ``lease_list_truncated`` records that the bounded list
+    the probe observed was shorter than that total, so operators can tell a
+    complete observation from a truncated one.
     """
 
     for name, value in (
         ("active_embedded_sessions", active_embedded_sessions),
         ("active_embedded_leases", active_embedded_leases),
+        ("pending_cleanup_host_leases", pending_cleanup_host_leases),
     ):
         if not isinstance(value, int) or isinstance(value, bool):
             raise EmbeddedDrainError(f"{name} must be an int, got {value!r}")
@@ -126,6 +140,10 @@ def summarize_embedded_drain(
         blockers.append(f"active_embedded_sessions:{active_embedded_sessions}")
     if active_embedded_leases > 0:
         blockers.append(f"active_embedded_leases:{active_embedded_leases}")
+    if pending_cleanup_host_leases > 0:
+        blockers.append(
+            f"pending_cleanup_host_leases:{pending_cleanup_host_leases}"
+        )
     if not historical_decoding_available:
         blockers.append("historical_decoding_unavailable")
     return {
@@ -133,6 +151,8 @@ def summarize_embedded_drain(
         "blockers": tuple(blockers),
         "activeEmbeddedSessions": active_embedded_sessions,
         "activeEmbeddedLeases": active_embedded_leases,
+        "pendingCleanupHostLeases": pending_cleanup_host_leases,
+        "leaseListTruncated": bool(lease_list_truncated),
         "historicalDecodingAvailable": bool(historical_decoding_available),
         "retirementPathId": EMBEDDED_TRANSPORT_RETIREMENT_PATH_ID,
         "contractVersion": EMBEDDED_DRAIN_CONTRACT_VERSION,
@@ -156,14 +176,23 @@ async def probe_embedded_drain(store: Any) -> dict[str, Any]:
     "in-flight cleanup and retained historical reads have a verified
     disposition").
 
-    ``store`` is duck-typed to the two canonical durable readers owned by
+    ``store`` is duck-typed to the canonical durable readers owned by
     :class:`moonmind.omnigent.bridge_store.OmnigentBridgeSessionStore` —
-    ``active_host_protocol_modes()`` for non-terminal sessions and
-    ``list_embedded_host_readiness()`` for active host leases — so this
-    module still imports no store, channel, launch, evidence, or DB modules.
-    Only the ``embedded_omnigent_compatible_server`` mode count and the lease
-    list length flow into :func:`summarize_embedded_drain`; provider session
-    ids, host ids, endpoints, and credentials are never projected.
+    ``active_host_protocol_modes()`` for non-terminal sessions,
+    ``list_embedded_host_readiness()`` for the bounded active host-lease
+    list, ``count_active_embedded_host_leases()`` for the uncapped lease
+    total, and ``cleanup_required_host_lease_refs()`` for outstanding
+    janitor cleanup authority — so this module still imports no store,
+    channel, launch, evidence, or DB modules. Only counts flow into
+    :func:`summarize_embedded_drain`; provider session ids, host ids,
+    endpoints, and credentials are never projected.
+
+    The bounded readiness list is payload-capped, so the uncapped aggregate
+    count is the drain total whenever the store offers it; otherwise the
+    list length is used and the observation is reported as untruncated.
+    Terminal sessions that still carry janitor cleanup authority are
+    invisible to both readers above, so their refs are counted separately:
+    the probe reports ``drained`` only when that set is empty.
 
     A store failure propagates instead of implying drain: missing evidence
     is a blocker, never an implicit drain, and the caller observes the
@@ -177,6 +206,37 @@ async def probe_embedded_drain(store: Any) -> dict[str, Any]:
             f"got {type(modes).__name__}"
         )
     leases = await store.list_embedded_host_readiness()
+    if not isinstance(leases, list):
+        raise EmbeddedDrainError(
+            "list_embedded_host_readiness must return a list, "
+            f"got {type(leases).__name__}"
+        )
+    count_reader = getattr(store, "count_active_embedded_host_leases", None)
+    if callable(count_reader):
+        raw_total = await count_reader()
+        try:
+            active_leases = int(raw_total or 0)
+        except (TypeError, ValueError) as exc:
+            raise EmbeddedDrainError(
+                "active embedded lease count must be an int, "
+                f"got {raw_total!r}"
+            ) from exc
+        lease_list_truncated = len(leases) < active_leases
+    else:
+        active_leases = len(leases)
+        lease_list_truncated = False
+    cleanup_reader = getattr(store, "cleanup_required_host_lease_refs", None)
+    if callable(cleanup_reader):
+        pending_cleanup_refs = await cleanup_reader()
+        try:
+            pending_cleanup = len(pending_cleanup_refs)
+        except TypeError as exc:
+            raise EmbeddedDrainError(
+                "cleanup_required_host_lease_refs must return a sized "
+                f"collection, got {type(pending_cleanup_refs).__name__}"
+            ) from exc
+    else:
+        pending_cleanup = 0
     try:
         active_sessions = int(modes.get(HOST_PROTOCOL_MODE_EMBEDDED, 0) or 0)
     except (TypeError, ValueError) as exc:
@@ -186,5 +246,7 @@ async def probe_embedded_drain(store: Any) -> dict[str, Any]:
         ) from exc
     return summarize_embedded_drain(
         active_embedded_sessions=active_sessions,
-        active_embedded_leases=len(leases),
+        active_embedded_leases=active_leases,
+        pending_cleanup_host_leases=pending_cleanup,
+        lease_list_truncated=lease_list_truncated,
     )

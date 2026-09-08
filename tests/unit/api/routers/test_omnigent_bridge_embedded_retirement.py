@@ -190,3 +190,150 @@ def test_embedded_readiness_reports_retirement_not_new_capacity(
     assert HOST_PROTOCOL_MODE_PROXY in (
         diagnostics["rollbackRecommendation"] or ""
     )
+
+
+class _RetryCapableStore:
+    """Store stand-in with an already-admitted idempotency-key row."""
+
+    def __init__(self, *, admitted: bool = True) -> None:
+        self._admitted = admitted
+
+    async def active_host_protocol_modes(self, *, exclude_idempotency_key=None):
+        return {}
+
+    async def get_existing(self, idempotency_key: str):
+        if self._admitted and idempotency_key == "idem-1":
+            from types import SimpleNamespace
+
+            return SimpleNamespace(omnigent_session_id="sess-77")
+        return None
+
+
+def _proxy_config() -> Any:
+    return parse_bridge_config(
+        {"compatibility": {"hostProtocolMode": HOST_PROTOCOL_MODE_PROXY}}
+    )
+
+
+def test_embedded_retry_with_admitted_key_reconciles_instead_of_rejecting() -> None:
+    """P1: POST /v1/sessions retries reuse the recorded row (no 410, no recreate)."""
+    app = FastAPI()
+    app.include_router(router, prefix=OMNIGENT_BRIDGE_MOUNT_PATH)
+    facade = _FakeEmbeddedFacade()
+    app.dependency_overrides[get_current_user()] = _mock_user
+    app.dependency_overrides[_get_execution_service] = lambda: _FakeService(_USER_ID)
+    app.dependency_overrides[_require_bridge_enabled] = _embedded_config
+    app.dependency_overrides[_get_bridge_proxy] = lambda: None
+    app.dependency_overrides[_get_create_embedded_facade] = lambda: facade
+    app.dependency_overrides[_get_bridge_store] = lambda: _RetryCapableStore()
+    app.dependency_overrides[_get_launch_default_agent_selection] = lambda: None
+
+    response = TestClient(app).post(_CREATE_PATH, json=_create_body())
+
+    assert response.status_code == 200
+    assert response.json()["id"] == "sess-77"
+    # The retry reconciled the recorded row: nothing was newly admitted.
+    assert facade.created == []
+    assert facade.attached == ["sess-77"]
+
+
+def test_new_embedded_admission_rejected_before_proxy_or_facade_errors() -> None:
+    """P2: the shared early gate answers 410 before 503/501 dependency errors."""
+    from fastapi import HTTPException
+
+    app = FastAPI()
+    app.include_router(router, prefix=OMNIGENT_BRIDGE_MOUNT_PATH)
+
+    async def _stale_evidence_proxy():
+        raise HTTPException(status_code=503, detail={"code": "stale_evidence"})
+
+    async def _missing_launch_facade():
+        raise HTTPException(status_code=501, detail={"code": "launch_gone"})
+
+    app.dependency_overrides[get_current_user()] = _mock_user
+    app.dependency_overrides[_get_execution_service] = lambda: _FakeService(_USER_ID)
+    app.dependency_overrides[_require_bridge_enabled] = _embedded_config
+    app.dependency_overrides[_get_bridge_proxy] = _stale_evidence_proxy
+    app.dependency_overrides[_get_create_embedded_facade] = _missing_launch_facade
+    app.dependency_overrides[_get_bridge_store] = lambda: _RetryCapableStore(
+        admitted=False
+    )
+    app.dependency_overrides[_get_launch_default_agent_selection] = lambda: None
+
+    response = TestClient(app).post(_CREATE_PATH, json=_create_body())
+
+    assert response.status_code == 410
+    assert (
+        response.json()["detail"]["code"] == "omnigent_embedded_transport_retired"
+    )
+
+
+def test_retained_embedded_row_reads_without_live_transport(monkeypatch) -> None:
+    """P1: historical reads decode the retained row when no facade exists."""
+    from types import SimpleNamespace
+
+    module = importlib.import_module("api_service.api.routers.omnigent_bridge")
+
+    async def _no_facade(**_kwargs):
+        return (None, True)
+
+    monkeypatch.setattr(module, "_resolve_session_control_facade", _no_facade)
+
+    retained_metadata = {
+        "hostProtocolMode": HOST_PROTOCOL_MODE_EMBEDDED,
+        "embedded_runner_lifecycle": {"state": "runner_tunnel_ready"},
+        "embedded_runner_launch": {"runnerId": "r-1"},
+        "egress_cleanup_authority": {"phase": "attested"},
+    }
+    row = SimpleNamespace(
+        status="completed",
+        omnigent_agent_id=None,
+        omnigent_host_id="host-1",
+        omnigent_runner_id="runner-1",
+        moonmind_workflow_id="mm:w1",
+        moonmind_agent_run_id="ar-1",
+        idempotency_key="idem-1",
+        bridge_session_id="brs-1",
+        terminal_refs={"summary": "done"},
+        diagnostics_ref="artifact://omnigent/diag",
+        final_snapshot_ref=None,
+        metadata_=retained_metadata,
+    )
+
+    class _RetainedStore:
+        async def get_session_by_provider_session_id(self, session_id: str):
+            return row if session_id == "sess-77" else None
+
+        async def get_session_owner(self, session_id: str):
+            if session_id == "sess-77":
+                return SimpleNamespace(workflow_id="mm:w1", agent_run_id="ar-1")
+            return None
+
+    for ban in (
+        "endpoint-secret.example",
+        "token-secret",
+        "host-secret",
+        "runner-secret",
+    ):
+        retained_metadata[ban] = ban
+    app = FastAPI()
+    app.include_router(router, prefix=OMNIGENT_BRIDGE_MOUNT_PATH)
+    app.dependency_overrides[get_current_user()] = _mock_user
+    app.dependency_overrides[_get_execution_service] = lambda: _FakeService(_USER_ID)
+    app.dependency_overrides[_require_bridge_enabled] = _proxy_config
+    app.dependency_overrides[_get_bridge_proxy] = lambda: None
+    app.dependency_overrides[_get_create_embedded_facade] = lambda: None
+    app.dependency_overrides[_get_bridge_store] = lambda: _RetainedStore()
+
+    response = TestClient(app).get(f"{_CREATE_PATH}/sess-77")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["id"] == "sess-77"
+    assert body["retained"] is True
+    decoding = body["retainedDecoding"]
+    assert decoding["isEmbedded"] is True
+    assert decoding["lifecycleState"] == "runner_tunnel_ready"
+    rendered = repr(body)
+    for banned in ("endpoint-secret.example", "token-secret", "host-secret"):
+        assert banned not in rendered

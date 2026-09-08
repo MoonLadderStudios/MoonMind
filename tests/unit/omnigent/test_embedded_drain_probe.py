@@ -154,3 +154,71 @@ def test_drain_probe_adds_no_launch_store_or_db_imports() -> None:
         "sqlalchemy",
     ):
         assert forbidden not in imported, forbidden
+
+
+class _FakeDrainStoreWithCleanup(_FakeBridgeSessionStore):
+    """Store stand-in with uncapped counts and cleanup authority."""
+
+    def __init__(
+        self,
+        modes: object,
+        leases: list[dict[str, object]] | BaseException,
+        *,
+        total_leases: int | None = None,
+        cleanup_refs: set[str] | BaseException = frozenset(),  # type: ignore[assignment]
+    ) -> None:
+        super().__init__(modes, leases)
+        self._total_leases = total_leases
+        self._cleanup_refs = cleanup_refs
+
+    async def count_active_embedded_host_leases(self) -> int:
+        if self._total_leases is None:
+            return len(await super().list_embedded_host_readiness())
+        return self._total_leases
+
+    async def cleanup_required_host_lease_refs(self) -> set[str]:
+        if isinstance(self._cleanup_refs, BaseException):
+            raise self._cleanup_refs
+        return set(self._cleanup_refs)
+
+
+@pytest.mark.asyncio
+async def test_probe_blocks_drain_while_cleanup_authority_remains() -> None:
+    disposition = await probe_embedded_drain(
+        _FakeDrainStoreWithCleanup(
+            {HOST_PROTOCOL_MODE_PROXY: 1},
+            [],
+            cleanup_refs={"host-lease-1", "host-lease-2"},
+        )
+    )
+
+    assert disposition["drained"] is False
+    assert disposition["blockers"] == ("pending_cleanup_host_leases:2",)
+    assert disposition["pendingCleanupHostLeases"] == 2
+
+
+@pytest.mark.asyncio
+async def test_probe_uses_uncapped_lease_total_and_reports_truncation() -> None:
+    disposition = await probe_embedded_drain(
+        _FakeDrainStoreWithCleanup(
+            {HOST_PROTOCOL_MODE_PROXY: 1},
+            [{"id": f"lease-{i}"} for i in range(3)],
+            total_leases=300,
+        )
+    )
+
+    assert disposition["drained"] is False
+    assert disposition["activeEmbeddedLeases"] == 300
+    assert disposition["leaseListTruncated"] is True
+    assert disposition["blockers"] == ("active_embedded_leases:300",)
+
+
+@pytest.mark.asyncio
+async def test_probe_without_capability_readers_stays_backward_compatible() -> None:
+    disposition = await probe_embedded_drain(
+        _FakeBridgeSessionStore({HOST_PROTOCOL_MODE_PROXY: 1}, [])
+    )
+
+    assert disposition["drained"] is True
+    assert disposition["pendingCleanupHostLeases"] == 0
+    assert disposition["leaseListTruncated"] is False
