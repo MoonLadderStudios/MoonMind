@@ -3084,6 +3084,39 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/omnigent/embedded-transport-drain": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Omnigent Embedded Transport Drain
+         * @description Report the live drain disposition for the retired embedded transport.
+         *
+         *     MoonLadderStudios/MoonMind#3955 (plan step 2): the production caller that
+         *     wires durable counts into the drain summary — active embedded sessions
+         *     from ``active_host_protocol_modes`` and active embedded host leases from
+         *     ``list_embedded_host_readiness`` via
+         *     :func:`omnigent_bridge_composition.probe_embedded_transport_drain`.
+         *     Transport removal stays gated on this probe reporting drained.
+         *
+         *     Mode-neutral and read-only: it works in proxy and embedded mode, projects
+         *     only counts and blocker names (no session/host identities, endpoints, or
+         *     credentials), and never imports the embedded launch modules. A durable
+         *     store failure returns 503 with a bounded code instead of implying drain:
+         *     missing evidence is a blocker, never an implicit drain.
+         */
+        get: operations["get_omnigent_embedded_transport_drain_api_omnigent_embedded_transport_drain_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/omnigent/v1/sessions": {
         parameters: {
             query?: never;
@@ -20898,6 +20931,28 @@ export interface operations {
         };
     };
     get_omnigent_bridge_readiness_api_omnigent_readiness_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+        };
+    };
+    get_omnigent_embedded_transport_drain_api_omnigent_embedded_transport_drain_get: {
         parameters: {
             query?: never;
             header?: never;
