@@ -20,9 +20,14 @@ construction:
 * **Keep the host unchanged (§2.3).** ``compatibility.hostUnchanged`` must be
   ``true``. Only deployment configuration is accepted; any configuration that
   requires a custom host build is rejected.
-* **Proxy-first compatibility (§2.4).** ``hostProtocolMode`` accepts
-  ``upstream_omnigent_server_proxy`` and ``embedded_omnigent_compatible_server``
-  and defaults to the proxy mode. Unknown modes fail fast.
+* **Proxy-only compatibility (§2.4, retired embedded transport #3955).**
+  ``hostProtocolMode`` accepts ``upstream_omnigent_server_proxy`` as the only
+  selectable production mode and defaults to it. An explicit operator request
+  for ``embedded_omnigent_compatible_server`` on an enabled bridge fails fast
+  with an actionable error naming the proxy alternative; the embedded value is
+  never silently substituted. The embedded literal is retained only so retained
+  session rows and historical evidence keep decoding to their recorded mode.
+  Unknown modes fail fast.
 * **MoonMind authority (§1).** The authority map (``temporal=moonmind``,
   ``artifacts=moonmind``, ``liveExecution=omnigent_host``) is validated and
   surfaced to downstream components.
@@ -64,7 +69,10 @@ OMNIGENT_BRIDGE_CONFIG_SCHEMA_VERSION = "moonmind.omnigent_bridge.v1"
 # protocol mode, and custom mount path/routes are honored (OB-§6, §21.1).
 OMNIGENT_BRIDGE_CONFIG_PATH_ENV = "OMNIGENT_BRIDGE_CONFIG_PATH"
 
-# §2.4 host protocol modes. Proxy is preferred (proxy-first default).
+# §2.4 host protocol modes. Proxy is the only selectable production mode since
+# the experimental embedded transport retired (#3955). The embedded literal is
+# retained so retained session rows and historical evidence keep decoding to
+# their recorded mode; it must never admit new work on an enabled bridge.
 HOST_PROTOCOL_MODE_PROXY = "upstream_omnigent_server_proxy"
 HOST_PROTOCOL_MODE_EMBEDDED = "embedded_omnigent_compatible_server"
 
@@ -560,32 +568,16 @@ class OmnigentBridgeConfig(BaseModel):
                 f"single active host protocol mode (§2.4)."
             )
         if self.enabled and compat_mode == HOST_PROTOCOL_MODE_EMBEDDED:
-            embedded = self.host_connection.embedded
-            missing = [
-                field_name
-                for field_name, value in (
-                    (
-                        "hostConnection.embedded.proxyConformanceEvidenceRef",
-                        embedded.proxy_conformance_evidence_ref,
-                    ),
-                    (
-                        "hostConnection.embedded.liveSmokeEvidenceRef",
-                        embedded.live_smoke_evidence_ref,
-                    ),
-                    (
-                        "hostConnection.embedded.hostAuthConformanceEvidenceRef",
-                        embedded.host_auth_conformance_evidence_ref,
-                    ),
-                )
-                if not value
-            ]
-            if missing:
-                raise BridgeConfigError(
-                    "embedded_omnigent_compatible_server mode cannot be enabled "
-                    "without proxy conformance, live smoke-test, and upstream host "
-                    "auth conformance evidence refs (§2.4, §16 rule 8). Missing: "
-                    + ", ".join(missing)
-                )
+            raise BridgeConfigError(
+                "embedded_omnigent_compatible_server mode is retired and cannot "
+                "admit new work (MoonLadderStudios/MoonMind#3955): select "
+                "'upstream_omnigent_server_proxy' for compatibility.hostProtocolMode "
+                "(and the matching hostConnection.mode) instead. The embedded "
+                "value is preserved only for decoding retained session rows and "
+                "historical evidence; it is never silently substituted with proxy "
+                "mode. Existing sessions retain their recorded mode/endpoint and "
+                "cleanup owner until drained."
+            )
         return self
 
     @property

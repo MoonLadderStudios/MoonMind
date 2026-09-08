@@ -254,9 +254,9 @@ async def test_websocket_profile_failure_close_code_matrix(
     monkeypatch, failure, expected_code
 ) -> None:
     socket = _HandshakeSocket({})
-    monkeypatch.setattr(bridge_router, "get_bridge_config", _embedded_config)
+    monkeypatch.setattr(bridge_router, "get_bridge_config", _live_embedded_config)
     monkeypatch.setattr(
-        bridge_router, "_require_embedded_mode", AsyncMock(return_value=_embedded_config())
+        bridge_router, "_require_embedded_mode", AsyncMock(return_value=_live_embedded_config())
     )
     monkeypatch.setattr(
         bridge_composition,
@@ -311,9 +311,9 @@ async def test_http_websocket_profile_failure_retryability_matrix(
     assert (ws_code in authoritative_retryable_close_codes) is retryable
 
     socket = _HandshakeSocket({})
-    monkeypatch.setattr(bridge_router, "get_bridge_config", _embedded_config)
+    monkeypatch.setattr(bridge_router, "get_bridge_config", _live_embedded_config)
     monkeypatch.setattr(
-        bridge_router, "_require_embedded_mode", AsyncMock(return_value=_embedded_config())
+        bridge_router, "_require_embedded_mode", AsyncMock(return_value=_live_embedded_config())
     )
     await bridge_router.embedded_omnigent_host_tunnel(socket, "host")
     assert socket.closes == [(ws_code, failure.code)]
@@ -330,9 +330,9 @@ async def test_connected_tunnel_is_drained_immediately_after_revocation(monkeypa
     socket = _HandshakeSocket(_Headers({"X-Omnigent-Runner-Tunnel-Token": token}))
     facade = SimpleNamespace(disconnect_host=AsyncMock())
     channel = SimpleNamespace()
-    monkeypatch.setattr(bridge_router, "get_bridge_config", _embedded_config)
+    monkeypatch.setattr(bridge_router, "get_bridge_config", _live_embedded_config)
     monkeypatch.setattr(
-        bridge_router, "_require_embedded_mode", AsyncMock(return_value=_embedded_config())
+        bridge_router, "_require_embedded_mode", AsyncMock(return_value=_live_embedded_config())
     )
     monkeypatch.setattr(
         bridge_composition,
@@ -414,11 +414,11 @@ async def test_connected_tunnel_drains_when_the_handshake_generation_is_rotated_
             frames=SimpleNamespace(HostRunnerExitedFrame=_RunnerExitedHostFrame)
         ),
     )
-    monkeypatch.setattr(bridge_router, "get_bridge_config", _embedded_config)
+    monkeypatch.setattr(bridge_router, "get_bridge_config", _live_embedded_config)
     monkeypatch.setattr(
         bridge_router,
         "_require_embedded_mode",
-        AsyncMock(return_value=_embedded_config()),
+        AsyncMock(return_value=_live_embedded_config()),
     )
     monkeypatch.setattr(
         bridge_router, "verify_embedded_host_request", AsyncMock(return_value=auth)
@@ -632,18 +632,21 @@ async def test_pinned_upstream_http_websocket_rejection_parity(
     assert http_exc.value.detail["code"] == http_code
 
     socket = _HandshakeSocket(headers)
-    monkeypatch.setattr(bridge_router, "get_bridge_config", _embedded_config)
+    monkeypatch.setattr(bridge_router, "get_bridge_config", _live_embedded_config)
     monkeypatch.setattr(
-        bridge_router, "_require_embedded_mode", AsyncMock(return_value=_embedded_config())
+        bridge_router, "_require_embedded_mode", AsyncMock(return_value=_live_embedded_config())
     )
     await bridge_router.embedded_omnigent_host_tunnel(socket, "untrusted-host")
     assert socket.closes == [(ws_code, http_code)]
 
 
 def _embedded_config():
+    # Retired (#3955): remediation coverage uses a disabled declaration.
+    # Enabled embedded admission fails fast; stale callbacks cannot mutate a
+    # replacement owner.
     return parse_bridge_config(
         {
-            "enabled": True,
+            "enabled": False,
             "compatibility": {"hostProtocolMode": HOST_PROTOCOL_MODE_EMBEDDED},
             "hostConnection": {
                 "embedded": {
@@ -654,3 +657,11 @@ def _embedded_config():
             },
         }
     )
+
+
+def _live_embedded_config():
+    # Test-only drain coverage: closed-tunnel and auth-failure paths read the
+    # live pre-check (enabled + embedded). Enabled embedded admission is
+    # retired at the parse boundary (#3955), so this bypasses validation with
+    # an explicit copy instead of parsing a new operator document.
+    return _embedded_config().model_copy(update={"enabled": True})

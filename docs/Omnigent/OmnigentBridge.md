@@ -96,19 +96,27 @@ A successful design supports a stock Omnigent host. No custom host image or sour
 
 Deployment configuration may specify server URL, host authentication, endpoint refs, network routing, and standard Omnigent host settings. A custom MoonMind-specific host build is out of scope.
 
-### 2.4 Prefer proxy-first compatibility
+### 2.4 Proxy-only compatibility (embedded transport retired #3955)
 
-The bridge supports:
+The bridge selects:
 
 ```yaml
 hostProtocolMode:
   - upstream_omnigent_server_proxy
-  - embedded_omnigent_compatible_server
 ```
 
-`upstream_omnigent_server_proxy` is the preferred default because stock Omnigent Server already owns the host/runner tunnel.
+`upstream_omnigent_server_proxy` is the production default and the only
+selectable mode because stock Omnigent Server already owns the host/runner
+tunnel.
 
-`embedded_omnigent_compatible_server` implements enough compatible server behavior for an unchanged host to connect directly to MoonMind. Its exact auth and protocol contract is owned by `EmbeddedHostAuthCompatibility.md` and remains gated by conformance evidence.
+`embedded_omnigent_compatible_server` is retired and cannot admit new work: an
+enabled bridge that selects it fails fast with the proxy alternative, and live
+embedded host routes answer `410 Gone`. The literal survives only so retained
+session rows and historical evidence keep decoding to their recorded mode.
+Its exact auth and protocol contract is owned by
+`EmbeddedHostAuthCompatibility.md`, which now documents the retired transport
+and its drain disposition. The native Workflow Chat `embedded=1` presentation
+option is unrelated to this transport and is preserved.
 
 ### 2.5 Preserve native UI, centralize authority
 
@@ -138,9 +146,13 @@ Responsibilities:
 - Stock Omnigent Server owns the host/runner tunnel.
 - The unchanged host continues to speak its native protocol.
 
-### 3.2 Embedded compatibility mode
+### 3.2 Embedded compatibility mode (retired #3955)
 
-The version, route, authentication, lifecycle, evidence, failure, upgrade, and rollback contract is authoritative in [`EmbeddedHostAuthCompatibility.md`](EmbeddedHostAuthCompatibility.md).
+> Retired: this topology no longer admits new work. The version, route,
+> authentication, lifecycle, evidence, failure, upgrade, and rollback contract
+> below is retained as the authoritative historical record in
+> [`EmbeddedHostAuthCompatibility.md`](EmbeddedHostAuthCompatibility.md) for
+> decoding retained sessions until drain completes.
 
 ```text
 MoonMind UI / API

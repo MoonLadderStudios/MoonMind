@@ -644,28 +644,25 @@ def _require_proxy_mode(
 async def _require_embedded_mode(
     config: OmnigentBridgeConfig = Depends(_require_bridge_enabled),
 ) -> OmnigentBridgeConfig:
-    """Fail fast when an embedded-host route is called outside embedded mode."""
+    """Fail fast for retired embedded-transport routes (#3955).
 
-    if config.host_protocol_mode == HOST_PROTOCOL_MODE_EMBEDDED:
-        validation = await _resolve_embedded_evidence(config)
-        readiness = config.readiness(evidence_validation=validation)
-        if readiness["conformanceState"] == "ready":
-            return config
-        raise HTTPException(
-            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail={
-                "code": "omnigent_embedded_evidence_gated",
-                "message": "Embedded mode requires authorized, current passing evidence.",
-                "evidenceValidation": validation,
-            },
-        )
+    New embedded-transport admission is retired: explicit requests receive an
+    actionable error naming the supported proxy alternative and are never
+    silently substituted. Retained sessions keep their recorded mode for
+    historical reads; this guard only owns the live transport routes.
+    """
+
     raise HTTPException(
-        status_code=status.HTTP_501_NOT_IMPLEMENTED,
+        status_code=status.HTTP_410_GONE,
         detail={
-            "code": "omnigent_bridge_mode_unsupported",
+            "code": "omnigent_embedded_transport_retired",
             "message": (
-                "This Omnigent bridge route requires "
-                "embedded_omnigent_compatible_server mode."
+                "The experimental embedded host transport is retired "
+                "(MoonLadderStudios/MoonMind#3955) and cannot admit new hosts, "
+                "sessions, or credential consumers. Select "
+                "'upstream_omnigent_server_proxy' for new work. Retained "
+                "sessions keep their recorded mode for historical reads and "
+                "drain under their recorded cleanup owner."
             ),
         },
     )
@@ -749,9 +746,13 @@ def _get_embedded_host_facade(
 async def _get_create_embedded_facade(
     _config: OmnigentBridgeConfig = Depends(_require_bridge_enabled),
 ) -> OmnigentEmbeddedHostProtocolFacade | None:
+    # NOTE (#3955): session-scoped drain paths keep resolving the recorded
+    # facade while retained sessions exist. New admission is blocked at the
+    # trusted bridge-config selection boundary (enabled embedded configs fail
+    # fast at parse/startup) and at the live host-lifecycle routes via
+    # _require_embedded_mode (410 Gone), never by silently substituting proxy.
     if _config.host_protocol_mode != HOST_PROTOCOL_MODE_EMBEDDED:
         return None
-    await _require_embedded_mode(_config)
     return build_embedded_host_facade(_config)
 
 

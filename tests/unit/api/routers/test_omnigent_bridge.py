@@ -33,6 +33,8 @@ from api_service.api.routers.retrieval_gateway import get_capability_registry
 from api_service.auth_providers import get_current_user
 from moonmind.omnigent.bridge_config import (
     HOST_PROTOCOL_MODE_EMBEDDED,
+    HOST_PROTOCOL_MODE_PROXY,
+    BridgeConfigError,
     parse_bridge_config,
 )
 from moonmind.omnigent.bridge_proxy import (
@@ -42,10 +44,6 @@ from moonmind.omnigent.bridge_proxy import (
 from moonmind.omnigent.control_plane.records import ControlPlaneOutcome
 from moonmind.omnigent.control_plane.turn_sources import TurnSource
 from moonmind.omnigent.effective_capabilities import CAPABILITY_NAMES
-from moonmind.omnigent.host_auth_contracts import (
-    HostAuthCredentialProfile,
-    HostAuthProfileError,
-)
 
 _USER_ID = uuid4()
 
@@ -200,13 +198,11 @@ def test_readiness_reports_selected_mode_and_conformance_state(monkeypatch) -> N
 
 @pytest.mark.asyncio
 async def test_embedded_preflight_gates_failed_host_auth(monkeypatch) -> None:
-    host_auth_module = importlib.import_module("moonmind.omnigent.host_auth_profile")
-    monkeypatch.setattr(
-        host_auth_module, "assert_pinned_omnigent_auth_contract", lambda: None
-    )
-    monkeypatch.setitem(
-        embedded_host_auth_preflight.__globals__,
-        "_BRIDGE_CONFIG",
+    # Retired (#3955): the experimental embedded transport cannot be selected
+    # for new admission, so the preflight enablement boundary is never reached
+    # with an embedded config. The default proxy bridge reports host auth as
+    # not selected instead of resolving embedded credentials.
+    with pytest.raises(BridgeConfigError, match="3955"):
         parse_bridge_config({
             "enabled": True,
             "compatibility": {"hostProtocolMode": HOST_PROTOCOL_MODE_EMBEDDED},
@@ -215,84 +211,36 @@ async def test_embedded_preflight_gates_failed_host_auth(monkeypatch) -> None:
                 "liveSmokeEvidenceRef": "artifact://smoke",
                 "hostAuthConformanceEvidenceRef": "artifact://auth",
             }},
-        }),
-    )
-    composition = importlib.import_module(
-        "api_service.api.routers.omnigent_bridge_composition"
-    )
-    monkeypatch.setattr(
-        composition,
-        "resolve_active_host_auth_profile",
-        AsyncMock(
-            return_value=HostAuthCredentialProfile(
-                "managed", "env://ABSENT_HOST_TOKEN", 1
-            )
-        ),
+        })
+    monkeypatch.setitem(
+        embedded_host_auth_preflight.__globals__,
+        "_BRIDGE_CONFIG",
+        parse_bridge_config({}),
     )
     result = await embedded_host_auth_preflight()
-    assert result["ready"] is False
-    assert result["code"] == "host_auth_secret_unavailable"
-    assert "ABSENT_HOST_TOKEN" not in str(result)
+    assert result == {"ready": True, "code": "host_auth_not_selected"}
 
 
-def test_embedded_readiness_stays_gated_when_artifacts_are_invalid(monkeypatch) -> None:
-    module = importlib.import_module("api_service.api.routers.omnigent_bridge")
-    config = parse_bridge_config(
-        {
-            "compatibility": {"hostProtocolMode": HOST_PROTOCOL_MODE_EMBEDDED},
-            "hostConnection": {
-                "embedded": {
-                    "proxyConformanceEvidenceRef": "arbitrary",
-                    "liveSmokeEvidenceRef": "missing",
-                    "hostAuthConformanceEvidenceRef": "unauthorized",
-                }
-            },
-        }
-    )
-
-    async def invalid(_config, **_kwargs):
-        return {
-            key: {
-                "status": "failed",
-                "reason": "evidence_unavailable_or_invalid",
+def test_embedded_readiness_selection_is_retired() -> None:
+    # Retired (#3955): an enabled embedded selection fails fast with the proxy
+    # alternative instead of rendering evidence-gated readiness. The enabled
+    # bridge reports the proxy-only topology.
+    with pytest.raises(BridgeConfigError, match="3955"):
+        parse_bridge_config(
+            {
+                "compatibility": {"hostProtocolMode": HOST_PROTOCOL_MODE_EMBEDDED},
+                "hostConnection": {
+                    "embedded": {
+                        "proxyConformanceEvidenceRef": "arbitrary",
+                        "liveSmokeEvidenceRef": "missing",
+                        "hostAuthConformanceEvidenceRef": "unauthorized",
+                    }
+                },
             }
-            for key in ("proxyConformance", "liveSmoke", "hostAuthConformance")
-        }
-
-    monkeypatch.setattr(module, "_resolve_embedded_evidence", invalid)
-    monkeypatch.setattr(
-        importlib.import_module(
-            "api_service.api.routers.omnigent_bridge_composition"
-        ),
-        "resolve_active_host_auth_profile",
-        AsyncMock(
-            side_effect=HostAuthProfileError(
-                "host authentication is unavailable",
-                code="host_auth_secret_unavailable",
-            )
-        ),
-    )
-    app = FastAPI()
-    app.include_router(router, prefix=OMNIGENT_BRIDGE_MOUNT_PATH)
-    app.dependency_overrides[get_current_user()] = _mock_user
-    app.dependency_overrides[_require_bridge_enabled] = lambda: config
-
-    response = TestClient(app).get(_READINESS_PATH)
-
-    assert response.status_code == 200
-    assert response.json()["conformanceState"] == "gated"
-    assert response.json()["gateReason"] == "validated_embedded_evidence_required"
-    diagnostics = response.json()["compatibilityDiagnostics"]
-    assert diagnostics["bridgeMode"] == HOST_PROTOCOL_MODE_EMBEDDED
-    assert diagnostics["compatibilityProfile"] == "omnigent.runner_tunnel.983c93c6"
-    assert diagnostics["auth"]["code"] == "host_auth_secret_unavailable"
-    assert diagnostics["evidence"]["fresh"] is False
-    assert diagnostics["failureReason"] == "validated_embedded_evidence_required"
-    assert diagnostics["rollbackRecommendation"] == (
-        "Select upstream_omnigent_server_proxy for new sessions; "
-        "existing sessions retain their recorded bridge mode."
-    )
-    assert all(row["supported"] is False for row in diagnostics["supportMatrix"])
+        )
+    readiness = parse_bridge_config({}).readiness()
+    assert readiness["selectedMode"] == HOST_PROTOCOL_MODE_PROXY
+    assert readiness["evidenceRefs"] == {}
 
 
 def _fake_store_dependency() -> "_FakeStore":
@@ -969,6 +917,7 @@ def test_provider_stream_authorizes_and_proxies_sse() -> None:
 def test_embedded_stream_emits_durable_sse_cursor_and_resumes() -> None:
     monkeypatch_config = parse_bridge_config(
         {
+            "enabled": False,
             "compatibility": {"hostProtocolMode": HOST_PROTOCOL_MODE_EMBEDDED},
             "hostConnection": {
                 "embedded": {
@@ -1002,6 +951,7 @@ def test_embedded_stream_emits_durable_sse_cursor_and_resumes() -> None:
 def test_embedded_public_routes_use_same_authorized_facade_boundary() -> None:
     config = parse_bridge_config(
         {
+            "enabled": False,
             "compatibility": {"hostProtocolMode": HOST_PROTOCOL_MODE_EMBEDDED},
             "hostConnection": {
                 "embedded": {
@@ -1787,6 +1737,7 @@ def test_create_session_available_in_embedded_mode() -> None:
     facade = _FakeEmbeddedFacade()
     embedded_config = parse_bridge_config(
         {
+            "enabled": False,
             "compatibility": {"hostProtocolMode": HOST_PROTOCOL_MODE_EMBEDDED},
             "hostConnection": {
                 "embedded": {
@@ -1824,6 +1775,7 @@ def test_stop_session_event_dispatches_to_embedded_exact_host_facade() -> None:
     facade = _FakeEmbeddedFacade()
     embedded_config = parse_bridge_config(
         {
+            "enabled": False,
             "compatibility": {"hostProtocolMode": HOST_PROTOCOL_MODE_EMBEDDED},
             "hostConnection": {
                 "embedded": {
@@ -1878,6 +1830,7 @@ def test_cleanup_session_event_uses_typed_embedded_control() -> None:
     app.include_router(router, prefix=OMNIGENT_BRIDGE_MOUNT_PATH)
     facade = _FakeEmbeddedFacade()
     embedded_config = parse_bridge_config({
+        "enabled": False,
         "compatibility": {"hostProtocolMode": HOST_PROTOCOL_MODE_EMBEDDED},
         "hostConnection": {"embedded": {
             "proxyConformanceEvidenceRef": "artifact://omnigent/proxy",
@@ -1916,6 +1869,7 @@ def test_cleanup_session_rejects_missing_terminal_lease_evidence() -> None:
     app.include_router(router, prefix=OMNIGENT_BRIDGE_MOUNT_PATH)
     facade = _FakeEmbeddedFacade()
     embedded_config = parse_bridge_config({
+        "enabled": False,
         "compatibility": {"hostProtocolMode": HOST_PROTOCOL_MODE_EMBEDDED},
         "hostConnection": {"embedded": {
             "proxyConformanceEvidenceRef": "artifact://omnigent/proxy",
@@ -1950,6 +1904,7 @@ def test_interrupt_embedded_control_is_explicitly_unsupported() -> None:
     facade = _FakeEmbeddedFacade()
     embedded_config = parse_bridge_config(
         {
+            "enabled": False,
             "compatibility": {"hostProtocolMode": HOST_PROTOCOL_MODE_EMBEDDED},
             "hostConnection": {
                 "embedded": {
@@ -2010,6 +1965,7 @@ def test_unknown_stream_schema_version_emits_stable_visible_error() -> None:
 
     config = parse_bridge_config(
         {
+            "enabled": False,
             "compatibility": {"hostProtocolMode": HOST_PROTOCOL_MODE_EMBEDDED},
             "hostConnection": {
                 "embedded": {
@@ -2052,6 +2008,7 @@ def test_proxy_stream_passes_through_untyped_upstream_frames() -> None:
 def test_proxy_and_embedded_share_unknown_and_non_owner_error_contracts() -> None:
     embedded_config = parse_bridge_config(
         {
+            "enabled": False,
             "compatibility": {"hostProtocolMode": HOST_PROTOCOL_MODE_EMBEDDED},
             "hostConnection": {
                 "embedded": {
@@ -2107,6 +2064,7 @@ def test_embedded_clear_rejection_preserves_retrieval_authority() -> None:
     facade = _FakeEmbeddedFacade()
     embedded_config = parse_bridge_config(
         {
+            "enabled": False,
             "compatibility": {"hostProtocolMode": HOST_PROTOCOL_MODE_EMBEDDED},
             "hostConnection": {
                 "embedded": {
