@@ -232,6 +232,7 @@ with deterministic workflow code, not Temporal Local Activities.
 | `omnigent.stop_host` | `agent_runtime` | `mm.activity.agent_runtime.control` |
 | `omnigent.stop_provider_session` | `agent_runtime` | `mm.activity.agent_runtime.control` |
 | `omnigent.submit_turn` | `agent_runtime` | `mm.activity.agent_runtime` |
+| `plan.check_preset_capabilities` | `llm` | `mm.activity.llm` |
 | `plan.generate` | `llm` | `mm.activity.llm` |
 | `plan.validate` | `llm` | `mm.activity.llm` |
 | `pr_resolver.classify_gate` | `integrations` | `mm.activity.integrations` |

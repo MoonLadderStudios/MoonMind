@@ -2,20 +2,21 @@
 
 **Document Class:** Canonical declarative
 
-> **Retirement notice (MoonLadderStudios/MoonMind#3955).** The experimental
-> embedded host/runner transport no longer admits new work. An enabled bridge
-> that selects `embedded_omnigent_compatible_server` fails fast at API/worker
-> startup with the supported `upstream_omnigent_server_proxy` alternative;
-> live embedded host routes answer `410 Gone` with the same alternative.
-> Proxy mode is the only selectable production topology. What this document
-> still describes below is retained for one purpose only: decoding retained
-> session rows and historical evidence in their recorded mode until bounded
-> drain probes establish no active or cleanup owner remains. Physical removal
-> of the launch code follows at the launch-only removal stage, never in the
-> same change as the product selector. The native Workflow Chat `embedded=1`
-> presentation option is unrelated to this transport and is preserved, as are
-> shared first-message idempotency, bridge session/event persistence, and
-> profile-owned credentials.
+> **Retirement notice (MoonLadderStudios/MoonMind#3955):** the experimental
+> embedded host/runner transport no longer admits new work. Session creation
+> and host registration through it are rejected with
+> `omnigent_embedded_transport_retired` and an actionable proxy alternative
+> (`upstream_omnigent_server_proxy`); the rejection never substitutes proxy
+> mode silently. Existing sessions retain their recorded bridge mode,
+> endpoint, and cleanup owner until drained, and retained rows keep decoding
+> their recorded `hostProtocolMode` for historical reads and evidence. Proxy
+> mode is the supported topology. The live drain disposition (active embedded
+> sessions and host leases with blocker names, no identities or credentials)
+> is reported by `GET /embedded-transport-drain`; transport removal stays
+> gated on that probe reporting drained. The remainder of this document is the
+> historical reference for those retained sessions and their evidence — it is
+> not an offer of new embedded capacity. The native Workflow Chat `embedded=1`
+> presentation option is unrelated and stays supported.
 
 **Compatibility declaration:** `omnigent.server.v1` with embedded runner
 authentication profile `omnigent.runner_tunnel.983c93c6`, verified against
@@ -131,13 +132,15 @@ to close code 4401, disabled/revoked or stale connected authority to 4403,
 transient verifier/configuration failure to 1013, and accepted-frame protocol
 failure to 4400.
 
-Embedded mode is retired (#3955) and must not be presented as production
-ready; an enabled bridge cannot select it for new work. The evidence claims
-described here (proxy conformance, live stock-host smoke, and host-auth
-conformance) remain the historical record of what gated the experimental path
-and stay resolvable for retained sessions. Proxy mode is the production
-default and the only supported topology. Retired-transport denials are
-explicit: HTTP routes answer `410 Gone` with code
+Embedded mode is retired for new work (see the notice above) and must not be
+presented as production ready. It remains observable only so in-flight
+sessions can drain: until all three configured evidence claims (proxy
+conformance, live stock-host smoke, and host-auth conformance) resolve
+independently, pass schema and secret-scan validation, match the active
+MoonMind build/configuration and immutable image identities, and remain
+unexpired, even drain-time continuity stays gated. Proxy mode remains the
+production default and supported topology until the full #3519 matrix passes.
+Retired-transport denials are explicit: HTTP routes answer `410 Gone` with code
 `omnigent_embedded_transport_retired`, and WebSocket handshakes close with
 `4404` carrying `omnigent_embedded_transport_retired` plus the
 `upstream_omnigent_server_proxy` alternative as the close reason.
@@ -152,8 +155,10 @@ mode does not imply support for the other. No embedded support row is
 advertised anymore: readiness and the support matrix report the proxy-only
 topology.
 
-Selecting embedded mode is retired. Rollback selects
-`upstream_omnigent_server_proxy` for new sessions only. An in-flight
+Selecting embedded mode was explicit and versioned; since #3955 it is retired
+for new sessions and only retained sessions drain. Missing, stale, revoked, or
+incompatible evidence gates readiness before retained-session continuity work
+starts. Rollback selects `upstream_omnigent_server_proxy` for new sessions only. An in-flight
 session stays with its recorded endpoint and bridge mode, and historical
 records retain their actual compatibility profile and evidence references.
 MoonMind never redirects an in-flight session between modes.

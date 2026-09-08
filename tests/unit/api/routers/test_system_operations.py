@@ -159,7 +159,7 @@ def test_missing_operations_invoke_is_rejected_without_subsystem_invocation(
 ) -> None:
     client, temporal = system_operations_client
     _override_user(client.app, is_superuser=False)
-    monkeypatch.setattr(settings.oidc, "AUTH_PROVIDER", "default")
+    monkeypatch.setattr(settings.oidc, "AUTH_PROVIDER", "accounts")
 
     response = client.post(
         "/api/system/worker-pause",
@@ -187,7 +187,7 @@ def test_missing_operations_read_is_rejected(
         is_superuser=False,
         settings_permissions={"operations.invoke"},
     )
-    monkeypatch.setattr(settings.oidc, "AUTH_PROVIDER", "default")
+    monkeypatch.setattr(settings.oidc, "AUTH_PROVIDER", "accounts")
 
     response = client.get("/api/system/worker-pause")
 
@@ -205,7 +205,7 @@ def test_non_superuser_with_operations_permissions_can_read_and_invoke(
         is_superuser=False,
         settings_permissions={"operations.read", "operations.invoke"},
     )
-    monkeypatch.setattr(settings.oidc, "AUTH_PROVIDER", "default")
+    monkeypatch.setattr(settings.oidc, "AUTH_PROVIDER", "accounts")
 
     snapshot = client.get("/api/system/worker-pause")
     command = client.post(

@@ -126,10 +126,14 @@ Verify the candidate state at the boundary where this skill is invoked. In a
 pre-publication verification step, an uncommitted workspace, an absent pull
 request, an open issue, and an unmerged candidate are expected inputs, not
 implementation or documentation gaps. Do not require downstream commit, pull
-request, merge, deployment, or issue-closure evidence before returning
+request, merge, or issue-closure evidence before returning
 `FULLY_IMPLEMENTED`. Gate on those outcomes only when the selected baseline
 explicitly makes publication itself part of this verification step and the
 workflow has already supplied the resulting publication evidence.
+This sequencing rule does not waive an acceptance or safety prerequisite that
+the source requires before a repository change, such as proving legacy tasks
+have drained before removing their handlers. Verify that prerequisite or return
+the bounded evidence handoff; do not perform an unauthorized deployment.
 
 ## Controlling vs Advisory Verification
 
@@ -142,7 +146,9 @@ Controlling evidence can block `FULLY_IMPLEMENTED`:
 - hermetic integration tests when their required fixtures, services, and assets are present in the current runtime and the failure identifies a concrete in-scope implementation defect.
 - explicit original-instruction, declarative-document, AGENTS.md, issue-brief, or spec `MUST` requirements that are repo-verifiable in the current runtime.
 
-Advisory evidence must be reported but must not fail verification by itself:
+Unless the selected source explicitly makes them an acceptance or safety
+prerequisite, the following are advisory evidence and must not fail verification
+by themselves:
 
 - integration, e2e, smoke, quickstart, map-entry, UI/browser, deployment, or external-service tests that require credentials, host services, deployed environments, proprietary or binary assets, large fixtures, game/editor map assets, simulators, or other runtime inputs not available in the checkout.
 - failures whose root cause is the unavailable advisory environment, such as missing `.umap` files, absent `/Game/Maps/...` assets, unavailable services, or unsupported local tools.
@@ -315,7 +321,9 @@ capability is missing or rejects the job, preserve its explicit evidence and
 classify the environment according to `AGENTS.md`.
 
 Use `NOT RUN` with an exact reason when a command requires unavailable credentials, missing services, unsafe side effects, unsupported local tools, or excessive environment setup.
-Use the controlling/advisory split when interpreting results. Missing map assets, game/editor content assets, external services, credentials, or other non-hermetic integration/e2e prerequisites are advisory limitations unless the command output exposes a concrete in-scope implementation defect.
+Use the controlling/advisory split above when interpreting unavailable assets,
+services, credentials, or tooling. Preserve explicitly mandatory prerequisites;
+report optional diagnostics as advisory limitations.
 
 ## Classify Items
 
@@ -331,7 +339,7 @@ Rules:
 
 - Do not mark the feature `FULLY_IMPLEMENTED` unless every in-scope source requirement, relevant AGENTS.md principle, source design requirement, and acceptance-critical behavior is `VERIFIED`.
 - Missing required unit tests or repo-local hermetic checks is a verification failure unless the selected verification baseline clearly makes that test class irrelevant.
-- Missing integration coverage for acceptance scenarios, contracts, workflows, persistence, or external boundaries is a high-severity gap only when that coverage is repo-local, hermetic, and controllable in the current runtime. Integration/e2e/map/deployment evidence that depends on unavailable assets or external runtime fixtures is advisory and non-blocking.
+- Missing repo-local hermetic integration coverage for acceptance-critical behavior is a verification gap. Unavailable external evidence follows the controlling/advisory policy above: mandatory prerequisites require a handoff, while optional diagnostics remain non-blocking.
 - Separate missing implementation from missing validation when both matter.
 - Treat violated AGENTS.md `MUST` rules as blocking failures.
 - Treat original request misalignment as blocking even if later tasks are complete.
@@ -348,7 +356,12 @@ Choose exactly one verdict:
 - `BLOCKED`: the execution environment prevents trustworthy verification, such as `ENVIRONMENT_CONTAMINATED_BY_SKILL_PROJECTION` from the workspace projection preflight. Include the diagnostic, whether it is recoverable in the current runtime, and the minimum repair needed.
 
 Prefer `ADDITIONAL_WORK_NEEDED` over `NO_DETERMINATION` when a concrete missing code or test gap is visible. Use `BLOCKED` only for environment failures; it says nothing about implementation completeness.
-Do not choose a blocking verdict solely because advisory integration/e2e/map/deployment validation cannot run or fails due to unavailable non-repo assets, services, credentials, or tooling. Use `FULLY_IMPLEMENTED` when all controlling evidence verifies; otherwise gate only on concrete implementation or controllable verification gaps.
+Do not choose a blocking verdict solely because advisory validation cannot run.
+Use `FULLY_IMPLEMENTED` when all controlling evidence verifies. When only
+mandatory external evidence or an authority decision remains unavailable, use
+`NO_DETERMINATION` with `needs_human`. When missing or broken runtime capabilities
+prevent required hermetic checks, use `BLOCKED` with `blocked`. These stopping
+verdicts preserve uncertainty about completeness; they are not assertion failures.
 
 When the verdict is `ADDITIONAL_WORK_NEEDED`, include a structured Remaining Work section that remediation steps can consume. Each item must identify:
 
@@ -362,7 +375,7 @@ Distinguish implementation gaps from verification gaps:
 
 - Implementation gaps mean required behavior, wiring, persistence, contracts, UI/API behavior, or configuration is absent, partial, or contradictory.
 - Verification gaps mean tests, command evidence, fixture coverage, integration evidence, or inspectable artifacts are missing or insufficient.
-- Environment gaps mean current-runtime constraints prevent a controlling repo-verifiable check and should usually map to `BLOCKED` or `NO_DETERMINATION` depending on recoverability. Environment gaps for advisory integration/e2e/map/deployment evidence are non-blocking limitations, not Remaining Work.
+- Environment gaps prevent controlling checks: missing runtime capabilities use `BLOCKED`; required external evidence or authority decisions use `NO_DETERMINATION`. Advisory environment gaps remain non-blocking limitations, not Remaining Work.
 
 Emit concrete `remainingWork` for every `ADDITIONAL_WORK_NEEDED` result. Each item must be bounded enough for a remediation step to act on without reinterpreting the whole report.
 
@@ -387,6 +400,23 @@ JSON is requested, use `recommendedNextAction` and
   external dependency that an authorized remediation step cannot supply. Use
   `blocked` when no authorized execution path can currently proceed. Explain
   what must change and preserve the evidence and concrete remaining work.
+
+Before requesting another attempt, identify the concrete change or controlling
+check that an authorized remediation step can actually execute. Distinguish
+repository work from prerequisites such as a missing container-test capability,
+live deployment access, or a required operator decision. Complete feasible
+repository work while preserving those prerequisites; once only unavailable
+prerequisites remain, use `needs_human` or `blocked` and name the required owner,
+the evidence they must supply, and the check that resumes verification. A newer
+commit, more unexecuted tests, or a rewritten report does not resolve an unchanged
+prerequisite. Do not spend another attempt repeating that same blocked check
+without evidence that its environment or authority changed.
+
+Keep mandatory acceptance conditions visible in this handoff. An explicitly
+required deployment drain or permission check cannot be waived as advisory just
+because the sandbox lacks access. Conversely, optional deployment diagnostics
+remain non-blocking under the test-evidence policy above. Missing test tooling is
+an environment limitation, not proof that an implementation or assertion failed.
 
 An explicit `needs_human` or `blocked` decision for `ADDITIONAL_WORK_NEEDED` or
 `NO_DETERMINATION` stops automatic verifier retry and implementation remediation.
@@ -533,6 +563,6 @@ If no hooks are registered or `.specify/extensions.yml` does not exist, skip sil
 - Do not require unrelated claims from a larger canonical design to verify for this story, but do not let the temporary spec silently override an in-scope canonical conflict.
 - Relevant AGENTS.md guidance defines repo principles, constraints, and test discipline for the story.
 - `plan.md` and `tasks.md` are useful context but never proof of implementation.
-- Unit tests and repo-local hermetic checks are controlling expected evidence. Integration/e2e/map/deployment checks are expected evidence when available, but they are advisory and non-blocking when they depend on unavailable non-repo assets, services, credentials, or tooling.
+- Apply the Controlling vs Advisory Verification policy consistently. Missing optional diagnostics cannot block acceptance; missing explicitly mandatory prerequisites cannot be waived because the environment lacks access.
 - Prefer direct, citeable repository evidence from production code, wiring, configuration, and tests.
 - Do not mark the feature complete when required behavior is only inferred and not verified.

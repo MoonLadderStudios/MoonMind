@@ -1,0 +1,6 @@
+{
+  "failureShapeId": "session-secret-compose-default",
+  "observedFailure": "Local Compose API startup rejects its empty default as an insecure explicit session secret, even though the documented default owns durable key generation",
+  "composeEnvironment": {"MOONMIND_SESSION_SECRET": "", "JWT_SECRET": ""},
+  "invariant": "Empty Compose defaults use one durable local key across recreations; nonempty placeholders and unprovisioned remote deployments still fail closed"
+}

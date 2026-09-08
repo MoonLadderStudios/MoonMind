@@ -71,6 +71,22 @@ async def prepare_checkpoint_branch_workspace(
 ) -> CheckpointBranchWorkspacePreparation:
     """Validate, emit artifacts, and persist a checkpoint branch git binding."""
 
+    if follow_up_retrieval is not None:
+        # Retired (#4105): explicit vector authority fails before any
+        # artifact write or persistence; absent values are dropped downstream.
+        from moonmind.workflows.executions.execution_contract import (
+            WorkflowContractError,
+            reject_retired_vector_fields,
+        )
+
+        try:
+            reject_retired_vector_fields(
+                {"followUpRetrieval": dict(follow_up_retrieval)},
+                field_path="payload",
+            )
+        except WorkflowContractError as exc:
+            raise ValueError(str(exc)) from exc
+
     try:
         validated_input = CheckpointBranchGitBindingInput.model_validate(binding_input)
     except ValueError as exc:
@@ -326,8 +342,9 @@ async def _persist_branch_turn(
     turn = await session.get(WorkflowCheckpointBranchTurn, binding.branch_turn_id)
     diagnostics = dict(prepared.branch_turn_metadata or {})
     diagnostics["gitBinding"] = prepared.diagnostics["gitBinding"]
-    if follow_up_retrieval is not None:
-        diagnostics["followUpRetrieval"] = dict(follow_up_retrieval)
+    # Entry validation rejected explicit retired authority; any residue
+    # reaching here is absent/empty/disabled and carries no authority, so new
+    # turns persist no vector retrieval state (retired #4105).
     if turn is None:
         turn = WorkflowCheckpointBranchTurn(
             branch_turn_id=binding.branch_turn_id,
