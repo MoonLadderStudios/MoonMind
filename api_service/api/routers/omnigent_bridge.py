@@ -73,9 +73,13 @@ from api_service.services.omnigent_policies import (
     PolicyNotFound,
 )
 from moonmind.omnigent.bridge_config import (
+    EMBEDDED_TRANSPORT_RETIRED_CODE,
+    EMBEDDED_TRANSPORT_RETIRED_MESSAGE,
+    EMBEDDED_TRANSPORT_RETIREMENT_PATH_ID,
     HOST_PROTOCOL_MODE_EMBEDDED,
     HOST_PROTOCOL_MODE_PROXY,
     OmnigentBridgeConfig,
+    embedded_transport_retirement,
     resolve_bridge_config,
 )
 from moonmind.omnigent.bridge_artifacts import (
@@ -449,11 +453,14 @@ def _compatibility_diagnostics(
             else None
         ),
         "rollbackRecommendation": (
-            _PROXY_ROLLBACK_RECOMMENDATION
-            if selected_embedded and failure_reason
-            else None
+            _PROXY_ROLLBACK_RECOMMENDATION if selected_embedded else None
         ),
     }
+    if selected_embedded:
+        # MoonLadderStudios/MoonMind#3955: support/readiness must not
+        # advertise the retired transport as available for new work, even
+        # when its evidence still validates for in-flight drain.
+        projection["retirement"] = embedded_transport_retirement()
     projection["releaseMetadata"] = {
         key: projection[key]
         for key in (
@@ -667,6 +674,59 @@ async def _require_embedded_mode(
                 "This Omnigent bridge route requires "
                 "embedded_omnigent_compatible_server mode."
             ),
+        },
+    )
+
+
+def _reject_new_embedded_transport_admission(
+    config: OmnigentBridgeConfig,
+) -> None:
+    """Reject new embedded-transport admission (MoonLadderStudios/MoonMind#3955).
+
+    The experimental embedded host/runner transport no longer admits new
+    work: session creation and host registration through it fail with an
+    explicit ``410 Gone`` naming the supported proxy alternative. The error
+    never substitutes proxy mode silently, and it creates no host, session,
+    or credential consumer. Existing sessions keep their recorded
+    mode/endpoint and cleanup owner: reads, controls, heartbeats, tunnels,
+    and typed cleanup for already-recorded sessions do not consult this
+    helper.
+
+    The code-owned retirement class is the authority: admission follows
+    ``omnigent.legacy.embedded_host_transport`` via
+    :func:`assert_new_admission_allowed`, so the check stays correct if the
+    class ever advances. (Function-level import: the router is imported by
+    the API composition root, while the retirement guard lives in core.)
+    """
+
+    if config.host_protocol_mode != HOST_PROTOCOL_MODE_EMBEDDED:
+        return
+    from moonmind.omnigent.legacy_retirement import (
+        LegacyAdmissionRejected,
+        assert_new_admission_allowed,
+    )
+
+    try:
+        assert_new_admission_allowed(EMBEDDED_TRANSPORT_RETIREMENT_PATH_ID)
+    except LegacyAdmissionRejected as exc:
+        raise HTTPException(
+            status_code=status.HTTP_410_GONE,
+            detail={
+                "code": EMBEDDED_TRANSPORT_RETIRED_CODE,
+                "message": EMBEDDED_TRANSPORT_RETIRED_MESSAGE,
+                "retirementPathId": exc.path_id,
+                "reasonCode": exc.reason_code,
+                "supportedAlternative": HOST_PROTOCOL_MODE_PROXY,
+            },
+        ) from exc
+    raise HTTPException(
+        status_code=status.HTTP_410_GONE,
+        detail={
+            "code": EMBEDDED_TRANSPORT_RETIRED_CODE,
+            "message": EMBEDDED_TRANSPORT_RETIRED_MESSAGE,
+            "retirementPathId": EMBEDDED_TRANSPORT_RETIREMENT_PATH_ID,
+            "reasonCode": "retired_without_rollback_authority",
+            "supportedAlternative": HOST_PROTOCOL_MODE_PROXY,
         },
     )
 
@@ -910,6 +970,10 @@ async def create_omnigent_session(
 ) -> dict[str, Any]:
     """Create or reuse an Omnigent-shaped session in the configured bridge mode."""
 
+    # MoonLadderStudios/MoonMind#3955: creating through the retired embedded
+    # transport is rejected before any binding, session, or credential-consumer
+    # side effect. Proxy creation is unaffected.
+    _reject_new_embedded_transport_admission(config)
     binding = await _resolve_bridge_binding(
         user=user,
         service=service,
@@ -2765,6 +2829,12 @@ async def register_embedded_omnigent_host(
 ) -> dict[str, Any]:
     """Register an unchanged host against MoonMind's embedded host facade."""
 
+    # MoonLadderStudios/MoonMind#3955: new host admission through the retired
+    # embedded transport is rejected before authentication or lease binding,
+    # so the request creates no host, lease, or credential consumer.
+    # Already-registered hosts keep heartbeating, tunneling, and draining
+    # through their dedicated continuity routes.
+    _reject_new_embedded_transport_admission(config)
     auth = await _embedded_auth_context(request=request, config=config)
     try:
         return await facade.register_host(request=payload, auth=auth)

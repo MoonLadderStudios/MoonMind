@@ -11,12 +11,15 @@ import pytest
 
 from moonmind.omnigent.bridge_config import (
     CANONICAL_FIRST_MESSAGE_STATES,
+    EMBEDDED_TRANSPORT_RETIRED_CODE,
+    EMBEDDED_TRANSPORT_RETIREMENT_PATH_ID,
     HOST_PROTOCOL_MODE_EMBEDDED,
     HOST_PROTOCOL_MODE_PROXY,
     OMNIGENT_BRIDGE_CONFIG_PATH_ENV,
     OMNIGENT_BRIDGE_CONFIG_SCHEMA_VERSION,
     BridgeConfigError,
     OmnigentBridgeConfig,
+    embedded_transport_retirement,
     load_bridge_config,
     parse_bridge_config,
     resolve_bridge_config,
@@ -241,7 +244,22 @@ def test_host_protocol_mode_accepts_embedded() -> None:
         },
         "evidenceValidation": {},
         "gateReason": "validated_embedded_evidence_required",
+        # MoonLadderStudios/MoonMind#3955: the retired transport still
+        # drains, but readiness must not advertise it for new work.
+        "retirement": embedded_transport_retirement(),
     }
+    assert config.readiness()["retirement"]["newAdmissionAllowed"] is False
+    assert (
+        config.readiness()["retirement"]["code"] == EMBEDDED_TRANSPORT_RETIRED_CODE
+    )
+    assert (
+        config.readiness()["retirement"]["retirementPathId"]
+        == EMBEDDED_TRANSPORT_RETIREMENT_PATH_ID
+    )
+    assert (
+        config.readiness()["retirement"]["supportedAlternative"]
+        == HOST_PROTOCOL_MODE_PROXY
+    )
 
     validation = {
         key: {

@@ -2436,6 +2436,12 @@ def _assert_omnigent_configuration_is_current() -> None:
     actionable warning naming the replacement, and after removal startup is
     rejected outright.
 
+    MoonLadderStudios/MoonMind#3955 additionally detects a retired embedded
+    transport selection here: the deployment still boots so in-flight
+    sessions drain, but the operator gets an actionable warning naming the
+    supported proxy alternative (new admission is rejected at the API
+    boundary).
+
     The API is one of several separately restartable consumers, so it invokes
     the shared check rather than owning its own copy.
     """
@@ -2445,6 +2451,21 @@ def _assert_omnigent_configuration_is_current() -> None:
     )
 
     enforce_obsolete_configuration_at_startup(logger, env=os.environ)
+    try:
+        from moonmind.omnigent.bridge_config import (
+            BridgeConfigError,
+            embedded_transport_retirement_notice,
+            resolve_bridge_config,
+        )
+
+        notice = embedded_transport_retirement_notice(resolve_bridge_config())
+    except BridgeConfigError as exc:
+        # An unreadable/invalid bridge document is already a hard failure at
+        # router import; startup detection must not add a second crash path.
+        logger.warning("Omnigent bridge configuration could not be resolved: %s", exc)
+        return
+    if notice:
+        logger.warning("Retired Omnigent transport selected: %s", notice)
 
 
 async def startup_event():

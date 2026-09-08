@@ -22,7 +22,10 @@ construction:
   requires a custom host build is rejected.
 * **Proxy-first compatibility (§2.4).** ``hostProtocolMode`` accepts
   ``upstream_omnigent_server_proxy`` and ``embedded_omnigent_compatible_server``
-  and defaults to the proxy mode. Unknown modes fail fast.
+  and defaults to the proxy mode. Unknown modes fail fast. The embedded
+  transport is retired for new work (MoonLadderStudios/MoonMind#3955): parsing
+  still accepts the literal so in-flight sessions drain, but new admission
+  through it is rejected with an actionable proxy alternative.
 * **MoonMind authority (§1).** The authority map (``temporal=moonmind``,
   ``artifacts=moonmind``, ``liveExecution=omnigent_host``) is validated and
   surfaced to downstream components.
@@ -67,6 +70,24 @@ OMNIGENT_BRIDGE_CONFIG_PATH_ENV = "OMNIGENT_BRIDGE_CONFIG_PATH"
 # §2.4 host protocol modes. Proxy is preferred (proxy-first default).
 HOST_PROTOCOL_MODE_PROXY = "upstream_omnigent_server_proxy"
 HOST_PROTOCOL_MODE_EMBEDDED = "embedded_omnigent_compatible_server"
+
+# MoonLadderStudios/MoonMind#3955: the experimental embedded host/runner
+# transport no longer admits new work. The literal stays valid so deployments
+# with in-flight embedded sessions still boot and drain, and so retained
+# bridge rows keep decoding their recorded ``hostProtocolMode``; selecting it
+# for *new* sessions, hosts, or credential consumers is rejected at the
+# admission boundary with an actionable proxy alternative (never a silent
+# substitution). The native Workflow Chat ``embedded=1`` presentation option
+# (``moonmind/omnigent/native_ui.py``) is unrelated and unaffected.
+EMBEDDED_TRANSPORT_RETIRED_CODE = "omnigent_embedded_transport_retired"
+EMBEDDED_TRANSPORT_RETIREMENT_PATH_ID = "omnigent.legacy.embedded_host_transport"
+EMBEDDED_TRANSPORT_RETIRED_MESSAGE = (
+    "The experimental embedded Omnigent host transport no longer admits new "
+    "sessions, hosts, or credential consumers "
+    f"(retirement row {EMBEDDED_TRANSPORT_RETIREMENT_PATH_ID}). Select "
+    f"'{HOST_PROTOCOL_MODE_PROXY}' for new work; existing sessions retain "
+    "their recorded bridge mode, endpoint, and cleanup owner until drained."
+)
 
 HostProtocolMode = Literal[
     "upstream_omnigent_server_proxy",
@@ -672,6 +693,10 @@ class OmnigentBridgeConfig(BaseModel):
         }
         if selected_embedded:
             result["evidenceValidation"] = validation
+            # MoonLadderStudios/MoonMind#3955: the transport still drains
+            # in-flight sessions, but readiness must not advertise it as
+            # available for new work.
+            result["retirement"] = embedded_transport_retirement()
             if not evidence_ready:
                 result["gateReason"] = (
                     "embedded_host_mode_evidence_required"
@@ -681,6 +706,70 @@ class OmnigentBridgeConfig(BaseModel):
         if host_mode is not None:
             result["hostMode"] = host_mode
         return result
+
+
+# ---------------------------------------------------------------------------
+# Embedded-transport retirement (MoonLadderStudios/MoonMind#3955)
+# ---------------------------------------------------------------------------
+
+
+def embedded_transport_retirement() -> dict[str, Any]:
+    """Return the non-secret retirement projection for the embedded transport.
+
+    Shared by config readiness, support diagnostics, startup detection, and
+    the HTTP admission boundary so every surface names the same code-owned
+    retirement row, the same stable reason code, and the same supported
+    proxy alternative.
+    """
+
+    return {
+        "retiredForNewWork": True,
+        "newAdmissionAllowed": False,
+        "code": EMBEDDED_TRANSPORT_RETIRED_CODE,
+        "message": EMBEDDED_TRANSPORT_RETIRED_MESSAGE,
+        "retirementPathId": EMBEDDED_TRANSPORT_RETIREMENT_PATH_ID,
+        "supportedAlternative": HOST_PROTOCOL_MODE_PROXY,
+    }
+
+
+def embedded_transport_retirement_notice(
+    config: OmnigentBridgeConfig,
+) -> str | None:
+    """Return an actionable startup notice when embedded mode is selected.
+
+    Returns ``None`` for proxy/disabled deployments. An embedded-selected
+    deployment still boots (in-flight sessions must drain), but the operator
+    must see that new admission is retired and which supported alternative
+    to select. This is the detection half of the #3955 acceptance criterion
+    "removed configuration is detected at actual API/worker startup".
+    """
+
+    if config.host_protocol_mode != HOST_PROTOCOL_MODE_EMBEDDED:
+        return None
+    return (
+        f"Omnigent bridge selects retired embedded transport "
+        f"('{HOST_PROTOCOL_MODE_EMBEDDED}'). New sessions, hosts, and "
+        f"credential consumers are rejected "
+        f"({EMBEDDED_TRANSPORT_RETIRED_CODE}); select "
+        f"'{HOST_PROTOCOL_MODE_PROXY}' for new work. Existing sessions retain "
+        "their recorded bridge mode, endpoint, and cleanup owner until "
+        f"drained (retirement row {EMBEDDED_TRANSPORT_RETIREMENT_PATH_ID})."
+    )
+
+
+def assert_new_embedded_transport_admission_allowed(
+    config: OmnigentBridgeConfig,
+) -> None:
+    """Reject new embedded-transport admission at the trusted selection boundary.
+
+    Raises :class:`BridgeConfigError` with an actionable supported alternative
+    when the resolved config selects the retired embedded transport. Never
+    substitutes proxy mode silently: the caller maps this to an explicit
+    ``410 Gone`` rather than creating the session/host elsewhere.
+    """
+
+    if config.host_protocol_mode == HOST_PROTOCOL_MODE_EMBEDDED:
+        raise BridgeConfigError(EMBEDDED_TRANSPORT_RETIRED_MESSAGE)
 
 
 # ---------------------------------------------------------------------------
@@ -774,6 +863,9 @@ def resolve_bridge_config(
 
 __all__ = [
     "CANONICAL_FIRST_MESSAGE_STATES",
+    "EMBEDDED_TRANSPORT_RETIRED_CODE",
+    "EMBEDDED_TRANSPORT_RETIRED_MESSAGE",
+    "EMBEDDED_TRANSPORT_RETIREMENT_PATH_ID",
     "HOST_PROTOCOL_MODE_EMBEDDED",
     "HOST_PROTOCOL_MODE_PROXY",
     "OMNIGENT_BRIDGE_CONFIG_PATH_ENV",
@@ -793,6 +885,9 @@ __all__ = [
     "HostProtocolMode",
     "OmnigentBridgeConfig",
     "WorkspaceDiffsCapture",
+    "assert_new_embedded_transport_admission_allowed",
+    "embedded_transport_retirement",
+    "embedded_transport_retirement_notice",
     "load_bridge_config",
     "parse_bridge_config",
     "resolve_bridge_config",
