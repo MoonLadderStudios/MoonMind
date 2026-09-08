@@ -1,11 +1,15 @@
 # Harness-First Workflow Authoring Design
 
-**Status:** Proposed  
-**Document Class:** Canonical declarative  
-**Viewpoint:** System / Feature Design View  
-**Implementation posture:** Deferred; preserve for implementation when the system is ready  
-**Owners:** MoonMind Product and Platform  
-**Updated:** 2026-09-07  
+**Status:** Proposed
+**Document Class:** Canonical declarative
+**Viewpoint:** System / Feature Design View
+**Implementation posture:** Deferred; preserve for implementation when the system is ready
+**Owners:** MoonMind Product and Platform
+**Updated:** 2026-09-08
+**Audience:** Product, UI, API, and runtime contributors reviewing future workflow authoring
+**Owning Surface:** Workflow authoring and execution admission across `frontend/`, `api_service/api/routers/executions.py`, and `moonmind/workflows/executions/`
+**Related Docs:** [Create Page](../UI/CreatePage.md), [Execution Configurations](../Omnigent/AgentProfiles.md), [Runtime-Provider Rollout Policy](../Omnigent/RuntimeProviderRollout.md), [Primary Runtime Provider Strategy](../Omnigent/PrimaryRuntimeProviderStrategy.md), [Provider Profiles](../Security/ProviderProfiles.md)
+**Related Implementation:** [Execution admission](../../api_service/api/routers/executions.py), [Profile execution selection](../../api_service/services/profile_execution_selection.py), [Runtime-target selection](../../moonmind/workflows/executions/runtime_target_selection.py); existing owners to extend upon adoption, not evidence of implementation
 **Authority:** Candidate product design only. Current providing contracts remain authoritative until this proposal is explicitly adopted and those contracts are reconciled.
 
 > Recording or merging this proposal does not change the UI, API, defaults, runtime identities, support policy, or issue status. It does not authorize implementation or default promotion. In particular, it does not override today's requirement for a visible Runtime selector.
@@ -16,7 +20,7 @@
 
 **One paragraph:** Harness identifies the agent that performs the work. Profile identifies the existing account, credential route, model policy, and capacity configuration. Runtime identifies the execution backend, normally Omnigent. Execution configurations, rollout targets, Host Classes, and realizer versions remain subordinate resolved details. Hiding normal runtime configuration simplifies presentation without weakening explicit intent, qualification, immutable execution plans, credential ownership, or recovery. A nondefault runtime override remains noticeable even when Advanced is collapsed.
 
-## 1. Product intent and scope
+## DOC-REQ-101 Harness-first product intent and scope
 
 MoonMind is intended to become optimized for Codex, Claude Code, and OpenCode through its shared Omnigent execution plane. Given that direction, the common choice should be which agent to use, not which host implementation to assemble around it.
 
@@ -24,7 +28,7 @@ The normal experience does not require understanding or displaying Omnigent in e
 
 The proposal replaces ordinary Runtime plus Profile authoring with Harness plus Profile. It does not add Harness beside an unchanged collection of Runtime, Profile, and Target controls. It applies to agent-execution choices across Create, presets, schedules, edit/rerun, fresh retries, checkpoint branches, remediation, linked continuations, and their API/MCP consumers. It does not force non-agent tools or container jobs to invent a harness or model Profile.
 
-## 2. Terminology
+## CONTRACT-101 Product terminology and serialized identity
 
 | Term | Meaning | Normal presentation |
 | --- | --- | --- |
@@ -39,7 +43,7 @@ Use Claude Code rather than Claude for the harness label to distinguish the agen
 
 These product terms do not mandate a wholesale serialized-field or database rename. Existing Provider Profile `runtime_id` values such as `codex_cli`, `claude_code`, and `opencode` retain their underlying-runtime compatibility meaning until their actual owners deliberately change them. Omnigent execution continues to use `agentKind=external`, `agentId=omnigent`, with nested harness identity. Do not introduce top-level identities such as `omnigent_codex` to implement this presentation.
 
-## 3. Normal and advanced experience
+## DOC-REQ-102 Harness and Profile are the normal controls
 
 An illustrative normal form is:
 
@@ -51,6 +55,8 @@ Profile       Personal Claude account
 ```
 
 The primary harness choices are Codex, Claude Code, OpenCode, and other approved integrations. These are illustrative product labels, not a hardcoded support list or a claim that every combination is qualified.
+
+### DOC-REQ-103 Advanced Runtime preserves visible exceptional intent
 
 Opening Advanced reveals the resolved backend:
 
@@ -72,9 +78,17 @@ Direct means MoonMind's direct integration without Omnigent, not necessarily exe
 
 Workflow lists and details lead with harness and Profile. Authorized execution details expose recorded runtime/configuration provenance. Runtime-specific failures surface actionable diagnostics. The design does not require an Omnigent prefix on ordinary labels, and does not replace the default with combined options such as Omnigent Codex and Direct Codex in the primary selector.
 
-## 4. One shared selection boundary
+## CONTRACT-102 Execution admission composes the existing selectors
 
-The existing backend resolver remains the selection owner. Extend it to treat the selected harness as an explicit constraint, alongside the selected Profile and effective runtime. Do not introduce a second frontend resolver, a new Profile type, a new runtime registry, or another rollout service.
+The composition/admission owner is `_create_execution_from_workflow_request` in [the executions API](../../api_service/api/routers/executions.py). It currently composes runtime-target selection with Profile/configuration resolution and validates the submitted configuration expectation before plan compilation. The proposed Harness/Profile/runtime agreement belongs at that admission boundary; neither existing selector alone owns the combined decision.
+
+| Existing owner | Responsibility in the proposed selection contract |
+| --- | --- |
+| `resolve_runtime_target_selection` in [runtime_target_selection.py](../../moonmind/workflows/executions/runtime_target_selection.py) | Resolve defaulted, explicit, or recorded technical target intent through the existing rollout policy for the authoring surface. Preserve availability, policy restrictions, and recorded target authority. |
+| `profile_execution_selection` / `select_execution_configuration` in [profile_execution_selection.py](../../api_service/services/profile_execution_selection.py) | Project the authorized compatible Profile configuration, preserving pins and unambiguous defaults. Extend candidate constraints to include the authored harness and effective runtime; retain the existing configuration-expectation validation. |
+| `_create_execution_from_workflow_request` in [executions.py](../../api_service/api/routers/executions.py) | Compose these results with the admitted Agent Profile snapshot, verify that harness, Profile, runtime, target, and preview expectation agree, and reject forged or stale input before credential acquisition or host launch. |
+
+Create and non-Create consumers, including presets, schedules, remediation, and API/MCP submissions, must use this composed admission contract for new work. Entry adapters preserve source intent and pass it to the admission owner; they must not implement their own agreement checks or default maps. Existing historical/re-admission owners retain their recorded-authority rules. Do not introduce a second frontend resolver, a new Profile type, a new runtime registry, or another rollout service.
 
 ```text
 Selected Harness + selected Profile + defaulted or explicit Runtime intent
@@ -88,7 +102,7 @@ A compatible Profile pin remains binding. Without a pin, an authorized compatibl
 
 The harness/Profile projection must come from existing trusted registration, compatibility, and readiness owners. Registration is not support, a shared provider name is not credential compatibility, and a UI-filtered option is not launch authorization. The final API boundary independently verifies the complete selection and caller permission.
 
-### 4.1 Profile and model transitions
+### INV-101 Selection changes preserve explicit Profile and model intent
 
 | Situation | Proposed behavior |
 | --- | --- |
@@ -101,7 +115,7 @@ The harness/Profile projection must come from existing trusted registration, com
 
 Keep explicit model/effort overrides distinct from derived tier defaults. Immediate submission must use the current draft, not a debounced or previously resolved selection. Profile inventory and saved drafts remain inspectable under transient discovery or capacity failure, subject to normal authorization.
 
-### 4.2 Hidden Runtime is not unspecified Runtime
+### CONTRACT-103 Hidden Runtime carries defined default intent
 
 The current Profile resolver can identify a direct route when a Profile has no pin and no compatible Omnigent configuration. It deliberately avoids using an unvalidated compatible Omnigent configuration as permission for direct fallback. Consequently, hiding the current dropdown and simply omitting Runtime is not sufficient to implement this proposal.
 
@@ -111,23 +125,29 @@ The preview and submission must agree. Carry an expectation for the relevant res
 
 Omitted and documented default-equivalent values in the new contract use the same resolver. Older clients and persisted payloads retain their actual versioned semantics through the repository's compatibility policy, not an unconditional reinterpretation of omission. Use only the narrowly required historical reader or cutover mechanism and remove superseded new-write paths with their consumers.
 
-### 4.3 Failure and history semantics
+### INV-102 Capacity and readiness failures never substitute authority
 
 Qualified but busy provider, host, or worker capacity produces durable waiting, not a different runtime or account. Missing qualification, incompatible configuration, revoked credentials, or forbidden policy produces an actionable blocked/setup state. Unknown observations remain unknown. None of these conditions authorizes silent harness, runtime, Profile, model, billing, or security-policy substitution.
 
+### INV-103 History and follow-up execution preserve recorded authority
+
 Retries within an existing execution reconcile its recorded plan and binding. Fresh execution, restore, or an explicitly reviewed runtime change follows the existing re-admission owner. Historical detail displays recorded identity rather than today's default. Saved schedules and inherited/child work preserve their admitted scope and declared pin/default-following policy. Unknown historical intent requires review rather than guessed migration. Workspace restoration does not restore credentials, leases, approvals, or permission to repeat external effects.
 
-## 5. Resilience and authority that must remain intact
+## INV-104 Presentation preserves execution and recovery authority
 
 The proposal changes which execution choice is prominent, not the security or durability model. Preserve immutable plans separately from acquired runtime bindings, exact support checks, current revocation checks, generation fencing, idempotent session/turn ownership, and the existing bounded retry and cleanup mechanisms.
+
+### INV-105 Profile credentials and capacity retain their existing owners
 
 Existing Codex and Claude OAuth Profiles remain the account, enrollment, credential-home, generation, and capacity owners for their corresponding Omnigent harnesses. Do not duplicate accounts, copy OAuth homes, repeat login, or allow concurrent mutable-home consumers merely because Runtime moved under Advanced. Keyed OpenCode and credentialless OpenCode remain distinct routes. Credentialless execution receives no dummy secret or implicit keyed fallback.
 
 Provider quota, credential exclusivity, and host/worker capacity remain separate constraints under their existing owners. Physical consumer teardown and durable capacity release must remain correctly ordered. Required checkpoint/artifact preservation and saved-work retention remain governed by their providing contracts. This proposal neither changes what qualifies as a recovery checkpoint nor authorizes destroying useful work to make cleanup appear successful.
 
+### INV-106 Portable Skills and native chat retain semantic authority
+
 Portable Skills keep their semantic authority. No harness-first UI or resolver may reproduce Skill behavior, create a second agent lifecycle, or bypass MoonMind's native-chat authorization boundary.
 
-## 6. Readiness for adoption
+## TEST-101 Adoption requires evidence per advertised combination
 
 Implementation and enablement are deferred. The following are evidence requirements for adopting the normal experience, not a claim that they are already met or a new implementation checklist.
 
@@ -144,7 +164,7 @@ Readiness is evaluated per advertised combination and capability. Do not infer i
 
 This proposal does not require every possible harness, optional static host, legacy-path removal, or unrelated repository/App project to finish before a bounded implementation can proceed. Equally, partial readiness cannot be hidden by presenting an unqualified route as the normal default. Preserve actionable availability/setup information for unavailable choices. There is no automatic activation date or feature flag introduced by this document.
 
-## 7. Current-contract differences and existing owners
+## DOC-REQ-104 Adoption reconciles the current providing contracts
 
 The source baseline reviewed for this proposal is `49fca8528f39b38ddb1f09d580c061d8df03140f` on 2026-09-07. It is context for future reinspection, not permanent evidence of deployment behavior.
 
@@ -153,9 +173,11 @@ The following current owners remain authoritative while this proposal is deferre
 | Existing owner | Reconciliation needed when adopted |
 | --- | --- |
 | [Primary Runtime Provider Strategy](../Omnigent/PrimaryRuntimeProviderStrategy.md) | Revise the visible-Runtime product outcome to Harness plus Profile with advanced Runtime, while retaining the other primary-runtime outcomes. |
+| [Runtime-Provider Rollout Policy](../Omnigent/RuntimeProviderRollout.md) | Replace visible Runtime authoring with Harness plus Profile and advanced Runtime. Define the normal Omnigent default intent through the existing per-combination promotion policy, and constrain the Profile-owned configuration harness to agree with the authored Harness while preserving exact qualification, rollback, and recorded-target authority. |
 | [Omnigent Execution Configurations](../Omnigent/AgentProfiles.md) | Replace the ordinary Runtime-first presentation rule and integrate an explicit harness constraint without adding another account or required configuration choice. |
 | [Create Page](../UI/CreatePage.md) | Make Harness the primary execution control and define advanced Runtime, exceptional-backend disclosure, errors, and reconstruction consistently. |
 | [Provider Profiles](../Security/ProviderProfiles.md) | Clarify user-facing terminology and default-runtime intent without changing credential ownership or silently reinterpreting existing Profile fields. |
+| [Execution admission](../../api_service/api/routers/executions.py) | Enforce the composed Harness/Profile/runtime/target agreement and stale-expectation checks at `_create_execution_from_workflow_request`, shared by supported new-work consumers before credential or host side effects. |
 | [Profile execution selection](../../api_service/services/profile_execution_selection.py) | Extend the existing compatible configuration and expectation boundary instead of duplicating selection policy. |
 | [Shared runtime-target selection](../../moonmind/workflows/executions/runtime_target_selection.py) | Preserve centralized defaults, recorded authority, policy restrictions, and exact runtime resolution across callers. |
 
@@ -163,28 +185,63 @@ Affected Settings, workflow-detail, preset/schedule, generated API/type, and tes
 
 Coordinate with the existing primary-runtime program [#3825](https://github.com/MoonLadderStudios/MoonMind/issues/3825), exact qualification [#3832](https://github.com/MoonLadderStudios/MoonMind/issues/3832), authoring/default rollout [#3833](https://github.com/MoonLadderStudios/MoonMind/issues/3833), and convergence/retirement [#3925](https://github.com/MoonLadderStudios/MoonMind/issues/3925). These are ownership references, not assertions about current completion or additional prerequisites. Recheck source and active work before implementation. Saving this proposal does not create a new epic or change those issues.
 
-## 8. Observable acceptance requirements
+## Observable acceptance requirements
 
 The eventual implementation must demonstrate the following through the existing production form, public API, resolver, and execution boundaries. These requirements do not report tests run for this documentation proposal.
 
-| Scenario | Required result |
-| --- | --- |
-| Ordinary Codex, Claude Code, or OpenCode workflow | Harness and one Profile are prominent. Omnigent is inspectable under Advanced without an ordinary Runtime/Target/configuration selection chain. |
-| Advanced disclosure | Opening and closing it changes no request identity. A nondefault backend remains visible when collapsed. |
-| Harness/Profile/runtime mismatch | The public API rejects the conflict before credential or host side effects, including forged client selections. |
-| Rapid selection changes and immediate submission | Delayed/out-of-order results cannot overwrite or validate a different draft. Submitted and admitted identities match the current selection. |
-| Concurrent default or pinned-configuration change | Relevant stale expectations produce a review conflict, not a silently changed execution. |
-| Busy, disabled, unknown, or unqualified route | Inventory, setup, support, and temporary capacity remain distinguishable. No automatic runtime, account, model, or billing substitution occurs. |
-| Existing OAuth and OpenCode credential classes | Account reuse, generation/capacity ownership, keyed isolation, and credentialless no-secret behavior remain correct. |
-| Presets, schedules, branches, remediation, and API/MCP | All supported consumers use the same selection contract or the expressly retained historical contract. No per-surface default map is introduced. |
-| Retry, continuation, rerun, and historical display | Recorded authority remains truthful. Fresh work re-admits as required, and source-workspace restoration never restores old live authority. |
-| Worker/host loss, cancellation, and cleanup | Applicable recovery and evidence guarantees remain intact. Capacity release cannot precede the required verified teardown. |
-| New harness registration | Existing projections can expose its permitted setup/support state without a new core lifecycle branch or mandatory selector. Registration alone cannot authorize execution. |
-| Access and presentation | Unauthorized Profiles and diagnostics remain protected. Keyboard/focus, narrow layouts, and production-served assets preserve the same behavior. |
+### TEST-102 Ordinary Codex, Claude Code, or OpenCode workflow
+
+Harness and one Profile are prominent. Omnigent is inspectable under Advanced without an ordinary Runtime/Target/configuration selection chain.
+
+### TEST-103 Advanced disclosure
+
+Opening and closing it changes no request identity. A nondefault backend remains visible when collapsed.
+
+### TEST-104 Harness/Profile/runtime mismatch
+
+The public API rejects the conflict before credential or host side effects, including forged client selections.
+
+### TEST-105 Rapid selection changes and immediate submission
+
+Delayed/out-of-order results cannot overwrite or validate a different draft. Submitted and admitted identities match the current selection.
+
+### TEST-106 Concurrent default or pinned-configuration change
+
+Relevant stale expectations produce a review conflict, not a silently changed execution.
+
+### TEST-107 Busy, disabled, unknown, or unqualified route
+
+Inventory, setup, support, and temporary capacity remain distinguishable. No automatic runtime, account, model, or billing substitution occurs.
+
+### TEST-108 Existing OAuth and OpenCode credential classes
+
+Account reuse, generation/capacity ownership, keyed isolation, and credentialless no-secret behavior remain correct.
+
+### TEST-109 Presets, schedules, branches, remediation, and API/MCP
+
+All supported consumers use the same selection contract or the expressly retained historical contract. No per-surface default map is introduced.
+
+### TEST-110 Retry, continuation, rerun, and historical display
+
+Recorded authority remains truthful. Fresh work re-admits as required, and source-workspace restoration never restores old live authority.
+
+### TEST-111 Worker/host loss, cancellation, and cleanup
+
+Applicable recovery and evidence guarantees remain intact. Capacity release cannot precede the required verified teardown.
+
+### TEST-112 New harness registration
+
+Existing projections can expose its permitted setup/support state without a new core lifecycle branch or mandatory selector. Registration alone cannot authorize execution.
+
+### TEST-113 Access and presentation
+
+Unauthorized Profiles and diagnostics remain protected. Keyboard/focus, narrow layouts, and production-served assets preserve the same behavior.
+
+### TEST-114 Required CI covers identity and fallback regressions
 
 Required CI must select the affected regressions, including negative cases that deliberately violate identity agreement or reintroduce hidden fallback. Hermetic checks do not replace any required exact-artifact or protected-live evidence. Link evidence through existing qualification and test owners rather than creating another test framework.
 
-## 9. Rationale and alternatives
+## Rationale and alternatives
 
 Keeping Runtime plus Profile visible remains the current contract and can be a useful transitional experience, but it foregrounds infrastructure for the intended common Omnigent path. Harness plus Profile better expresses which agent and account the user selected.
 
