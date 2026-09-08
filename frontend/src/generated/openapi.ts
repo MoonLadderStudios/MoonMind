@@ -14429,6 +14429,10 @@ export interface components {
              * @default 0
              */
             generation: number;
+            /** Enumerationcursor */
+            enumerationCursor?: string | null;
+            /** Enumerationpolicy */
+            enumerationPolicy?: string | null;
         };
         /** WorkflowControlTarget */
         WorkflowControlTarget: {
@@ -14443,7 +14447,7 @@ export interface components {
              * @default requested
              * @enum {string}
              */
-            state: "requested" | "accepted" | "pending" | "safe_point" | "resumed" | "failed" | "unknown";
+            state: "requested" | "accepted" | "pending" | "safe_point" | "resumed" | "failed" | "unknown" | "already_terminal" | "unsupported" | "superseded";
             /** Reason */
             reason?: string | null;
         };

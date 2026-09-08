@@ -24,12 +24,15 @@ per target and action.
 
 `SystemOperationsService` commits intent before making Temporal calls. The audit
 stores enumeration completion and each target's `requested`, `accepted`,
-`pending`, `safe_point`, `resumed`, `failed`, or `unknown` evidence. Each observed
-transition is committed before that target proceeds. Up to ten targets reconcile
-concurrently; progress callbacks serialize state changes and commits on the
+`pending`, `safe_point`, `resumed`, `failed`, `unknown`, `already_terminal`,
+`unsupported`, or `superseded` evidence. Each observed transition is committed
+before that target proceeds. Up to ten targets reconcile concurrently; progress
+callbacks serialize state changes and commits on the
 service session. A persistence failure cancels and joins the remaining dispatch
 workers before committed evidence is reloaded. Concurrent observers lock the audit
-row and merge observations without overwriting confirmed target outcomes. A
+row and merge observations without overwriting terminal target outcomes
+(`safe_point`, `resumed`, `failed`, `already_terminal`, `unsupported`,
+`superseded`). A
 failed audit write reloads committed evidence before any result is displayed. A new service instance can continue
 that request on a snapshot read or an idempotent resubmission. The current
 request is selected by its persisted request ID, independently of timestamp
@@ -38,11 +41,72 @@ and audit insertion, including simultaneous first commands. Duplicate keys with
 different commands are rejected.
 
 Update acceptance only establishes `accepted`. Completion is followed by a
-`control_state` query of the same run. `MoonMind.UserWorkflow` confirms a pause
+`control_state` query of the same pinned run. `MoonMind.UserWorkflow` confirms a pause
 only while suspended at its safe boundary, with no active agent child and no
 Pause/Resume transition in progress. Child forwarding failures retain rollback
-behavior. An unsupported query, missing run, or unavailable RPC leaves explicit
-unknown/pending evidence. Other targets' successful confirmations are retained.
+behavior. An unavailable RPC or a failed/absent lookup leaves explicit
+unknown/pending evidence unless positive evidence establishes a better
+disposition. Other targets' successful confirmations are retained.
+
+Target dispositions decode as follows:
+
+- `already_terminal`: the pinned run observably closed (describe shows a
+  non-running status). No further action is needed for the scoped operation,
+  but this is never equated with verified physical host cleanup or lease
+  release; per-target evidence keeps the distinction visible.
+- `unsupported`: the run does not implement the control/query protocol, so no
+  safe-point confirmation is possible. Requires operator attention.
+- `superseded`: the pinned run identity was replaced (Continue-As-New, reset,
+  or a later execution sharing the workflow id reports a different run id) or
+  a newer control generation owns the run. The target keeps its pinned
+  identity; a successor never silently inherits the old request. Requires
+  operator attention under the current command.
+- `unknown`/`pending`: query or Update transport unavailable. Requires retry
+  or attention; never silently promoted.
+
+`safe_point`/`resumed` plus `already_terminal` satisfy the scoped operation;
+`failed`, `unknown`, `unsupported`, and `superseded` require attention.
+Historical operation results live in their own per-command audit rows; a newer
+generation never overwrites an older request's evidence, and older
+observations never overwrite the current requested state.
+
+## Bounded, resumable enumeration
+
+Enumeration scans Temporal Visibility for running `MoonMind.UserWorkflow`
+executions on the configured task queues. The scan is a point-in-time,
+non-atomic selection recorded as `enumerationPolicy`; it is not an atomic
+system snapshot. Discovery checkpoints partial target lists with an explicit
+progress marker (`enumerationCursor`) every 100 targets, deduplicates against
+already-persisted target identities, and resumes from persisted progress after
+a restart or retry instead of repeating the full scan. A per-request budget of
+1000 targets caps memory, response size, duration, and write volume; beyond the
+budget the request stays unenumerated with `control_enumeration_truncated`.
+A failed later page checkpoints its partial list with
+`control_visibility_unavailable`. Incomplete enumeration (an
+`enumerationError` is present) can never report a fully confirmed result.
+An enumerated request with zero eligible targets reports `empty`, displayed as
+"No eligible runs found", never as proof that every worker, host, or excluded
+workflow is quiescent.
+
+## Recovery and observer behavior
+
+Progress requires a read (`GET` snapshot reconciliation) or an idempotent
+resubmission of the same recorded request, reusing the stable per-target
+Update ID before issuing another effect; there is no autonomous background
+reconciler or always-on service. Terminal batches (`succeeded`, `empty`) do
+not re-enter fan-out on reads. Closing the dashboard page is not cancellation
+of the committed intent.
+
+## Admission coverage and scope
+
+`check_system_paused` (`TemporalExecutionService`, owned pause-state key
+`operations.workers.pause_state`) is the API guard preventing new workflow
+submissions while a pause is active. Work enumerated for quiesce is the
+running-`UserWorkflow` point-in-time set; new concurrent work outside the
+original enumeration follows the admission policy at submission time rather
+than joining the old batch. Shared-queue operator and manifest workflows are
+excluded and stay operational where intended. Agent teardown and blocked
+enumeration surface as pending attention, not as confirmed quiescence.
 
 System requests carry an increasing generation from the persisted state version.
 A workflow ignores an older generation and confirms the requested generation in
@@ -57,8 +121,12 @@ control reconciliation. `POST /api/system/worker-pause` accepts `action`, `reaso
 `idempotencyKey`, and pause `mode` (`drain` or `quiesce`). Pause requires
 `confirmation`; forced resume also requires confirmation.
 
-The dashboard displays **Workers quiesced** only when enumeration finished and
-every target confirmed `safe_point`. Pending and partial confirmations remain
+The dashboard displays **Workers quiesced** only when enumeration finished with
+at least one target and every target confirmed `safe_point`. An enumerated
+request with no eligible targets displays **No eligible runs found; admission
+pause still applies** with an explicit scope note (running UserWorkflow
+executions only; not proof of host-wide quiescence). Blocked enumeration
+displays its error with confirmation pending. Pending and partial confirmations remain
 visible, with per-target state available in an expandable list. Resume admission
 and confirmed resumed workflows are separate evidence. Resume remains available
 until every target confirms resumption, so failed or partial batches can be retried
