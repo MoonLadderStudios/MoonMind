@@ -124,33 +124,6 @@ Startup has a finite deadline. Missing required assets, failed essential reads, 
 
 These are local presentation states, not new persisted Workflow or provider-session lifecycle states. Loading, retrying, or opening the full-page presentation must not create a session, replay a message, change credentials, or restart the workflow. The full-page action is a same-authority presentation alternative, not a workaround for shared bootstrap, capability, or transport defects.
 
-### 4.2 Upstream-native simplification decision (MoonLadderStudios/MoonMind#3956)
-
-The parent epic's duplication claim is corrected: `WorkflowChatNative` never
-reimplemented Omnigent's chat UI. The single ordinary interactive composer is
-the provider-maintained application mounted by `WorkflowNativeChatRoute`
-(Chat tab) through the server-issued, binding-scoped `chatUrl`; the Debug tab
-fallback (`WorkflowChatNative`) is a read-only diagnostic shell plus terminal
-workflow actions, not a second composer. No second composer was found on any
-reachable supported path, so none was removed; instead the duplicate
-fetch/iframe/readiness lifecycle in the fallback shell was deleted and the
-canonical behavior stays in `features/workflow-native-chat/` (`chatBindingModel`,
-`NativeChatFrame`, `NativeChatUnavailableState`, `useWorkflowChatBinding`).
-
-`native_ui.py` and `native_ui_compat.py` transforms were inventoried against the
-pinned `omnigent.server.v1` contract and all retained: bootstrap injection,
-scoped asset-URL rewriting, document/asset classification, version gating,
-security headers, and the route/transport allowlist remain load-bearing for the
-supported bundle. Removal criteria for any future deletion: the supported
-bundle demonstrably no longer needs the transform, the pinned contract fixture
-is updated in the same change, and no production caller remains. The
-method/route allowlist, ownership checks, expected-state checks, idempotency,
-secret scanning, header filtering, and bounds at the trusted boundary are never
-simplification targets.
-
-`embedded=1` is the presentation-only flag on the MoonMind-scoped `chatUrl`
-(§4) and is unrelated to the experimental embedded-host transport in #3955.
-
 ## 5. Workflow chat binding
 
 The Workflow Detail API exposes one authoritative binding for the session that the Chat route opens.
