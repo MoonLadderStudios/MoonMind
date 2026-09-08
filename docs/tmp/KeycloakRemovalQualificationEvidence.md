@@ -3,6 +3,44 @@
 Run-local handoff for the `remediate-issue` remediation step. This is execution
 scaffolding, not canonical desired-state documentation.
 
+## Remediation pass (2026-09-08, on head `25ff436`, zero working-tree delta)
+
+- Checklist re-run against the authoritative verifier gate
+  (`art_01M20FWX4G6AQ2HSD3FPMJ297J`, 6 MISSING / 2 PARTIAL / 1 VERIFIED):
+  rw-1..rw-6 remain BLOCKED — each requires production behavior owned by the
+  unlanded #4118–4127 feature work (local OIDC/JWKS fixtures, session
+  issuance through production routes, accounts/OIDC/header/restricted-local
+  modes plus negative matrix, PostgreSQL identity-migration durability,
+  two-user browser journey, Keycloak deletion with DNS-blocked
+  built-artifact qualification). Implementing any of them here would fork
+  feature-owner scope and break the currently passing pre-cutover negative
+  coverage, so the candidate is preserved unchanged per the skill's
+  terminal rules.
+- rw-7 has no remaining safe work pre-cutover: all 5 named modules
+  centralize via `_AUTHENTICATED_PROVIDER_MODE`, zero raw
+  `setattr(..., "AUTH_PROVIDER", "keycloak")` literals repository-wide
+  outside the conformance guard's own docstring, `keycloak_mode` referenced
+  only by the retirement guard. Repointing the constant awaits the
+  production cutover.
+- impl-8 re-verified intact (see commands table below). rw-9 unchanged:
+  narrow pre-cutover pins pass; post-cutover topology/route/token
+  qualification and the full matrix record still require the integrated
+  candidate.
+
+## Commands and results (remediation pass, hermetic sandbox, head `25ff436`)
+
+| Command | Result |
+|---|---|
+| `python3 -m py_compile` on the conformance module, `tests/conftest.py`, `tests/unit/test_integration_test_taxonomy.py`, `tools/select_test_suites.py` | PASS |
+| Direct execution of all 17 functions in `tests/unit/auth/test_keycloak_removal_conformance.py` (plain asserts over file reads + YAML; no pytest needed) | 17/17 PASS |
+| Direct `select_suites([...], event_name="pull_request")` for `api_service/auth_providers.py`, `moonmind/config/settings.py`, `api_service/main.py`, `api_service/api/routers/worker_auth.py`, `docker-compose.yaml` | All select `integration_ci=true`; impl-8 VERIFIED gate intact |
+| Grep check: zero raw `setattr(..., "AUTH_PROVIDER", "keycloak")` literals and zero `keycloak_mode` references outside the conformance guard | PASS |
+| Production inventory re-check (`api_service/auth_providers.py:78-80,143`, `moonmind/config/settings.py:1764-1767`, `docker-compose.yaml:47-59`) | Keycloak live by design until #4118–4127 lands — unchanged |
+| `git status --porcelain` | Clean except this run-local evidence handoff; candidate head preserved |
+| `./tools/test_unit.sh`, `moonmind container python-tests`, `./tools/test_integration.sh` | NOT RUN / UNEXECUTED — no `pytest` module, no `MOONMIND_RUNTIME_ID`, no Docker/Compose backend in this sandbox (environment blockers, not assertion failures) |
+| Workspace projection preflight: no `.agents/skills` / `.gemini/skills` symlinks, no `skills_active`, no tracked-view contamination | PASS |
+| Live IdP / MFA / operator cutover | EXTERNAL — separate evidence category per the issue brief; never part of merge CI |
+
 ## Re-verification pass (2026-09-08, on head `adcdfc9e8`, zero working-tree delta)
 
 - Checklist re-run against the verifier's remaining work (gate
