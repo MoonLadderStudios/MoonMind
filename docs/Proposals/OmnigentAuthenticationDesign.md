@@ -5,10 +5,11 @@
 **Viewpoint:** System / Feature Design View  
 **Implementation posture:** Deferred until explicitly adopted and the authentication boundary is qualified  
 **Owners:** MoonMind Platform and Security  
-**Updated:** 2026-09-07  
+**Updated:** 2026-09-08  
 **Audience:** API, dashboard, deployment, and Omnigent integration contributors  
 **Owning Surface:** Human authentication across `api_service/auth_providers.py`, API composition, browser transports, and deployment configuration  
-**Related Docs:** [Workflow Chat Panel](../UI/WorkflowChatPanel.md), [Omnigent Bridge](../Omnigent/OmnigentBridge.md), [Provider Profiles](../Security/ProviderProfiles.md), [Secrets System](../Security/SecretsSystem.md), [Primary Runtime Provider Strategy](../Omnigent/PrimaryRuntimeProviderStrategy.md)  
+**Related Docs:** [Workflow Chat Panel](../UI/WorkflowChatPanel.md), [Omnigent Bridge](../Omnigent/OmnigentBridge.md), [Provider Profiles](../Security/ProviderProfiles.md), [Secrets System](../Security/SecretsSystem.md), [Primary Runtime Provider Strategy](../Omnigent/PrimaryRuntimeProviderStrategy.md), [Model Context Protocol](../ExternalAgents/ModelContextProtocol.md)  
+**Related Implementation:** [`api_service/auth_providers.py`](../../api_service/auth_providers.py), [auth router composition in `api_service/main.py`](../../api_service/main.py), [`User` model](../../api_service/db/models.py), [terminal WebSocket authentication](../../api_service/api/websockets.py), [MCP routers](../../api_service/api/routers/mcp_tools.py), and the optional Keycloak profile in [`docker-compose.yaml`](../../docker-compose.yaml); these are the current implementing surfaces to reconcile upon adoption, not evidence that the proposal is implemented  
 **Authority:** Candidate design only. Current providing contracts remain authoritative until an explicit adoption change reconciles them.
 
 > Adding this document does not remove Keycloak, enable Omnigent authentication for MoonMind, migrate users, change defaults, or qualify a deployment. Implementation sequencing and live progress belong in existing issues or `docs/tmp/`, not in this proposal.
@@ -17,7 +18,7 @@
 
 **One sentence:** Omnigent Server authenticates people, while MoonMind retains stable application user IDs and decides what those people may access or control.
 
-**One paragraph:** Replace bundled Keycloak and redundant MoonMind password-login behavior with the account and login functionality of the already-running Omnigent Server. Integrate through a narrow authentication adapter, preferably using a supported server-side validation contract behind the MoonMind browser origin. Preserve MoonMind's authorization, workflow ownership, native-chat facade, durable evidence, and service credentials. This is a moderate integration rather than an orchestration rewrite, but credential separation, account identity, browser transports, and session lifecycle are release requirements, not follow-up hardening.
+**One paragraph:** Replace bundled Keycloak and redundant MoonMind password-login behavior with the account and login functionality of the already-running Omnigent Server. Integrate through a narrow authentication adapter, preferably using a supported server-side validation contract behind the MoonMind browser origin. Preserve MoonMind's authorization, workflow ownership, native-chat facade, durable evidence, and service credentials. This is a moderate integration rather than an orchestration rewrite, but credential separation, account identity, browser transports, non-browser API credentials, and session lifecycle are release requirements, not follow-up hardening.
 
 ## DOC-REQ-201 Proposed decision and scope
 
@@ -90,7 +91,7 @@ The preferred resolution is a supported upstream validation/session contract tha
 
 An alternative is a narrowly established MoonMind browser session created only from a verified upstream human-login exchange, with upstream validation and lifecycle still authoritative. Such a design must justify any additional session state and prove login provenance. It must not offer an exchange endpoint that upgrades an arbitrary Omnigent bearer into a human session. The adoption change chooses one mechanism; it does not ship both as fallback paths.
 
-The pinned verifier alone does not meet this separation requirement. Production adoption remains blocked until the selected mechanism is proven. Required CLI or machine access retains an explicitly scoped contract rather than borrowing browser authority.
+The pinned verifier alone does not meet this separation requirement. Production adoption remains blocked until the selected mechanism is proven. Required CLI, MCP, or machine access retains the explicitly scoped contract in CONTRACT-206 rather than borrowing browser authority.
 
 ## CONTRACT-203 Stable identity and administrative authority
 
@@ -113,7 +114,7 @@ MoonMind remains authoritative for application permissions. An upstream `is_admi
 
 ## CONTRACT-204 Authentication applies consistently to every transport
 
-`get_current_user()` and `get_current_user_optional()` remain the shared API integration points. Composition explicitly chooses the configured provider and fails on unknown values. Audit and converge direct consumers of FastAPI Users, `current_active_user`, `get_jwt_strategy()`, and bespoke WebSocket authentication rather than assuming every route already passes through those dependencies.
+`get_current_user()` and `get_current_user_optional()` remain the shared API integration points. Composition selects the configured provider by exact positive match per mode and fails startup/readiness on an unknown, misspelled, or internally inconsistent value; the current negative `!= keycloak` condition, which mounts the legacy password, registration, reset, and user routers for any unrecognized string, is replaced rather than extended. Audit and converge direct consumers of FastAPI Users, `current_active_user`, `get_jwt_strategy()`, and bespoke WebSocket authentication rather than assuming every route already passes through those dependencies.
 
 The same principal resolution and resource checks cover dashboard bootstrap, API/MCP access where human auth applies, artifact downloads, OAuth enrollment terminals, native-chat documents and assets, SSE, WebSockets, and protected full-page views. Public health, static, login, callback, or setup surfaces are explicitly classified, not accidental exceptions.
 
@@ -137,6 +138,19 @@ Local JWT verification is not the initial default. It would expand signing-key a
 
 Passwords and raw access, refresh, cookie, or runner credentials never enter Temporal payloads, workflow plans, logs, traces, diagnostics, artifacts, URLs, or source control. User sessions are not runtime credentials. Secret references and authorized safe audit metadata use the existing owners rather than another secret system.
 
+## CONTRACT-206 Non-browser API and MCP credentials
+
+CLI, MCP, and other non-browser clients are a supported access path, not a byproduct of the browser journey. The [Model Context Protocol contract](../ExternalAgents/ModelContextProtocol.md) requires those clients to present a bearer credential to the same `get_current_user()` dependency, and today that bearer is the MoonMind-issued FastAPI Users JWT obtained from the login routes this proposal removes. Adoption therefore defines exactly one supported non-browser credential contract before the legacy JWT routes are unmounted; removing them without that contract breaks the supported MCP path even when every browser acceptance row passes.
+
+The contract states, in provider-neutral terms:
+
+- **Issuance.** A non-browser credential is minted only from an authenticated human session or an explicit, audited administrative action. There is no anonymous or configuration-only issuance path and no endpoint that exchanges an arbitrary Omnigent bearer for API access (INV-201).
+- **Binding and scope.** The credential is bound to one MoonMind user UUID and carries an explicit purpose and scope that existing resource authorization enforces. It is distinguishable from browser sessions and from every machine credential class; Omnigent host, runner, delegated, and worker tokens are never accepted as user credentials on API or MCP routes.
+- **Lifecycle.** Maximum lifetime, rotation, revocation, and propagation of account disable or deletion have documented bounds, and revocation is testable within them.
+- **Transport.** The credential travels only in the `Authorization` header over the supported transport. It never appears in query strings, logs, artifacts, workflow payloads, or rendered pages.
+
+Whether the credential is a MoonMind-issued scoped user token or an upstream session/token form qualified for non-browser purpose is an adoption decision that must satisfy INV-201. The adoption change chooses one mechanism and does not ship both as fallbacks. Existing skill helpers and automation that forward a runtime bearer token to the MoonMind API are consumers of this contract and are reconciled in the same change.
+
 ## QUALITY-201 Failure containment and operational behavior
 
 | Condition | Required behavior |
@@ -145,7 +159,7 @@ Passwords and raw access, refresh, cookie, or runner credentials never enter Tem
 | Authenticated user lacks resource or operation permission | Preserve the existing authorization denial. Login success cannot widen access. |
 | Omnigent validation times out, is unavailable, or returns malformed data | Return a bounded authentication-service-unavailable outcome, ordinarily HTTP 503, rather than a false invalid-password response or redirect loop. |
 | User mapping store is unavailable or linking conflicts | Fail safely and distinguish the condition from invalid credentials. Never return the disabled-mode stub. |
-| Auth configuration is incomplete, unknown, or inconsistent | Fail startup/readiness or the affected authenticated surface actionably. Do not infer `disabled` mode. |
+| Auth configuration is incomplete, unknown, or inconsistent | Fail startup/readiness with an actionable error before any authenticated surface is served. Deployment-level authentication configuration is validated at composition time and never deferred to the first affected request, so the service cannot report ready while exposing unintended auth routes. Do not infer `disabled` mode. |
 | Logout, account switch, or transport replacement | Dispose browser streams, timers, credential-bound caches, and stale view state before another identity can reuse them. |
 
 Initial remote validation deliberately couples protected interactive access to Omnigent Server availability. Stored workflows and artifacts remain intact, but protected reads can be unavailable during an auth outage. Do not promise that local artifact storage makes authenticated history reads independent of the identity service.
@@ -156,7 +170,7 @@ Already-admitted durable work continues under its existing workflow and machine-
 
 ## INV-202 Migration preserves ownership and recoverability
 
-Removal of the bundled service and migration of authentication are separate concerns. Keycloak may be removed independently only when no installation or retained-data consumer requires it; that removal never establishes Omnigent authentication by itself.
+Removal of the bundled service and migration of authentication are separate concerns, and this requirement owns the single retirement ordering. Inventory actual consumers first. When no installation or retained-data consumer requires bundled Keycloak, its service and assets may be removed independently of this proposal. When a deployment still relies on bundled Keycloak for human authentication, its assets are retired only in a coupled authentication cutover after the supported replacement is qualified. Neither removal establishes Omnigent authentication by itself.
 
 Existing MoonMind UUIDs, foreign-key relationships, workflow ownership, audit actors, Provider Profiles, and historical evidence retain their identity. Account linking uses authenticated proof or an explicit operator-approved mapping. It does not rewrite historical actors to a new username or remap every user to the first Omnigent account.
 
@@ -174,7 +188,7 @@ The candidate provider selector is an explicit `AUTH_PROVIDER=omnigent` branch i
 
 MoonMind's human-auth mode and Omnigent's accounts/OIDC/header mode have separate meanings. Their selected combination must be validated. Header trust is not a way for public callers to assert an email, and choosing Omnigent cannot silently choose an upstream single-user fallback.
 
-The supported replacement is qualified before bundled Keycloak's service, realm/setup assets, database initialization, settings, developer helpers, and obsolete tests are retired. Inventory actual consumers before deletion. Superseded MoonMind password/register/reset routes are removed or unmounted in the new mode. Storage/model helpers still needed by the application are retained without preserving a second public login system.
+Keycloak retirement follows the INV-202 ordering. In a coupled authentication cutover, the supported replacement is qualified before bundled Keycloak's service, realm/setup assets, database initialization, settings, developer helpers, and obsolete tests are retired; an independent cleanup with no retained consumer does not wait on this proposal. Superseded MoonMind password/register/reset routes are removed or unmounted in the new mode. Storage/model helpers still needed by the application are retained without preserving a second public login system.
 
 This changes the identity source behind today's MoonMind authentication boundary. It does not override the existing Workflow Chat requirement that MoonMind authenticates and authorizes each request, and it does not change model-provider OAuth ownership. Existing defaults and disabled-auth behavior remain current until adoption explicitly changes them.
 
@@ -186,11 +200,12 @@ These are proposed observable requirements, not a completed test checklist.
 
 | Boundary | Required proof |
 | --- | --- |
-| Production composition | The configured provider selects the intended dependency, and old password/registration routes cannot bypass it. Unknown modes fail safely. |
+| Production composition | The configured provider selects the intended dependency, and old password/registration routes cannot bypass it. Unknown, misspelled, or inconsistent modes fail startup/readiness before any route is served, and the API never reports ready in that state. |
 | Human versus machine authority | Host, runner-owner, delegated, worker, and wrong-authority tokens cannot obtain human authority through headers, cookies, login exchange, or a current-user endpoint. Include the pinned same-format runner-token regression. |
 | Identity and roles | Concurrent provisioning is stable; conflicting links, renamed/recreated accounts, local disable, authority changes, and forged admin claims cannot inherit ownership or elevate privileges. |
 | Multi-user resources | User A cannot read or mutate user B's workflows, artifacts, Profiles, secrets, terminals, or bound chat using modified URLs, IDs, cookies, or streams. |
 | Browser journey | Real login, permitted setup/invitation, logout, reload, expiry, iframe/full-page chat, artifact access, SSE, and WebSocket flows work through the composed API and actual browser client. |
+| Non-browser API and MCP journey | A CLI or MCP client acquires the CONTRACT-206 credential through the supported issuance path and reaches `GET /mcp/tools`, `POST /mcp/tools/call`, and a protected REST route through the composed API. The same routes reject wrong-purpose Omnigent tokens and revoked or expired credentials, and access ends within the documented bound after account disable or deletion. |
 | Session lifecycle | Deleted accounts, logout replay, password reset/change, administrative revocation, refresh races, and long-lived transport expiry satisfy documented bounds. |
 | Proxy and browser security | Origin/CSRF, redirect-state/PKCE where applicable, forwarded-header spoofing, refresh-field injection, query-token leakage, and cross-user client-cookie contamination are rejected. |
 | Failure containment | Server outage, malformed validation response, cache expiry, mapping-store failure, overload, and reconnect yield bounded outcomes without authentication downgrade or retry storms. |
@@ -213,7 +228,7 @@ The expected work is moderate: the current-user abstraction and UUID user model 
 
 Adoption requires agreement on the exact upstream human-session/identity contract, stable subject or account-incarnation policy, administrator binding, session invalidation bounds, supported origin topology, and treatment of existing users. Accounts mode can be qualified first without claiming OIDC or header-mode support. This proposal cannot itself resolve those source-dependent choices by inventing an upstream API.
 
-The affected owners are the current auth dependencies and API composition, user model/migrations, direct HTTP/WebSocket consumers, dashboard account/bootstrap flows, native-chat facade, and Compose/configuration/operator documentation. Reconcile the providing Security, UI, and Omnigent documents when the proposal is selected. Execution plans and issue breakdowns remain outside this document.
+The affected owners are the current auth dependencies and API composition, user model/migrations, direct HTTP/WebSocket consumers, MCP and CLI credential consumers, dashboard account/bootstrap flows, native-chat facade, and Compose/configuration/operator documentation. Reconcile the providing Security, UI, and Omnigent documents when the proposal is selected. Execution plans and issue breakdowns remain outside this document.
 
 Follow the [proposal lifecycle](README.md): promote adopted durable contracts into their owning documents and remove the superseded proposal/discovery entry in the same adoption change. Until then, this document records a design for later consideration and authorizes no implementation or deployment change.
 
