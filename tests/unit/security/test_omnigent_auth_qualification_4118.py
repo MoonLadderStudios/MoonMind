@@ -22,6 +22,8 @@ import pytest
 
 from moonmind.security import omnigent_auth_qualification as q
 
+q._ensure_omnigent_bundle_on_path()
+
 
 def _config(mode: str = "accounts", **overrides) -> q.MoonmindAuthConfig:
     base = {
@@ -252,7 +254,7 @@ async def test_cache_hit_cannot_bypass_revocation_or_status():
     revocation = q.InMemoryRevocationStore()
     cache = q.SessionValidationCache(config)
     identity = _identity()
-    account = _enrolled(store, identity)
+    _enrolled(store, identity)
     token, _ = await q.mint_moonmind_session(identity, store, config)
     await cache.validate(token, store, revocation)
     assert cache.misses == 1
