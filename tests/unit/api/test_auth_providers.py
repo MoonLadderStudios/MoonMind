@@ -12,6 +12,7 @@ from api_service.auth_providers import (
     get_current_user_optional,
     get_default_user_from_db,
     is_planned_auth_provider,
+    normalize_auth_provider,
     validate_auth_provider,
 )
 from api_service.db.models import User
@@ -177,3 +178,73 @@ def test_planned_modes_mount_no_legacy_auth_routes(monkeypatch, provider):
     monkeypatch.setattr(settings.oidc, "AUTH_PROVIDER", provider)
     router = get_auth_router()
     assert [route.path for route in router.routes] == []
+
+
+@pytest.mark.parametrize(
+    "raw, expected",
+    [
+        ("disabled", "disabled"),
+        ("Disabled", "disabled"),
+        (" DISABLED ", "disabled"),
+        ("ACCOUNTS", "accounts"),
+        (" Oidc ", "oidc"),
+        ("HEADER", "header"),
+        ("Keycloak", "keycloak"),
+        ("sso-magic", "sso-magic"),
+        ("", ""),
+    ],
+)
+def test_normalize_auth_provider_case_and_whitespace(raw, expected):
+    """MoonLadderStudios/MoonMind#4116: selector comparisons must be case-insensitive."""
+    assert normalize_auth_provider(raw) == expected
+
+
+@pytest.mark.parametrize("provider", ["Disabled", " DISABLED ", "DISABLED"])
+def test_disabled_mode_case_variants_take_disabled_path(monkeypatch, provider):
+    """Case/whitespace variants of 'disabled' must not fall through to FastAPI Users."""
+    monkeypatch.setattr(settings.oidc, "AUTH_PROVIDER", provider)
+    monkeypatch.setattr(settings.workflow, "test_mode", True)
+    monkeypatch.setattr(auth_providers, "_cached_current_user_dependency", None)
+    try:
+        dependency = get_current_user()
+        assert dependency is not auth_providers.current_active_user
+    finally:
+        monkeypatch.setattr(auth_providers, "_cached_current_user_dependency", None)
+
+
+@pytest.mark.parametrize("provider", ["ACCOUNTS", " Oidc ", "HEADER"])
+def test_planned_mode_case_variants_fail_closed(monkeypatch, provider):
+    """Planned-mode variants must fail closed, never use a substitute authority."""
+    assert is_planned_auth_provider(provider) is True
+    monkeypatch.setattr(settings.oidc, "AUTH_PROVIDER", provider)
+    monkeypatch.setattr(auth_providers, "_cached_current_user_dependency", None)
+    try:
+        router = get_auth_router()
+        assert [route.path for route in router.routes] == []
+    finally:
+        monkeypatch.setattr(auth_providers, "_cached_current_user_dependency", None)
+
+
+@pytest.mark.parametrize("provider", ["sso-magic", "SSO-MAGIC", " keycloakx "])
+@pytest.mark.asyncio
+async def test_unknown_modes_fail_closed_at_request_boundary(monkeypatch, provider):
+    """Unknown selectors must 503 at request boundaries, never resolve via FastAPI Users."""
+    monkeypatch.setattr(settings.oidc, "AUTH_PROVIDER", provider)
+    monkeypatch.setattr(auth_providers, "_cached_current_user_dependency", None)
+    try:
+        dependency = get_current_user()
+        assert dependency is not auth_providers.current_active_user
+        with pytest.raises(HTTPException) as exc:
+            await dependency()
+        assert exc.value.status_code == 503
+
+        optional_dependency = get_current_user_optional()
+        assert optional_dependency is not auth_providers.current_active_user_optional
+        with pytest.raises(HTTPException) as exc:
+            await optional_dependency()
+        assert exc.value.status_code == 503
+
+        router = get_auth_router()
+        assert [route.path for route in router.routes] == []
+    finally:
+        monkeypatch.setattr(auth_providers, "_cached_current_user_dependency", None)
