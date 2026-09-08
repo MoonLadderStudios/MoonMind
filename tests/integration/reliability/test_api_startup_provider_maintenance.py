@@ -18,7 +18,10 @@ from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 from api_service import main as api_main
 from tests.integration.reliability.helpers import load_replay
 
-pytestmark = [pytest.mark.asyncio, pytest.mark.integration, pytest.mark.integration_ci]
+# No integration_ci mark: tests/conftest.py owns every test under
+# tests/integration/reliability/ to the reliability-journey shard, and the
+# shard verifier forbids combining integration_ci with reliability_journey.
+pytestmark = [pytest.mark.asyncio, pytest.mark.integration]
 
 
 @pytest.mark.parametrize(

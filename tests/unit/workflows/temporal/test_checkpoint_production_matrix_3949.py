@@ -62,7 +62,9 @@ from moonmind.workflows.temporal.workflow_registry import (
     workflow_fleet_activity_handlers,
 )
 
-pytestmark = pytest.mark.unit_fast
+# No explicit shard mark: tests/conftest.py owns every test under
+# tests/unit/workflows/temporal/ to the temporal-boundary shard. Do not add
+# pytest.mark.unit_fast here; it conflicts with that ownership.
 
 REPO_ROOT = Path(__file__).resolve().parents[4]
 WORKFLOW_SRC = (
@@ -158,7 +160,7 @@ def _timeout_seconds(call: ast.Call, keyword: str) -> int:
         if not isinstance(kw.value, ast.Call):
             raise AssertionError(f"{keyword} is not a timedelta call")
         parts = {
-            sub.arg: sub.value
+            sub.arg: sub.value.value
             for sub in kw.value.keywords
             if isinstance(sub.value, ast.Constant)
         }
@@ -549,7 +551,7 @@ async def test_duplicate_terminal_delivery_replays_without_overwrite(
     assert second.diagnostics["agentResultRef"] == (
         first.diagnostics["agentResultRef"]
     )
-    await matrix_session.expire_all()
+    matrix_session.expire_all()
     branch = await matrix_session.get(WorkflowCheckpointBranch, branch_id)
     assert branch is not None
     assert branch.current_head_version == version_after_first
@@ -575,7 +577,7 @@ async def test_stale_terminal_evidence_is_rejected_not_overwritten(
         await service.finalize_turn_execution(
             branch_turn_id=turn_id, **_finalize_kwargs(branch_id, "t2")
         )
-    await matrix_session.expire_all()
+    matrix_session.expire_all()
 
     turn = await matrix_session.get(WorkflowCheckpointBranchTurn, turn_id)
     assert turn is not None
@@ -599,7 +601,7 @@ async def test_failed_handoff_stays_visible_and_unfinalized(
     branch_id = "cbr-matrix-failed-handoff"
     turn_id = await _claimed_turn(service, branch_id)
     await matrix_session.commit()
-    await matrix_session.expire_all()
+    matrix_session.expire_all()
 
     turn = await matrix_session.get(WorkflowCheckpointBranchTurn, turn_id)
     assert turn is not None
@@ -639,7 +641,7 @@ async def test_cancellation_cannot_be_overwritten_by_stale_success(
         await service.finalize_turn_execution(
             branch_turn_id=turn_id, **_finalize_kwargs(branch_id, "late")
         )
-    await matrix_session.expire_all()
+    matrix_session.expire_all()
 
     turn = await matrix_session.get(WorkflowCheckpointBranchTurn, turn_id)
     assert turn is not None
@@ -677,7 +679,7 @@ async def test_restarted_worker_cannot_steal_running_turn_or_release_cleanup(
             branch_turn_id=turn_id,
             runtime_agent_run_id="checkpoint-branch-agent:restarted:turn-1",
         )
-    await matrix_session.expire_all()
+    matrix_session.expire_all()
 
     turn = await matrix_session.get(WorkflowCheckpointBranchTurn, turn_id)
     assert turn is not None
@@ -724,7 +726,7 @@ async def test_rejection_terminalizes_blocked_without_advancing_head(
     assert rejected.diagnostics["terminalDisposition"] == "retained_evidence_rejected"
     assert rejected.diagnostics["verificationPending"] is False
     await matrix_session.commit()
-    await matrix_session.expire_all()
+    matrix_session.expire_all()
 
     branch = await matrix_session.get(WorkflowCheckpointBranch, branch_id)
     assert branch is not None
@@ -735,7 +737,7 @@ async def test_rejection_terminalizes_blocked_without_advancing_head(
         await service.finalize_turn_execution(
             branch_turn_id=turn_id, **_finalize_kwargs(branch_id, "late")
         )
-    await matrix_session.expire_all()
+    matrix_session.expire_all()
     turn = await matrix_session.get(WorkflowCheckpointBranchTurn, turn_id)
     assert turn is not None
     assert turn.status == "blocked"
