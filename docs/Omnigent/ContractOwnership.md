@@ -41,6 +41,7 @@ work stays in its owning issue plan (`docs/tmp/OmnigentBridgeRollout.md`).
 | 22 | Policy authority, persistence, approvals | `PolicyAuthority.md` |
 | 23 | Embedded host-auth compatibility surface | `EmbeddedHostAuthCompatibility.md` |
 | 24 | Combined-stack validation and rollback runbook | `CombinedStackValidationAndRollback.md` |
+| 25 | Upstream-duplication audit (caller-backed ownership vs pinned upstream) | `UpstreamDuplicationAudit.md` |
 
 ## Duplicated sections and their surviving owners
 
@@ -103,6 +104,7 @@ Deliberately *not* merged (distinct responsibilities, per #3962):
 | `PolicyAuthority.md` | Owner: policy authority | Canonical desired state; #3515 |
 | `EmbeddedHostAuthCompatibility.md` | Owner: embedded compat surface | Experimental, not default |
 | `CombinedStackValidationAndRollback.md` | Owner: validation/rollback runbook | Current; #3564 |
+| `UpstreamDuplicationAudit.md` | Owner: caller-backed upstream-duplication audit | Current; #3954 |
 
 ## Reduction report
 
