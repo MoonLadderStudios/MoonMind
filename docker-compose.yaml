@@ -50,7 +50,12 @@ services:
     init: true
     restart: unless-stopped
     ports:
-      - "${MOONMIND_API_HOST_PORT:-7000}:8000"
+      # Explicit local-mode exposure (#4120 req 5): the operator-facing
+      # publish host is validated at startup by validate_publish_binding.
+      # Loopback by default; wildcard/custom hosts require
+      # MOONMIND_TRUSTED_INGRESS=1 with an audited ingress path. The
+      # in-container listen address is not proof of safe loopback.
+      - "${MOONMIND_API_PUBLISH_HOST:-127.0.0.1}:${MOONMIND_API_HOST_PORT:-7000}:8000"
     environment:
       - PYTHONPATH=/app
       - LOG_LEVEL=${LOG_LEVEL:-DEBUG}

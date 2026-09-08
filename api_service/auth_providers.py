@@ -36,7 +36,7 @@ def _disabled_auth_test_user():
     return SimpleNamespace(id=None, email="stub@example.com", is_superuser=True)
 
 
-def build_moonmind_control_plane_config(environ=None):
+def build_moonmind_control_plane_config(environ=None, mode=None):
     """Resolve the MoonMind control-plane auth config explicitly (#4120 req 2).
 
     Only MoonMind-owned inputs (AUTH_PROVIDER mode, MOONMIND_* cookie/key
@@ -45,15 +45,34 @@ def build_moonmind_control_plane_config(environ=None):
     same-origin use stays isolated through distinct cookies/keys/purposes.
     Callers must pass the durable session secret explicitly; this helper
     never reads runtime-server secrets.
+
+    ``mode`` accepts the startup-classified production mode so the
+    omitted-fresh path (blank storage, classified ``accounts``) resolves
+    through the same production code as explicit ``accounts``. When omitted,
+    the stored selector is read via the auth-modes owner and blank storage
+    fails closed with 503 (startup owns the fresh-vs-upgrade decision).
+
+    Production wiring: ``api_service.main._initialize_oidc_provider`` calls
+    :func:`resolve_moonmind_auth_config` directly with the classified
+    production mode at startup, so this helper is the request-time
+    counterpart of the same production boundary, not dead code.
     """
     from moonmind.security.auth_modes_4120 import default_session_key_path
 
-    mode = get_effective_auth_provider()
-    if not mode:
+    if mode is not None:
+        from moonmind.security.omnigent_auth_qualification import (
+            validate_mode_selector,
+        )
+
+        effective = validate_mode_selector(str(mode).strip().lower())
+    else:
+        effective = get_effective_auth_provider()
+    if not effective:
         # Omitted selector at request time: the startup classifier owns the
         # fresh-vs-upgrade decision. Request code fails closed rather than
         # guessing a mode.
         raise HTTPException(status_code=503, detail="auth_undecided")
+    mode = effective
     secret_env = os.environ.get("MOONMIND_SESSION_SECRET", "").strip()
     cookie_secret: bytes
     if secret_env:
