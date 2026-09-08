@@ -97,3 +97,15 @@ def test_compose_declares_identical_sources_for_api_and_worker() -> None:
     api, worker = (_service_environment(name) for name in _DECLARING_SERVICES)
     for key in (IMAGE_SOURCES_ENV_KEY, CACHE_SOURCES_ENV_KEY):
         assert api[key] == worker[key]
+
+
+@pytest.mark.parametrize("service", _DECLARING_SERVICES)
+def test_compose_passes_registry_credential_reference_to_api_and_worker(service: str) -> None:
+    environment = _service_environment(service)
+    declaration = environment[IMAGE_SOURCES_ENV_KEY].replace(
+        "${MOONMIND_UNREAL_ENGINE_REGISTRY_CREDENTIAL_REF:-}", "db://registry-pull"
+    )
+    settings = resolve_container_backend_settings({
+        IMAGE_SOURCES_ENV_KEY: _interpolate(declaration)
+    })
+    assert settings.image_source(_SKILL_IMAGE_SOURCE_REF).registry_credential_ref == "db://registry-pull"
