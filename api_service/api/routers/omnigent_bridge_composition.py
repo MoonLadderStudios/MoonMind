@@ -14,7 +14,7 @@ from __future__ import annotations
 
 from contextlib import asynccontextmanager
 from datetime import timedelta
-from typing import Any, AsyncIterator, Mapping, Sequence
+from typing import TYPE_CHECKING, Any, AsyncIterator, Mapping, Sequence
 
 from api_service.db.base import async_session_maker
 from api_service.services.omnigent_agent_profile_service import (
@@ -27,10 +27,11 @@ from moonmind.omnigent.bridge_config import (
     HOST_PROTOCOL_MODE_PROXY,
     OmnigentBridgeConfig,
 )
-from moonmind.omnigent.bridge_embedded import (
-    OmnigentEmbeddedHostProtocolFacade,
-    verify_embedded_host_auth,
-)
+# NOTE (#3955): the embedded launch facade is imported lazily inside
+# build_embedded_host_facade / verify_embedded_host_request so the proxy-only
+# production path never requires the retired embedded launch modules.
+if TYPE_CHECKING:  # pragma: no cover - typing only, never a runtime import
+    from moonmind.omnigent.bridge_embedded import OmnigentEmbeddedHostProtocolFacade
 from moonmind.omnigent.bridge_proxy import OmnigentBridgeSessionProxy
 from moonmind.omnigent.bridge_store import OmnigentBridgeSessionStore
 from moonmind.omnigent.host_auth_contracts import (
@@ -127,6 +128,8 @@ async def verify_embedded_host_request(
     *, headers: Mapping[str, str], config: OmnigentBridgeConfig
 ):
     """Resolve host-auth credentials and verify one embedded host request."""
+
+    from moonmind.omnigent.bridge_embedded import verify_embedded_host_auth
 
     resolved = await resolve_host_auth_credentials(
         profile=await resolve_active_host_auth_profile()
@@ -289,6 +292,8 @@ async def project_upstream_inventory_failure(
 def build_embedded_host_facade(
     config: OmnigentBridgeConfig,
 ) -> OmnigentEmbeddedHostProtocolFacade:
+    from moonmind.omnigent.bridge_embedded import OmnigentEmbeddedHostProtocolFacade
+
     return OmnigentEmbeddedHostProtocolFacade(
         run_store=build_bridge_session_store(),
         config=config,

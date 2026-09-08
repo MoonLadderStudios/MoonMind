@@ -1,6 +1,21 @@
-# Embedded host authentication compatibility
+# Embedded host authentication compatibility (retired transport)
 
 **Document Class:** Canonical declarative
+
+> **Retirement notice (MoonLadderStudios/MoonMind#3955).** The experimental
+> embedded host/runner transport no longer admits new work. An enabled bridge
+> that selects `embedded_omnigent_compatible_server` fails fast at API/worker
+> startup with the supported `upstream_omnigent_server_proxy` alternative;
+> live embedded host routes answer `410 Gone` with the same alternative.
+> Proxy mode is the only selectable production topology. What this document
+> still describes below is retained for one purpose only: decoding retained
+> session rows and historical evidence in their recorded mode until bounded
+> drain probes establish no active or cleanup owner remains. Physical removal
+> of the launch code follows at the launch-only removal stage, never in the
+> same change as the product selector. The native Workflow Chat `embedded=1`
+> presentation option is unrelated to this transport and is preserved, as are
+> shared first-message idempotency, bridge session/event persistence, and
+> profile-owned credentials.
 
 **Compatibility declaration:** `omnigent.server.v1` with embedded runner
 authentication profile `omnigent.runner_tunnel.983c93c6`, verified against
@@ -116,12 +131,12 @@ to close code 4401, disabled/revoked or stale connected authority to 4403,
 transient verifier/configuration failure to 1013, and accepted-frame protocol
 failure to 4400.
 
-Embedded mode remains experimental and must not be presented as production
-ready until all three configured evidence claims (proxy conformance, live
-stock-host smoke, and host-auth conformance) resolve independently, pass schema
-and secret-scan validation, match the active MoonMind build/configuration and
-immutable image identities, and remain unexpired. Proxy mode remains the
-production default and supported topology until the full #3519 matrix passes.
+Embedded mode is retired (#3955) and must not be presented as production
+ready; an enabled bridge cannot select it for new work. The evidence claims
+described here (proxy conformance, live stock-host smoke, and host-auth
+conformance) remain the historical record of what gated the experimental path
+and stay resolvable for retained sessions. Proxy mode is the production
+default and the only supported topology.
 
 ## Launch modes, rollout, and rollback
 
@@ -129,11 +144,12 @@ Static Compose and on-demand Docker are separate support rows. Each must prove
 the same registration, authentication, session, reconnect, resource, terminal,
 and cleanup contract before it can be advertised for embedded mode. An
 unproven row is unavailable with an actionable readiness reason; success in one
-mode does not imply support for the other.
+mode does not imply support for the other. No embedded support row is
+advertised anymore: readiness and the support matrix report the proxy-only
+topology.
 
-Selecting embedded mode is explicit and versioned. Missing, stale, revoked, or
-incompatible evidence gates readiness before a new session starts. Rollback
-selects `upstream_omnigent_server_proxy` for new sessions only. An in-flight
+Selecting embedded mode is retired. Rollback selects
+`upstream_omnigent_server_proxy` for new sessions only. An in-flight
 session stays with its recorded endpoint and bridge mode, and historical
 records retain their actual compatibility profile and evidence references.
 MoonMind never redirects an in-flight session between modes.
