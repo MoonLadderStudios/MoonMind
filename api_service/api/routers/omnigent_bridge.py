@@ -128,11 +128,13 @@ from moonmind.omnigent.native_ui_compat import (
     CODE_WS_SUBPROTOCOL_REJECTED,
     NativeUiCompatibilityError,
     DISPOSITION_SERVED,
+    NATIVE_HTTP_PRECONDITIONS,
     classify_native_ui_http,
     classify_native_ui_websocket,
     negotiate_ws_subprotocol,
     upstream_http_path,
     upstream_websocket_path,
+    validate_native_ui_http_fields,
 )
 from moonmind.omnigent.settings import (
     OMNIGENT_DISABLED_MESSAGE,
@@ -4411,21 +4413,36 @@ async def _dispatch_native_ui_http(
         )
     provider_session_id = str(getattr(row, "omnigent_session_id", "") or "").strip()
     session_status = str(getattr(row, "status", "") or "")
-    body = b""
+    body = await _read_bounded_facade_body(request)
     parsed_body: Any | None = None
-    if request.method.upper() in {"POST", "PUT", "PATCH"}:
-        body = await _read_bounded_facade_body(request)
-        content_type = str(request.headers.get("content-type") or "").lower()
-        if content_type.startswith("application/json") and body:
-            try:
-                parsed_body = json.loads(body)
-            except (json.JSONDecodeError, ValueError) as exc:
-                raise WorkflowChatFacadeError(
-                    "The request body is not valid JSON.",
-                    failure_class="user_error",
-                    status_code=400,
-                    code=CODE_MALFORMED_PAYLOAD,
-                ) from exc
+    content_type = str(request.headers.get("content-type") or "").lower()
+    if body and content_type.split(";", 1)[0].strip() == "application/json":
+        try:
+            def unique_object(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
+                value: dict[str, Any] = {}
+                for key, item in pairs:
+                    if key in value:
+                        raise ValueError("duplicate JSON field")
+                    value[key] = item
+                return value
+
+            parsed_body = json.loads(body, object_pairs_hook=unique_object)
+            if not isinstance(parsed_body, dict):
+                raise ValueError("JSON object required")
+        except (ValueError, UnicodeDecodeError) as exc:
+            raise WorkflowChatFacadeError(
+                "The request body is not valid JSON.",
+                failure_class="user_error",
+                status_code=400,
+                code=CODE_MALFORMED_PAYLOAD,
+            ) from exc
+    elif body and route.name != "resource_upload":
+        raise WorkflowChatFacadeError(
+            "The native operation requires a reviewed JSON request.",
+            failure_class="user_error",
+            status_code=415,
+            code=CODE_UNSUPPORTED_MEDIA_TYPE,
+        )
     assert_no_identity_substitution(
         chat_binding_id=chat_binding_id,
         path_session_id=match.params.get("session_id"),
@@ -4433,6 +4450,46 @@ async def _dispatch_native_ui_http(
         body=parsed_body,
         headers=request.headers,
     )
+    validate_native_ui_http_fields(
+        match,
+        method=request.method.upper(),
+        query=list(request.query_params.multi_items()),
+        body=parsed_body if body else (
+            {} if route.mutation and request.method in {"POST", "PUT", "PATCH"}
+            else None
+        ),
+    )
+    if route.name == "resource_upload":
+        from starlette.datastructures import UploadFile
+        from starlette.formparsers import MultiPartException, MultiPartParser
+
+        async def upload_stream():
+            yield body
+
+        try:
+            if not content_type.startswith("multipart/form-data;"):
+                raise ValueError("multipart required")
+            form = await MultiPartParser(
+                request.headers, upload_stream(), max_files=1, max_fields=0,
+            ).parse()
+            try:
+                parts = list(form.multi_items())
+                if (
+                    len(parts) != 1
+                    or parts[0][0] != "file"
+                    or not isinstance(parts[0][1], UploadFile)
+                    or not parts[0][1].filename
+                ):
+                    raise ValueError("one file part required")
+            finally:
+                await form.close()
+        except (MultiPartException, ValueError) as exc:
+            raise WorkflowChatFacadeError(
+                "The upload requires exactly one file part.",
+                failure_class="user_error",
+                status_code=400,
+                code=CODE_MALFORMED_PAYLOAD,
+            ) from exc
     runner_alias = str(match.params.get("runner_id") or "")
     if runner_alias and runner_alias != chat_binding_id:
         raise WorkflowChatFacadeError(
@@ -4632,6 +4689,17 @@ async def _dispatch_native_ui_http(
             status_code=status.HTTP_200_OK,
             media_type="application/json",
         )
+
+    if isinstance(parsed_body, dict) and NATIVE_HTTP_PRECONDITIONS.intersection(
+        parsed_body
+    ):
+        body = json.dumps(
+            {
+                key: value for key, value in parsed_body.items()
+                if key not in NATIVE_HTTP_PRECONDITIONS
+            },
+            separators=(",", ":"),
+        ).encode()
 
     upstream_path = upstream_http_path(match, provider_session_id)
     query = urlencode(list(request.query_params.multi_items()))

@@ -118,17 +118,9 @@ def test_served_surface_is_single_sourced_from_facade_operations() -> None:
         "terminal_status",
         "terminal_close",
         "terminal_shell",
-        "execution_logs",
         "workspace_edit",
         "workspace_delete",
         "resource_upload",
-        "resource_download",
-        "resource_attach",
-        "browser_pane",
-        "subagent_tree",
-        "subagent_control",
-        "task_todo",
-        "task_mutate",
         "host_liveness",
         "runner_liveness",
         "session_reconnect",
@@ -145,7 +137,7 @@ def test_served_surface_is_single_sourced_from_facade_operations() -> None:
         ("GET", "v1/sessions/b1/resources/terminals", "terminal_view"),
         ("POST", "v1/sessions/b1/resources/terminals", "terminal_create"),
         ("DELETE", "v1/sessions/b1/resources/terminals/t1", "terminal_close"),
-        ("PATCH", "v1/sessions/b1/tasks/t1", "task_mutate"),
+        ("PATCH", "v1/sessions/b1/resources/environments/default/filesystem/a.py", "workspace_edit"),
         ("POST", "v1/sessions/b1/reconnect", "session_reconnect"),
     ],
 )
@@ -198,10 +190,7 @@ def test_every_native_ui_transport_class_is_represented() -> None:
         compat.CLASS_TERMINAL_CREATE,
         compat.CLASS_TERMINAL_ATTACH,
         compat.CLASS_TERMINAL_CLOSE,
-        compat.CLASS_EXEC_LOG,
         compat.CLASS_BROWSER_PANE,
-        compat.CLASS_SUBAGENT,
-        compat.CLASS_TASK,
         compat.CLASS_RECONNECT,
     } <= classes
     assert {
@@ -290,3 +279,77 @@ def test_subprotocol_negotiation_rejects_unlisted_protocol() -> None:
         compat.negotiate_ws_subprotocol(["evil.raw.protocol"])
     assert exc.value.code == compat.CODE_WS_SUBPROTOCOL_REJECTED
     assert exc.value.status_code == 403
+
+
+def test_native_http_inventory_has_real_pinned_upstream_entrypoints() -> None:
+    """Do not label invented endpoints as supported based on mocked responses."""
+    import ast
+    import re
+
+    fixture = json.loads(
+        (_CONTRACT_FIXTURE.parent / "native_http_ownership_3954.json").read_text()
+    )
+    network = json.loads(_CONTRACT_FIXTURE.read_text())
+    assert fixture["sourceCommit"] == network["evidence"]["sourceCommit"]
+    local_projections = {"host_liveness", "runner_liveness", "session_reconnect"}
+    expected = {
+        (route.name, method)
+        for route in compat._PINNED_HTTP_ROUTES
+        if route.disposition == compat.DISPOSITION_SERVED
+        and route.name not in local_projections
+        for method in route.methods
+    }
+    assert {(r["operation"], r["method"]) for r in fixture["httpOperations"]} == expected
+    for record in fixture["httpOperations"]:
+        tree = ast.parse((_REPO_ROOT / record["sourcePath"]).read_text())
+        entry = next(
+            node for node in ast.walk(tree)
+            if isinstance(node, ast.AsyncFunctionDef)
+            and node.name == record["entrypoint"]
+        )
+        decorator = next(
+            node for node in entry.decorator_list
+            if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)
+            and node.func.attr.upper() == record["method"]
+        )
+        upstream_route = ast.literal_eval(decorator.args[0])
+        pattern = re.sub(r"\{[^}]+:path\}", ".+", upstream_route)
+        pattern = re.sub(r"\{[^}]+\}", "[^/]+", pattern)
+        assert re.fullmatch("/v1" + pattern, "/" + record["browserPath"])
+        match = compat.classify_native_ui_http(record["method"], record["browserPath"])
+        assert match is not None and match.route.name == record["operation"]
+
+
+def test_file_download_has_one_canonical_route_owner() -> None:
+    from moonmind.omnigent.workflow_chat_facade import match_facade_operation
+
+    path = "v1/sessions/b1/resources/files/file1/content"
+    match = match_facade_operation("GET", path)
+    assert match is not None and match.operation.name == "session_file"
+    assert compat.classify_native_ui_http("GET", path) is None
+    assert not any(route.name == "resource_download" for route in compat.NATIVE_UI_ROUTES)
+
+
+def test_native_request_fields_are_consumed_by_the_pinned_runner() -> None:
+    import ast
+
+    fixture = json.loads(
+        (_CONTRACT_FIXTURE.parent / "native_http_ownership_3954.json").read_text()
+    )
+    tree = ast.parse((_REPO_ROOT / "omnigent/omnigent/runner/app.py").read_text())
+    for shape in fixture["requestShapes"]:
+        entry = next(
+            node for node in ast.walk(tree)
+            if isinstance(node, ast.AsyncFunctionDef)
+            and node.name == shape["entrypoint"]
+        )
+        consumed = {
+            node.args[0].value for node in ast.walk(entry)
+            if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)
+            and isinstance(node.func.value, ast.Name) and node.func.value.id == "body"
+            and node.func.attr == "get" and node.args
+            and isinstance(node.args[0], ast.Constant)
+        }
+        admitted = compat._NATIVE_HTTP_BODY_FIELDS[(shape["operation"], shape["method"])]
+        assert set(admitted) == set(shape["fields"])
+        assert set(admitted) <= consumed
