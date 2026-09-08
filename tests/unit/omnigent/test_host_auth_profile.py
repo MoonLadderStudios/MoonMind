@@ -26,9 +26,12 @@ from moonmind.omnigent.host_auth_adapter import PINNED_PROTOCOL_PROFILE
 
 
 def _embedded_config():
+    # Retired (#3955): host-auth credential coverage uses a disabled
+    # declaration. Enabled embedded admission fails fast with the proxy
+    # alternative; profile-owned credentials are preserved, not deleted.
     return parse_bridge_config(
         {
-            "enabled": True,
+            "enabled": False,
             "compatibility": {"hostProtocolMode": HOST_PROTOCOL_MODE_EMBEDDED},
             "hostConnection": {
                 "embedded": {
