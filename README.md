@@ -37,7 +37,7 @@ See the [Omnigent module entrypoint](docs/Omnigent/README.md), the canonical [Om
     - Configure any other secrets or settings needed for the first workflow
 8. Click Create, select Runtime and one Profile, and submit a workflow. The Profile resolves its execution configuration; readiness and rollout policy validate the resulting plan.
 
-`.env` is optional for normal local startup. Use `.env-template` only when you want to override defaults or preconfigure advanced settings before launch.
+`.env` is optional for normal local startup. Use `.env-template` only when you want to override defaults or preconfigure advanced settings before launch. MoonMind control-plane user authentication (`AUTH_PROVIDER`, `disabled` by default) is separate from Omnigent runtime-server auth (`OMNIGENT_AUTH_*`); see [AuthenticationSystem.md](docs/Security/AuthenticationSystem.md).
 
 ### OAuth Workflow
 

@@ -1763,13 +1763,13 @@ class OIDCSettings(BaseSettings):
 
     AUTH_PROVIDER: str = Field(
         "disabled",
-        description="Authentication provider: 'disabled' or 'keycloak'.",
+        description="MoonMind control-plane authentication selector: 'disabled' (default local single-user) or 'keycloak' (legacy opt-in, pending removal). See docs/Security/AuthenticationSystem.md. 'accounts'/'oidc'/'header' are not shipped.",
         alias="AUTH_PROVIDER",
     )
     OIDC_ISSUER_URL: Optional[str] = Field(
         None,
         alias="OIDC_ISSUER_URL",
-        description="URL of the OIDC provider, e.g., Keycloak.",
+        description="URL of the OIDC provider (legacy Keycloak realm URL when AUTH_PROVIDER='keycloak').",
     )
     OIDC_CLIENT_ID: Optional[str] = Field(None, alias="OIDC_CLIENT_ID")
     OIDC_CLIENT_SECRET: Optional[str] = Field(None, alias="OIDC_CLIENT_SECRET")
