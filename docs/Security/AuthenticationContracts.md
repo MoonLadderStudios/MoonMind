@@ -189,3 +189,16 @@ reason, and request correlation. Never log passwords, authorization codes,
 bearer tokens, cookies, reset links, refresh material, or raw IdP token
 responses. No authentication material belongs in Temporal payloads, workflow
 artifacts, or runtime bridge evidence.
+
+## 11. Qualified upstream boundary (K2)
+
+The reusable upstream authentication boundary qualified in
+MoonLadderStudios/MoonMind#4118 is declared in
+[OmnigentAuthAdapterContract.md](./OmnigentAuthAdapterContract.md): the
+pinned upstream entrypoints MoonMind composes, the validated-identity
+hook ordering before session minting, the MoonMind session-purpose
+binding and durable revocation interface, the explicitly rejected
+optional surfaces, and configuration isolation. That contract is the
+authoritative adapter reference for K3/K4; this document remains the
+authority for modes, identity, session, error, and background-work
+semantics.
