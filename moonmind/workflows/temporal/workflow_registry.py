@@ -289,3 +289,126 @@ def checkpoint_branch_activity_handlers() -> tuple[Any, ...]:
         persist_checkpoint_branch_turn_terminal,
         persist_checkpoint_branch_turn_terminal_rejection,
     )
+
+
+#: Activity types for checkpoint-branch persistence. Single source of truth for
+#: the new-write routing, compatibility retention, and retirement gate below.
+#: MoonLadderStudios/MoonMind#3949.
+CHECKPOINT_BRANCH_PERSISTENCE_ACTIVITY_TYPES: tuple[str, ...] = (
+    "checkpoint_branch.turn.mark_running",
+    "checkpoint_branch.turn.persist_terminal",
+    "checkpoint_branch.turn.persist_terminal_rejection",
+)
+
+#: New-only workflow-queue helpers. These are deterministic/metadata reads with
+#: the ``workflow`` capability class; they never require artifact-store,
+#: provider, Docker, or database authority beyond Temporal itself.
+WORKFLOW_FLEET_NEW_ONLY_HELPER_ACTIVITY_TYPES: tuple[str, ...] = (
+    "integration.resolve_adapter_metadata",
+    "integration.get_activity_route",
+    "integration.resolve_external_adapter",
+    "integration.external_adapter_execution_style",
+)
+
+
+def checkpoint_branch_persistence_contract() -> dict[str, Any]:
+    """Describe new-write routing vs retained compatibility vs final topology.
+
+    New histories schedule the three persistence activities on the artifacts
+    fleet via the ``checkpoint-branch-artifact-fleet-v1`` patch marker
+    (``CheckpointBranchTurn._persistence_route_options``). Pre-marker histories
+    retain their recorded workflow-queue behavior and keep executing against
+    the retained ``workflow_fleet_activity_handlers`` below.
+
+    Retirement reuses existing mechanisms only: Temporal Visibility drain
+    metrics (``TemporalClientAdapter.get_drain_metrics``), worker-versioning
+    build identity (``build_worker_spec`` deployment/build IDs), and the
+    pre-cutover replay fixtures under
+    ``tests/fixtures/temporal/checkpoint_before_artifacts_fleet``. Fixture
+    replay proves history compatibility, never deployed drainage. Removal of
+    the retained workflow-queue handlers is blocked until old tasks,
+    retained histories, and supported resets have a verified disposition.
+    """
+
+    from moonmind.workflows.temporal.workflows.checkpoint_branch_turn import (
+        CHECKPOINT_BRANCH_ARTIFACT_FLEET_PATCH,
+    )
+
+    return {
+        "patch_marker": CHECKPOINT_BRANCH_ARTIFACT_FLEET_PATCH,
+        "activity_types": CHECKPOINT_BRANCH_PERSISTENCE_ACTIVITY_TYPES,
+        "new_write": {
+            "fleet": "artifacts",
+            "capability_class": "artifacts",
+            "route_source": (
+                "CheckpointBranchTurn._persistence_route_options "
+                "with checkpoint-branch-artifact-fleet-v1"
+            ),
+        },
+        "retained_compatibility": {
+            "fleet": "workflow",
+            "queue_behavior": "recorded pre-marker workflow queue (no override)",
+            "handlers": "workflow_fleet_activity_handlers (same implementations)",
+            "reason": "replay/in-flight compatibility for pre-cutover histories",
+        },
+        "final_topology": {
+            "workflow_fleet": "four metadata/adapter helpers only",
+            "artifacts_fleet": "single persistence implementation",
+        },
+        "drain_owner": {
+            "old_tasks": "artifacts-fleet owner via #3946 persistence ownership",
+            "retained_histories": (
+                "Temporal Visibility drain metrics + worker-versioning build IDs"
+            ),
+            "supported_resets": "existing reset/versioning cutover, not a new mode",
+            "fixture_role": "replay compatibility only; not deployed-drain proof",
+        },
+        "removal_blocked": True,
+        "removal_gate": (
+            "delete retained workflow-queue persistence handlers, dead DI, and "
+            "now-unneeded permissions together only after old consumers have a "
+            "verified drain disposition"
+        ),
+    }
+
+
+def workflow_fleet_capability_inventory() -> dict[str, Any]:
+    """Separate new-only needs from retained old-task I/O authority.
+
+    A worker intentionally executing old persistence tasks still needs
+    narrowly scoped artifact-store/database authority until those tasks drain.
+    Queue separation alone is not privilege separation; the actual
+    process/container boundary is the fleet service
+    (``temporal-worker-workflow`` vs ``temporal-worker-artifacts``) with its
+    documented capabilities, privileges, secrets, mounts, and egress policy.
+    """
+
+    return {
+        "new_only_helpers": {
+            "activity_types": WORKFLOW_FLEET_NEW_ONLY_HELPER_ACTIVITY_TYPES,
+            "capability_class": "workflow",
+            "required_authority": ("temporal",),
+            "forbidden": (
+                "artifacts",
+                "llm",
+                "sandbox",
+                "agent_runtime",
+                "docker_workload",
+                "provider_tokens",
+            ),
+        },
+        "retained_compatibility_handlers": {
+            "activity_types": CHECKPOINT_BRANCH_PERSISTENCE_ACTIVITY_TYPES,
+            "capability_class": "artifacts",
+            "required_authority": ("artifact_store", "database"),
+            "scope": (
+                "narrowly scoped I/O only while pre-cutover tasks/histories "
+                "remain; do not strip before the drain owner confirms disposition"
+            ),
+        },
+        "boundary": {
+            "workflow_service": "temporal-worker-workflow",
+            "artifacts_service": "temporal-worker-artifacts",
+            "note": "queue separation is not privilege separation",
+        },
+    }
