@@ -369,3 +369,260 @@ def test_diagnostics_contain_no_secret_values():
     assert diagnostics["MOONMIND_SESSION_SECRET"] == "<set>"
     assert diagnostics["session_secret"] == "<set>"
     assert diagnostics["note"] == "plain"
+
+
+# ---------------------------------------------------------------------------
+# Remediation: R3 startup/request gating on the bootstrap decision
+# ---------------------------------------------------------------------------
+
+
+def test_effective_mode_prefers_proceeded_bootstrap():
+    fresh = m.decide_auth_bootstrap(
+        mode="disabled", mode_explicitly_set=False, db_has_users=False,
+        migration_decision=None,
+    )
+    # Genuinely fresh installs run the accounts production flow.
+    assert (
+        m.effective_auth_mode(settings_mode="disabled", bootstrap=fresh)
+        == "accounts"
+    )
+    explicit_local = m.decide_auth_bootstrap(
+        mode="disabled", mode_explicitly_set=True, db_has_users=False,
+        migration_decision=None,
+    )
+    assert (
+        m.effective_auth_mode(settings_mode="disabled", bootstrap=explicit_local)
+        == "disabled"
+    )
+    blocked = m.decide_auth_bootstrap(
+        mode="disabled", mode_explicitly_set=False, db_has_users=True,
+        migration_decision=None,
+    )
+    # Awaiting an operator choice: the configured selector stands and the
+    # gate outcome (not a silent remap) drives the startup/request paths.
+    assert (
+        m.effective_auth_mode(settings_mode="disabled", bootstrap=blocked)
+        == "disabled"
+    )
+    assert (
+        m.effective_auth_mode(settings_mode="accounts", bootstrap=None)
+        == "accounts"
+    )
+
+
+def test_should_ensure_default_user_gate_matrix():
+    fresh_omitted = m.decide_auth_bootstrap(
+        mode="disabled", mode_explicitly_set=False, db_has_users=False,
+        migration_decision=None,
+    )
+    assert (
+        m.should_ensure_default_user(settings_mode="disabled", bootstrap=fresh_omitted)
+        is False
+    )
+    blocked = m.decide_auth_bootstrap(
+        mode="disabled", mode_explicitly_set=False, db_has_users=True,
+        migration_decision=None,
+    )
+    # Populated databases awaiting an operator choice: never mutate owners.
+    assert (
+        m.should_ensure_default_user(settings_mode="disabled", bootstrap=blocked)
+        is False
+    )
+    # Unknown bootstrap (unreadable decision, unreachable DB): fail closed.
+    assert (
+        m.should_ensure_default_user(settings_mode="disabled", bootstrap=None)
+        is False
+    )
+    proceeded_disabled = m.decide_auth_bootstrap(
+        mode="disabled", mode_explicitly_set=True, db_has_users=True,
+        migration_decision=m.AuthMigrationDecision(decision="disabled"),
+    )
+    assert (
+        m.should_ensure_default_user(
+            settings_mode="disabled", bootstrap=proceeded_disabled
+        )
+        is True
+    )
+    fresh_explicit_disabled = m.decide_auth_bootstrap(
+        mode="disabled", mode_explicitly_set=True, db_has_users=False,
+        migration_decision=None,
+    )
+    assert (
+        m.should_ensure_default_user(
+            settings_mode="disabled", bootstrap=fresh_explicit_disabled
+        )
+        is True
+    )
+
+
+# ---------------------------------------------------------------------------
+# Remediation: R5/R6 deployment-boundary configuration
+# ---------------------------------------------------------------------------
+
+
+def test_deployment_config_loopback_publish_passes():
+    for host in ("127.0.0.1", "localhost", "::1"):
+        config = m.deployment_auth_config_from_env(
+            {"MOONMIND_API_PUBLISH_HOST": host, "MOONMIND_API_HOST_PORT": "7000"}
+        )
+        assert config.published_binding().startswith(host)
+        assert (
+            m.validate_deployment_auth_config(config, effective_mode="disabled")
+            == ""
+        )
+
+
+def test_deployment_config_wildcard_and_remote_publish_fail_closed():
+    # Empty publish host (wildcard publish) without trusted-ingress evidence.
+    wildcard = m.deployment_auth_config_from_env({"MOONMIND_API_HOST_PORT": "7000"})
+    assert wildcard.published_binding() == "7000:8000"
+    with pytest.raises(
+        m.AuthConfigError, match="all interfaces|no validated host-port"
+    ):
+        m.validate_deployment_auth_config(wildcard, effective_mode="disabled")
+    # Remote/custom hosts and alternate listeners fail without evidence.
+    for env in (
+        {"MOONMIND_API_PUBLISH_HOST": "192.168.1.10"},
+        {"MOONMIND_API_PUBLISH_HOST": "0.0.0.0"},
+        {
+            "MOONMIND_API_PUBLISH_HOST": "127.0.0.1",
+            "MOONMIND_ADDITIONAL_LISTENERS": "0.0.0.0:9000",
+        },
+        {
+            "MOONMIND_API_PUBLISH_HOST": "127.0.0.1",
+            "MOONMIND_PROXY_BYPASS_POSSIBLE": "1",
+        },
+    ):
+        config = m.deployment_auth_config_from_env(env)
+        with pytest.raises(m.AuthConfigError):
+            m.validate_deployment_auth_config(config, effective_mode="disabled")
+    # Non-disabled modes are not subject to the disabled exposure gate.
+    assert m.validate_deployment_auth_config(wildcard, effective_mode="accounts") == ""
+
+
+def test_deployment_config_trusted_ingress_covers_custom_host():
+    config = m.deployment_auth_config_from_env(
+        {
+            "MOONMIND_API_PUBLISH_HOST": "192.168.1.10",
+            "MOONMIND_ADDITIONAL_LISTENERS": "10.0.0.2:9000",
+            "MOONMIND_PROXY_BYPASS_POSSIBLE": "1",
+            "MOONMIND_DISABLED_TRUSTED_INGRESS_EVIDENCE": "1",
+        }
+    )
+    assert m.validate_deployment_auth_config(config, effective_mode="disabled") == ""
+
+
+def test_deployment_config_base_url_validated_at_boundary():
+    good = m.deployment_auth_config_from_env(
+        {
+            "MOONMIND_API_PUBLISH_HOST": "127.0.0.1",
+            "MOONMIND_PUBLIC_BASE_URL": "https://app.example.com",
+        }
+    )
+    assert (
+        m.validate_deployment_auth_config(good, effective_mode="accounts")
+        == "https://app.example.com"
+    )
+    bad = m.deployment_auth_config_from_env(
+        {
+            "MOONMIND_API_PUBLISH_HOST": "127.0.0.1",
+            "MOONMIND_PUBLIC_BASE_URL": "http://app.example.com",
+        }
+    )
+    with pytest.raises(m.AuthConfigError):
+        m.validate_deployment_auth_config(bad, effective_mode="accounts")
+    # No ambient runtime authority participates in the boundary config.
+    ambient = m.deployment_auth_config_from_env(
+        {
+            "MOONMIND_API_PUBLISH_HOST": "127.0.0.1",
+            "OMNIGENT_AUTH_PROVIDER": "oidc",
+            "OMNIGENT_ACCOUNTS_COOKIE_SECRET": "runtime-secret-value-xyz",
+        }
+    )
+    assert m.validate_deployment_auth_config(ambient, effective_mode="disabled") == ""
+
+
+def test_request_cookie_policy_seam_enforces_proxy_trust():
+    trusted = m.ProxyConfig(
+        trusted_proxies=("10.0.0.1",), trust_forwarded_headers=True
+    )
+    policy = m.resolve_request_cookie_policy(
+        is_https=True,
+        request_host="app.example.com",
+        forwarded_host="app.example.com",
+        forwarded_proto="https",
+        proxy_config=trusted,
+    )
+    assert policy.cookie_name == m.MOONMIND_PROD_COOKIE and policy.secure is True
+    # Untrusted forwarded headers fail closed before influencing policy.
+    with pytest.raises(m.AuthConfigError, match="Untrusted forwarded"):
+        m.resolve_request_cookie_policy(
+            is_https=False,
+            request_host="127.0.0.1",
+            forwarded_host="evil.example",
+            explicit_dev_loopback_http=True,
+        )
+    # The development cookie still requires the explicit loopback opt-in.
+    dev = m.resolve_request_cookie_policy(
+        is_https=False, request_host="127.0.0.1", explicit_dev_loopback_http=True
+    )
+    assert dev.cookie_name == m.MOONMIND_DEV_COOKIE and dev.development is True
+    prod = m.resolve_request_cookie_policy(
+        is_https=False, request_host="127.0.0.1", explicit_dev_loopback_http=False
+    )
+    assert prod.cookie_name == m.MOONMIND_PROD_COOKIE
+
+
+# ---------------------------------------------------------------------------
+# Remediation: R2 production helper crosses the K2 boundary (contradictory
+# ambient + same-origin isolation through the real helper)
+# ---------------------------------------------------------------------------
+
+
+def test_build_control_plane_auth_config_ignores_runtime_ambient(tmp_path, monkeypatch):
+    import api_service.auth_providers as providers
+    from moonmind.security import omnigent_auth_qualification as q
+
+    monkeypatch.setenv("OMNIGENT_AUTH_PROVIDER", "oidc")
+    monkeypatch.setenv("OMNIGENT_ACCOUNTS_COOKIE_SECRET", "r" * 40)
+    secret_file = tmp_path / "session_secret"
+    env = {
+        "OMNIGENT_AUTH_PROVIDER": "oidc",
+        "OMNIGENT_AUTH_ENABLED": "1",
+        "OMNIGENT_ACCOUNTS_COOKIE_SECRET": "r" * 40,
+        "MOONMIND_SESSION_SECRET": "m" * 40,
+    }
+    config = providers.build_control_plane_auth_config(
+        mode="accounts", secret_file=secret_file, env=env
+    )
+    assert isinstance(config, q.MoonmindAuthConfig)
+    assert config.mode == "accounts"
+    assert config.cookie_secret == b"m" * 40
+    # Same-origin isolation: distinct cookies, MoonMind purpose binding.
+    assert config.cookie_name == m.MOONMIND_PROD_COOKIE
+    assert config.cookie_name not in q.UPSTREAM_SESSION_COOKIES
+    assert config.token_issuer == m.MOONMIND_TOKEN_ISSUER
+    assert config.token_audience == m.MOONMIND_TOKEN_AUDIENCE
+
+
+@pytest.mark.asyncio
+async def test_disabled_fallback_blocked_on_operator_choice(monkeypatch):
+    """R3: the request path serves no owner while a choice is pending."""
+    from fastapi import HTTPException
+
+    import api_service.auth_providers as providers
+    from moonmind.config.settings import settings
+
+    providers.reset_startup_auth_state()
+    try:
+        monkeypatch.setattr(settings.oidc, "AUTH_PROVIDER", "disabled")
+        monkeypatch.setattr(settings.workflow, "test_mode", False)
+        monkeypatch.delenv("PYTEST_CURRENT_TEST", raising=False)
+        providers.set_startup_auth_state(effective_mode="disabled", blocked=True)
+        dependency = providers.get_current_user()
+        with pytest.raises(HTTPException) as exc:
+            await dependency()
+        assert exc.value.status_code == 503
+        assert "operator" in str(exc.value.detail).lower()
+    finally:
+        providers.reset_startup_auth_state()

@@ -382,6 +382,46 @@ def decide_auth_bootstrap(
     )
 
 
+def effective_auth_mode(
+    *,
+    settings_mode: str,
+    bootstrap: BootstrapDecision | None,
+) -> str:
+    """Return the production mode startup and request paths must enforce.
+
+    When the bootstrap gate proceeded, its resolved ``mode`` is authoritative:
+    a genuinely fresh install with an omitted selector runs the ``accounts``
+    production flow exactly like an explicit accounts installation, never the
+    disabled default-user flow. Otherwise the configured selector stands and
+    the caller must honor the gate's ``require-operator-choice`` separately
+    (see :func:`should_ensure_default_user`).
+    """
+    normalized = validate_auth_provider(settings_mode)
+    if bootstrap is not None and bootstrap.action == "proceed":
+        return validate_auth_provider(bootstrap.mode)
+    return normalized
+
+
+def should_ensure_default_user(
+    *,
+    settings_mode: str,
+    bootstrap: BootstrapDecision | None,
+) -> bool:
+    """Return whether startup may create/ensure the disabled-mode default user.
+
+    The default user (and its profile) is ensured only when the effective
+    mode is ``disabled`` **and** the bootstrap gate explicitly proceeded.
+    Populated databases awaiting a protected operator choice, unreadable
+    migration decisions, and unreachable databases (``bootstrap is None``)
+    never mutate owners here; the request path fails closed with ``503``
+    instead of synthesizing an administrator.
+    """
+    if bootstrap is None or bootstrap.action != "proceed":
+        return False
+    effective = effective_auth_mode(settings_mode=settings_mode, bootstrap=bootstrap)
+    return effective == "disabled"
+
+
 # ---------------------------------------------------------------------------
 # R4: durable deployment-owned signing/session secrets
 # ---------------------------------------------------------------------------
@@ -468,14 +508,15 @@ def resolve_session_secret(
     """Resolve the MoonMind session-signing secret (durable across restarts).
 
     Precedence: explicit ``MOONMIND_SESSION_SECRET`` (or ``explicit``) >
-    durable ``secret_file`` > single local generation persisted to
-    ``secret_file``. Generated secrets are 32 random bytes, written atomically
+    ``JWT_SECRET_KEY`` > legacy ``JWT_SECRET`` > durable ``secret_file`` >
+    single local generation persisted to ``secret_file``. Generated secrets
+    are 32 random bytes, written atomically
     with exclusive creation (``O_EXCL``) so concurrent bootstrap processes
     converge on one intended generation instead of creating incompatible
     per-process keys; the loser reads the winner's file. File permissions are
-    restricted to ``0o600``. Placeholder, short, or incomplete explicit values
-    are rejected. Runtime-host, worker, or repository credentials are never
-    consulted and must never be shared here.
+    restricted to ``0o600``. Placeholder, short, or incomplete candidate values
+    are rejected (fail closed). Runtime-host, worker, or repository credentials
+    are never consulted and must never be shared here.
     """
     source = os.environ if env is None else env
     candidate = explicit if explicit is not None else source.get(
@@ -647,6 +688,125 @@ def validate_disabled_exposure(
 
 
 # ---------------------------------------------------------------------------
+# R5/R6: deployment-boundary configuration (explicit MoonMind-owned env only)
+# ---------------------------------------------------------------------------
+
+
+def _env_flag(env: Mapping[str, str], key: str) -> bool:
+    """Parse an explicit ``0``/``1``/``true``/``false`` deployment flag."""
+    raw = str(env.get(key, "") or "").strip().lower()
+    return raw in ("1", "true", "yes", "on")
+
+
+@dataclass(frozen=True)
+class DeploymentAuthConfig:
+    """Explicit deployment-boundary authentication inputs.
+
+    All values come from MoonMind-owned ``MOONMIND_*`` environment variables
+    (plus ``AUTH_PROVIDER`` and the API host-port number). Runtime-server
+    ``OMNIGENT_AUTH_*`` ambient values are never consulted. The startup gate
+    validates this object with :func:`validate_deployment_auth_config`
+    (fail closed); the K4 session/redirect request path consumes the stored
+    proxy/cookie inputs through :func:`resolve_request_cookie_policy`.
+    """
+
+    publish_host: str = ""
+    host_port: str = "7000"
+    container_port: str = "8000"
+    alternate_listeners: tuple[str, ...] = ()
+    proxy_bypass_possible: bool = False
+    trusted_ingress_evidence: bool = False
+    public_base_url: str = ""
+    trusted_proxies: tuple[str, ...] = ()
+    trust_forwarded_headers: bool = False
+    dev_loopback_http_allowed: bool = False
+
+    def published_binding(self) -> str:
+        """Render the Docker-style host-port binding under evaluation."""
+        host = (self.publish_host or "").strip()
+        if host:
+            return f"{host}:{self.host_port}:{self.container_port}"
+        return f"{self.host_port}:{self.container_port}"
+
+    def proxy_config(self) -> ProxyConfig:
+        """Return the explicit trusted-proxy configuration."""
+        return ProxyConfig(
+            trusted_proxies=self.trusted_proxies,
+            trust_forwarded_headers=self.trust_forwarded_headers,
+        )
+
+
+def deployment_auth_config_from_env(
+    env: Mapping[str, str] | None = None,
+) -> DeploymentAuthConfig:
+    """Map explicit MoonMind-owned deployment env to a boundary config.
+
+    ``MOONMIND_API_PUBLISH_HOST`` names the host interface the API container
+    is published on; empty means no validated loopback claim (a wildcard
+    publish), which the disabled-mode exposure gate rejects unless
+    documented trusted-ingress evidence is supplied. ``MOONMIND_API_HOST_PORT``
+    carries only the host port number (mirroring the compose
+    ``"${MOONMIND_API_HOST_PORT:-7000}:8000"`` mapping).
+    """
+    source = os.environ if env is None else env
+    alternates = tuple(
+        part.strip()
+        for part in str(
+            source.get("MOONMIND_ADDITIONAL_LISTENERS", "") or ""
+        ).split(",")
+        if part.strip()
+    )
+    proxies = tuple(
+        part.strip()
+        for part in str(source.get("MOONMIND_TRUSTED_PROXIES", "") or "").split(",")
+        if part.strip()
+    )
+    return DeploymentAuthConfig(
+        publish_host=str(source.get("MOONMIND_API_PUBLISH_HOST", "") or "").strip(),
+        host_port=str(source.get("MOONMIND_API_HOST_PORT", "") or "").strip() or "7000",
+        container_port="8000",
+        alternate_listeners=alternates,
+        proxy_bypass_possible=_env_flag(source, "MOONMIND_PROXY_BYPASS_POSSIBLE"),
+        trusted_ingress_evidence=_env_flag(
+            source, "MOONMIND_DISABLED_TRUSTED_INGRESS_EVIDENCE"
+        ),
+        public_base_url=str(source.get("MOONMIND_PUBLIC_BASE_URL", "") or "").strip(),
+        trusted_proxies=proxies,
+        trust_forwarded_headers=_env_flag(source, "MOONMIND_TRUST_FORWARDED_HEADERS"),
+        dev_loopback_http_allowed=_env_flag(source, "MOONMIND_DEV_LOOPBACK_HTTP_ALLOW"),
+    )
+
+
+def validate_deployment_auth_config(
+    config: DeploymentAuthConfig,
+    *,
+    effective_mode: str,
+) -> str:
+    """Enforce the deployment boundary, failing closed. Returns the base URL.
+
+    - The configured public base URL, when set, must validate (production
+      requires HTTPS except on explicit loopback).
+    - Explicit local (``disabled``) mode must publish only on supported
+      loopback/trusted-ingress paths with the real published binding,
+      alternate listeners, and proxy-bypass state evaluated.
+    Untrusted forwarded headers can never decide redirects or secure-cookie
+    policy; that enforcement lives on the request path
+    (:func:`resolve_request_cookie_policy`).
+    """
+    normalized = validate_auth_provider(effective_mode)
+    base_url = config.public_base_url.strip()
+    validated_base_url = validate_public_base_url(base_url) if base_url else ""
+    if normalized == "disabled":
+        validate_disabled_exposure(
+            [config.published_binding()],
+            trusted_ingress_evidence=config.trusted_ingress_evidence,
+            alternate_listeners=list(config.alternate_listeners),
+            proxy_bypass_possible=config.proxy_bypass_possible,
+        )
+    return validated_base_url
+
+
+# ---------------------------------------------------------------------------
 # R6: base URL, trusted proxy, callback origins, cookie policy
 # ---------------------------------------------------------------------------
 
@@ -687,6 +847,36 @@ def resolve_cookie_policy(
             cookie_name=MOONMIND_DEV_COOKIE, secure=False, development=True
         )
     return CookiePolicy(cookie_name=MOONMIND_PROD_COOKIE, secure=is_https)
+
+
+def resolve_request_cookie_policy(
+    *,
+    is_https: bool,
+    request_host: str = "",
+    forwarded_host: str | None = None,
+    forwarded_proto: str | None = None,
+    proxy_config: ProxyConfig | None = None,
+    explicit_dev_loopback_http: bool = False,
+) -> CookiePolicy:
+    """Resolve the session-cookie policy for one request (composed seam).
+
+    This is the production entrypoint the session/redirect request path
+    calls: untrusted forwarded host/proto headers are validated against the
+    explicit trusted-proxy configuration **before** they can influence
+    cookie policy, and fail closed on violation. The separately named
+    development cookie additionally requires an explicit loopback-HTTP
+    opt-in plus a loopback request host.
+    """
+    validate_proxy_config(
+        proxy_config or ProxyConfig(),
+        forwarded_host=forwarded_host,
+        forwarded_proto=forwarded_proto,
+    )
+    return resolve_cookie_policy(
+        is_https=is_https,
+        request_host=request_host,
+        explicit_dev_loopback_http=explicit_dev_loopback_http,
+    )
 
 
 @dataclass(frozen=True)
@@ -868,6 +1058,7 @@ __all__ = [
     "ControlPlaneAuthConfig",
     "CookiePolicy",
     "INSECURE_SECRET_MARKERS",
+    "DeploymentAuthConfig",
     "MIGRATION_DECISIONS",
     "MIGRATION_DECISION_VERSION",
     "MOONMIND_DEV_COOKIE",
@@ -883,6 +1074,8 @@ __all__ = [
     "check_explicit_secret_strength",
     "decide_auth_bootstrap",
     "default_secret_file",
+    "deployment_auth_config_from_env",
+    "effective_auth_mode",
     "is_loopback_host",
     "load_migration_decision",
     "parse_host_port_binding",
@@ -890,12 +1083,15 @@ __all__ = [
     "resolve_auth_mode",
     "resolve_control_plane_config",
     "resolve_cookie_policy",
+    "resolve_request_cookie_policy",
     "resolve_session_secret",
     "resolve_session_secrets",
     "retired_guidance",
     "save_migration_decision",
+    "should_ensure_default_user",
     "validate_auth_provider",
     "validate_callback_origin",
+    "validate_deployment_auth_config",
     "validate_disabled_exposure",
     "validate_proxy_config",
     "validate_public_base_url",

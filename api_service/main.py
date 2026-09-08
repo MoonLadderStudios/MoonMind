@@ -676,34 +676,31 @@ async def _initialize_oidc_provider(app: FastAPI):
     # by the #4124 contract; this step performs no outbound DNS/connect attempt.
     settings.oidc.validate_auth_provider()
     # K3 (#4120 R2): resolve the explicit MoonMind control-plane configuration
-    # from MoonMind-owned inputs only. Runtime-server OMNIGENT_AUTH_* ambient
-    # values never select MoonMind behavior; the resolved object is passed
-    # into the K2 qualification boundary by later (K4) wiring. Stored on
-    # app.state for readiness/diagnostics; redacted in logs.
-    try:
-        from moonmind.security.auth_modes import (
-            build_auth_diagnostics,
-            resolve_control_plane_config,
-            resolve_session_secret,
-        )
+    # from MoonMind-owned inputs only and cross the K2 qualification boundary
+    # here: the constructed MoonmindAuthConfig is stored on app.state for
+    # readiness/diagnostics. Runtime-server OMNIGENT_AUTH_* ambient values
+    # never select MoonMind behavior. Secret failures (insecure placeholder,
+    # incomplete explicit values, unreadable deployment-owned files) fail
+    # closed at startup instead of deferring with a warning; redacted in logs.
+    from api_service.auth_providers import build_control_plane_auth_config
+    from moonmind.security.auth_modes import build_auth_diagnostics
 
-        secret = resolve_session_secret()
-        control_plane = resolve_control_plane_config(
-            mode=settings.oidc.AUTH_PROVIDER, cookie_secret=secret
-        )
-        app.state.moonmind_control_plane_auth = control_plane.to_qualification_kwargs()
-        app.state.moonmind_auth_diagnostics = build_auth_diagnostics(
-            mode=settings.oidc.AUTH_PROVIDER,
-            db_reachable=True,
-            secret_configured=True,
-        )
+    try:
+        control_plane = build_control_plane_auth_config()
     except Exception as exc:
         from moonmind.utils.logging import SecretRedactor as _Redactor
 
         redacted = _Redactor.from_environ().scrub(str(exc))
-        logger.warning("MoonMind control-plane auth preflight deferred: %s", redacted)
+        logger.error("MoonMind control-plane auth preflight failed: %s", redacted)
         app.state.moonmind_control_plane_auth = None
         app.state.moonmind_auth_diagnostics = None
+        raise
+    app.state.moonmind_control_plane_auth = control_plane
+    app.state.moonmind_auth_diagnostics = build_auth_diagnostics(
+        mode=settings.oidc.AUTH_PROVIDER,
+        db_reachable=True,
+        secret_configured=True,
+    )
 
 
 async def _resolve_auth_bootstrap_decision(app: FastAPI) -> None:
@@ -777,6 +774,124 @@ async def _resolve_auth_bootstrap_decision(app: FastAPI) -> None:
             bootstrap.mode,
             bootstrap.fresh_install,
         )
+
+
+async def _validate_auth_deployment_boundary(app: FastAPI) -> None:
+    """Enforce the R5/R6 deployment boundary at startup (fail closed).
+
+    Reads explicit MoonMind-owned deployment inputs (published binding,
+    alternate listeners, proxy-bypass state, trusted-ingress evidence,
+    public base URL, trusted proxies) and validates them through the
+    canonical ``moonmind.security.auth_modes`` owner:
+
+    - explicit local (``disabled``) mode publishes only on supported
+      loopback/trusted-ingress paths;
+    - a configured public base URL must validate (production HTTPS except
+      on explicit loopback);
+    - the trusted-proxy/cookie inputs for the session/redirect request path
+      are stored on ``app.state`` for K4 wiring.
+
+    When the bootstrap decision is known (the database was observable) and
+    no operator choice is pending, violations fail fast with an actionable
+    error. When the database was unreachable, the decision unreadable
+    (bootstrap unknown), or a populated database awaits a protected operator
+    choice, exposure enforcement defers with a warning and a blocked marker
+    while pure configuration validation (public base URL) still fails fast;
+    the listener still starts, and every auth path already fails closed on
+    the unreachable identity store or the pending choice. Diagnostics are
+    redacted (no secret values).
+    """
+    from api_service.auth_providers import set_startup_auth_state
+    from moonmind.security.auth_modes import (
+        build_auth_diagnostics,
+        deployment_auth_config_from_env,
+        effective_auth_mode,
+        validate_deployment_auth_config,
+        validate_public_base_url,
+    )
+
+    try:
+        settings_mode = settings.oidc.AUTH_PROVIDER
+    except Exception:
+        settings_mode = "disabled"
+    bootstrap = getattr(app.state, "moonmind_auth_bootstrap", None)
+    try:
+        effective = effective_auth_mode(
+            settings_mode=settings_mode, bootstrap=bootstrap
+        )
+    except Exception:
+        effective = settings_mode
+    blocked = (
+        bootstrap is not None
+        and getattr(bootstrap, "action", "proceed") == "require-operator-choice"
+    )
+    set_startup_auth_state(effective_mode=effective, blocked=blocked)
+
+    deployment = deployment_auth_config_from_env()
+    app.state.moonmind_auth_deployment = deployment
+    app.state.moonmind_auth_proxy_config = deployment.proxy_config()
+    app.state.moonmind_auth_dev_loopback_http_allowed = (
+        deployment.dev_loopback_http_allowed
+    )
+    # Pure-configuration validation has no database dependence: a configured
+    # public base URL must validate even when the bootstrap is unknown.
+    try:
+        validated_base_url = (
+            validate_public_base_url(deployment.public_base_url)
+            if deployment.public_base_url.strip()
+            else ""
+        )
+    except Exception as exc:
+        redacted = SecretRedactor.from_environ().scrub(str(exc))
+        logger.error("Auth deployment boundary rejected startup: %s", redacted)
+        app.state.moonmind_auth_exposure_blocked = True
+        raise
+    app.state.moonmind_auth_public_base_url = validated_base_url
+    if bootstrap is None:
+        logger.warning(
+            "Auth deployment-boundary exposure enforcement deferred "
+            "(bootstrap unknown): disabled-mode publish bindings will be "
+            "rejected until the database is observable and the migration "
+            "decision resolves."
+        )
+        app.state.moonmind_auth_exposure_blocked = True
+        return
+    if blocked:
+        # Populated database awaiting a protected operator choice: the API
+        # listener still starts so the operator can record the versioned
+        # decision, and the disabled request path already fails closed
+        # (503, no owner served). Exposure enforcement applies once the
+        # operator unblocks startup with an explicit matching decision.
+        logger.warning(
+            "Auth deployment-boundary exposure enforcement deferred "
+            "(operator choice pending): record the versioned migration "
+            "decision, then restart with an explicit loopback publish or "
+            "documented trusted-ingress evidence for disabled mode."
+        )
+        app.state.moonmind_auth_exposure_blocked = True
+        return
+    try:
+        validate_deployment_auth_config(deployment, effective_mode=effective)
+    except Exception as exc:
+        redacted = SecretRedactor.from_environ().scrub(str(exc))
+        logger.error("Auth deployment boundary rejected startup: %s", redacted)
+        app.state.moonmind_auth_exposure_blocked = True
+        raise
+    app.state.moonmind_auth_exposure_blocked = False
+    diagnostics = build_auth_diagnostics(
+        mode=effective,
+        db_reachable=True,
+        bootstrap=bootstrap,
+        secret_configured=True,
+        bindings=[deployment.published_binding()],
+        extra={
+            "publish_host": deployment.publish_host or "<wildcard>",
+            "trusted_ingress_evidence": deployment.trusted_ingress_evidence,
+            "public_base_url": validated_base_url or "<unset>",
+        },
+    )
+    app.state.moonmind_auth_diagnostics = diagnostics
+    logger.info("Auth deployment boundary validated: %s", diagnostics)
 
 
 @asynccontextmanager
@@ -877,6 +992,16 @@ async def health_check():
     except Exception:
         mode = "disabled"
     bootstrap = getattr(app.state, "moonmind_auth_bootstrap", None)
+    # Prefer the startup-resolved effective mode (fresh installs select
+    # accounts through the normal production path) while keeping
+    # infrastructure/authentication/setup-required distinguishable.
+    if bootstrap is not None and getattr(bootstrap, "action", "") == "proceed":
+        try:
+            from moonmind.security.auth_modes import effective_auth_mode
+
+            mode = effective_auth_mode(settings_mode=mode, bootstrap=bootstrap)
+        except Exception:
+            pass
     try:
         readiness = build_auth_readiness(
             db_reachable=db_ok, mode=mode, bootstrap=bootstrap
@@ -2549,6 +2674,7 @@ async def startup_event():
     _assert_omnigent_configuration_is_current()
     await _initialize_oidc_provider(app)  # Fail fast on retired selectors; no discovery fetch
     await _resolve_auth_bootstrap_decision(app)  # K3 (#4120 R3): fresh vs pre-cutover
+    await _validate_auth_deployment_boundary(app)  # K3 (#4120 R5/R6): fail closed
     _register_settings_change_subscribers()
     try:
         from moonmind.rag.service import ContextRetrievalService
@@ -2578,8 +2704,19 @@ async def startup_event():
     # embedded sessions drain through the janitor-owned terminal-cleanup
     # probes after startup instead of blocking it.
 
-    # Ensure default user and profile exist if auth is disabled
-    if settings.oidc.AUTH_PROVIDER == "disabled":
+    # Ensure default user and profile exist only for explicit local mode.
+    # K3 (#4120 R3): creation is gated on the versioned bootstrap decision —
+    # populated databases awaiting a protected operator choice never mutate
+    # owners here, and genuinely fresh installs run the accounts production
+    # flow instead of the disabled default-user flow.
+    from moonmind.security.auth_modes import should_ensure_default_user
+
+    try:
+        _settings_mode = settings.oidc.AUTH_PROVIDER
+    except Exception:
+        _settings_mode = "disabled"
+    _bootstrap = getattr(app.state, "moonmind_auth_bootstrap", None)
+    if should_ensure_default_user(settings_mode=_settings_mode, bootstrap=_bootstrap):
         logger.info(
             "Auth provider is 'disabled'. Ensuring default user and profile exist on startup."
         )
@@ -2647,8 +2784,18 @@ async def startup_event():
                         redacted_error,
                     )
     else:
+        _skip_reason = "not the startup-resolved disabled production flow"
+        if _bootstrap is not None and getattr(
+            _bootstrap, "action", ""
+        ) == "require-operator-choice":
+            _skip_reason = (
+                "populated database requires an explicit protected operator "
+                "migration choice; owners left unmodified"
+            )
         logger.info(
-            f"Auth provider is '{settings.oidc.AUTH_PROVIDER}'. Skipping default user creation on startup."
+            "Auth provider is '%s'. Skipping default user creation on startup (%s).",
+            _settings_mode,
+            _skip_reason,
         )
 
     # Wait for the Temporal client to be available and initialize provider profile managers
