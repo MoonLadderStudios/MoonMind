@@ -337,7 +337,19 @@ async def test_cache_hit_cannot_bypass_revocation_or_status():
     # Malformed and wrong-key tokens never validate, cached or not.
     assert (await auth.validate_session("not-a-jwt")).code == "auth_invalid"
     assert (await auth.validate_session(token + "tampered")).code == "auth_invalid"
-    other = build_conformance_fixtures()["auth"]
+    # A genuinely distinct-key authority (distinct cookie secret, issuer,
+    # and audience, mirroring test_control_plane_runtime_cookie_key_purpose
+    # _isolation) must reject this token. A same-key instance would
+    # correctly validate, so sharing fixtures here would assert wrongly.
+    other = MoonmindQualifiedAuth(
+        build_test_config(
+            cookie_name="mm_runtime_4118",
+            cookie_secret=bytes.fromhex("ef" * 32),
+            issuer="moonmind-runtime-test",
+            audience="moonmind-runtime-api-test",
+        ),
+        InMemoryAsyncAccountStore(),
+    )
     assert (await other.validate_session(token)).code == "auth_invalid"
 
 
