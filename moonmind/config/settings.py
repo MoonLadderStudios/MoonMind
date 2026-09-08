@@ -263,12 +263,20 @@ class TemporalSettings(BaseSettings):
         silently. Unset them: user Workflow Execution routing now resolves
         from ``TEMPORAL_USER_WORKFLOW_V2_TASK_QUEUE`` (starts) and
         ``TEMPORAL_WORKFLOW_TASK_QUEUE`` (retained-history replay) alone.
+        Environment names match case-insensitively so previously accepted
+        lower/mixed-case spellings also fail fast.
         """
 
         stale = [
             name
             for name in _REMOVED_USER_WORKFLOW_CUTOVER_SETTINGS
-            if str(os.environ.get(name, "") or "").strip()
+            if str(
+                {
+                    str(k or "").strip().upper(): v
+                    for k, v in os.environ.items()
+                }.get(name, "")
+                or ""
+            ).strip()
         ]
         if isinstance(data, dict):
             for key in data:

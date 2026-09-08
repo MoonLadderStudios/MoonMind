@@ -106,6 +106,19 @@ def test_stale_release_notes_environment_fails_fast(
         TemporalSettings()
 
 
+def test_stale_cutover_environment_fails_fast_case_insensitive(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Lower-case spellings previously accepted must also fail fast."""
+
+    monkeypatch.setenv(
+        "temporal_user_workflow_cutover_record_path",
+        "docs/ReleaseNotes/MM-730-hard-switch-cutover.json",
+    )
+    with pytest.raises(ValueError, match="CUTOVER_RECORD_PATH.*obsolete"):
+        TemporalSettings()
+
+
 def test_renamed_contract_routes_new_starts_to_distinct_queue() -> None:
     temporal_settings = _renamed_contract_settings()
 
