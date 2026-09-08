@@ -645,8 +645,15 @@ class DockerContainerJobBackend:
         those fail closed instead of reading as a vanished consumer.
         """
 
+        # Generic inspect searches other object families after a container 404.
+        # The restricted proxy denies plugins, masking absence with a 403 and
+        # blocking both first launch and idempotent cleanup. Query containers
+        # explicitly so only their existence/ownership controls this boundary.
         code, stdout, stderr = await self._runner(
-            ("inspect", "--format", "{{json .Config.Labels}}", name)
+            (
+                "inspect", "--format", "{{json .Config.Labels}}",
+                "--type", "container", name,
+            )
         )
         if code:
             detail = stderr.decode(errors="replace").strip()

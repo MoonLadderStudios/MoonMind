@@ -247,6 +247,13 @@ async def test_production_backend_makes_every_registered_activity_callable(
             return 0, b"", b""
         if args[:2] == ("inspect", "--format"):
             if args[2] == "{{json .Config.Labels}}":
+                # Generic inspect probes plugins after a missing container;
+                # the deployment proxy denies that unrelated object family.
+                if (
+                    "--type" not in args
+                    or args[args.index("--type") + 1] != "container"
+                ):
+                    return 1, b"", b"Error response from daemon: 403 Forbidden"
                 return 1, b"", b"Error: No such object: moonmind-container-job"
             if args[2] == "{{json .State}}":
                 return 0, b'{"Running":false,"ExitCode":0}', b""
