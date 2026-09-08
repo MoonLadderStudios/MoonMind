@@ -314,7 +314,14 @@ def test_phase6_integration_ci_suite_stays_focused_on_highest_risk_seams() -> No
 
 def test_phase6_artifact_authorization_tests_require_oidc() -> None:
     """Phase 6: artifact authorization tests must toggle AUTH_PROVIDER to
-    exercise real ownership checks, not rely on disabled auth."""
+    exercise real ownership checks, not rely on disabled auth.
+
+    MoonLadderStudios/MoonMind#4128: the pre-cutover suite toggles the
+    ``keycloak`` literal; the cutover may replace it with accounts/OIDC/header
+    mode literals. Either is accepted, but a suite that never leaves disabled
+    mode — or that drops the negative authorization coverage — regresses this
+    gate.
+    """
     authz_test = (
         REPO_ROOT
         / "tests"
@@ -323,5 +330,41 @@ def test_phase6_artifact_authorization_tests_require_oidc() -> None:
         / "test_temporal_artifact_authorization.py"
     ).read_text(encoding="utf-8")
     assert "AUTH_PROVIDER" in authz_test
-    assert "keycloak" in authz_test
+    assert "disabled" in authz_test or "keycloak" in authz_test or "oidc" in authz_test.lower()
     assert "TemporalArtifactAuthorizationError" in authz_test
+
+
+def test_keycloak_removal_auth_boundaries_select_integration_ci() -> None:
+    """MoonLadderStudios/MoonMind#4128: auth/provider/session/configuration,
+    route/dependency, and Compose changes must run the hermetic integration_ci
+    suite. Representative diffs pin this so a touched boundary cannot silently
+    skip its required tests."""
+    from tools.select_test_suites import select_suites
+
+    def _outputs(paths: list[str]) -> dict[str, str]:
+        return select_suites(paths, event_name="pull_request").as_outputs()
+
+    # Production auth, session issuance, worker authority, route mounting,
+    # configuration, and deployment topology boundaries.
+    for changed_path in (
+        "api_service/auth.py",
+        "api_service/auth_providers.py",
+        "api_service/main.py",
+        "api_service/api/routers/worker_auth.py",
+        "moonmind/config/settings.py",
+        "docker-compose.yaml",
+    ):
+        outputs = _outputs([changed_path])
+        assert outputs["integration_ci"] == "true", changed_path
+        assert outputs["unit_fast"] == "true", changed_path
+
+    # The conformance baseline itself owns the contract: touching it must run
+    # the fast shard that executes it.
+    outputs = _outputs(["tests/unit/auth/test_keycloak_removal_conformance.py"])
+    assert outputs["unit_fast"] == "true"
+
+    # An unrelated API router must not be dragged into integration_ci by the
+    # exact-path additions above.
+    outputs = _outputs(["api_service/api/routers/workflow_console.py"])
+    assert outputs["api_component"] == "true"
+    assert outputs["integration_ci"] == "false"
