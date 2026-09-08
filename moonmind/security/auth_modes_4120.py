@@ -457,6 +457,7 @@ def _secret_to_bytes(value: str) -> bytes:
             if len(text) >= 44:
                 return decoded
     except Exception:
+        # Not base64-shaped input; fall through to raw UTF-8 handling below.
         pass
     return text.encode("utf-8")
 
@@ -575,6 +576,7 @@ def resolve_session_secret(
     try:
         os.chmod(str(path), 0o600)
     except OSError:
+        # Best-effort hardening; key material is already persisted above.
         pass
     return generated
 
