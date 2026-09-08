@@ -459,6 +459,7 @@ Purpose: plan generation and validation.
 
 Current implemented activities:
 
+- `plan.check_preset_capabilities`
 - `plan.generate`
 - `plan.validate`
 
@@ -468,6 +469,9 @@ Key rules:
 
 - planning is always nondeterministic, therefore always an activity
 - plan outputs are stored as artifacts, not placed directly into workflow history
+- saved-schedule capability checks read scoped preset metadata before planning and
+  return compact readiness diagnostics; they do not modify the schedule or grant
+  capabilities (see [Required Capabilities](../Workflows/RequiredCapabilities.md))
 
 ## 8.3 Tool execution (`mm.skill.execute`)
 

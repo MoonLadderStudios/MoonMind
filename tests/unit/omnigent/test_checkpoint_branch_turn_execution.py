@@ -77,10 +77,7 @@ def _authority_graph():
         context_bundle_ref=None,
         step_execution_manifest_ref=None,
         diagnostics={
-            "followUpRetrieval": {
-                "collections": ["repo"],
-                "budgets": {"tokens": 500},
-            }
+            # Retired (#4105): new branch turns carry no vector authority.
         },
         created_at=datetime(2026, 8, 12, tzinfo=UTC),
     )
@@ -425,8 +422,8 @@ async def test_owner_allocates_and_claims_canonical_omnigent_request_before_star
         "sourceProviderSessionReused": False,
         "sourceOAuthLeaseReused": False,
     }
-    assert request["parameters"]["followUpRetrieval"]["collections"] == ["repo"]
-    assert request["parameters"]["followUpRetrieval"]["maxContextTokens"] == 500
+    # Retired (#4105): new branch-turn launches carry no vector authority.
+    assert "followUpRetrieval" not in request["parameters"]
     assert request["parameters"]["model"] == "profile-model"
     assert request["parameters"]["effort"] == "medium"
     assert request["parameters"]["maxBudgetUsd"] == 2.5

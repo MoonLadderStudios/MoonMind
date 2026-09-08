@@ -203,8 +203,8 @@ def test_run_request_preserves_model_tier_intent_for_launch_resolution() -> None
     assert request.parameters["tierFallback"] == "strict"
 
 
-def test_run_request_forwards_context_retrieval_authoring() -> None:
-    """Authored RAG / follow-up retrieval policy reaches request.parameters (#3514)."""
+def test_run_request_strips_retired_context_retrieval_authoring() -> None:
+    """Retired vector fields never reach request.parameters (#4105)."""
     wf = MoonMindRunWorkflow()
     with patch(
         "moonmind.workflows.temporal.workflows.run.workflow.info",
@@ -227,9 +227,8 @@ def test_run_request_forwards_context_retrieval_authoring() -> None:
         )
 
     assert request.parameters["repository"] == "MoonMind"
-    assert request.parameters["rag"] == {"collections": ["docs"], "allowStale": True}
-    assert request.parameters["followUpRetrieval"]["enabled"] is True
-    assert request.parameters["followUpRetrieval"]["collections"] == ["repo", "docs"]
+    assert "rag" not in request.parameters
+    assert "followUpRetrieval" not in request.parameters
 
 
 def test_run_request_records_prepared_manifest_before_step_dispatch() -> None:

@@ -720,10 +720,8 @@ for changed_file in "${CHANGED_FILES[@]}"; do
       add_target "api"
       ;;
 
-    keycloak/*)
-      add_target "keycloak"
-      add_target "keycloak-db"
-      ;;
+    # Bundled Keycloak integration retired (#4129): no keycloak/* paths remain.
+    # The updater targets no retired service; init_db changes recycle the api.
     *)
       add_all_services
       ;;

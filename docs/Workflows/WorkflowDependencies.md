@@ -4,7 +4,7 @@
 **Viewpoint:** Module Contract Specification  
 **Status:** Draft  
 **Owners:** MoonMind Engineering  
-**Updated:** 2026-09-06  
+**Updated:** 2026-09-08
 **Audience:** Workflow lifecycle, API, orchestration, and dashboard contributors  
 **Authority:** Inter-UserWorkflow dependency declaration, successful-completion waiting, signaling, bypass, and durable outcome semantics. Publication inheritance and code-transfer proof remain with their providing owners.  
 **Owning Surface:** Workflow dependency admission and durable wait/notification boundary  
@@ -20,7 +20,7 @@ The single-policy batch contract is defined in [Workflow Publishing](WorkflowPub
 
 ## 2. Contract Summary
 
-Create requests may declare prerequisite workflow IDs in `payload.task.dependsOn`, normalized to `initialParameters.task.dependsOn`. Targets are existing MoonMind.UserWorkflow executions. WorkflowId is the durable target; runId is diagnostic/evidence identity, not a dependency target. Compatibility taskId equals workflowId for Temporal-backed work.
+Create requests may declare prerequisite workflow IDs in `payload.workflow.dependsOn`, normalized to `initialParameters.workflow.dependsOn`. Targets are existing MoonMind.UserWorkflow executions. WorkflowId is the durable target; runId is diagnostic/evidence identity, not a dependency target. Compatibility taskId equals workflowId for Temporal-backed work.
 
 A prerequisite is satisfied only when it reaches MoonMind terminal state completed. Failed, canceled, terminated, timed_out, or runtime-unresolvable outcomes keep the dependent in waiting_on_dependencies until that same workflowId later completes or an operator cancels/bypasses the wait. A prerequisite failure does not automatically fail the dependent.
 
@@ -36,7 +36,7 @@ The contract supports create-time declaration, UserWorkflow-to-UserWorkflow edge
 {
   "type": "task",
   "payload": {
-    "task": {
+    "workflow": {
       "instructions": "Run integration tests",
       "dependsOn": ["mm:01ABC...", "mm:01DEF..."]
     }
@@ -63,6 +63,8 @@ Persist forward/reverse edges, startup resolution state, notification ownership,
 ### 4.1 Lifecycle
 
 The normal order is scheduled when applicable, initializing, waiting_on_dependencies, then the ordinary planning/executing lifecycle. No declared dependencies means the gate is skipped.
+
+The gate reads the same admitted workflow parameters used for dependency visibility. It precedes planning, tool execution, and child launch for every runtime and preset, including the Fix and Review Loop.
 
 ### 4.2 Dependency resolution model
 

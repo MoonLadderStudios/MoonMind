@@ -18,10 +18,7 @@ from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 from api_service import main as api_main
 from tests.integration.reliability.helpers import load_replay
 
-# No integration_ci mark: tests/conftest.py owns every test under
-# tests/integration/reliability/ to the reliability-journey shard, and the
-# shard verifier forbids combining integration_ci with reliability_journey.
-pytestmark = [pytest.mark.asyncio, pytest.mark.integration]
+pytestmark = [pytest.mark.asyncio, pytest.mark.integration, pytest.mark.reliability_journey]
 
 
 @pytest.mark.parametrize(
@@ -52,7 +49,7 @@ async def test_http_serves_while_bootstrap_waits_and_lifespan_owns_cleanup(
     assert match is not None
     monkeypatch.setenv("OMNIGENT_ENABLED", enabled_setting or match[1])
     monkeypatch.setenv("OMNIGENT_SERVER_URL", "http://unused.invalid")
-    monkeypatch.setattr(api_main.settings.oidc, "AUTH_PROVIDER", "keycloak")
+    monkeypatch.setattr(api_main.settings.oidc, "AUTH_PROVIDER", "oidc")
     monkeypatch.delattr(
         api_main.app.state, "omnigent_bootstrap_reconciliation_task", raising=False
     )

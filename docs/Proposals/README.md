@@ -7,6 +7,7 @@ This directory preserves product and architecture proposals for later considerat
 | Proposal | Status | Implementation posture |
 | --- | --- | --- |
 | [Harness-first workflow authoring](HarnessFirstWorkflowAuthoringDesign.md) | Proposed | Deferred until the relevant Omnigent paths are ready and the product-contract change is explicitly adopted. |
+| [Omnigent-backed authentication](OmnigentAuthenticationDesign.md) | Proposed | Deferred until the human-session boundary, identity mapping, transport coverage, and secure cutover are qualified and explicitly adopted. |
 
 ## Authority and lifecycle
 

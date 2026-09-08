@@ -149,6 +149,16 @@ def _bridge_authoritative_issue(
 
     launch = dict(row.effective_launch_snapshot_json or {})
     policy = launch.get("followUpRetrieval")
+    if isinstance(policy, dict) and policy.get("enabled") is True:
+        raise HTTPException(
+            status_code=410,
+            detail=(
+                "Built-in vector retrieval has been retired "
+                "(MoonLadderStudios/MoonMind#4105). Remove followUpRetrieval "
+                "and use explicit attachments, artifact refs, or scoped "
+                "workspace access instead. Historical details remain readable."
+            ),
+        )
     if not isinstance(policy, dict) or policy.get("enabled") is not True:
         raise HTTPException(
             403, detail="Follow-up retrieval is not enabled by the launch snapshot."

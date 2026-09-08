@@ -291,6 +291,25 @@ def test_declarations_reject_keys_outside_their_documented_schema() -> None:
     assert settings.cache_source(DECLARED_CACHE_REF).read_only is True
 
 
+@pytest.mark.parametrize("credential_ref", [None, "", "db://registry-pull"])
+def test_registry_source_accepts_optional_opaque_credential(credential_ref) -> None:
+    declaration = {"sourceRef": "private", "image": DECLARED_IMAGE}
+    if credential_ref is not None:
+        declaration["registryCredentialRef"] = credential_ref
+    settings = resolve_container_backend_settings(
+        {IMAGE_SOURCES_ENV_KEY: json.dumps([declaration])}
+    )
+    assert settings.image_source("private").registry_credential_ref == (credential_ref or None)
+
+
+def test_registry_source_rejects_plaintext_credential() -> None:
+    with pytest.raises(ContainerBackendConfigError, match="opaque registryCredentialRef"):
+        resolve_container_backend_settings({IMAGE_SOURCES_ENV_KEY: json.dumps([
+            {"sourceRef": "private", "image": DECLARED_IMAGE,
+             "registryCredentialRef": "username:password"}
+        ])})
+
+
 def test_shared_memory_default_must_fit_under_its_ceiling() -> None:
     # ``_enforce_resource_ceilings`` only inspects caller-supplied shmSize, so a
     # default above the ceiling would launch every omitted request above the
