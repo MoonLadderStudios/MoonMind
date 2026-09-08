@@ -113,6 +113,8 @@ def _observed_omnigent_commit() -> str:
         if completed.returncode == 0 and revision:
             return revision
     except Exception:
+        # Fail closed to "unknown" so provenance never claims a revision
+        # that was not actually observed from the submodule checkout.
         pass
     return "unknown"
 
@@ -126,6 +128,8 @@ def _observed_omnigent_package() -> str:
         if _observed_version:
             return f"omnigent=={_observed_version}"
     except Exception:
+        # Fail closed to "unknown" so evidence never reports a package
+        # version that was not actually imported from the pinned bundle.
         pass
     return "unknown"
 
