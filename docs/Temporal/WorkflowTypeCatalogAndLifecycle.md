@@ -59,18 +59,17 @@ This document defines the **Temporal-side contract**. Product-facing APIs and UI
 
 Namespace: `MoonMind.*`
 
-Current core workflow types:
-
-- `MoonMind.UserWorkflow`
-- `MoonMind.UserWorkflow`
-- `MoonMind.ManifestIngest`
-- `MoonMind.ProviderProfileManager`
-- `MoonMind.AgentRun`
-- `MoonMind.OmnigentSession`
-- `MoonMind.AgentSession`
-- `MoonMind.ManagedSessionReconcile`
-- `MoonMind.OAuthSession`
-- `MoonMind.MergeAutomation`
+The authoritative per-type inventory — exact Temporal type, module/class
+owner, and declared projection role for every current production
+registration — is the generated reference
+`WorkflowTypeCatalogGenerated.md`, produced mechanically from
+`moonmind/workflows/temporal/workflow_registry.py`
+(MoonLadderStudios/MoonMind#3959). Do not duplicate that enumeration here:
+a second handwritten list drifts (it previously listed
+`MoonMind.UserWorkflow` twice and omitted registered operator/excluded
+types). The product root enum `TemporalWorkflowType`
+(`api_service/db/models.py`) intentionally covers only user-submitted roots;
+it is not the registration inventory.
 
 Rules:
 
@@ -110,18 +109,32 @@ Rules:
 
 ## 4.1 Catalog overview
 
-| Workflow Type | Primary responsibility | Typical inputs | Typical outputs | Expected duration |
-| --- | --- | --- | --- | --- |
-| `MoonMind.UserWorkflow` | User-submitted, Step-ledger-owning Workflow Execution: plan work, own Step state/progress, orchestrate child agent runs, integrate results, produce artifacts | input refs, optional plan ref, parameters | output artifacts, summary, progress, Step refs | seconds → hours |
-| `MoonMind.UserWorkflow` | Current live implementation name for the user Workflow Execution path while the product model uses `MoonMind.UserWorkflow` terminology | input refs, optional plan ref, parameters | output artifacts, summary, progress, Step refs | seconds → hours |
-| `MoonMind.ManifestIngest` | Ingest a manifest artifact, validate, compile to a plan/graph, orchestrate execution, aggregate results | manifest artifact ref, policy params | aggregated outputs, per-node results | seconds → hours |
-| `MoonMind.ProviderProfileManager` | Coordinate provider-profile slot assignment, release, cooldowns, and reconciliation for managed runtimes | runtime/profile coordination inputs | slot assignment, lease state transitions | minutes → long-lived |
-| `MoonMind.AgentRun` | Own the durable lifecycle of one true managed or external agent execution | `AgentExecutionRequest`, refs, runtime metadata | canonical agent result, artifacts, lifecycle outcome | seconds → hours |
-| `MoonMind.OmnigentSession` | Own one canonical profile-bound Omnigent session, reconcile bounded provider observations and fenced commands, then harvest, clean up, and release leases | immutable owner identities, compiled-intent ref and digest, frozen feature/compatibility versions | compact canonical agent result and durable evidence refs | minutes → hours |
-| `MoonMind.AgentSession` | Own one workflow-scoped managed runtime session container, including launch, turn routing, clear/reset epoch changes, status, summary refs, and teardown | `ManagedSessionWorkflowInput` for the live session-capable runtime (`codex_cli`) | session handle/state, continuity refs, control/reset refs | minutes → hours |
-| `MoonMind.ManagedSessionReconcile` | Periodically reconcile managed-session supervision records and container state outside any one workflow step | reconciliation policy and runtime scope | reconciliation summary and cleanup actions | seconds → minutes per run |
-| `MoonMind.OAuthSession` | Manage browser-initiated OAuth or terminal-auth session lifecycle for managed runtimes | session config, runtime/provider context | auth/session status, profile registration side effects | minutes |
-| `MoonMind.MergeAutomation` | Wait for external pull request readiness after a published implementation run, then launch one resolver follow-up run when policy allows | parent run ref, compact pull request ref, optional Jira issue key, merge readiness policy | blocker summary, resolver run ref, terminal gate status | minutes → hours |
+The per-type inventory — exact type, module/class owner, and declared
+projection role for every registration — is the generated reference
+`WorkflowTypeCatalogGenerated.md`. The notes below explain the axes that the
+generated table keeps distinct; they are not a second inventory.
+
+- **User workflow root.** `MoonMind.UserWorkflow` is the User-submitted, Step-ledger-owning Workflow Execution: it plans work, owns Step
+  state/progress, orchestrates child agent runs, integrates results, and
+  produces artifacts. There is exactly one live user-workflow registration;
+  no separate implementation name exists beside it.
+- **Projection scope is not authorization.** `product` / `operator` /
+  `excluded` declares which executions may appear in product views. Updates,
+  Signals, and Cancels are still authorized by the MoonMind API layer (§12),
+  and operator-only types remain observable through Temporal and the owning
+  resource surfaces (`SourceOfTruthAndProjectionModel.md`).
+- **Projection scope is not action capability.** Valid controls differ per
+  type: only some workflows accept `Pause` / `Resume`, and acceptance never
+  implies a safe paused state (§6.2). Do not infer a universal control
+  contract from handler or type names.
+- **Registered type is not entry contract.** `MoonMind.ManifestIngest`
+  retains two entry contracts — the current catalogued-Activity path and the
+  historical `manifest_read` / `manifest_compile` commands kept for replay —
+  as inputs to one registered type, not as two catalog entries.
+- **Current routing is not historical routing.** The workflow-queue lane in
+  the generated reference separates the current handler lane from
+  historical-only handlers retained for pre-cutover histories; module
+  placement alone never proves Temporal Local Activity use.
 
 > Note: We intentionally do **not** model “Codex workflow,” “Gemini workflow,” “Jules workflow,” or “worker/system/manifest” as a top-level taxonomy. Provider/runtime choice is an execution concern, not a root orchestration category.
 
@@ -341,9 +354,35 @@ Payload:
 - `approval_type: string`
 - `note?`
 
-### Signal: `Pause` / `Resume`
+### Update: `Pause` / `Resume` (+ Query `control_state`)
 
-Optional. Only expose if interactive long-run control is a product requirement.
+Pause and Resume are **Temporal Updates**, not Signals: they return an
+acknowledged accepted/rejected response, with validation varying by workflow
+type (`MoonMind.UserWorkflow` and `MoonMind.AgentRun` define Update
+validators; `MoonMind.ManifestIngest` defines none and always accepts).
+Acceptance of the Update only establishes that the request was accepted; it
+does **not** prove the workflow reached a safe paused state. Only
+`MoonMind.UserWorkflow` exposes a `control_state` Query that lets a caller
+confirm a safe point. The operator API (`TemporalExecutionService`) accepts
+operator `Pause`/`Resume` requests and forwards them as Temporal Updates
+(`transport="temporal_update"` in the intervention audit), so the
+Signal/Update distinction below describes the workflow handler surface, not
+the operator entry point.
+
+Per-workflow-type control surface (verified against handler definitions):
+
+| Workflow type | `Pause` Update | `Resume` Update | `control_state` Query | Ack / completion semantics |
+|---|---|---|---|---|
+| `MoonMind.UserWorkflow` (`workflows/run.py`) | `@workflow.update(name="Pause")`, optional payload `{controlGeneration?: int}`; validator rejects invalid generation, in-progress transition, already-paused (no-generation path), or terminal state; forwards to the active `MoonMind.AgentRun` child and rolls back on forward failure | `@workflow.update(name="Resume")`, same payload shape; validator rejects invalid generation, in-progress transition, not-paused-and-not-awaiting-external (no-generation path), or terminal state; forwards to the active child | Yes: returns `{runId, paused, controlGeneration, safePoint, resumed}`; `safePoint` is true only while paused at the safe boundary with no active agent child and no transition in progress | Accepted ≠ paused. Safe-point completion requires a follow-up `control_state` Query on the same run observing `safePoint: true` (see `WorkerPauseSystem.md`) |
+| `MoonMind.AgentRun` (`workflows/agent_run.py`) | `@workflow.update(name="Pause")`, no payload; handler sets the local `_paused` flag; validator rejects already-paused or terminal runs | `@workflow.update(name="Resume")`, no payload; handler clears the flag; validator rejects not-paused or terminal runs | No | Temporal `ACCEPTED` only means the validator admitted the Update; the flag flips on handler completion (returned result). Reached only via parent forwarding or a direct Update; the system quiesce fan-out (`client.py`) does not enumerate this type |
+| `MoonMind.ManifestIngest` (`workflows/manifest_ingest.py`) | `@workflow.update(name="Pause")`, no validator; handler sets `_paused` and returns `{accepted: true, applied: "immediate"}` | `@workflow.update(name="Resume")`, no validator; handler clears `_paused` and returns `{accepted: true, applied: "immediate"}` | No | No validation: every request is accepted. Temporal `ACCEPTED` only means the Update was admitted; the flag flips on handler completion (returned result). There is no safe-point notion. The system quiesce fan-out (`client.py`) does not enumerate this type |
+
+System quiesce (`client.py::_send_update_to_running_workflows`) enumerates
+only `WorkflowType="MoonMind.UserWorkflow"` executions over Visibility, so a
+system pause never assumes every registered workflow type accepts the same
+control. Shared-queue operator and manifest workflows are excluded from
+enumeration. Partial/unknown outcomes are retained per target; see
+`WorkerPauseSystem.md` and the durable operation-result work in #3953.
 
 ### Signal: provider-profile coordination signals
 
@@ -670,6 +709,22 @@ Representative lifecycle:
 
 This is a support workflow, not a general user workflow.
 
+## 11.9 `MoonMind.MergeAutomation` lifecycle
+
+Representative lifecycle:
+
+* wait for external pull request readiness after a published implementation run
+* evaluate merge readiness under policy (`merge_automation.*` activities)
+* launch one resolver follow-up run when policy allows
+* complete post-merge Jira/GitHub evidence and publish the terminal gate status
+
+Key notes:
+
+* inputs are a parent run ref, a compact pull request ref, an optional Jira
+  issue key, and the merge readiness policy — not a manifest or plan ref
+* outputs are a blocker summary, a resolver run ref, and the terminal gate
+  status; expected duration is minutes → hours
+
 ---
 
 ## 12. Authorization rules
@@ -703,7 +758,7 @@ This document is “done” when:
 
 1. Do we expose raw Workflow Type names directly in the UI, or map them to product-friendly labels?
 2. Does the detail page always point to the latest run, or should run history be first-class in the UI?
-3. Do we need `Pause/Resume` in v1?
+3. ~~Do we need `Pause/Resume` in v1?~~ Resolved: yes — `Pause`/`Resume` Updates are implemented per §6.2 (validator-guarded on `MoonMind.UserWorkflow` and `MoonMind.AgentRun`, unconditional on `MoonMind.ManifestIngest`).
 4. Should `mm_updated_at` track any state transition, progress updates, or both under a bounded policy?
 Product visibility is defined by each registration's `projection_scope` in
 `workflow_registry.py`. UserWorkflow and ManifestIngest are product executions.

@@ -166,9 +166,18 @@ Temporal requires Task Queues so Workers can poll. MoonMind uses them strictly a
 
 ## 4.1 Current queue set
 
-### Workflow task queue
+Queue names below are routing addresses, not deployment units. A queue name,
+a worker instance (poller), a process, a container, and an enabled deployment
+profile are different things: multiple queues can share one process, and
+multiple replicas can serve one queue. Do not maintain an independent
+numerical total elsewhere; the authoritative inventory is derived from the
+production registries and resolved settings (see #3959).
 
-- `mm.workflow`
+### Workflow task queues
+
+- `mm.workflow.user.v2` (default start queue; `TemporalSettings.user_workflow_v2_task_queue`; new `MoonMind.UserWorkflow` starts and replay-patched child workflows route here under the `renamed_contract` mode)
+- `mm.workflow` (replay/poll address; `TemporalSettings.workflow_task_queue`; the workflow fleet keeps polling it for pre-patch in-flight histories via `get_workflow_poll_task_queues()`)
+- `mm.workflow.merge_automation` (`TemporalSettings.merge_automation_workflow_task_queue`; hosts the merge-automation workflow registration in `workflow_registry.py`)
 
 ### Activity task queues
 
@@ -177,7 +186,23 @@ Temporal requires Task Queues so Workers can poll. MoonMind uses them strictly a
 - `mm.activity.sandbox`
 - `mm.activity.integrations`
 - `mm.activity.agent_runtime`
-- `mm.activity.agent_runtime.control`
+- `mm.activity.agent_runtime.control` — a real worker queue polled by the
+  same agent-runtime service with independent bounded concurrency so
+  terminal-evidence evaluation (`agent_runtime.evaluate_terminal_evidence`)
+  stays schedulable while fan-out launches occupy the long-lived execution
+  queue. It is **not** in `client.py::_MOONMIND_TASK_QUEUES`, which scopes
+  only drain metrics and batch Pause/Resume fan-out, not the full worker
+  topology.
+
+The workflow poll topology (`get_workflow_poll_task_queues()` in
+`activity_catalog.py`: default start queue plus the replay queue) is wider
+than the drain/fan-out scope (`_MOONMIND_TASK_QUEUES` in `client.py`), which
+covers only drain metrics and batch Pause/Resume fan-out. The intended
+contract derives the inventory from production registries and resolved
+settings through #3959 (generated catalogs); until that lands, the list above
+is hand-maintained against `client.py`, `config/settings.py`, and
+`workflow_registry.py` and must not be copied into a second numerical total
+elsewhere.
 
 ## 4.2 Queue policy
 
@@ -200,7 +225,7 @@ The activity catalog maps activity types onto the following fleets.
 
 | Fleet | Queue(s) | Primary capabilities | Primary privileges |
 |---|---|---|---|
-| `workflow` | `mm.workflow` | workflow execution, limited helper activities | Temporal only |
+| `workflow` | `mm.workflow.user.v2`, `mm.workflow` | workflow execution, limited helper activities | Temporal only |
 | `artifacts` | `mm.activity.artifacts` | artifact lifecycle, provider-profile support, OAuth session support | artifact storage, DB-backed support services |
 | `llm` | `mm.activity.llm` | planning, validation, review, generic LLM work | model/provider credentials |
 | `sandbox` | `mm.activity.sandbox` | repo and command execution | isolated process execution |
@@ -211,9 +236,18 @@ The activity catalog maps activity types onto the following fleets.
 
 The workflow fleet is primarily for workflow code. It may also host **small helper activities** when needed to preserve deterministic workflow behavior without creating unnecessary routing complexity.
 
-Current example:
+Current registration (`workflow_registry.py::workflow_fleet_activity_handlers`,
+verified against the function body — seven handlers, not one):
 
-- `integration.resolve_adapter_metadata`
+- adapter/metadata helpers from `workflows/agent_run.py`: `integration.resolve_adapter_metadata`, `integration.get_activity_route`, `integration.resolve_external_adapter`, `integration.external_adapter_execution_style`
+- checkpoint-persistence handlers from `workflows/checkpoint_branch_turn.py` (via `checkpoint_branch_activity_handlers()`): `checkpoint_branch.turn.mark_running`, `checkpoint_branch.turn.persist_terminal`, `checkpoint_branch.turn.persist_terminal_rejection` — retained for replay/in-flight compatibility of pre-cutover histories; no new calls route there.
+
+This registration is the current state, not the intended end state. The
+intended least-privilege boundary keeps the workflow fleet Temporal-only with
+no artifact, provider-mutation, or runtime-supervision I/O; whether
+checkpoint persistence belongs beside deterministic workflows is the
+implementation concern tracked in #3949. Do not read the registration above
+as approval for broad workflow-fleet I/O.
 
 This is a narrow exception, not a second general-purpose activity plane.
 
@@ -236,11 +270,20 @@ Activity Type names use dotted namespaces.
 - `agent_runtime.*` — managed runtime launch/supervision/result/cancel operations
 - `step.review` — review gate execution
 
-### 6.2 Target-state namespace not yet fully implemented
+### 6.2 Implemented skill namespace
 
-- `agent_skill.*` — future skill resolution/materialization family
+- `agent_skill.*` — skill resolution/materialization family, implemented in
+  `workflows/agent_skills/agent_skills_activities.py` (`AgentSkillsActivities`)
+  and registered in the live catalog (`activity_catalog.py`) on the
+  agent-runtime fleet. See §8.11 for the per-operation table.
 
-This family is still part of the target-state architecture but is not yet a core live catalog family in the current implementation.
+Portable instruction bundles (agent skill sets: `SKILL.md` plus supporting
+files, resolved into immutable snapshots) and executable tool contracts
+(`tool.type = "skill"` invocations dispatched through the tool router) remain
+different concepts. Native workflow/activity infrastructure provides execution
+substrate only — resolution, materialization, scheduling, artifacts, and
+approvals — and must not reimplement Skill semantics such as data collection,
+classification, or completion rules.
 
 ---
 
@@ -565,31 +608,48 @@ Queues:
 
 These are support families, not agent-runtime families.
 
+## 8.11 Skill activities (`agent_skill.*`)
+
+Purpose: resolve portable instruction bundles into immutable snapshots and
+materialize those snapshots for runtime consumption. Workflows consume refs,
+not inline skill content.
+
+Actually registered and wired operations (five; verified against
+`agent_skills_activities.py`, `activity_catalog.py`, and
+`activity_runtime.py` — not by catalog membership alone):
+
+| Activity | Owning contract (`schemas/agent_skill_models.py`) | Production wiring | Remaining gap |
+|---|---|---|---|
+| `agent_skill.resolve` | `SkillSelector` → `ResolvedSkillSet`; persists file-backed content and the resolved manifest via the artifact dependency | Catalog entry (agent-runtime fleet); runtime binding `("agent_skills", "resolve_skills")`; called from `MoonMind.UserWorkflow` (`workflows/run.py` resolves the selector per node) | On-demand injection path below is still gated; resolve callers pass `allow_repo_skills=False, allow_local_skills=False` |
+| `agent_skill.query_on_demand` | `SkillsOnDemandQueryRequest` → `SkillsOnDemandQueryResult` via `SkillsOnDemandService`, gated on `settings.workflow.skills_on_demand_enabled` | Catalog entry; runtime binding present | No production workflow caller; behavior verified by unit tests only, not through a production boundary |
+| `agent_skill.request_on_demand` | `SkillsOnDemandRequest` → `SkillsOnDemandRequestResult` via the same gate | Catalog entry; runtime binding present | Same as above |
+| `agent_skill.build_prompt_index` | `ResolvedSkillSet` → prompt-injectable string | Catalog entry; runtime binding present | No production workflow caller; current body renders refs/metadata, not full prompt bundles |
+| `agent_skill.materialize` | `(ResolvedSkillSet, runtime_id, mode, workspace_root)` → `RuntimeSkillMaterialization` via `AgentSkillMaterializer` | Catalog entry; runtime binding present | No production workflow caller; per-runtime materialization through a production boundary is unverified |
+
+Do not describe this family as "future": the operations above are registered
+and bound. Do not describe it as fully supported either: only `resolve` has a
+production workflow caller, and resolve/materialize/on-demand injection must
+be verified through production boundaries before any "supported" claim. The
+'supported' bar is a workflow-boundary test exercising the real invocation
+shape, not catalog membership or helper unit tests.
+
+The intended contract keeps executable tool contracts and portable
+instruction bundles distinct and requires per-operation
+production-boundary verification; the table above records current wiring
+vs gaps.
+
 ---
 
-## 9. Target-state additions not yet fully implemented
+## 9. Retired target-state note (resolved by §8.11)
 
-MoonMind’s broader design still includes a future `agent_skill.*` family.
+The `agent_skill.*` family was previously listed here as future work. It is
+now documented as implemented-but-partially-wired in §8.11 (five registered
+operations; only `agent_skill.resolve` has a production workflow caller). The
+general rules below still apply: resolution semantics stay centralized,
+materialization may vary by runtime, and workflows consume refs, not inline
+skill content.
 
-Target-state activities:
-
-- `agent_skill.resolve`
-- `agent_skill.materialize`
-- `agent_skill.build_prompt_index`
-
-Purpose:
-
-- resolve active instruction bundles into immutable snapshots
-- materialize those snapshots for runtime consumption
-- build prompt indexes or other compact runtime-ready skill representations
-
-Important rule:
-
-- resolution semantics must remain centralized
-- materialization may vary by runtime
-- workflows should consume refs, not inline skill content
-
-This family should be documented as target-state until it is actually added to the live catalog.
+## 9.1 (reserved)
 
 ---
 
@@ -674,7 +734,7 @@ Rules:
 - artifact writes remain naturally retry-safe through integrity checks
 - external starts must not create duplicate jobs on retry
 - managed launches must not create duplicate runtime executions on retry
-- any future `agent_skill.materialize` activity must be safe under retry and must not mutate checked-in source trees in place
+- `agent_skill.materialize` must be safe under retry and must not mutate checked-in source trees in place. Known gap: when the workspace already contains a repo-authored `.agents/skills` directory, `AgentSkillMaterializer._project_builtin_support_directory()` still projects the `_shared` support directory into that repo-owned path, so the current implementation does not fully enforce the non-mutation invariant yet.
 
 ---
 
@@ -801,7 +861,10 @@ Disallowed. Workflows own visibility state.
 
 ### 15.4 Workflow fleet helper activities
 
-Allowed only as a narrow exception. Current example: `integration.resolve_adapter_metadata`.
+Allowed only as a narrow exception. Current registration: the seven handlers
+listed in §5.1 (four adapter/metadata helpers plus three
+replay-compatibility checkpoint handlers). The intended boundary stays
+least-privilege; see #3949 for the checkpoint-persistence question.
 
 ### 15.5 Canonical runtime contract enforcement
 

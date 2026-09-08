@@ -203,6 +203,22 @@ def test_temporal_schema_change_selects_temporal_boundary() -> None:
     assert outputs["temporal_boundary"] == "true"
 
 
+def test_temporal_catalog_generator_change_selects_temporal_boundary() -> None:
+    """MoonLadderStudios/MoonMind#3959: generator, generated reference, and
+    lifecycle-anchor doc must select the drift/composition checks."""
+    for path in (
+        "tools/generate_temporal_catalog.py",
+        "docs/Temporal/WorkflowTypeCatalogGenerated.md",
+        "docs/Temporal/WorkflowTypeCatalogAndLifecycle.md",
+        "tests/unit/workflows/temporal/test_workflow_catalog_generator.py",
+        "services/temporal/scripts/bootstrap-namespace.sh",
+    ):
+        outputs = _outputs([path])
+
+        assert outputs["unit_fast"] == "true", path
+        assert outputs["temporal_boundary"] == "true", path
+
+
 def test_integration_test_change_selects_integration_ci() -> None:
     outputs = _outputs(["tests/integration/api/test_workflow_console_routes.py"])
 

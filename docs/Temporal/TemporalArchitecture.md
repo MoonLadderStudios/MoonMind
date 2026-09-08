@@ -43,7 +43,7 @@ The current repo baseline is:
 - The default artifact backend is MinIO / S3-compatible storage.
 - The worker topology is a small capability-based fleet set: `workflow`, `artifacts`, `llm`, `sandbox`, `integrations`, and `agent_runtime`.
 - The live registered workflow catalog includes `MoonMind.MergeAutomation` in addition to the previously documented core workflow types.
-- The workflow helper-activity exception is narrow; the concrete helper currently called out by the activity topology is `integration.resolve_adapter_metadata`.
+- The workflow helper-activity exception is narrow; the current registration is the seven handlers listed in §9.1 (four adapter/metadata helpers plus three replay-compatibility checkpoint handlers, owned by `workflow_registry.py`).
 - The shared Temporal data converter currently resolves to the Pydantic data converter. A payload-encryption codec is not currently visible as the shared converter contract and must not be assumed to exist.
 - Projection repair, run-history/rerun semantics, visibility semantics, type-safety rules, and error taxonomy are covered by adjacent docs and should be treated as part of this architecture.
 
@@ -352,18 +352,14 @@ Rules:
 
 ## 7. Workflow catalog
 
-The live repo-aligned workflow catalog is:
-
-| Workflow Type | Role | Product visibility |
-| --- | --- | --- |
-| `MoonMind.UserWorkflow` | Current live root workflow implementation for user/service Workflow Executions; plans work, owns Step ledger, starts child agent runs, integrates outputs | Primary Workflow Execution surface |
-| `MoonMind.ManifestIngest` | Ingests, validates, compiles, and orchestrates manifest-backed work | User/system execution surface |
-| `MoonMind.AgentRun` | Durable lifecycle wrapper for one true managed or external agent execution | Child/internal, surfaced through parent details |
-| `MoonMind.AgentSession` | Workflow-scoped managed-session workflow; currently Codex-backed in the live session plane | Internal/operator/detail support |
-| `MoonMind.ManagedSessionReconcile` | Bounded operational reconciliation for managed sessions | Operational |
-| `MoonMind.ProviderProfileManager` | Long-lived provider-profile slot, lease, cooldown, and reconciliation manager | Internal/operator |
-| `MoonMind.OAuthSession` | OAuth / terminal-auth lifecycle support for managed runtimes | Support workflow |
-| `MoonMind.MergeAutomation` | PR readiness watcher and resolver follow-up launcher after publish-capable runs | Child/support workflow |
+The live repo-aligned workflow catalog is the generated reference
+`WorkflowTypeCatalogGenerated.md` (exact Temporal type, module/class owner,
+and declared projection role for every production registration, produced
+mechanically from `moonmind/workflows/temporal/workflow_registry.py`).
+Roles group as user-submitted roots, manifest-backed orchestration, durable
+agent-execution wrappers, session and coordination workflows, and
+operational/maintenance workflows; the generated table is authoritative for
+which registered type sits in each group.
 
 Rules:
 
@@ -371,7 +367,10 @@ Rules:
 - Add new Workflow Types only when lifecycle behavior is materially distinct.
 - Do not model provider brands as root workflow types.
 - Do not model worker fleets or task queues as product taxonomies.
-- Product Workflow Execution vocabulary maps primarily to `MoonMind.UserWorkflow`; `MoonMind.UserWorkflow` remains the current live implementation name where code and workflow registration still use it.
+- Product Workflow Execution vocabulary maps primarily to the single live
+  user-workflow registration `MoonMind.UserWorkflow`
+  (`moonmind/workflows/temporal/workflows/run.py`, projection `product` in
+  the generated reference). There is no separate live implementation name.
 - If docs and code disagree about the live catalog, code registration and `WorkflowTypeCatalogAndLifecycle.md` must be reconciled immediately.
 
 ---
@@ -470,9 +469,17 @@ A narrow helper-activity exception is allowed only when all of the following are
 - it does not block Workflow Task throughput under normal operation
 - it is explicitly listed in the activity topology
 
-Current repo-aligned example:
+Current repo-aligned registration (`workflow_registry.py::workflow_fleet_activity_handlers` — seven handlers, not one):
 
-- `integration.resolve_adapter_metadata`
+- adapter/metadata helpers from `workflows/agent_run.py`: `integration.resolve_adapter_metadata`, `integration.get_activity_route`, `integration.resolve_external_adapter`, `integration.external_adapter_execution_style`
+- checkpoint-persistence handlers from `workflows/checkpoint_branch_turn.py` (via `checkpoint_branch_activity_handlers()`): `checkpoint_branch.turn.mark_running`, `checkpoint_branch.turn.persist_terminal`, `checkpoint_branch.turn.persist_terminal_rejection` — retained for replay/in-flight compatibility of pre-cutover histories; no new calls route there.
+
+The list above is the current state, not the intended end state. The
+intended least-privilege boundary keeps the workflow fleet Temporal-only;
+whether checkpoint persistence belongs beside deterministic workflows is the
+implementation concern tracked in #3949. Do not read the registration as
+approval for broad workflow-fleet I/O. The current registration vs intended
+boundary is tabulated in `ActivityCatalogAndWorkerTopology.md` §5.1.
 
 If a helper grows into I/O-heavy work, provider mutation, artifact work, or runtime supervision, it must move to a capability-appropriate activity queue.
 
