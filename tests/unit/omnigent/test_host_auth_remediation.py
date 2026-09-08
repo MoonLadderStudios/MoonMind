@@ -20,6 +20,9 @@ from moonmind.omnigent.bridge_artifacts import OmnigentArtifactGateway, capture_
 from moonmind.omnigent.bridge_security import redact_raw_events
 from moonmind.omnigent.bridge_embedded import verify_embedded_host_auth
 from moonmind.omnigent.bridge_proxy import OmnigentBridgeError
+from moonmind.omnigent.embedded_host_channel import (
+    embedded_host_channels as _embedded_host_channels,
+)
 from moonmind.omnigent.host_auth_adapter import (
     OmnigentHostAuthAdapter,
     UpstreamHostAuthError,
@@ -349,8 +352,8 @@ async def test_connected_tunnel_is_drained_immediately_after_revocation(monkeypa
             ]
         ),
     )
-    monkeypatch.setattr(bridge_router.embedded_host_channels, "connect", lambda **_: channel)
-    monkeypatch.setattr(bridge_router.embedded_host_channels, "disconnect", lambda _: None)
+    monkeypatch.setattr(_embedded_host_channels, "connect", lambda **_: channel)
+    monkeypatch.setattr(_embedded_host_channels, "disconnect", lambda _: None)
     monkeypatch.setattr(
         bridge_router, "build_embedded_host_facade", lambda _config: facade
     )
@@ -442,13 +445,13 @@ async def test_connected_tunnel_drains_when_the_handshake_generation_is_rotated_
         ),
     )
     monkeypatch.setattr(
-        bridge_router.embedded_host_channels, "connect", lambda **_: channel
+        _embedded_host_channels, "connect", lambda **_: channel
     )
     monkeypatch.setattr(
-        bridge_router.embedded_host_channels, "disconnect", lambda _: None
+        _embedded_host_channels, "disconnect", lambda _: None
     )
     monkeypatch.setattr(
-        bridge_router.embedded_host_channels,
+        _embedded_host_channels,
         "revoke_runner_binding",
         lambda _runner_id: None,
     )

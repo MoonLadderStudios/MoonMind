@@ -430,22 +430,23 @@ async def test_drain_facade_refuses_new_admission() -> None:
         drain_retained_sessions=True,
     )
     for operation in (
-        facade.create_session,
-        facade.dispatch_runner,
-        facade.register_host,
+        ("create_session", {"request": None, "binding": None}),
+        ("dispatch_runner", {"idempotency_key": "key"}),
+        ("register_host", {"request": None, "auth": None}),
+        ("heartbeat", {"host_id": "h", "request": None, "auth": None}),
+        (
+            "ingest_session_event",
+            {"host_id": "h", "session_id": "s", "request": None, "auth": None},
+        ),
     ):
+        name, kwargs = operation
         try:
-            if operation is facade.create_session:
-                await operation(request=None, binding=None)  # type: ignore[arg-type]
-            elif operation is facade.dispatch_runner:
-                await operation(idempotency_key="key")
-            else:
-                await operation(request=None, auth=None)  # type: ignore[arg-type]
+            await getattr(facade, name)(**kwargs)  # type: ignore[arg-type]
         except Exception as exc:  # noqa: BLE001 - asserting mapped denial below
-            assert getattr(exc, "status_code", None) == 410
+            assert getattr(exc, "status_code", None) == 410, name
             assert (
                 getattr(exc, "code", "")
                 == "omnigent_embedded_transport_retired"
-            )
+            ), name
         else:
-            raise AssertionError(f"{operation.__name__} admitted new work")
+            raise AssertionError(f"{name} admitted new work")
