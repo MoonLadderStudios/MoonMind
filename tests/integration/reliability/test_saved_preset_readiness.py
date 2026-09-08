@@ -10,9 +10,11 @@ import pytest
 import pytest_asyncio
 import yaml
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
+from sqlalchemy import select
 from temporalio import activity
 from temporalio.exceptions import ApplicationError
 
+from api_service.api.routers.executions import _build_recurring_target
 from api_service.db import base as db_base
 from api_service.db.models import Base, Preset, PresetScopeType
 from api_service.services.presets.catalog import (
@@ -106,13 +108,16 @@ def parameters():
 
 
 @pytest.mark.parametrize("plan_ref", [None, "art_saved_plan"])
+@pytest.mark.parametrize("payload_node", ["workflow", "task"])
 async def test_stale_schedule_stops_before_planner_or_agent(
-    boundary, monkeypatch, plan_ref
+    boundary, monkeypatch, plan_ref, payload_node
 ):
     workflow, calls, _ = boundary
     planner = AsyncMock()
     monkeypatch.setattr(run_module, "execute_typed_activity", planner)
     saved = parameters()
+    saved[payload_node] = saved.pop("task")
+    saved = _build_recurring_target(saved)["initialParameters"]
     original = deepcopy(saved)
     with pytest.raises(ApplicationError, match="missing docker") as raised:
         await workflow._run_planning_stage(
@@ -271,3 +276,85 @@ async def test_personal_preset_uses_execution_owner_without_global_fallback(boun
         await workflow._run_planning_stage(
             parameters=saved, input_ref=None, plan_ref="art_saved_plan"
         )
+
+
+@pytest.mark.parametrize("include_kind", ["include", "preset"])
+async def test_new_current_include_capabilities_require_refresh(boundary, include_kind):
+    workflow, calls, sessions = boundary
+    saved = parameters()
+    async with sessions() as session:
+        root = (await session.execute(select(Preset))).scalar_one()
+        root.required_capabilities = ["git", "gh"]
+        root.steps = (
+            [{"kind": "include", "slug": "new-child", "alias": "new-child"}]
+            if include_kind == "include"
+            else [{"type": "preset", "preset": {"slug": "new-child"}}]
+        )
+        session.add(
+            Preset(
+                slug="new-child",
+                scope_type=PresetScopeType.GLOBAL,
+                title="New child",
+                description="Added after this schedule was saved",
+                steps=[{"kind": "include", "slug": "test-runner", "alias": "tests"}],
+            )
+        )
+        session.add(
+            Preset(
+                slug="test-runner",
+                scope_type=PresetScopeType.GLOBAL,
+                title="Test runner",
+                description="Required verification capability",
+                required_capabilities=["docker"],
+            )
+        )
+        await session.commit()
+    with pytest.raises(ApplicationError) as raised:
+        await workflow._run_planning_stage(
+            parameters=saved, input_ref=None, plan_ref="art_saved_plan"
+        )
+    assert raised.value.details[0]["missingCapabilities"] == ["docker"]
+    assert calls == [ACTIVITY]
+    saved["requiredCapabilities"].append("docker")
+    assert (
+        await workflow._run_planning_stage(
+            parameters=saved, input_ref=None, plan_ref="art_refreshed_plan"
+        )
+        == "art_refreshed_plan"
+    )
+
+
+@pytest.mark.parametrize("invalid", ["missing", "inactive", "cycle", "personal"])
+async def test_invalid_current_include_graph_never_launches_work(boundary, invalid):
+    workflow, _, sessions = boundary
+    async with sessions() as session:
+        root = (await session.execute(select(Preset))).scalar_one()
+        root.required_capabilities = ["git", "gh"]
+        root.steps = [
+            {
+                "kind": "include",
+                "alias": "new-child",
+                "slug": root.slug if invalid == "cycle" else "new-child",
+                "scope": "personal" if invalid == "personal" else "global",
+            }
+        ]
+        if invalid == "inactive":
+            session.add(
+                Preset(
+                    slug="new-child",
+                    scope_type=PresetScopeType.GLOBAL,
+                    title="Inactive child",
+                    description="Unavailable requirement source",
+                    is_active=False,
+                )
+            )
+        await session.commit()
+    with pytest.raises(ApplicationError) as raised:
+        await workflow._run_planning_stage(
+            parameters=parameters(), input_ref=None, plan_ref="art_saved_plan"
+        )
+    assert raised.value.type == "saved_preset_capabilities_stale"
+    assert (
+        raised.value.details[0]["presets"][0]["reason"]
+        == "preset_composition_unavailable"
+    )
