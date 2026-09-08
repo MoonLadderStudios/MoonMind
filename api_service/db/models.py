@@ -112,6 +112,12 @@ class User(SQLAlchemyBaseUserTableUUID, Base):
     # is_verified is inherited
 
     hashed_password = Column(Text, nullable=True)  # Made nullable
+    # Legacy Keycloak-era mapping authority. Frozen read-only evidence after
+    # the K3 identity migration (MoonLadderStudios/MoonMind#4119): the
+    # 32-character field cannot hold a full issuer URI and is never consulted
+    # by the active resolver. Retained (with its unique pair constraint) so
+    # historical rows, old revisions, and bounded rollback reads keep working.
+    # The single active authority is ``UserExternalIdentity`` below.
     oidc_provider = Column(String(32), index=True, nullable=True)
     oidc_subject = Column(String(255), index=True, nullable=True)
 
@@ -121,6 +127,88 @@ class User(SQLAlchemyBaseUserTableUUID, Base):
     user_profile = relationship(
         "UserProfile", back_populates="user", uselist=False
     )  # Added relationship to UserProfile
+    external_identities = relationship(
+        "UserExternalIdentity",
+        back_populates="user",
+        cascade="all, delete-orphan",
+    )
+
+
+class UserExternalIdentity(Base):
+    """Single active external-identity authority (K3, #4119).
+
+    One verified OIDC ``(issuer, subject)`` pair — or one explicitly
+    namespaced trusted-proxy identity (``proxy:<namespace>:<stable-id>``) —
+    resolves to exactly one MoonMind ``User.id``. The legacy
+    ``User.oidc_provider/oidc_subject`` columns are frozen read-only evidence
+    and are never consulted by the resolver; this relation is the only mapping
+    the resolver reads, so there are never two competing active mappings.
+
+    Semantics (per OpenID Connect Core §5.7 claim stability):
+
+    * ``issuer`` is the full verified issuer URI (``Text``, never truncated).
+    * ``subject`` is matched exactly and case-sensitively; it is never
+      normalized, lowercased, or derived from email/display name.
+    * ``(issuer, subject)`` is globally unique: the same subject under two
+      issuers maps to two different users, never one merged account.
+    """
+
+    __tablename__ = "user_external_identities"
+    __table_args__ = (
+        UniqueConstraint(
+            "issuer", "subject", name="uq_user_external_identity"
+        ),
+        Index("ix_user_external_identities_user", "user_id"),
+    )
+
+    id: Mapped[UUID] = mapped_column(Uuid, primary_key=True, default=uuid4)
+    user_id: Mapped[UUID] = mapped_column(
+        Uuid, ForeignKey("user.id", ondelete="CASCADE"), nullable=False
+    )
+    issuer: Mapped[str] = mapped_column(Text, nullable=False)
+    subject: Mapped[str] = mapped_column(Text, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+
+    user = relationship("User", back_populates="external_identities")
+
+
+class IdentityMigrationRun(Base):
+    """Durable ledger for the idempotent operator identity migration (#4119).
+
+    One row per preflight digest. A rerun with the same digest resumes or
+    replays the recorded result instead of duplicating work; a concurrent
+    apply against an ``in_progress`` row fails closed with an actionable
+    conflict. ``result_json`` carries only sanitized per-row dispositions
+    (UUIDs, issuers, issue codes) — never password hashes, tokens, or raw
+    identity exports.
+    """
+
+    __tablename__ = "identity_migration_runs"
+    __table_args__ = (
+        UniqueConstraint(
+            "preflight_digest", name="uq_identity_migration_runs_digest"
+        ),
+    )
+
+    id: Mapped[UUID] = mapped_column(Uuid, primary_key=True, default=uuid4)
+    preflight_digest: Mapped[str] = mapped_column(String(128), nullable=False)
+    status: Mapped[str] = mapped_column(
+        String(32), nullable=False, default="in_progress", server_default="in_progress"
+    )
+    result_json: Mapped[dict[str, Any]] = mapped_column(
+        mutable_json_dict(), nullable=False, default=dict
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=func.now(),
+        onupdate=func.now(),
+    )
 
 
 class UserProfile(Base):
