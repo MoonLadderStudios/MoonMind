@@ -122,6 +122,39 @@ def test_merge_group_event_computes_exact_tree_diff(tmp_path) -> None:
     assert changed == ["b.txt"]
 
 
+def test_rename_reports_old_and_new_paths(tmp_path) -> None:
+    # Renaming docs/Guide.md away must surface the removed Markdown target,
+    # not just the destination: downstream selectors (and the link checker's
+    # renamed-away handling) key off the old .md path.
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    _git(repo, "init", "-q")
+    _git(repo, "config", "user.email", "test@example.com")
+    _git(repo, "config", "user.name", "Test")
+    (repo / "docs").mkdir()
+    (repo / "docs" / "Guide.md").write_text(
+        "# Guide\n\nLine one.\nLine two.\nLine three.\nLine four.\n",
+        encoding="utf-8",
+    )
+    _git(repo, "add", "docs/Guide.md")
+    _git(repo, "commit", "-qm", "base")
+    base = _git(repo, "rev-parse", "HEAD")
+    _git(repo, "mv", "docs/Guide.md", "docs/Guide.txt")
+    _git(repo, "commit", "-qm", "rename")
+    head = _git(repo, "rev-parse", "HEAD")
+
+    stdout, changed = _run_helper(
+        repo,
+        tmp_path,
+        event_name="push",
+        event_payload={"before": base, "after": head},
+        github_sha=head,
+    )
+
+    assert stdout == "resolution=known"
+    assert changed == ["docs/Guide.md", "docs/Guide.txt"]
+
+
 def test_push_with_zero_before_is_unknown(tmp_path) -> None:
     repo, _, head = _init_repo(tmp_path)
 

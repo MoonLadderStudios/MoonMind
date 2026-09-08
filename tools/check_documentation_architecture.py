@@ -58,10 +58,10 @@ NON_CANONICAL_DOC_DIRS = ("docs/tmp", "docs/assets", "docs/ReleaseNotes")
 # "Imperative working documents"). Plans outside these are flagged.
 APPROVED_IMPERATIVE_DIRS = ("docs/tmp",)
 
-# A canonical declarative doc should declare its Document Class. v1 accepts an
-# explicit ``Document Class:`` marker OR any recognized base class / viewpoint
-# name (so existing docs that name their viewpoint inline are not flagged).
-DOCUMENT_CLASS_MARKER_RE = re.compile(r"document\s+class\s*[:|]", re.IGNORECASE)
+# A canonical declarative doc should declare its Document Class. Only an
+# explicit header field counts: body prose and examples cannot satisfy a
+# missing header, and an explicit value must name a recognized base class /
+# viewpoint in full (prefix matches do not count).
 DOCUMENT_CLASS_TERMS = (
     # Document Model base classes.
     "canonical declarative",
@@ -213,7 +213,8 @@ def check_missing_document_class(docs: Sequence[DocFile]) -> list[Finding]:
             continue
         header = metadata_fields(doc.text)
         if "document class" in header:
-            if not DOCUMENT_CLASS_TERMS_RE.match(header["document class"]):
+            declared = header["document class"].strip()
+            if not DOCUMENT_CLASS_TERMS_RE.fullmatch(declared):
                 findings.append(
                     Finding(
                         rule="invalid-document-class",
@@ -222,10 +223,6 @@ def check_missing_document_class(docs: Sequence[DocFile]) -> list[Finding]:
                         message="Document Class must name a recognized document class or viewpoint.",
                     )
                 )
-            continue
-        if DOCUMENT_CLASS_MARKER_RE.search(doc.text):
-            continue
-        if DOCUMENT_CLASS_TERMS_RE.search(doc.text):
             continue
         findings.append(
             Finding(

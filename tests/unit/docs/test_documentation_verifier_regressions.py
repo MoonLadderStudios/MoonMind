@@ -42,6 +42,20 @@ def test_body_metadata_cannot_satisfy_a_missing_header():
     )
 
 
+def test_body_class_mention_cannot_satisfy_missing_document_class():
+    # No top-of-file header: a viewpoint mention (or a Document Class marker)
+    # after the first section must not rescue the doc from
+    # missing-document-class.
+    for body in (
+        "This is a Cross-Cutting Concept View describing X.",
+        "Document Class: Canonical declarative",
+    ):
+        doc = architecture.DocFile("docs/Example.md", f"# Title\n\n## Body\n{body}\n")
+        assert {f.rule for f in architecture.run_checks([doc])} == {
+            "missing-document-class"
+        }
+
+
 def test_metadata_and_claim_violations_remain_detectable():
     original = architecture.DocFile(
         "docs/ExampleContract.md",
@@ -54,6 +68,18 @@ def test_metadata_and_claim_violations_remain_detectable():
             "invalid-document-class",
         ),
         (original.text.replace("Canonical declarative", ""), "invalid-document-class"),
+        (
+            original.text.replace(
+                "Canonical declarative", "Canonical declarative garbage"
+            ),
+            "invalid-document-class",
+        ),
+        (
+            original.text.replace(
+                "Canonical declarative", "Canonical declarative document"
+            ),
+            "invalid-document-class",
+        ),
         (
             original.text.replace("Canonical declarative", "not Canonical declarative"),
             "invalid-document-class",
