@@ -54,11 +54,16 @@ Target dispositions decode as follows:
   non-running status). No further action is needed for the scoped operation,
   but this is never equated with verified physical host cleanup or lease
   release; per-target evidence keeps the distinction visible.
-- `unsupported`: the run does not implement the control/query protocol, so no
-  safe-point confirmation is possible. Requires operator attention.
+- `unsupported`: the run provably does not implement the control/query
+  protocol (an explicit unknown/unregistered-query error), so no
+  safe-point confirmation is possible. A generic NOT_FOUND can mean the
+  pinned execution or namespace is transiently unavailable, so it stays
+  retryable (`unknown`). Requires operator attention.
 - `superseded`: the pinned run identity was replaced (Continue-As-New, reset,
-  or a later execution sharing the workflow id reports a different run id) or
-  a newer control generation owns the run. The target keeps its pinned
+  or a later execution sharing the workflow id reports a valid, nonblank,
+  differing run id) or a newer control generation owns the run. Malformed or
+  blank control evidence (non-object, missing run id) stays retryable
+  (`unknown`); it never parks the target as superseded. The target keeps its pinned
   identity; a successor never silently inherits the old request. Requires
   operator attention under the current command.
 - `unknown`/`pending`: query or Update transport unavailable. Requires retry
@@ -79,7 +84,9 @@ system snapshot. Discovery checkpoints partial target lists with an explicit
 progress marker (`enumerationCursor`) every 100 targets, deduplicates against
 already-persisted target identities, and resumes from persisted progress after
 a restart or retry instead of repeating the full scan. A per-request budget of
-1000 targets caps memory, response size, duration, and write volume; beyond the
+1000 targets caps memory, response size, duration, and write volume; the budget
+applies to the accumulated total, so a resumed pass already at the cap stays
+truncated without growing the payload one run per read. Beyond the
 budget the request stays unenumerated with `control_enumeration_truncated`.
 A failed later page checkpoints its partial list with
 `control_visibility_unavailable`. Incomplete enumeration (an
@@ -122,7 +129,8 @@ control reconciliation. `POST /api/system/worker-pause` accepts `action`, `reaso
 `confirmation`; forced resume also requires confirmation.
 
 The dashboard displays **Workers quiesced** only when enumeration finished with
-at least one target and every target confirmed `safe_point`. An enumerated
+at least one target and every target confirmed `safe_point` or
+`already_terminal`. An enumerated
 request with no eligible targets displays **No eligible runs found; admission
 pause still applies** with an explicit scope note (running UserWorkflow
 executions only; not proof of host-wide quiescence). Blocked enumeration

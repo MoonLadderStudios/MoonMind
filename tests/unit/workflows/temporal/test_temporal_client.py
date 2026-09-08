@@ -686,3 +686,102 @@ async def test_control_terminal_dispositions_skip_reconciliation(adapter):
 
     assert result.targets[0].state == "already_terminal"
     assert result.status == "succeeded"
+
+
+async def test_control_truncated_resume_never_grows_past_limit(adapter, monkeypatch):
+    """A resumed pass caps the accumulated total instead of growing one per read."""
+
+    from moonmind.schemas.workflow_control_models import (
+        WorkflowControlBatch,
+        WorkflowControlTarget,
+    )
+
+    monkeypatch.setattr(temporal_client_module, "_WORKFLOW_CONTROL_ENUMERATION_LIMIT", 2)
+    partial = WorkflowControlBatch(
+        requestId="resume-truncated", action="Pause",
+        targets=[WorkflowControlTarget(
+            workflowId="wf-0", runId="run-wf-0", updateId="update-0",
+        ), WorkflowControlTarget(
+            workflowId="wf-1", runId="run-wf-1", updateId="update-1",
+        )],
+    )
+    executions = [_FakeWorkflowExecution("wf-0"), _FakeWorkflowExecution("wf-1"),
+                  _FakeWorkflowExecution("wf-2")]
+
+    async def _fake_list(query):
+        for ex in executions:
+            yield ex
+
+    adapter._client.list_workflows = _fake_list
+
+    result = await adapter.send_batch_pause_update(batch=partial)
+
+    assert result.enumerated is False
+    assert result.enumeration_error == "control_enumeration_truncated"
+    assert len(result.targets) == 2
+    assert [target.workflow_id for target in result.targets] == ["wf-0", "wf-1"]
+    assert result.status == "unknown"
+
+
+async def test_control_malformed_control_evidence_stays_retryable(adapter):
+    """A blank or runId-less control_state observation never parks as superseded."""
+
+    from moonmind.schemas.workflow_control_models import (
+        WorkflowControlBatch,
+        WorkflowControlTarget,
+    )
+
+    for observed in (None, "not-a-dict", {}, {"safePoint": True}):
+        batch = WorkflowControlBatch(
+            requestId="malformed-request", action="Pause", enumerated=True,
+            targets=[WorkflowControlTarget(
+                workflowId="wf-malformed", runId="run-malformed",
+                updateId="update-malformed",
+            )],
+        )
+        handle = _confirmed_handle(run_id="run-malformed", payload={})
+        handle.query = AsyncMock(return_value=observed)
+        adapter._client.get_workflow_handle = Mock(return_value=handle)
+        adapter._client.list_workflows = Mock(
+            side_effect=AssertionError("Enumerated targets must not be re-listed")
+        )
+
+        result = await adapter.send_batch_pause_update(batch=batch)
+
+        assert result.targets[0].state == "unknown"
+        assert result.targets[0].reason == "control_query_unavailable"
+        assert result.status == "unknown"
+
+
+async def test_control_generic_not_found_stays_retryable(adapter):
+    """A generic NOT_FOUND during control_state query is not proof of no protocol."""
+
+    from moonmind.schemas.workflow_control_models import (
+        WorkflowControlBatch,
+        WorkflowControlTarget,
+    )
+
+    batch = WorkflowControlBatch(
+        requestId="not-found-request", action="Pause", enumerated=True,
+        targets=[WorkflowControlTarget(
+            workflowId="wf-vanished", runId="run-vanished",
+            updateId="update-vanished",
+        )],
+    )
+    handle = AsyncMock()
+    handle.get_update_handle = Mock(
+        return_value=SimpleNamespace(result=AsyncMock(return_value=None))
+    )
+    handle.query = AsyncMock(
+        side_effect=RuntimeError("workflow execution not found")
+    )
+    adapter._client.get_workflow_handle = Mock(return_value=handle)
+    adapter._client.list_workflows = Mock(
+        side_effect=AssertionError("Enumerated targets must not be re-listed")
+    )
+
+    result = await adapter.send_batch_pause_update(batch=batch)
+
+    assert result.targets[0].state == "unknown"
+    assert result.targets[0].reason == "control_query_unavailable"
+    assert result.status == "unknown"

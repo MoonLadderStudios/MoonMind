@@ -602,6 +602,14 @@ class TemporalClientAdapter:
             )
             seen = {(target.workflow_id, target.run_id) for target in result.targets}
             targets = list(result.targets)
+            if len(targets) >= _WORKFLOW_CONTROL_ENUMERATION_LIMIT:
+                # A resumed pass must not grow the capped audit payload one
+                # run per read: the budget applies to the accumulated total,
+                # not to newly appended targets in this pass.
+                result.targets = targets[:_WORKFLOW_CONTROL_ENUMERATION_LIMIT]
+                result.enumeration_error = "control_enumeration_truncated"
+                await persist()
+                return result
             try:
                 async for execution in client.list_workflows(query=query):
                     identity = (str(execution.id), str(execution.run_id or ""))
@@ -613,7 +621,7 @@ class TemporalClientAdapter:
                     targets.append(WorkflowControlTarget(workflowId=workflow_id, runId=run_id, updateId=update_id))
                     result.enumeration_cursor = workflow_id
                     if len(targets) >= _WORKFLOW_CONTROL_ENUMERATION_LIMIT:
-                        result.targets = targets
+                        result.targets = targets[:_WORKFLOW_CONTROL_ENUMERATION_LIMIT]
                         result.enumeration_error = "control_enumeration_truncated"
                         await persist()
                         return result
@@ -663,7 +671,13 @@ class TemporalClientAdapter:
                 return
             try:
                 observed = await handle.query("control_state", rpc_timeout=_WORKFLOW_UPDATE_ACCEPTED_TIMEOUT)
-                if not isinstance(observed, dict) or observed.get("runId") != target.run_id:
+                observed_run_id = observed.get("runId") if isinstance(observed, dict) else None
+                if not observed_run_id:
+                    # No positive evidence of a successor run: a transient or
+                    # cross-version malformed response stays retryable instead
+                    # of permanently parking the target as superseded.
+                    state, reason = "unknown", "control_query_unavailable"
+                elif observed_run_id != target.run_id:
                     # The pinned run identity is preserved: a Continue-As-New,
                     # reset, or later execution sharing the workflow id never
                     # inherits this control request.
@@ -680,15 +694,15 @@ class TemporalClientAdapter:
                     state, reason = "pending", "safe_point_pending"
             except Exception as exc:
                 message = str(exc).lower()
-                if _is_rpc_status(exc, "NOT_FOUND") or (
-                    "query" in message
-                    and (
-                        "unknown" in message
-                        or "unregistered" in message
-                        or "not found" in message
-                        or "unsupported" in message
-                    )
+                if "query" in message and (
+                    "unknown" in message
+                    or "unregistered" in message
+                    or "unsupported" in message
                 ):
+                    # Only an explicit unknown/unregistered-query error proves
+                    # the workflow lacks the control protocol. A generic
+                    # NOT_FOUND can mean the pinned execution or namespace is
+                    # transiently unavailable, so it stays retryable.
                     state, reason = "unsupported", "control_protocol_unsupported"
                 else:
                     state, reason = "unknown", "control_query_unavailable"
