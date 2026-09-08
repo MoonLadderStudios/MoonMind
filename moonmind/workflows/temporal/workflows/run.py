@@ -95,6 +95,7 @@ with workflow.unsafe.imports_passed_through():
         JIRA_BACKED_AGENT_SKILLS,
     )
     from moonmind.workflows.temporal.story_output_tools import (
+        ISSUE_BRIEF_LOADER_TOOL_NAMES,
         JIRA_CHECK_BLOCKERS_TOOL_NAME,
     )
     from moonmind.workflows.temporal.typed_execution import execute_typed_activity
@@ -9688,9 +9689,7 @@ class MoonMindRunWorkflow:
         """Declare durable prior-step artifacts as fresh-workspace attachments."""
 
         merged = [str(ref).strip() for ref in input_refs if str(ref).strip()]
-        if agent_kind == "managed" and not self._patched_or_false_outside_workflow(
-            RUN_TRUSTED_ISSUE_BRIEF_AUTHORITY_PATCH
-        ):
+        if agent_kind == "managed":
             return list(dict.fromkeys(merged))
         artifact_refs = [
             self._assessment_context.get("assessmentArtifactRef")
@@ -9789,6 +9788,7 @@ class MoonMindRunWorkflow:
         outputs: Mapping[str, Any],
         *,
         request: AgentExecutionRequest | None = None,
+        source_tool_name: str | None = None,
     ) -> None:
         record_aliases = self._patched_or_false_outside_workflow(
             RUN_JIRA_BLOCKER_RECHECK_ASSESSMENT_CONTEXT_ALIAS_PATCH
@@ -9804,8 +9804,7 @@ class MoonMindRunWorkflow:
                     RUN_TRUSTED_ISSUE_BRIEF_AUTHORITY_PATCH
                 )
                 and self._assessment_context.get("briefArtifactRef")
-                and outputs.get("trustedSource")
-                not in {"moonmind.github.get_issue", "moonmind.jira.get_issue"}
+                and source_tool_name not in ISSUE_BRIEF_LOADER_TOOL_NAMES
             ):
                 # Agent-produced copies cannot replace the loader's source.
                 continue
@@ -9838,7 +9837,9 @@ class MoonMindRunWorkflow:
                 self._assessment_context.pop("assessedRepository", None)
                 self._assessment_context.pop("assessedBranch", None)
 
-    def _merge_assessment_context_into_result(self, execution_result: Any) -> Any:
+    def _merge_assessment_context_into_result(
+        self, execution_result: Any, *, source_tool_name: str | None = None
+    ) -> Any:
         if not self._assessment_context:
             return execution_result
         outputs = self._get_from_result(execution_result, "outputs")
@@ -9859,10 +9860,7 @@ class MoonMindRunWorkflow:
                 )
                 and self._assessment_context.get("briefArtifactRef")
             ):
-                if outputs.get("trustedSource") in {
-                    "moonmind.github.get_issue",
-                    "moonmind.jira.get_issue",
-                }:
+                if source_tool_name in ISSUE_BRIEF_LOADER_TOOL_NAMES:
                     # A new trusted load may select a different issue.
                     continue
                 for alias in aliases:
@@ -9938,6 +9936,18 @@ class MoonMindRunWorkflow:
                 if gate_result_ref:
                     merged["moonSpecVerifyArtifactRef"] = gate_result_ref
         if not self._trusted_issue_context:
+            return merged if merged != previous_outputs else previous_outputs
+        if self._patched_or_false_outside_workflow(
+            RUN_TRUSTED_ISSUE_BRIEF_AUTHORITY_PATCH
+        ):
+            # The context recorded from the dispatched loader owns source
+            # fields even when a later tool copies or spoofs trustedSource.
+            copied_source = self._trusted_previous_outputs_context(
+                {**merged, "trustedSource": self._trusted_issue_context["trustedSource"]}
+            )
+            for key in copied_source or {}:
+                merged.pop(key, None)
+            merged.update(self._trusted_issue_context)
             return merged if merged != previous_outputs else previous_outputs
         if self._trusted_previous_outputs_context(previous_outputs):
             return merged if merged != previous_outputs else previous_outputs
@@ -14035,8 +14045,18 @@ class MoonMindRunWorkflow:
                 self._record_assessment_context(
                     outputs_for_story_output,
                     request=agent_request_for_context,
+                    source_tool_name=(
+                        tool_name if agent_request_for_context is None else None
+                    ),
                 )
-                self._record_trusted_issue_context(outputs_for_story_output)
+                if (
+                    not workflow.patched(RUN_TRUSTED_ISSUE_BRIEF_AUTHORITY_PATCH)
+                    or (
+                        agent_request_for_context is None
+                        and tool_name in ISSUE_BRIEF_LOADER_TOOL_NAMES
+                    )
+                ):
+                    self._record_trusted_issue_context(outputs_for_story_output)
                 previous_step_outputs = outputs_for_story_output
                 story_output_result = outputs_for_story_output.get("storyOutput")
                 if isinstance(story_output_result, Mapping):
@@ -15221,7 +15241,11 @@ class MoonMindRunWorkflow:
         if preserve_assessment_context:
             outputs = self._get_from_result(current_result, "outputs")
             if isinstance(outputs, Mapping):
-                self._record_assessment_context(outputs, request=agent_request)
+                self._record_assessment_context(
+                    outputs,
+                    request=agent_request,
+                    source_tool_name=tool_name if agent_request is None else None,
+                )
         while self._jira_blocker_waitable_result(
             current_result,
             tool_type=tool_type,
@@ -15390,11 +15414,16 @@ class MoonMindRunWorkflow:
                     break
             if preserve_assessment_context:
                 current_result = self._merge_assessment_context_into_result(
-                    current_result
+                    current_result,
+                    source_tool_name=tool_name if agent_request is None else None,
                 )
                 outputs = self._get_from_result(current_result, "outputs")
                 if isinstance(outputs, Mapping):
-                    self._record_assessment_context(outputs, request=agent_request)
+                    self._record_assessment_context(
+                        outputs,
+                        request=agent_request,
+                        source_tool_name=tool_name if agent_request is None else None,
+                    )
             self._record_step_result_evidence(
                 node_id,
                 execution_result=current_result,

@@ -1,3 +1,5 @@
+import importlib.util
+from pathlib import Path
 import subprocess
 
 import pytest
@@ -56,10 +58,10 @@ def test_opencode_materializer_pins_deterministic_server_startup_environment():
     assert (
         environment["MOONMIND_STEP_EXECUTION_ID"] == "workflow:run:node-1:execution:1"
     )
-    assert "> /home/app/.omnigent/moonmind/bin/moonmind-opencode-context" in script
+    assert "> /home/app/.omnigent/moonmind/bin/moonmind-context" in script
     assert "> /home/app/.omnigent/moonmind/bin/opencode" in script
     assert (
-        "exec /home/app/.omnigent/moonmind/bin/moonmind-opencode-context "
+        "exec /home/app/.omnigent/moonmind/bin/moonmind-context "
         '/usr/local/bin/opencode "$@"'
     ) in script
     assert "MOONMIND_STEP_EXECUTION_ID=$(cat" in script
@@ -152,8 +154,10 @@ def test_github_projection_exposes_only_non_secret_cli_environment():
 
 
 @pytest.mark.parametrize("capability", ["EXECUTION_FANOUT", "CONTAINER_JOBS"])
-def test_opencode_projection_restores_scoped_capability_file_selector(
+@pytest.mark.parametrize("enable_opencode", [False, True])
+def test_generic_projection_restores_scoped_capability_file_selector(
     capability,
+    enable_opencode,
 ) -> None:
     runtime_environment = {
         "MOONMIND_URL": "http://api:8000",
@@ -179,7 +183,7 @@ def test_opencode_projection_restores_scoped_capability_file_selector(
         )
     script, environment = _build(
         target_path="",
-        enable_opencode_runtime=True,
+        enable_opencode_runtime=enable_opencode,
         runtime_environment=runtime_environment,
     )
 
@@ -232,3 +236,14 @@ def test_opencode_runtime_seeds_plugin_npm_cache_before_host_start():
         check=False,
     )
     assert syntax.returncode == 0, syntax.stderr
+
+
+def test_projected_cli_restores_context_after_child_environment_is_stripped(tmp_path):
+    replay = (
+        Path(__file__).resolve().parents[3]
+        / "tests/integration/reliability/replays/issue-brief-verification-handoff/runner_boundary.py"
+    )
+    spec = importlib.util.spec_from_file_location("runner_boundary", replay)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    module.exercise_projection(tmp_path)

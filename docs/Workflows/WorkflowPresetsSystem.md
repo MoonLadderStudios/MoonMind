@@ -36,10 +36,14 @@ Presets do not replace Skills, require per-preset React forms, grant execution r
 
 Trusted issue loaders persist the complete GitHub or Jira brief as a linked JSON
 artifact before returning to the workflow. The existing `briefArtifactRef` carries
-that source into the first assessment and subsequent implementation, remediation,
-and verification workspaces. Inline context may be shortened for history limits;
+that source into attachment-capable assessment, implementation, remediation,
+and verification workspaces. Direct managed Codex sessions retain their existing
+prepared-context path because their session adapter rejects raw input refs.
+Inline context may be shortened for prompt limits;
 the full attachment remains authoritative. Agent-generated copies do not replace
-the loader's brief. Artifact storage failure stops the handoff before assessment.
+the loader's brief. Loader authority comes from the dispatched native tool identity,
+never from an agent's `trustedSource` field. Artifact storage failure stops the
+handoff before assessment.
 
 GitHub implementation presets declare `docker` for their repository verification
 work. Admission validates Docker readiness; agents use the

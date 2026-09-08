@@ -159,7 +159,7 @@ async def _run_exact_host_opencode_command(
         "bridge_dir=Path('/tmp/moonmind-opencode-attestation'), "
         "auth_secret='moonmind-attestation'); "
         "result = subprocess.run("
-        "['/home/app/.omnigent/moonmind/bin/moonmind-opencode-context', "
+        "['/home/app/.omnigent/moonmind/bin/moonmind-context', "
         "*sys.argv[1:]], "
         "env=env, text=True, capture_output=True); "
         "sys.stdout.write(result.stdout); sys.stderr.write(result.stderr); "

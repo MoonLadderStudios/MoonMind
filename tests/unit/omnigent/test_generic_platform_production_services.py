@@ -249,7 +249,7 @@ async def test_exact_host_opencode_probe_composes_both_environment_builders() ->
     ]
     assert "from omnigent.host.connect import _build_runner_env" in argv[5]
     assert "from omnigent.opencode_native_app_server import filtered_server_env" in argv[5]
-    assert "moonmind-opencode-context" in argv[5]
+    assert "moonmind-context" in argv[5]
     assert "env=runner_env" in argv[5]
     assert argv[6:] == ["gh", "auth", "status", "--hostname", "github.com"]
     assert kwargs == {"timeout_seconds": 30.0, "check": False}
@@ -1137,6 +1137,7 @@ def test_generic_container_capability_reaches_python_test_submission(
         plan=plan,
         host_lease_ref="lease-1",
         launch_policy=get_launch_policy("omnigent-on-demand@1"),
+        workspace_attachment={"accessMode": "read-only"},
     )
     capability = verify_container_job_session_capability(
         environment["MOONMIND_CONTAINER_JOBS_BEARER_TOKEN"],
@@ -1150,6 +1151,7 @@ def test_generic_container_capability_reaches_python_test_submission(
     }
     assert capability.workspace_id == "sandbox-1"
     assert capability.runtime_id == harness_id
+    assert capability.workspace_read_only is True
     assert (
         capability.agent_run_id
         == capability.owner.principal_id

@@ -63,6 +63,7 @@ class OmnigentRuntimeEnvironmentService:
         plan: OmnigentExecutionPlanEnvelope,
         host_lease_ref: str,
         launch_policy: LaunchPolicy,
+        workspace_attachment: Mapping[str, Any] | None = None,
     ) -> Mapping[str, str]:
         required_capabilities = authored_required_capabilities(request)
         needs_fanout = EXECUTION_FANOUT_REQUIRED_CAPABILITY in required_capabilities
@@ -115,6 +116,15 @@ class OmnigentRuntimeEnvironmentService:
                     "container jobs require an authoritative sandbox workspace locator",
                     code=HarnessPlatformFailure.OMNIGENT_HOST_LAUNCH_FAILED,
                 ) from exc
+            access_mode = (workspace_attachment or {}).get("accessMode")
+            if not isinstance(access_mode, str) or access_mode not in {
+                "read-only",
+                "read-write",
+            }:
+                raise HarnessPlatformError(
+                    "container jobs require authoritative workspace access mode",
+                    code=HarnessPlatformFailure.OMNIGENT_HOST_LAUNCH_FAILED,
+                )
             environment.update(
                 {
                     "MOONMIND_CONTAINER_JOBS_MCP_URL": self._moonmind_url.rstrip("/")
@@ -133,6 +143,7 @@ class OmnigentRuntimeEnvironmentService:
                         workspace_kind="sandbox",
                         workspace_id=locator.workspace_id,
                         workspace_relative_path=locator.relative_path,
+                        workspace_read_only=access_mode == "read-only",
                         lifetime_seconds=int(launch_policy.limits["timeoutSeconds"]),
                     ),
                     "MOONMIND_CONTAINER_JOBS_SOURCE_KIND": "omnigent",
