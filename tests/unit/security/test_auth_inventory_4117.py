@@ -18,6 +18,7 @@ semantics) are durable and move with docs/Security/AuthenticationContracts.md.
 from __future__ import annotations
 
 import uuid
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
@@ -74,11 +75,17 @@ def test_canonical_principal_is_uuid_backed_user_id():
 
 def test_external_identity_pair_has_unique_pair_constraint():
     table = db_models.User.__table__
-    assert table.c["oidc_provider"].type.length == 32
+    # Pre-change baseline (owned for replacement by the K3 identity/migration
+    # child): the legacy `oidc_provider` column is 32 chars and cannot hold a
+    # full issuer URI. The frozen contract is uniqueness + full preservation
+    # of the `(issuer, subject)` pair, independently of the legacy layout —
+    # K3 replaces this with one external-identity relation when the field
+    # cannot hold issuer URIs, never two competing mappings.
     constraints = list(table.constraints)
     assert any(
         getattr(c, "name", "") == "uq_oidc_identity" for c in constraints
     ), "expected uq_oidc_identity unique pair constraint on (oidc_provider, oidc_subject)"
+    assert "oidc_subject" in table.c and table.c["oidc_subject"].type.length == 255
 
 
 def test_zero_uuid_default_is_reserved_single_user_principal():
@@ -87,10 +94,19 @@ def test_zero_uuid_default_is_reserved_single_user_principal():
 
 
 def test_target_modes_are_frozen_and_documented():
-    inventory = open("docs/tmp/KeycloakRemovalInventory-4117.md", encoding="utf-8").read()
-    contracts = open("docs/Security/AuthenticationContracts.md", encoding="utf-8").read()
+    inventory = Path("docs/tmp/KeycloakRemovalInventory-4117.md").read_text(encoding="utf-8")
+    contracts = Path("docs/Security/AuthenticationContracts.md").read_text(encoding="utf-8")
+    # Supported modes: asserted as structured table rows in the canonical
+    # contract (`| `accounts` |`), not incidental prose mentions — a removed
+    # mode row or an added retired-mode row fails even when the word appears
+    # elsewhere in the document.
     for mode in ("accounts", "oidc", "header", "disabled"):
-        assert mode in contracts
+        assert f"| `{mode}` |" in contracts, f"missing structured mode row for {mode}"
+    # Retired selectors: frozen as rejected-at-startup with migration guidance
+    # in the canonical contract, with dispositions tracked in the inventory.
+    for retired in ("keycloak", "default", "google"):
+        assert retired in contracts
+    assert "Rejected selectors" in contracts or "retired selectors" in contracts.lower()
     for retired in ("keycloak", "default", "google"):
         assert retired in inventory  # retired literals tracked with disposition
 
@@ -148,6 +164,7 @@ async def test_worker_auth_rejects_legacy_token_with_gone(monkeypatch):
             worker_token="legacy-token", user=_user(OWNER_PRINCIPAL)
         )
     assert exc_info.value.status_code == 410
+    assert exc_info.value.detail["code"] == "worker_token_deprecated"
 
 
 @pytest.mark.asyncio
