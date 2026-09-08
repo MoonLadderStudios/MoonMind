@@ -205,10 +205,10 @@ services:
       - MOONMIND_MANAGED_RUNTIME_JANITOR_MAX_DELETE_BYTES=${MOONMIND_MANAGED_RUNTIME_JANITOR_MAX_DELETE_BYTES:-}
       - MOONMIND_MANAGED_RUNTIME_JANITOR_LOCK_PATH=${MOONMIND_MANAGED_RUNTIME_JANITOR_LOCK_PATH:-/work/agent_jobs/.janitor.lock}
       # OIDC specific variables for API service
-      - AUTH_PROVIDER=${AUTH_PROVIDER:-disabled} # local, google, or disabled
-      - OIDC_ISSUER_URL=${OIDC_ISSUER_URL:-http://keycloak:8080/realms/moonmind} # For 'local'
-      - OIDC_CLIENT_ID=${OIDC_CLIENT_ID:-api-service} # For 'local', matches realm-export.json
-      - OIDC_CLIENT_SECRET=${API_CLIENT_SECRET:-changeme} # For 'local', matches realm-export.json
+      - AUTH_PROVIDER=${AUTH_PROVIDER:-disabled} # shipped: disabled (default local single-user) or keycloak (legacy opt-in, pending removal); see docs/Security/AuthenticationSystem.md
+      - OIDC_ISSUER_URL=${OIDC_ISSUER_URL:-http://keycloak:8080/realms/moonmind} # legacy Keycloak realm default; used when AUTH_PROVIDER=keycloak
+      - OIDC_CLIENT_ID=${OIDC_CLIENT_ID:-api-service} # For 'keycloak', matches realm-export.json
+      - OIDC_CLIENT_SECRET=${API_CLIENT_SECRET:-changeme} # For 'keycloak', matches realm-export.json
       - JWT_SECRET=${JWT_SECRET:-devsecret} # For 'disabled' auth provider (legacy JWT)
     env_file:
       - path: .env

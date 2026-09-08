@@ -111,6 +111,31 @@ facade. A valid MoonMind login does not grant unrestricted upstream host access;
 service credentials stay server-side and browser cookies/bearer headers are not
 blindly forwarded upstream.
 
+### 5.1 Shipped transport, expiry, and error behavior
+
+Applies to the shipped `disabled` / `keycloak` contract only. The proposed
+`accounts` / `oidc` / `header` modes carry no transport, cookie, or error
+contract until their implementation qualifies.
+
+- User sessions travel in the `Authorization: Bearer` header
+  (`BearerTransport(tokenUrl="auth/jwt/login")` in `api_service/auth.py`).
+  Shipped auth code sets no session cookies, so there is no cookie/CSRF
+  contract on this boundary.
+- User JWT lifetime is 3600 seconds
+  (`get_jwt_strategy()` in `api_service/auth.py`, `JWT_SECRET_KEY`-signed).
+- Outside `disabled` mode, requests resolve through the FastAPI Users
+  `current_active_user` dependency (`api_service/auth_providers.py`):
+  a missing or invalid bearer is rejected without reaching route logic.
+- In `disabled` mode, an unparseable `DEFAULT_USER_ID` fails with
+  `500 "Invalid DEFAULT_USER_ID"` and a missing default-user row fails with
+  `500 "Default user not found"` (`get_default_user_from_db` in
+  `api_service/auth_providers.py`). A transient database lookup failure on
+  the request path logs a warning and falls back to the configured
+  default-user stub; it never promotes another principal.
+- Worker-token endpoints use `get_current_user_optional()` so header-only
+  worker credentials are not blocked by the strict bearer dependency
+  first (`api_service/auth_providers.py`).
+
 ## 6. Fresh install and existing data
 
 - Fresh local install: `docker compose up -d` with no mandatory `.env`. The
