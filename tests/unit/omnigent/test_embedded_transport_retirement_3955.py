@@ -189,7 +189,7 @@ def test_removal_waits_for_bounded_drain_before_launch_code() -> None:
 
 
 def test_proxy_operates_with_embedded_launch_modules_unavailable() -> None:
-    """Proxy config, contracts, and composition load with embedded gone."""
+    """Proxy config, contracts, composition, and the API router load with embedded gone."""
 
     script = "\n".join(
         [
@@ -220,10 +220,22 @@ def test_proxy_operates_with_embedded_launch_modules_unavailable() -> None:
             "from moonmind.omnigent.bridge_proxy import BridgeSessionCreateRequest, BridgeSessionEventRequest",
             "BridgeSessionCreateRequest(labels={'moonmind.workflow_id': 'wf-1'})",
             "BridgeSessionEventRequest(type='message')",
+            "from moonmind.omnigent.embedded_host_requests import EmbeddedHostRegisterRequest",
+            "EmbeddedHostRegisterRequest(hostId='h-1')",
             "import api_service.api.routers.omnigent_bridge_composition as composition",
             "assert callable(composition.build_bridge_session_proxy)",
             "assert callable(composition.build_bridge_session_store)",
+            # The production proxy API surface (router import + route table)
+            # must not require the retired launch modules either.
+            "import api_service.api.routers.omnigent_bridge as bridge_router",
+            "paths = {getattr(route, 'path', '') for route in bridge_router.router.routes}",
+            "assert '/v1/hosts/register' in paths",
+            "assert 410 in bridge_router._PUBLIC_ERROR_RESPONSES",
+            "retired = [r for r in bridge_router.router.routes if getattr(r, 'path', '') in {'/v1/hosts/register'}]",
+            "assert retired and 410 in (retired[0].responses or {})",
             "assert 'moonmind.omnigent.bridge_embedded' not in sys.modules",
+            "assert 'moonmind.omnigent.embedded_host_channel' not in sys.modules",
+            "assert 'moonmind.omnigent.embedded_evidence' not in sys.modules",
             "print('proxy-without-embedded-ok')",
         ]
     )
@@ -295,3 +307,142 @@ def test_bridge_config_module_still_decodes_historical_embedded_literal() -> Non
         "schemaVersion: moonmind.omnigent_bridge.v1\nenabled: false\n"
         "compatibility:\n  hostProtocolMode: embedded_omnigent_compatible_server\n"
     ).host_protocol_mode
+
+
+def test_retired_host_routes_declare_410_in_openapi() -> None:
+    """Register/heartbeat/event-ingest model the terminal 410 response (#3955)."""
+
+    from api_service.api.routers import omnigent_bridge as bridge_router
+
+    assert 410 in bridge_router._PUBLIC_ERROR_RESPONSES
+    wanted = {
+        "/v1/hosts/register",
+        "/v1/hosts/{host_id}/heartbeat",
+        "/v1/hosts/{host_id}/sessions/{session_id}/events",
+    }
+    found: dict[str, dict[int, Any]] = {}
+    for route in bridge_router.router.routes:
+        path = str(getattr(route, "path", ""))
+        if path in wanted:
+            found[path] = dict(getattr(route, "responses", None) or {})
+    assert set(found) == wanted
+    for path, responses in found.items():
+        assert 410 in responses, path
+        assert (
+            responses[410].get("model") is bridge_router.OmnigentPublicErrorResponse
+        ), path
+
+
+def test_tunnel_retirement_close_carries_reason() -> None:
+    """WebSocket retirement denials name the cause and the alternative (#3955)."""
+
+    from api_service.api.routers import omnigent_bridge as bridge_router
+
+    reason = bridge_router._EMBEDDED_TRANSPORT_RETIRED_CLOSE_REASON
+    assert "omnigent_embedded_transport_retired" in reason
+    assert "upstream_omnigent_server_proxy" in reason
+    assert len(reason.encode("utf-8")) <= 123
+
+
+@pytest.mark.asyncio
+async def test_retained_embedded_sessions_drain_under_proxy_mode() -> None:
+    """Persisted-mode dispatch keeps retained drain paths on their owner (#3955)."""
+
+    from types import SimpleNamespace
+
+    from api_service.api.routers import omnigent_bridge as bridge_router
+
+    config = parse_bridge_config({})
+    assert config.host_protocol_mode == HOST_PROTOCOL_MODE_PROXY
+    proxy = object()
+
+    class _Store:
+        def __init__(self, row: Any) -> None:
+            self._row = row
+
+        async def get_session_by_provider_session_id(
+            self, session_id: str
+        ) -> Any:
+            return self._row
+
+    embedded_row = SimpleNamespace(
+        metadata_={"hostProtocolMode": HOST_PROTOCOL_MODE_EMBEDDED}
+    )
+    facade, selected = await bridge_router._resolve_session_control_facade(
+        session_id="sess-1",
+        config=config,
+        proxy=proxy,  # type: ignore[arg-type]
+        embedded_facade=None,
+        store=_Store(embedded_row),  # type: ignore[arg-type]
+    )
+    assert selected is True
+    assert facade is not None and facade is not proxy
+    assert getattr(facade, "_drain_retained_sessions", False) is True
+
+    proxy_row = SimpleNamespace(
+        metadata_={"hostProtocolMode": HOST_PROTOCOL_MODE_PROXY}
+    )
+    facade_proxy, selected_proxy = (
+        await bridge_router._resolve_session_control_facade(
+            session_id="sess-1",
+            config=config,
+            proxy=proxy,  # type: ignore[arg-type]
+            embedded_facade=None,
+            store=_Store(proxy_row),  # type: ignore[arg-type]
+        )
+    )
+    assert facade_proxy is proxy
+    assert selected_proxy is False
+
+    facade_unknown, selected_unknown = (
+        await bridge_router._resolve_session_control_facade(
+            session_id="sess-unknown",
+            config=config,
+            proxy=proxy,  # type: ignore[arg-type]
+            embedded_facade=None,
+            store=_Store(None),  # type: ignore[arg-type]
+        )
+    )
+    assert facade_unknown is proxy
+    assert selected_unknown is False
+
+
+@pytest.mark.asyncio
+async def test_drain_facade_refuses_new_admission() -> None:
+    """A drain facade drains retained rows but never admits new work (#3955)."""
+
+    from moonmind.omnigent.bridge_embedded import (
+        OmnigentEmbeddedHostProtocolFacade,
+    )
+
+    config = parse_bridge_config({})
+    assert config.host_protocol_mode == HOST_PROTOCOL_MODE_PROXY
+
+    class _Store:
+        pass
+
+    facade = OmnigentEmbeddedHostProtocolFacade(
+        run_store=_Store(),  # type: ignore[arg-type]
+        config=config,
+        drain_retained_sessions=True,
+    )
+    for operation in (
+        facade.create_session,
+        facade.dispatch_runner,
+        facade.register_host,
+    ):
+        try:
+            if operation is facade.create_session:
+                await operation(request=None, binding=None)  # type: ignore[arg-type]
+            elif operation is facade.dispatch_runner:
+                await operation(idempotency_key="key")
+            else:
+                await operation(request=None, auth=None)  # type: ignore[arg-type]
+        except Exception as exc:  # noqa: BLE001 - asserting mapped denial below
+            assert getattr(exc, "status_code", None) == 410
+            assert (
+                getattr(exc, "code", "")
+                == "omnigent_embedded_transport_retired"
+            )
+        else:
+            raise AssertionError(f"{operation.__name__} admitted new work")

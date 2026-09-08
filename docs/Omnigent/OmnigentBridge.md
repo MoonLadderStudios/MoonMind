@@ -111,8 +111,16 @@ tunnel.
 
 `embedded_omnigent_compatible_server` is retired and cannot admit new work: an
 enabled bridge that selects it fails fast with the proxy alternative, and live
-embedded host routes answer `410 Gone`. The literal survives only so retained
-session rows and historical evidence keep decoding to their recorded mode.
+embedded host routes answer `410 Gone` (declared in OpenAPI so generated
+clients model the terminal `omnigent_embedded_transport_retired` payload;
+WebSocket denials carry the same code plus the proxy alternative as the close
+reason). The literal survives only so retained session rows and historical
+evidence keep decoding to their recorded mode. Session-scoped controls (read,
+stop, terminal cleanup, delete, elicitation, event and resource reads) dispatch
+by each session row's recorded mode, so retained embedded sessions keep their
+recorded cleanup owner until drained while the deployment runs proxy mode;
+new admission still follows the configured global mode and is never silently
+substituted.
 Its exact auth and protocol contract is owned by
 `EmbeddedHostAuthCompatibility.md`, which now documents the retired transport
 and its drain disposition. The native Workflow Chat `embedded=1` presentation
