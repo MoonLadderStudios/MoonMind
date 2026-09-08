@@ -599,6 +599,8 @@ RUN_CANONICAL_GIT_REPOSITORY_PROJECTION_PATCH = (
 )
 RUN_MEMO_RUNTIME_INHERITANCE_PATCH = "run-memo-runtime-inheritance-v1"
 DEPENDENCY_GATE_PATCH = "dependency-gate-v1"
+# Older canonical-payload histories skipped the gate; preserve their commands.
+RUN_CANONICAL_DEPENDENCY_PARAMETERS_PATCH = "run-canonical-dependency-parameters-v1"
 # Replay-stable patch id for unified wait-through-rerun dependency behavior.
 # Under this patch, a non-success prerequisite terminal outcome (failed,
 # canceled, terminated, timed_out, unresolvable) keeps the dependent run
@@ -10156,25 +10158,32 @@ class MoonMindRunWorkflow:
     def _dependency_ids_from_parameters(
         self, parameters: Mapping[str, Any]
     ) -> list[str]:
-        task_payload = parameters.get("task")
+        parameter_key = "task"
+        if "workflow" in parameters and workflow.patched(
+            RUN_CANONICAL_DEPENDENCY_PARAMETERS_PATCH
+        ):
+            parameter_key = "workflow"
+        task_payload = parameters.get(parameter_key)
         if task_payload is None:
             return []
         if not isinstance(task_payload, Mapping):
-            raise ValueError("initialParameters.task must be an object when provided")
+            raise ValueError(
+                f"initialParameters.{parameter_key} must be an object when provided"
+            )
 
         depends_on = task_payload.get("dependsOn")
         if depends_on is None:
             return []
         if not isinstance(depends_on, list):
             raise ValueError(
-                "initialParameters.task.dependsOn must be a list when provided"
+                f"initialParameters.{parameter_key}.dependsOn must be a list when provided"
             )
 
         normalized: list[str] = []
         for dep_id in depends_on:
             if not isinstance(dep_id, str):
                 raise ValueError(
-                    "initialParameters.task.dependsOn entries must be strings"
+                    f"initialParameters.{parameter_key}.dependsOn entries must be strings"
                 )
             candidate = dep_id.strip()
             if candidate and candidate not in normalized:
