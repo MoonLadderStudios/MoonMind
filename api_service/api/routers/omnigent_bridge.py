@@ -5558,6 +5558,7 @@ async def _dispatch_workflow_chat_facade(
 
     # 12. Read-only resource indexes and content.
     resource_value = params.get("res_path") or params.get("file_id")
+    _validate_native_resource_path(resource_value)
     result = await facade.get_resource(
         operation.name, provider_session_id, resource_value
     )
