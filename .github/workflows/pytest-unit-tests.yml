@@ -898,8 +898,23 @@ jobs:
           require_selected "omnigent-deterministic-conformance" \
             "${{ needs.select-test-suites.outputs.omnigent_conformance }}" \
             "${{ needs.omnigent-deterministic-conformance.result }}"
-          require_selected "verify-test-shard-ownership" \
-            "${{ needs.select-test-suites.outputs.full_backend }}" \
+
+          # Always-run aggregators (MoonLadderStudios/MoonMind#3950): both
+          # test-frontend and check-generated-contracts use `if: always()`
+          # and exit non-zero when a selected child fails, exiting zero on
+          # an intentional skip. They always produce a meaningful result,
+          # so require their success unconditionally — a failing frontend
+          # or generated-contract gate must fail ci-required.
+          require_always "test-frontend" \
+            "${{ needs.test-frontend.result }}"
+          require_always "check-generated-contracts" \
+            "${{ needs.check-generated-contracts.result }}"
+
+          # Always-run static invariant (MoonLadderStudios/MoonMind#3950):
+          # verify-test-shard-ownership has no selection gate, so aggregate
+          # it unconditionally. Gating it on full_backend tripped a
+          # success-but-unselected failure on every targeted PR.
+          require_always "verify-test-shard-ownership" \
             "${{ needs.verify-test-shard-ownership.result }}"
 
           if [[ "$failures" -gt 0 ]]; then
