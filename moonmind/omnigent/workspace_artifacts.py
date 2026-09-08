@@ -972,13 +972,14 @@ class WorkspaceArtifactProjector:
                             "archive member is sparse, truncated, or oversized",
                             "OMNIGENT_WORKSPACE_MATERIALIZATION_FAILED",
                         )
-                    # Normalize privileged metadata; content stays as data.
-                    try:
-                        os.chmod(target, 0o600, follow_symlinks=False)
-                    except OSError:
-                        # Mode normalization is best-effort: extraction
-                        # already created the file with restrictive bits.
-                        pass
+                    # Preserve ordinary executable bits: stripping them dirties
+                    # Git checkouts and breaks restored scripts before launch.
+                    # Keep read/write access owner-only and drop privilege bits;
+                    # imported hooks are removed before the tree is promoted.
+                    # A chmod failure must abort restore, never mark it ready.
+                    os.chmod(
+                        target, 0o600 | (member.mode & 0o111), follow_symlinks=False
+                    )
                 elif member.isdir():
                     target.mkdir(parents=True, exist_ok=True)
                 elif member.issym() or member.islnk():
