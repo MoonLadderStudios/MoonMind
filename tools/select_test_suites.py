@@ -143,6 +143,17 @@ INTEGRATION_CI_EXACT = {
     "api_service/main.py",
     "api_service/api/routers/worker_auth.py",
     "moonmind/config/settings.py",
+    # MoonLadderStudios/MoonMind#4128 (rw-8): frontend transport is part of
+    # the same qualification boundary. The generated OpenAPI client and the
+    # tooling that produces it carry session/credential transport; a change
+    # here must run integration_ci so a transport regression cannot skip
+    # its required tests. Schema (api_service/db/, migrations/) is already
+    # covered by INTEGRATION_CI_PREFIXES; pins (pyproject/uv.lock/poetry.lock)
+    # select integration_ci via the force-full path and package-lock via the
+    # exact-artifact gate (pinned in the taxonomy test).
+    "tools/export_openapi.py",
+    "tools/generate_openapi_types.py",
+    "frontend/src/generated/openapi.ts",
 }
 
 INTEGRATION_CI_PREFIXES = (
