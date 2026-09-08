@@ -14,7 +14,6 @@ from .status import (
     JULES_TERMINAL_FAILURE_PROVIDER_STATUSES,
     JULES_TERMINAL_SUCCESS_PROVIDER_STATUSES,
     JulesNormalizedStatus,
-    JulesStatusSnapshot,
     normalize_jules_status,
 )
 from .vocabulary import (
@@ -37,7 +36,6 @@ __all__ = [
     "JULES_WIRE_STATUS_MAP",
     "JulesNormalizedStatus",
     "JulesStatusClassification",
-    "JulesStatusSnapshot",
     "JulesUnknownStatusError",
     "RuntimeGateState",
     "build_runtime_gate_state",

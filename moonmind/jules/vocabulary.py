@@ -44,6 +44,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any, Literal, NoReturn
 
+from moonmind.schemas.agent_runtime_models import UnsupportedStatusError
+
 JulesNormalizedStatus = Literal[
     "queued",
     "running",
@@ -119,7 +121,7 @@ JULES_TERMINAL_FAILURE_PROVIDER_STATUSES: frozenset[str] = frozenset(
 JULES_DEFAULT_PROVIDER_STATUS = "pending"
 
 
-class JulesUnknownStatusError(ValueError):
+class JulesUnknownStatusError(UnsupportedStatusError):
     """Raised at execution-critical boundaries for unknown/missing Jules status."""
 
 

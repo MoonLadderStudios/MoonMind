@@ -41,7 +41,7 @@ from moonmind.security.outbound_scan import (
     scan_outbound_bundle,
     scan_outbound_text,
 )
-from moonmind.jules.status import JulesStatusSnapshot, normalize_jules_status
+from moonmind.jules.status import JulesStatusClassification, normalize_jules_status
 from moonmind.workflows.temporal.runtime.workspace_locators import (
     SandboxWorkspaceRecordStore,
     resolve_managed_workspace_locator,
@@ -4671,7 +4671,7 @@ class TemporalIntegrationActivities:
         )
 
     @staticmethod
-    def _status_snapshot(raw_status: str | None) -> JulesStatusSnapshot:
+    def _status_snapshot(raw_status: str | None) -> JulesStatusClassification:
         return normalize_jules_status(raw_status)
 
     @staticmethod
@@ -4679,7 +4679,7 @@ class TemporalIntegrationActivities:
         *,
         provider_status: str | None,
         normalized_hint: str | None,
-    ) -> JulesStatusSnapshot:
+    ) -> JulesStatusClassification:
         snapshot = normalize_jules_status(provider_status)
         token = str(normalized_hint or "").strip().lower()
         if token == "cancelled":
@@ -4688,7 +4688,7 @@ class TemporalIntegrationActivities:
             return snapshot
 
         terminal = token in {"completed", "failed", "canceled"}
-        return JulesStatusSnapshot(
+        return JulesStatusClassification(
             provider_status=snapshot.provider_status,
             provider_status_token=snapshot.provider_status_token,
             normalized_status=token,  # type: ignore[arg-type]
