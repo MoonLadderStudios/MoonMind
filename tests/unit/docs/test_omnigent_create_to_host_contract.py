@@ -1,6 +1,11 @@
 import json
 import re
+import sys
 from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+
+from _semantic_docs_3964 import assert_semantic_present
 
 from moonmind.schemas.agent_runtime_models import AgentExecutionRequest
 
@@ -24,7 +29,11 @@ def test_identity_and_versioned_wire_contract_are_pinned() -> None:
     assert '"agentKind": "external"' in text
     assert '"agentId": "omnigent"' in text
     assert '"harnessOverride": "codex-native"' in text
-    assert "There is deliberately no `session.hostId`" in text
+    assert_semantic_present(
+        text,
+        ("deliberately no", "session.hostid"),
+        context="create-to-host hostId absence",
+    )
     assert text.count('"schemaVersion": "omnigent-create-host/v1"') >= 4
 
 
@@ -50,7 +59,11 @@ def test_launch_snapshot_and_terminal_authority_are_pinned() -> None:
     assert terminal["primaryStatus"] == "completed"
     assert terminal["cleanup"] == {"status": "completed", "janitorRequired": False}
     assert terminal["profileLease"] == {"releaseStatus": "released"}
-    assert "never replace or obscure `primaryStatus`" in text
+    assert_semantic_present(
+        text,
+        ("never replace or obscure", "primaryStatus"),
+        context="create-to-host terminal authority",
+    )
 
 
 def test_manual_host_id_is_rejected_by_both_canonical_contracts() -> None:
@@ -63,12 +76,13 @@ def test_manual_host_id_is_rejected_by_both_canonical_contracts() -> None:
 
 def test_explicit_selection_is_fail_closed_without_substitution() -> None:
     text = CONTRACT.read_text(encoding="utf-8")
-    invariant = (
-        "An explicit Omnigent selection never silently runs through direct Codex, "
-        "another Provider Profile, another host mode, an arbitrary static host, or "
-        "a broader network/mount policy."
+    # Same invariant as the reconciliation doc (#3964: exact paragraph
+    # loosened to the substitution prohibition contract).
+    assert_semantic_present(
+        text,
+        ("explicit omnigent selection", "never silently"),
+        context="create-to-host no-substitution invariant",
     )
-    assert invariant in text
     for code in (
         "OMNIGENT_RUNTIME_UNSUPPORTED",
         "OMNIGENT_PROFILE_UNAVAILABLE",

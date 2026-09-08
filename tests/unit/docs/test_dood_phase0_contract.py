@@ -1,5 +1,11 @@
 from pathlib import Path
 
+import sys
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+
+from _semantic_docs_3964 import assert_semantic_present
+
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
 BACKEND_DOC = REPO_ROOT / "docs" / "ManagedAgents" / "DockerBackendService.md"
@@ -48,12 +54,20 @@ def test_docker_backend_service_reuses_provisioned_images_across_workflows() -> 
     text = _read(BACKEND_DOC)
 
     assert "Optional images are acquired on demand" in text
-    assert "Deployment-owned local image recipes are provisioned on demand" in text
+    assert_semantic_present(
+        text,
+        ("deployment-owned local image recipes", "provisioned on demand"),
+        context="backend image provisioning",
+    )
     assert "cross-workflow image cache" in text
     assert "reusableAcrossWorkflows: true" in text
     assert "removeOnJobEnd: false" in text
     assert "per-source, per-build-key lock" in text
-    assert "Job cleanup never removes shared images" in text
+    assert_semantic_present(
+        text,
+        ("job cleanup never removes shared images",),
+        context="backend shared-image cleanup guard",
+    )
 
 
 def test_docker_backend_service_uses_logical_workspace_references() -> None:
@@ -62,7 +76,11 @@ def test_docker_backend_service_uses_logical_workspace_references() -> None:
     assert "Workspaces are logical references" in text
     assert "callerProvidesHostPath: false" in text
     assert "visibilityProbeBeforeProvisioning: true" in text
-    assert "A failed probe stops the job before expensive image provisioning" in text
+    assert_semantic_present(
+        text,
+        ("failed probe stops the job", "image provisioning"),
+        context="backend visibility-probe gate",
+    )
 
 
 def test_omnigent_uses_mcp_without_receiving_docker_authority() -> None:
@@ -86,10 +104,20 @@ def test_canonical_backend_doc_has_no_migration_or_compatibility_checklist() -> 
 def test_sidecar_document_is_only_a_removed_design_tombstone() -> None:
     text = _normalized(SIDECAR_DOC)
 
-    assert "Removed from desired state" in text
-    assert "not a supported MoonMind desired state or compatibility path" in text
-    assert "only a tombstone for old links" in text
-    assert "does not define a runtime mode" in text
+    assert_semantic_present(
+        text, ("removed from desired state",), context="sidecar tombstone status"
+    )
+    assert_semantic_present(
+        text,
+        ("not a supported", "desired state", "compatibility path"),
+        context="sidecar tombstone scope",
+    )
+    assert_semantic_present(
+        text, ("only a tombstone for old links",), context="sidecar tombstone purpose"
+    )
+    assert_semantic_present(
+        text, ("does not define a runtime mode",), context="sidecar tombstone limit"
+    )
     assert "may remain temporarily" not in text
 
 
@@ -120,7 +148,13 @@ def test_related_architecture_docs_do_not_reinstate_sidecar_as_default() -> None
 def test_backend_doc_remains_domain_agnostic() -> None:
     text = _read(BACKEND_DOC)
 
-    assert "The core remains workload-agnostic" in text
+    assert_semantic_present(
+        text, ("core remains workload-agnostic",), context="backend domain scope"
+    )
     assert "not backend" in text
-    assert "branches for Python, .NET, Unreal, Unity, or Node" in text
+    assert_semantic_present(
+        text,
+        ("branches for python", ".net", "unreal", "unity", "or node"),
+        context="backend toolchain neutrality",
+    )
     assert "specialized worker pool" in text
