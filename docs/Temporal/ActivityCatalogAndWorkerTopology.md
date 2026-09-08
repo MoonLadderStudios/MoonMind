@@ -258,6 +258,40 @@ distinct states:
   old consumers have a verified disposition. Queue separation is not privilege separation: the retained handlers still share the workflow
   worker process and its I/O authority until that removal lands.
 
+Removal is owned by the drain gate in
+`moonmind/workflows/temporal/checkpoint_compat_drain.py`
+(`evaluate_checkpoint_compat_drain`, contract
+`checkpoint-branch-artifact-fleet-drain-v1`), which reuses the canonical
+`evaluate_worker_drain` predicate (`outstanding == 0` → safe to remove).
+Drained means all three deployment-observed dimensions reach zero:
+
+- open pre-cutover histories recorded without the
+  `checkpoint-branch-artifact-fleet-v1` marker (`get_drain_metrics`
+  scoped to the workflow task queue, filtered to pre-marker histories);
+- pending `checkpoint_branch.turn.*` activity tasks still addressed to
+  the workflow queue;
+- retained histories with an undischarged supported-reset obligation.
+
+Fixture replay is history-compatibility evidence, not deployed drainage;
+missing visibility or failed probes are not a clean drain and keep the
+registration retained.
+
+### Actual process permission boundary (consolidated topology)
+
+Until the drain gate above releases the compat registration, the workflow
+worker process intentionally carries database and artifact-retention
+authority (`async_session_maker`, `CheckpointBranchService`, retained
+artifact refs in `workflows/checkpoint_branch_turn.py`) because the
+retained handlers execute old persistence tasks in that process. The four
+`agent_run.py` metadata helpers need none of it (proven behaviorally by
+`test_checkpoint_compat_drain_3949.py`, which runs the helpers with
+database I/O denied while the persistence handler fails closed). New-only
+workflow processing must carry only what its real helpers require; while
+the topology stays consolidated, the justified permission set is exactly
+the retained handlers' persistence authority plus the helpers' catalog
+and registry reads — and the drain gate above is what retires the
+persistence half.
+
 This registration is the current state, not the intended end state. The
 intended least-privilege boundary keeps the workflow fleet Temporal-only with
 no artifact, provider-mutation, or runtime-supervision I/O; whether

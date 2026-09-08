@@ -238,7 +238,11 @@ def workflow_fleet_activity_handlers() -> tuple[Any, ...]:
         external_adapter_execution_style,
         # Replay/in-flight compatibility: pre-cutover activities have no queue
         # override and remain scheduled on the workflow queue. No new calls
-        # route here; retire after those histories and pending tasks drain.
+        # route here; retire only through the drain gate in
+        # ``moonmind.workflows.temporal.checkpoint_compat_drain``
+        # (MoonLadderStudios/MoonMind#3949): removal requires
+        # ``evaluate_checkpoint_compat_drain`` to report zero outstanding
+        # old-queue consumers from live deployment probes.
         *checkpoint_branch_activity_handlers(),
     )
 
