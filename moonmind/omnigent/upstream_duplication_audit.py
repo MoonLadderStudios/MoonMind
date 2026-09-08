@@ -332,9 +332,16 @@ def check_upstream_pin(
     *,
     supported_commits: frozenset[str] | None = None,
 ) -> str:
-    """Accept only a known-compatible upstream commit; reject drift fail-closed."""
+    """Accept only a known-compatible upstream commit; reject drift fail-closed.
 
-    supported = supported_commits or frozenset({PINNED_OMNIGENT_COMMIT})
+    ``supported_commits=None`` selects the default implementation-pin set;
+    an explicitly empty set is a deny-all policy and rejects every commit.
+    """
+
+    if supported_commits is None:
+        supported = frozenset({PINNED_OMNIGENT_COMMIT})
+    else:
+        supported = supported_commits
     candidate = str(reported_commit or "").strip()
     if not candidate:
         raise UpstreamDuplicationAuditError(
@@ -365,14 +372,34 @@ def check_audit_baseline_current() -> None:
         )
 
 
+# The binding-scoped facade operations this audit validates. The single
+# authority is ``workflow_chat_facade.FACADE_OPERATIONS``; this literal mirrors
+# it instead of importing it so the audit module stays importable without the
+# facade's dependency chain (bridge store / API models). CI pins the mirror:
+# ``test_facade_route_allowlist_matches_canonical`` fails on any drift.
 _ALLOWED_FACADE_ROUTES: frozenset[str] = frozenset(
     {
         "changed_files",
-        "workspace_files",
-        "workspace_file",
-        "workspace_diff",
-        "session_files",
+        "get_session",
+        "get_session_agent",
+        "get_session_environment",
+        "list_agents",
+        "list_child_sessions",
+        "list_harnesses",
+        "list_projects",
+        "list_sessions",
+        "liveness",
+        "native_current_user",
+        "native_server_info",
+        "post_event",
+        "resolve_elicitation",
         "session_file",
+        "session_files",
+        "stream_events",
+        "stream_events_websocket",
+        "workspace_diff",
+        "workspace_file",
+        "workspace_files",
     }
 )
 
@@ -415,20 +442,32 @@ def check_generation_match(*, observed: str, authorized: str) -> str:
     return seen
 
 
+# Terminal evidence refs every caller must supply. Presence alone is not
+# enough: a required ref that is absent or blank fails closed so callers
+# cannot omit evidence by passing ``{}`` or a partial mapping.
+REQUIRED_EVIDENCE_REFS: frozenset[str] = frozenset({"terminalRef", "captureRef"})
+
+
 def check_evidence_present(refs: Mapping[str, Any]) -> dict[str, Any]:
     """Accept only complete terminal evidence; missing refs fail closed."""
 
+    provided = dict(refs or {})
     missing = sorted(
         str(key)
-        for key, value in dict(refs or {}).items()
-        if str(value or "").strip() == ""
+        for key in REQUIRED_EVIDENCE_REFS
+        if str(provided.get(key) or "").strip() == ""
+    )
+    missing.extend(
+        str(key)
+        for key, value in provided.items()
+        if key not in REQUIRED_EVIDENCE_REFS and str(value or "").strip() == ""
     )
     if missing:
         raise UpstreamDuplicationAuditError(
-            f"Missing terminal evidence: {', '.join(missing)}",
+            f"Missing terminal evidence: {', '.join(sorted(set(missing)))}",
             code="omnigent_audit_missing_evidence",
         )
-    return dict(refs or {})
+    return dict(provided)
 
 
 def check_credential_scope(
@@ -506,9 +545,25 @@ class AuditReductionSummary:
 
 
 def audit_reduction_summary() -> AuditReductionSummary:
-    """Report the measured reduction: behavior preserved, nothing removed."""
+    """Report the measured reduction, derived from audited dispositions.
 
-    return AuditReductionSummary()
+    ``preserved``/``removed_tables_or_fields``/``residual_dependencies`` are
+    computed from each row's ``disposition`` (``"removed"`` counts as removed)
+    so the evidence stays true on the first successful reduction; the examined
+    baseline is retained for comparison.
+    """
+
+    examined = len(OWNERSHIP_TABLE)
+    residual = tuple(
+        row.candidate_id for row in OWNERSHIP_TABLE if row.disposition != "removed"
+    )
+    removed = examined - len(residual)
+    return AuditReductionSummary(
+        candidates_examined=examined,
+        preserved=len(residual),
+        removed_tables_or_fields=removed,
+        residual_dependencies=residual,
+    )
 
 
 __all__ = [
@@ -517,6 +572,7 @@ __all__ = [
     "AUDIT_ISSUE",
     "OWNERSHIP_TABLE",
     "PRODUCTION_BOUNDARY_COVERAGE",
+    "REQUIRED_EVIDENCE_REFS",
     "AuditReductionSummary",
     "RemovalEligibility",
     "UpstreamDuplicationAuditError",

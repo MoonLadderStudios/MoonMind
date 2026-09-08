@@ -76,11 +76,33 @@ def test_one_owner_per_mutation_with_evidence_downstream() -> None:
         assert "upstream owns" in row.surviving_owner, row.candidate_id
 
 
-def test_production_boundary_coverage_is_caller_backed() -> None:
+def test_facade_route_allowlist_matches_canonical() -> None:
+    # The audit's route guard must accept the full binding-scoped facade
+    # authority, not just the resource subset: production operations such as
+    # post_event, stream_events, get_session, and resolve_elicitation are
+    # legitimate facade operations.
+    from moonmind.omnigent.workflow_chat_facade import FACADE_OPERATIONS
+
+    canonical = {operation.name for operation in FACADE_OPERATIONS}
+    assert set(audit._ALLOWED_FACADE_ROUTES) == canonical
+    for operation in ("post_event", "stream_events", "get_session", "resolve_elicitation"):
+        assert audit.check_route_allowed(operation) == operation
+
+
+def test_production_boundary_entrypoints_are_caller_backed() -> None:
+    # Every covered production boundary must resolve to a real module on disk
+    # so the coverage table cannot drift into aspirational entries.
     covered = dict(audit.PRODUCTION_BOUNDARY_COVERAGE)
-    for boundary in REQUIRED_PRODUCTION_BOUNDARIES:
-        assert boundary in covered, boundary
-        audit.get_ownership_row(covered[boundary])
+    assert set(REQUIRED_PRODUCTION_BOUNDARIES) <= set(covered)
+    for boundary, candidate_id in covered.items():
+        row = audit.get_ownership_row(candidate_id)
+        modules = [
+            part.split("::")[0].strip()
+            for part in row.production_entrypoint.split("+")
+        ]
+        assert modules, boundary
+        for module in modules:
+            assert (REPO_ROOT / module).is_file(), (boundary, module)
 
 
 def test_unknown_candidate_fails_closed() -> None:
@@ -95,6 +117,19 @@ def test_upstream_drift_is_rejected() -> None:
         with pytest.raises(audit.UpstreamDuplicationAuditError) as exc_info:
             audit.check_upstream_pin(bad)
         assert exc_info.value.code == "omnigent_audit_upstream_drift"
+    # An explicitly empty supported-commit set is a deny-all policy: even the
+    # implementation pin is rejected instead of falling back to the default.
+    with pytest.raises(audit.UpstreamDuplicationAuditError) as exc_info:
+        audit.check_upstream_pin(PINNED_OMNIGENT_COMMIT, supported_commits=frozenset())
+    assert exc_info.value.code == "omnigent_audit_upstream_drift"
+    # An explicit non-empty set still authorizes its members.
+    assert (
+        audit.check_upstream_pin(
+            PINNED_OMNIGENT_COMMIT,
+            supported_commits=frozenset({PINNED_OMNIGENT_COMMIT}),
+        )
+        == PINNED_OMNIGENT_COMMIT
+    )
     # The #3954 review baseline differs from the implementation pin, so audit
     # evidence alone cannot authorize a removal.
     with pytest.raises(audit.UpstreamDuplicationAuditError) as exc_info:
@@ -159,6 +194,12 @@ def test_missing_terminal_evidence_is_rejected() -> None:
     with pytest.raises(audit.UpstreamDuplicationAuditError) as exc_info:
         audit.check_evidence_present({"terminalRef": "artifact:terminal", "captureRef": ""})
     assert exc_info.value.code == "omnigent_audit_missing_evidence"
+    # Required refs cannot be omitted entirely: an empty or partial mapping
+    # fails even though no present value is blank.
+    for omitted in ({}, {"terminalRef": "artifact:terminal"}, {"captureRef": "artifact:capture"}):
+        with pytest.raises(audit.UpstreamDuplicationAuditError) as exc_info:
+            audit.check_evidence_present(omitted)
+        assert exc_info.value.code == "omnigent_audit_missing_evidence"
 
 
 def test_credential_scope_rejects_mismatch() -> None:
@@ -214,3 +255,20 @@ def test_reduction_measured_after_preserving_behavior() -> None:
     assert set(summary.residual_dependencies) == {
         row.candidate_id for row in audit.OWNERSHIP_TABLE
     }
+
+
+def test_reduction_counts_derive_from_dispositions(monkeypatch: pytest.MonkeyPatch) -> None:
+    # The summary must stay true on the first successful reduction: rows
+    # marked removed stop counting as preserved/residual while the examined
+    # baseline is retained.
+    import dataclasses
+
+    removed_row = dataclasses.replace(audit.OWNERSHIP_TABLE[0], disposition="removed")
+    monkeypatch.setattr(
+        audit, "OWNERSHIP_TABLE", (removed_row, *audit.OWNERSHIP_TABLE[1:])
+    )
+    summary = audit.audit_reduction_summary()
+    assert summary.candidates_examined == len(audit.OWNERSHIP_TABLE)
+    assert summary.removed_tables_or_fields == 1
+    assert summary.preserved == len(audit.OWNERSHIP_TABLE) - 1
+    assert removed_row.candidate_id not in summary.residual_dependencies

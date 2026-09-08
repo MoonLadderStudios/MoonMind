@@ -68,11 +68,14 @@ path replaces the binding-scoped facade.
 
 ## Removals and residual dependencies
 
-No table or field is removed by this audit: no verified replacement contract
-exists, so every `evaluate_removal_eligibility` verdict is blocked with its
-persisted-consumer and removal-criteria blockers. Residual dependencies are
-the eight preserved candidates above; each names its removal criteria in the
-code-owned row rather than in a generic compatibility framework. Reduction is
-measured after preserving behavior (`audit_reduction_summary`: 8 examined, 8
-preserved, 0 removed); no LOC or table quota forces removal of the governance
-layer.
+No table or field is removed except under a verified replacement contract
+with drained consumers: every `evaluate_removal_eligibility` verdict is
+blocked until its persisted-consumer and removal-criteria blockers clear,
+and each row names its own removal criteria rather than deferring to a
+generic compatibility framework. Reduction is measured after preserving
+behavior via the code-owned `audit_reduction_summary()`, which derives its
+counts from row dispositions. The point-in-time outcome of this audit pass
+(examined/preserved/removed counts and residual dependencies at the review
+baseline) lives in
+[`../tmp/OmnigentUpstreamDuplication3954ReductionReport.md`](../tmp/OmnigentUpstreamDuplication3954ReductionReport.md),
+not here, so this document cannot go stale when the pin or consumers change.
