@@ -433,10 +433,11 @@ export function OperationsSettingsSection({
       return WorkerSnapshotSchema.parse(await response.json());
     },
     onSuccess: (data, variables) => {
+      const expectedState = variables.action === 'pause' ? 'safe_point' : 'resumed';
       const confirmed = Boolean(data.control?.enumerated)
-        && data.control.targets.length > 0
-        && data.control.targets.every(
-          (target) => target.state === (variables.action === 'pause' ? 'safe_point' : 'resumed'),
+        && (data.control?.targets?.length ?? 0) > 0
+        && (data.control?.targets ?? []).every(
+          (target) => target.state === expectedState || target.state === 'already_terminal',
         );
       setNotice({
         level: ['partial', 'unknown', 'failed'].includes(data.signalStatus || '') ? 'error' : 'ok',
@@ -799,7 +800,7 @@ export function OperationsSettingsSection({
   const isPaused = Boolean(system.workersPaused);
   const controlTargets = snapshot?.control?.targets ?? [];
   const controlEnumerated = Boolean(snapshot?.control?.enumerated);
-  const controlBlocked = controlEnumerated && Boolean(snapshot?.control?.enumerationError);
+  const controlBlocked = Boolean(snapshot?.control?.enumerationError);
   const noEligibleTargets = controlEnumerated && !controlBlocked && controlTargets.length === 0;
   const targetTotals = controlTargets.reduce<Record<string, number>>((counts, target) => {
     counts[target.state] = (counts[target.state] ?? 0) + 1;
@@ -809,8 +810,9 @@ export function OperationsSettingsSection({
     .map(([state, count]) => `${count} ${formatStatusLabel(state)}`)
     .join(', ');
   const allQuiesced = controlEnumerated
+    && !controlBlocked
     && controlTargets.length > 0
-    && controlTargets.every((target) => target.state === 'safe_point');
+    && controlTargets.every((target) => target.state === 'safe_point' || target.state === 'already_terminal');
   const stateLabel = isPaused
     ? system.mode === 'quiesce'
       ? allQuiesced

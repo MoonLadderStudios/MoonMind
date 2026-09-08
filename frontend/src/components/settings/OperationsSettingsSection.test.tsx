@@ -614,7 +614,47 @@ describe('OperationsSettingsSection deployment update card', () => {
           ...workerSnapshot,
           system: { ...workerSnapshot.system, workersPaused: true, mode: 'quiesce' },
           signalStatus: 'unknown',
-          control: { enumerated: true, enumerationError: 'control_visibility_unavailable', targets: [] },
+          control: { enumerated: false, enumerationError: 'control_visibility_unavailable', targets: [] },
+        }) } as Response);
+      }
+      return originalFetch(input, init);
+    });
+    renderOperations();
+    expect(await screen.findByRole('heading', { name: 'Target enumeration blocked; confirmation pending' })).toBeTruthy();
+    expect(screen.queryByRole('heading', { name: 'Workers quiesced' })).toBeNull();
+  });
+
+  it('treats already-terminal targets as confirmed quiescence', async () => {
+    const originalFetch = fetchSpy.getMockImplementation()!;
+    fetchSpy.mockImplementation((input, init) => {
+      if (String(input) === '/api/workers') {
+        return Promise.resolve({ ok: true, json: async () => ({
+          ...workerSnapshot,
+          system: { ...workerSnapshot.system, workersPaused: true, mode: 'quiesce' },
+          signalStatus: 'succeeded',
+          control: { enumerated: true, targets: [
+            { workflowId: 'quiesced-target', runId: 'run-1', state: 'safe_point' },
+            { workflowId: 'vanished-target', runId: 'run-2', state: 'already_terminal' },
+          ] },
+        }) } as Response);
+      }
+      return originalFetch(input, init);
+    });
+    renderOperations();
+    expect(await screen.findByRole('heading', { name: 'Workers quiesced' })).toBeTruthy();
+  });
+
+  it('does not claim quiescence when enumeration is truncated', async () => {
+    const originalFetch = fetchSpy.getMockImplementation()!;
+    fetchSpy.mockImplementation((input, init) => {
+      if (String(input) === '/api/workers') {
+        return Promise.resolve({ ok: true, json: async () => ({
+          ...workerSnapshot,
+          system: { ...workerSnapshot.system, workersPaused: true, mode: 'quiesce' },
+          signalStatus: 'partial',
+          control: { enumerated: false, enumerationError: 'control_enumeration_truncated', targets: [
+            { workflowId: 'confirmed-target', runId: 'run-1', state: 'safe_point' },
+          ] },
         }) } as Response);
       }
       return originalFetch(input, init);
