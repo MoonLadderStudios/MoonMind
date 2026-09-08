@@ -136,7 +136,11 @@ ready; an enabled bridge cannot select it for new work. The evidence claims
 described here (proxy conformance, live stock-host smoke, and host-auth
 conformance) remain the historical record of what gated the experimental path
 and stay resolvable for retained sessions. Proxy mode is the production
-default and the only supported topology.
+default and the only supported topology. Retired-transport denials are
+explicit: HTTP routes answer `410 Gone` with code
+`omnigent_embedded_transport_retired`, and WebSocket handshakes close with
+`4404` carrying `omnigent_embedded_transport_retired` plus the
+`upstream_omnigent_server_proxy` alternative as the close reason.
 
 ## Launch modes, rollout, and rollback
 

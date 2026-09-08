@@ -17,7 +17,8 @@ from typing import Any, Mapping
 from urllib.parse import quote
 
 import structlog
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+# (Pydantic request payloads live in embedded_host_requests so the proxy-only
+# production path can import the API contract without the launch modules.)
 
 from moonmind.omnigent.bridge_config import (
     HOST_PROTOCOL_MODE_EMBEDDED,
@@ -58,84 +59,19 @@ from moonmind.omnigent.host_auth_adapter import OmnigentHostAuthAdapter
 from moonmind.omnigent.settings import resolved_host_runner_token
 from moonmind.schemas.agent_runtime_models import AgentExecutionRequest
 
-MAX_EMBEDDED_CAPABILITIES = 128
-MAX_EMBEDDED_CAPABILITY_BYTES = 64 * 1024
-MAX_EMBEDDED_EVENT_ENTRIES = 1024
-MAX_EMBEDDED_EVENT_BYTES = 1024 * 1024
+from moonmind.omnigent.embedded_host_requests import (
+    MAX_EMBEDDED_CAPABILITIES,
+    MAX_EMBEDDED_CAPABILITY_BYTES,
+    MAX_EMBEDDED_EVENT_BYTES,
+    MAX_EMBEDDED_EVENT_ENTRIES,
+    EmbeddedHostHeartbeatRequest,
+    EmbeddedHostRegisterRequest,
+    EmbeddedHostSessionEventRequest,
+    _bounded_mapping,
+)
+
 logger = structlog.get_logger(__name__)
 MAX_EMBEDDED_CONTROL_KEY_LENGTH = 220
-
-
-def _bounded_mapping(
-    value: dict[str, Any], *, label: str, max_entries: int, max_bytes: int
-) -> dict[str, Any]:
-    if len(value) > max_entries:
-        raise ValueError(f"{label} exceeds the {max_entries}-entry limit")
-    try:
-        encoded = json.dumps(value, separators=(",", ":"), ensure_ascii=False).encode()
-    except (TypeError, ValueError) as exc:
-        raise ValueError(f"{label} must be JSON serializable") from exc
-    if len(encoded) > max_bytes:
-        raise ValueError(f"{label} exceeds the {max_bytes}-byte limit")
-    return value
-
-
-class EmbeddedHostRegisterRequest(BaseModel):
-    """Host registration payload accepted from an unchanged Omnigent host."""
-
-    model_config = ConfigDict(populate_by_name=True, extra="allow")
-
-    host_id: str | None = Field(None, alias="hostId")
-    runner_id: str | None = Field(None, alias="runnerId")
-    capabilities: dict[str, Any] = Field(default_factory=dict)
-
-    @field_validator("capabilities")
-    @classmethod
-    def validate_capabilities(cls, value: dict[str, Any]) -> dict[str, Any]:
-        return _bounded_mapping(
-            value,
-            label="Host capabilities",
-            max_entries=MAX_EMBEDDED_CAPABILITIES,
-            max_bytes=MAX_EMBEDDED_CAPABILITY_BYTES,
-        )
-
-
-class EmbeddedHostHeartbeatRequest(BaseModel):
-    """Host heartbeat payload."""
-
-    model_config = ConfigDict(populate_by_name=True, extra="allow")
-
-    status: str | None = None
-    capabilities: dict[str, Any] = Field(default_factory=dict)
-
-    @field_validator("capabilities")
-    @classmethod
-    def validate_capabilities(cls, value: dict[str, Any]) -> dict[str, Any]:
-        return _bounded_mapping(
-            value,
-            label="Host capabilities",
-            max_entries=MAX_EMBEDDED_CAPABILITIES,
-            max_bytes=MAX_EMBEDDED_CAPABILITY_BYTES,
-        )
-
-
-class EmbeddedHostSessionEventRequest(BaseModel):
-    """Host-to-MoonMind session event payload."""
-
-    model_config = ConfigDict(populate_by_name=True, extra="allow")
-
-    type: str = Field(..., min_length=1)
-    data: dict[str, Any] = Field(default_factory=dict)
-
-    @field_validator("data")
-    @classmethod
-    def validate_data(cls, value: dict[str, Any]) -> dict[str, Any]:
-        return _bounded_mapping(
-            value,
-            label="Host event data",
-            max_entries=MAX_EMBEDDED_EVENT_ENTRIES,
-            max_bytes=MAX_EMBEDDED_EVENT_BYTES,
-        )
 
 
 @dataclass(frozen=True, slots=True)
@@ -231,7 +167,16 @@ def verify_embedded_host_auth(
 
 
 class OmnigentEmbeddedHostProtocolFacade:
-    """Embedded host-facing protocol facade over the bridge session store."""
+    """Embedded host-facing protocol facade over the bridge session store.
+
+    ``drain_retained_sessions`` builds a drain-only facade for retained
+    embedded rows after the transport retired (#3955): the global-mode gate is
+    bypassed so stop, terminal cleanup, delete, reads, and retained-row event
+    controls keep reaching their recorded embedded owner while the deployment
+    runs proxy mode, but new admission (session/host creation, runner dispatch,
+    heartbeat, host event-ingest) stays refused with the actionable proxy
+    alternative.
+    """
 
     def __init__(
         self,
@@ -241,6 +186,7 @@ class OmnigentEmbeddedHostProtocolFacade:
         host_channels: EmbeddedHostChannelRegistry = embedded_host_channels,
         artifact_gateway: OmnigentArtifactGateway | None = None,
         runner_binding_root_secret: str | None = None,
+        drain_retained_sessions: bool = False,
     ) -> None:
         self._run_store = run_store
         self._config = config
@@ -248,10 +194,27 @@ class OmnigentEmbeddedHostProtocolFacade:
         self._artifact_gateway = artifact_gateway or LocalOmnigentArtifactGateway()
         self._event_journal_locks: dict[str, asyncio.Lock] = {}
         self._runner_binding_root_secret = runner_binding_root_secret
+        self._drain_retained_sessions = drain_retained_sessions
+
+    def _retired_admission_error(self, operation: str) -> OmnigentBridgeError:
+        """Refuse new embedded-transport admission on a drain facade (#3955)."""
+
+        return OmnigentBridgeError(
+            f"The experimental embedded host transport is retired "
+            f"(MoonLadderStudios/MoonMind#3955) and cannot admit new work "
+            f"({operation}). Select 'upstream_omnigent_server_proxy' for new "
+            f"sessions; retained sessions keep draining under their recorded "
+            f"cleanup owner.",
+            failure_class="user_error",
+            status_code=410,
+            code="omnigent_embedded_transport_retired",
+        )
 
     async def dispatch_runner(self, *, idempotency_key: str) -> dict[str, Any]:
         """Dispatch and durably bind a runner to an authorized embedded session."""
 
+        if self._drain_retained_sessions:
+            raise self._retired_admission_error("dispatch_runner")
         self._require_embedded_mode()
         row = await self._run_store.get_existing(idempotency_key)
         if row is None or not row.omnigent_session_id or not row.omnigent_host_id:
@@ -1396,6 +1359,8 @@ class OmnigentEmbeddedHostProtocolFacade:
     ) -> dict[str, Any]:
         """Create or reuse a local embedded bridge session."""
 
+        if self._drain_retained_sessions:
+            raise self._retired_admission_error("create_session")
         self._require_embedded_mode()
         validate_bridge_host_fields(
             host_type=request.host_type,
@@ -1483,6 +1448,8 @@ class OmnigentEmbeddedHostProtocolFacade:
         request: EmbeddedHostRegisterRequest,
         auth: EmbeddedHostAuthContext,
     ) -> dict[str, Any]:
+        if self._drain_retained_sessions:
+            raise self._retired_admission_error("register_host")
         self._require_embedded_mode()
         host_id = _clean(request.host_id) or auth.runner_id
         runner_id = _clean(request.runner_id) or auth.runner_id
@@ -1523,6 +1490,8 @@ class OmnigentEmbeddedHostProtocolFacade:
         request: EmbeddedHostHeartbeatRequest,
         auth: EmbeddedHostAuthContext,
     ) -> dict[str, Any]:
+        if self._drain_retained_sessions:
+            raise self._retired_admission_error("heartbeat")
         self._require_embedded_mode()
         if _clean(host_id) != auth.runner_id:
             raise OmnigentBridgeError(
@@ -1584,6 +1553,8 @@ class OmnigentEmbeddedHostProtocolFacade:
         request: EmbeddedHostSessionEventRequest,
         auth: EmbeddedHostAuthContext,
     ) -> dict[str, Any]:
+        if self._drain_retained_sessions:
+            raise self._retired_admission_error("ingest_session_event")
         self._require_embedded_mode()
         if _clean(host_id) != auth.runner_id:
             raise OmnigentBridgeError(
@@ -1697,6 +1668,11 @@ class OmnigentEmbeddedHostProtocolFacade:
         return raw_ref, normalized_ref
 
     def _require_embedded_mode(self) -> None:
+        if self._drain_retained_sessions:
+            # Retained-row drain under proxy global mode (#3955): admission
+            # entrypoints refuse explicitly via _retired_admission_error, so
+            # the global-mode gate must not block stop/cleanup/delete/reads.
+            return
         if self._config.host_protocol_mode != HOST_PROTOCOL_MODE_EMBEDDED:
             raise OmnigentBridgeError(
                 "Embedded Omnigent host protocol requires "

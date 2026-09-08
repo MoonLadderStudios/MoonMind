@@ -291,12 +291,22 @@ async def project_upstream_inventory_failure(
 
 def build_embedded_host_facade(
     config: OmnigentBridgeConfig,
+    *,
+    drain_retained_sessions: bool = False,
 ) -> OmnigentEmbeddedHostProtocolFacade:
+    """Build the embedded host facade for admission or retained-row drain.
+
+    ``drain_retained_sessions=True`` (#3955) bypasses the global-mode gate so
+    stop, terminal cleanup, delete, and reads for already-recorded embedded
+    rows keep reaching their recorded owner while the deployment runs proxy
+    mode; new admission stays refused inside the facade.
+    """
     from moonmind.omnigent.bridge_embedded import OmnigentEmbeddedHostProtocolFacade
 
     return OmnigentEmbeddedHostProtocolFacade(
         run_store=build_bridge_session_store(),
         config=config,
+        drain_retained_sessions=drain_retained_sessions,
     )
 
 
