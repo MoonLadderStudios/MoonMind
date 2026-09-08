@@ -102,7 +102,10 @@ def store(session_factory):
 
 
 def _config():
+    # Retired (#3955): retained here for drain/recovery coverage through a
+    # disabled declaration. Enabled embedded admission fails fast.
     return parse_bridge_config({
+        "enabled": False,
         "compatibility": {"hostProtocolMode": HOST_PROTOCOL_MODE_EMBEDDED},
         "hostConnection": {"embedded": {
             "proxyConformanceEvidenceRef": "artifact://proxy",
