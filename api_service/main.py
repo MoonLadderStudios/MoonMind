@@ -674,7 +674,111 @@ async def _initialize_oidc_provider(app: FastAPI):
     # fail startup with migration guidance instead of attempting provider-specific
     # discovery against a retired issuer. Generic external OIDC discovery is owned
     # by the #4124 contract; this step performs no outbound DNS/connect attempt.
+    # Mode interpretation lives in moonmind.security.auth_modes_4120 (#4120).
+    from moonmind.security.auth_modes_4120 import (
+        MIGRATION_DECISION_ENV_VAR,
+        MigrationRequiredError,
+        auth_readiness_summary,
+        classify_deployment,
+        is_auth_provider_explicit,
+        parse_migration_decision,
+        redacted_diagnostics,
+        resolve_session_secret,
+        default_session_key_path,
+        validate_public_base_url,
+        validate_publish_binding,
+        validate_trusted_proxy_config,
+    )
+
     settings.oidc.validate_auth_provider()
+    raw = (settings.oidc.AUTH_PROVIDER or "").strip()
+    explicit = is_auth_provider_explicit()
+    decision = parse_migration_decision(os.environ.get(MIGRATION_DECISION_ENV_VAR))
+    has_users: bool | None = None
+    if not explicit and not raw:
+        # Omitted selector: distinguish fresh vs. pre-cutover via a bounded
+        # users probe. Fresh (no users) takes the accounts production path;
+        # populated without a decision stops actionably below.
+        try:
+            from api_service.db.base import get_async_session_context
+
+            async with get_async_session_context() as session:
+                result = await session.execute(text("SELECT COUNT(*) FROM users"))
+                count = int(result.scalar() or 0)
+                has_users = count > 0
+        except Exception:
+            # Database unreachable at startup: fail closed later via healthz;
+            # do not guess fresh vs. upgrade here.
+            has_users = False
+            logger.warning(
+                "Auth-mode startup could not probe user count; "
+                "treating as undecided fresh path pending DB readiness."
+            )
+    classification = classify_deployment(
+        raw_selector=raw if (explicit or raw) else None,
+        explicit=explicit,
+        has_users=bool(has_users),
+        migration_decision=decision,
+    )
+    if classification.migration_required:
+        raise RuntimeError(str(classification.detail))
+    production_mode = classification.production_mode or raw.lower() or "accounts"
+    # Durable signing secret: fresh local startup generates once; remote
+    # production requires explicit material; placeholders always rejected.
+    public_base = os.environ.get("MOONMIND_PUBLIC_BASE_URL", "").strip()
+    is_remote = bool(public_base) and "localhost" not in public_base and "127.0.0.1" not in public_base
+    try:
+        resolve_session_secret(
+            explicit_secret=os.environ.get("MOONMIND_SESSION_SECRET")
+            or os.environ.get("JWT_SECRET"),
+            key_path=default_session_key_path(),
+            allow_generate=not is_remote,
+            for_remote_production=is_remote,
+        )
+    except Exception as exc:
+        raise RuntimeError(f"Invalid MoonMind session secret: {exc}") from exc
+    # Disabled-mode exposure at the deployment boundary.
+    try:
+        validate_publish_binding(
+            mode=production_mode,
+            publish_host=os.environ.get("MOONMIND_API_PUBLISH_HOST")
+            or os.environ.get("MOONMIND_API_HOST"),
+            trusted_ingress=os.environ.get("MOONMIND_TRUSTED_INGRESS", "").lower()
+            in ("1", "true", "yes"),
+        )
+    except Exception as exc:
+        raise RuntimeError(str(exc)) from exc
+    # Base-URL / trusted-proxy validation when configured.
+    if public_base:
+        try:
+            proxies = validate_trusted_proxy_config(
+                os.environ.get("MOONMIND_TRUSTED_PROXIES", "")
+            )
+            validate_public_base_url(
+                public_base,
+                trusted_proxies=proxies,
+                forwarded_host=os.environ.get("MOONMIND_FORWARDED_HOST_HINT"),
+                forwarded_proto=os.environ.get("MOONMIND_FORWARDED_PROTO_HINT"),
+            )
+        except Exception as exc:
+            raise RuntimeError(str(exc)) from exc
+    app.state.auth_production_mode = production_mode
+    app.state.auth_classification = classification
+    logger.info(
+        "Auth modes initialized: %s",
+        redacted_diagnostics(
+            {
+                "auth_mode": production_mode,
+                "explicit": explicit,
+                "fresh_install": classification.fresh_install,
+                "setup_required": classification.setup_required,
+                "auth_readiness": auth_readiness_summary(
+                    production_mode=production_mode,
+                    setup_required=classification.setup_required,
+                )["auth_readiness"],
+            }
+        ),
+    )
 
 
 @asynccontextmanager
@@ -753,21 +857,77 @@ _api_start_time = time.monotonic()
 
 @health_router.get("/healthz")
 async def health_check():
-    """Health endpoint with database connectivity probe."""
+    """Health endpoint with database probe and distinguishable auth readiness."""
+    from moonmind.security.auth_modes_4120 import (
+        auth_readiness_summary,
+        classify_deployment,
+        is_auth_provider_explicit,
+        parse_migration_decision,
+        MIGRATION_DECISION_ENV_VAR,
+    )
+
     uptime = int(time.monotonic() - _api_start_time)
     try:
         async with get_async_session_context() as session:
             await session.execute(text("SELECT 1"))
-        return {"status": "ok", "db": "connected", "uptime_seconds": uptime}
+        db_status = "connected"
+        db_reachable = True
     except Exception:
-        return JSONResponse(
-            status_code=503,
-            content={
-                "status": "degraded",
-                "db": "unreachable",
-                "uptime_seconds": uptime,
-            },
-        )
+        db_status = "unreachable"
+        db_reachable = False
+    # Auth readiness stays distinguishable from infrastructure readiness.
+    stored_mode = (getattr(app.state, "auth_production_mode", None) or "").strip()
+    classification = getattr(app.state, "auth_classification", None)
+    if classification is not None:
+        production_mode = stored_mode or classification.production_mode
+        setup_required = classification.setup_required
+        migration_required = classification.migration_required
+    else:
+        raw = (settings.oidc.AUTH_PROVIDER or "").strip()
+        explicit = is_auth_provider_explicit()
+        decision = parse_migration_decision(os.environ.get(MIGRATION_DECISION_ENV_VAR))
+        try:
+            fresh_probe = False
+            if not explicit and not raw and db_reachable:
+                from api_service.db.base import get_async_session_context as _ctx
+
+                async with _ctx() as session:
+                    result = await session.execute(text("SELECT COUNT(*) FROM users"))
+                    fresh_probe = int(result.scalar() or 0) == 0
+            classification = classify_deployment(
+                raw_selector=raw if (explicit or raw) else None,
+                explicit=explicit,
+                has_users=not fresh_probe if (not explicit and not raw) else False,
+                migration_decision=decision,
+            )
+        except Exception:
+            classification = None
+        if classification is None:
+            production_mode, setup_required, migration_required = (
+                raw.lower() or "undecided",
+                False,
+                False,
+            )
+        else:
+            production_mode = classification.production_mode
+            setup_required = classification.setup_required
+            migration_required = classification.migration_required
+    readiness = auth_readiness_summary(
+        production_mode=production_mode,
+        migration_required=migration_required,
+        setup_required=setup_required,
+        db_reachable=db_reachable,
+        secret_ready=True,
+    )
+    body = {
+        "status": "ok" if db_reachable and not migration_required else "degraded",
+        "db": db_status,
+        "uptime_seconds": uptime,
+        **readiness,
+    }
+    if not db_reachable or migration_required:
+        return JSONResponse(status_code=503, content=body)
+    return body
 
 
 @app.get("/", include_in_schema=False)
@@ -2438,7 +2598,9 @@ async def startup_event():
     # probes after startup instead of blocking it.
 
     # Ensure default user and profile exist if auth is disabled
-    if settings.oidc.AUTH_PROVIDER == "disabled":
+    from moonmind.security.auth_modes_4120 import is_disabled_local_mode as _is_disabled
+
+    if getattr(app.state, "auth_production_mode", "") == "disabled" or _is_disabled():
         logger.info(
             "Auth provider is 'disabled'. Ensuring default user and profile exist on startup."
         )
@@ -2507,7 +2669,7 @@ async def startup_event():
                     )
     else:
         logger.info(
-            f"Auth provider is '{settings.oidc.AUTH_PROVIDER}'. Skipping default user creation on startup."
+            f"Auth provider is '{getattr(app.state, 'auth_production_mode', settings.oidc.AUTH_PROVIDER)}'. Skipping default user creation on startup."
         )
 
     # Wait for the Temporal client to be available and initialize provider profile managers

@@ -1759,7 +1759,14 @@ class MemorySettings(BaseSettings):
     )
 
 class OIDCSettings(BaseSettings):
-    """OIDC settings"""
+    """OIDC settings.
+
+    Storage for the raw ``AUTH_PROVIDER`` selector. Interpretation of the
+    selector (validation, fresh-vs-upgrade classification, migration
+    decisions, and deployment policy) is owned by
+    ``moonmind.security.auth_modes_4120`` (#4120); production consumers
+    must use that owner instead of comparing this field directly.
+    """
 
     # Canonical application-authentication selector
     # (docs/Security/AuthenticationContracts.md). Supported target modes are

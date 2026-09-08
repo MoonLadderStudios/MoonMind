@@ -185,15 +185,37 @@ services:
       - MOONMIND_MANAGED_RUNTIME_JANITOR_MAX_DELETE_PATHS=${MOONMIND_MANAGED_RUNTIME_JANITOR_MAX_DELETE_PATHS:-100}
       - MOONMIND_MANAGED_RUNTIME_JANITOR_MAX_DELETE_BYTES=${MOONMIND_MANAGED_RUNTIME_JANITOR_MAX_DELETE_BYTES:-}
       - MOONMIND_MANAGED_RUNTIME_JANITOR_LOCK_PATH=${MOONMIND_MANAGED_RUNTIME_JANITOR_LOCK_PATH:-/work/agent_jobs/.janitor.lock}
-      # Generic external OIDC (MoonLadderStudios/MoonMind#4124). No bundled
-      # identity provider remains; leave the issuer unset unless an external
-      # IdP is configured. Retired `keycloak`/`default`/`google` selectors are
-      # rejected at API startup with migration guidance (#4129).
-      - AUTH_PROVIDER=${AUTH_PROVIDER:-disabled} # accounts, oidc, header, or disabled
+      # MoonMind application authentication (MoonLadderStudios/MoonMind#4120).
+      # One selector, AUTH_PROVIDER: accounts, oidc, header, or explicitly
+      # restricted local disabled. Omitted selects accounts on a genuinely
+      # fresh database through the same production path as explicit accounts
+      # (protected first-owner setup, no mandatory .env); a populated
+      # database with an omitted selector stops actionably pending
+      # MOONMIND_AUTH_MIGRATION_DECISION (no silent disable, no new owner).
+      # Retired `keycloak`/`default`/`google` selectors are rejected at API
+      # startup with migration guidance (#4129). OMNIGENT_AUTH_* never
+      # selects MoonMind auth.
+      - AUTH_PROVIDER=${AUTH_PROVIDER:-} # accounts, oidc, header, or disabled; empty = fresh->accounts, upgrade->migration_required
+      - MOONMIND_AUTH_MIGRATION_DECISION=${MOONMIND_AUTH_MIGRATION_DECISION:-}
       - OIDC_ISSUER_URL=${OIDC_ISSUER_URL:-} # Generic external issuer URL for 'oidc'
       - OIDC_CLIENT_ID=${OIDC_CLIENT_ID:-} # Generic external client ID for 'oidc'
       - OIDC_CLIENT_SECRET=${OIDC_CLIENT_SECRET:-} # Generic external client secret for 'oidc'
-      - JWT_SECRET=${JWT_SECRET:-devsecret} # For 'disabled' auth provider (legacy JWT)
+      # Durable MoonMind session signing key (deployment-owned
+      # moonmind_secrets volume). Leave MOONMIND_SESSION_SECRET empty on
+      # loopback fresh installs: exactly one key is generated and shared by
+      # restarts/replicas. Placeholders are rejected; remote production
+      # requires explicit material. JWT_SECRET remains a legacy alias read
+      # only when MOONMIND_SESSION_SECRET is unset; its insecure default is
+      # never accepted as key material by the auth-modes owner.
+      - MOONMIND_SESSION_SECRET=${MOONMIND_SESSION_SECRET:-}
+      - MOONMIND_SESSION_KEY_PATH=${MOONMIND_SESSION_KEY_PATH:-/app/var/secrets/moonmind_session_key}
+      - JWT_SECRET=${JWT_SECRET:-} # Legacy alias for 'disabled' JWT; empty by default
+      # Explicit local-mode exposure: disabled publishes only on loopback
+      # unless MOONMIND_TRUSTED_INGRESS documents an audited ingress path.
+      - MOONMIND_API_PUBLISH_HOST=${MOONMIND_API_PUBLISH_HOST:-127.0.0.1}
+      - MOONMIND_TRUSTED_INGRESS=${MOONMIND_TRUSTED_INGRESS:-}
+      - MOONMIND_PUBLIC_BASE_URL=${MOONMIND_PUBLIC_BASE_URL:-}
+      - MOONMIND_TRUSTED_PROXIES=${MOONMIND_TRUSTED_PROXIES:-}
     env_file:
       - path: .env
         required: false
