@@ -2762,6 +2762,7 @@ async def test_pre_cutover_pending_persistence_invocations_keep_real_handlers(
 FLEET3949_REFS: dict[str, str] = {}
 FLEET3949_CALLS: list[tuple[str, str, int, object]] = []
 FLEET3949_FAIL_TERMINAL_ONCE = False
+FLEET3949_FAIL_TERMINAL_ALWAYS = False
 
 
 @activity.defn(name="checkpoint_branch.turn.mark_running")
@@ -2780,6 +2781,8 @@ async def _fleet3949_persist_terminal(payload: dict) -> dict:
         ("terminal", info.task_queue, info.attempt, payload["outcome"])
     )
     global FLEET3949_FAIL_TERMINAL_ONCE
+    if FLEET3949_FAIL_TERMINAL_ALWAYS:
+        raise RuntimeError("injected persistent fleet3949 terminal failure")
     if FLEET3949_FAIL_TERMINAL_ONCE and info.attempt == 1:
         FLEET3949_FAIL_TERMINAL_ONCE = False
         raise RuntimeError("injected transient fleet3949 terminal failure")
@@ -3274,3 +3277,77 @@ async def test_terminal_persistence_fails_closed_when_database_unavailable_3949(
             assert not (turn.diagnostics or {}).get("agentResultRef")
     finally:
         await engine.dispose()
+
+
+async def test_new_rejection_reaches_artifacts_fleet_with_real_handlers_3949(
+    tmp_path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Exhausted terminal retries fall back to the artifacts-fleet rejection.
+
+    The real ``persist_terminal`` fails on every attempt, so the workflow's
+    ``_persist_terminal`` fallback schedules
+    ``checkpoint_branch.turn.persist_terminal_rejection``. Both the failed
+    terminal attempts and the rejection must be served by the artifacts
+    fleet (the workflow queue carries no ``checkpoint_branch.turn.*``
+    handler), the rejection digest must be a canonical sha256, and the
+    durable turn must terminalize as blocked with
+    ``retained_evidence_rejected`` without advancing the branch head to a
+    terminal checkpoint for this turn.
+    """
+
+    import re
+
+    global FLEET3949_FAIL_TERMINAL_ALWAYS
+    FLEET3949_FAIL_TERMINAL_ALWAYS = True
+    try:
+        result, history, fleet_calls, sessions = await _run_fleet3949(
+            "fleet3949-rejected", monkeypatch, tmp_path
+        )
+    finally:
+        FLEET3949_FAIL_TERMINAL_ALWAYS = False
+
+    assert result["status"] == "blocked"
+    assert result["verificationPending"] is False
+    assert result["terminalDisposition"] == "retained_evidence_rejected"
+
+    kinds = [name for name, _queue, _attempt, _value in fleet_calls]
+    assert kinds[0] == "mark_running"
+    terminal_calls = [call for call in fleet_calls if call[0] == "terminal"]
+    rejection_calls = [
+        call for call in fleet_calls if call[0] == "terminal_rejection"
+    ]
+    assert len(terminal_calls) == 3
+    assert [attempt for _n, _q, attempt, _v in terminal_calls] == [1, 2, 3]
+    assert len(rejection_calls) == 1
+    assert all(
+        task_queue == ARTIFACTS_TASK_QUEUE
+        for _name, task_queue, _attempt, _value in fleet_calls
+    )
+    digest = rejection_calls[0][3]
+    assert isinstance(digest, str)
+    assert re.fullmatch(r"sha256:[0-9a-f]{64}", digest) is not None
+
+    _assert_fleet3949_operation_identity(history)
+    scheduled_names = {
+        name for name, _q, _s, _c, _a in _fleet3949_scheduled_persistence(history)
+    }
+    assert "checkpoint_branch.turn.persist_terminal" in scheduled_names
+    assert "checkpoint_branch.turn.persist_terminal_rejection" in scheduled_names
+
+    async with sessions() as session:
+        turn = await session.get(WorkflowCheckpointBranchTurn, "turn-1")
+        assert turn is not None
+        assert turn.status == "blocked"
+        assert turn.completed_at is not None
+        assert turn.diagnostics["terminalDisposition"] == "retained_evidence_rejected"
+        assert turn.diagnostics["verificationPending"] is False
+        branch = await session.get(WorkflowCheckpointBranch, "branch-1")
+        assert branch is not None
+        # Rejected evidence never advances the branch head to a terminal
+        # checkpoint for this turn; the head stays on the source checkpoint.
+        assert branch.current_head_checkpoint_ref == "artifact://source/checkpoint"
+        assert "latestBranchTurnCheckpoint" not in (branch.artifact_refs or {})
+    await Replayer(
+        workflows=[MoonMindCheckpointBranchTurnWorkflow],
+        workflow_runner=UnsandboxedWorkflowRunner(),
+    ).replay_workflow(history)

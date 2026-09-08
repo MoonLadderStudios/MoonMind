@@ -649,3 +649,96 @@ async def test_cancellation_cannot_be_overwritten_by_stale_success(
     assert branch.current_head_checkpoint_ref == (
         "artifact://checkpoint/matrix-source"
     )
+
+
+@pytest.mark.asyncio
+async def test_restarted_worker_cannot_steal_running_turn_or_release_cleanup(
+    matrix_session: AsyncSession,
+) -> None:
+    """A restarted worker replays the running handoff without stealing it.
+
+    The new ``CheckpointBranchService`` handle on the same durable state
+    cannot claim the turn under a different AgentRun identity, the turn
+    stays running under its original owner, the branch head does not
+    advance, and no terminal result is published (cleanup authority stays
+    with the running handoff).
+    """
+
+    service = CheckpointBranchService(matrix_session)
+    branch_id = "cbr-matrix-restart"
+    turn_id = await _claimed_turn(service, branch_id)
+    await matrix_session.commit()
+
+    restarted = CheckpointBranchService(matrix_session)
+    with pytest.raises(ValueError, match="does not match claim"):
+        await restarted.mark_turn_running(
+            workflow_id="wf-matrix",
+            branch_id=branch_id,
+            branch_turn_id=turn_id,
+            runtime_agent_run_id="checkpoint-branch-agent:restarted:turn-1",
+        )
+    await matrix_session.expire_all()
+
+    turn = await matrix_session.get(WorkflowCheckpointBranchTurn, turn_id)
+    assert turn is not None
+    assert turn.status == "running"
+    assert turn.runtime_agent_run_id == f"checkpoint-branch-agent:{branch_id}:turn-1"
+    assert turn.completed_at is None
+    assert turn.diagnostics["deliveryStage"] == "running"
+    assert "agentResultRef" not in (turn.diagnostics or {})
+    branch = await matrix_session.get(WorkflowCheckpointBranch, branch_id)
+    assert branch is not None
+    assert branch.current_head_checkpoint_ref == "artifact://checkpoint/matrix-source"
+    assert "latestBranchTurnResult" not in (branch.artifact_refs or {})
+
+
+@pytest.mark.asyncio
+async def test_rejection_terminalizes_blocked_without_advancing_head(
+    matrix_session: AsyncSession,
+) -> None:
+    """The rejection fallback terminalizes as blocked without a head advance.
+
+    This is the service-level ordering half of the end-to-end rejection
+    flow (the Temporal half lives in
+    ``test_new_rejection_reaches_artifacts_fleet_with_real_handlers_3949``):
+    a failed handoff that falls back to the rejection path records
+    ``retained_evidence_rejected``, never publishes a terminal checkpoint
+    for the turn, and a delayed divergent terminal afterwards is rejected
+    instead of overwriting the rejection.
+    """
+
+    service = CheckpointBranchService(matrix_session)
+    branch_id = "cbr-matrix-rejection"
+    turn_id = await _claimed_turn(service, branch_id)
+
+    rejected = await service.finalize_turn_execution(
+        workflow_id="wf-matrix",
+        branch_id=branch_id,
+        branch_turn_id=turn_id,
+        outcome="blocked",
+        agent_result_ref=f"artifact://agent-result/{branch_id}-rejection",
+        diagnostics_ref=f"artifact://terminal-diagnostics/{branch_id}-rejection",
+        terminal_disposition="retained_evidence_rejected",
+    )
+    assert rejected.status == "blocked"
+    assert rejected.diagnostics["terminalDisposition"] == "retained_evidence_rejected"
+    assert rejected.diagnostics["verificationPending"] is False
+    await matrix_session.commit()
+    await matrix_session.expire_all()
+
+    branch = await matrix_session.get(WorkflowCheckpointBranch, branch_id)
+    assert branch is not None
+    assert branch.current_head_checkpoint_ref == "artifact://checkpoint/matrix-source"
+    assert "latestBranchTurnCheckpoint" not in (branch.artifact_refs or {})
+
+    with pytest.raises(ValueError, match="immutable terminal field"):
+        await service.finalize_turn_execution(
+            branch_turn_id=turn_id, **_finalize_kwargs(branch_id, "late")
+        )
+    await matrix_session.expire_all()
+    turn = await matrix_session.get(WorkflowCheckpointBranchTurn, turn_id)
+    assert turn is not None
+    assert turn.status == "blocked"
+    assert turn.diagnostics["agentResultRef"] == (
+        f"artifact://agent-result/{branch_id}-rejection"
+    )
