@@ -38,9 +38,12 @@ from __future__ import annotations
 import hashlib
 import hmac
 import secrets
+import subprocess
+import sys
 import time
 import uuid
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any, Protocol
 
 import jwt
@@ -68,6 +71,64 @@ MOONMIND_SESSION_PURPOSE = "moonmind-browser-session"
 MOONMIND_PROD_COOKIE = "__Host-mm_session"
 MOONMIND_DEV_COOKIE = "mm_session_dev"
 _SUPPORTED_ALGORITHMS = ("HS256",)
+
+# Pinned upstream revision this qualification targets. Observed provenance in
+# ``UpstreamProbeEvidence`` is derived from the checked-out submodule and the
+# imported package at runtime (see ``_observed_omnigent_*``); these constants
+# are the expected values, never the reported observation.
+PINNED_OMNIGENT_COMMIT = "f04b0354fb5344c1ea8b92795ceb6760a9ad7595"
+PINNED_OMNIGENT_PACKAGE = "omnigent==0.12.0"
+
+
+def _ensure_omnigent_bundle_on_path() -> None:
+    """Put the pinned omnigent submodule bundle root on ``sys.path``.
+
+    The submodule lives at ``<repo_root>/omnigent`` and contains the
+    importable ``omnigent/`` package one level down
+    (``<repo_root>/omnigent/omnigent/server/...``). From the repository root
+    ``import omnigent.server`` would otherwise resolve the submodule root as
+    a namespace package and fail. CI's ``unit-fast`` job only runs
+    ``git submodule update --init -- omnigent`` plus
+    ``uv pip install --system -e .[tests]``; no separate Omnigent install is
+    required once this bundle root is visible.
+    """
+    bundle_root = Path(__file__).resolve().parents[2] / "omnigent"
+    bundle_text = str(bundle_root)
+    if bundle_text not in sys.path:
+        sys.path.insert(0, bundle_text)
+
+
+def _observed_omnigent_commit() -> str:
+    """Return the checked-out omnigent submodule revision, or ``"unknown"``."""
+    try:
+        bundle_root = Path(__file__).resolve().parents[2] / "omnigent"
+        completed = subprocess.run(
+            ["git", "-C", str(bundle_root), "rev-parse", "HEAD"],
+            capture_output=True,
+            text=True,
+            timeout=10,
+            check=False,
+        )
+        revision = (completed.stdout or "").strip()
+        if completed.returncode == 0 and revision:
+            return revision
+    except Exception:
+        pass
+    return "unknown"
+
+
+def _observed_omnigent_package() -> str:
+    """Return the imported omnigent package version, or ``"unknown"``."""
+    try:
+        _ensure_omnigent_bundle_on_path()
+        from omnigent.version import VERSION as _observed_version
+
+        if _observed_version:
+            return f"omnigent=={_observed_version}"
+    except Exception:
+        pass
+    return "unknown"
+
 
 # Upstream cookie names observed at the pinned revision; MoonMind never uses
 # them so control-plane and runtime credentials cannot be confused.
@@ -242,33 +303,39 @@ class AsyncAccountStore(Protocol):
 
     async def resolve_identity_to_user_id(self, identity: ValidatedIdentity) -> uuid.UUID | None:
         """Map a validated (issuer, subject) pair to an existing UUID."""
-        ...
+        raise NotImplementedError
 
     async def get_account(self, user_id: uuid.UUID) -> AccountRecord | None:
-        ...
+        """Return the MoonMind account for a UUID, if any."""
+        raise NotImplementedError
 
     async def get_password_hash_by_login(self, login: str) -> str | None:
-        ...
+        """Return the stored password hash for a login, if any."""
+        raise NotImplementedError
 
     async def record_login(self, user_id: uuid.UUID, when_epoch_seconds: int) -> None:
-        ...
+        """Record a successful login; fixture implementations may no-op."""
+        raise NotImplementedError
 
 
 class SessionRevocationStore(Protocol):
     """Durable session/revocation mechanism behind a portable interface."""
 
     async def revoke_session(self, jti: str) -> None:
-        ...
+        """Durably revoke one session by JTI."""
+        raise NotImplementedError
 
     async def is_session_revoked(self, jti: str) -> bool:
-        ...
+        """Return whether a JTI was revoked."""
+        raise NotImplementedError
 
     async def revoke_all_for_user(self, user_id: uuid.UUID) -> int:
         """Invalidate all sessions for a user; returns the new generation."""
-        ...
+        raise NotImplementedError
 
     async def generation_for_user(self, user_id: uuid.UUID) -> int:
-        ...
+        """Return the current revocation generation for a user."""
+        raise NotImplementedError
 
 
 class InMemoryAsyncAccountStore:
@@ -335,6 +402,7 @@ class InMemoryRevocationStore:
 
 def qualify_password_hash(plaintext: str) -> str:
     """Hash a password with the qualified upstream argon2 implementation."""
+    _ensure_omnigent_bundle_on_path()
     from omnigent.server.passwords import hash_password
 
     return hash_password(plaintext)
@@ -342,6 +410,7 @@ def qualify_password_hash(plaintext: str) -> str:
 
 def verify_account_password(plaintext: str, password_hash: str) -> bool:
     """Verify against a stored hash; ``False`` on any mismatch or malformed hash."""
+    _ensure_omnigent_bundle_on_path()
     from omnigent.server.passwords import InvalidPasswordError, verify_password
 
     try:
@@ -377,6 +446,7 @@ async def mint_moonmind_session(
     config: MoonmindAuthConfig,
     *,
     now: int | None = None,
+    revocation: SessionRevocationStore | None = None,
 ) -> tuple[str, uuid.UUID]:
     """Mint a MoonMind-bound session for a validated identity.
 
@@ -385,6 +455,11 @@ async def mint_moonmind_session(
     A wrapper around a final subject string is insufficient; the caller
     must supply the verified claims. Email-only mappings are rejected:
     the identity must already resolve to a UUID in the store.
+
+    When ``revocation`` is supplied, the current revocation generation is
+    captured into the ``gen`` claim so every later validation can compare
+    the minted generation against the live generation even when the caller
+    does not pin ``expected_generation``.
     """
     now = now if now is not None else _now_seconds()
     user_id = await account_store.resolve_identity_to_user_id(identity)
@@ -395,7 +470,7 @@ async def mint_moonmind_session(
         raise ForbiddenError("inactive", "account inactive")
     # Upstream admin advisory is recorded nowhere privileged: MoonMind
     # superuser authority comes only from the MoonMind account record.
-    payload = {
+    payload: dict[str, Any] = {
         "sub": str(account.user_id),
         "iss": config.token_issuer,
         "aud": config.token_audience,
@@ -405,6 +480,11 @@ async def mint_moonmind_session(
         "exp": now + config.session_ttl_seconds,
         "id_issuer": identity.issuer,
     }
+    if revocation is not None:
+        try:
+            payload["gen"] = await revocation.generation_for_user(account.user_id)
+        except Exception as exc:
+            raise UnavailableError("revocation store unavailable") from exc
     token = jwt.encode(payload, config.cookie_secret, algorithm="HS256")
     await account_store.record_login(account.user_id, now)
     return token, account.user_id
@@ -455,6 +535,7 @@ async def validate_moonmind_session(
             algorithms=list(_SUPPORTED_ALGORITHMS),
             issuer=config.token_issuer,
             audience=config.token_audience,
+            options={"require": ["exp", "iss", "aud", "sub", "jti"]},
         )
     except jwt.InvalidTokenError as exc:
         raise AuthInvalidError("auth_invalid", f"invalid session: {exc}") from exc
@@ -475,15 +556,23 @@ async def validate_moonmind_session(
         raise UnavailableError("revocation store unavailable") from exc
     if revoked:
         raise AuthInvalidError("auth_invalid", "session revoked")
-    generation = await revocation.generation_for_user(user_id)
+    try:
+        generation = await revocation.generation_for_user(user_id)
+    except Exception as exc:
+        raise UnavailableError("revocation store unavailable") from exc
     if expected_generation is not None and generation != expected_generation:
         raise AuthInvalidError("auth_invalid", "stale session generation")
-    # A generation bump invalidates sessions minted before it even when the
-    # caller does not pin a generation: compare against the token's issue
-    # time is out of scope for the hermetic fixture, so any bump revokes
-    # previously observed sessions tracked via expected_generation, and
-    # revoke_all_for_user callers must re-resolve. Direct per-session
+    # Every session is compared against its minted revocation generation,
+    # even when the caller does not pin one: tokens minted with a ``gen``
+    # claim must match the live generation, and legacy tokens without the
+    # claim are rejected once any generation bump exists. Direct per-session
     # revocation covers logout; generation covers password/account events.
+    token_generation = payload.get("gen")
+    if token_generation is not None:
+        if token_generation != generation:
+            raise AuthInvalidError("auth_invalid", "stale session generation")
+    elif generation != 0:
+        raise AuthInvalidError("auth_invalid", "stale session generation")
     try:
         account = await account_store.get_account(user_id)
     except Exception as exc:
@@ -573,8 +662,8 @@ async def resolve_current_user(
 class UpstreamProbeEvidence:
     """Redacted qualification evidence for the pinned upstream revision."""
 
-    commit: str = "f04b0354fb5344c1ea8b92795ceb6760a9ad7595"
-    package: str = "omnigent==0.12.0"
+    commit: str = PINNED_OMNIGENT_COMMIT
+    package: str = PINNED_OMNIGENT_PACKAGE
     session_roundtrip: bool = False
     password_roundtrip: bool = False
     accounts_config_fail_closed: bool = False
@@ -585,6 +674,7 @@ class UpstreamProbeEvidence:
 
 def probe_upstream_session_roundtrip(cookie_secret: bytes | None = None) -> bool:
     """Mint and validate a session JWT through real upstream helpers."""
+    _ensure_omnigent_bundle_on_path()
     from omnigent.server.oidc import hmac_digest, mint_session_token
 
     secret = cookie_secret or secrets.token_bytes(32)
@@ -621,6 +711,7 @@ def probe_upstream_config_fail_closed() -> tuple[bool, bool]:
     """Upstream config constructors fail loud on invalid configuration."""
     import os
 
+    _ensure_omnigent_bundle_on_path()
     from omnigent.server.accounts_config import AccountsConfig
     from omnigent.server.oidc import OIDCConfig
 
@@ -653,6 +744,7 @@ def probe_upstream_config_fail_closed() -> tuple[bool, bool]:
 
 def probe_upstream_defaults_intact() -> bool:
     """The pinned upstream default behavior is unchanged by qualification."""
+    _ensure_omnigent_bundle_on_path()
     from omnigent.server.auth import (
         RESERVED_USER_LOCAL,
         UnifiedAuthProvider,
@@ -673,8 +765,15 @@ def probe_upstream_defaults_intact() -> bool:
 
 
 def collect_upstream_probe_evidence() -> UpstreamProbeEvidence:
-    """Run all reuse probes and return redacted evidence (no secrets)."""
-    evidence = UpstreamProbeEvidence()
+    """Run all reuse probes and return redacted evidence (no secrets).
+
+    Provenance is observed from the checked-out submodule and the imported
+    package, never reported from hard-coded constants alone.
+    """
+    evidence = UpstreamProbeEvidence(
+        commit=_observed_omnigent_commit(),
+        package=_observed_omnigent_package(),
+    )
     try:
         evidence.session_roundtrip = probe_upstream_session_roundtrip()
     except Exception as exc:
