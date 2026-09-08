@@ -201,6 +201,7 @@ class OmnigentRuntimeEnvironmentPort(Protocol):
         plan: OmnigentExecutionPlanEnvelope,
         host_lease_ref: str,
         launch_policy: LaunchPolicy,
+        workspace_attachment: Mapping[str, Any] | None = None,
     ) -> Mapping[str, str]:
         raise NotImplementedError
 
