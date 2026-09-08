@@ -1350,15 +1350,17 @@ def test_run_initializes_latest_run_step_ledger(monkeypatch: pytest.MonkeyPatch)
     assert progress["pending"] == 1
 
 
+@pytest.mark.parametrize("verdict", ["ADDITIONAL_WORK_NEEDED", "NO_DETERMINATION"])
 def test_review_gate_retry_requires_reattempt_recommendation(
     monkeypatch: pytest.MonkeyPatch,
+    verdict: str,
 ) -> None:
     _configure_workflow_runtime(monkeypatch)
     workflow = MoonMindRunWorkflow()
 
     assert review_gate_retry_allowed(
         verdict=SimpleNamespace(
-            verdict="ADDITIONAL_WORK_NEEDED",
+            verdict=verdict,
             recommended_next_action="needs_human",
             recoverable_in_current_runtime=True,
         ),
@@ -1370,7 +1372,7 @@ def test_review_gate_retry_requires_reattempt_recommendation(
 
     assert review_gate_retry_allowed(
         verdict=SimpleNamespace(
-            verdict="ADDITIONAL_WORK_NEEDED",
+            verdict=verdict,
             recommended_next_action="blocked",
             recoverable_in_current_runtime=True,
         ),
@@ -1382,7 +1384,7 @@ def test_review_gate_retry_requires_reattempt_recommendation(
 
     assert review_gate_retry_allowed(
         verdict=SimpleNamespace(
-            verdict="ADDITIONAL_WORK_NEEDED",
+            verdict=verdict,
             recommended_next_action="reattempt_current_step",
             recoverable_in_current_runtime=True,
         ),
@@ -1391,6 +1393,61 @@ def test_review_gate_retry_requires_reattempt_recommendation(
         consecutive_no_progress_attempts=0,
         max_consecutive_no_progress_attempts=2,
     ) is True
+
+
+@pytest.mark.parametrize("stop_patch_enabled", [False, True])
+@pytest.mark.parametrize("verdict", ["ADDITIONAL_WORK_NEEDED", "NO_DETERMINATION"])
+@pytest.mark.parametrize("action", ["needs_human", "blocked"])
+def test_verifier_stop_routes_to_control_gate_before_retry(
+    monkeypatch,
+    stop_patch_enabled,
+    verdict,
+    action,
+):
+    _configure_workflow_runtime(monkeypatch)
+    workflow = MoonMindRunWorkflow()
+    monkeypatch.setattr(
+        workflow,
+        "_patched_or_false_outside_workflow",
+        lambda patch: (
+            stop_patch_enabled
+            if patch == (run_module.RUN_VERIFIER_REMEDIATION_STOP_AUTHORITY_PATCH)
+            else True
+        ),
+    )
+    gate = SimpleNamespace(
+        verdict=verdict,
+        recommended_next_action=action,
+        recoverable_in_current_runtime=True,
+    )
+    transition = workflow._resolve_gate_transition(
+        verdict=gate,
+        current_index=0,
+        ordered_nodes=[
+            {
+                "id": "verify",
+                "annotations": {"issueImplementRole": "moonspec-verification-gate"},
+            }
+        ],
+    )
+    if stop_patch_enabled:
+        assert transition.disposition == "accept"
+        assert transition.routing_disposition == "stop_at_control_gate"
+        assert transition.reason_code == f"verification_requested_{action}"
+    elif verdict == "NO_DETERMINATION":
+        assert transition.disposition == "retry"
+    if verdict == "NO_DETERMINATION":
+        assert (
+            review_gate_retry_allowed(
+                verdict=gate,
+                review_retry_count=0,
+                max_review_attempts=2,
+                consecutive_no_progress_attempts=0,
+                max_consecutive_no_progress_attempts=2,
+                honor_explicit_stop=stop_patch_enabled,
+            )
+            is not stop_patch_enabled
+        )
 
 
 def test_moonspec_verifier_resolves_only_exact_next_remediation_attempt(
