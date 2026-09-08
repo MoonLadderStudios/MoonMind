@@ -36,7 +36,7 @@ machine path. Disposition key: **convert** (move to the new boundary),
 | E6 | `api_service/auth.py` FastAPI Users core [J] | `BearerTransport(tokenUrl="auth/jwt/login")`, `JWTStrategy(secret=JWT_SECRET_KEY, 3600s)`, `UserManager` + profile hooks | email+password in, bearer JWT out | `UserManager` / `SQLAlchemyUserDatabase(User)` | `current_active_user` (active check) | issues tokens; creates profile async on register/login | **convert** (replace issuance/validation; keep one-profile-per-user; JWT secret/purpose rebinding) — K2/K4 |
 | E7 | `api_service/auth.py::get_or_create_default_user()` [S] | startup seeding; reserved zero UUID `00000000-…-000000` default | `DEFAULT_USER_*` settings | direct `User` row create | n/a (bootstrap) | creates local owner row | **convert** (explicit operator claim; no silent owner creation) — K3 |
 | E8 | `api_service/api/routers/profile.py` [R] | `GET/PUT /me` (`Profile` router, no extra prefix) via `get_current_user()` | bearer / default user | E3 | `ProfileService` | reads/writes own profile | **convert** (preserve contract, replace implementation) — K4 |
-| E9 | `api_service/api/routers/worker_auth.py::_require_worker_auth()` [W] | `X-MoonMind-Worker-Token` header + `get_current_user_optional()` | OIDC principal only; legacy worker token → `410 worker_token_deprecated`; none → `401 auth_required` | OIDC user with non-null id | manifests router mutations | machine-authority gate | **convert** (keep OIDC-only; browser logout must not revoke worker creds) — K4 |
+| E9 | `api_service/api/routers/worker_auth.py::_require_worker_auth()` [W] | `X-MoonMind-Worker-Token` header + `get_current_user_optional()` | OIDC principal only; legacy worker token → `410 worker_token_deprecated`; none → `401 auth_required` | any non-`disabled` user with non-null id resolves `auth_source="oidc"` (pre-change baseline, traced) | manifests router mutations | machine-authority gate with a pre-change gap: ordinary browser principals satisfy the current check, so this disposition is NOT a frozen OIDC-only worker contract | **convert** (K4 mints an explicitly scoped machine credential independent of browser login, with allow/deny rejection rules; browser logout must not revoke worker creds; ordinary browser principals must not satisfy worker-only mutations) — K4 |
 | E10 | `api_service/api/routers/manifests.py` [R/W] | user routes via `get_current_user()`; mutation route via `_require_worker_auth` | bearer or worker auth | E3 / E9 | manifest ownership | mixed human/machine surface | **convert** — K4 |
 | E11 | `api_service/api/routers/temporal_artifacts.py` [R/T] | artifact endpoints via `get_current_user_optional()` | optional bearer | E4 | Temporal artifact owner checks | preview/download surface | **convert** (no URL-broad tokens; SSE/download re-auth) — K4 |
 | E12 | `moonmind/workflows/temporal/artifacts.py` owner checks [D] | `_assert_read_access` / `_assert_mutation_access` / `_raw_access_allowed`: bypass when `AUTH_PROVIDER == "disabled"`; `principal required` when non-disabled and empty | principal string | owner principal vs `service:` prefix | artifact repository | authorization bypass in `disabled` | **convert** (new modes must not inherit bypass; authenticated fixtures) — K4 |
@@ -44,12 +44,16 @@ machine path. Disposition key: **convert** (move to the new boundary),
 | E14 | `api_service/api/routers/omnigent_bridge.py` + workflow-chat router [T] | bridge mount + `WORKFLOW_CHAT_BINDINGS_MOUNT_PATH`; native Workflow Chat behind same-origin binding-scoped facade | MoonMind login (binding-scoped) | E3 | binding scope | proxied upstream sessions | **convert** (login ≠ unrestricted upstream access; no cookie/bearer forwarding) — K4 |
 | E15 | `api_service/api/routers/container_jobs.py` [W] | container-job routes via `get_current_user()` | bearer | E3 | job ownership | dispatches container work | **convert** (qualify without browser cookies) — K4 |
 | E16 | `api_service/api/routers/retrieval_gateway.py:468` [W] | one optional-user route; rest strict | optional/strict bearer | E4 / E3 | retrieval ownership | mixed surface | **convert** — K4 |
-| E17 | All other `get_current_user()` routers [R] | provider_profiles, secrets, sessions, agent_profiles, deployment_operations, settings, timelines, bootstrap, recurring/executions/catalog/mcp/console/jira/manifests/workflows/oauth_sessions/presets/automation/system/agent_runs/policies/migration/native_ui | bearer | E3 | per-router ownership | standard API | **convert** (audit for direct FastAPI Users deps bypassing E3) — K4 |
-| E18 | `frontend/src/lib/api/client.ts::fetchApi` [C] | same-origin `fetch`, JSON headers, no auth header | cookie (same-origin) | browser session | n/a (client) | all dashboard requests | **convert** (login/setup/logout UX, CSRF-aware requests, return-to-deep-link, expired-session handling) — K4 |
+| E17 | All other `get_current_user()` routers [R] | provider_profiles, secrets, sessions, agent_profiles, deployment_operations, settings, timelines, bootstrap, recurring/executions/catalog/mcp/console/jira/manifests/workflows/oauth_sessions/presets/automation/system/agent_runs/policies/migration/native_ui | bearer | E3 | per-router ownership | standard API | **convert** (audit for direct FastAPI Users deps bypassing E3; non-login machine credentials live in E23–E26, not this row) — K4 |
+| E18 | `frontend/src/lib/api/client.ts::fetchApi` [C] | same-origin `fetch`, JSON headers only, sends no `Authorization` header (traced pre-change gap) | no credential sent by the client; mounted FastAPI Users transport (`api_service/auth.py` E6) returns a bearer JWT that this client never attaches, and no session cookie is established by the current application | browser session (unestablished) | n/a (client) | all dashboard requests | current bearer gap: authenticated modes leave this client without any credential until the bearer-to-cookie transport transition lands | **convert** (login/setup/logout UX, bearer-to-cookie transport transition, CSRF-aware requests, return-to-deep-link, expired-session handling with regression coverage proving the client presents a credential) — K4 |
 | E19 | `moonmind/container_job_cli.py` + `MOONMIND_CONTAINER_JOBS_BEARER_TOKEN{,_FILE}` [W/C] | CLI/container file-based bearer | scoped bearer file | container-job minting (`runtime_environment.py`, `launcher.py`) | job scope | machine credential | **retain** (unrelated machine credential; qualify in K4 journey, do not delete) — K4 |
 | E20 | `moonmind/auth/` (`AuthProviderManager`, `EnvAuthProvider`, `ProfileAuthProvider`) [D] | profile/environment credential resolution for provider credentials | env/profile secrets | provider resolution | secret refs | model-credential supply | **retain** (not application login) — no owner change |
 | E21 | `api_service/api/routers/oauth_sessions.py`, provider-profile OAuth [R] | model Provider Profile OAuth flows | provider OAuth | provider oauth policy | profile ownership | model access | **retain** (not application login) — no owner change |
 | E22 | `api_service/api/routers/worker_auth.py` legacy token constant | `X-MoonMind-Worker-Token` → `410` | removed | n/a | n/a | documents removal | **retain-narrowly** (keep the `410` tombstone through cutover, then remove with callers) — K5 |
+| E23 | `api_service/api/routers/execution_integrations.py` integration-callback token [W] | `/api/integrations/*` callback routes; `X-Integration-Token` header or `Authorization: Bearer` compared against `IntegrationCallbackSettings.callback_token` / `JulesSettings.jules_callback_token` (constant-time compare, rate-limited, payload-capped) | shared integration-callback secret (operator-held, per-integration profile) | callback-profile match (no MoonMind user principal) | execution visibility/write-back | admitted-workflow write-back path independent of `get_current_user()` | **convert** (scope per-integration tokens, rotation plan, and cutover tests proving `JWT_SECRET_KEY` rebinding/rotation does not break admitted callbacks) — K4 |
+| E24 | `api_service/api/routers/proxy.py` provider-proxy token [W] | `/proxy/{provider}/{path}`; `Authorization: Bearer mm-proxy-token:<fernet>` or `x-api-key`, Fernet-decrypted via app encryption key, provider-bound, exp-checked | symmetric-encrypted proxy token carrying `secret_refs` (not a MoonMind login) | token `provider` field vs route provider | provider secret resolution | model-credential supply to agent runtimes | **convert** (qualify proxy-token issuance/rotation independently of the login JWT secret; cutover tests prove proxy tokens survive `JWT_SECRET_KEY` rotation) — K4 |
+| E25 | `api_service/api/routers/mcp_tools.py::call_managed_session_container_tool` managed-session capability [W] | `POST /container/tools/call`; `Authorization` bearer verified by `verify_container_job_session_capability(..., secret=JWT_SECRET_KEY)` | JWT-secret-backed managed-session capability (scoped: session id, tools, workspace flags) | capability `owner` | container tool dispatch | machine-scoped container execution | **convert** (explicit `JWT_SECRET_KEY` purpose binding + rotation/migration plan for managed-session capabilities; K4 regression coverage for rebinding) — K4 |
+| E26 | `api_service/api/execution_fanout.py` execution-fanout capability [W] | fanout create/describe routes via `EXECUTION_FANOUT_HEADER`, verified by `verify_execution_fanout_capability` | fanout capability marker (JWT-secret-backed) | capability parent/child binding | fanout child visibility | admitted-workflow fanout | **convert** (same secret-purpose binding and rotation plan as E25; K4 cutover tests) — K4 |
 
 Direct FastAPI Users dependencies outside E3/E4 (e.g. `websockets.py` importing
 `get_jwt_strategy`/`get_user_manager`) must be audited in K4 so no stale
@@ -163,6 +167,45 @@ principal), `service:worker` (service prefix principal). Executable form:
 | `get_auth_router()`, `AUTH_PROVIDER=keycloak` | empty router (Keycloak placeholder; login path unmounted) |
 | startup `AUTH_PROVIDER=google` without reachable issuer | `RuntimeError` from discovery |
 | DB outage on strict path | degraded/unavailable (must fail closed; no admin stub on production paths) |
+
+### 5.1 Background-work disablement policy (frozen selection surface)
+
+When a user account is disabled, new user actions are blocked immediately.
+Already-admitted background work (running Temporal workflows, queued jobs,
+container dispatches) keeps its stored principal ID and durable authority and
+follows exactly one per-deployment policy selected before K6 cutover:
+
+| Field | Frozen values |
+| --- | --- |
+| Policy selector | `drain_complete` (let admitted work finish; admit nothing new) or `revoke` (cancel admitted work). No silent ownership transfer either way. |
+| Default | `drain_complete`, recorded in the deployment runbook when the operator selects nothing. |
+| Owner | Deployment owner selects; K4 implements both paths with fixtures; K6 gates cutover on the recorded selection. |
+| Evidence | K4 negative matrix (disabled principal admits nothing new under both policies) + K6 smoke result naming the selected policy. |
+
+### 5.2 Revocation deadline (frozen acceptance threshold)
+
+"Bounded interval" in `docs/Security/AuthenticationContracts.md` §5 means:
+credential and session revocation (password reset, account disablement,
+administrative revocation, logout) is enforced on every API replica and
+terminates active browser streams (SSE, WebSocket reconnects, artifact
+downloads) within **5 minutes of the revocation commit**, measured from the
+database transaction commit timestamp to the replica's final re-authorization
+check. The clock starts at commit, not at cache expiry. K4 proves this with a
+replica-consistency test using a fixed short test bound; K6 verifies the
+production 5-minute bound on the deployed replica count.
+
+### 5.3 Disabled-mode ingress gate (fail-closed validator)
+
+`disabled` mode is an explicitly selected local single-user mode, never an
+error fallback. Its restricted-ingress requirement is enforced by a
+fail-closed startup/deployment validator (K4 implements, K2 qualifies the
+interface): at startup the API refuses to serve `disabled` mode on a
+non-loopback bind unless the operator provides explicit trusted-ingress
+evidence (loopback-only bind proof or a named trusted-proxy chain with TLS
+termination recorded in the deployment runbook). Accepted evidence is a
+loopback bind (`127.0.0.1`/`::1`) or a documented trusted-ingress declaration;
+anything else fails startup closed. The deployment owner records the bind,
+proxy chain, TLS termination, and replica count per §4 step 5.
 
 Escaped-regression policy: any production escape becomes a minimized required-CI
 fixture (unit where possible, `integration_ci` only for Docker/compose/DB seams

@@ -1,7 +1,7 @@
 # Authentication Contracts
 
 **Document Class:** Canonical declarative  
-**Viewpoint:** Module Architecture View  
+**Viewpoint:** Cross-Cutting Concept View  
 **Status:** Draft  
 **Owners:** MoonMind Engineering  
 **Audience:** API, dashboard, runtime, security contributors and operators  
@@ -42,7 +42,7 @@ select MoonMind's mode, key, or identity store.
 | `accounts` | Default for new installations. Built-in accounts with protected first-owner setup and invite-only enrollment. No Keycloak or mandatory SMTP service. |
 | `oidc` | Advanced external identity-provider integration through a qualified generic OIDC flow (authorization code + PKCE). |
 | `header` | Advanced authenticated ingress. Only a trusted proxy may assert identity; direct API connections never accept user-controlled identity headers. |
-| `disabled` | Explicit local single-user mode with a stable persisted user and restricted ingress. Never an error fallback. |
+| `disabled` | Explicit local single-user mode with a stable persisted user and fail-closed restricted ingress (startup/deployment validator; loopback-only bind or documented trusted-ingress evidence; see inventory §5.3). Never an error fallback. |
 
 Unknown or retired selectors fail startup with migration guidance. `keycloak`
 must not translate to `disabled`, `default` is not an undocumented alias, and
@@ -115,24 +115,26 @@ operator.
 - One durable session/revocation mechanism lives in the existing database behind
   a portable interface. Logout invalidates the current session. Password reset,
   account disablement, and administrative revocation invalidate the relevant
-  credentials across API replicas within a bounded interval. Clearing a cookie
+  credentials across API replicas within 5 minutes of the revocation commit
+  (commit timestamp to final replica re-authorization check; clock starts at
+  commit — see inventory §5.2). Clearing a cookie
   alone is not revocation.
 - Browser logout does not revoke independent worker credentials and does not
   cancel already-admitted workflows. Account disablement blocks new user actions
   immediately; already-admitted background work keeps its stored principal ID
   and durable authority and follows the explicit per-deployment policy recorded
-  in the inventory (drain/complete versus revoke), never silent ownership
+  in the inventory §5.1 (`drain_complete` by default versus `revoke`), never silent ownership
   transfer.
 - Active browser streams (SSE, WebSocket reconnects, artifact downloads) are
-  re-authorized and terminated within a documented bounded interval after
-  revocation. SSE and artifact downloads work without placing broad tokens in
+  re-authorized and terminated within the same 5-minute bound after
+  revocation (inventory §5.2). SSE and artifact downloads work without placing broad tokens in
   URLs.
 
 ## 6. Browser and transport security
 
 - Cookie-authenticated mutations require CSRF protection and origin validation.
   WebSocket handshakes validate origin, authorize reconnects, and are revoked on
-  the same bounded interval as other streams.
+  the same 5-minute bound as other streams (inventory §5.2).
 - OIDC login uses authorization-code flow with PKCE, state/nonce protections,
   verified issuer/audience/signature/time claims, and exact configured redirect
   destinations. Open redirects are rejected.
