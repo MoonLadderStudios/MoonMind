@@ -82,10 +82,13 @@ async def test_control_adapter_confirms_actual_workflow_safe_point_and_replays(t
                             ))
                             for _ in range(2):
                                 mixed = await adapter.send_batch_pause_update(batch=mixed)
-                                assert mixed.status == "partial"
-                                assert [target.state for target in mixed.targets] == ["safe_point", "unknown"]
+                                # The terminated run carries positive close evidence, so it
+                                # resolves as already_terminal (satisfying the scoped
+                                # operation) while staying distinct from safe_point.
+                                assert mixed.status == "succeeded"
+                                assert [target.state for target in mixed.targets] == ["safe_point", "already_terminal"]
                                 assert mixed.targets[0].update_id == batch.targets[0].update_id
-                                assert mixed.targets[1].reason == "update_acceptance_unavailable"
+                                assert mixed.targets[1].reason == "workflow_already_terminal"
                             await _assert_durable_mixed_fanout(tmp_path, mixed, adapter)
                     await handle.execute_update("Pause", {"controlGeneration": 1})
                     assert (await handle.query("control_state"))["resumed"]
@@ -224,12 +227,12 @@ async def _assert_durable_mixed_fanout(tmp_path, observed, adapter):
             temporal = TemporalExecutionService(session, client_adapter=adapter)
             owner = SystemOperationsService(session, temporal_service=temporal)
             result = await owner.snapshot()
-            assert result.control.status == "partial"
-            assert [target.state for target in result.control.targets] == ["safe_point", "unknown"]
+            assert result.control.status == "succeeded"
+            assert [target.state for target in result.control.targets] == ["safe_point", "already_terminal"]
         async with sessions() as session:
             audit = await SystemOperationsService(session)._audit_event_by_idempotency_key(intent.request_id)
             persisted = audit.new_value_json["control"]["targets"]
-            assert [target["state"] for target in persisted] == ["safe_point", "unknown"]
-            assert persisted[1]["reason"] == "update_acceptance_unavailable"
+            assert [target["state"] for target in persisted] == ["safe_point", "already_terminal"]
+            assert persisted[1]["reason"] == "workflow_already_terminal"
     finally:
         await engine.dispose()

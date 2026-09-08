@@ -532,3 +532,215 @@ async def test_command_refreshes_state_loaded_before_another_session_commits(
         assert result.system.version == 3
         assert stale_row.value_json["version"] == 3
         assert result.system.workers_paused is True
+
+
+# ---- Bounded pause/resume reconciliation (MoonMind#3953) ----
+
+class EmptyEnumerationTemporalService(FakeTemporalService):
+    """Visibility finds no eligible UserWorkflow runs for the request."""
+
+    async def send_quiesce_pause_signal(self, *, request_id, batch, on_progress):
+        self.pause_calls += 1
+        batch.enumerated = True
+        batch.targets = []
+        batch.enumeration_policy = "test-policy"
+        await on_progress(batch)
+        return batch
+
+
+@pytest.mark.asyncio
+async def test_empty_enumeration_is_terminal_without_fanout(
+    system_operations_session_maker,
+) -> None:
+    """No eligible runs must not read as quiesced and must not re-enumerate."""
+    temporal = EmptyEnumerationTemporalService()
+    async with system_operations_session_maker() as session:
+        service = SystemOperationsService(session, temporal_service=temporal)
+        snapshot = await service.submit(
+            WorkerOperationCommand(
+                action="pause",
+                mode="quiesce",
+                reason="Stop claims",
+                confirmation="Pause workers confirmed",
+                idempotencyKey=_idempotency_key("empty-enumeration"),
+            ),
+            actor_user_id=uuid4(),
+        )
+
+        assert snapshot.control is not None
+        assert snapshot.control.targets == []
+        assert snapshot.control.status == "empty"
+        assert snapshot.signal_status == "empty"
+
+        reread = await service.snapshot()
+
+    assert temporal.pause_calls == 1
+    assert reread.control is not None
+    assert reread.control.status == "empty"
+    assert reread.signal_status == "empty"
+
+
+@pytest.mark.asyncio
+async def test_new_terminal_dispositions_survive_stale_observers(
+    system_operations_session_maker,
+) -> None:
+    """already_terminal/unsupported/superseded are never overwritten by stale reads."""
+    from moonmind.schemas.workflow_control_models import (
+        WorkflowControlBatch,
+        WorkflowControlTarget,
+    )
+
+    async with system_operations_session_maker() as session:
+        service = SystemOperationsService(session, temporal_service=object())
+        await service.submit(
+            WorkerOperationCommand(
+                action="pause",
+                mode="quiesce",
+                reason="Stop claims",
+                confirmation="Pause workers confirmed",
+                idempotencyKey=_idempotency_key("terminal-evidence"),
+            ),
+            actor_user_id=uuid4(),
+        )
+        audit = await service._audit_event_by_idempotency_key(
+            _idempotency_key("terminal-evidence")
+        )
+        assert audit is not None
+        stored = WorkflowControlBatch.model_validate(
+            audit.new_value_json["control"]
+        )
+        assert stored.enumerated is False
+        confirmed = stored.model_copy(deep=True)
+        confirmed.enumerated = True
+        confirmed.targets = [
+            WorkflowControlTarget(
+                workflowId="closed-workflow", runId="run-closed",
+                updateId="update-closed", state="already_terminal",
+                reason="workflow_already_terminal",
+            ),
+            WorkflowControlTarget(
+                workflowId="foreign-workflow", runId="run-foreign",
+                updateId="update-foreign", state="unsupported",
+                reason="control_protocol_unsupported",
+            ),
+            WorkflowControlTarget(
+                workflowId="replaced-workflow", runId="run-old",
+                updateId="update-replaced", state="superseded",
+                reason="control_generation_superseded",
+            ),
+        ]
+        await service._persist_control_progress(audit.id, confirmed)
+
+        stale = confirmed.model_copy(deep=True)
+        for target in stale.targets:
+            target.state, target.reason = "pending", "safe_point_pending"
+        merged = await service._persist_control_progress(audit.id, stale)
+
+        assert [target.state for target in merged.targets] == [
+            "already_terminal", "unsupported", "superseded",
+        ]
+        # One satisfied target plus two attention targets stays partial.
+        assert merged.status == "partial"
+
+
+@pytest.mark.asyncio
+async def test_replayed_progress_cannot_change_request_authority(
+    system_operations_session_maker,
+) -> None:
+    """Reads reconcile only the stored authorized command, never a new scope."""
+    from moonmind.schemas.workflow_control_models import WorkflowControlBatch
+
+    async with system_operations_session_maker() as session:
+        service = SystemOperationsService(session, temporal_service=FakeTemporalService())
+        await service.submit(
+            WorkerOperationCommand(
+                action="pause",
+                mode="quiesce",
+                reason="Stop claims",
+                confirmation="Pause workers confirmed",
+                idempotencyKey=_idempotency_key("authority-scope"),
+            ),
+            actor_user_id=uuid4(),
+        )
+        audit = await service._audit_event_by_idempotency_key(
+            _idempotency_key("authority-scope")
+        )
+        assert audit is not None
+        stored = WorkflowControlBatch.model_validate(
+            audit.new_value_json["control"]
+        )
+
+        tampered_action = stored.model_copy(deep=True)
+        tampered_action.action = "Resume"
+        with pytest.raises(ValueError, match="request authority"):
+            await service._persist_control_progress(audit.id, tampered_action)
+
+        tampered_generation = stored.model_copy(deep=True)
+        tampered_generation.generation += 1
+        with pytest.raises(ValueError, match="request authority"):
+            await service._persist_control_progress(audit.id, tampered_generation)
+
+        tampered_request = stored.model_copy(deep=True)
+        tampered_request.request_id = "another-request"
+        with pytest.raises(ValueError, match="request authority"):
+            await service._persist_control_progress(audit.id, tampered_request)
+
+        await session.rollback()
+        reread = await service.snapshot()
+        assert reread.control is not None
+        assert reread.control.request_id == _idempotency_key("authority-scope")
+        assert reread.control.action == "Pause"
+
+
+@pytest.mark.asyncio
+async def test_historical_operation_results_stay_separate_from_current(
+    system_operations_session_maker,
+) -> None:
+    """A newer command keeps its own audit row; older evidence is untouched."""
+    from moonmind.schemas.workflow_control_models import WorkflowControlBatch
+
+    temporal = FakeTemporalService()
+    async with system_operations_session_maker() as session:
+        service = SystemOperationsService(session, temporal_service=temporal)
+        await service.submit(
+            WorkerOperationCommand(
+                action="pause",
+                mode="quiesce",
+                reason="Stop claims",
+                confirmation="Pause workers confirmed",
+                idempotencyKey=_idempotency_key("history-pause"),
+            ),
+            actor_user_id=uuid4(),
+        )
+        await service.submit(
+            WorkerOperationCommand(
+                action="resume",
+                reason="Done",
+                idempotencyKey=_idempotency_key("history-resume"),
+            ),
+            actor_user_id=uuid4(),
+        )
+
+        pause_audit = await service._audit_event_by_idempotency_key(
+            _idempotency_key("history-pause")
+        )
+        resume_audit = await service._audit_event_by_idempotency_key(
+            _idempotency_key("history-resume")
+        )
+        assert pause_audit is not None and resume_audit is not None
+        assert pause_audit.id != resume_audit.id
+        pause_batch = WorkflowControlBatch.model_validate(
+            pause_audit.new_value_json["control"]
+        )
+        resume_batch = WorkflowControlBatch.model_validate(
+            resume_audit.new_value_json["control"]
+        )
+        assert pause_batch.action == "Pause"
+        assert pause_batch.generation == 1
+        assert [target.state for target in pause_batch.targets] == ["safe_point"]
+        assert resume_batch.action == "Resume"
+        assert resume_batch.generation == 2
+
+        current = await service.snapshot()
+        assert current.control is not None
+        assert current.control.request_id == _idempotency_key("history-resume")

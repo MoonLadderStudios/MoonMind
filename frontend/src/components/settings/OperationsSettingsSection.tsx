@@ -8,6 +8,8 @@ const WorkerSnapshotSchema = z.object({
   signalStatus: z.string().nullable().optional(),
   control: z.object({
     enumerated: z.boolean(),
+    enumerationError: z.string().nullable().optional(),
+    enumerationPolicy: z.string().nullable().optional(),
     targets: z.array(z.object({ workflowId: z.string(), runId: z.string(), state: z.string(), reason: z.string().nullable().optional() })),
   }).nullable().optional(),
   system: z
@@ -431,9 +433,11 @@ export function OperationsSettingsSection({
       return WorkerSnapshotSchema.parse(await response.json());
     },
     onSuccess: (data, variables) => {
-      const confirmed = data.control?.enumerated && data.control.targets.every(
-        (target) => target.state === (variables.action === 'pause' ? 'safe_point' : 'resumed'),
-      );
+      const confirmed = Boolean(data.control?.enumerated)
+        && data.control.targets.length > 0
+        && data.control.targets.every(
+          (target) => target.state === (variables.action === 'pause' ? 'safe_point' : 'resumed'),
+        );
       setNotice({
         level: ['partial', 'unknown', 'failed'].includes(data.signalStatus || '') ? 'error' : 'ok',
         text: variables.action === 'pause' && variables.mode === 'drain'
@@ -793,20 +797,40 @@ export function OperationsSettingsSection({
         ? 'Unavailable'
         : 'Healthy';
   const isPaused = Boolean(system.workersPaused);
+  const controlTargets = snapshot?.control?.targets ?? [];
+  const controlEnumerated = Boolean(snapshot?.control?.enumerated);
+  const controlBlocked = controlEnumerated && Boolean(snapshot?.control?.enumerationError);
+  const noEligibleTargets = controlEnumerated && !controlBlocked && controlTargets.length === 0;
+  const targetTotals = controlTargets.reduce<Record<string, number>>((counts, target) => {
+    counts[target.state] = (counts[target.state] ?? 0) + 1;
+    return counts;
+  }, {});
+  const targetTotalsLabel = Object.entries(targetTotals)
+    .map(([state, count]) => `${count} ${formatStatusLabel(state)}`)
+    .join(', ');
+  const allQuiesced = controlEnumerated
+    && controlTargets.length > 0
+    && controlTargets.every((target) => target.state === 'safe_point');
   const stateLabel = isPaused
     ? system.mode === 'quiesce'
-      ? snapshot?.control?.enumerated && snapshot.control.targets.every((target) => target.state === 'safe_point')
+      ? allQuiesced
         ? 'Workers quiesced'
-        : snapshot?.signalStatus === 'failed'
-          ? 'Pause failed'
-          : snapshot?.signalStatus === 'partial' || snapshot?.signalStatus === 'unknown'
-          ? 'Pause partially confirmed'
-          : 'Pause requested; confirmation pending'
+        : noEligibleTargets
+          ? 'No eligible runs found; admission pause still applies'
+          : controlBlocked
+            ? 'Target enumeration blocked; confirmation pending'
+            : snapshot?.signalStatus === 'failed'
+              ? 'Pause failed'
+              : snapshot?.signalStatus === 'partial' || snapshot?.signalStatus === 'unknown'
+                ? 'Pause partially confirmed'
+                : 'Pause requested; confirmation pending'
       : 'New work admission paused'
     : snapshot?.control
       ? snapshot.signalStatus === 'succeeded'
         ? 'Workflow resume confirmed'
-        : 'Resume requested; confirmation pending'
+        : noEligibleTargets
+          ? 'No eligible runs found; admission open'
+          : 'Resume requested; confirmation pending'
       : 'Work admission open';
 
   return (
@@ -1122,11 +1146,29 @@ export function OperationsSettingsSection({
                 Mode: {system.mode || (isPaused ? 'paused' : 'running')} | Version:{' '}
                 {system.version || '-'} | Updated: {system.updatedAt || '-'}
               </p>
+              {noEligibleTargets ? (
+                <p className="text-xs text-slate-500 dark:text-slate-400">
+                  Scope covers running UserWorkflow executions only; no eligible runs were
+                  enumerated. This does not prove every worker process, host, or excluded
+                  operator workflow is quiescent.
+                </p>
+              ) : null}
+              {controlBlocked ? (
+                <p className="text-xs text-amber-700 dark:text-amber-300">
+                  Target enumeration blocked ({snapshot?.control?.enumerationError});
+                  confirmation is pending until enumeration completes.
+                </p>
+              ) : null}
             </div>
 
             {snapshot?.control && snapshot.control.targets.length > 0 ? (
               <details>
-                <summary>Control confirmations</summary>
+                <summary>Control confirmations ({targetTotalsLabel})</summary>
+                {snapshot.control.enumerationPolicy ? (
+                  <p className="text-xs text-slate-500 dark:text-slate-400">
+                    {snapshot.control.enumerationPolicy}
+                  </p>
+                ) : null}
                 <ul>
                   {snapshot.control.targets.map((target) => (
                     <li key={`${target.workflowId}:${target.runId}`}>
