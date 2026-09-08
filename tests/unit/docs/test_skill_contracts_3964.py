@@ -31,7 +31,6 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 from _semantic_docs_3964 import (  # noqa: E402
     assert_semantic_absent,
     assert_semantic_present,
-    normalize,
 )
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
@@ -87,9 +86,13 @@ def test_every_skill_body_carries_executable_contract_sections() -> None:
             ("## ",),
             context=f"{skill_dir.name}/SKILL.md headed sections",
         )
-        lowered = normalize(text)
-        assert any(term in lowered for term in ("workflow", "inputs", "output")), (
-            f"{skill_dir.name}/SKILL.md must define workflow/inputs/output semantics"
+        # P1 (Codex review): the production frontmatter loader and canonical
+        # Skill contract do not require literal `workflow`/`inputs`/`output`
+        # prose. Validate declared frontmatter (covered by
+        # test_every_skill_frontmatter_parses_via_production_loader) plus a
+        # substantive headed body instead of an undocumented prose schema.
+        assert len(text.strip()) >= 200, (
+            f"{skill_dir.name}/SKILL.md must carry a substantive executable body"
         )
 
 
@@ -197,12 +200,16 @@ def test_no_silent_fallback_error_classes_exist_in_production() -> None:
         OMNIGENT_FAILURE_CLASS_TABLE,
         OmnigentFailureReason,
         classify_omnigent_failure,
+        failure_class_for_terminal_status,
     )
 
     # The production failure taxonomy must cover the fail-closed surface the
     # docs describe (auth, invalid payload, host timeout, ambiguous first
     # message): an explicit selection maps to a failure class, never to a
     # silent substitution.
+    # P2 (Codex review): exercise the production failure paths instead of
+    # only asserting enum keys exist, so a regression that silently routes
+    # through another runtime/profile/host cannot leave this twin green.
     assert OmnigentFailureReason.AUTH_FAILURE in OMNIGENT_FAILURE_CLASS_TABLE
     assert OmnigentFailureReason.INVALID_SESSION_PAYLOAD in (
         OMNIGENT_FAILURE_CLASS_TABLE
@@ -216,3 +223,15 @@ def test_no_silent_fallback_error_classes_exist_in_production() -> None:
         classify_omnigent_failure(OmnigentFailureReason.INVALID_SESSION_PAYLOAD)
         == "user_error"
     )
+    # Fail-closed: denied/failed explicit selections classify to an error,
+    # never to silent success (None) or a substituted authority.
+    for reason in (
+        OmnigentFailureReason.AUTH_FAILURE,
+        OmnigentFailureReason.INVALID_SESSION_PAYLOAD,
+        OmnigentFailureReason.SESSION_HOST_TIMEOUT,
+        OmnigentFailureReason.AMBIGUOUS_POSTING_RECONCILIATION,
+        OmnigentFailureReason.FIRST_MESSAGE_DIGEST_MISMATCH,
+    ):
+        assert classify_omnigent_failure(reason) is not None, reason
+    assert failure_class_for_terminal_status("failed") is not None
+    assert failure_class_for_terminal_status("timed_out") == "system_error"

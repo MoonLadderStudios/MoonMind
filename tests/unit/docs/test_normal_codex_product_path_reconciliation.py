@@ -76,10 +76,21 @@ def test_no_silent_fallback_is_pinned() -> None:
     # (#3964: the three-sentence invariant paragraph loosened to its semantic
     # contract; the production failure taxonomy twin in
     # test_skill_contracts_3964.py proves fail-closed behavior in code).
+    # P2 (Codex review): scope the terms to the bounded §5 failure-matrix
+    # section so unrelated occurrences elsewhere (e.g. "never silently
+    # filled" in the projection table) cannot satisfy a removed contract.
+    section_start = text.index("## 5. Complete failure and evidence matrix")
+    section_end = text.index("## 6. Evidence-qualified support language")
+    section = text[section_start:section_end]
     assert_semantic_present(
-        text,
+        section,
         ("explicit", "never silently", "direct codex"),
         context="reconciliation no-silent-fallback invariant",
+    )
+    assert_semantic_present(
+        section,
+        ("denied or failed", "is an error"),
+        context="reconciliation denied-selection error invariant",
     )
     assert_semantic_present(
         text,

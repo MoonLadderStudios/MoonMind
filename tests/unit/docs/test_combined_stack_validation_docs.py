@@ -113,3 +113,11 @@ def test_combined_stack_doc_documents_omnigent_host_workspace_and_credentials() 
         ("does not mount moonmind's codex oauth volume",),
         context="combined stack OAuth mount prohibition",
     )
+    # P2 (Codex review): the generic-host contract also prohibits setting
+    # `CODEX_HOME` globally; pin it separately so removing that clause alone
+    # fails even though the volume clause above still passes.
+    assert_semantic_present(
+        text,
+        ("codex_home", "globally"),
+        context="combined stack CODEX_HOME global prohibition",
+    )
