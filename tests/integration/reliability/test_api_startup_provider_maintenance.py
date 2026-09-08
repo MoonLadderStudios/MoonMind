@@ -139,7 +139,7 @@ async def test_http_serves_while_bootstrap_waits_and_lifespan_owns_cleanup(
         async with asyncio.timeout(3):
             while not server.started:
                 if server_task.done():
-                    await server_task
+                    server_task.result()
                     pytest.fail("API stopped before opening its HTTP listener")
                 await asyncio.sleep(0.01)
 
