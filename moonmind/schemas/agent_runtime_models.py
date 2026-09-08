@@ -597,10 +597,10 @@ class RuntimeCommandRenderResult(BaseModel):
     fallback_event: dict[str, Any] | None = Field(None, alias="fallbackEvent")
     diagnostics: dict[str, Any] = Field(default_factory=dict)
     invocation: RuntimeCommandInvocation | None = None
-
 class UnsupportedStatusError(ValueError):
     """Raised when an unknown or unsupported provider status is encountered."""
     pass
+
 
 def raise_unsupported_status(raw_status: str, context: str = "") -> NoReturn:
     """Consistently format and raise an UnsupportedStatusError."""
@@ -1312,6 +1312,17 @@ class AgentExecutionRequest(BaseModel):
         ]
 
         parameters_for_secret_scan = dict(self.parameters)
+        from moonmind.workflows.executions.execution_contract import (
+            WorkflowContractError,
+            reject_retired_vector_fields,
+        )
+
+        try:
+            reject_retired_vector_fields(
+                parameters_for_secret_scan, field_path="parameters"
+            )
+        except WorkflowContractError as exc:
+            raise ValueError(str(exc)) from exc
         follow_up_retrieval = parameters_for_secret_scan.get("followUpRetrieval")
         if isinstance(follow_up_retrieval, dict):
             follow_up_for_secret_scan = dict(follow_up_retrieval)

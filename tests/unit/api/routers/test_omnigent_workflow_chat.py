@@ -560,19 +560,19 @@ def test_route_not_allowlisted_is_rejected() -> None:
     assert response.json()["detail"]["code"] == "omnigent_chat_route_not_allowlisted"
 
 
-def test_native_task_mutation_uses_effective_change_goal_authority() -> None:
+def test_native_file_mutation_uses_effective_workspace_authority() -> None:
     row = _row()
     metadata = dict(row.metadata_)
     caller_authorities = dict(metadata["callerAuthorities"])
     caller_grants = dict(caller_authorities[str(_USER_ID)])
-    caller_grants["changeGoal"] = False
+    caller_grants["mutateWorkspace"] = False
     caller_authorities[str(_USER_ID)] = caller_grants
     metadata["callerAuthorities"] = caller_authorities
     client, _proxy, _store = _build(store=_FakeStore(row=_row(metadata_=metadata)))
 
     response = client.patch(
-        _path(f"v1/sessions/{_CHAT_BINDING_ID}/tasks/task-1"),
-        json={"completed": True},
+        _path(f"v1/sessions/{_CHAT_BINDING_ID}/resources/environments/default/filesystem/src/main.py"),
+        json={"old_text": "before", "new_text": "after"},
     )
 
     assert response.status_code == 403
@@ -596,7 +596,7 @@ def test_native_http_mutation_is_scanned_receipted_and_replay_safe(
         status = 307
         headers = {
             "content-type": "application/json",
-            "location": f"/v1/sessions/{_PROVIDER_SESSION_ID}/tasks/task-1",
+            "location": f"/v1/sessions/{_PROVIDER_SESSION_ID}/resources/environments/default/filesystem/src/main.py",
         }
         content = _Content()
 
@@ -622,18 +622,18 @@ def test_native_http_mutation_is_scanned_receipted_and_replay_safe(
         lambda **_kwargs: _Client(),
     )
     client, _proxy, store = _build()
-    path = _path(f"v1/sessions/{_CHAT_BINDING_ID}/tasks/task-1")
+    path = _path(f"v1/sessions/{_CHAT_BINDING_ID}/resources/environments/default/filesystem/src/main.py")
     headers = {"Idempotency-Key": "native-task-1"}
 
     first = client.patch(
         path,
-        json={"completed": True},
+        json={"old_text": "before", "new_text": "after"},
         headers=headers,
         follow_redirects=False,
     )
     replay = client.patch(
         path,
-        json={"completed": True},
+        json={"old_text": "before", "new_text": "after"},
         headers=headers,
         follow_redirects=False,
     )
@@ -642,7 +642,7 @@ def test_native_http_mutation_is_scanned_receipted_and_replay_safe(
     assert replay.status_code == 307
     expected_location = (
         f"{WORKFLOW_CHAT_BINDINGS_MOUNT_PATH}/{_CHAT_BINDING_ID}/omnigent/"
-        f"v1/sessions/{_CHAT_BINDING_ID}/tasks/task-1"
+        f"v1/sessions/{_CHAT_BINDING_ID}/resources/environments/default/filesystem/src/main.py"
     )
     assert first.headers["location"] == expected_location
     assert replay.headers["location"] == expected_location
@@ -659,7 +659,7 @@ def test_native_http_mutation_is_scanned_receipted_and_replay_safe(
 
 
 _STOCK_NATIVE_MUTATION_CASES = (
-    ("POST", "resources/terminals", {"cols": 80}, "terminal_create"),
+    ("POST", "resources/terminals", {"terminal": "shell", "session_key": "main"}, "terminal_create"),
     ("DELETE", "resources/terminals/t-1", None, "terminal_close"),
     (
         "POST",
@@ -676,7 +676,7 @@ _STOCK_NATIVE_MUTATION_CASES = (
     (
         "PATCH",
         "resources/environments/default/filesystem/src/main.py",
-        {"content": "hello"},
+        {"old_text": "hello", "new_text": "world"},
         "workspace_edit",
     ),
     (
@@ -685,14 +685,7 @@ _STOCK_NATIVE_MUTATION_CASES = (
         None,
         "workspace_delete",
     ),
-    ("POST", "resources/files", {"name": "note.txt"}, "resource_upload"),
-    ("POST", "resources/files/file-1/attach", {}, "resource_attach"),
-    ("GET", "browser", None, "browser_pane"),
-    ("POST", "browser/open", {"url": "about:blank"}, "browser_pane"),
-    ("DELETE", "browser/open", None, "browser_pane"),
-    ("POST", "subagents/agent-1/interrupt", {}, "subagent_control"),
-    ("POST", "tasks/task-1", {"title": "follow up"}, "task_mutate"),
-    ("PATCH", "tasks/task-1", {"completed": True}, "task_mutate"),
+    ("POST", "resources/files", None, "resource_upload"),
     ("POST", "reconnect", {}, "session_reconnect"),
 )
 
@@ -722,10 +715,6 @@ _STOCK_NATIVE_READ_CASES = (
     ("items", "session_items", "relay"),
     ("resources/terminals", "terminal_view", "relay"),
     ("resources/terminals/t-1", "terminal_status", "relay"),
-    ("resources/terminals/t-1/logs", "execution_logs", "relay"),
-    ("resources/files/file-1/content", "resource_download", "resource"),
-    ("subagents", "subagent_tree", "relay"),
-    ("tasks", "task_todo", "relay"),
     (None, "host_liveness", "local"),
     (None, "runner_liveness", "local"),
 )
@@ -841,11 +830,6 @@ def test_every_additional_stock_native_read_uses_the_bound_identity(
         assert "moonmind-browser" not in serialized_headers
         assert "cookie" not in serialized_headers
         assert "csrf" not in serialized_headers
-    elif owner == "resource":
-        assert upstream_calls == []
-        assert proxy.resources == [
-            ("session_file", _PROVIDER_SESSION_ID, "file-1")
-        ]
     else:
         assert upstream_calls == []
         assert proxy.resources == []
@@ -930,7 +914,11 @@ def test_every_stock_native_http_mutation_has_a_complete_durable_receipt(
             "X-CSRF-Token": "browser-csrf",
         }
     }
-    if payload is not None:
+    if operation == "workspace_edit" and method == "PATCH":
+        payload = {**payload, "expectedSessionEpoch": 2, "expectedProviderProfileGeneration": 4}
+    if operation == "resource_upload":
+        request_kwargs["files"] = {"file": ("note.txt", b"hello", "text/plain")}
+    elif payload is not None:
         request_kwargs["json"] = payload
 
     response = client.request(method, path, **request_kwargs)
@@ -938,19 +926,31 @@ def test_every_stock_native_http_mutation_has_a_complete_durable_receipt(
     assert response.status_code == 200
     expected_upstream_calls = 0 if operation == "session_reconnect" else 1
     assert len(upstream_calls) == expected_upstream_calls
-    replay = client.request(method, path, **request_kwargs)
+    replay_kwargs = dict(request_kwargs)
+    if operation == "resource_upload":
+        replay_kwargs.pop("files")
+        replay_kwargs["content"] = response.request.content
+        replay_kwargs["headers"] = dict(response.request.headers)
+    replay = client.request(method, path, **replay_kwargs)
     assert replay.status_code == response.status_code
     assert replay.content == response.content
     assert len(upstream_calls) == expected_upstream_calls
     if upstream_calls:
         assert _PROVIDER_SESSION_ID in upstream_calls[0]["url"]
         assert _CHAT_BINDING_ID not in upstream_calls[0]["url"]
+        if payload is not None:
+            forwarded = json.loads(upstream_calls[0]["data"])
+            assert forwarded == {
+                key: value for key, value in payload.items()
+                if key not in native_ui_compat.NATIVE_HTTP_PRECONDITIONS
+            }
+
         assert client_headers == [
             {
                 "Accept": "*/*",
                 **(
-                    {"Content-Type": "application/json"}
-                    if payload is not None
+                    {"Content-Type": response.request.headers["content-type"]}
+                    if payload is not None or operation == "resource_upload"
                     else {}
                 ),
                 "Authorization": "Bearer upstream-only",
@@ -1030,13 +1030,13 @@ def test_native_http_mutation_response_failure_records_delivery_unknown(
     client, _proxy, store = _build()
 
     response = client.patch(
-        _path(f"v1/sessions/{_CHAT_BINDING_ID}/tasks/task-1"),
-        json={"completed": True},
+        _path(f"v1/sessions/{_CHAT_BINDING_ID}/resources/environments/default/filesystem/src/main.py"),
+        json={"old_text": "before", "new_text": "after"},
         headers={"Idempotency-Key": "native-oversized-response"},
     )
     replay = client.patch(
-        _path(f"v1/sessions/{_CHAT_BINDING_ID}/tasks/task-1"),
-        json={"completed": True},
+        _path(f"v1/sessions/{_CHAT_BINDING_ID}/resources/environments/default/filesystem/src/main.py"),
+        json={"old_text": "before", "new_text": "after"},
         headers={"Idempotency-Key": "native-oversized-response"},
     )
 
@@ -1048,7 +1048,7 @@ def test_native_http_mutation_response_failure_records_delivery_unknown(
         if entry["kind"] == "record"
         and entry["metadata"].get("controlOutcome") == "delivery_unknown"
     )
-    assert unknown["metadata"]["controlType"] == "task_mutate"
+    assert unknown["metadata"]["controlType"] == "workspace_edit"
     assert unknown["metadata"]["completionTime"]
 
 
@@ -1088,7 +1088,7 @@ def test_native_wildcard_path_rejects_encoded_traversal() -> None:
 
     response = client.get(
         _path(
-            f"v1/sessions/{_CHAT_BINDING_ID}/subagents/" "%252e%252e/%252e%252e/secret"
+            f"v1/sessions/{_CHAT_BINDING_ID}/resources/environments/default/filesystem/" "%252e%252e/%252e%252e/secret"
         )
     )
 
@@ -1099,7 +1099,7 @@ def test_native_wildcard_path_rejects_encoded_traversal() -> None:
 def test_embedded_mode_rejects_proxy_only_native_transport() -> None:
     client, _proxy, _store = _build(host_protocol_mode="embedded")
 
-    response = client.get(_path(f"v1/sessions/{_CHAT_BINDING_ID}/tasks"))
+    response = client.get(_path(f"v1/sessions/{_CHAT_BINDING_ID}/resources/terminals"))
 
     assert response.status_code == 409
     assert response.json()["detail"]["code"] == "omnigent_bridge_mode_unsupported"
@@ -2613,3 +2613,130 @@ def test_embedded_catalog_read() -> None:
     body = response.json()
     # Topology stripped even from the embedded catalog list response.
     assert body == [{"id": "agent-1", "name": "codex"}]
+
+
+@pytest.mark.parametrize(
+    ("method", "suffix", "payload", "operation"), _STOCK_NATIVE_MUTATION_CASES,
+)
+def test_native_unknown_query_is_rejected_before_any_mutation(
+    monkeypatch, method, suffix, payload, operation,
+) -> None:
+    def forbidden_client(**_kwargs):
+        pytest.fail("unreviewed request reached upstream transport")
+
+    monkeypatch.setattr(
+        "api_service.api.routers.omnigent_bridge.aiohttp.ClientSession", forbidden_client,
+    )
+    client, _proxy, store = _build()
+    kwargs = {"json": payload} if payload is not None else {}
+    if operation == "resource_upload":
+        kwargs = {"files": {"file": ("a.txt", b"hello", "text/plain")}}
+    response = client.request(
+        method, _path(f"v1/sessions/{_CHAT_BINDING_ID}/{suffix}"),
+        params={"unreviewed_field": "private-value"}, **kwargs,
+    )
+    assert response.status_code == 400
+    assert response.json()["detail"]["code"] == "omnigent_chat_malformed_payload"
+    assert "private-value" not in response.text
+    assert not any(entry["kind"] == "claim" for entry in store.lifecycle)
+
+
+@pytest.mark.parametrize(
+    ("suffix", "payload"),
+    [
+        ("resources/terminals", {"terminal": "shell", "session_key": "main", "spec": {"command": "override"}}),
+        ("resources/terminals", {"terminal": "codex", "session_key": "main", "ensure_native_terminal": True}),
+        ("resources/terminals", {"terminal": "shell", "session_key": "main", "cwd": "/tmp"}),
+        ("resources/terminals", {"terminal": "shell", "session_key": "main", "bridge_inject_dir": True}),
+        ("resources/environments/default/shell", {"command": "pwd", "unknown": {"nested": "private-value"}}),
+        ("resources/environments/default/shell", {"command": {"text": "pwd"}}),
+        ("resources/environments/default/shell", {"command": "pwd", "timeout": True}),
+        ("resources/environments/default/shell", {"command": "pwd", "timeout": 1.5}),
+        ("resources/environments/default/shell", {"command": "pwd", "timeout": -1}),
+        ("reconnect", {"unreviewed": True}),
+        ("resources/files", {"name": "a.txt"}),
+    ],
+)
+def test_native_unknown_body_fields_and_shapes_never_claim_or_dispatch(
+    monkeypatch, suffix, payload,
+) -> None:
+    def forbidden_client(**_kwargs):
+        pytest.fail("unreviewed request reached upstream transport")
+
+    monkeypatch.setattr(
+        "api_service.api.routers.omnigent_bridge.aiohttp.ClientSession", forbidden_client,
+    )
+    client, _proxy, store = _build()
+    response = client.post(_path(f"v1/sessions/{_CHAT_BINDING_ID}/{suffix}"), json=payload)
+    assert response.status_code == 400
+    assert "private-value" not in response.text
+    assert not any(entry["kind"] == "claim" for entry in store.lifecycle)
+
+
+@pytest.mark.parametrize("query", ["new=field", "limit=1&limit=2", "limit=0", "limit=1001", "order=sideways"])
+@pytest.mark.parametrize("suffix", ["items", "resources/terminals"])
+def test_native_pagination_fails_closed_on_schema_drift(query, suffix) -> None:
+    client, _proxy, store = _build()
+    response = client.get(_path(f"v1/sessions/{_CHAT_BINDING_ID}/{suffix}?{query}"))
+    assert response.status_code == 400
+    assert not any(entry["kind"] == "claim" for entry in store.lifecycle)
+
+
+@pytest.mark.parametrize(
+    ("method", "suffix", "content", "media_type"),
+    [
+        ("POST", "resources/terminals", b'{"terminal":"shell","terminal":"other","session_key":"main"}', "application/json"),
+        ("POST", "resources/terminals", b'{"terminal":"shell","session_key":"main"}', "text/plain"),
+        ("GET", "items", b'{"unknown":true}', "application/json"),
+        ("GET", "items", b'null', "application/json"),
+        ("DELETE", "resources/terminals/t1", b'{"unknown":true}', "application/json"),
+        ("PATCH", "resources/environments/default/filesystem/a.py", b'{"content":"hello"}', "application/json"),
+    ],
+)
+def test_native_http_rejects_transport_shape_bypasses(method, suffix, content, media_type) -> None:
+    client, _proxy, store = _build()
+    response = client.request(
+        method, _path(f"v1/sessions/{_CHAT_BINDING_ID}/{suffix}"),
+        content=content, headers={"Content-Type": media_type},
+    )
+    assert response.status_code in {400, 415}
+    assert not any(entry["kind"] == "claim" for entry in store.lifecycle)
+
+
+@pytest.mark.parametrize("suffix", [
+    "tasks/task-1", "tasks/new/route", "subagents/agent-1/interrupt",
+    "resources/terminals/t1/logs", "resources/files/f1/attach", "browser/open",
+    "browser/action_request/unreviewed",
+])
+def test_unverified_pinned_routes_do_not_forward(suffix) -> None:
+    client, _proxy, store = _build()
+    for method in ("GET", "POST", "PATCH", "DELETE"):
+        response = client.request(method, _path(f"v1/sessions/{_CHAT_BINDING_ID}/{suffix}"))
+        assert response.status_code == 404
+    assert not any(entry["kind"] == "claim" for entry in store.lifecycle)
+
+
+def test_native_browser_actions_require_a_reviewed_field_contract() -> None:
+    client, _proxy, store = _build()
+    response = client.post(
+        _path(f"v1/sessions/{_CHAT_BINDING_ID}/browser/action_request"),
+        json={"action": "navigate", "args": {"url": "about:blank"}},
+    )
+    assert response.status_code == 409
+    assert response.json()["detail"]["code"] == "omnigent_chat_compat_review_required"
+    assert not any(entry["kind"] == "claim" for entry in store.lifecycle)
+
+
+@pytest.mark.parametrize("parts", [
+    [("file", ("a.txt", b"hello")), ("extra", (None, "private-value"))],
+    [("file", ("a.txt", b"hello")), ("file", ("b.txt", b"world"))],
+    [("unknown", ("a.txt", b"hello"))],
+])
+def test_native_upload_rejects_unreviewed_multipart_fields(parts) -> None:
+    client, _proxy, store = _build()
+    response = client.post(
+        _path(f"v1/sessions/{_CHAT_BINDING_ID}/resources/files"), files=parts,
+    )
+    assert response.status_code == 400
+    assert "private-value" not in response.text
+    assert not any(entry["kind"] == "claim" for entry in store.lifecycle)

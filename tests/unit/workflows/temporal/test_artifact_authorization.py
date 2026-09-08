@@ -40,7 +40,7 @@ async def test_authenticated_mode_denies_cross_principal_read(
 ) -> None:
     """Authenticated mode should deny raw reads to non-owning principals."""
 
-    monkeypatch.setattr(settings.oidc, "AUTH_PROVIDER", "local")
+    monkeypatch.setattr(settings.oidc, "AUTH_PROVIDER", "oidc")
     async with temporal_db(tmp_path) as session_maker:
         async with session_maker() as session:
             service = TemporalArtifactService(
@@ -98,7 +98,7 @@ async def test_restricted_raw_presign_denied_for_non_owner_in_auth_mode(
 ) -> None:
     """Authenticated mode should block restricted raw presign requests from non-owners."""
 
-    monkeypatch.setattr(settings.oidc, "AUTH_PROVIDER", "local")
+    monkeypatch.setattr(settings.oidc, "AUTH_PROVIDER", "oidc")
     async with temporal_db(tmp_path) as session_maker:
         async with session_maker() as session:
             service = TemporalArtifactService(

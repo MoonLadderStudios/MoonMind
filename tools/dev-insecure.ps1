@@ -7,7 +7,6 @@ $env:AUTH_PROVIDER = "disabled"
 $env:FASTAPI_RELOAD = "True"
 $env:LOG_LEVEL = "DEBUG"
 $env:WEBUI_AUTH = "false"  # Disable authentication for development
-# TODO: set keycloak to development mode here and make sure keycloak uses it
 
 Write-Host "Stopping existing containers, but not deleting volumes..." -ForegroundColor Cyan
 docker-compose down

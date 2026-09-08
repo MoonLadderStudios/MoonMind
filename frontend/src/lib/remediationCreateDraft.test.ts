@@ -130,7 +130,7 @@ describe('remediationCreateDraft', () => {
     expect(inspectRemediationCreateDraft(draftId).status).toBe('valid');
   });
 
-  it('prepopulates source/work branches, Omnigent launch identity, and retrieval controls', () => {
+  it('prepopulates source/work branches and Omnigent launch identity without retrieval state', () => {
     const draft = buildRemediationCreateDraft({
       workflowId: 'mm:target',
       runId: 'run-target',
@@ -161,9 +161,8 @@ describe('remediationCreateDraft', () => {
     expect(draft.workBranch).toBe('repair/mm-3623');
     expect(draft.executionProfileRef).toBe('execution-profile:codex-default');
     expect(draft.launchPolicyRef).toBe('launch-policy:remediation-v3');
-    expect(draft.contextRetrieval).toMatchObject({
-      initial: { collections: ['docs'], required: true },
-    });
+    // Retired (#4105): remediation drafts carry no retrieval authoring.
+    expect(draft.contextRetrieval).toBeUndefined();
     expect(draft.remediation.checkpointBranchPolicy).toMatchObject({
       gitWorkBranch: 'repair/mm-3623',
     });
