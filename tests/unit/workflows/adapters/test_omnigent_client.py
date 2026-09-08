@@ -3,10 +3,15 @@
 from __future__ import annotations
 
 import json
+from collections.abc import AsyncIterator
+from contextlib import aclosing
 
 import httpx
 import pytest
 
+from moonmind.omnigent.bridge_artifacts import OmnigentContractError
+from moonmind.omnigent.bridge_events import build_omnigent_bridge_event
+from moonmind.schemas.agent_runtime_models import AgentExecutionRequest
 from moonmind.workflows.adapters.omnigent_client import (
     OmnigentClientError,
     OmnigentHttpClient,
@@ -306,6 +311,88 @@ def test_parse_sse_line_redacts_payload_and_rejects_malformed_frames() -> None:
 
     with pytest.raises(OmnigentClientError, match="Malformed Omnigent SSE frame"):
         parse_sse_line("data: not-json")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("payload", "error_type", "message"),
+    [
+        ("not-json", OmnigentClientError, "Malformed Omnigent SSE frame"),
+        ("[]", OmnigentClientError, "Malformed Omnigent SSE frame"),
+        (
+            '{"type":"session.future_terminal","status":"completed"}',
+            OmnigentContractError,
+            "Unsupported Omnigent event type",
+        ),
+        (
+            '{"type":"response.delta","status":"future_status"}',
+            OmnigentContractError,
+            "Unsupported Omnigent status",
+        ),
+        (
+            '{"type":"response.delta","status":""}',
+            OmnigentContractError,
+            "Unsupported Omnigent status",
+        ),
+    ],
+    ids=[
+        "malformed-json",
+        "non-object",
+        "unknown-event",
+        "unknown-status",
+        "blank-status",
+    ],
+)
+async def test_stream_to_journal_rejects_critical_drift(
+    payload: str, error_type: type[Exception], message: str
+) -> None:
+    """#3954: a transport replacement must not skip drift and report success.
+
+    Exercise the public streaming client through the production normalizer,
+    with only the HTTP peer replaced. A later valid completion must never hide
+    the invalid frame, including when frames arrive across byte chunks.
+    """
+
+    wire = (
+        f"event: session.update\ndata: {payload}\n\n"
+        'event: response.completed\ndata: {"type":"response.completed"}\n\n'
+    ).encode()
+
+    class Stream(httpx.AsyncByteStream):
+        async def __aiter__(self) -> AsyncIterator[bytes]:
+            for offset in range(0, len(wire), 7):
+                yield wire[offset : offset + 7]
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        assert request.method == "GET"
+        assert request.url.path == "/v1/sessions/sess-audit/stream"
+        return httpx.Response(
+            200, headers={"Content-Type": "text/event-stream"}, stream=Stream()
+        )
+
+    client = OmnigentHttpClient(
+        base_url="https://omnigent.test", transport=httpx.MockTransport(handler)
+    )
+    request = AgentExecutionRequest(
+        agentKind="external",
+        agentId="omnigent",
+        correlationId="audit-3954",
+        idempotencyKey="audit-3954",
+    )
+    normalized = []
+    with pytest.raises(error_type, match=message):
+        async with aclosing(client.stream_events("sess-audit")) as events:
+            async for event in events:
+                normalized.append(
+                    build_omnigent_bridge_event(
+                        payload=event,
+                        sequence=len(normalized) + 1,
+                        request=request,
+                        omnigent_session_id="sess-audit",
+                    )
+                )
+
+    assert normalized == []
 
 
 @pytest.mark.asyncio
