@@ -515,7 +515,19 @@ async def mutate_execution_projection(
     if latest is not None and not patch_only:
         previous_time = _projection_semantic_time(latest.updated_at, latest.search_attributes)
         incoming_time = _semantic_time(incoming.get("updated_at"))
-        stale = bool(previous_time and incoming_time and incoming_time < previous_time)
+        # DB-only finalization writes can occur after the last mm_updated_at.
+        # Temporal closure is authoritative for this run even when that metadata
+        # timestamp is newer; otherwise detail reads retain EXECUTING forever.
+        closes_current_run = bool(
+            owner == "temporal"
+            and incoming.get("close_status")
+            and not latest.close_status
+            and latest.run_id == incoming.get("run_id")
+        )
+        stale = bool(
+            previous_time and incoming_time and incoming_time < previous_time
+            and not closes_current_run
+        )
         # A stale RUNNING describe with no semantic timestamp cannot reopen a
         # terminal execution in the same run.
         stale = stale or bool(latest.close_status and not incoming.get("close_status") and latest.run_id == incoming.get("run_id"))
