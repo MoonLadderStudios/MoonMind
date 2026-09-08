@@ -8,11 +8,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from api_service.auth import (
     _DEFAULT_USER_ID,
-    UserCreate,
-    UserRead,
-    auth_backend,
     current_active_user,
-    fastapi_users,
+    current_active_user_optional,
 )
 from api_service.db.base import get_async_session
 from api_service.db.models import User
@@ -76,7 +73,9 @@ def get_current_user():
 
     global _cached_current_user_dependency
     if settings.oidc.AUTH_PROVIDER != "disabled":
-        # Keycloak / default auth modes – just use the fastapi-users dependency
+        # Authenticated modes share the current bearer validation until the
+        # #4124-era session contracts replace it; retired selectors fail at
+        # startup via OIDCSettings.validate_auth_provider, never here.
         return current_active_user
 
     if _cached_current_user_dependency is None:
@@ -117,7 +116,9 @@ def get_current_user():
 
     return _cached_current_user_dependency
 
-current_active_user_optional = fastapi_users.current_user(active=True, optional=True)
+def get_auth_router():
+    """Return the legacy helper router: empty since #4129 removed all legacy routes."""
+    return APIRouter()
 
 def get_current_user_optional():
     """Return an auth dependency that tolerates missing bearer credentials.
@@ -138,20 +139,3 @@ async def get_auth_manager(
     env_provider = EnvAuthProvider()
     return AuthProviderManager(profile_provider, env_provider)
 
-def get_auth_router():
-    router = APIRouter()
-    if settings.oidc.AUTH_PROVIDER == "keycloak":
-        # Keycloak routes would be included here
-        pass
-    elif settings.oidc.AUTH_PROVIDER == "default":
-        router.include_router(
-            fastapi_users.get_auth_router(auth_backend),
-            prefix="/auth/jwt",
-            tags=["auth"],
-        )
-        router.include_router(
-            fastapi_users.get_register_router(UserRead, UserCreate),
-            prefix="/auth",
-            tags=["auth"],
-        )
-    return router

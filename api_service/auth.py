@@ -205,11 +205,17 @@ async def get_or_create_default_user(
             status_code=500, detail=f"Could not create default user: {e}"
         )
 
+# Legacy login/register/reset route registration was removed with the bundled
+# Keycloak integration (#4129); no issuance routes remain mounted. The bearer
+# validation below is retained temporarily for authenticated-mode request and
+# WebSocket token checks plus disabled-mode default-user seeding until the
+# #4124-era session contracts replace it. fastapi-users and PyJWT stay as
+# retained dependencies: the User model/migrations couple to the former and
+# managed-session/fanout/proxy capabilities use JWT-secret-backed tokens.
 bearer_transport = BearerTransport(tokenUrl="auth/jwt/login")
 
 def get_jwt_strategy() -> JWTStrategy:
     return JWTStrategy(secret=settings.security.JWT_SECRET_KEY, lifetime_seconds=3600)
-
 auth_backend = AuthenticationBackend(
     name="jwt",
     transport=bearer_transport,
@@ -219,3 +225,4 @@ auth_backend = AuthenticationBackend(
 fastapi_users = FastAPIUsers[User, uuid.UUID](get_user_manager, [auth_backend])
 
 current_active_user = fastapi_users.current_user(active=True)
+current_active_user_optional = fastapi_users.current_user(active=True, optional=True)
