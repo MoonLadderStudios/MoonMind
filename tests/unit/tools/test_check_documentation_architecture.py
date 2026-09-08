@@ -49,14 +49,18 @@ def test_document_class_marker_satisfies_check() -> None:
     assert mod.check_missing_document_class(docs) == []
 
 
-def test_inline_viewpoint_name_satisfies_document_class_check() -> None:
+def test_inline_viewpoint_name_does_not_satisfy_document_class_check() -> None:
+    # Body prose cannot satisfy a missing header: a canonical doc with no
+    # top-of-file Document Class field is flagged even when the body names a
+    # recognized viewpoint.
     docs = [
         _doc(
             "docs/NewThing.md",
             "# New Thing\n\nThis is a Cross-Cutting Concept View describing X.\n",
         )
     ]
-    assert mod.check_missing_document_class(docs) == []
+    findings = mod.check_missing_document_class(docs)
+    assert _rules(findings) == {"missing-document-class"}
 
 
 def test_non_canonical_dirs_are_exempt_from_document_class() -> None:
@@ -291,10 +295,10 @@ def test_focus_paths_reports_only_changed_doc_but_uses_full_context() -> None:
     # Global checks see the full canonical set (``docs``) while reporting is
     # scoped to the changed path via ``focus_paths``.
     changed = "docs/B/Overview.md"
-    cls = "\n\nThis is a Cross-Cutting Concept View describing X.\n"
+    header = "# Execution Model\n\n**Document Class:** Canonical declarative\n"
     docs = [
-        _doc("docs/A/Overview.md", f"# Execution Model{cls}"),
-        _doc(changed, f"# Execution Model{cls}"),
+        _doc("docs/A/Overview.md", f"{header}"),
+        _doc(changed, f"{header}"),
     ]
     findings = mod.run_checks(docs, focus_paths=[changed])
     assert _rules(findings) == {"duplicate-canonical-authority"}

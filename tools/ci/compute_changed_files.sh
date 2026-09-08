@@ -12,6 +12,11 @@
 # Behavior:
 #   - Writes the newline-delimited changed-file list to OUTPUT_FILE
 #     (default: /tmp/changed-files.txt).
+#   - Rename sources are included alongside destinations: `git diff
+#     --name-only` reports only the new path for a rename, so renaming
+#     `docs/Guide.md` to `docs/Guide.txt` would otherwise hide the removed
+#     Markdown target from downstream selectors (MoonLadderStudios/MoonMind#4081).
+#     Rename detection needs no history beyond the two endpoint trees.
 #   - Prints exactly one line to stdout: "resolution=known" or
 #     "resolution=unknown" so callers can pick their own fail-open direction.
 #   - A "known" resolution means the exact base/head tree diff was computed
@@ -105,7 +110,8 @@ if ! ensure_commit_available "${base_sha}" || ! ensure_commit_available "${head_
   exit 0
 fi
 
-if ! git -c core.quotepath=false diff --name-only "${base_sha}" "${head_sha}" > "${OUTPUT_FILE}" 2>/dev/null; then
+if ! git -c core.quotepath=false diff --name-status -M "${base_sha}" "${head_sha}" 2>/dev/null \
+  | awk -F'\t' '{ if ($1 ~ /^R/) { print $2; print $3 } else { print $2 } }' > "${OUTPUT_FILE}"; then
   : > "${OUTPUT_FILE}"
   echo "resolution=unknown"
   exit 0

@@ -3,19 +3,24 @@ import re
 import sys
 from pathlib import Path
 
+import pytest
+from pydantic import ValidationError
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from _semantic_docs_3964 import assert_semantic_present
 
 from moonmind.schemas.agent_runtime_models import AgentExecutionRequest
 
-
-CONTRACT = Path(__file__).resolve().parents[3] / "docs/Omnigent/CodexCreateToHostContract.md"
+CONTRACT = (
+    Path(__file__).resolve().parents[3] / "docs/Omnigent/CodexCreateToHostContract.md"
+)
 ADAPTER = Path(__file__).resolve().parents[3] / "docs/Omnigent/OmnigentAdapter.md"
 
 
 def _json_example(text: str, heading: str) -> dict[str, object]:
-    match = re.search(rf"### {re.escape(heading)}\n\n```json\n(.*?)\n```", text, re.DOTALL)
+    match = re.search(
+        rf"### {re.escape(heading)}\n\n```json\n(.*?)\n```", text, re.DOTALL
+    )
     assert match is not None
     return json.loads(match.group(1))
 
@@ -23,12 +28,13 @@ def _json_example(text: str, heading: str) -> dict[str, object]:
 def test_identity_and_versioned_wire_contract_are_pinned() -> None:
     text = CONTRACT.read_text(encoding="utf-8")
     assert "MoonLadderStudios/MoonMind#3449" in text
-    assert "agentKind = external" in text
-    assert "agentId   = omnigent" in text
-    assert "harness   = codex-native" in text
-    assert '"agentKind": "external"' in text
-    assert '"agentId": "omnigent"' in text
-    assert '"harnessOverride": "codex-native"' in text
+    payload = _json_example(text, "4.3 AgentExecutionRequest")
+    request = AgentExecutionRequest.model_validate(payload)
+    assert request.agent_kind == "external"
+    assert request.agent_id == "omnigent"
+    assert (
+        payload["parameters"]["omnigent"]["agent"]["harnessOverride"] == "codex-native"
+    )
     assert_semantic_present(
         text,
         ("deliberately no", "session.hostid"),
@@ -46,6 +52,17 @@ def test_agent_execution_request_example_matches_canonical_model() -> None:
     assert request.agent_id == "omnigent"
     assert request.correlation_id == "workflow:run_01:step_01"
     assert request.workspace_spec["workspaceLocator"]["workspaceId"] == "ws_01"
+
+
+def test_wire_example_survives_json_formatting_and_rejects_invalid_identity() -> None:
+    payload = _json_example(
+        CONTRACT.read_text(encoding="utf-8"), "4.3 AgentExecutionRequest"
+    )
+    compact = json.dumps(payload, separators=(",", ":"))
+    assert AgentExecutionRequest.model_validate_json(compact).agent_kind == "external"
+    payload["agentKind"] = "invented-runtime-kind"
+    with pytest.raises(ValidationError):
+        AgentExecutionRequest.model_validate(payload)
 
 
 def test_launch_snapshot_and_terminal_authority_are_pinned() -> None:

@@ -16,11 +16,12 @@ owns from silent regression.
 
 from __future__ import annotations
 
+import sys
 from pathlib import Path
 
 import pytest
 
-import sys
+from tools.check_documentation_architecture import metadata_fields
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
@@ -54,21 +55,8 @@ def _read(path: Path) -> str:
 def test_standard_is_declarative_desired_state_not_a_tracker() -> None:
     text = _read(STANDARD_DOC)
 
-    # Declarative status, not a migration/checklist/status framing. Wording
-    # tolerant (#3964): rewording the status line must not break this guard
-    # as long as the declarative desired-state contract survives.
-    assert_semantic_present(
-        text,
-        ("current standard", "target direction"),
-        context="DocumentationArchitecture.md declarative status",
-    )
-    assert_semantic_present(
-        text,
-        ("desired state",),
-        context="DocumentationArchitecture.md desired-state strategy",
-    )
-    # No checklist/status checkbox framing leaks into the canonical standard
-    # (structural, kept exact).
+    # Declarative status, not a migration/checklist/status framing.
+    assert metadata_fields(text)["document class"] == "Canonical declarative"
     # No checklist/status checkbox framing leaks into the canonical standard.
     assert "- [ ]" not in text
     assert "- [x]" not in text

@@ -3,6 +3,7 @@
 Last updated: 2026-09-07
 
 **Document class:** Canonical declarative lifecycle contract.
+**Status:** Normative
 **Owner:** MoonMind Platform.
 **Audience:** Backend, dashboard, workflow authors, and API owners.
 
