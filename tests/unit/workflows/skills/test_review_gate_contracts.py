@@ -441,3 +441,42 @@ class TestBuildReviewPrompt:
         assert "Step 1 of 3" in prompt
         assert '"repo_ref"' in prompt
         assert "Fix tests" in prompt
+
+
+@pytest.mark.parametrize(
+    ("verdict", "compatible_actions"),
+    [
+        ("FULLY_IMPLEMENTED", {"advance"}),
+        (
+            "ADDITIONAL_WORK_NEEDED",
+            {"reattempt_current_step", "needs_human", "blocked"},
+        ),
+        ("NO_DETERMINATION", {"reattempt_current_step", "needs_human", "blocked"}),
+        ("BLOCKED", {"blocked"}),
+        ("FAILED_UNRECOVERABLE", {"blocked"}),
+    ],
+)
+@pytest.mark.parametrize(
+    "action", ["advance", "reattempt_current_step", "needs_human", "blocked"]
+)
+def test_gate_verdict_action_compatibility_fails_closed(
+    verdict, compatible_actions, action
+):
+    payload = {"verdict": verdict, "recommendedNextAction": action}
+    gate = parse_step_gate_result(payload)
+    if action in compatible_actions:
+        assert gate.verdict == verdict
+        assert gate.recommended_next_action == action
+        assert not gate.invalid
+        assert step_gate_contract_violations(payload) == []
+    else:
+        assert gate.verdict == "NO_DETERMINATION"
+        assert gate.recommended_next_action == "blocked"
+        assert gate.invalid and gate.degraded
+        assert "incompatible" in gate.downgrade_reason
+        assert "incompatible" in step_gate_contract_violations(payload)[0]
+    # Recorded pre-patch payloads retain their original interpretation.
+    legacy = parse_step_gate_result(payload, validate_action_compatibility=False)
+    assert legacy.verdict == verdict
+    assert legacy.recommended_next_action == action
+    assert not legacy.invalid
