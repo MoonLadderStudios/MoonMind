@@ -8447,7 +8447,14 @@ class MoonMindRunWorkflow:
                 if source.get(key):
                     payload = dict(source)
                     payload["verdict"] = source.get(key)
-                    return parse_step_gate_result(payload)
+                    return parse_step_gate_result(
+                        payload,
+                        validate_action_compatibility=(
+                            self._patched_or_false_outside_workflow(
+                                RUN_VERIFIER_REMEDIATION_STOP_AUTHORITY_PATCH
+                            )
+                        ),
+                    )
 
         return parse_step_gate_result({})
 
@@ -13107,7 +13114,10 @@ class MoonMindRunWorkflow:
                         review_request.to_payload(),
                         cancellation_type=ActivityCancellationType.TRY_CANCEL,
                         **self._execute_kwargs_for_route(review_route),
-                    )
+                    ),
+                    validate_action_compatibility=workflow.patched(
+                        RUN_VERIFIER_REMEDIATION_STOP_AUTHORITY_PATCH
+                    ),
                 )
                 review_verdict = gate_result.to_review_verdict()
                 step_execution = self._step_execution_for(node_id) or 0
@@ -13268,6 +13278,15 @@ class MoonMindRunWorkflow:
                         previous_review_issues = tuple(review_verdict.issues)
                         current_review_attempt += 1
                         continue
+                    honor_explicit_stop = workflow.patched(
+                        RUN_VERIFIER_REMEDIATION_STOP_AUTHORITY_PATCH
+                    )
+                    terminal_disposition = terminal_disposition_for_gate_stop(
+                        review_verdict, honor_explicit_stop=honor_explicit_stop
+                    )
+                    terminal_status = (
+                        "blocked" if terminal_disposition == "blocked" else "failed"
+                    )
                     self._mark_step_terminal(
                         node_id,
                         status="failed",
@@ -13285,14 +13304,8 @@ class MoonMindRunWorkflow:
                         phase="terminal",
                         updated_at=workflow.now(),
                         reason=attempt_reason,
-                        status=(
-                            "blocked"
-                            if review_verdict.verdict == "BLOCKED"
-                            else "failed"
-                        ),
-                        terminal_disposition=terminal_disposition_for_gate_stop(
-                            review_verdict
-                        ),
+                        status=terminal_status,
+                        terminal_disposition=terminal_disposition,
                         budget=review_gate_budget_metadata(
                             max_review_attempts=max_review_attempts,
                             review_retry_count=review_retry_count,

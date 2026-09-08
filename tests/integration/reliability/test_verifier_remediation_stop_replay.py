@@ -47,12 +47,14 @@ pytestmark = [
 
 @pytest.mark.parametrize("runtime", ["codex_cli", "claude_code", "omnigent"])
 @pytest.mark.parametrize("action", ["needs_human", "blocked"])
+@pytest.mark.parametrize("verdict", ["ADDITIONAL_WORK_NEEDED", "NO_DETERMINATION"])
 async def test_verifier_stop_survives_publication_and_both_controllers(
-    tmp_path, monkeypatch, runtime, action
+    tmp_path, monkeypatch, runtime, action, verdict
 ):
     replay = load_replay("verifier-remediation-stop-authority", "manifest.json")
     payload = replay["verifierPayload"]
     payload["recommendedNextAction"] = action
+    payload["verdict"] = verdict
     engine = create_async_engine(f"sqlite+aiosqlite:///{tmp_path}/artifacts.db")
     try:
         async with engine.begin() as connection:
@@ -137,6 +139,15 @@ async def test_verifier_stop_survives_publication_and_both_controllers(
             )
             assert json.loads(persisted)["recommendedNextAction"] == action
             assert json.loads(persisted)["remainingWork"] == payload["remainingWork"]
+            assert projected["remainingWorkRef"] == projected["gateResultRef"]
+            _, remaining_work_bytes = await service.read(
+                artifact_id=projected["remainingWorkRef"],
+                principal="system:agent_runtime",
+            )
+            assert (
+                json.loads(remaining_work_bytes)["remainingWork"]
+                == payload["remainingWork"]
+            )
 
             monkeypatch.setattr(run_module.workflow, "patched", lambda _patch: True)
             monkeypatch.setattr(
@@ -251,12 +262,16 @@ async def test_verifier_stop_survives_publication_and_both_controllers(
             assert bounded["continueLoop"] is False
             assert bounded["state"] == action
             assert bounded["reason"] == decision["reason"]
-            assert parent._blocking_moonspec_gate_reason()
-            parent._activate_moonspec_draft_publication(
-                "Remaining work", policy="draft_pr_on_additional_work_needed"
+            assert (
+                bounded["remainingWorkRef"] == "artifact://" + gate.remaining_work_ref
             )
-            body = parent._moonspec_draft_publication_body_section()
-            assert "verifier requested a stop" in body
-            assert "budget was exhausted" not in body
+            assert parent._blocking_moonspec_gate_reason()
+            if verdict == "ADDITIONAL_WORK_NEEDED":
+                parent._activate_moonspec_draft_publication(
+                    "Remaining work", policy="draft_pr_on_additional_work_needed"
+                )
+                body = parent._moonspec_draft_publication_body_section()
+                assert "verifier requested a stop" in body
+                assert "budget was exhausted" not in body
     finally:
         await engine.dispose()
