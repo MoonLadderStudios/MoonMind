@@ -706,7 +706,7 @@ The primary runtime-provider strategy owns long-term Omnigent direction. The har
 
 ## Durable acceptance-claim identifiers
 
-These exact identifiers are pinned by `tests/unit/docs/test_final_docs_cleanup_policy.py` and `tests/integration/docs/test_final_docs_cleanup_contract.py`. They remain stable even when active execution milestones are renumbered in the tracker:
+These exact identifiers are pinned by `tests/unit/docs/test_final_docs_cleanup_policy.py` and `tests/unit/docs/test_final_docs_cleanup_contract.py`. They remain stable even when active execution milestones are renumbered in the tracker:
 
 - [ ] **5.1 Checkpoint boundary and completeness** — implementation foundation landed; independently resolvable acceptance evidence remains required.
 - [ ] **5.4 Resume-from-checkpoint default flow** — production orchestration must choose validated reattach, cold restore, branch-required, or explicit unavailable outcomes.
