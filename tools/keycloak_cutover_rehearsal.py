@@ -260,7 +260,13 @@ def collect_inventory_survey(repo_root: Path = REPO_ROOT) -> dict[str, Any]:
             survey["keycloak_surfaces"].append("docker-compose.yaml: keycloak service")
     realm_text = _read_text(repo_root / "keycloak/realm-export.json")
     if realm_text is None:
-        survey["sources"]["keycloak/realm-export.json"] = "missing"
+        # The realm export is obsolete once Keycloak removal (#4129) deletes
+        # it; its permanent absence is removal evidence, never an unreadable
+        # required source. Recorded distinctly from "missing" so the survey
+        # step does not fail forever on a correctly removed checkout.
+        survey["sources"]["keycloak/realm-export.json"] = (
+            "absent (removed or never present; post-#4129)"
+        )
     else:
         try:
             realm = json.loads(realm_text)
@@ -308,13 +314,6 @@ def check_inventory_survey(repo_root: Path = REPO_ROOT) -> StepResult:
     """Verify the sanitized survey can be collected hermetically."""
     survey = collect_inventory_survey(repo_root)
     missing = [k for k, v in survey["sources"].items() if v == "missing"]
-    # An absent realm export after integrated removal (#4129) is expected
-    # evidence of removal, not an unreadable required source.
-    if (
-        "keycloak/realm-export.json" in missing
-        and _capability_present("4129-removal", repo_root)
-    ):
-        missing = [k for k in missing if k != "keycloak/realm-export.json"]
     if missing:
         return StepResult(
             "inventory-survey", "failed",
@@ -565,13 +564,11 @@ def check_build_pins(repo_root: Path = REPO_ROOT) -> StepResult:
     if pins.get("app_image_default") in (None, "unknown"):
         unusable.append("app_image_default")
     else:
-        # Validate the app image registry by hostname, not by substring:
-        # a registry string containing "ghcr.io/" at an arbitrary position
-        # must not count as a ghcr.io pin.
-        from urllib.parse import urlparse as _urlparse
-
-        _host = _urlparse("https://" + str(pins["app_image_default"])).hostname or ""
-        if _host != "ghcr.io":
+        # Validate the app image registry by exact host comparison, not by
+        # URL substring or prefix: a registry string containing "ghcr.io/"
+        # at an arbitrary position must not count as a ghcr.io pin.
+        _registry = str(pins["app_image_default"]).split("/", 1)[0].split(":", 1)[0]
+        if _registry != "ghcr.io":
             unusable.append("app_image_default")
     if pins.get("postgres_image") in (None, "unknown"):
         unusable.append("postgres_image")

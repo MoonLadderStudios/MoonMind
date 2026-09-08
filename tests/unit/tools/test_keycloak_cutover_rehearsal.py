@@ -162,9 +162,11 @@ def test_evidence_redacts_bearer_tokens_and_assignments() -> None:
 def test_inventory_survey_collects_counts_without_identity_exports() -> None:
     survey = rehearsal.collect_inventory_survey()
     assert len(survey["sources"]) == len(rehearsal.SURVEY_SOURCES)
-    assert survey["keycloak_image"] == "quay.io/keycloak/keycloak:24.0"
+    # Post-#4129 removal: no pinned Keycloak image, no realm export.
+    assert survey["keycloak_image"] == "not-pinned-or-absent"
+    assert survey["sources"]["keycloak/realm-export.json"].startswith("absent")
+    assert "realm_clients" not in survey
     assert survey["auth_provider_default"] == "disabled"
-    assert survey["realm_clients"] == ["api-service", "open-webui"]
     blob = json.dumps(survey)
     assert "hunter2" not in blob
     # No identity material: only counts, pins, and file refs.
@@ -195,11 +197,14 @@ def test_capability_presence_detects_absent_migration_and_modes() -> None:
 
 def test_build_pins_collect_exact_versions_and_topology() -> None:
     pins = rehearsal.collect_build_pins()
-    assert pins["keycloak_image"] == "quay.io/keycloak/keycloak:24.0"
+    # Post-#4129 removal: the Keycloak image pin is expectedly absent.
+    assert pins["keycloak_image"] == "absent"
+    assert pins["realm_clients"] == []
     assert pins["auth_provider_default"] == "disabled"
     assert isinstance(pins["alembic_revisions"], int) and pins["alembic_revisions"] > 0
     assert pins["plan_status"] == "Proposed"
-    assert pins["app_image_default"].startswith("ghcr.io/")
+    # Exact registry-host comparison, not a URL substring/prefix match.
+    assert pins["app_image_default"].split("/", 1)[0] == "ghcr.io"
     assert pins["root_package_version"] == "1.0.0"
     result = rehearsal.check_build_pins()
     assert result.status == "completed"
@@ -321,11 +326,8 @@ def test_inventory_survey_passes_after_realm_export_removal(tmp_path: Path) -> N
 
 def test_app_image_pin_validated_by_hostname() -> None:
     pins = rehearsal.collect_build_pins()
-    from urllib.parse import urlparse
-
-    host = urlparse("https://" + pins["app_image_default"]).hostname
-    # Exact hostname validation, not a substring match.
-    assert host == "ghcr.io"
+    # Exact registry-host comparison, not a URL substring/prefix match.
+    assert pins["app_image_default"].split("/", 1)[0] == "ghcr.io"
 
 
 def test_dual_issuance_refuses_concurrent_old_and_new() -> None:
