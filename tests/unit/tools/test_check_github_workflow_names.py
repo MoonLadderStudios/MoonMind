@@ -42,6 +42,7 @@ def test_current_workflows_have_stable_names() -> None:
         "omnigent-live-verification-health.yml": (
             "Provider / Omnigent Live Verification Health"
         ),
+        "omnigent-upstream-pin-updater.yml": "Omnigent Upstream Pin Updater",
         "promote-ghcr-stable.yml": "Release / Promote Stable",
         "pytest-unit-tests.yml": "CI / Test Suite",
     }

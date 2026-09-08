@@ -1,0 +1,582 @@
+name: Omnigent Upstream Pin Updater
+
+# Source issue: MoonLadderStudios/MoonMind#3957.
+#
+# Scheduled/manual updater for the `omnigent` gitlink.  Each run discovers
+# eligible upstream releases of omnigent-ai/omnigent, resolves tags to
+# immutable commits, and opens or updates exactly one evidence-backed
+# candidate PR.  It never changes main directly, never tracks upstream main,
+# never executes newly fetched upstream code, and never consumes production
+# secrets: the plan job reads release metadata only, the qualify job runs
+# the checked-in hermetic shards against the candidate commit, and the
+# propose job moves the submodule pointer plus every canonical pin consumer
+# and the evidence artifacts.
+#
+# Explicit outcomes (closed vocabulary from
+# moonmind/omnigent/upstream_pin_update.py):
+# up_to_date | candidate_available | no_suitable_release |
+# blocked_invalid_tag | blocked_transient_upstream.  A failed qualification
+# or an incompatible release leaves the known-good pin intact, records a
+# blocked reason in status.json, and never creates duplicate PRs.
+#
+# Freshness publication: status.json distinguishes available / tested /
+# qualified / promoted versions.  Merge-time hermetic success (tested) never
+# implies protected live evidence (qualified) or product-default promotion
+# (promoted).
+#
+# Trust boundary: upstream release tags and names are untrusted input.  They
+# always travel through step outputs into `env` and are expanded as quoted
+# shell data, never interpolated into `run` scripts.
+
+on:
+  schedule:
+    - cron: "0 7 * * 1"
+  workflow_dispatch:
+    inputs:
+      allow_prereleases:
+        description: "Consider upstream prereleases as candidates"
+        required: false
+        default: false
+        type: boolean
+      upstream_repo:
+        description: "Upstream repository to check"
+        required: false
+        default: "omnigent-ai/omnigent"
+        type: string
+      dry_run:
+        description: "Plan and qualify without opening or updating the candidate PR"
+        required: false
+        default: false
+        type: boolean
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: omnigent-upstream-pin-updater
+  cancel-in-progress: false
+
+jobs:
+  plan:
+    name: Discover candidate and record evidence
+    runs-on: ubuntu-latest
+    outputs:
+      outcome: ${{ steps.evaluate.outputs.outcome }}
+      candidate_tag: ${{ steps.evaluate.outputs.candidate_tag }}
+      candidate_commit: ${{ steps.evaluate.outputs.candidate_commit }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - name: Set up Python
+        uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+
+      - name: Read current omnigent pin
+        id: pin
+        run: |
+          PIN="$(git ls-tree HEAD omnigent | awk '{print $3}')"
+          echo "pin=${PIN}" >> "$GITHUB_OUTPUT"
+          echo "Current omnigent pin: ${PIN}"
+
+      - name: Fetch upstream releases metadata
+        id: releases
+        env:
+          GH_TOKEN: ${{ github.token }}
+          UPSTREAM_REPO: ${{ inputs.upstream_repo || 'omnigent-ai/omnigent' }}
+        run: |
+          # Metadata only: release tags, prerelease/draft flags, publish
+          # dates.  Fetched code is never executed in this workflow.
+          # --slurp wraps each paginated REST page into one outer array so
+          # large release histories (>30 entries) still parse as one
+          # document; the resolver flattens pages before planning.
+          if gh api "repos/${UPSTREAM_REPO}/releases?per_page=100" --paginate --slurp \
+              > /tmp/upstream-releases-raw.json; then
+            echo "fetch_error=" >> "$GITHUB_OUTPUT"
+          else
+            echo "fetch_error=upstream releases API request failed (transient)" >> "$GITHUB_OUTPUT"
+            echo "[]" > /tmp/upstream-releases-raw.json
+          fi
+
+      - name: Resolve release tags to immutable commits
+        if: steps.releases.outputs.fetch_error == ''
+        env:
+          GH_TOKEN: ${{ github.token }}
+          UPSTREAM_REPO: ${{ inputs.upstream_repo || 'omnigent-ai/omnigent' }}
+        run: |
+          python - <<'PY'
+          import json, os, re, subprocess
+
+          FULL_SHA = re.compile(r"^[0-9a-f]{40}$")
+
+          def read_pages(path):
+              raw = json.load(open(path))
+              if isinstance(raw, dict):
+                  return raw.get("releases", [])
+              if not isinstance(raw, list):
+                  return []
+              # --slurp output is a list of pages (lists); a single page is
+              # a list of release objects.
+              if raw and all(isinstance(page, list) for page in raw):
+                  flattened = []
+                  for page in raw:
+                      flattened.extend(page)
+                  return flattened
+              return raw
+
+          def peel_to_commit(repo, sha):
+              """Follow an annotated tag object to its commit target."""
+              try:
+                  out = subprocess.run(
+                      ["gh", "api", f"repos/{repo}/git/tags/{sha}"],
+                      capture_output=True, text=True, check=True, timeout=60,
+                  )
+                  tag_obj = json.loads(out.stdout or "{}")
+                  if not isinstance(tag_obj, dict):
+                      return ""
+                  target = tag_obj.get("object", {})
+                  if target.get("type") == "commit" and FULL_SHA.match(target.get("sha", "")):
+                      return target["sha"]
+                  return ""
+              except Exception:
+                  return ""
+
+          def resolve_tag(repo, tag):
+              """Resolve one release tag to its immutable commit SHA.
+
+              Returns (sha, failed) where failed is True only when the
+              resolution itself errored (transient); a missing or moved tag
+              yields ("", False) so the planner reports blocked_invalid_tag.
+              """
+              try:
+                  out = subprocess.run(
+                      ["gh", "api", f"repos/{repo}/git/matching-refs/tags/{tag}"],
+                      capture_output=True, text=True, check=True, timeout=60,
+                  )
+              except Exception:
+                  return "", True
+              try:
+                  refs = json.loads(out.stdout or "[]")
+              except ValueError:
+                  return "", True
+              candidates = refs if isinstance(refs, list) else [refs]
+              for ref in candidates:
+                  if not isinstance(ref, dict):
+                      continue
+                  obj = ref.get("object", {})
+                  sha = obj.get("sha", "")
+                  if not FULL_SHA.match(sha):
+                      continue
+                  if obj.get("type") == "commit":
+                      return sha, False
+                  if obj.get("type") == "tag":
+                      peeled = peel_to_commit(repo, sha)
+                      if peeled:
+                          return peeled, False
+                      return "", False
+              return "", False
+
+          raw_releases = read_pages("/tmp/upstream-releases-raw.json")
+          repo = os.environ["UPSTREAM_REPO"]
+          resolved = []
+          failures = []
+          for rel in raw_releases:
+              if not isinstance(rel, dict):
+                  continue
+              tag = (rel.get("tag_name") or "").strip()
+              entry = {
+                  "tag_name": tag,
+                  "name": rel.get("name", ""),
+                  "html_url": rel.get("html_url", ""),
+                  "published_at": rel.get("published_at", ""),
+                  "prerelease": bool(rel.get("prerelease", False)),
+                  "draft": bool(rel.get("draft", False)),
+                  "resolved_commit": "",
+              }
+              if tag:
+                  # A missing or moved tag leaves resolved_commit empty and
+                  # the planner reports blocked_invalid_tag explicitly.  A
+                  # resolution error is recorded separately and blocks the
+                  # run so a newer-but-unresolvable release can never lose
+                  # silently to an older candidate.
+                  sha, failed = resolve_tag(repo, tag)
+                  entry["resolved_commit"] = sha
+                  if failed:
+                      failures.append(tag)
+              resolved.append(entry)
+          json.dump(resolved, open("/tmp/upstream-releases.json", "w"), indent=2)
+          json.dump(failures, open("/tmp/upstream-resolve-failures.json", "w"), indent=2)
+          print(f"resolved {len(resolved)} releases, {len(failures)} resolution failures")
+          PY
+
+      - name: Evaluate updater outcome
+        id: evaluate
+        run: |
+          ARGS=(--current-commit "${{ steps.pin.outputs.pin }}")
+          if [ "${{ steps.releases.outputs.fetch_error }}" != "" ]; then
+            ARGS+=(--fetch-error "${{ steps.releases.outputs.fetch_error }}")
+          elif [ -s /tmp/upstream-resolve-failures.json ] && [ "$(python -c "import json;print(len(json.load(open('/tmp/upstream-resolve-failures.json'))))")" != "0" ]; then
+            ARGS+=(--fetch-error "transient tag-resolution failures for: $(python -c "import json;print(','.join(json.load(open('/tmp/upstream-resolve-failures.json'))))") (retry on next check)")
+          else
+            ARGS+=(--releases-json /tmp/upstream-releases.json)
+          fi
+          if [ "${{ inputs.allow_prereleases }}" = "true" ]; then
+            ARGS+=(--allow-prereleases)
+          fi
+          ARGS+=(--upstream-repo "${{ inputs.upstream_repo || 'omnigent-ai/omnigent' }}")
+          ARGS+=(--output-dir artifacts/omnigent-upstream-pin-update)
+          python tools/check_omnigent_upstream_pin_update.py "${ARGS[@]}"
+          echo "outcome=$(python -c "import json;print(json.load(open('artifacts/omnigent-upstream-pin-update/candidate.json'))['status'])")" >> "$GITHUB_OUTPUT"
+          echo "candidate_tag=$(python -c "import json;d=json.load(open('artifacts/omnigent-upstream-pin-update/candidate.json'));print((d['candidate'] or {}).get('tag',''))")" >> "$GITHUB_OUTPUT"
+          echo "candidate_commit=$(python -c "import json;d=json.load(open('artifacts/omnigent-upstream-pin-update/candidate.json'));print((d['candidate'] or {}).get('commit',''))")" >> "$GITHUB_OUTPUT"
+
+      - name: Publish freshness to job summary
+        if: always()
+        run: |
+          python - <<'PY'
+          import json
+          try:
+              status = json.load(open("artifacts/omnigent-upstream-pin-update/status.json"))
+          except OSError:
+              print("No updater status produced.")
+              raise SystemExit(0)
+          lines = [
+              "## Omnigent upstream-pin freshness",
+              f"- Outcome: `{status['outcome']}`",
+              f"- Available: `{status['available']['tag'] or '-'}` @ `{status['available']['commit'] or '-'}`",
+              f"- Last qualified: `{status['lastQualifiedVersion']['tag'] or '-'}` @ `{status['lastQualifiedVersion']['commit']}`",
+              f"- Promoted: `{status['promoted']['commit']}`",
+              f"- Blocked reason: {status['blockedReason'] or '-'}",
+              f"- Checked at: `{status['checkedAt']}` (weekly cadence)",
+          ]
+          with open("summary.md", "w") as fh:
+              fh.write("\n".join(lines) + "\n")
+          PY
+          cat summary.md >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload updater evidence
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: omnigent-upstream-pin-update-${{ github.run_id }}-${{ github.run_attempt }}
+          path: artifacts/omnigent-upstream-pin-update/
+          if-no-files-found: warn
+          retention-days: 30
+
+  qualify:
+    name: Hermetic qualification shards
+    needs: plan
+    if: needs.plan.outputs.outcome == 'candidate_available'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - name: Set up Python
+        uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+
+      - name: Install test dependencies
+        run: |
+          python -m pip install --upgrade pip uv
+          uv pip install --system -e .[tests]
+
+      - name: Check out the candidate commit for qualification
+        env:
+          CANDIDATE_COMMIT: ${{ needs.plan.outputs.candidate_commit }}
+        run: |
+          set -euo pipefail
+          if ! echo "${CANDIDATE_COMMIT}" | grep -Eq '^[0-9a-f]{40}$'; then
+            echo "::error::candidate commit is not a full 40-hex SHA" >&2
+            exit 1
+          fi
+          # The gate must test the candidate, never the base checkout: point
+          # the working-tree gitlink at the candidate and initialize the
+          # submodule at exactly that commit.
+          git update-index --cacheinfo 160000 "${CANDIDATE_COMMIT}" omnigent
+          git submodule update --init --depth 1 -- omnigent
+          ACTUAL="$(git -C omnigent rev-parse HEAD)"
+          if [ "${ACTUAL}" != "${CANDIDATE_COMMIT}" ]; then
+            echo "::error::submodule HEAD ${ACTUAL} != candidate ${CANDIDATE_COMMIT}" >&2
+            exit 1
+          fi
+
+      - name: Run owning hermetic shards
+        run: |
+          python -m pytest -q \
+            tests/unit/omnigent/test_adapter_contracts.py \
+            tests/unit/omnigent/test_host_protocol_adapter.py \
+            tests/unit/omnigent/test_host_registration_inventory.py \
+            tests/unit/omnigent/test_oauth_home_materializers.py \
+            tests/unit/omnigent/test_omnigent_session_timeline_api.py \
+            tests/unit/omnigent/test_session_supervisor_admission.py \
+            tests/unit/omnigent/test_control_plane_readiness.py \
+            tests/unit/omnigent/test_native_ui.py \
+            tests/unit/omnigent/test_native_ui_compat.py \
+            tests/unit/omnigent/test_omnigent_facade_unknown_route_fails_closed.py \
+            tests/unit/omnigent/test_authority_chain_evidence.py \
+            tests/unit/omnigent/test_execution_support_evidence.py \
+            tests/unit/omnigent/test_deployment_evidence_publishing.py \
+            tests/unit/omnigent/test_host_cleanup_service.py \
+            tests/unit/omnigent/test_oauth_host_janitor.py
+
+      - name: Download plan evidence
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          mkdir -p artifacts/omnigent-upstream-pin-update
+          gh run download "${{ github.run_id }}" \
+            --name "omnigent-upstream-pin-update-${{ github.run_id }}-${{ github.run_attempt }}" \
+            --dir artifacts/omnigent-upstream-pin-update
+
+      - name: Record tested qualification outcome
+        # The plan artifact carries outcome=candidate_available with an empty
+        # tested stage; republish it with the hermetic result so success and
+        # failure states are both durable lifecycle evidence.
+        if: always()
+        env:
+          CANDIDATE_COMMIT: ${{ needs.plan.outputs.candidate_commit }}
+        run: |
+          python - <<'PY'
+          import json, os, sys
+          sys.path.insert(0, ".")
+          from moonmind.omnigent.upstream_pin_update import mark_tested, normalize_commit
+          status = json.load(open("artifacts/omnigent-upstream-pin-update/status.json"))
+          commit = os.environ["CANDIDATE_COMMIT"]
+          normalize_commit(commit)
+          run_ref = f"{os.environ.get('GITHUB_RUN_ID', '')}/{os.environ.get('GITHUB_RUN_ATTEMPT', '')}"
+          tested = mark_tested(status, commit=commit, hermetic_run_ref=run_ref)
+          json.dump(tested, open("artifacts/omnigent-upstream-pin-update/status.json", "w"), indent=2)
+          print(f"recorded tested commit {commit} run {run_ref}")
+          PY
+
+      - name: Upload tested evidence
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: omnigent-upstream-pin-tested-${{ github.run_id }}-${{ github.run_attempt }}
+          path: artifacts/omnigent-upstream-pin-update/
+          if-no-files-found: error
+          retention-days: 30
+
+  propose:
+    name: Open or update single candidate PR
+    needs: [plan, qualify]
+    if: needs.plan.outputs.outcome == 'candidate_available' && needs.qualify.result == 'success' && inputs.dry_run != true
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+      actions: read
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - name: Verify candidate against the configured submodule remote
+        env:
+          GH_TOKEN: ${{ github.token }}
+          UPSTREAM_REPO: ${{ inputs.upstream_repo || 'omnigent-ai/omnigent' }}
+          CANDIDATE_COMMIT: ${{ needs.plan.outputs.candidate_commit }}
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import os, re, subprocess, sys
+          upstream = os.environ["UPSTREAM_REPO"]
+          candidate = os.environ["CANDIDATE_COMMIT"]
+          if not re.fullmatch(r"[0-9a-f]{40}", candidate):
+              print(f"::error::candidate commit is not a full 40-hex SHA: {candidate!r}")
+              raise SystemExit(1)
+          # The gitlink is always fetched from the .gitmodules remote, so a
+          # fork override that the configured remote cannot serve must fail
+          # here instead of producing an unreachable submodule commit.
+          remote_url = subprocess.run(
+              ["git", "config", "-f", ".gitmodules", "--get", "submodule.omnigent.url"],
+              capture_output=True, text=True, check=True,
+          ).stdout.strip()
+          m = re.search(r"github\.com[/:]([^/]+/[^/]+?)(?:\.git)?$", remote_url)
+          if not m or m.group(1).lower() != upstream.lower():
+              print(f"::error::upstream_repo {upstream!r} does not match submodule remote {remote_url!r}")
+              raise SystemExit(1)
+          proc = subprocess.run(
+              ["gh", "api", f"repos/{upstream}/git/commits/{candidate}"],
+              capture_output=True, text=True,
+          )
+          if proc.returncode != 0:
+              print(f"::error::candidate {candidate} is not reachable in {upstream}")
+              raise SystemExit(1)
+          print(f"candidate {candidate} verified in {upstream}")
+          PY
+
+      - name: Prepare candidate branch without touching main
+        id: branch
+        env:
+          CANDIDATE_COMMIT: ${{ needs.plan.outputs.candidate_commit }}
+        run: |
+          SHORT="$(echo "${CANDIDATE_COMMIT}" | cut -c1-12)"
+          BRANCH="automation/omnigent-pin-${SHORT}"
+          echo "branch=${BRANCH}" >> "$GITHUB_OUTPUT"
+          git fetch origin main --quiet
+          if git ls-remote --exit-code --heads origin "${BRANCH}" >/dev/null 2>&1; then
+            git fetch origin "${BRANCH}:${BRANCH}" --quiet
+            git checkout "${BRANCH}"
+          else
+            git checkout -b "${BRANCH}" origin/main
+          fi
+
+      - name: Move only the omnigent pointer to the resolved commit
+        env:
+          CANDIDATE_COMMIT: ${{ needs.plan.outputs.candidate_commit }}
+        run: |
+          # The tag is provenance only; the gitlink records the immutable
+          # commit.  No fetched upstream code is executed here.
+          git update-index --cacheinfo 160000 "${CANDIDATE_COMMIT}" omnigent
+          git diff --cached --stat
+          git diff --cached --quiet && echo "pointer already at candidate" || true
+
+      - name: Update canonical pin consumers with the gitlink
+        # PINNED_OMNIGENT_COMMIT is the single runtime authority imported by
+        # settings, embedded evidence, and the host adapters; the native-UI
+        # network fixture records the same source commit.  Moving only the
+        # gitlink would keep admitting, reporting, and testing the old
+        # commit, so all three move atomically in this change.
+        env:
+          CANDIDATE_COMMIT: ${{ needs.plan.outputs.candidate_commit }}
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import json, os, re
+          from pathlib import Path
+          candidate = os.environ["CANDIDATE_COMMIT"]
+          assert re.fullmatch(r"[0-9a-f]{40}", candidate), candidate
+          adapter = Path("moonmind/omnigent/host_auth_adapter.py")
+          text = adapter.read_text(encoding="utf-8")
+          updated, count = re.subn(
+              r'PINNED_OMNIGENT_COMMIT = "[0-9a-f]{40}"',
+              f'PINNED_OMNIGENT_COMMIT = "{candidate}"',
+              text,
+          )
+          if count != 1:
+              raise SystemExit(f"expected exactly one pin literal in {adapter}, found {count}")
+          adapter.write_text(updated, encoding="utf-8")
+          fixture = Path("tests/fixtures/omnigent/native_ui_network_contract_v1.json")
+          doc = json.loads(fixture.read_text(encoding="utf-8"))
+          doc["evidence"]["sourceCommit"] = candidate
+          fixture.write_text(json.dumps(doc, indent=2) + "\n", encoding="utf-8")
+          print(f"pin consumers updated to {candidate}")
+          PY
+          git submodule update --init --depth 1 -- omnigent
+          ACTUAL="$(git -C omnigent rev-parse HEAD)"
+          if [ "${ACTUAL}" != "${CANDIDATE_COMMIT}" ]; then
+            echo "::error::submodule HEAD ${ACTUAL} != candidate ${CANDIDATE_COMMIT}" >&2
+            exit 1
+          fi
+          git diff --stat
+
+      - name: Attach evidence artifacts to the branch
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          mkdir -p artifacts/omnigent-upstream-pin-update
+          gh run download "${{ github.run_id }}" \
+            --name "omnigent-upstream-pin-update-${{ github.run_id }}-${{ github.run_attempt }}" \
+            --dir artifacts/omnigent-upstream-pin-update
+          # artifacts*/ is gitignored, so force-add the exact evidence files
+          # and verify they are staged; never silence a staging failure.
+          git add -f \
+            artifacts/omnigent-upstream-pin-update/candidate.json \
+            artifacts/omnigent-upstream-pin-update/evidence.json \
+            artifacts/omnigent-upstream-pin-update/status.json
+          STAGED="$(git diff --cached --name-only)"
+          echo "${STAGED}"
+          for required in candidate.json evidence.json status.json; do
+            echo "${STAGED}" | grep -q "${required}" || {
+              echo "::error::evidence file ${required} is not staged" >&2
+              exit 1
+            }
+          done
+          git -c user.name="moonmind-updater" -c user.email="moonmind-updater@users.noreply.github.com" \
+            commit -m "MoonLadderStudios/MoonMind#3957: candidate omnigent pin from plan evidence ($(git rev-parse --short HEAD))" || echo "nothing to commit"
+
+      - name: Set candidate tag and commit for PR metadata
+        id: candidate
+        env:
+          CANDIDATE_TAG: ${{ needs.plan.outputs.candidate_tag }}
+          CANDIDATE_COMMIT: ${{ needs.plan.outputs.candidate_commit }}
+        run: |
+          # Untrusted upstream release fields cross into shell only as
+          # quoted env data, never as interpolated workflow expressions.
+          {
+            echo "tag=${CANDIDATE_TAG}"
+            echo "commit=${CANDIDATE_COMMIT}"
+          } >> "$GITHUB_OUTPUT"
+          git push --force-with-lease origin HEAD:"${{ steps.branch.outputs.branch }}"
+
+      - name: Open or update the single candidate PR
+        env:
+          GH_TOKEN: ${{ github.token }}
+          CANDIDATE_TAG: ${{ steps.candidate.outputs.tag }}
+          CANDIDATE_COMMIT: ${{ steps.candidate.outputs.commit }}
+          BRANCH: ${{ steps.branch.outputs.branch }}
+          DRY_RUN: ${{ inputs.dry_run }}
+        run: |
+          if [ "${DRY_RUN}" = "true" ]; then
+            echo "dry_run: skipping PR creation/update"
+            exit 0
+          fi
+          BODY_FILE="$(mktemp)"
+          {
+            echo "Candidate omnigent pin update for MoonLadderStudios/MoonMind#3957."
+            echo ""
+            echo "- Release: \`${CANDIDATE_TAG}\` (provenance only)"
+            echo "- Resolved commit: \`${CANDIDATE_COMMIT}\`"
+            echo "- Hermetic qualification shards: passed (see checks)"
+            echo "- Protected live evidence still required before promotion;"
+            echo "  prior support evidence for the old commit does not qualify"
+            echo "  this combination."
+            echo "- Rollback: previous qualified pin retained in evidence.json;"
+            echo "  historical run bindings are never rewritten."
+            echo "- Follow-up before promotion: re-run the native-UI network"
+            echo "  contract capture for the candidate (per-file source hashes)"
+            echo "  and refresh protected live evidence; this PR moves the pin"
+            echo "  records only."
+            echo ""
+            echo "Evidence: artifacts/omnigent-upstream-pin-update/{candidate,evidence,status}.json"
+          } > "${BODY_FILE}"
+          if gh pr view "${BRANCH}" --json number >/dev/null 2>&1; then
+            gh pr edit "${BRANCH}" --title "MoonLadderStudios/MoonMind#3957: candidate omnigent pin ${CANDIDATE_TAG}" --body-file "${BODY_FILE}"
+            echo "updated existing candidate PR"
+          else
+            gh pr create --base main --head "${BRANCH}" \
+              --title "MoonLadderStudios/MoonMind#3957: candidate omnigent pin ${CANDIDATE_TAG}" \
+              --body-file "${BODY_FILE}" \
+              --label dependencies --label testing
+          fi
+
+      - name: Trigger required CI for the generated pull request
+        # Pushes and PR events created with GITHUB_TOKEN do not start new
+        # workflow runs, so the candidate branch would otherwise carry no
+        # authoritative checks.  Dispatch the test suite explicitly at the
+        # pushed head so the candidate is gated before review.
+        env:
+          GH_TOKEN: ${{ github.token }}
+          BRANCH: ${{ steps.branch.outputs.branch }}
+        run: |
+          set -euo pipefail
+          HEAD_SHA="$(git ls-remote origin "${BRANCH}" | awk '{print $1}')"
+          if [ -z "${HEAD_SHA}" ]; then
+            echo "::error::candidate branch ${BRANCH} has no remote head" >&2
+            exit 1
+          fi
+          gh workflow run pytest-unit-tests.yml --ref "${BRANCH}"
+          echo "dispatched pytest-unit-tests.yml at ${BRANCH} (${HEAD_SHA})"
