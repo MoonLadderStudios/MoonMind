@@ -845,8 +845,11 @@ async def _initialize_oidc_provider(app: FastAPI):
     is_remote = bool(public_base) and not public_base_url_is_loopback(public_base)
     try:
         session_secret = resolve_session_secret(
+            # Compose renders omitted secret settings as empty strings.
+            # Preserve omission so the durable key owner can load or generate.
             explicit_secret=os.environ.get("MOONMIND_SESSION_SECRET")
-            or os.environ.get("JWT_SECRET"),
+            or os.environ.get("JWT_SECRET")
+            or None,
             key_path=default_session_key_path(),
             allow_generate=not is_remote,
             for_remote_production=is_remote,
