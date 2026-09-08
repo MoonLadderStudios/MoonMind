@@ -14,7 +14,7 @@ with the run rather than rewriting it after registry or credential changes.
 **Document Class:** Canonical declarative  
 **Status:** Current  
 **Owners:** MoonMind Platform  
-**Last updated:** 2026-08-17
+**Last updated:** 2026-09-07
 **Authority:** Unified Temporal lifecycle and ownership model for true agent execution, including profile-bound Codex execution through Omnigent hosts
 
 Implementation progress belongs in the roadmap, issues, and pull requests. This document defines durable product and runtime contracts.
@@ -814,8 +814,11 @@ Checkpoint capabilities remain distinct:
 
 Omnigent checkpoint extraction assigns restored files and their containing
 directories to the selected runtime identity before launch. Archive ownership is
-not runtime authority. Restored modes remain intact, and newly injected input
-artifacts retain their read-only projection contract.
+not runtime authority. Restore preserves ordinary executable bits so scripts
+remain runnable and unchanged Git candidates remain clean. Regular-file
+read/write access is owner-only; privilege bits and imported hooks are removed.
+Failure to apply these permissions aborts restore before readiness. Newly
+injected input artifacts retain their read-only projection contract.
 
 A session-state ref is not evidence of workspace capture or restore. `external_state_ref` can preserve Omnigent/provider continuity without being locally restorable.
 
