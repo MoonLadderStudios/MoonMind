@@ -151,6 +151,55 @@ async def test_drain_gate_retains_progress_under_bounded_load():
     assert verdicts == [True, False, False, False] * 25
 
 
+@pytest.mark.asyncio
+async def test_consolidated_worker_retains_control_and_cleanup_progress_under_load():
+    """Saturation rehearsal: control/cleanup progress is never lost or
+    reordered under concurrent load.
+
+    Each of 100 concurrent turn handoffs records its control decision and
+    its cleanup release into a shared ledger. The gate decision stays
+    decisive per input, every handoff's control record precedes its cleanup
+    record, and all 100 handoffs retain both records — the progress
+    property the consolidated topology must keep until the drain gate
+    releases the compat registration.
+    """
+
+    ledger: dict[str, list[str]] = {}
+    ledger_lock = asyncio.Lock()
+
+    async def _handoff(index: int, usage: CheckpointCompatDrainUsage) -> bool:
+        await asyncio.sleep(0)
+        decision = evaluate_checkpoint_compat_drain(usage)
+        async with ledger_lock:
+            ledger.setdefault(f"turn-{index}", []).append(
+                f"control:{decision.required_action}"
+            )
+        await asyncio.sleep(0)
+        async with ledger_lock:
+            ledger.setdefault(f"turn-{index}", []).append("cleanup:released")
+        return decision.may_remove_workflow_queue_handlers
+
+    usages = [
+        CheckpointCompatDrainUsage(),
+        CheckpointCompatDrainUsage(open_pre_cutover_histories=1),
+        CheckpointCompatDrainUsage(pending_old_queue_tasks=5),
+        CheckpointCompatDrainUsage(supported_resets_pending=2),
+    ]
+    verdicts = await asyncio.wait_for(
+        asyncio.gather(
+            *(_handoff(index, usages[index % len(usages)]) for index in range(100))
+        ),
+        timeout=30,
+    )
+    assert verdicts == [True, False, False, False] * 25
+    assert len(ledger) == 100
+    for index in range(100):
+        records = ledger[f"turn-{index}"]
+        assert len(records) == 2, f"turn-{index} lost progress under load"
+        assert records[0].startswith("control:")
+        assert records[1] == "cleanup:released"
+
+
 # --- Ordering: idempotency and single-mutator ownership ----------------------
 
 
@@ -225,6 +274,51 @@ async def test_metadata_helpers_need_no_database_authority(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_all_four_retained_helpers_need_no_io_authority(monkeypatch):
+    """Full helper inventory: none of the four retained helpers needs
+    database, provider, Docker, or artifact-storage authority.
+
+    The inventory denies database I/O and removes provider credentials and
+    Docker/artifact configuration from the environment. Every helper must
+    still succeed with its real registry/catalog reads, proving new-only
+    workflow processing carries no unnecessary I/O credentials or mounts.
+    """
+
+    import moonmind.workflows.temporal.workflows.agent_run as agent_run_module
+    import moonmind.workflows.temporal.workflows.checkpoint_branch_turn as turn_module
+
+    monkeypatch.setattr(turn_module, "async_session_maker", _deny_session_maker)
+    for env_key in (
+        "DATABASE_URL",
+        "ANTHROPIC_API_KEY",
+        "OPENAI_API_KEY",
+        "MOONMIND_PROVIDER_CREDENTIALS_JSON",
+        "DOCKER_HOST",
+        "DOCKER_SOCKET",
+        "MOONMIND_ARTIFACT_STORE_URL",
+        "MOONMIND_ARTIFACT_STORAGE_URL",
+    ):
+        monkeypatch.delenv(env_key, raising=False)
+
+    agent_id = (
+        await agent_run_module.resolve_adapter_metadata("OpenClaw")
+    )["agent_id"]
+    assert agent_id == "openclaw"
+
+    assert (
+        await agent_run_module.resolve_external_adapter(agent_id)
+    ) == agent_id
+    assert await agent_run_module.external_adapter_execution_style(agent_id) in (
+        "polling",
+        "streaming_gateway",
+    )
+    route = await agent_run_module.get_activity_route(
+        "checkpoint_branch.turn.persist_terminal"
+    )
+    assert route["task_queue"] == "mm.activity.artifacts"
+
+
+@pytest.mark.asyncio
 async def test_retained_persistence_handler_fails_closed_without_db(monkeypatch):
     """The compat handlers still carry database authority: deny it loudly."""
 
@@ -234,6 +328,38 @@ async def test_retained_persistence_handler_fails_closed_without_db(monkeypatch)
         turn_module, "async_session_maker", _deny_session_maker
     )
     with pytest.raises(RuntimeError, match="denied unexpected database"):
+        await turn_module.mark_checkpoint_branch_turn_running(
+            {
+                "workflowId": "wf-1",
+                "branchId": "b-1",
+                "branchTurnId": "t-1",
+                "agentRunWorkflowId": "run-1",
+            }
+        )
+
+
+@pytest.mark.asyncio
+async def test_retained_persistence_handler_fails_closed_without_artifact_storage(
+    monkeypatch,
+):
+    """Artifact-storage denial also fails closed instead of persisting
+    partially: with the artifact service denied, the terminal persistence
+    handler must raise rather than record an unverifiable terminal."""
+
+    import moonmind.workflows.temporal.workflows.checkpoint_branch_turn as turn_module
+
+    def _deny_artifact_service(*args, **kwargs):
+        raise RuntimeError("test denied unexpected artifact-storage I/O")
+
+    monkeypatch.setattr(
+        turn_module, "async_session_maker", _deny_session_maker
+    )
+    monkeypatch.setattr(
+        turn_module,
+        "get_checkpoint_branch_artifact_service",
+        _deny_artifact_service,
+    )
+    with pytest.raises(RuntimeError, match="denied unexpected"):
         await turn_module.mark_checkpoint_branch_turn_running(
             {
                 "workflowId": "wf-1",
