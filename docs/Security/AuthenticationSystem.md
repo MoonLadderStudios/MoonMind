@@ -188,7 +188,10 @@ deployment-cutover issue; this document must not invent a successful result.
 The temporary [KeycloakRemovalPlan.md](../tmp/KeycloakRemovalPlan.md) is
 removed or archived only once execution is complete, with durable contracts
 retained here and backlinks resolved. Necessary operator upgrade guidance is not
-erased prematurely.
+erased prematurely. Backlink audit 2026-09-08: this document is the only
+canonical-doc reference to the temporary plan, held as an explicit
+non-authoritative pointer (header Authority field); no other canonical doc treats
+the plan as authoritative for shipped behavior.
 
 ## 9. Verification
 
@@ -203,5 +206,9 @@ Shipped-behavior checks for this document:
 - Keycloak service remains behind the `keycloak` Compose profile
   (`docker-compose.yaml`); Keycloak DB provisioning remains in
   `init_db_scripts/01-create-dbs.sh`.
+- `tools/export_openapi.py` carries no Keycloak setup, realm-URL, or
+  unshipped-mode claims (serializes FastAPI routes only); `moonmind/cli.py`
+  exposes no auth selectors and `moonmind/container_job_cli.py` sends only the
+  worker bearer machine credential documented in §5.
 - `tests/unit/docs/test_authentication_system_docs.py` pins these contracts so
   future implementation PRs update the doc and the test together.

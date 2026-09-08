@@ -13,6 +13,7 @@ DOC = REPO_ROOT / "docs" / "Security" / "AuthenticationSystem.md"
 SETTINGS = REPO_ROOT / "moonmind" / "config" / "settings.py"
 ENV_TEMPLATE = REPO_ROOT / ".env-template"
 COMPOSE = REPO_ROOT / "docker-compose.yaml"
+README = REPO_ROOT / "README.md"
 CHAT_PANEL_DOC = REPO_ROOT / "docs" / "UI" / "WorkflowChatPanel.md"
 MCP_DOC = REPO_ROOT / "docs" / "ExternalAgents" / "ModelContextProtocol.md"
 ARTIFACT_DOC = (
@@ -24,6 +25,13 @@ COMBINED_DOC = (
     / "Omnigent"
     / "CombinedStackValidationAndRollback.md"
 )
+BRIDGE_DOC = REPO_ROOT / "docs" / "Omnigent" / "OmnigentBridge.md"
+EMBEDDED_AUTH_DOC = (
+    REPO_ROOT / "docs" / "Omnigent" / "EmbeddedHostAuthCompatibility.md"
+)
+EXPORT_OPENAPI = REPO_ROOT / "tools" / "export_openapi.py"
+CLI = REPO_ROOT / "moonmind" / "cli.py"
+CONTAINER_JOB_CLI = REPO_ROOT / "moonmind" / "container_job_cli.py"
 
 
 def _read(path: Path) -> str:
@@ -127,3 +135,41 @@ def test_compose_selector_comments_match_shipped_modes() -> None:
 
 def test_workflow_chat_panel_points_at_canonical_auth_owner() -> None:
     assert "AuthenticationSystem.md" in _read(CHAT_PANEL_DOC)
+
+
+def test_readme_documents_shipped_auth_modes_without_new_default() -> None:
+    text = _read(README)
+    assert "Control-plane authentication (shipped modes)" in text
+    assert "AuthenticationSystem.md" in text
+    assert "Existing databases with omitted settings" in text
+    assert "Unsupported selectors" in text
+    assert "are not shipped" in text
+    for forbidden in (
+        "accounts` is the default",
+        "accounts` (default)",
+        "`header` mode is available",
+        "configure `AUTH_PROVIDER=accounts`",
+    ):
+        assert forbidden not in text
+
+
+def test_bridge_docs_point_at_canonical_auth_owner() -> None:
+    assert "AuthenticationSystem.md" in _read(BRIDGE_DOC)
+    assert "does not define a parallel credential contract" in _read(BRIDGE_DOC)
+    embedded = _read(EMBEDDED_AUTH_DOC)
+    assert "AuthenticationSystem.md" in embedded
+    # Runner control-plane credential stays distinct from user login.
+    assert "distinct from Omnigent" in embedded
+
+
+def test_generated_openapi_and_cli_carry_no_keycloak_setup_claims() -> None:
+    export_text = _read(EXPORT_OPENAPI)
+    assert "keycloak" not in export_text.lower()
+    assert "realm" not in export_text.lower()
+    cli_text = _read(CLI)
+    assert "keycloak" not in cli_text.lower()
+    assert "AUTH_PROVIDER" not in cli_text
+    job_cli_text = _read(CONTAINER_JOB_CLI)
+    assert "keycloak" not in job_cli_text.lower()
+    # Container-job CLI sends only the worker bearer machine credential.
+    assert "Bearer" in job_cli_text
