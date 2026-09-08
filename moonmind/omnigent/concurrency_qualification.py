@@ -380,6 +380,11 @@ CONCURRENCY_SCENARIO_CATALOG: tuple[ScenarioOwner, ...] = (
         escaped_regressions=("MoonLadderStudios/MoonMind#3883",),
         required_in_ci=True,
     ),
+    _owner(
+        _F.recovery_and_release,
+        _L.exact_docker,
+        "tests/integration/omnigent/test_embedded_recovery.py",
+    ),
     # 7. Product and readability.
     _owner(
         _F.product_and_readability,

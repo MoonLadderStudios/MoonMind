@@ -35,7 +35,7 @@ The bridge supports an unchanged Omnigent host whenever deployment topology and 
 MoonMind Workflow / UI
   -> MoonMind Omnigent Bridge
       -> authorized Omnigent-shaped session/event/resource/control surface
-          -> stock Omnigent Server or retired embedded-compatible surface
+          -> stock Omnigent Server or embedded-compatible surface
               -> unchanged Omnigent host / runner
                   -> Codex, Claude, or another supported harness
 ```
@@ -96,23 +96,35 @@ A successful design supports a stock Omnigent host. No custom host image or sour
 
 Deployment configuration may specify server URL, host authentication, endpoint refs, network routing, and standard Omnigent host settings. A custom MoonMind-specific host build is out of scope.
 
-### 2.4 Proxy-only compatibility (embedded transport retired)
+### 2.4 Proxy-only compatibility (embedded transport retired #3955)
 
-The bridge supports one host protocol mode:
+The bridge selects:
 
 ```yaml
-hostProtocolMode: upstream_omnigent_server_proxy
+hostProtocolMode:
+  - upstream_omnigent_server_proxy
 ```
 
-`upstream_omnigent_server_proxy` is the supported topology because stock
-Omnigent Server owns the host/runner tunnel. The experimental
-`embedded_omnigent_compatible_server` transport was retired by
-MoonLadderStudios/MoonMind#3955: the bridge configuration rejects that mode
-and the removed `hostConnection.embedded` settings block with actionable
-errors, and explicit embedded-transport requests are rejected without silently
-substituting proxy mode. The retirement record, retained-history handling, and
-preserved native-chat presentation option are owned by
-`EmbeddedHostAuthCompatibility.md`.
+`upstream_omnigent_server_proxy` is the production default and the only
+selectable mode because stock Omnigent Server already owns the host/runner
+tunnel.
+
+`embedded_omnigent_compatible_server` is retired and cannot admit new work: an
+enabled bridge that selects it fails fast with the proxy alternative, and live
+embedded host routes answer `410 Gone` (declared in OpenAPI so generated
+clients model the terminal `omnigent_embedded_transport_retired` payload;
+WebSocket denials carry the same code plus the proxy alternative as the close
+reason). The literal survives only so retained session rows and historical
+evidence keep decoding to their recorded mode. Session-scoped controls (read,
+stop, terminal cleanup, delete, elicitation, event and resource reads) dispatch
+by each session row's recorded mode, so retained embedded sessions keep their
+recorded cleanup owner until drained while the deployment runs proxy mode;
+new admission still follows the configured global mode and is never silently
+substituted.
+Its exact auth and protocol contract is owned by
+`EmbeddedHostAuthCompatibility.md`, which now documents the retired transport
+and its drain disposition. The native Workflow Chat `embedded=1` presentation
+option is unrelated to this transport and is preserved.
 
 ### 2.5 Preserve native UI, centralize authority
 
@@ -141,14 +153,24 @@ Responsibilities:
 - The bridge calls stock Omnigent session/event/resource/control APIs.
 - Stock Omnigent Server owns the host/runner tunnel.
 - The unchanged host continues to speak its native protocol.
-### 3.2 Embedded compatibility mode (retired)
 
-Retired by MoonLadderStudios/MoonMind#3955. The retirement record, retained
-session/history handling, and preserved native-chat presentation option are
-authoritative in
-[`EmbeddedHostAuthCompatibility.md`](EmbeddedHostAuthCompatibility.md). No new
-embedded work is admitted; retained sessions keep their recorded mode and
-cleanup owner until drained.
+### 3.2 Embedded compatibility mode (retired #3955)
+
+> Retired: this topology no longer admits new work. The version, route,
+> authentication, lifecycle, evidence, failure, upgrade, and rollback contract
+> below is retained as the authoritative historical record in
+> [`EmbeddedHostAuthCompatibility.md`](EmbeddedHostAuthCompatibility.md) for
+> decoding retained sessions until drain completes.
+
+```text
+MoonMind UI / API
+  -> MoonMind Omnigent Bridge
+      -> embedded Omnigent-compatible server surface
+          -> unchanged Omnigent Host / Runner
+              -> Codex / Claude / other harness
+```
+
+Embedded mode must preserve the same browser binding, authorization, capability, scan, audit, and artifact boundaries as proxy mode.
 
 ### 3.3 Direct Codex compatibility during migration
 
@@ -275,8 +297,7 @@ unchanged host -> stock Omnigent Server host/runner channel
 MoonMind Bridge -> stock Omnigent Server public session API
 ```
 
-In embedded mode (retired by MoonLadderStudios/MoonMind#3955; retained history
-only):
+In embedded mode:
 
 ```text
 unchanged host -> MoonMind embedded-compatible host/runner channel
@@ -312,9 +333,7 @@ Resolves opaque browser-safe bindings, serves/proxies the native application, vi
 
 ### 5.3 Host Protocol Facade / Proxy
 
-Forwards to stock Omnigent Server in the supported proxy mode. (The
-embedded-compatible host-facing surface was retired by
-MoonLadderStudios/MoonMind#3955.)
+Forwards to stock Omnigent Server in proxy mode or implements the compatible host-facing surface in embedded mode.
 
 ### 5.4 Bridge Session Store
 
@@ -390,6 +409,11 @@ workflowChat:
 hostConnection:
   mode: upstream_omnigent_server_proxy
   upstreamServerUrlRef: default
+  embedded:
+    bindAddress: 0.0.0.0
+    port: 8000
+    authMode: upstream_runner_tunnel
+    protocolProfile: omnigent.runner_tunnel.983c93c6
 
 sessionDefaults:
   hostType: managed
@@ -558,7 +582,7 @@ A normalized provider event without this evidence may be displayed diagnosticall
 2. Resolve immutable Agent Profile, Provider Profile, policy, and launch snapshots.
 3. Create or reuse the bridge row by `idempotency_key`.
 4. Resolve endpoint and target agent server-side.
-5. Forward to stock Omnigent Server.
+5. Forward to stock Omnigent Server or the embedded-compatible backend.
 6. Persist provider session identity before preparing or posting the first message.
 7. Allocate the opaque `chat_binding_id` only after the durable binding exists.
 8. Emit `session.created` into the bridge journal.
@@ -1204,9 +1228,9 @@ record-specific observed facts are:
 ## 21. Open questions
 
 1. Which upstream WebSocket paths require explicit rewriting in each compatibility profile? *(Resolved for `omnigent.server.v1` by MoonLadderStudios/MoonMind#3635: the global session-update, terminal-attach, and dictation transports are inventoried, identity-scoped, capability-gated, and relayed through the binding facade. Any route absent from a future reviewed profile fails closed.)*
-2. Which upstream host auth modes are supported in embedded mode? *(Retired with the embedded transport by MoonLadderStudios/MoonMind#3955: no new embedded work is admitted. See `EmbeddedHostAuthCompatibility.md`.)*
+2. Which upstream host auth modes are supported in embedded mode?
 3. Which binary attachment types are allowed under high-security mode when their content cannot be text-scanned?
-4. What is the minimum stock-host conformance suite before embedded mode is enabled? *(Retired with the embedded transport by MoonLadderStudios/MoonMind#3955: proxy qualification owns conformance now.)*
+4. What is the minimum stock-host conformance suite before embedded mode is enabled?
 5. Which native clear/reset operations require a new session and explicit reset-boundary artifact?
 
 ---
