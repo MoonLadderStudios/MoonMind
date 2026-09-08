@@ -4684,18 +4684,20 @@ class TemporalIntegrationActivities:
         token = str(normalized_hint or "").strip().lower()
         if token == "cancelled":
             token = "canceled"
-        if token not in {"queued", "running", "completed", "failed", "canceled", "unknown"}:
+        if token not in {"queued", "running", "completed", "failed", "canceled", "unknown", "awaiting_feedback"}:
             return snapshot
 
         terminal = token in {"completed", "failed", "canceled"}
         return JulesStatusSnapshot(
             provider_status=snapshot.provider_status,
             provider_status_token=snapshot.provider_status_token,
-            normalized_status=token,
+            normalized_status=token,  # type: ignore[arg-type]
             terminal=terminal,
             succeeded=token == "completed",
             failed=token == "failed",
             canceled=token == "canceled",
+            is_known=snapshot.is_known,
+            is_missing=snapshot.is_missing,
         )
 
     async def _write_failure_summary_artifact(

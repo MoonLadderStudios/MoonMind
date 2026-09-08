@@ -12,6 +12,7 @@ from typing import Any
 
 import httpx
 
+from moonmind.jules.vocabulary import classify_jules_status
 from moonmind.schemas.jules_models import (
     JulesActivity,
     JulesCreateTaskRequest,
@@ -25,7 +26,6 @@ from moonmind.schemas.jules_models import (
     JulesResolveTaskRequest,
     JulesSendMessageRequest,
     JulesTaskResponse,
-    normalize_jules_status,
 )
 from moonmind.security import scan_outbound_text
 
@@ -248,7 +248,7 @@ class JulesClient:
         return JulesIntegrationStartResult(
             taskQueue=task_queue,
             externalOperationId=str(created.task_id),
-            normalizedStatus=normalize_jules_status(provider_status),
+            normalizedStatus=classify_jules_status(provider_status).normalized_status,
             providerStatus=provider_status,
             callbackSupported=bool(request.callback_url),
             callbackCorrelationKey=request.callback_correlation_key,
@@ -272,16 +272,15 @@ class JulesClient:
 
         task = await self.get_task(JulesGetTaskRequest(task_id=external_operation_id))
         provider_status = str(task.status or "").strip() or "unknown"
-        normalized = normalize_jules_status(provider_status)
-        if normalized == "running" and task.pull_request_url:
-            normalized = "completed"
+        classification = classify_jules_status(provider_status)
+        normalized = classification.normalized_status
 
         return JulesIntegrationStatusResult(
             taskQueue=task_queue,
             externalOperationId=external_operation_id,
             normalizedStatus=normalized,
             providerStatus=provider_status,
-            terminal=normalized in {"completed", "failed", "canceled"},
+            terminal=classification.terminal,
             recommendedPollSeconds=recommended_poll_seconds,
             externalUrl=str(task.url or "").strip() or None,
             providerSummary={"provider": "jules"},
@@ -298,9 +297,7 @@ class JulesClient:
 
         task = await self.get_task(JulesGetTaskRequest(task_id=external_operation_id))
         provider_status = str(task.status or "").strip() or "unknown"
-        normalized = normalize_jules_status(provider_status)
-        if normalized == "running" and task.pull_request_url:
-            normalized = "completed"
+        normalized = classify_jules_status(provider_status).normalized_status
 
         summary = (
             f"Jules task {external_operation_id} completed with status "
@@ -362,7 +359,7 @@ class JulesClient:
             raise
 
         provider_status = str(task.status or "").strip() or "canceled"
-        normalized = normalize_jules_status(provider_status)
+        normalized = classify_jules_status(provider_status).normalized_status
         return JulesIntegrationCancelResult(
             taskQueue=task_queue,
             externalOperationId=external_operation_id,
