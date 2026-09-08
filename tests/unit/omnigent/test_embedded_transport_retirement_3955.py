@@ -268,11 +268,22 @@ def test_native_chat_embedded_presentation_flag_survives() -> None:
     )
     assert headers
 
-    frontend = (
-        REPO_ROOT / "frontend" / "src" / "entrypoints" / "WorkflowChatNative.tsx"
+    # MoonLadderStudios/MoonMind#3956 moved the live native-chat mount out of
+    # the WorkflowChatNative entrypoint (now a diagnostics fallback shell)
+    # into WorkflowNativeChatRoute + chatBindingModel. The embedded
+    # presentation flag survives there, distinct from the retired
+    # embedded-host transport.
+    binding_model = (
+        REPO_ROOT
+        / "frontend"
+        / "src"
+        / "features"
+        / "workflow-native-chat"
+        / "chatBindingModel.ts"
     )
-    assert frontend.is_file()
-    assert "embedded=1" in frontend.read_text(encoding="utf-8")
+    assert binding_model.is_file()
+    binding_text = binding_model.read_text(encoding="utf-8")
+    assert "embedded" in binding_text
 
 
 def test_shared_contracts_preserved() -> None:
