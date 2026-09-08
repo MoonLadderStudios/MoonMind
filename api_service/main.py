@@ -680,7 +680,11 @@ async def _maintain_omnigent_bootstrap_reconciliation() -> None:
 
 async def _initialize_oidc_provider(app: FastAPI):
     """Initializes the OIDC provider by fetching discovery documents if needed."""
-    provider = settings.oidc.AUTH_PROVIDER
+    from api_service.auth_providers import validate_auth_provider
+
+    # MoonLadderStudios/MoonMind#4116: reject unknown/retired selectors at
+    # startup with migration guidance; never silently disable auth.
+    provider = validate_auth_provider(settings.oidc.AUTH_PROVIDER)
     if provider == "google":
         logger.info("Initializing Google OIDC provider...")
         try:

@@ -6,7 +6,11 @@ from fastapi import HTTPException
 from sqlalchemy.ext.asyncio import AsyncSession
 
 import api_service.auth_providers as auth_providers
-from api_service.auth_providers import get_current_user, get_default_user_from_db
+from api_service.auth_providers import (
+    get_current_user,
+    get_default_user_from_db,
+    validate_auth_provider,
+)
 from api_service.db.models import User
 from moonmind.config.settings import settings
 
@@ -56,4 +60,82 @@ async def test_disabled_auth_fallback_user_has_default_id(monkeypatch):
 
     assert user.id == uuid.UUID(user_id)
     assert user.is_superuser is True
+    monkeypatch.setattr(auth_providers, "_cached_current_user_dependency", None)
+
+
+@pytest.mark.parametrize(
+    "provider", ["disabled", "default", "keycloak", "google", "accounts", "oidc", "header"]
+)
+def test_validate_auth_provider_accepts_known_modes(provider):
+    assert validate_auth_provider(provider) == provider
+
+
+@pytest.mark.parametrize("provider", ["none", "keycloakx", "", "disabledx"])
+def test_validate_auth_provider_rejects_unknown_modes(provider):
+    with pytest.raises(RuntimeError, match="Unknown AUTH_PROVIDER"):
+        validate_auth_provider(provider)
+
+
+def test_validate_auth_provider_rejects_unknown_settings_value(monkeypatch):
+    monkeypatch.setattr(settings.oidc, "AUTH_PROVIDER", "sso-magic")
+    with pytest.raises(RuntimeError, match="Refusing to start"):
+        validate_auth_provider()
+
+
+def _non_test_runtime(monkeypatch):
+    monkeypatch.setattr(settings.oidc, "AUTH_PROVIDER", "disabled")
+    monkeypatch.setattr(settings.workflow, "test_mode", False)
+    monkeypatch.delenv("PYTEST_CURRENT_TEST", raising=False)
+    monkeypatch.delenv("MOONMIND_DISABLE_DEFAULT_USER_DB_LOOKUP", raising=False)
+    monkeypatch.setattr(auth_providers, "_cached_current_user_dependency", None)
+    monkeypatch.setattr(auth_providers, "_is_test_runtime", lambda: False)
+
+
+@pytest.mark.asyncio
+async def test_disabled_auth_db_outage_fails_closed(monkeypatch):
+    """MoonLadderStudios/MoonMind#4116 K4: DB outage must not yield an admin stub."""
+    import api_service.db.base as db_base
+
+    _non_test_runtime(monkeypatch)
+
+    class _FailingCtx:
+        async def __aenter__(self):
+            raise ConnectionRefusedError("db down")
+
+        async def __aexit__(self, *args):
+            return False
+
+    monkeypatch.setattr(db_base, "get_async_session_context", lambda: _FailingCtx())
+
+    dependency = get_current_user()
+    with pytest.raises(HTTPException) as exc:
+        await dependency()
+    assert exc.value.status_code == 503
+    monkeypatch.setattr(auth_providers, "_cached_current_user_dependency", None)
+
+
+@pytest.mark.asyncio
+async def test_disabled_auth_missing_row_fails_closed(monkeypatch):
+    """MoonLadderStudios/MoonMind#4116 K4: missing row must not yield an admin stub."""
+    import api_service.db.base as db_base
+
+    _non_test_runtime(monkeypatch)
+
+    class _EmptySession:
+        async def get(self, *args, **kwargs):
+            return None
+
+    class _EmptyCtx:
+        async def __aenter__(self):
+            return _EmptySession()
+
+        async def __aexit__(self, *args):
+            return False
+
+    monkeypatch.setattr(db_base, "get_async_session_context", lambda: _EmptyCtx())
+
+    dependency = get_current_user()
+    with pytest.raises(HTTPException) as exc:
+        await dependency()
+    assert exc.value.status_code == 503
     monkeypatch.setattr(auth_providers, "_cached_current_user_dependency", None)

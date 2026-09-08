@@ -1763,7 +1763,7 @@ class OIDCSettings(BaseSettings):
 
     AUTH_PROVIDER: str = Field(
         "disabled",
-        description="Authentication provider: 'disabled' or 'keycloak'.",
+        description="Authentication provider selector (MoonLadderStudios/MoonMind#4116). Legacy values: 'disabled', 'default', 'keycloak', 'google'. Planned cutover values: 'accounts', 'oidc', 'header'. Unknown values refuse startup; never silently disable authentication.",
         alias="AUTH_PROVIDER",
     )
     OIDC_ISSUER_URL: Optional[str] = Field(
