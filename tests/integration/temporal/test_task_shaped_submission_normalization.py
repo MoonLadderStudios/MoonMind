@@ -655,7 +655,7 @@ def test_task_shaped_submission_boundary_rejects_wrong_owner_binary_ref(
 ) -> None:
     """MM-628: unauthorized binary refs fail before execution creation."""
 
-    monkeypatch.setattr(settings.oidc, "AUTH_PROVIDER", "keycloak")
+    monkeypatch.setattr(settings.oidc, "AUTH_PROVIDER", "oidc")
     monkeypatch.setattr(settings.workflow, "agent_job_attachment_enabled", True)
     test_client, service = _client()
     artifact_id = "art_01MM628INTWRONGOWNER0000"

@@ -27,6 +27,11 @@ jobs/
 .codex/auth.json
 # Note: .codex/config.toml and .codex/prompts/ should be committed (project config)
 
+# Local linked worktrees and machine-specific Claude settings
+/.worktrees/
+/.claude/worktrees/
+/.claude/settings.local.json
+
 # Qwen user-specific data
 .qwen/
 

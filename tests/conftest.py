@@ -141,10 +141,10 @@ def disabled_env_keys(monkeypatch):
 
 
 @pytest.fixture
-def keycloak_mode(monkeypatch):
+def authenticated_mode(monkeypatch):
     from moonmind.config.settings import settings
 
-    monkeypatch.setattr(settings.oidc, "AUTH_PROVIDER", "keycloak", raising=False)
+    monkeypatch.setattr(settings.oidc, "AUTH_PROVIDER", "oidc", raising=False)
     yield
 
 

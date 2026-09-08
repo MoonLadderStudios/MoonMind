@@ -26,6 +26,7 @@ from api_service.services.registry_authorization import (
 from moonmind.config.container_backend_settings import (
     ContainerBackendConfigError,
     ContainerBackendSettings,
+    RegistryImageSource,
     resolve_container_backend_settings,
 )
 from moonmind.schemas.container_job_models import (
@@ -252,11 +253,25 @@ class ContainerJobService:
             # Public requests select only an opaque deployment-approved alias.
             # Recipe paths and registry references remain worker-side policy.
             try:
-                self._backend_settings.image_source(
+                source = self._backend_settings.image_source(
                     request.spec.image_source_ref or ""
                 )
             except ContainerBackendConfigError as exc:
                 raise ValueError("container image source is not configured") from exc
+            if isinstance(source, RegistryImageSource):
+                authorization = self._authorizer.authorize(
+                    owner=owner,
+                    spec=request.spec.model_copy(
+                        update={
+                            "image_source_ref": None,
+                            "image": source.image,
+                            "pull_policy": source.pull_policy,
+                            "registry_credential_ref": source.registry_credential_ref,
+                        }
+                    ),
+                )
+                if not authorization.authorized:
+                    raise ContainerJobAuthorizationError(authorization)
         existing = await self.repository.find_exact_replay(owner=owner, request=request)
         if existing is not None:
             record, replayed = existing, True

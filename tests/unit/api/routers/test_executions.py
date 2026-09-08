@@ -4333,11 +4333,11 @@ def test_create_task_shaped_execution_rejects_explicit_skill_step_without_skill_
     service.create_execution.assert_not_awaited()
 
 
-def test_create_execution_lifts_context_retrieval_authoring(
+def test_create_execution_rejects_retired_vector_retrieval(
     client: tuple[TestClient, AsyncMock, SimpleNamespace],
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """MoonMind#3514: payload-level rag / followUpRetrieval reach initial parameters."""
+    """MoonLadderStudios/MoonMind#4105: explicit rag/followUp fail before scheduling."""
     test_client, service, _user = client
     service.create_execution.return_value = _build_execution_record()
 
@@ -4383,14 +4383,61 @@ def test_create_execution_lifts_context_retrieval_authoring(
         },
     )
 
+    assert response.status_code == 422, response.text
+    assert "4105" in response.text
+    service.create_execution.assert_not_awaited()
+
+
+def test_create_execution_absent_vector_fields_admitted(
+    client: tuple[TestClient, AsyncMock, SimpleNamespace],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """MoonLadderStudios/MoonMind#4105: absent/empty/disabled vector fields pass."""
+    test_client, service, _user = client
+    service.create_execution.return_value = _build_execution_record()
+
+    async def _identity_validate_skill_step_inputs(*, initial_parameters, **_kwargs):
+        return SimpleNamespace(
+            valid=True,
+            parameters=initial_parameters,
+            error_dicts=lambda: [],
+        )
+
+    monkeypatch.setattr(
+        "api_service.api.routers.executions.validate_skill_step_inputs",
+        _identity_validate_skill_step_inputs,
+    )
+
+    response = test_client.post(
+        "/api/executions",
+        json={
+            "type": "workflow",
+            "payload": {
+                "rag": {},
+                "followUpRetrieval": {"enabled": False},
+                "workflow": {
+                    "instructions": "Run without vector retrieval.",
+                    "steps": [
+                        {
+                            "id": "step-1",
+                            "title": "Step",
+                            "type": "skill",
+                            "skill": {
+                                "id": "noop",
+                                "inputs": {},
+                                "inputContractDigest": "sha256:saved",
+                            },
+                        }
+                    ],
+                },
+            },
+        },
+    )
+
     assert response.status_code == 201, response.text
     initial_parameters = service.create_execution.await_args.kwargs["initial_parameters"]
-    assert initial_parameters["rag"] == {"collections": ["docs"], "allowStale": True}
-    assert initial_parameters["followUpRetrieval"] == {
-        "enabled": True,
-        "collections": ["repo", "docs"],
-        "topK": 6,
-    }
+    assert "rag" not in initial_parameters
+    assert "followUpRetrieval" not in initial_parameters
 
 
 def test_create_task_shaped_execution_normalizes_skill_inputs(
@@ -10404,7 +10451,7 @@ def test_create_task_shaped_execution_rejects_other_users_completed_input_attach
     """MM-628: another user's completed artifact cannot be attached to a new execution."""
 
     test_client, service, user = client
-    monkeypatch.setattr(settings.oidc, "AUTH_PROVIDER", "keycloak")
+    monkeypatch.setattr(settings.oidc, "AUTH_PROVIDER", "oidc")
     monkeypatch.setattr(settings.workflow, "agent_job_attachment_enabled", True)
     service.create_execution.return_value = _build_execution_record()
     artifact_id = "art_01MM628WRONGOWNER0000000"
@@ -10451,7 +10498,7 @@ def test_create_task_shaped_execution_rejects_service_owned_attachment_for_user(
     """MM-628: service ownership does not make an artifact attachable by any user."""
 
     test_client, service, _user = client
-    monkeypatch.setattr(settings.oidc, "AUTH_PROVIDER", "keycloak")
+    monkeypatch.setattr(settings.oidc, "AUTH_PROVIDER", "oidc")
     monkeypatch.setattr(settings.workflow, "agent_job_attachment_enabled", True)
     artifact_id = "art_01MM628SERVICEOWNER0000"
     test_client.app.dependency_overrides[get_async_session] = lambda: _artifact_session(
@@ -10809,6 +10856,33 @@ def test_recurring_target_preserves_omnigent_selection_in_initial_parameters() -
         "mode": "omnigent",
         "executionProfileRef": "codex-oauth-profile",
     }
+
+
+def test_build_recurring_target_rejects_retired_vector_in_task_path() -> None:
+    """MoonLadderStudios/MoonMind#4105: task-shaped recurring targets reject retired vectors."""
+    with pytest.raises(HTTPException) as excinfo:
+        _build_recurring_target(
+            {
+                "workflowType": "MoonMind.UserWorkflow",
+                "workflow": {
+                    "instructions": "Run nightly",
+                    "followUpRetrieval": {"enabled": True, "collections": ["repo"]},
+                },
+            }
+        )
+    assert "4105" in str(excinfo.value.detail)
+
+    with pytest.raises(HTTPException) as excinfo:
+        _build_recurring_target(
+            {
+                "workflowType": "MoonMind.UserWorkflow",
+                "task": {
+                    "instructions": "Run nightly",
+                    "rag": {"collections": ["docs"]},
+                },
+            }
+        )
+    assert "4105" in str(excinfo.value.detail)
 
 
 @pytest.mark.asyncio

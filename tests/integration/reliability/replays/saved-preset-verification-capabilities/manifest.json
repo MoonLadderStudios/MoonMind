@@ -1,0 +1,19 @@
+{
+  "incidentWorkflowId": "mm:9b176122-499f-44ae-9749-7b08d6be3039-2026-09-08T06:00:00Z",
+  "initialParameters": {
+    "system": {"recurrence": {"definitionId": "9b176122-499f-44ae-9749-7b08d6be3039"}},
+    "requiredCapabilities": ["git", "gh"],
+    "targetRuntime": "omnigent",
+    "model": "opencode-go/muse-spark-1.3-contributor",
+    "effort": "xhigh",
+    "task": {
+      "appliedStepTemplates": [{
+        "slug": "github-issue-search-and-implement",
+        "presetDigest": "23835b8abeb92761",
+        "capabilities": ["git", "gh"]
+      }]
+    }
+  },
+  "observedFailure": "Required tests could not execute; container submission lacked runtime context; six remediation passes exhausted the budget.",
+  "expectedMissingCapabilities": ["docker"]
+}
