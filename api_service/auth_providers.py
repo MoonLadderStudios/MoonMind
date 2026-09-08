@@ -24,6 +24,42 @@ logger = logging.getLogger(__name__)
 
 _cached_current_user_dependency = None
 
+# MoonLadderStudios/MoonMind#4116 (Keycloak removal epic, K3/K4 boundary):
+# one AUTH_PROVIDER selector. Values below are the literals accepted by the
+# current codebase; the planned cutover selector is
+# accounts/oidc/header/disabled. Unknown values must fail fast at startup
+# with migration guidance and must never silently become disabled auth.
+SUPPORTED_AUTH_PROVIDERS = frozenset({"disabled", "default", "keycloak", "google"})
+
+# Target selector values from docs/tmp/KeycloakRemovalPlan.md §3. Accepted
+# here alongside legacy literals so operators can adopt the new names before
+# the full K3/K4 cutover; unknown values still fail fast.
+_PLANNED_AUTH_PROVIDERS = frozenset({"accounts", "oidc", "header"})
+
+
+def validate_auth_provider(provider: str | None = None) -> str:
+    """Fail fast on unknown AUTH_PROVIDER values (MoonLadderStudios/MoonMind#4116).
+
+    Returns the normalized provider. Raises RuntimeError with migration
+    guidance for unknown values instead of silently disabling
+    authentication.
+    """
+    value = provider if provider is not None else settings.oidc.AUTH_PROVIDER
+    normalized = (value or "").strip().lower()
+    if normalized in SUPPORTED_AUTH_PROVIDERS or normalized in _PLANNED_AUTH_PROVIDERS:
+        return normalized
+    raise RuntimeError(
+        f"Unknown AUTH_PROVIDER '{value}'. Supported values are "
+        "'disabled', 'default', 'keycloak', 'google' (legacy) and the planned "
+        "'accounts', 'oidc', 'header' (see docs/tmp/KeycloakRemovalPlan.md). "
+        "Refusing to start rather than disabling authentication; set an "
+        "explicit supported value before deploying."
+    )
+
+
+def _is_test_runtime() -> bool:
+    return bool(settings.workflow.test_mode or os.getenv("PYTEST_CURRENT_TEST"))
+
 
 def _disabled_auth_fallback_user():
     from types import SimpleNamespace
@@ -65,9 +101,12 @@ def get_current_user():
       default user from the database (to keep behaviour unchanged for the running
       API).
     • **However** when running under unit-test environments the database is often
-      unavailable.  If we cannot reach it (e.g. connection refused) we gracefully
-      fall back to returning a lightweight stub user object so the rest of the
-      application code continues to work without a real database.
+      unavailable. In test runtimes only (workflow test_mode or PYTEST_CURRENT_TEST)
+      we return a lightweight stub user object so the rest of the application code
+      continues to work without a real database.
+    • In real runtimes a database outage or missing default-user row fails closed
+      with HTTP 503 (MoonLadderStudios/MoonMind#4116 K4): it must never resolve to
+      an administrator stub.
     This removes the hard DB dependency from the vast majority of unit tests that
     don’t need it, preventing the `[Errno 111] Connect call failed ('127.0.0.1',
     5432)` failures that appeared after switching back to
@@ -82,7 +121,7 @@ def get_current_user():
     if _cached_current_user_dependency is None:
 
         async def _current_user_fallback():  # pragma: no cover – simple helper
-            if settings.workflow.test_mode or os.getenv("PYTEST_CURRENT_TEST"):
+            if _is_test_runtime():
                 return _disabled_auth_test_user()
             if os.getenv("MOONMIND_DISABLE_DEFAULT_USER_DB_LOOKUP") == "1":
                 return _disabled_auth_fallback_user()
@@ -97,21 +136,33 @@ def get_current_user():
 
             try:
                 user_obj = await asyncio.wait_for(_load_default_user(), timeout=1.0)
-                if user_obj is not None:
-                    # Disabled auth is single-user local mode; treat that principal
-                    # as the local administrator even if the persisted row predates
-                    # this policy.
-                    user_obj.is_superuser = True
-                    return user_obj
             except (Exception, asyncio.TimeoutError):
-                # Preserve fallback behaviour while surfacing lookup failures.
+                # MoonLadderStudios/MoonMind#4116 (K4): a database outage
+                # must fail closed with a bounded unavailable response, never
+                # resolve to an administrator stub.
                 logger.warning(
-                    "Failed to load default user in disabled auth mode; falling back to stub user.",
+                    "Default user lookup unavailable in disabled auth mode; failing closed.",
                     exc_info=True,
                 )
-
-            # Fallback: lightweight stub with the minimal attributes used in code.
-            return _disabled_auth_fallback_user()
+                raise HTTPException(
+                    status_code=503,
+                    detail="User store unavailable; authentication refused.",
+                )
+            if user_obj is None:
+                # Missing row is a configuration/migration problem, not a
+                # permission to run unauthenticated.
+                logger.warning(
+                    "Default user row missing in disabled auth mode; failing closed."
+                )
+                raise HTTPException(
+                    status_code=503,
+                    detail="Default user not configured; authentication refused.",
+                )
+            # Disabled auth is single-user local mode; treat that principal
+            # as the local administrator even if the persisted row predates
+            # this policy.
+            user_obj.is_superuser = True
+            return user_obj
 
         _cached_current_user_dependency = _current_user_fallback
 
