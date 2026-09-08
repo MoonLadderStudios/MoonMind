@@ -49,7 +49,7 @@ async def test_http_serves_while_bootstrap_waits_and_lifespan_owns_cleanup(
     assert match is not None
     monkeypatch.setenv("OMNIGENT_ENABLED", enabled_setting or match[1])
     monkeypatch.setenv("OMNIGENT_SERVER_URL", "http://unused.invalid")
-    monkeypatch.setattr(api_main.settings.oidc, "AUTH_PROVIDER", "keycloak")
+    monkeypatch.setattr(api_main.settings.oidc, "AUTH_PROVIDER", "oidc")
     monkeypatch.delattr(
         api_main.app.state, "omnigent_bootstrap_reconciliation_task", raising=False
     )
