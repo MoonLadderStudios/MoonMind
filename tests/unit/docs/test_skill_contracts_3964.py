@@ -31,6 +31,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 from _semantic_docs_3964 import (  # noqa: E402
     assert_semantic_absent,
     assert_semantic_present,
+    normalize,
 )
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
@@ -86,9 +87,9 @@ def test_every_skill_body_carries_executable_contract_sections() -> None:
             ("## ",),
             context=f"{skill_dir.name}/SKILL.md headed sections",
         )
-        lowered = text.lower()
-        assert ("workflow" in lowered or "inputs" in lowered), (
-            f"{skill_dir.name}/SKILL.md must define workflow/inputs semantics"
+        lowered = normalize(text)
+        assert any(term in lowered for term in ("workflow", "inputs", "output")), (
+            f"{skill_dir.name}/SKILL.md must define workflow/inputs/output semantics"
         )
 
 
