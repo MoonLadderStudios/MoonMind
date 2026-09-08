@@ -15,7 +15,7 @@ from moonmind.workflows.temporal.activity_runtime import TemporalAgentRuntimeAct
 from moonmind.workflows.temporal.container_job_backend import DockerContainerJobBackend
 from tests.integration.reliability.helpers import load_replay
 
-pytestmark = [pytest.mark.integration, pytest.mark.integration_ci, pytest.mark.asyncio]
+pytestmark = [pytest.mark.integration, pytest.mark.asyncio]
 
 
 @pytest.fixture
