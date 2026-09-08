@@ -94,6 +94,8 @@ Each non-success outcome records workflowId, current domain/Temporal close statu
 
 If that workflowId later completes, mark satisfied_after_rerun and remove it from unresolved dependencies. Once all are satisfied, the dependency gate clears.
 
+This requires completion under the declared workflowId. [Terminal RequestRerun](../Temporal/WorkflowRunHistoryAndNewRunSemantics.md#7-new-run-semantics) creates a new linked workflowId and leaves the source closed; dependency edges do not follow rerun lineage or retarget automatically. To require that destination, cancel and recreate the dependent with the returned ID under normal admission. Explicitly authorized bypass/skip remains a separate choice; a new destination's success cannot silently satisfy the old edge.
+
 The only supported exits without prerequisite success are dependent cancellation, BypassDependencies, or SkipDependencyWait under the appropriate operator authority. Standard workflow timeout remains applicable.
 
 Resolution ratchets: duplicate completed observations do nothing; duplicate failures with the same resolvedAt do not increment counts; a later stale failure cannot revert satisfied, satisfied_after_rerun, or bypassed state.

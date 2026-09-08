@@ -29,9 +29,11 @@ The public `/api/agent-runs` path comes from the `agent_runs` router's `prefix="
 | `POST` | `/api/executions` | Create/start a Temporal-backed execution. |
 | `GET` | `/api/executions` | List executions visible to the caller. |
 | `GET` | `/api/executions/{workflowId}` | Get execution detail. |
-| `POST` | `/api/executions/{workflowId}/update` | Apply an enabled in-place workflow update such as `UpdateInputs`, `SetTitle`, or `RequestRerun`. The deferred `SubmitChatInstruction` update is not an ordinary chat compatibility form. |
+| `POST` | `/api/executions/{workflowId}/update` | Apply an enabled workflow update such as `UpdateInputs` or `SetTitle`, or request `RequestRerun` through its active/terminal lifecycle path. The deferred `SubmitChatInstruction` update is not an ordinary chat compatibility form. |
 | `POST` | `/api/executions/{workflowId}/signal` | Send an asynchronous workflow signal such as pause, resume, or approve. |
 | `POST` | `/api/executions/{workflowId}/cancel` | Cancel or terminate an execution. |
+
+`RequestRerun` may Continue-As-New for a supported active workflow. A terminal source instead creates a fresh linked execution and remains closed. Follow the returned `execution.workflowId` and `execution.redirectPath`; the existing `applied = continue_as_new` value also covers terminal fresh starts. Replacement inputs require supported admission and cannot patch an immutable Omnigent plan. [Executions API Contract, section 12](../Api/ExecutionsApiContract.md#12-update-execution) owns the response and error details.
 
 ### 2.2 Auxiliary execution routes (`/api/executions`)
 

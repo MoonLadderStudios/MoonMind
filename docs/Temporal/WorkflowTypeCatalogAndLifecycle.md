@@ -315,10 +315,12 @@ Response:
 - `accepted: bool`
 - `message: string`
 
-Semantics:
+Semantics follow [Workflow Run History and New Run Semantics](WorkflowRunHistoryAndNewRunSemantics.md#7-new-run-semantics):
 
-- prefer Continue-As-New when the intent is “same durable execution identity, fresh orchestration state”
-- use a fresh Workflow ID only when product semantics explicitly call for a new execution identity
+- a supported active workflow may Continue-As-New, retaining Workflow ID and allocating a new Run ID; unsupported workflow types reject the control explicitly
+- terminal rerun is a service-owned fresh start with a new Workflow ID and Run ID linked to the pinned source; the closed source remains unchanged and receives no ordinary update
+- exact rerun preserves immutable source intent under current validation; edited inputs require a supported new admission, including a newly compiled plan when the source plan is immutable
+- the public API returns the actual destination execution; callers follow its identity and redirect rather than infer identity retention from the existing `applied = continue_as_new` wire value, which also covers terminal fresh starts; response fields and errors belong to [Executions API Contract, section 12](../Api/ExecutionsApiContract.md#12-update-execution)
 
 ## 6.2 Signals
 
@@ -756,9 +758,8 @@ This document is “done” when:
 
 1. Do we expose raw Workflow Type names directly in the UI, or map them to product-friendly labels?
 2. Does the detail page always point to the latest run, or should run history be first-class in the UI?
-3. For `RequestRerun`, when do we use Continue-As-New vs a brand-new Workflow ID?
-4. ~~Do we need `Pause/Resume` in v1?~~ Resolved: yes — `Pause`/`Resume` Updates are implemented per §6.2 (validator-guarded on `MoonMind.UserWorkflow` and `MoonMind.AgentRun`, unconditional on `MoonMind.ManifestIngest`).
-5. Should `mm_updated_at` track any state transition, progress updates, or both under a bounded policy?
+3. ~~Do we need `Pause/Resume` in v1?~~ Resolved: yes — `Pause`/`Resume` Updates are implemented per §6.2 (validator-guarded on `MoonMind.UserWorkflow` and `MoonMind.AgentRun`, unconditional on `MoonMind.ManifestIngest`).
+4. Should `mm_updated_at` track any state transition, progress updates, or both under a bounded policy?
 Product visibility is defined by each registration's `projection_scope` in
 `workflow_registry.py`. UserWorkflow and ManifestIngest are product executions.
 Managers, sessions, agent runs and control owners are operator-only; janitors,

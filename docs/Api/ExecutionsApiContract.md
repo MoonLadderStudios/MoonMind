@@ -316,13 +316,15 @@ Derived per-step publication disposition does not create a step-authoring overri
 
 UpdateInputs replaces/adds refs and patches admitted parameters. No-op updates can succeed. Executing/awaiting-external work may accept supported changes for the next safe point; major changes may require a newly admitted run through the lifecycle owner. SetTitle changes display metadata immediately and does not change execution authority.
 
-RequestRerun requests a clean re-execution from confirmed/replacement inputs. Supported lifecycle paths preserve workflowId and allocate a new runId. Terminal rerun availability is determined by the authoritative action/lifecycle contract, not an assumption that a closed Temporal run accepts an update. When unsupported or no longer allowed, the response is non-accepted rather than a queue fallback.
+RequestRerun requests a clean re-execution under the [run-history/rerun contract](../Temporal/WorkflowRunHistoryAndNewRunSemantics.md#7-new-run-semantics). A supported active workflow may Continue-As-New, retaining workflowId and allocating a new runId. For a terminal source, the service creates a fresh execution with a new workflowId and runId through normal admission, records the source workflow/run in `rerunSource`, and leaves the source closed. The same fresh-start path handles a source that closes before Temporal receives the update. Closed Temporal runs never process an ordinary rerun update.
+
+An exact rerun preserves the source's immutable inputs, Skill snapshot, and execution choices subject to current validation. Replacement refs or parameters are accepted only by a lifecycle path that supports the edited intent. An admitted Omnigent execution plan cannot be edited through this update: replacement inputs require a new execution through normal admission, and the update returns 409 `omnigent_execution_plan_replacement_required`. Unsupported active controls or invalid admission return an explicit non-accepted result or validation error; they do not fabricate a destination or use a queue fallback.
 
 ### Response and Idempotency
 
-The response includes required `accepted`, `applied = immediate | next_safe_point | continue_as_new`, and a human-readable message. A 200 response alone does not mean accepted. Older update idempotency retains only the most recent key/response and is not an arbitrary historical deduplication ledger.
+The response includes required `accepted`, `applied = immediate | next_safe_point | continue_as_new`, a human-readable message, and the materialized `execution`. Accepted reruns report `continueAsNewCause = manual_rerun`. The existing wire value `applied = continue_as_new` is also returned for a terminal fresh rerun; it does not prove that Temporal performed Continue-As-New or that workflowId was retained. Clients follow the returned `execution.workflowId`, `execution.runId`, and `execution.redirectPath` instead of continuing to poll the closed source. A 200 response alone does not mean accepted. Older update idempotency retains only the most recent key/response and is not an arbitrary historical deduplication ledger.
 
-A terminal/unsupported update returns 200 with accepted false, applied immediate, and an explanation. Missing/invisible targets use 404; invalid updates use 422 `invalid_update_request` or framework errors.
+Ordinary updates to terminal executions return 200 with accepted false, applied immediate, and an explanation. Terminal RequestRerun is the explicit fresh-start exception above. Missing/invisible targets use 404; invalid or unsupported updates use 422 `invalid_update_request` or framework errors, with the immutable-plan conflict using the 409 code above.
 
 ### Context and Policy Immutability
 
@@ -388,7 +390,7 @@ Replay and supported resets retain original bytes/digests and workflow command s
 
 The current projection row can materialize identifiers, lifecycle state, attributes/memo, artifact refs, pending updates, counters, and timestamps. Those implementation details do not replace Temporal history or authoritative artifacts.
 
-Continue-As-New/rerun uses stable workflowId with a new runId and refreshed lifecycle where supported. Projection/Visibility-backed list implementations preserve successful pages when bounded count enrichment fails. Current pagination/filter error naming is not a reason to change input authority or silently report empty work.
+Supported active Continue-As-New retains workflowId with a new runId. Terminal or explicit fresh reruns create a new linked workflowId/runId and preserve the source result; clients follow the returned destination as specified in section 12. Projection/Visibility-backed list implementations preserve successful pages when bounded count enrichment fails. Current pagination/filter error naming is not a reason to change input authority or silently report empty work.
 
 The new authoring/compiler rules require coordinated schemas, generated clients, preset/helper consumers, retired workspace-default readers, unified publication writers/validators, and compatible workers. This documentation-only specification does not implement or qualify that cutover.
 
