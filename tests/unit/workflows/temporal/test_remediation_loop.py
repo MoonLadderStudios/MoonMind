@@ -137,6 +137,40 @@ def test_evidence_retry_does_not_consume_or_create_semantic_attempt() -> None:
     assert decision.next_phase == RemediationLoopPhase.VERIFICATION_PENDING
 
 
+@pytest.mark.parametrize("verdict", ["ADDITIONAL_WORK_NEEDED", "NO_DETERMINATION"])
+@pytest.mark.parametrize("action", ["needs_human", "blocked"])
+def test_explicit_verifier_stop_overrides_remaining_retry_budget(verdict, action):
+    state = _state(attempts=1)
+    decision = decide_remediation_continuation(
+        spec=_spec(6),
+        state=state,
+        verdict=verdict,
+        gate_result_ref="artifact://gate/latest",
+        remaining_work_ref="artifact://remaining/latest",
+        recoverable_evidence=True,
+        recommended_next_action=action,
+    )
+    assert not decision.continue_loop
+    assert decision.next_phase == action
+    assert decision.next_attempt is None
+    assert decision.retry_kind is None
+    assert decision.workspace_head_ref == state.workspace_head_ref
+    assert decision.remaining_work_ref == "artifact://remaining/latest"
+
+
+@pytest.mark.parametrize("action", [None, "reattempt_current_step"])
+def test_missing_and_explicit_retry_actions_keep_default_remediation(action):
+    decision = decide_remediation_continuation(
+        spec=_spec(),
+        state=_state(attempts=0),
+        verdict="ADDITIONAL_WORK_NEEDED",
+        gate_result_ref="artifact://gate/latest",
+        recommended_next_action=action,
+    )
+    assert decision.continue_loop
+    assert decision.next_attempt == 1
+
+
 def test_acceptance_and_block_are_terminal_workflow_decisions() -> None:
     accepted = decide_remediation_continuation(
         spec=_spec(),

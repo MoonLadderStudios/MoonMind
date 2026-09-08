@@ -32,9 +32,16 @@ _VERDICT_SYNONYMS = {
 }
 
 
-def recommended_next_actions() -> tuple[str, ...]:
-    """Canonical ``recommendedNextAction`` vocabulary for gate payloads."""
-    return tuple(sorted(_RECOMMENDED_NEXT_ACTIONS))
+def recommended_next_actions(verdict: Any = None) -> tuple[str, ...]:
+    """Canonical actions, optionally restricted to a gate verdict."""
+    if verdict is None:
+        return tuple(sorted(_RECOMMENDED_NEXT_ACTIONS))
+    normalized = str(verdict or "").strip().upper()
+    normalized = _VERDICT_SYNONYMS.get(normalized, normalized)
+    if normalized in {"ADDITIONAL_WORK_NEEDED", "NO_DETERMINATION"}:
+        return ("blocked", "needs_human", "reattempt_current_step")
+    default_action = recommended_next_action_for_verdict(normalized)
+    return (default_action,) if default_action else ()
 
 
 def recommended_next_action_for_verdict(
@@ -42,7 +49,7 @@ def recommended_next_action_for_verdict(
     *,
     recoverable_in_current_runtime: bool = False,
 ) -> str | None:
-    """Return the runtime-owned next action for a canonical gate verdict."""
+    """Return the default next action for a canonical gate verdict."""
 
     normalized = str(verdict or "").strip().upper()
     normalized = _VERDICT_SYNONYMS.get(normalized, normalized)
@@ -61,7 +68,9 @@ def recommended_next_action_for_verdict(
     return None
 
 
-def step_gate_contract_violations(payload: Mapping[str, Any]) -> list[str]:
+def step_gate_contract_violations(
+    payload: Mapping[str, Any], *, validate_action_compatibility: bool = True
+) -> list[str]:
     """Return the contract violations that force a fail-closed downgrade.
 
     A non-empty result means ``parse_step_gate_result`` will mark the payload
@@ -100,6 +109,16 @@ def step_gate_contract_violations(payload: Mapping[str, Any]) -> list[str]:
                 violations.append(
                     f"recommendedNextAction {recommended_text!r} is not one of "
                     f"{sorted(_RECOMMENDED_NEXT_ACTIONS)}"
+                )
+            elif (
+                validate_action_compatibility
+                and raw_verdict
+                and normalized in REVIEW_VERDICTS
+                and recommended_text not in recommended_next_actions(normalized)
+            ):
+                violations.append(
+                    f"recommendedNextAction {recommended_text!r} is incompatible "
+                    f"with verdict {normalized}"
                 )
     return violations
 
@@ -365,7 +384,9 @@ def parse_review_verdict(payload: Mapping[str, Any]) -> ReviewVerdict:
     return parse_step_gate_result(payload).to_review_verdict()
 
 
-def parse_step_gate_result(payload: Mapping[str, Any]) -> StepGateResult:
+def parse_step_gate_result(
+    payload: Mapping[str, Any], *, validate_action_compatibility: bool = True
+) -> StepGateResult:
     """Normalize activity output into the canonical gate result contract."""
     declared_verdict = str(payload.get("verdict") or "").strip()
     verdict_raw = (declared_verdict or "INCONCLUSIVE").upper()
@@ -422,6 +443,10 @@ def parse_step_gate_result(payload: Mapping[str, Any]) -> StepGateResult:
     if recommended_next_action_value is not None and (
         not isinstance(recommended_next_action_value, str)
         or recommended_next_action not in _RECOMMENDED_NEXT_ACTIONS
+        or (
+            validate_action_compatibility
+            and recommended_next_action not in recommended_next_actions(verdict_raw)
+        )
     ):
         # Fail closed gracefully on an unrecognized recommended action instead
         # of raising a hard ContractValidationError from StepGateResult.
@@ -434,7 +459,9 @@ def parse_step_gate_result(payload: Mapping[str, Any]) -> StepGateResult:
         # malformed/degraded result that still says FULLY_IMPLEMENTED would
         # otherwise approve publication. Downgrade the verdict and force a
         # blocking action so the gate fails closed.
-        violations = step_gate_contract_violations(payload)
+        violations = step_gate_contract_violations(
+            payload, validate_action_compatibility=validate_action_compatibility
+        )
         detail = (
             "; ".join(violations)
             if violations
@@ -565,6 +592,12 @@ claim, or artifact reference without its content does not prove the work passed.
 Return NO_DETERMINATION when the required evidence is unavailable. Never invent
 artifact references or claim to have read content that was not supplied.
 
+Use advance only with FULLY_IMPLEMENTED, and blocked with BLOCKED or
+FAILED_UNRECOVERABLE. ADDITIONAL_WORK_NEEDED and NO_DETERMINATION allow
+reattempt_current_step, needs_human, or blocked. Explicit needs_human or blocked
+stops automatic retry; explain the required decision or unavailable authority.
+Contradictory verdict/action pairs fail contract validation.
+
 Respond with JSON:
 {{
   "verdict": "FULLY_IMPLEMENTED" | "ADDITIONAL_WORK_NEEDED" | "NO_DETERMINATION" | "BLOCKED" | "FAILED_UNRECOVERABLE",
@@ -671,6 +704,7 @@ def review_gate_retry_allowed(
     max_review_attempts: int,
     consecutive_no_progress_attempts: int,
     max_consecutive_no_progress_attempts: int,
+    honor_explicit_stop: bool = True,
 ) -> bool:
     normalized = str(getattr(verdict, "verdict", "") or "").strip().upper()
     if review_retry_count >= max_review_attempts:
@@ -680,6 +714,8 @@ def review_gate_retry_allowed(
     recommended_next_action = (
         str(getattr(verdict, "recommended_next_action", "") or "").strip().lower()
     )
+    if honor_explicit_stop and recommended_next_action in {"needs_human", "blocked"}:
+        return False
     if normalized == "ADDITIONAL_WORK_NEEDED":
         return recommended_next_action == "reattempt_current_step"
     return normalized == "NO_DETERMINATION" and bool(
@@ -702,8 +738,17 @@ def review_gate_verdict_made_progress(verdict: Any) -> bool:
     )
 
 
-def terminal_disposition_for_gate_stop(verdict: Any) -> str:
+def terminal_disposition_for_gate_stop(
+    verdict: Any, *, honor_explicit_stop: bool = True
+) -> str:
     normalized = str(getattr(verdict, "verdict", "") or "").strip().upper()
+    action = getattr(verdict, "recommended_next_action", None)
+    if (
+        honor_explicit_stop
+        and normalized in {"ADDITIONAL_WORK_NEEDED", "NO_DETERMINATION"}
+        and action in {"needs_human", "blocked"}
+    ):
+        return action
     if normalized == "BLOCKED":
         return "blocked"
     if normalized == "FAILED_UNRECOVERABLE":

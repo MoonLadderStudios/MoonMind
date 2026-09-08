@@ -31,7 +31,7 @@ def test_docs_only_change_does_not_select_heavy_backend_suites(
     outputs = _outputs([changed_path])
 
     assert outputs == {
-        "unit_fast": "false",
+        "unit_fast": "true",
         "unit_slow": "false",
         "api_component": "false",
         "temporal_boundary": "false",
@@ -425,7 +425,16 @@ def test_docs_only_change_never_selects_omnigent_gate() -> None:
     outputs = _outputs(["docs/Omnigent/Overview.md"])
 
     for key in OMNIGENT_CONTRACT_GATE_KEYS:
-        assert outputs[key] == "false", key
+        assert outputs[key] == ("true" if key == "unit_fast" else "false"), key
+
+
+def test_markdown_renamed_away_still_selects_unit_fast() -> None:
+    # compute_changed_files.sh reports both rename endpoints, so the removed
+    # Markdown target keeps selecting the fast shard that owns the link,
+    # metadata, and contract checks for unchanged callers.
+    outputs = _outputs(["docs/Guide.md", "docs/Guide.txt"])
+
+    assert outputs["unit_fast"] == "true"
 
 
 # --- Tier-1 exact deployable-artifact gate (MoonLadderStudios/MoonMind#3710) ---

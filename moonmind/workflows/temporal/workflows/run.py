@@ -71,6 +71,10 @@ with workflow.unsafe.imports_passed_through():
         is_jules_agent_runtime_node,
     )
     from moonmind.workflows.executions.routing import _coerce_bool
+    from moonmind.workflows.executions.preset_readiness import (
+        SAVED_PRESET_CAPABILITY_READINESS_PATCH,
+        saved_preset_capability_check,
+    )
     from moonmind.workflows.executions.prepared_context import (
         ExecutionContextBundle,
         branch_turn_step_execution_manifest_projection,
@@ -95,6 +99,7 @@ with workflow.unsafe.imports_passed_through():
         JIRA_BACKED_AGENT_SKILLS,
     )
     from moonmind.workflows.temporal.story_output_tools import (
+        ISSUE_BRIEF_LOADER_TOOL_NAMES,
         JIRA_CHECK_BLOCKERS_TOOL_NAME,
     )
     from moonmind.workflows.temporal.typed_execution import execute_typed_activity
@@ -617,6 +622,7 @@ RUN_ASSESSMENT_PARAMETER_INJECTION_PATCH = "run-assessment-parameter-injection-v
 RUN_ASSESSMENT_CONSUMER_HANDOFF_PATCH = "run-assessment-consumer-handoff-v1"
 RUN_ASSESSMENT_ATTACHMENT_HANDOFF_PATCH = "run-assessment-attachment-handoff-v1"
 RUN_ISSUE_BRIEF_ATTACHMENT_HANDOFF_PATCH = "run-issue-brief-attachment-handoff-v1"
+RUN_TRUSTED_ISSUE_BRIEF_AUTHORITY_PATCH = "run-trusted-issue-brief-authority-v1"
 RUN_MOONSPEC_VERIFY_ATTACHMENT_HANDOFF_PATCH = (
     "run-moonspec-verify-attachment-handoff-v1"
 )
@@ -853,6 +859,11 @@ RUN_INCIDENT_RECONSTRUCTION_PATCH = "run-incident-reconstruction-v1"
 RUN_PLAN_ROUTED_MOONSPEC_REMEDIATION_PATCH = "run-plan-routed-moonspec-remediation-v1"
 RUN_DYNAMIC_REMEDIATION_LOOP_CONTROLLER_PATCH = (
     "run-dynamic-remediation-loop-controller-v1"
+)
+# Preserve recorded continuation decisions while admitting new gates using the
+# resolved verifier's explicit stop action.
+RUN_VERIFIER_REMEDIATION_STOP_AUTHORITY_PATCH = (
+    "run-verifier-remediation-stop-authority-v1"
 )
 # The dynamic controller replaces its durable decision while processing the
 # current verifier result. Re-read the blocking projection after that update so
@@ -4482,6 +4493,7 @@ class MoonMindRunWorkflow:
         current_index: int | None = None,
         logical_step_id: str | None = None,
         recoverable_evidence: bool = False,
+        recommended_next_action: str | None = None,
         workspace_head: Mapping[str, Any] | None = None,
         headless_workspace_spec: Mapping[str, Any] | None = None,
     ) -> bool:
@@ -4595,6 +4607,11 @@ class MoonMindRunWorkflow:
             remaining_work_ref=remaining_work_ref,
             progress_ref=remaining_work_ref,
             recoverable_evidence=recoverable_evidence,
+            recommended_next_action=(
+                recommended_next_action
+                if workflow.patched(RUN_VERIFIER_REMEDIATION_STOP_AUTHORITY_PATCH)
+                else None
+            ),
         )
         decision_ref = await self._write_json_artifact(
             name=(
@@ -8168,7 +8185,7 @@ class MoonMindRunWorkflow:
         ordered_nodes: Sequence[Mapping[str, Any]],
         current_index: int,
     ) -> GateTransitionDecision:
-        """Keep verifier semantics advisory and make plan routing authoritative."""
+        """Route valid verifier evidence without overriding an explicit stop."""
         normalized = str(getattr(verdict, "verdict", "") or "").strip().upper()
         explicit_chain = False
         if 0 <= current_index < len(ordered_nodes):
@@ -8201,6 +8218,17 @@ class MoonMindRunWorkflow:
         if normalized == "FULLY_IMPLEMENTED":
             return GateTransitionDecision(
                 "accept", "exit_remediation_loop", "verification_passed"
+            )
+        next_action = getattr(verdict, "recommended_next_action", None)
+        if (
+            self._patched_or_false_outside_workflow(
+                RUN_VERIFIER_REMEDIATION_STOP_AUTHORITY_PATCH
+            )
+            and normalized in {"ADDITIONAL_WORK_NEEDED", "NO_DETERMINATION"}
+            and next_action in {"needs_human", "blocked"}
+        ):
+            return GateTransitionDecision(
+                "accept", "stop_at_control_gate", f"verification_requested_{next_action}"
             )
         if normalized == "ADDITIONAL_WORK_NEEDED":
             successor, reason = self._resolve_next_moonspec_remediation_step(
@@ -8425,7 +8453,14 @@ class MoonMindRunWorkflow:
                 if source.get(key):
                     payload = dict(source)
                     payload["verdict"] = source.get(key)
-                    return parse_step_gate_result(payload)
+                    return parse_step_gate_result(
+                        payload,
+                        validate_action_compatibility=(
+                            self._patched_or_false_outside_workflow(
+                                RUN_VERIFIER_REMEDIATION_STOP_AUTHORITY_PATCH
+                            )
+                        ),
+                    )
 
         return parse_step_gate_result({})
 
@@ -9038,6 +9073,13 @@ class MoonMindRunWorkflow:
             budget=budget,
             checkpoint_available=True,
             policy_allowed=True,
+            recommended_next_action=(
+                gate_result.recommended_next_action
+                if self._patched_or_false_outside_workflow(
+                    RUN_VERIFIER_REMEDIATION_STOP_AUTHORITY_PATCH
+                )
+                else None
+            ),
         )
         if (
             gate.verdict == "ADDITIONAL_WORK_NEEDED"
@@ -9304,6 +9346,18 @@ class MoonMindRunWorkflow:
                 "the bounded remediation budget was exhausted with remaining "
                 "implementation work"
             )
+            if (
+                self._patched_or_false_outside_workflow(
+                    RUN_VERIFIER_REMEDIATION_STOP_AUTHORITY_PATCH
+                )
+                and isinstance(gate_context, Mapping)
+                and gate_context.get("recommendedNextAction")
+                in {"needs_human", "blocked"}
+            ):
+                explanation = (
+                    "the verifier requested a stop before further automatic "
+                    "remediation with remaining implementation work"
+                )
         else:
             explanation = (
                 "the operator policy "
@@ -9786,6 +9840,7 @@ class MoonMindRunWorkflow:
         outputs: Mapping[str, Any],
         *,
         request: AgentExecutionRequest | None = None,
+        source_tool_name: str | None = None,
     ) -> None:
         record_aliases = self._patched_or_false_outside_workflow(
             RUN_JIRA_BLOCKER_RECHECK_ASSESSMENT_CONTEXT_ALIAS_PATCH
@@ -9795,6 +9850,16 @@ class MoonMindRunWorkflow:
             ("assessmentVerdict", "assessment_verdict"),
             ("briefArtifactRef", "brief_artifact_ref"),
         ):
+            if (
+                aliases[0] == "briefArtifactRef"
+                and self._patched_or_false_outside_workflow(
+                    RUN_TRUSTED_ISSUE_BRIEF_AUTHORITY_PATCH
+                )
+                and self._assessment_context.get("briefArtifactRef")
+                and source_tool_name not in ISSUE_BRIEF_LOADER_TOOL_NAMES
+            ):
+                # Agent-produced copies cannot replace the loader's source.
+                continue
             for key in aliases:
                 value = outputs.get(key)
                 if value in (None, "", {}, []):
@@ -9824,7 +9889,9 @@ class MoonMindRunWorkflow:
                 self._assessment_context.pop("assessedRepository", None)
                 self._assessment_context.pop("assessedBranch", None)
 
-    def _merge_assessment_context_into_result(self, execution_result: Any) -> Any:
+    def _merge_assessment_context_into_result(
+        self, execution_result: Any, *, source_tool_name: str | None = None
+    ) -> Any:
         if not self._assessment_context:
             return execution_result
         outputs = self._get_from_result(execution_result, "outputs")
@@ -9838,6 +9905,22 @@ class MoonMindRunWorkflow:
             ("assessmentVerdict", "assessment_verdict"),
             ("briefArtifactRef", "brief_artifact_ref"),
         ):
+            if (
+                aliases[0] == "briefArtifactRef"
+                and self._patched_or_false_outside_workflow(
+                    RUN_TRUSTED_ISSUE_BRIEF_AUTHORITY_PATCH
+                )
+                and self._assessment_context.get("briefArtifactRef")
+            ):
+                if source_tool_name in ISSUE_BRIEF_LOADER_TOOL_NAMES:
+                    # A new trusted load may select a different issue.
+                    continue
+                for alias in aliases:
+                    if alias == aliases[0] or alias in merged_outputs:
+                        value = self._assessment_context["briefArtifactRef"]
+                        changed = changed or merged_outputs.get(alias) != value
+                        merged_outputs[alias] = value
+                continue
             if any(
                 merged_outputs.get(alias) not in (None, "", {}, []) for alias in aliases
             ):
@@ -9880,7 +9963,14 @@ class MoonMindRunWorkflow:
         ):
             value = self._assessment_context.get(key)
             if value not in (None, "", {}, []):
-                merged.setdefault(key, value)
+                if key in {"briefArtifactRef", "brief_artifact_ref"} and (
+                    self._patched_or_false_outside_workflow(
+                        RUN_TRUSTED_ISSUE_BRIEF_AUTHORITY_PATCH
+                    )
+                ):
+                    merged[key] = value
+                else:
+                    merged.setdefault(key, value)
         if self._patched_or_false_outside_workflow(
             RUN_MOONSPEC_GATE_PREVIOUS_OUTPUTS_HANDOFF_PATCH
         ):
@@ -9898,6 +9988,18 @@ class MoonMindRunWorkflow:
                 if gate_result_ref:
                     merged["moonSpecVerifyArtifactRef"] = gate_result_ref
         if not self._trusted_issue_context:
+            return merged if merged != previous_outputs else previous_outputs
+        if self._patched_or_false_outside_workflow(
+            RUN_TRUSTED_ISSUE_BRIEF_AUTHORITY_PATCH
+        ):
+            # The context recorded from the dispatched loader owns source
+            # fields even when a later tool copies or spoofs trustedSource.
+            copied_source = self._trusted_previous_outputs_context(
+                {**merged, "trustedSource": self._trusted_issue_context["trustedSource"]}
+            )
+            for key in copied_source or {}:
+                merged.pop(key, None)
+            merged.update(self._trusted_issue_context)
             return merged if merged != previous_outputs else previous_outputs
         if self._trusted_previous_outputs_context(previous_outputs):
             return merged if merged != previous_outputs else previous_outputs
@@ -11418,6 +11520,55 @@ class MoonMindRunWorkflow:
         input_ref: Optional[str],
         plan_ref: Optional[str],
     ) -> Optional[str]:
+        # A new scheduled execution must validate its saved requirements even
+        # when it supplies a plan. Recorded histories and durable continuations
+        # keep their admitted inputs and already validated progress.
+        if (
+            workflow.patched(SAVED_PRESET_CAPABILITY_READINESS_PATCH)
+            and not getattr(workflow.info(), "continued_run_id", None)
+        ):
+            try:
+                check = saved_preset_capability_check(
+                    parameters, principal=self._owner_id or ""
+                )
+            except (ValueError, TypeError, AttributeError):
+                raise exceptions.ApplicationError(
+                    "Saved schedule preset provenance is invalid; review and "
+                    "reapply its presets before retrying.",
+                    type="saved_preset_capabilities_unavailable",
+                    non_retryable=True,
+                ) from None
+            if check is not None:
+                route = DEFAULT_ACTIVITY_CATALOG.resolve_activity(
+                    "plan.check_preset_capabilities"
+                )
+                readiness = await workflow.execute_activity(
+                    "plan.check_preset_capabilities",
+                    check.model_dump(),
+                    **self._execute_kwargs_for_route(route),
+                )
+                if (
+                    not isinstance(readiness, Mapping)
+                    or readiness.get("status") != "ready"
+                ):
+                    if (
+                        isinstance(readiness, Mapping)
+                        and readiness.get("status") == "refresh_required"
+                        and isinstance(readiness.get("message"), str)
+                        and readiness["message"].strip()
+                    ):
+                        raise exceptions.ApplicationError(
+                            str(readiness["message"]),
+                            dict(readiness),
+                            type="saved_preset_capabilities_stale",
+                            non_retryable=True,
+                        )
+                    raise exceptions.ApplicationError(
+                        "Saved schedule capability readiness is unavailable; inspect "
+                        "the schedule's preset definitions before retrying.",
+                        type="saved_preset_capabilities_unavailable",
+                        non_retryable=True,
+                    )
         if plan_ref:
             return plan_ref
 
@@ -13066,7 +13217,10 @@ class MoonMindRunWorkflow:
                         review_request.to_payload(),
                         cancellation_type=ActivityCancellationType.TRY_CANCEL,
                         **self._execute_kwargs_for_route(review_route),
-                    )
+                    ),
+                    validate_action_compatibility=workflow.patched(
+                        RUN_VERIFIER_REMEDIATION_STOP_AUTHORITY_PATCH
+                    ),
                 )
                 review_verdict = gate_result.to_review_verdict()
                 step_execution = self._step_execution_for(node_id) or 0
@@ -13215,6 +13369,9 @@ class MoonMindRunWorkflow:
                         max_consecutive_no_progress_attempts=(
                             max_consecutive_no_progress_attempts
                         ),
+                        honor_explicit_stop=workflow.patched(
+                            RUN_VERIFIER_REMEDIATION_STOP_AUTHORITY_PATCH
+                        ),
                     ):
                         review_retry_count += 1
                         previous_review_feedback = (
@@ -13224,6 +13381,15 @@ class MoonMindRunWorkflow:
                         previous_review_issues = tuple(review_verdict.issues)
                         current_review_attempt += 1
                         continue
+                    honor_explicit_stop = workflow.patched(
+                        RUN_VERIFIER_REMEDIATION_STOP_AUTHORITY_PATCH
+                    )
+                    terminal_disposition = terminal_disposition_for_gate_stop(
+                        review_verdict, honor_explicit_stop=honor_explicit_stop
+                    )
+                    terminal_status = (
+                        "blocked" if terminal_disposition == "blocked" else "failed"
+                    )
                     self._mark_step_terminal(
                         node_id,
                         status="failed",
@@ -13241,14 +13407,8 @@ class MoonMindRunWorkflow:
                         phase="terminal",
                         updated_at=workflow.now(),
                         reason=attempt_reason,
-                        status=(
-                            "blocked"
-                            if review_verdict.verdict == "BLOCKED"
-                            else "failed"
-                        ),
-                        terminal_disposition=terminal_disposition_for_gate_stop(
-                            review_verdict
-                        ),
+                        status=terminal_status,
+                        terminal_disposition=terminal_disposition,
                         budget=review_gate_budget_metadata(
                             max_review_attempts=max_review_attempts,
                             review_retry_count=review_retry_count,
@@ -13637,6 +13797,9 @@ class MoonMindRunWorkflow:
                             recoverable_evidence=(
                                 step_gate_result.recoverable_in_current_runtime
                             ),
+                            recommended_next_action=(
+                                step_gate_result.recommended_next_action
+                            ),
                             workspace_head=(
                                 outputs_for_gate.get("remediationWorkspaceHead")
                                 if isinstance(
@@ -13708,7 +13871,18 @@ class MoonMindRunWorkflow:
                             if isinstance(budget_payload, Mapping)
                             else None
                         )
-                        if isinstance(consumed_payload, Mapping) and int(
+                        if (
+                            workflow.patched(
+                                RUN_VERIFIER_REMEDIATION_STOP_AUTHORITY_PATCH
+                            )
+                            and continuation_decision.get("reason")
+                            in {
+                                "verification_requested_needs_human",
+                                "verification_requested_blocked",
+                            }
+                        ):
+                            transition_reason = continuation_decision["reason"]
+                        elif isinstance(consumed_payload, Mapping) and int(
                             consumed_payload.get("consecutiveNoProgressAttempts", 0)
                             or 0
                         ) >= int(
@@ -13839,6 +14013,13 @@ class MoonMindRunWorkflow:
                             ),
                         }
                         control_stop_summary = {
+                            "verification_requested_needs_human": (
+                                "Skipped because the verifier requires human input "
+                                "before further remediation."
+                            ),
+                            "verification_requested_blocked": (
+                                "Skipped because the verifier blocked further remediation."
+                            ),
                             "remediation_budget_exhausted": (
                                 "Skipped because remediation budget was exhausted "
                                 "after verification attempt "
@@ -13995,8 +14176,18 @@ class MoonMindRunWorkflow:
                 self._record_assessment_context(
                     outputs_for_story_output,
                     request=agent_request_for_context,
+                    source_tool_name=(
+                        tool_name if agent_request_for_context is None else None
+                    ),
                 )
-                self._record_trusted_issue_context(outputs_for_story_output)
+                if (
+                    not workflow.patched(RUN_TRUSTED_ISSUE_BRIEF_AUTHORITY_PATCH)
+                    or (
+                        agent_request_for_context is None
+                        and tool_name in ISSUE_BRIEF_LOADER_TOOL_NAMES
+                    )
+                ):
+                    self._record_trusted_issue_context(outputs_for_story_output)
                 previous_step_outputs = outputs_for_story_output
                 story_output_result = outputs_for_story_output.get("storyOutput")
                 if isinstance(story_output_result, Mapping):
@@ -15181,7 +15372,11 @@ class MoonMindRunWorkflow:
         if preserve_assessment_context:
             outputs = self._get_from_result(current_result, "outputs")
             if isinstance(outputs, Mapping):
-                self._record_assessment_context(outputs, request=agent_request)
+                self._record_assessment_context(
+                    outputs,
+                    request=agent_request,
+                    source_tool_name=tool_name if agent_request is None else None,
+                )
         while self._jira_blocker_waitable_result(
             current_result,
             tool_type=tool_type,
@@ -15350,11 +15545,16 @@ class MoonMindRunWorkflow:
                     break
             if preserve_assessment_context:
                 current_result = self._merge_assessment_context_into_result(
-                    current_result
+                    current_result,
+                    source_tool_name=tool_name if agent_request is None else None,
                 )
                 outputs = self._get_from_result(current_result, "outputs")
                 if isinstance(outputs, Mapping):
-                    self._record_assessment_context(outputs, request=agent_request)
+                    self._record_assessment_context(
+                        outputs,
+                        request=agent_request,
+                        source_tool_name=tool_name if agent_request is None else None,
+                    )
             self._record_step_result_evidence(
                 node_id,
                 execution_result=current_result,

@@ -7,6 +7,7 @@ import json
 import sys
 from pathlib import Path
 
+import pytest
 
 MODULE_PATH = (
     Path(__file__).resolve().parents[3] / "tools" / "check_documentation_architecture.py"
@@ -49,14 +50,18 @@ def test_document_class_marker_satisfies_check() -> None:
     assert mod.check_missing_document_class(docs) == []
 
 
-def test_inline_viewpoint_name_satisfies_document_class_check() -> None:
+def test_inline_viewpoint_name_does_not_satisfy_document_class_check() -> None:
+    # Body prose cannot satisfy a missing header: a canonical doc with no
+    # top-of-file Document Class field is flagged even when the body names a
+    # recognized viewpoint.
     docs = [
         _doc(
             "docs/NewThing.md",
             "# New Thing\n\nThis is a Cross-Cutting Concept View describing X.\n",
         )
     ]
-    assert mod.check_missing_document_class(docs) == []
+    findings = mod.check_missing_document_class(docs)
+    assert _rules(findings) == {"missing-document-class"}
 
 
 def test_non_canonical_dirs_are_exempt_from_document_class() -> None:
@@ -147,6 +152,24 @@ def test_documentation_architecture_standard_not_miscounted_as_system_view() -> 
         ),
     ]
     assert mod.check_duplicate_canonical_authority(docs) == []
+
+
+@pytest.mark.parametrize("filename", ["Overview.md", "ThingSystem.md", "ThingDesign.md"])
+def test_authority_comes_from_declaration_regardless_of_filename(filename) -> None:
+    """#3964: replacing prose must still detect a second declared system view."""
+    primary = _doc(
+        "docs/Architecture.md",
+        "# Primary\n**Document Class:** System Architecture View\n",
+    )
+    other = _doc(f"docs/Other/{filename}", "# Other\nOrdinary explanatory prose.\n")
+    assert mod.check_duplicate_canonical_authority([primary, other]) == []
+
+    conflicting = _doc(
+        other.path, other.text + "\n**Document Class:** System Architecture View\n"
+    )
+    assert _rules(mod.check_duplicate_canonical_authority([primary, conflicting])) == {
+        "duplicate-canonical-authority"
+    }
 
 
 def test_contract_without_authority_statement_flagged() -> None:
@@ -291,10 +314,10 @@ def test_focus_paths_reports_only_changed_doc_but_uses_full_context() -> None:
     # Global checks see the full canonical set (``docs``) while reporting is
     # scoped to the changed path via ``focus_paths``.
     changed = "docs/B/Overview.md"
-    cls = "\n\nThis is a Cross-Cutting Concept View describing X.\n"
+    header = "# Execution Model\n\n**Document Class:** Canonical declarative\n"
     docs = [
-        _doc("docs/A/Overview.md", f"# Execution Model{cls}"),
-        _doc(changed, f"# Execution Model{cls}"),
+        _doc("docs/A/Overview.md", f"{header}"),
+        _doc(changed, f"{header}"),
     ]
     findings = mod.run_checks(docs, focus_paths=[changed])
     assert _rules(findings) == {"duplicate-canonical-authority"}
@@ -357,6 +380,28 @@ def test_default_full_scan_is_non_blocking(capsys) -> None:
     rc = mod.main(["--scope", "all"])
     capsys.readouterr()
     assert rc == 0
+
+
+@pytest.mark.parametrize("scope_args", [[], ["--scope", "changed"]])
+def test_incremental_default_reports_changed_violations_without_retroactive_churn(
+    monkeypatch, capsys, scope_args
+) -> None:
+    """Exercise the CLI default, with independent invalid metadata/claim fixtures."""
+    docs = [
+        _doc("docs/Old.md", "# Old\nLegacy prose without metadata.\n"),
+        _doc("docs/New.md", "# New\n### DOC-REQ-1 Malformed claim\n"),
+    ]
+    monkeypatch.setattr(mod, "all_doc_paths", lambda: [d.path for d in docs])
+    monkeypatch.setattr(mod, "changed_doc_paths", lambda _base: ["docs/New.md"])
+    monkeypatch.setattr(mod, "load_docs", lambda _paths: docs)
+
+    assert mod.main(["--format", "json", *scope_args]) == 0
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["advisory_only"] is True
+    assert {f["path"] for f in payload["findings"]} == {"docs/New.md"}
+    assert {f["rule"] for f in payload["findings"]} == {
+        "missing-document-class", "malformed-claim-id"
+    }
 
 
 def test_strict_mode_returns_nonzero_when_findings_exist(capsys) -> None:

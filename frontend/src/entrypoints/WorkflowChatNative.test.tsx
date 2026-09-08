@@ -1,17 +1,20 @@
 /**
- * Tests for the native Omnigent Workflow Chat surface
- * (MoonLadderStudios/MoonMind#3638).
+ * Tests for the diagnostics fallback shell
+ * (MoonLadderStudios/MoonMind#3638 compatibility surface, #3641 terminal
+ * actions, simplified MoonLadderStudios/MoonMind#3956).
+ *
+ * The single interactive chat application is mounted by
+ * `WorkflowNativeChatRoute` (Chat tab); its live behavior — same-origin URL
+ * guards, readiness/timeout, retry, unavailable states — is covered by the
+ * `features/workflow-native-chat` suites. This suite pins the fallback shell:
+ * no fetch, no iframe, no second composer — only the read-only diagnostic
+ * projection plus terminal workflow actions.
  */
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { act, fireEvent, waitFor } from '@testing-library/react';
+import { fireEvent, waitFor } from '@testing-library/react';
 
 import { renderWithClient } from '../utils/test-utils';
-import {
-  WorkflowChatNative,
-  fullPageChatUrl,
-  type WorkflowChatBinding,
-} from './WorkflowChatNative';
-import { isNativeChatReadySignal, nativeChatFatalReason, NATIVE_CHAT_READY_TIMEOUT_MS } from '../features/workflow-native-chat/nativeChatProtocol';
+import { WorkflowChatNative } from './WorkflowChatNative';
 import {
   capturedEvidenceHref,
   type CapturedEvidence,
@@ -20,199 +23,6 @@ import {
 
 const API_BASE = '/api';
 const WORKFLOW_ID = 'mm:w1';
-const CHAT_URL = '/omnigent-ui/workflow-chat/chatb_opaque123?embedded=1';
-
-function bindingResponse(overrides: Partial<WorkflowChatBinding> = {}): WorkflowChatBinding {
-  return {
-    chatBindingId: 'chatb_opaque123',
-    workflowId: WORKFLOW_ID,
-    chatUrl: CHAT_URL,
-    apiBase: '/api/workflow-chat-bindings/chatb_opaque123/omnigent',
-    state: 'available',
-    readOnly: false,
-    capabilities: {},
-    ...overrides,
-  } as WorkflowChatBinding;
-}
-
-function mockFetch(body: WorkflowChatBinding | null, status = 200) {
-  vi.stubGlobal(
-    'fetch',
-    vi.fn(async () =>
-      ({
-        ok: status >= 200 && status < 300,
-        status,
-        json: async () => body,
-      }) as unknown as Response,
-    ),
-  );
-}
-
-afterEach(() => {
-  vi.unstubAllGlobals();
-  vi.restoreAllMocks();
-});
-
-describe('fullPageChatUrl', () => {
-  it('drops only the embedded flag from the scoped chat url', () => {
-    expect(fullPageChatUrl(CHAT_URL)).toBe(
-      '/omnigent-ui/workflow-chat/chatb_opaque123',
-    );
-  });
-
-  it('keeps other query parameters and never points at the upstream server', () => {
-    expect(
-      fullPageChatUrl('/omnigent-ui/workflow-chat/x?embedded=1&foo=bar'),
-    ).toBe('/omnigent-ui/workflow-chat/x?foo=bar');
-  });
-});
-
-describe('WorkflowChatNative', () => {
-  it('embeds the native app in an iframe using the scoped chatUrl', async () => {
-    mockFetch(bindingResponse());
-    const { getByTestId, queryByText } = renderWithClient(
-      <WorkflowChatNative apiBase={API_BASE} workflowId={WORKFLOW_ID} active>
-        <div>legacy projection</div>
-      </WorkflowChatNative>,
-    );
-
-    const frame = await waitFor(() => getByTestId('workflow-native-chat-frame'));
-    expect(frame.getAttribute('src')).toBe(CHAT_URL);
-    // The legacy projection is not rendered once native chat is available (no
-    // second composer competing with the native UI).
-    expect(queryByText('legacy projection')).toBeNull();
-  });
-
-  it('offers an Open in Omnigent full-page link on the same scoped binding', async () => {
-    mockFetch(bindingResponse());
-    const { getByTestId } = renderWithClient(
-      <WorkflowChatNative apiBase={API_BASE} workflowId={WORKFLOW_ID} active />,
-    );
-
-    const link = await waitFor(() => getByTestId('workflow-native-chat-open'));
-    expect(link.getAttribute('href')).toBe(
-      '/omnigent-ui/workflow-chat/chatb_opaque123',
-    );
-    expect(link.getAttribute('href')).not.toContain('embedded');
-  });
-
-  it('falls back to the legacy projection when no native binding exists', async () => {
-    mockFetch(null, 404);
-    const { findByText, queryByTestId } = renderWithClient(
-      <WorkflowChatNative apiBase={API_BASE} workflowId={WORKFLOW_ID} active>
-        <div>legacy projection</div>
-      </WorkflowChatNative>,
-    );
-
-    expect(await findByText('legacy projection')).toBeTruthy();
-    expect(queryByTestId('workflow-native-chat-frame')).toBeNull();
-  });
-
-  it('shows the unavailable reason, a Retry, and still renders the fallback', async () => {
-    mockFetch(
-      bindingResponse({ state: 'unavailable', unavailableReason: 'native_ui_upstream_unavailable', chatUrl: '' }),
-    );
-    const { findByTestId, findByText } = renderWithClient(
-      <WorkflowChatNative apiBase={API_BASE} workflowId={WORKFLOW_ID} active>
-        <div>legacy projection</div>
-      </WorkflowChatNative>,
-    );
-
-    expect(await findByTestId('workflow-native-chat-unavailable')).toBeTruthy();
-    // The unavailable state is retryable, so a stable Retry action is offered.
-    expect(await findByTestId('workflow-native-chat-retry')).toBeTruthy();
-    expect(await findByText('legacy projection')).toBeTruthy();
-  });
-
-  it('surfaces a stable reason and Retry when the binding request is unreachable', async () => {
-    // A non-404 error makes fetchWorkflowChatBinding throw, so the query errors.
-    mockFetch(null, 500);
-    const { findByTestId, findByText } = renderWithClient(
-      <WorkflowChatNative apiBase={API_BASE} workflowId={WORKFLOW_ID} active>
-        <div>legacy projection</div>
-      </WorkflowChatNative>,
-    );
-
-    const unavailable = await findByTestId('workflow-native-chat-unavailable');
-    expect(unavailable.textContent).toContain('native_chat_binding_unreachable');
-    expect(await findByTestId('workflow-native-chat-retry')).toBeTruthy();
-    // Native failure still shows the read-only fallback rather than swapping in a
-    // behaviorally different interactive chat.
-    expect(await findByText('legacy projection')).toBeTruthy();
-  });
-
-  it('offers Retry while the native session is still starting', async () => {
-    mockFetch(bindingResponse({ state: 'starting', chatUrl: '' }));
-    const { findByTestId } = renderWithClient(
-      <WorkflowChatNative apiBase={API_BASE} workflowId={WORKFLOW_ID} active />,
-    );
-
-    const unavailable = await findByTestId('workflow-native-chat-unavailable');
-    expect(unavailable.textContent).toContain('native_chat_session_starting');
-    expect(await findByTestId('workflow-native-chat-retry')).toBeTruthy();
-  });
-
-  it('does not offer Retry for a runtime that never had a native binding', async () => {
-    mockFetch(null, 404);
-    const { findByText, queryByTestId } = renderWithClient(
-      <WorkflowChatNative apiBase={API_BASE} workflowId={WORKFLOW_ID} active>
-        <div>legacy projection</div>
-      </WorkflowChatNative>,
-    );
-
-    // A clean 404 is a stable historical state: no unavailable banner, no Retry,
-    // just the read-only fallback projection.
-    expect(await findByText('legacy projection')).toBeTruthy();
-    expect(queryByTestId('workflow-native-chat-unavailable')).toBeNull();
-    expect(queryByTestId('workflow-native-chat-retry')).toBeNull();
-  });
-
-  it('refetches the binding and mounts native chat when Retry succeeds', async () => {
-    const fetchMock = vi
-      .fn()
-      // First attempt: upstream not reachable yet.
-      .mockResolvedValueOnce({ ok: false, status: 500, json: async () => null } as unknown as Response)
-      // Retry: the native binding is now available.
-      .mockResolvedValue({ ok: true, status: 200, json: async () => bindingResponse() } as unknown as Response);
-    vi.stubGlobal('fetch', fetchMock);
-
-    const { findByTestId } = renderWithClient(
-      <WorkflowChatNative apiBase={API_BASE} workflowId={WORKFLOW_ID} active>
-        <div>legacy projection</div>
-      </WorkflowChatNative>,
-    );
-
-    const retry = await findByTestId('workflow-native-chat-retry');
-    fireEvent.click(retry);
-
-    const frame = await findByTestId('workflow-native-chat-frame');
-    expect(frame.getAttribute('src')).toBe(CHAT_URL);
-  });
-
-  it('does not fetch while the chat tab is inactive', () => {
-    const fetchMock = vi.fn();
-    vi.stubGlobal('fetch', fetchMock);
-    renderWithClient(
-      <WorkflowChatNative apiBase={API_BASE} workflowId={WORKFLOW_ID} active={false}>
-        <div>legacy projection</div>
-      </WorkflowChatNative>,
-    );
-
-    expect(fetchMock).not.toHaveBeenCalled();
-  });
-
-  it('does not show terminal actions for a non-terminal workflow even when read-only', async () => {
-    // A binding can be read-only while its workflow is still live; terminal
-    // actions are gated on the workflow being terminal, not on write capability.
-    mockFetch(bindingResponse({ readOnly: true }));
-    const { getByTestId, queryByTestId } = renderWithClient(
-      <WorkflowChatNative apiBase={API_BASE} workflowId={WORKFLOW_ID} active terminal={false} />,
-    );
-    await waitFor(() => getByTestId('workflow-native-chat-frame'));
-    expect(queryByTestId('workflow-native-chat-continue')).toBeNull();
-    expect(queryByTestId('workflow-native-chat-evidence-toggle')).toBeNull();
-  });
-});
 
 const EVIDENCE: CapturedEvidence = {
   workflowId: WORKFLOW_ID,
@@ -233,7 +43,6 @@ const CONTINUE_RESULT: ContinueInNewWorkflowResult = {
 };
 
 function mockFetchByUrl(handlers: {
-  binding: WorkflowChatBinding;
   evidence?: CapturedEvidence;
   continue?: ContinueInNewWorkflowResult;
 }) {
@@ -245,11 +54,64 @@ function mockFetchByUrl(handlers: {
     if (url.includes('/continue')) {
       return { ok: true, status: 201, json: async () => handlers.continue } as unknown as Response;
     }
-    return { ok: true, status: 200, json: async () => handlers.binding } as unknown as Response;
+    throw new Error(`unexpected fetch in fallback shell: ${url}`);
   });
   vi.stubGlobal('fetch', fetchMock);
   return fetchMock;
 }
+
+afterEach(() => {
+  vi.unstubAllGlobals();
+  vi.restoreAllMocks();
+});
+
+describe('WorkflowChatNative fallback shell (#3956)', () => {
+  it('renders the read-only diagnostic projection without fetching or mounting a frame', () => {
+    const fetchMock = vi.fn();
+    vi.stubGlobal('fetch', fetchMock);
+    const { getByText, queryByTestId } = renderWithClient(
+      <WorkflowChatNative apiBase={API_BASE} workflowId={WORKFLOW_ID}>
+        <div>legacy projection</div>
+      </WorkflowChatNative>,
+    );
+
+    expect(getByText('legacy projection')).toBeTruthy();
+    expect(fetchMock).not.toHaveBeenCalled();
+    // No live native surface here: the Chat tab owns the single iframe.
+    expect(queryByTestId('workflow-native-chat-frame')).toBeNull();
+    expect(queryByTestId('workflow-native-chat-open')).toBeNull();
+    expect(queryByTestId('workflow-native-chat-unavailable')).toBeNull();
+  });
+
+  it('does not show terminal actions for a non-terminal workflow', () => {
+    const { queryByTestId } = renderWithClient(
+      <WorkflowChatNative apiBase={API_BASE} workflowId={WORKFLOW_ID} terminal={false} />,
+    );
+    expect(queryByTestId('workflow-native-chat-continue')).toBeNull();
+    expect(queryByTestId('workflow-native-chat-evidence-toggle')).toBeNull();
+  });
+
+  it('shows View captured evidence and Continue for a terminal workflow', async () => {
+    mockFetchByUrl({});
+    const { getByTestId } = renderWithClient(
+      <WorkflowChatNative apiBase={API_BASE} workflowId={WORKFLOW_ID} terminal />,
+    );
+    expect(getByTestId('workflow-native-chat-evidence-toggle')).toBeTruthy();
+    expect(getByTestId('workflow-native-chat-continue')).toBeTruthy();
+  });
+
+  it('keeps terminal actions alongside the diagnostic projection', async () => {
+    mockFetchByUrl({});
+    const { getByTestId, getByText } = renderWithClient(
+      <WorkflowChatNative apiBase={API_BASE} workflowId={WORKFLOW_ID} terminal>
+        <div>legacy projection</div>
+      </WorkflowChatNative>,
+    );
+    expect(getByText('legacy projection')).toBeTruthy();
+    expect(getByTestId('workflow-native-chat-evidence-toggle')).toBeTruthy();
+    expect(getByTestId('workflow-native-chat-continue')).toBeTruthy();
+  });
+});
 
 describe('capturedEvidenceHref', () => {
   it('routes a plain ref through the workflow-scoped evidence download endpoint', () => {
@@ -259,8 +121,6 @@ describe('capturedEvidenceHref', () => {
   });
 
   it('carries an Omnigent gateway ref (scheme + slashes) intact as a query param', () => {
-    // The generic /artifacts/{id}/download route cannot serve these; the ref is
-    // encoded so its scheme and nested path survive to the gateway-aware route.
     expect(
       capturedEvidenceHref('/api', WORKFLOW_ID, 'artifact://omnigent/corr-1/final.json'),
     ).toBe(
@@ -276,44 +136,11 @@ describe('capturedEvidenceHref', () => {
 });
 
 describe('WorkflowChatNative terminal actions (#3641)', () => {
-  it('shows View captured evidence and Continue for a terminal workflow', async () => {
-    mockFetchByUrl({ binding: bindingResponse({ state: 'ended', readOnly: true }) });
-    const { getByTestId } = renderWithClient(
-      <WorkflowChatNative apiBase={API_BASE} workflowId={WORKFLOW_ID} active terminal />,
-    );
-    await waitFor(() => getByTestId('workflow-native-chat-frame'));
-    expect(getByTestId('workflow-native-chat-evidence-toggle')).toBeTruthy();
-    expect(getByTestId('workflow-native-chat-continue')).toBeTruthy();
-  });
-
-  it('keeps terminal workflow actions available when the native iframe is unavailable', async () => {
-    // Terminal binding returned as state='unavailable' (native UI disabled / upstream
-    // unavailable): the workflow-level actions must still render in the fallback.
-    mockFetchByUrl({
-      binding: bindingResponse({
-        state: 'unavailable',
-        unavailableReason: 'native_ui_serving_disabled',
-        chatUrl: '',
-      }),
-    });
-    const { getByTestId, queryByTestId } = renderWithClient(
-      <WorkflowChatNative apiBase={API_BASE} workflowId={WORKFLOW_ID} active terminal>
-        <div>legacy projection</div>
-      </WorkflowChatNative>,
-    );
-    await waitFor(() => getByTestId('workflow-native-chat-unavailable'));
-    expect(getByTestId('workflow-native-chat-evidence-toggle')).toBeTruthy();
-    expect(getByTestId('workflow-native-chat-continue')).toBeTruthy();
-    // No live iframe in the fallback.
-    expect(queryByTestId('workflow-native-chat-frame')).toBeNull();
-  });
-
   it('opens captured evidence as authorized MoonMind download links', async () => {
-    mockFetchByUrl({ binding: bindingResponse({ state: 'ended', readOnly: true }), evidence: EVIDENCE });
+    mockFetchByUrl({ evidence: EVIDENCE });
     const { getByTestId, findAllByTestId } = renderWithClient(
-      <WorkflowChatNative apiBase={API_BASE} workflowId={WORKFLOW_ID} active terminal />,
+      <WorkflowChatNative apiBase={API_BASE} workflowId={WORKFLOW_ID} terminal />,
     );
-    await waitFor(() => getByTestId('workflow-native-chat-evidence-toggle'));
 
     fireEvent.click(getByTestId('workflow-native-chat-evidence-toggle'));
     const links = await findAllByTestId('workflow-native-chat-evidence-link');
@@ -327,29 +154,21 @@ describe('WorkflowChatNative terminal actions (#3641)', () => {
   });
 
   it('requires authored intent before launching a continuation', async () => {
-    const fetchMock = mockFetchByUrl({
-      binding: bindingResponse({ state: 'ended', readOnly: true }),
-      continue: CONTINUE_RESULT,
-    });
+    const fetchMock = mockFetchByUrl({ continue: CONTINUE_RESULT });
     const { getByTestId } = renderWithClient(
-      <WorkflowChatNative apiBase={API_BASE} workflowId={WORKFLOW_ID} active terminal />,
+      <WorkflowChatNative apiBase={API_BASE} workflowId={WORKFLOW_ID} terminal />,
     );
-    await waitFor(() => getByTestId('workflow-native-chat-continue'));
 
-    // Opening the action reveals an authoring form; it does not launch anything.
     fireEvent.click(getByTestId('workflow-native-chat-continue'));
     const submit = getByTestId('workflow-native-chat-continue-submit') as HTMLButtonElement;
-    // Submit is disabled until new instructions are authored (no accidental rerun).
     expect(submit.disabled).toBe(true);
     expect(
       fetchMock.mock.calls.some((call) => String(call[0]).includes('/continue')),
     ).toBe(false);
   });
 
-  it('continues into the linked workflow with authored intent and navigates to it', async () => {    const fetchMock = mockFetchByUrl({
-      binding: bindingResponse({ state: 'ended', readOnly: true }),
-      continue: CONTINUE_RESULT,
-    });
+  it('continues into the linked workflow with authored intent and navigates to it', async () => {
+    const fetchMock = mockFetchByUrl({ continue: CONTINUE_RESULT });
     const assign = vi.fn();
     Object.defineProperty(window, 'location', {
       configurable: true,
@@ -357,9 +176,8 @@ describe('WorkflowChatNative terminal actions (#3641)', () => {
     });
 
     const { getByTestId } = renderWithClient(
-      <WorkflowChatNative apiBase={API_BASE} workflowId={WORKFLOW_ID} active terminal />,
+      <WorkflowChatNative apiBase={API_BASE} workflowId={WORKFLOW_ID} terminal />,
     );
-    await waitFor(() => getByTestId('workflow-native-chat-continue'));
 
     fireEvent.click(getByTestId('workflow-native-chat-continue'));
     fireEvent.change(getByTestId('workflow-native-chat-continue-instructions'), {
@@ -379,185 +197,9 @@ describe('WorkflowChatNative terminal actions (#3641)', () => {
     expect(String(continueCall?.[0])).toContain(
       `/executions/${encodeURIComponent(WORKFLOW_ID)}/continue`,
     );
-    // The continuation is a POST Workflow action carrying the authored intent,
-    // not a native composer message.
     expect(continueCall?.[1]?.method).toBe('POST');
     const body = JSON.parse(String(continueCall?.[1]?.body));
     expect(body.instructions).toBe('Do the follow-up work');
     expect(typeof body.idempotencyKey).toBe('string');
-  });
-});
-
-describe('native chat signal validation (#4013 AC7/PLAN5)', () => {
-  it('accepts only the ready shape for the current binding', () => {
-    expect(
-      isNativeChatReadySignal(
-        { type: 'moonmind.omnigent.chat.ready', chatBindingId: 'chatb_opaque123' },
-        'chatb_opaque123',
-      ),
-    ).toBe(true);
-    expect(
-      isNativeChatReadySignal(
-        { type: 'moonmind.omnigent.chat.ready', chatBindingId: 'chatb_other' },
-        'chatb_opaque123',
-      ),
-    ).toBe(false);
-    expect(
-      isNativeChatReadySignal({ type: 'something-else', chatBindingId: 'chatb_opaque123' }, 'chatb_opaque123'),
-    ).toBe(false);
-    expect(isNativeChatReadySignal(null, 'chatb_opaque123')).toBe(false);
-  });
-
-  it('extracts a bounded fatal reason only for the current binding', () => {
-    expect(
-      nativeChatFatalReason(
-        { type: 'moonmind.omnigent.chat.fatal', chatBindingId: 'chatb_opaque123', reason: 'native_crash' },
-        'chatb_opaque123',
-      ),
-    ).toBe('native_crash');
-    expect(
-      nativeChatFatalReason(
-        { type: 'moonmind.omnigent.chat.fatal', chatBindingId: 'chatb_other', reason: 'native_crash' },
-        'chatb_opaque123',
-      ),
-    ).toBeNull();
-    expect(
-      nativeChatFatalReason(
-        { type: 'moonmind.omnigent.chat.ready', chatBindingId: 'chatb_opaque123' },
-        'chatb_opaque123',
-      ),
-    ).toBeNull();
-  });
-});
-
-describe('WorkflowChatNative readiness containment (#4013 AC7/AC8)', () => {
-  afterEach(() => {
-    vi.useRealTimers();
-  });
-
-  function postToChat(data: unknown, origin?: string) {
-    window.dispatchEvent(
-      new MessageEvent('message', {
-        data,
-        origin: origin ?? window.location.origin,
-        source: document.querySelector<HTMLIFrameElement>('[data-testid="workflow-native-chat-frame"]')?.contentWindow ?? null,
-      }),
-    );
-  }
-
-  // Fake timers must be armed before render so the readiness deadline itself
-  // runs on the fake clock; async RTL queries would deadlock on fake timers,
-  // so initial readiness is flushed with virtual time + sync queries instead.
-  async function renderLiveFrame(children?: React.ReactNode, terminal = false) {
-    vi.useFakeTimers();
-    const utils = renderWithClient(
-      <WorkflowChatNative apiBase={API_BASE} workflowId={WORKFLOW_ID} active terminal={terminal}>
-        {children}
-      </WorkflowChatNative>,
-    );
-    await act(async () => {
-      await vi.advanceTimersByTimeAsync(1000);
-    });
-    utils.getByTestId('workflow-native-chat-frame');
-    return utils;
-  }
-
-  async function advance(ms: number) {
-    await act(async () => {
-      await vi.advanceTimersByTimeAsync(ms);
-    });
-  }
-
-  it('shows a bounded timeout with Retry and the read-only fallback when ready never arrives', async () => {
-    mockFetch(bindingResponse());
-    const { getByTestId, getByText, queryByTestId } = await renderLiveFrame(
-      <div>legacy projection</div>,
-    );
-
-    expect(queryByTestId('workflow-native-chat-timeout')).toBeNull();
-
-    await advance(NATIVE_CHAT_READY_TIMEOUT_MS + 1);
-
-    expect(getByTestId('workflow-native-chat-timeout')).toBeTruthy();
-    expect(getByTestId('workflow-native-chat-retry')).toBeTruthy();
-    // The iframe and the transcript fallback stay reachable (AC8).
-    expect(getByTestId('workflow-native-chat-frame')).toBeTruthy();
-    expect(getByText('legacy projection')).toBeTruthy();
-  });
-
-  it('a valid ready signal suppresses the timeout', async () => {
-    mockFetch(bindingResponse());
-    const { queryByTestId } = await renderLiveFrame();
-
-    await act(async () => {
-      postToChat({ type: 'moonmind.omnigent.chat.ready', chatBindingId: 'chatb_opaque123' });
-    });
-    await advance(NATIVE_CHAT_READY_TIMEOUT_MS + 1);
-
-    expect(queryByTestId('workflow-native-chat-timeout')).toBeNull();
-    expect(queryByTestId('workflow-native-chat-fatal')).toBeNull();
-    expect(queryByTestId('workflow-native-chat-frame')).not.toBeNull();
-  });
-
-  it('ignores ready signals from another origin or another binding', async () => {
-    mockFetch(bindingResponse());
-    const { getByTestId } = await renderLiveFrame(<div>legacy projection</div>);
-
-    await act(async () => {
-      postToChat(
-        { type: 'moonmind.omnigent.chat.ready', chatBindingId: 'chatb_opaque123' },
-        'https://evil.test',
-      );
-      postToChat({ type: 'moonmind.omnigent.chat.ready', chatBindingId: 'chatb_other' });
-    });
-    await advance(NATIVE_CHAT_READY_TIMEOUT_MS + 1);
-
-    expect(getByTestId('workflow-native-chat-timeout')).toBeTruthy();
-  });
-
-  it('a fatal signal shows the failure surface with Retry and the fallback', async () => {
-    mockFetch(bindingResponse());
-    const { getByTestId, getByText } = await renderLiveFrame(<div>legacy projection</div>);
-
-    await act(async () => {
-      postToChat({
-        type: 'moonmind.omnigent.chat.fatal',
-        chatBindingId: 'chatb_opaque123',
-        reason: 'native_crash',
-      });
-    });
-
-    const fatal = getByTestId('workflow-native-chat-fatal');
-    expect(fatal.textContent).toContain('native_crash');
-    expect(getByTestId('workflow-native-chat-retry')).toBeTruthy();
-    expect(getByText('legacy projection')).toBeTruthy();
-  });
-
-  it('Retry after a timeout remounts the frame and waits again', async () => {
-    mockFetch(bindingResponse());
-    const { getByTestId, queryByTestId } = await renderLiveFrame();
-
-    await advance(NATIVE_CHAT_READY_TIMEOUT_MS + 1);
-    expect(getByTestId('workflow-native-chat-timeout')).toBeTruthy();
-
-    fireEvent.click(getByTestId('workflow-native-chat-retry'));
-    // The retry clears the timeout banner and rearms the deadline.
-    expect(queryByTestId('workflow-native-chat-timeout')).toBeNull();
-    expect(getByTestId('workflow-native-chat-frame')).toBeTruthy();
-
-    await advance(NATIVE_CHAT_READY_TIMEOUT_MS + 1);
-    expect(getByTestId('workflow-native-chat-timeout')).toBeTruthy();
-  });
-
-  it('keeps terminal workflow actions available while the native frame times out', async () => {
-    mockFetchByUrl({ binding: bindingResponse({ state: 'ended', readOnly: true }) });
-    const { getByTestId } = await renderLiveFrame(undefined, true);
-
-    await advance(NATIVE_CHAT_READY_TIMEOUT_MS + 1);
-
-    expect(getByTestId('workflow-native-chat-timeout')).toBeTruthy();
-    // Terminal evidence and continuation survive the native failure (AC8).
-    expect(getByTestId('workflow-native-chat-evidence-toggle')).toBeTruthy();
-    expect(getByTestId('workflow-native-chat-continue')).toBeTruthy();
   });
 });

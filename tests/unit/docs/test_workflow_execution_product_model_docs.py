@@ -1,6 +1,6 @@
+import sys
 from pathlib import Path
 
-import sys
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
@@ -43,11 +43,8 @@ def test_workflow_type_catalog_uses_workflow_native_user_workflow_language() -> 
     text = _read(TYPE_CATALOG)
 
     assert "`MoonMind.UserWorkflow`" in text
-    assert_semantic_present(
-        text,
-        ("user-submitted, step-ledger-owning workflow execution",),
-        context="type catalog user-workflow language",
-    )
+    # Product identity is a machine token. The description is editorial;
+    # ownership/routing is covered by test_temporal_claims_reconciliation_3960.
     assert "standard task execution" not in text
     assert "public APIs and UI flows may still use `task` terminology" not in text
 

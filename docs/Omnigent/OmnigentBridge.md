@@ -255,6 +255,8 @@ For every HTML/bootstrap, HTTP, SSE, WebSocket, resource, message, approval, ter
 
 The full-page **Open in Omnigent** experience uses this same scoped facade. It must not navigate directly to an upstream server and bypass MoonMind authority.
 
+The additional native HTTP surface admits only fields reviewed against the pinned server and runner entrypoints. Unknown body or query fields, duplicate keys, unreviewed media types and incompatible operation shapes are rejected before mutation claims or upstream I/O. Multipart uploads contain exactly one `file` part. Terminal creation admits declared terminal identity and session key; browser input cannot inject bootstrap flags, runtime specifications, workspace roots or sandbox overrides. MoonMind compare-and-set inputs are consumed locally and excluded from upstream requests. A route without a verified upstream counterpart is not served; recognized internal browser actions remain closed until their field and ownership contracts are reviewed.
+
 #### Versioned native-UI compatibility map (MoonLadderStudios/MoonMind#3635)
 
 The native UI is more than an HTTP transcript: it opens WebSockets and drives terminal/PTY, execution-log, browser-pane, sub-agent/task, and reconnect/wake surfaces. Transport and route coverage for that surface is a single **versioned compatibility map** pinned to the `omnigent.server.v1` profile (`moonmind/omnigent/native_ui_compat.py`). Each recognized route/transport declares one of two dispositions:
@@ -505,7 +507,7 @@ omnigent_bridge_sessions
 
 `chat_binding_id` is an opaque authorization lookup key, not a bearer capability. The provider session id and upstream endpoint remain server-side. Caller permissions and effective capabilities are recomputed per request rather than trusted from mutable browser state.
 
-`omnigent_bridge_sessions` is the single canonical Omnigent session and idempotency store. It supersedes the removed `omnigent_external_runs` mapping without a parallel table or compatibility wrapper.
+`omnigent_bridge_sessions` is the canonical bridge binding and idempotency store within the bridge scope. It supersedes the removed `omnigent_external_runs` mapping without a parallel table or compatibility wrapper. Canonical session authority lives in `omnigent_sessions` and its control-plane repositories and turn commands; bridge rows retain attempt identity, evidence, and compatibility consumers.
 
 The coarse session `status` preserves `declared`, `creating`, `active`, `completed`, `failed`, `canceled`, and `timed_out`. Full non-lossy provider state remains per event.
 
@@ -1087,7 +1089,7 @@ Bridge code lives in the existing `moonmind/omnigent/` package. A parallel packa
 | Component | Owning module | Notes |
 |---|---|---|
 | Bridge configuration | `moonmind/omnigent/bridge_config.py` | Parses §6. |
-| Bridge Session Store | `moonmind/omnigent/bridge_store.py` | Canonical binding/idempotency store. |
+| Bridge Session Store | `moonmind/omnigent/bridge_store.py` | Canonical bridge binding/idempotency store; canonical session authority lives in the control-plane session repositories. |
 | Bridge schemas | `moonmind/schemas/omnigent_bridge_models.py` | Session/event/config/binding models. |
 | Durable ORM/migration | `api_service/db/models.py` plus migrations | §7 persistence. |
 | Session and Workflow Chat facades | `api_service/api/routers/omnigent_bridge.py`, `moonmind/omnigent/bridge_proxy.py` | Provider compatibility plus binding-scoped native UI/API. |

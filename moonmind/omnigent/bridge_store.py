@@ -504,7 +504,12 @@ class OmnigentBridgeSessionStore:
         )
 
     async def list_embedded_host_readiness(self) -> list[dict[str, Any]]:
-        """Return bounded, non-secret readiness for active embedded host leases."""
+        """Return bounded, non-secret readiness for active embedded host leases.
+
+        The list is payload-capped at 250 rows: drain reporting must use
+        :meth:`count_active_embedded_host_leases` for the uncapped total,
+        never ``len()`` of this list.
+        """
         from api_service.db.models import OmnigentOAuthHostLeaseRecord
 
         now = datetime.now(tz=UTC)
@@ -534,6 +539,30 @@ class OmnigentBridgeSessionStore:
                 }
                 for row in result.scalars().all()
             ]
+
+    async def count_active_embedded_host_leases(self) -> int:
+        """Return the uncapped total of active embedded host leases.
+
+        MoonLadderStudios/MoonMind#3955: the bounded readiness list above is
+        capped for payload safety, so drain reporting derives its blocker
+        count from this aggregate instead of ``len(leases)``.
+        """
+        from api_service.db.models import OmnigentOAuthHostLeaseRecord
+
+        now = datetime.now(tz=UTC)
+        async with self._session_factory() as session:
+            result = await session.execute(
+                select(func.count())
+                .select_from(OmnigentOAuthHostLeaseRecord)
+                .where(
+                    OmnigentOAuthHostLeaseRecord.status.in_(
+                        {"starting", "ready", "assigned", "draining"}
+                    ),
+                    OmnigentOAuthHostLeaseRecord.expires_at > now,
+                    OmnigentOAuthHostLeaseRecord.omnigent_host_id.is_not(None),
+                )
+            )
+            return int(result.scalar_one())
 
     async def record_embedded_host_lifecycle(
         self,

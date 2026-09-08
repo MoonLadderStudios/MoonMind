@@ -11,6 +11,8 @@ import ast
 import re
 from pathlib import Path
 
+import pytest
+
 REPO_ROOT = Path(__file__).resolve().parents[3]
 DOCS = REPO_ROOT / "docs" / "Temporal"
 TYPE_CATALOG = DOCS / "WorkflowTypeCatalogAndLifecycle.md"
@@ -118,14 +120,25 @@ def test_system_fan_out_targets_only_user_workflow_type() -> None:
     assert "Update acceptance never proves a safe paused state" in pause_doc
 
 
-def test_skill_operations_match_live_catalog_and_bindings() -> None:
+def _assert_skill_catalog_reference(doc: str) -> set[str]:
+    from moonmind.workflows.temporal.activity_catalog import (
+        build_default_activity_catalog,
+    )
+
     expected = {
-        "agent_skill.resolve",
-        "agent_skill.query_on_demand",
-        "agent_skill.request_on_demand",
-        "agent_skill.build_prompt_index",
-        "agent_skill.materialize",
+        entry.activity_type
+        for entry in build_default_activity_catalog().activities
+        if entry.activity_type.startswith("agent_skill.")
     }
+    assert expected
+    documented = set(re.findall(r"`(agent_skill\.[a-z_]+)`", doc))
+    assert documented == expected
+    return expected
+
+
+def test_skill_operations_match_live_catalog_and_bindings() -> None:
+    doc = _normalized(_read(TOPOLOGY))
+    expected = _assert_skill_catalog_reference(doc)
     catalog_src = _read(CATALOG)
     for op in expected:
         assert f'activity_type="{op}"' in catalog_src
@@ -133,12 +146,23 @@ def test_skill_operations_match_live_catalog_and_bindings() -> None:
     for op in expected:
         assert f'"{op}"' in runtime_src
 
-    doc = _normalized(_read(TOPOLOGY))
     for op in expected:
         assert op in doc, f"docs must list actually registered operation {op}"
     assert "not yet a core live catalog family" not in doc
     # Executable tool contracts vs portable instruction bundles stay distinct.
     assert "must not reimplement Skill semantics" in doc
+
+
+@pytest.mark.parametrize("mutation", ["missing", "invented"])
+def test_skill_registry_reference_drift_is_detected(mutation) -> None:
+    doc = _read(TOPOLOGY)
+    _assert_skill_catalog_reference(doc)
+    if mutation == "missing":
+        doc = doc.replace("agent_skill.resolve", "obsolete.resolve")
+    else:
+        doc += "\n`agent_skill.invented`\n"
+    with pytest.raises(AssertionError):
+        _assert_skill_catalog_reference(doc)
 
 
 def test_only_resolve_has_production_workflow_caller() -> None:
@@ -203,9 +227,9 @@ def test_queue_inventory_matches_client_scope() -> None:
 
     catalog_src = _read(CATALOG)
     assert "def get_workflow_poll_task_queues" in catalog_src
-    settings_src = (
-        REPO_ROOT / "moonmind" / "config" / "settings.py"
-    ).read_text(encoding="utf-8")
+    settings_src = (REPO_ROOT / "moonmind" / "config" / "settings.py").read_text(
+        encoding="utf-8"
+    )
     assert "mm.workflow.user.v2" in settings_src
 
     doc = _normalized(_read(TOPOLOGY))
@@ -236,7 +260,12 @@ def test_canonical_docs_carry_no_issue_dispositions() -> None:
 def test_finding_cross_links_present() -> None:
     combined = _normalized(
         "\n".join(
-            [_read(TYPE_CATALOG), _read(PAUSE_SYSTEM), _read(TOPOLOGY), _read(ARCHITECTURE)]
+            [
+                _read(TYPE_CATALOG),
+                _read(PAUSE_SYSTEM),
+                _read(TOPOLOGY),
+                _read(ARCHITECTURE),
+            ]
         )
     )
     for ref in ("#3959", "#3953", "#3949"):

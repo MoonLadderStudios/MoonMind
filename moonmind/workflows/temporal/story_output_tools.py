@@ -49,6 +49,9 @@ JIRA_CHECK_BLOCKERS_TOOL_NAME = "jira.check_blockers"
 JIRA_LOAD_PRESET_BRIEF_TOOL_NAME = "jira.load_preset_brief"
 JIRA_UPDATE_ISSUE_STATUS_TOOL_NAME = "jira.update_issue_status"
 GITHUB_LOAD_ISSUE_PRESET_BRIEF_TOOL_NAME = "github.load_issue_preset_brief"
+ISSUE_BRIEF_LOADER_TOOL_NAMES = frozenset(
+    {JIRA_LOAD_PRESET_BRIEF_TOOL_NAME, GITHUB_LOAD_ISSUE_PRESET_BRIEF_TOOL_NAME}
+)
 GITHUB_CHECK_ISSUE_BLOCKERS_TOOL_NAME = "github.check_issue_blockers"
 GITHUB_UPDATE_ISSUE_STATUS_TOOL_NAME = "github.update_issue_status"
 GITHUB_RESOLVE_PULL_REQUEST_TARGET_TOOL_NAME = "github.resolve_pull_request_target"
