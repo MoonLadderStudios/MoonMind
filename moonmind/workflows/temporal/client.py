@@ -69,6 +69,12 @@ OMNIGENT_OAUTH_HOST_JANITOR_WORKFLOW_ID_BASE = "omnigent-oauth-host-janitor-run"
 ALLOW_LIVE_TEMPORAL_IN_TESTS_ENV = "MOONMIND_ALLOW_LIVE_TEMPORAL_IN_TESTS"
 _WORKFLOW_UPDATE_ACCEPTED_TIMEOUT = timedelta(seconds=10)
 _WORKFLOW_CONTROL_CONCURRENCY = 10
+# Enumeration budgets: dispatch workers bound concurrent tasks, so target
+# discovery gets its own explicit bounds. Checkpoint cadence avoids one
+# ever-growing audit payload rewrite per target; the limit caps memory,
+# response size, total duration and write volume per request.
+_WORKFLOW_CONTROL_ENUMERATION_CHECKPOINT_EVERY = 100
+_WORKFLOW_CONTROL_ENUMERATION_LIMIT = 1000
 _SINGLE_VALUE_KEYWORD_LIST_SEARCH_ATTRIBUTES = frozenset(
     {
         "mm_target_runtime",
@@ -552,6 +558,13 @@ class TemporalClientAdapter:
         A durable caller supplies on_progress and retries the same batch after a
         restart. IDs are pinned to runs; ACCEPTED never means quiesced. Query
         failure retains unknown evidence and never destroys successful targets.
+        Enumeration is paged and resumable: partial target lists checkpoint with
+        an explicit cursor/policy marker, targets deduplicate against already
+        persisted identities, and a truncated or failed scan never reports a
+        fully confirmed result. Every observed outcome carries a truthful
+        disposition: ``already_terminal`` (positive close evidence only),
+        ``unsupported`` (no control protocol), or ``superseded`` (run or
+        generation replaced) instead of collapsing to ``unknown``.
         """
         import hashlib
         from uuid import uuid4
@@ -581,22 +594,54 @@ class TemporalClientAdapter:
             )
             if queues:
                 query += ' AND TaskQueue IN (' + ', '.join(f'"{queue}"' for queue in queues) + ')'
-            targets = []
+            # Record the selection policy: a point-in-time Visibility scan,
+            # never an atomic system snapshot. Retries resume from the
+            # already-persisted targets below instead of starting over.
+            result.enumeration_policy = (
+                f"visibility point-in-time scan: {query} (non-atomic)"
+            )
+            seen = {(target.workflow_id, target.run_id) for target in result.targets}
+            targets = list(result.targets)
+            if len(targets) >= _WORKFLOW_CONTROL_ENUMERATION_LIMIT:
+                # A resumed pass must not grow the capped audit payload one
+                # run per read: the budget applies to the accumulated total,
+                # not to newly appended targets in this pass.
+                result.targets = targets[:_WORKFLOW_CONTROL_ENUMERATION_LIMIT]
+                result.enumeration_error = "control_enumeration_truncated"
+                await persist()
+                return result
             try:
                 async for execution in client.list_workflows(query=query):
-                    run_id = str(execution.run_id or "")
-                    update_id = hashlib.sha256(f"{result.request_id}:{update_name}:{execution.id}:{run_id}".encode()).hexdigest()
-                    targets.append(WorkflowControlTarget(workflowId=execution.id, runId=run_id, updateId=update_id))
+                    identity = (str(execution.id), str(execution.run_id or ""))
+                    if identity in seen:
+                        continue
+                    seen.add(identity)
+                    workflow_id, run_id = identity
+                    update_id = hashlib.sha256(f"{result.request_id}:{update_name}:{workflow_id}:{run_id}".encode()).hexdigest()
+                    targets.append(WorkflowControlTarget(workflowId=workflow_id, runId=run_id, updateId=update_id))
+                    result.enumeration_cursor = workflow_id
+                    if len(targets) >= _WORKFLOW_CONTROL_ENUMERATION_LIMIT:
+                        result.targets = targets[:_WORKFLOW_CONTROL_ENUMERATION_LIMIT]
+                        result.enumeration_error = "control_enumeration_truncated"
+                        await persist()
+                        return result
+                    if len(targets) % _WORKFLOW_CONTROL_ENUMERATION_CHECKPOINT_EVERY == 0:
+                        result.targets = targets
+                        await persist()
             except Exception:
+                # Checkpoint the partial target list/cursor so a retry resumes
+                # instead of repeating the full scan before any target progresses.
+                result.targets = targets
                 result.enumeration_error = "control_visibility_unavailable"
                 await persist()
                 return result
             result.enumeration_error = None
+            result.enumeration_cursor = None
             result.targets = targets
             result.enumerated = True
             await persist()
         async def reconcile(target):
-            if target.state in {"safe_point", "resumed", "failed"}:
+            if target.state in WorkflowControlTarget.TERMINAL_STATES:
                 return
             if not target.run_id:
                 await persist(target, "unknown", "run_identity_unavailable")
@@ -611,8 +656,8 @@ class TemporalClientAdapter:
                         wait_for_stage=WorkflowUpdateStage.ACCEPTED,
                         rpc_timeout=_WORKFLOW_UPDATE_ACCEPTED_TIMEOUT,
                     )
-                except Exception:
-                    await persist(target, "unknown", "update_acceptance_unavailable")
+                except Exception as exc:
+                    await _record_acceptance_failure(handle, target, exc)
                     return
                 await persist(target, "accepted", None)
             from temporalio.client import WorkflowUpdateFailedError
@@ -626,19 +671,65 @@ class TemporalClientAdapter:
                 return
             try:
                 observed = await handle.query("control_state", rpc_timeout=_WORKFLOW_UPDATE_ACCEPTED_TIMEOUT)
-                if not isinstance(observed, dict) or observed.get("runId") != target.run_id:
-                    state, reason = "unknown", "control_evidence_unavailable"
+                observed_run_id = observed.get("runId") if isinstance(observed, dict) else None
+                if not observed_run_id:
+                    # No positive evidence of a successor run: a transient or
+                    # cross-version malformed response stays retryable instead
+                    # of permanently parking the target as superseded.
+                    state, reason = "unknown", "control_query_unavailable"
+                elif observed_run_id != target.run_id:
+                    # The pinned run identity is preserved: a Continue-As-New,
+                    # reset, or later execution sharing the workflow id never
+                    # inherits this control request.
+                    state, reason = "superseded", "run_superseded"
                 elif result.generation and observed.get("controlGeneration") != result.generation:
-                    state, reason = "unknown", "control_generation_superseded"
+                    # A newer command owns the run; the old observation must
+                    # not overwrite current requested state or report confirmed.
+                    state, reason = "superseded", "control_generation_superseded"
                 elif update_name == "Pause" and observed.get("safePoint") is True:
                     state, reason = "safe_point", None
                 elif update_name == "Resume" and observed.get("resumed") is True:
                     state, reason = "resumed", None
                 else:
                     state, reason = "pending", "safe_point_pending"
-            except Exception:
-                state, reason = "unknown", "control_query_unavailable"
+            except Exception as exc:
+                message = str(exc).lower()
+                if "query" in message and (
+                    "unknown" in message
+                    or "unregistered" in message
+                    or "unsupported" in message
+                ):
+                    # Only an explicit unknown/unregistered-query error proves
+                    # the workflow lacks the control protocol. A generic
+                    # NOT_FOUND can mean the pinned execution or namespace is
+                    # transiently unavailable, so it stays retryable.
+                    state, reason = "unsupported", "control_protocol_unsupported"
+                else:
+                    state, reason = "unknown", "control_query_unavailable"
             await persist(target, state, reason)
+
+        async def _record_acceptance_failure(handle, target, exc):
+            """Map an Update acceptance failure to a truthful disposition.
+
+            Only positive close evidence (a describe showing the pinned run is
+            no longer running) becomes ``already_terminal``. A failed or absent
+            lookup stays ``unknown``. A closed run is never equated with
+            verified physical host cleanup or lease release.
+            """
+            try:
+                description = await handle.describe()
+            except Exception:
+                await persist(target, "unknown", "update_acceptance_unavailable")
+                return
+            run_status = getattr(getattr(description, "status", None), "name", "")
+            if (
+                isinstance(run_status, str)
+                and run_status
+                and run_status != "RUNNING"
+            ):
+                await persist(target, "already_terminal", "workflow_already_terminal")
+                return
+            await persist(target, "unknown", "update_acceptance_unavailable")
 
         targets = iter(result.targets)
 

@@ -1,0 +1,11 @@
+{
+  "incidentWorkflowId": "mm:26abcfea-f8f4-418b-82c3-991e42843992",
+  "containerJobId": "container-job:1b298653633b4d798f3eb41718ec62a3",
+  "boundary": "container-job activity to Docker CLI to restricted Docker proxy",
+  "failureShape": "Generic inspect masks container absence with a forbidden plugins lookup, preventing test launch and cleanup.",
+  "missingObjectStatus": 404,
+  "missingContainerMessage": "No such container: {name}",
+  "forbiddenStatus": 403,
+  "forbiddenBody": "<html><body><h1>403 Forbidden</h1>\nRequest forbidden by administrative rules.\n</body></html>\n",
+  "expectedInvariant": "Only container inspection determines job ownership; missing containers permit creation, while denied or unavailable ownership never permits mutation or release."
+}

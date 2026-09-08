@@ -14429,6 +14429,10 @@ export interface components {
              * @default 0
              */
             generation: number;
+            /** Enumerationcursor */
+            enumerationCursor?: string | null;
+            /** Enumerationpolicy */
+            enumerationPolicy?: string | null;
         };
         /** WorkflowControlTarget */
         WorkflowControlTarget: {
@@ -14443,7 +14447,7 @@ export interface components {
              * @default requested
              * @enum {string}
              */
-            state: "requested" | "accepted" | "pending" | "safe_point" | "resumed" | "failed" | "unknown";
+            state: "requested" | "accepted" | "pending" | "safe_point" | "resumed" | "failed" | "unknown" | "already_terminal" | "unsupported" | "superseded";
             /** Reason */
             reason?: string | null;
         };
@@ -22311,6 +22315,15 @@ export interface operations {
                     };
                 };
             };
+            /** @description Embedded host transport retired (omnigent_embedded_transport_retired). */
+            410: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["OmnigentPublicErrorResponse"];
+                };
+            };
             /** @description Validation Error */
             422: {
                 headers: {
@@ -22346,6 +22359,15 @@ export interface operations {
                     "application/json": {
                         [key: string]: unknown;
                     };
+                };
+            };
+            /** @description Embedded host transport retired (omnigent_embedded_transport_retired). */
+            410: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["OmnigentPublicErrorResponse"];
                 };
             };
             /** @description Validation Error */
@@ -22384,6 +22406,15 @@ export interface operations {
                     "application/json": {
                         [key: string]: unknown;
                     };
+                };
+            };
+            /** @description Embedded host transport retired (omnigent_embedded_transport_retired). */
+            410: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["OmnigentPublicErrorResponse"];
                 };
             };
             /** @description Validation Error */

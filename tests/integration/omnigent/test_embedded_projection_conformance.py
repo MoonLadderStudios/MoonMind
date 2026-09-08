@@ -64,8 +64,11 @@ def _request(key: str) -> AgentExecutionRequest:
 
 
 def _config():
+    # Retired (#3955): retained here for historical-read/projection coverage
+    # through a disabled declaration. Enabled embedded admission fails fast.
     return parse_bridge_config(
         {
+            "enabled": False,
             "compatibility": {"hostProtocolMode": HOST_PROTOCOL_MODE_EMBEDDED},
             "hostConnection": {
                 "embedded": {

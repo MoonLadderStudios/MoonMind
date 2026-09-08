@@ -583,8 +583,85 @@ describe('OperationsSettingsSection deployment update card', () => {
     });
     renderOperations();
     expect(await screen.findByRole('heading', { name: label })).toBeTruthy();
-    expect(await screen.findByText('Control confirmations')).toBeTruthy();
+    expect(await screen.findByText(/Control confirmations \(/)).toBeTruthy();
     if (state !== 'safe_point') expect(screen.queryByRole('heading', { name: 'Workers quiesced' })).toBeNull();
+  });
+
+  it('explains an empty enumeration instead of claiming quiescence', async () => {
+    const originalFetch = fetchSpy.getMockImplementation()!;
+    fetchSpy.mockImplementation((input, init) => {
+      if (String(input) === '/api/workers') {
+        return Promise.resolve({ ok: true, json: async () => ({
+          ...workerSnapshot,
+          system: { ...workerSnapshot.system, workersPaused: true, mode: 'quiesce' },
+          signalStatus: 'empty',
+          control: { enumerated: true, targets: [] },
+        }) } as Response);
+      }
+      return originalFetch(input, init);
+    });
+    renderOperations();
+    expect(await screen.findByRole('heading', { name: 'No eligible runs found; admission pause still applies' })).toBeTruthy();
+    expect(await screen.findByText(/not prove every worker process/i)).toBeTruthy();
+    expect(screen.queryByRole('heading', { name: 'Workers quiesced' })).toBeNull();
+  });
+
+  it('surfaces blocked enumeration with confirmation pending', async () => {
+    const originalFetch = fetchSpy.getMockImplementation()!;
+    fetchSpy.mockImplementation((input, init) => {
+      if (String(input) === '/api/workers') {
+        return Promise.resolve({ ok: true, json: async () => ({
+          ...workerSnapshot,
+          system: { ...workerSnapshot.system, workersPaused: true, mode: 'quiesce' },
+          signalStatus: 'unknown',
+          control: { enumerated: false, enumerationError: 'control_visibility_unavailable', targets: [] },
+        }) } as Response);
+      }
+      return originalFetch(input, init);
+    });
+    renderOperations();
+    expect(await screen.findByRole('heading', { name: 'Target enumeration blocked; confirmation pending' })).toBeTruthy();
+    expect(screen.queryByRole('heading', { name: 'Workers quiesced' })).toBeNull();
+  });
+
+  it('treats already-terminal targets as confirmed quiescence', async () => {
+    const originalFetch = fetchSpy.getMockImplementation()!;
+    fetchSpy.mockImplementation((input, init) => {
+      if (String(input) === '/api/workers') {
+        return Promise.resolve({ ok: true, json: async () => ({
+          ...workerSnapshot,
+          system: { ...workerSnapshot.system, workersPaused: true, mode: 'quiesce' },
+          signalStatus: 'succeeded',
+          control: { enumerated: true, targets: [
+            { workflowId: 'quiesced-target', runId: 'run-1', state: 'safe_point' },
+            { workflowId: 'vanished-target', runId: 'run-2', state: 'already_terminal' },
+          ] },
+        }) } as Response);
+      }
+      return originalFetch(input, init);
+    });
+    renderOperations();
+    expect(await screen.findByRole('heading', { name: 'Workers quiesced' })).toBeTruthy();
+  });
+
+  it('does not claim quiescence when enumeration is truncated', async () => {
+    const originalFetch = fetchSpy.getMockImplementation()!;
+    fetchSpy.mockImplementation((input, init) => {
+      if (String(input) === '/api/workers') {
+        return Promise.resolve({ ok: true, json: async () => ({
+          ...workerSnapshot,
+          system: { ...workerSnapshot.system, workersPaused: true, mode: 'quiesce' },
+          signalStatus: 'partial',
+          control: { enumerated: false, enumerationError: 'control_enumeration_truncated', targets: [
+            { workflowId: 'confirmed-target', runId: 'run-1', state: 'safe_point' },
+          ] },
+        }) } as Response);
+      }
+      return originalFetch(input, init);
+    });
+    renderOperations();
+    expect(await screen.findByRole('heading', { name: 'Target enumeration blocked; confirmation pending' })).toBeTruthy();
+    expect(screen.queryByRole('heading', { name: 'Workers quiesced' })).toBeNull();
   });
 
   it('acknowledges an accepted pause without a success toast', async () => {

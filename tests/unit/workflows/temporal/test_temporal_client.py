@@ -371,3 +371,417 @@ async def test_control_resumes_legacy_persisted_batch_without_generation(adapter
     assert handle.start_update.await_args.kwargs["args"] == []
     assert handle.start_update.await_args.kwargs["id"] == "old-update"
     adapter._client.get_workflow_handle.assert_called_once_with("legacy-workflow", run_id="old-run")
+
+
+# ---- Bounded enumeration and truthful dispositions (MoonMind#3953) ----
+
+async def test_control_resumes_legacy_persisted_batch_without_generation(adapter):
+    from moonmind.schemas.workflow_control_models import WorkflowControlBatch
+
+    batch = WorkflowControlBatch.model_validate({
+        "requestId": "legacy", "action": "Resume", "enumerated": True,
+        "targets": [{"workflowId": "legacy-workflow", "runId": "old-run", "updateId": "old-update"}],
+    })
+    handle = AsyncMock()
+    handle.get_update_handle = Mock(return_value=SimpleNamespace(result=AsyncMock(return_value=None)))
+    handle.query.return_value = {"runId": "old-run", "resumed": True}
+    adapter._client.get_workflow_handle = Mock(return_value=handle)
+    adapter._client.list_workflows = Mock(side_effect=AssertionError("Existing identities are immutable"))
+
+    result = await adapter.send_batch_resume_update(batch=batch)
+
+    assert result.status == "succeeded"
+    assert handle.start_update.await_args.kwargs["args"] == []
+    assert handle.start_update.await_args.kwargs["id"] == "old-update"
+    adapter._client.get_workflow_handle.assert_called_once_with("legacy-workflow", run_id="old-run")
+
+
+async def _fake_empty_list(query):
+    for _execution in ():
+        yield _execution
+
+
+async def test_control_empty_enumeration_reports_empty_not_succeeded(adapter):
+    """An enumerated request with no eligible runs must not read as quiesced."""
+
+    adapter._client.list_workflows = _fake_empty_list
+
+    batch = await adapter.send_batch_pause_update(request_id="empty-request")
+
+    assert batch.enumerated is True
+    assert batch.targets == []
+    assert batch.status == "empty"
+    assert batch.enumeration_error is None
+    assert batch.enumeration_cursor is None
+    assert batch.enumeration_policy is not None
+    assert "non-atomic" in batch.enumeration_policy
+
+
+def _confirmed_handle(*, run_id: str, payload: dict) -> AsyncMock:
+    handle = AsyncMock()
+    handle.get_update_handle = Mock(
+        return_value=SimpleNamespace(result=AsyncMock(return_value=None))
+    )
+    handle.query.return_value = {"runId": run_id, **payload}
+    return handle
+
+
+async def test_control_enumeration_resumes_and_deduplicates(adapter):
+    """A retry keeps already-persisted targets and skips re-listed identities."""
+
+    from moonmind.schemas.workflow_control_models import (
+        WorkflowControlBatch,
+        WorkflowControlTarget,
+    )
+
+    partial = WorkflowControlBatch(
+        requestId="resume-enumeration", action="Pause",
+        targets=[WorkflowControlTarget(
+            workflowId="wf-0", runId="run-wf-0", updateId="update-0",
+        )],
+    )
+    executions = [_FakeWorkflowExecution("wf-0"), _FakeWorkflowExecution("wf-1")]
+
+    async def _fake_list(query):
+        for ex in executions:
+            yield ex
+
+    handles = {
+        "wf-0": _confirmed_handle(run_id="run-wf-0", payload={"safePoint": True}),
+        "wf-1": _confirmed_handle(run_id="run-wf-1", payload={"safePoint": True}),
+    }
+    adapter._client.list_workflows = _fake_list
+    adapter._client.get_workflow_handle = lambda workflow_id, **kwargs: handles[workflow_id]
+
+    result = await adapter.send_batch_pause_update(batch=partial)
+
+    assert result.enumerated is True
+    assert [target.workflow_id for target in result.targets] == ["wf-0", "wf-1"]
+    # The re-listed identity keeps its original stable Update ID.
+    assert result.targets[0].update_id == "update-0"
+    assert result.targets[1].update_id != "update-0"
+    assert result.enumeration_cursor is None
+    assert result.status == "succeeded"
+
+
+async def test_control_enumeration_truncation_never_confirms(adapter, monkeypatch):
+    """Hitting the enumeration budget leaves the request unconfirmed."""
+
+    monkeypatch.setattr(temporal_client_module, "_WORKFLOW_CONTROL_ENUMERATION_LIMIT", 2)
+    executions = [_FakeWorkflowExecution(f"wf-{i}") for i in range(3)]
+
+    async def _fake_list(query):
+        for ex in executions:
+            yield ex
+
+    adapter._client.list_workflows = _fake_list
+
+    batch = await adapter.send_batch_pause_update(request_id="truncated-request")
+
+    assert batch.enumerated is False
+    assert batch.enumeration_error == "control_enumeration_truncated"
+    assert len(batch.targets) == 2
+    assert batch.enumeration_cursor == "wf-1"
+    assert batch.status == "unknown"
+
+
+async def test_control_visibility_failure_checkpoints_partial_targets(adapter):
+    """A later-page failure keeps the partial list instead of discarding it."""
+
+    executions = [_FakeWorkflowExecution("wf-0"), _FakeWorkflowExecution("wf-1")]
+
+    async def _fake_failing_list(query):
+        yield executions[0]
+        raise RuntimeError("visibility page lost")
+
+    adapter._client.list_workflows = _fake_failing_list
+
+    batch = await adapter.send_batch_pause_update(request_id="failing-request")
+
+    assert batch.enumerated is False
+    assert batch.enumeration_error == "control_visibility_unavailable"
+    assert [target.workflow_id for target in batch.targets] == ["wf-0"]
+    assert batch.enumeration_cursor == "wf-0"
+    assert batch.status == "unknown"
+
+
+async def test_control_generation_mismatch_is_superseded(adapter):
+    """A newer generation owns the run; the old request must not confirm."""
+
+    from moonmind.schemas.workflow_control_models import (
+        WorkflowControlBatch,
+        WorkflowControlTarget,
+    )
+
+    batch = WorkflowControlBatch(
+        requestId="generation-request", action="Pause", generation=4, enumerated=True,
+        targets=[WorkflowControlTarget(
+            workflowId="wf-gen", runId="run-gen", updateId="update-gen",
+        )],
+    )
+    handle = _confirmed_handle(
+        run_id="run-gen", payload={"controlGeneration": 5, "safePoint": True},
+    )
+    adapter._client.get_workflow_handle = Mock(return_value=handle)
+    adapter._client.list_workflows = Mock(
+        side_effect=AssertionError("Enumerated targets must not be re-listed")
+    )
+
+    result = await adapter.send_batch_pause_update(batch=batch)
+
+    assert result.targets[0].state == "superseded"
+    assert result.targets[0].reason == "control_generation_superseded"
+    assert result.targets[0].run_id == "run-gen"
+    assert result.status == "unknown"
+
+
+async def test_control_run_mismatch_keeps_pinned_identity(adapter):
+    """A successor execution sharing the workflow id never inherits the request."""
+
+    from moonmind.schemas.workflow_control_models import (
+        WorkflowControlBatch,
+        WorkflowControlTarget,
+    )
+
+    batch = WorkflowControlBatch(
+        requestId="successor-request", action="Pause", generation=4, enumerated=True,
+        targets=[WorkflowControlTarget(
+            workflowId="wf-run", runId="run-old", updateId="update-run",
+        )],
+    )
+    handle = _confirmed_handle(
+        run_id="run-new", payload={"controlGeneration": 4, "safePoint": True},
+    )
+    adapter._client.get_workflow_handle = Mock(return_value=handle)
+    adapter._client.list_workflows = Mock(
+        side_effect=AssertionError("Enumerated targets must not be re-listed")
+    )
+
+    result = await adapter.send_batch_pause_update(batch=batch)
+
+    assert result.targets[0].state == "superseded"
+    assert result.targets[0].reason == "run_superseded"
+    # Pinned identity is preserved; the successor run id is not adopted.
+    assert result.targets[0].run_id == "run-old"
+    assert result.status == "unknown"
+
+
+async def test_control_unknown_query_is_unsupported(adapter):
+    """Runs without the control protocol need attention, not unknown-outage."""
+
+    from moonmind.schemas.workflow_control_models import (
+        WorkflowControlBatch,
+        WorkflowControlTarget,
+    )
+
+    batch = WorkflowControlBatch(
+        requestId="protocol-request", action="Pause", enumerated=True,
+        targets=[WorkflowControlTarget(
+            workflowId="wf-proto", runId="run-proto", updateId="update-proto",
+        )],
+    )
+    handle = AsyncMock()
+    handle.get_update_handle = Mock(
+        return_value=SimpleNamespace(result=AsyncMock(return_value=None))
+    )
+    handle.query = AsyncMock(
+        side_effect=RuntimeError("unknown query 'control_state' for workflow")
+    )
+    adapter._client.get_workflow_handle = Mock(return_value=handle)
+    adapter._client.list_workflows = Mock(
+        side_effect=AssertionError("Enumerated targets must not be re-listed")
+    )
+
+    result = await adapter.send_batch_pause_update(batch=batch)
+
+    assert result.targets[0].state == "unsupported"
+    assert result.targets[0].reason == "control_protocol_unsupported"
+    assert result.status == "unknown"
+
+
+async def test_control_terminated_run_is_already_terminal(adapter):
+    """Positive close evidence resolves the target without claiming cleanup."""
+
+    from moonmind.schemas.workflow_control_models import (
+        WorkflowControlBatch,
+        WorkflowControlTarget,
+    )
+
+    batch = WorkflowControlBatch(
+        requestId="terminal-request", action="Pause", enumerated=True,
+        targets=[WorkflowControlTarget(
+            workflowId="wf-gone", runId="run-gone", updateId="update-gone",
+        )],
+    )
+    handle = AsyncMock()
+    handle.start_update = AsyncMock(side_effect=RuntimeError("workflow closed"))
+    handle.describe = AsyncMock(
+        return_value=SimpleNamespace(status=SimpleNamespace(name="TERMINATED"))
+    )
+    adapter._client.get_workflow_handle = Mock(return_value=handle)
+    adapter._client.list_workflows = Mock(
+        side_effect=AssertionError("Enumerated targets must not be re-listed")
+    )
+
+    result = await adapter.send_batch_pause_update(batch=batch)
+
+    assert result.targets[0].state == "already_terminal"
+    assert result.targets[0].reason == "workflow_already_terminal"
+    assert result.status == "succeeded"
+
+
+async def test_control_absent_lookup_without_evidence_stays_unknown(adapter):
+    """A failed describe cannot promote a missing run to already_terminal."""
+
+    from moonmind.schemas.workflow_control_models import (
+        WorkflowControlBatch,
+        WorkflowControlTarget,
+    )
+
+    batch = WorkflowControlBatch(
+        requestId="absent-request", action="Pause", enumerated=True,
+        targets=[WorkflowControlTarget(
+            workflowId="wf-absent", runId="run-absent", updateId="update-absent",
+        )],
+    )
+    handle = AsyncMock()
+    handle.start_update = AsyncMock(side_effect=RuntimeError("unavailable"))
+    handle.describe = AsyncMock(side_effect=RuntimeError("not found"))
+    adapter._client.get_workflow_handle = Mock(return_value=handle)
+    adapter._client.list_workflows = Mock(
+        side_effect=AssertionError("Enumerated targets must not be re-listed")
+    )
+
+    result = await adapter.send_batch_pause_update(batch=batch)
+
+    assert result.targets[0].state == "unknown"
+    assert result.targets[0].reason == "update_acceptance_unavailable"
+    assert result.status == "unknown"
+
+
+async def test_control_terminal_dispositions_skip_reconciliation(adapter):
+    """Terminal observations never re-enter Temporal fan-out on reads."""
+
+    from moonmind.schemas.workflow_control_models import (
+        WorkflowControlBatch,
+        WorkflowControlTarget,
+    )
+
+    batch = WorkflowControlBatch(
+        requestId="settled-request", action="Pause", enumerated=True,
+        targets=[WorkflowControlTarget(
+            workflowId="wf-settled", runId="run-settled",
+            updateId="update-settled", state="already_terminal",
+            reason="workflow_already_terminal",
+        )],
+    )
+    adapter._client.get_workflow_handle = Mock(
+        side_effect=AssertionError("Settled targets must not be re-queried")
+    )
+    adapter._client.list_workflows = Mock(
+        side_effect=AssertionError("Enumerated targets must not be re-listed")
+    )
+
+    result = await adapter.send_batch_pause_update(batch=batch)
+
+    assert result.targets[0].state == "already_terminal"
+    assert result.status == "succeeded"
+
+
+async def test_control_truncated_resume_never_grows_past_limit(adapter, monkeypatch):
+    """A resumed pass caps the accumulated total instead of growing one per read."""
+
+    from moonmind.schemas.workflow_control_models import (
+        WorkflowControlBatch,
+        WorkflowControlTarget,
+    )
+
+    monkeypatch.setattr(temporal_client_module, "_WORKFLOW_CONTROL_ENUMERATION_LIMIT", 2)
+    partial = WorkflowControlBatch(
+        requestId="resume-truncated", action="Pause",
+        targets=[WorkflowControlTarget(
+            workflowId="wf-0", runId="run-wf-0", updateId="update-0",
+        ), WorkflowControlTarget(
+            workflowId="wf-1", runId="run-wf-1", updateId="update-1",
+        )],
+    )
+    executions = [_FakeWorkflowExecution("wf-0"), _FakeWorkflowExecution("wf-1"),
+                  _FakeWorkflowExecution("wf-2")]
+
+    async def _fake_list(query):
+        for ex in executions:
+            yield ex
+
+    adapter._client.list_workflows = _fake_list
+
+    result = await adapter.send_batch_pause_update(batch=partial)
+
+    assert result.enumerated is False
+    assert result.enumeration_error == "control_enumeration_truncated"
+    assert len(result.targets) == 2
+    assert [target.workflow_id for target in result.targets] == ["wf-0", "wf-1"]
+    assert result.status == "unknown"
+
+
+async def test_control_malformed_control_evidence_stays_retryable(adapter):
+    """A blank or runId-less control_state observation never parks as superseded."""
+
+    from moonmind.schemas.workflow_control_models import (
+        WorkflowControlBatch,
+        WorkflowControlTarget,
+    )
+
+    for observed in (None, "not-a-dict", {}, {"safePoint": True}):
+        batch = WorkflowControlBatch(
+            requestId="malformed-request", action="Pause", enumerated=True,
+            targets=[WorkflowControlTarget(
+                workflowId="wf-malformed", runId="run-malformed",
+                updateId="update-malformed",
+            )],
+        )
+        handle = _confirmed_handle(run_id="run-malformed", payload={})
+        handle.query = AsyncMock(return_value=observed)
+        adapter._client.get_workflow_handle = Mock(return_value=handle)
+        adapter._client.list_workflows = Mock(
+            side_effect=AssertionError("Enumerated targets must not be re-listed")
+        )
+
+        result = await adapter.send_batch_pause_update(batch=batch)
+
+        assert result.targets[0].state == "unknown"
+        assert result.targets[0].reason == "control_query_unavailable"
+        assert result.status == "unknown"
+
+
+async def test_control_generic_not_found_stays_retryable(adapter):
+    """A generic NOT_FOUND during control_state query is not proof of no protocol."""
+
+    from moonmind.schemas.workflow_control_models import (
+        WorkflowControlBatch,
+        WorkflowControlTarget,
+    )
+
+    batch = WorkflowControlBatch(
+        requestId="not-found-request", action="Pause", enumerated=True,
+        targets=[WorkflowControlTarget(
+            workflowId="wf-vanished", runId="run-vanished",
+            updateId="update-vanished",
+        )],
+    )
+    handle = AsyncMock()
+    handle.get_update_handle = Mock(
+        return_value=SimpleNamespace(result=AsyncMock(return_value=None))
+    )
+    handle.query = AsyncMock(
+        side_effect=RuntimeError("workflow execution not found")
+    )
+    adapter._client.get_workflow_handle = Mock(return_value=handle)
+    adapter._client.list_workflows = Mock(
+        side_effect=AssertionError("Enumerated targets must not be re-listed")
+    )
+
+    result = await adapter.send_batch_pause_update(batch=batch)
+
+    assert result.targets[0].state == "unknown"
+    assert result.targets[0].reason == "control_query_unavailable"
+    assert result.status == "unknown"
