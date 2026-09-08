@@ -4,11 +4,6 @@ from datetime import UTC, datetime, timedelta
 
 import pytest
 
-from moonmind.omnigent.bridge_config import (
-    HOST_PROTOCOL_MODE_EMBEDDED,
-    parse_bridge_config,
-)
-from moonmind.omnigent.bridge_embedded import verify_embedded_host_auth
 from moonmind.omnigent.host_auth_contracts import (
     HostAuthCredentialProfile,
     HostAuthProfileError,
@@ -23,24 +18,6 @@ from moonmind.omnigent.host_auth_profile import (
     resolve_host_auth_credentials,
 )
 from moonmind.omnigent.host_auth_adapter import PINNED_PROTOCOL_PROFILE
-
-
-def _embedded_config():
-    return parse_bridge_config(
-        {
-            "enabled": True,
-            "compatibility": {"hostProtocolMode": HOST_PROTOCOL_MODE_EMBEDDED},
-            "hostConnection": {
-                "embedded": {
-                    "protocolProfile": PINNED_PROTOCOL_PROFILE,
-                    "authMode": "upstream_runner_tunnel",
-                    "proxyConformanceEvidenceRef": "artifact://proxy",
-                    "liveSmokeEvidenceRef": "artifact://smoke",
-                    "hostAuthConformanceEvidenceRef": "artifact://auth",
-                }
-            },
-        }
-    )
 
 
 @pytest.mark.asyncio
@@ -61,15 +38,8 @@ async def test_current_and_bounded_previous_generations_resolve_without_durable_
     )
 
     resolved = await resolve_host_auth_credentials(profile=profile, now=now)
-    context = verify_embedded_host_auth(
-        headers={"X-Omnigent-Runner-Tunnel-Token": "previous-token"},
-        config=_embedded_config(),
-        configured_credentials=resolved.tokens_by_generation,
-        credential_profile_id=profile.profile_id,
-    )
-
-    assert context.credential_generation == 7
-    assert context.credential_profile_id == "managed-host-auth"
+    assert resolved.tokens_by_generation == {8: "current-token", 7: "previous-token"}
+    assert resolved.profile.profile_id == "managed-host-auth"
     assert "token" not in str(profile.metadata()).lower()
 
 

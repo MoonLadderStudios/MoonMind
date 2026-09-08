@@ -18,8 +18,6 @@ from api_service.api.routers import omnigent_bridge_composition as bridge_compos
 from api_service.db.models import OmnigentHostAuthProfileRecord
 from moonmind.omnigent.bridge_artifacts import OmnigentArtifactGateway, capture_artifact_json
 from moonmind.omnigent.bridge_security import redact_raw_events
-from moonmind.omnigent.bridge_embedded import verify_embedded_host_auth
-from moonmind.omnigent.bridge_proxy import OmnigentBridgeError
 from moonmind.omnigent.host_auth_adapter import (
     OmnigentHostAuthAdapter,
     UpstreamHostAuthError,
@@ -30,10 +28,6 @@ from moonmind.omnigent.host_auth_contracts import (
     ResolvedHostAuthCredentials,
     profile_persistence_metadata,
     rotate_host_auth_profile,
-)
-from moonmind.omnigent.bridge_config import (
-    HOST_PROTOCOL_MODE_EMBEDDED,
-    parse_bridge_config,
 )
 from moonmind.omnigent.host_auth_store import HostAuthProfileStore
 from moonmind.omnigent.checkpoints import OmnigentCheckpointIdentity
@@ -236,232 +230,75 @@ class _HandshakeSocket:
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize(
-    ("failure", "expected_code"),
-    [
-        (HostAuthProfileError("sensitive revoked detail", code="host_auth_revoked"), 4403),
-        (HostAuthProfileError("sensitive disabled detail", code="host_auth_disabled"), 4403),
-        (
-            HostAuthProfileError(
-                "sensitive incompatible detail",
-                code="host_auth_profile_incompatible",
-            ),
-            1013,
-        ),
-    ],
-)
-async def test_websocket_profile_failure_close_code_matrix(
-    monkeypatch, failure, expected_code
+@pytest.mark.parametrize("tunnel", ["host", "runner"])
+async def test_retired_tunnels_close_without_host_auth_admission(
+    monkeypatch, tunnel
 ) -> None:
-    socket = _HandshakeSocket({})
-    monkeypatch.setattr(bridge_router, "get_bridge_config", _embedded_config)
-    monkeypatch.setattr(
-        bridge_router, "_require_embedded_mode", AsyncMock(return_value=_embedded_config())
-    )
-    monkeypatch.setattr(
-        bridge_composition,
-        "resolve_active_host_auth_profile",
-        AsyncMock(side_effect=failure),
-    )
-    await bridge_router.embedded_omnigent_host_tunnel(socket, "host")
-    assert socket.closes == [(expected_code, failure.code)]
-    assert failure.args[0] not in str(socket.closes)
+    """Retired tunnels refuse before touching credentials or channels.
 
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize(
-    ("failure", "http_status", "ws_code", "retryable"),
-    [
-        (HostAuthProfileError("revoked", code="host_auth_revoked"), 503, 4403, False),
-        (HostAuthProfileError("disabled", code="host_auth_disabled"), 503, 4403, False),
-        (
-            HostAuthProfileError("incompatible", code="host_auth_profile_incompatible"),
-            503,
-            1013,
-            True,
-        ),
-        (
-            HostAuthProfileError("unavailable", code="host_auth_secret_unavailable"),
-            503,
-            1013,
-            True,
-        ),
-    ],
-)
-async def test_http_websocket_profile_failure_retryability_matrix(
-    monkeypatch, failure, http_status, ws_code, retryable
-) -> None:
-    """Profile failures retain stable HTTP/WS retry interpretations."""
-
-    monkeypatch.setattr(
-        bridge_composition,
-        "resolve_active_host_auth_profile",
-        AsyncMock(side_effect=failure),
-    )
-    with pytest.raises(HTTPException) as http_exc:
-        await bridge_router._embedded_auth_context(
-            request=SimpleNamespace(headers={}), config=_embedded_config()
-        )
-    assert http_exc.value.status_code == http_status
-    assert http_exc.value.detail["code"] == failure.code
-    # RFC 6455 1013 is the stock-host-compatible retry signal; policy failures
-    # use the permanent 4403 close. This is an explicit transport contract,
-    # independent of the router result being tested below.
-    authoritative_retryable_close_codes = frozenset({1013})
-    assert (ws_code in authoritative_retryable_close_codes) is retryable
-
-    socket = _HandshakeSocket({})
-    monkeypatch.setattr(bridge_router, "get_bridge_config", _embedded_config)
-    monkeypatch.setattr(
-        bridge_router, "_require_embedded_mode", AsyncMock(return_value=_embedded_config())
-    )
-    await bridge_router.embedded_omnigent_host_tunnel(socket, "host")
-    assert socket.closes == [(ws_code, failure.code)]
-
-
-@pytest.mark.asyncio
-async def test_connected_tunnel_is_drained_immediately_after_revocation(monkeypatch) -> None:
-    token = "sentinel-connected-token"
-    runner_id = OmnigentHostAuthAdapter(
-        allowed_tokens=frozenset({token})
-    ).runner_id_for_binding_token(token)
-    profile = HostAuthCredentialProfile("managed", "env://HOST", 3)
-    resolved = ResolvedHostAuthCredentials(profile, {3: token})
-    socket = _HandshakeSocket(_Headers({"X-Omnigent-Runner-Tunnel-Token": token}))
-    facade = SimpleNamespace(disconnect_host=AsyncMock())
-    channel = SimpleNamespace()
-    monkeypatch.setattr(bridge_router, "get_bridge_config", _embedded_config)
-    monkeypatch.setattr(
-        bridge_router, "_require_embedded_mode", AsyncMock(return_value=_embedded_config())
-    )
-    monkeypatch.setattr(
-        bridge_composition,
-        "resolve_active_host_auth_profile",
-        AsyncMock(return_value=profile),
-    )
-    monkeypatch.setattr(
-        bridge_composition,
-        "resolve_host_auth_credentials",
-        AsyncMock(
-            side_effect=[
-                resolved,
-                HostAuthProfileError("revoked", code="host_auth_revoked"),
-            ]
-        ),
-    )
-    monkeypatch.setattr(bridge_router.embedded_host_channels, "connect", lambda **_: channel)
-    monkeypatch.setattr(bridge_router.embedded_host_channels, "disconnect", lambda _: None)
-    monkeypatch.setattr(
-        bridge_router, "build_embedded_host_facade", lambda _config: facade
-    )
-    await bridge_router.embedded_omnigent_host_tunnel(socket, runner_id)
-    assert socket.accepted is True
-    assert socket.closes == [(4403, "host_auth_revoked")]
-    facade.disconnect_host.assert_awaited_once()
-
-
-class _UnrelatedHostFrame:
-    """A host frame that is not the runner-exit frame."""
-
-
-class _RunnerExitedHostFrame:
-    """Stands in for the adapter's terminal runner-exit frame class."""
-
-
-class _FrameSocket(_HandshakeSocket):
-    """A connected tunnel that replays a bounded sequence of host frames."""
-
-    def __init__(self, headers, frames) -> None:
-        super().__init__(headers)
-        self._frames = list(frames)
-        self.delivered: list[str] = []
-
-    async def receive_text(self):
-        frame = self._frames.pop(0)
-        self.delivered.append(frame)
-        return frame
-
-
-@pytest.mark.asyncio
-async def test_connected_tunnel_drains_when_the_handshake_generation_is_rotated_away(
-    monkeypatch,
-) -> None:
-    """Per-frame authority is re-resolved through the production composition op.
-
-    The handshake generation stays authoritative only while the durable profile
-    still lists it. This drives the real
-    ``connected_host_frame_is_authorized`` operation: only the durable profile
-    read and the SecretRef resolution beneath it are hermetic, so a router that
-    stopped re-resolving per frame would keep the tunnel open and fail here.
+    MoonLadderStudios/MoonMind#3955: no new embedded-transport admission means
+    the handshake never resolves the host-auth profile, so revocation state
+    cannot change the outcome.
     """
 
-    current = HostAuthCredentialProfile("managed", "env://HOST", 3)
-    rotated = HostAuthCredentialProfile("managed", "env://HOST_NEXT", 4)
-    auth = SimpleNamespace(
-        runner_id="host",
-        credential_profile_id="managed",
-        credential_generation=3,
+    resolve = AsyncMock(side_effect=AssertionError("must not resolve profiles"))
+    monkeypatch.setattr(
+        bridge_composition, "resolve_active_host_auth_profile", resolve
     )
-    socket = _FrameSocket(_Headers({}), ["first-frame", "second-frame"])
-    facade = SimpleNamespace(
-        disconnect_host=AsyncMock(), record_runner_exit=AsyncMock()
-    )
-    accepted: list[str] = []
-    channel = SimpleNamespace(
-        accept_host_frame=lambda text: accepted.append(text)
-        or _UnrelatedHostFrame(),
-        adapter=SimpleNamespace(
-            frames=SimpleNamespace(HostRunnerExitedFrame=_RunnerExitedHostFrame)
+    socket = _HandshakeSocket({})
+
+    if tunnel == "host":
+        await bridge_router.retired_embedded_host_tunnel(socket, "host")
+    else:
+        await bridge_router.retired_embedded_runner_tunnel(socket, "runner")
+
+    assert socket.accepted is False
+    assert socket.closes == [(4404, "omnigent_embedded_transport_retired")]
+    resolve.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("failure", "code"),
+    [
+        (HostAuthProfileError("revoked", code="host_auth_revoked"), "host_auth_revoked"),
+        (
+            HostAuthProfileError("disabled", code="host_auth_disabled"),
+            "host_auth_disabled",
         ),
-    )
-    monkeypatch.setattr(bridge_router, "get_bridge_config", _embedded_config)
-    monkeypatch.setattr(
-        bridge_router,
-        "_require_embedded_mode",
-        AsyncMock(return_value=_embedded_config()),
-    )
-    monkeypatch.setattr(
-        bridge_router, "verify_embedded_host_request", AsyncMock(return_value=auth)
-    )
-    monkeypatch.setattr(
-        bridge_router, "build_embedded_host_facade", lambda _config: facade
-    )
+        (
+            HostAuthProfileError(
+                "incompatible", code="host_auth_profile_incompatible"
+            ),
+            "host_auth_profile_incompatible",
+        ),
+        (
+            HostAuthProfileError(
+                "unavailable", code="host_auth_secret_unavailable"
+            ),
+            "host_auth_secret_unavailable",
+        ),
+    ],
+)
+async def test_host_auth_profile_failures_keep_stable_readiness_codes(
+    monkeypatch, failure, code
+) -> None:
+    """Profile failures retain stable, secret-free readiness codes.
+
+    The embedded handshake that used to map these onto HTTP/WS retry signals
+    was retired (MoonLadderStudios/MoonMind#3955); the surviving lifecycle
+    surface is the readiness projection, which must keep the exact codes.
+    """
+
     monkeypatch.setattr(
         bridge_composition,
         "resolve_active_host_auth_profile",
-        AsyncMock(side_effect=[current, rotated]),
+        AsyncMock(side_effect=failure),
     )
-    monkeypatch.setattr(
-        bridge_composition,
-        "resolve_host_auth_credentials",
-        AsyncMock(
-            side_effect=[
-                ResolvedHostAuthCredentials(current, {3: "generation-three"}),
-                ResolvedHostAuthCredentials(rotated, {4: "generation-four"}),
-            ]
-        ),
-    )
-    monkeypatch.setattr(
-        bridge_router.embedded_host_channels, "connect", lambda **_: channel
-    )
-    monkeypatch.setattr(
-        bridge_router.embedded_host_channels, "disconnect", lambda _: None
-    )
-    monkeypatch.setattr(
-        bridge_router.embedded_host_channels,
-        "revoke_runner_binding",
-        lambda _runner_id: None,
-    )
+    readiness = await bridge_composition.evaluate_active_host_auth_readiness()
 
-    await bridge_router.embedded_omnigent_host_tunnel(socket, "host")
-
-    assert socket.accepted is True
-    # The first frame was still inside the handshake generation.
-    assert accepted == ["first-frame"]
-    # The second frame is refused because generation 3 is no longer resolvable.
-    assert socket.delivered == ["first-frame", "second-frame"]
-    assert socket.closes == [(4403, None)]
-    facade.disconnect_host.assert_awaited_once()
+    assert readiness == {"ready": False, "code": code}
+    assert failure.args[0] not in str(readiness)
 
 
 class _RecordingArtifactGateway(OmnigentArtifactGateway):
@@ -476,22 +313,6 @@ class _RecordingArtifactGateway(OmnigentArtifactGateway):
 @pytest.mark.asyncio
 async def test_cross_channel_serializers_redact_or_reject_host_secret(caplog) -> None:
     token = "sentinel-http-token"
-    config = _embedded_config()
-    cases = [
-        {},
-        {"Authorization": f"Bearer {token}"},
-        {"Cookie": f"session={token}"},
-        {"X-Omnigent-Runner-Tunnel-Token": "malformed"},
-    ]
-    for headers in cases:
-        with pytest.raises(OmnigentBridgeError) as excinfo:
-            verify_embedded_host_auth(
-                headers=headers,
-                config=config,
-                configured_credentials={9: token},
-                credential_profile_id="managed",
-            )
-        assert token not in str(excinfo.value)
 
     # The real raw-event persistence serializer removes credential-shaped data.
     persisted_events = redact_raw_events(
@@ -570,87 +391,37 @@ async def test_cross_channel_serializers_redact_or_reject_host_secret(caplog) ->
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    ("headers", "http_status", "http_code", "ws_code"),
+    "headers",
     [
-        ({}, 401, "host_auth_rejected", 4401),
+        {},
         (
             _Headers({
                 "X-Omnigent-Runner-Tunnel-Token": "current",
                 "x-omnigent-runner-tunnel-token": "duplicate",
-            }),
-            401,
-            "host_auth_rejected",
-            4401,
+            })
         ),
-        (
-            _Headers({"X-Omnigent-Runner-Tunnel-Token": "invalid"}),
-            401,
-            "host_auth_rejected",
-            4401,
-        ),
-        (
-            _Headers({"X-Omnigent-Runner-Tunnel-Token": "stale"}),
-            401,
-            "host_auth_rejected",
-            4401,
-        ),
-        ({"Authorization": "Bearer current"}, 401, "host_auth_rejected", 4401),
+        (_Headers({"X-Omnigent-Runner-Tunnel-Token": "invalid"})),
+        (_Headers({"X-Omnigent-Runner-Tunnel-Token": "stale"})),
+        ({"Authorization": "Bearer current"}),
     ],
 )
-async def test_pinned_upstream_http_websocket_rejection_parity(
-    monkeypatch, headers, http_status, http_code, ws_code
+async def test_pinned_verifier_rejects_tunnel_credentials_without_admission(
+    headers,
 ) -> None:
-    """The same pinned-verifier rejection retains HTTP and WS retry semantics."""
+    """The pinned verifier still rejects bad tunnel credentials.
+
+    The MoonMind-side handshake that used to map these rejections onto the
+    embedded tunnel was retired (MoonLadderStudios/MoonMind#3955): the
+    retired tunnel refuses before consulting the verifier, so a rejected
+    credential can never become a session or lease consumer.
+    """
 
     token = "current"
-    profile = HostAuthCredentialProfile("managed", "env://HOST", 2)
-    resolved = ResolvedHostAuthCredentials(profile, {2: token})
     adapter = OmnigentHostAuthAdapter(allowed_tokens=frozenset({token}))
     with pytest.raises(UpstreamHostAuthError):
         adapter.verify(headers)
 
-    # The pinned verifier exposes one credential-rejection class. MoonMind maps
-    # every such failure to permanent authentication rejection on both
-    # transports; only server/profile availability uses the retryable 1013 path.
-    assert http_status == 401
-    assert ws_code == 4401
-
-    monkeypatch.setattr(
-        bridge_composition,
-        "resolve_active_host_auth_profile",
-        AsyncMock(return_value=profile),
-    )
-    monkeypatch.setattr(
-        bridge_composition,
-        "resolve_host_auth_credentials",
-        AsyncMock(return_value=resolved),
-    )
-    request = SimpleNamespace(headers=headers)
-    with pytest.raises(HTTPException) as http_exc:
-        await bridge_router._embedded_auth_context(request=request, config=_embedded_config())
-    assert http_exc.value.status_code == http_status
-    assert http_exc.value.detail["code"] == http_code
-
     socket = _HandshakeSocket(headers)
-    monkeypatch.setattr(bridge_router, "get_bridge_config", _embedded_config)
-    monkeypatch.setattr(
-        bridge_router, "_require_embedded_mode", AsyncMock(return_value=_embedded_config())
-    )
-    await bridge_router.embedded_omnigent_host_tunnel(socket, "untrusted-host")
-    assert socket.closes == [(ws_code, http_code)]
-
-
-def _embedded_config():
-    return parse_bridge_config(
-        {
-            "enabled": True,
-            "compatibility": {"hostProtocolMode": HOST_PROTOCOL_MODE_EMBEDDED},
-            "hostConnection": {
-                "embedded": {
-                    "proxyConformanceEvidenceRef": "artifact://proxy",
-                    "liveSmokeEvidenceRef": "artifact://smoke",
-                    "hostAuthConformanceEvidenceRef": "artifact://auth",
-                }
-            },
-        }
-    )
+    await bridge_router.retired_embedded_host_tunnel(socket, "untrusted-host")
+    assert socket.accepted is False
+    assert socket.closes == [(4404, "omnigent_embedded_transport_retired")]
