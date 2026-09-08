@@ -1,0 +1,33 @@
+{
+  "sourceWorkflowId": "mm:7ecd83e1-f260-4d02-828d-fd9e59e1f8b8-2026-09-07T23:40:00Z",
+  "stepExecutionId": "tpl:github-issue-search-and-implement:08:094d273f:execution:1",
+  "request": {
+    "agentKind": "external",
+    "agentId": "omnigent",
+    "instructionRef": "Publish the verified candidate pull request.",
+    "workspaceSpec": {
+      "repository": "MoonLadderStudios/MoonMind",
+      "startingBranch": "main",
+      "branch": "moonmind-job-8372248e",
+      "workspaceCheckpointRestoreRef": "artifact://checkpoint"
+    },
+    "parameters": {
+      "publishMode": "pr",
+      "acceptedPublishedHead": {
+        "workflowId": "mm:7ecd83e1-f260-4d02-828d-fd9e59e1f8b8-2026-09-07T23:40:00Z",
+        "repository": "MoonLadderStudios/MoonMind",
+        "branch": "moonmind-job-8372248e"
+      }
+    }
+  },
+  "pullRequest": {
+    "number": 4085,
+    "html_url": "https://github.com/MoonLadderStudios/MoonMind/pull/4085",
+    "draft": false,
+    "head": {
+      "ref": "moonmind-job-8372248e",
+      "repo": {"full_name": "MoonLadderStudios/MoonMind"}
+    },
+    "base": {"ref": "main"}
+  }
+}

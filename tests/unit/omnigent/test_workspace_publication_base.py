@@ -4,19 +4,23 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import subprocess
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 from uuid import uuid4
 
+import httpx
 import pytest
 
 from moonmind.config.settings import settings
 from moonmind.omnigent.harness_platform.failures import HarnessPlatformError
+from moonmind.omnigent.host_services.workspace import OmnigentWorkspaceMaterializer
 from moonmind.omnigent.workspace_publication import OmnigentWorkspacePublicationService
 from moonmind.publish.service import PublishService
 from moonmind.schemas.agent_runtime_models import AgentExecutionRequest
+from moonmind.workflows.temporal.activity_runtime import TemporalSandboxActivities
 from moonmind.workflows.temporal.runtime.workspace_locators import (
     SandboxWorkspaceRecord,
     SandboxWorkspaceRecordStore,
@@ -27,6 +31,119 @@ def git(*args: str, cwd: Path) -> str:
     return subprocess.run(
         ["git", *args], cwd=cwd, check=True, capture_output=True, text=True
     ).stdout.strip()
+
+
+@pytest.mark.asyncio
+async def test_checkpoint_restore_preserves_accepted_pr_publication(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Replay capture -> restore -> exact remote PR discovery, including retry."""
+    replay = json.loads(
+        (Path(__file__).parent / "fixtures/checkpoint-executable-publication.json")
+        .read_text()
+    )
+    monkeypatch.setattr(settings.security, "high_security_mode", False)
+    for prefix in ("AUTHOR", "COMMITTER"):
+        monkeypatch.setenv(f"GIT_{prefix}_NAME", "Test")
+        monkeypatch.setenv(f"GIT_{prefix}_EMAIL", "test@example.invalid")
+    monkeypatch.setattr(
+        "moonmind.omnigent.workspace_publication.resolve_github_credential",
+        AsyncMock(return_value=SimpleNamespace(token="fixture-credential")),
+    )
+    source = tmp_path / "source"
+    source.mkdir()
+    origin = tmp_path / "origin.git"
+    git("init", "--bare", "--initial-branch=main", str(origin), cwd=tmp_path)
+    git("init", "--initial-branch=main", cwd=source)
+    (source / ".gitignore").write_text("artifacts/\n.moonmind/\n")
+    (source / "run.sh").write_text("#!/bin/sh\nprintf 'candidate works\\n'\n")
+    (source / "run.sh").chmod(0o755)
+    (source / "work.txt").write_text("base\n")
+    git("add", ".", cwd=source)
+    git("commit", "-m", "base", cwd=source)
+    git("remote", "add", "origin", str(origin), cwd=source)
+    git("push", "origin", "main", cwd=source)
+    candidate = replay["pullRequest"]["head"]["ref"]
+    git("checkout", "-b", candidate, cwd=source)
+    (source / "work.txt").write_text("completed work\n")
+    git("commit", "-am", "candidate", cwd=source)
+    head_sha = git("rev-parse", "HEAD", cwd=source)
+    git("push", "origin", candidate, cwd=source)
+    archive, _ = TemporalSandboxActivities(workspace_root=tmp_path)._build_worktree_archive(
+        source
+    )
+
+    class Artifacts:
+        async def get_metadata(self, **_kwargs):
+            return SimpleNamespace(size_bytes=len(archive)), []
+
+        async def read_chunks(self, **_kwargs):
+            return SimpleNamespace(), iter((archive,))
+
+    workflow_id, step_id = replay["sourceWorkflowId"], replay["stepExecutionId"]
+    workspace_id = hashlib.sha256(f"{workflow_id}:{step_id}".encode()).hexdigest()[:24]
+    workspace = tmp_path / "temporal_sandbox" / workspace_id / "repo"
+    workspace.parent.mkdir(parents=True)
+    git("clone", "--branch", candidate, str(origin), str(workspace), cwd=tmp_path)
+    SandboxWorkspaceRecordStore(tmp_path).ensure(
+        SandboxWorkspaceRecord(workspace_id, workflow_id, step_id, "repo")
+    )
+    payload = replay["request"]
+    payload.update(correlationId=workflow_id, idempotencyKey=step_id)
+    payload["parameters"]["acceptedPublishedHead"]["headSha"] = head_sha
+    payload["workspaceSpec"]["workspaceLocator"] = {
+        "kind": "sandbox", "workspaceId": workspace_id, "relativePath": "repo"
+    }
+    request = AgentExecutionRequest.model_validate(payload)
+    materializer = OmnigentWorkspaceMaterializer(
+        command_runner=AsyncMock(side_effect=AssertionError("must reuse checkout")),
+        workspace_root=tmp_path,
+        artifact_service=Artifacts(),
+    )
+    await materializer.materialize(
+        request, runtime_uid=os.getuid(), runtime_gid=os.getgid()
+    )
+    assert git("status", "--porcelain", cwd=workspace) == ""
+    assert subprocess.run(
+        [str(workspace / "run.sh")], check=True, capture_output=True, text=True
+    ).stdout == "candidate works\n"
+    assert not (workspace / "work.txt").stat().st_mode & 0o111
+
+    # The agent created this PR before the trusted publisher inspected the
+    # restored workspace. Exercise the real selector against its HTTP contract.
+    pull_request = replay["pullRequest"]
+    pull_request["head"]["sha"] = head_sha
+    lookups = []
+
+    def github(request: httpx.Request) -> httpx.Response:
+        assert request.method == "GET"
+        assert request.url.path == "/repos/MoonLadderStudios/MoonMind/pulls"
+        lookups.append(request.url.params["head"])
+        return httpx.Response(200, json=[pull_request])
+
+    client = httpx.AsyncClient
+    monkeypatch.setattr(
+        "moonmind.workflows.adapters.github_service.httpx.AsyncClient",
+        lambda **kwargs: client(transport=httpx.MockTransport(github), **kwargs),
+    )
+    publisher = OmnigentWorkspacePublicationService(tmp_path)
+    for _attempt in range(2):
+        evidence = await publisher.publish_request_workspace(
+            request=request,
+            current_workflow_id=workflow_id,
+            current_step_execution_id=step_id,
+        )
+        assert evidence["pull_request_url"] == pull_request["html_url"]
+        assert evidence["push_branch"] == candidate
+        assert evidence["push_head_sha"] == head_sha
+        assert evidence["push_commit_count"] == 1
+        assert evidence["remote_verified"] is True
+        assert git("status", "--porcelain", cwd=workspace) == ""
+        assert git("rev-parse", "HEAD", cwd=workspace) == head_sha
+    assert lookups == [f"MoonLadderStudios:{candidate}"] * 2
+    assert git("branch", "--format=%(refname:short)", cwd=origin).splitlines() == [
+        "main", candidate
+    ]
 
 
 @pytest.mark.asyncio
