@@ -309,7 +309,8 @@ dockerBackendService:
 
     # Every other image source is declared by the deployment through
     # MOONMIND_CONTAINER_BACKEND_IMAGE_SOURCES, a JSON array of
-    # {"sourceRef", "image", "pullPolicy"} objects. MoonMind ships no project
+    # {"sourceRef", "image", "pullPolicy", "registryCredentialRef"} objects.
+    # registryCredentialRef is optional. MoonMind ships no project
     # image default of its own.
     <deployment-declared>:
       kind: registry
@@ -658,6 +659,41 @@ Compose profile for operators who want prewarming. It must call the same
 provisioner and must never be a dependency of ordinary API or worker startup.
 
 ### 11.6 Private images
+
+A deployment registry image declaration may carry an optional opaque
+`registryCredentialRef`. The API authorizes the resolved image and credential
+through `MOONMIND_REGISTRY_CREDENTIAL_GRANTS` before persisting a job, and the
+worker checks that both still match that authorization before inspecting or
+pulling. Callers continue to submit only `imageSourceRef`; they cannot override
+the source's image, pull policy, or credential. Missing grants fail at admission.
+Existing declarations without a credential retain their anonymous pull behavior.
+If a credential or image declaration changes while a job is in flight, an
+authorization mismatch fails closed; a new submission obtains a new decision.
+
+For the Compose Unreal source, set
+`MOONMIND_UNREAL_ENGINE_REGISTRY_CREDENTIAL_REF` to a managed secret such as
+`db://tactics-ghcr-pull` and declare a grant scoped to
+`ghcr.io/moonladderstudios/tactics-ue-base`. Store the registry username and
+password/token as a JSON object in that encrypted secret. A host's Docker Desktop
+credential helper is client-local and is not inherited by the worker container.
+The worker never substitutes the agent's GitHub source-control token.
+
+Registry enrollment is a deployment operation, not a per-job or per-container
+step. With a `db://` reference, preserving the application database, its managed
+secret encryption key, and deployment configuration makes worker recreations
+and application updates reuse the credential automatically. The API's separate
+session-key volume likewise preserves its generated local signing key across
+API recreations; empty Compose defaults select that durable key path.
+
+Fresh deployments with empty databases can instead use an `env://`, `vault://`,
+or approved `exec://` registry credential reference. Their deployment provisioner
+supplies access to that selected source; no dashboard enrollment or database
+copy is required. For example, `env://TACTICS_REGISTRY_AUTH` resolves a JSON
+username/password pair injected into the trusted worker by the deployment's
+secret manager. Both the image declaration and its repository-scoped grant must
+name that same reference. Secret values do not belong in the image declaration
+or grant. Missing or unauthorized references fail closed instead of searching
+other credentials.
 
 A job request carries a non-sensitive `registryCredentialRef` only; it never
 carries a username, token, password, or Docker auth blob. Private-image

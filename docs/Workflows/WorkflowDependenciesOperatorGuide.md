@@ -6,7 +6,7 @@ This document describes operational behavior, limits, diagnostics, and remediati
 
 ## 1. What Are Workflow Dependencies?
 
-A `MoonMind.UserWorkflow` execution can declare up to **10 prerequisite `workflowId` values** at create time via `payload.task.dependsOn`. The dependent run:
+A `MoonMind.UserWorkflow` execution can declare up to **10 prerequisite `workflowId` values** at create time via `payload.workflow.dependsOn`. The dependent run:
 
 1. Initializes normally.
 2. Enters `waiting_on_dependencies` state.
@@ -146,7 +146,7 @@ Workflows that started **before** `dependency-wait-through-rerun-v1` was deploye
 Dependents are stored in the `execution_dependencies` durable edge table. If reverse lookup returns empty:
 
 1. Verify the prerequisite's `workflowId` matches the `prerequisite_workflow_id` column.
-2. Check that the dependency edges were persisted at create time (both `initialParameters.task.dependsOn` and the edge table must be written).
+2. Check that the dependency edges were persisted at create time (both `initialParameters.workflow.dependsOn` and the edge table must be written).
 
 ---
 
@@ -155,6 +155,7 @@ Dependents are stored in the `execution_dependencies` durable edge table. If rev
 The dependency gate is deployed under cooperating Temporal patches:
 
 - **`dependency-gate-v1`** — installs the dependency gate itself. Workflows started before this patch was deployed skip the gate entirely (backward compatible).
+- **`run-canonical-dependency-parameters-v1`** — reads dependencies from the admitted `workflow` envelope. Histories that already passed initialization without this marker retain their recorded command sequence; restarting a worker does not retroactively gate work that already launched. Cancel and recreate an affected dependent with its prerequisites to enforce the wait.
 - **`dependency-wait-through-rerun-v1`** — installs the unified wait-through-rerun behavior. The first time a workflow under this patch records a prerequisite outcome, Temporal records a marker that pins the workflow to the new behavior across replays.
   - Workflows started **after** `dependency-wait-through-rerun-v1` was deployed never auto-fail on a prerequisite failure.
   - Workflows whose history predates `dependency-wait-through-rerun-v1` continue to use the legacy fail-fast code path until they terminate. Their `_dependency_failure` paths and `dependency_gate_failed` events remain accurate for those runs only.

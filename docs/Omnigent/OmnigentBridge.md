@@ -255,6 +255,8 @@ For every HTML/bootstrap, HTTP, SSE, WebSocket, resource, message, approval, ter
 
 The full-page **Open in Omnigent** experience uses this same scoped facade. It must not navigate directly to an upstream server and bypass MoonMind authority.
 
+The additional native HTTP surface admits only fields reviewed against the pinned server and runner entrypoints. Unknown body or query fields, duplicate keys, unreviewed media types and incompatible operation shapes are rejected before mutation claims or upstream I/O. Multipart uploads contain exactly one `file` part. Terminal creation admits declared terminal identity and session key; browser input cannot inject bootstrap flags, runtime specifications, workspace roots or sandbox overrides. MoonMind compare-and-set inputs are consumed locally and excluded from upstream requests. A route without a verified upstream counterpart is not served; recognized internal browser actions remain closed until their field and ownership contracts are reviewed.
+
 #### Versioned native-UI compatibility map (MoonLadderStudios/MoonMind#3635)
 
 The native UI is more than an HTTP transcript: it opens WebSockets and drives terminal/PTY, execution-log, browser-pane, sub-agent/task, and reconnect/wake surfaces. Transport and route coverage for that surface is a single **versioned compatibility map** pinned to the `omnigent.server.v1` profile (`moonmind/omnigent/native_ui_compat.py`). Each recognized route/transport declares one of two dispositions:

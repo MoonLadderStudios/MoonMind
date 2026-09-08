@@ -123,11 +123,37 @@ TEMPORAL_BOUNDARY_GLOBS = (
 INTEGRATION_CI_EXACT = {
     "api_service/core/sync.py",
     "docker-compose.test.yaml",
+    # MoonLadderStudios/MoonMind#4128: deployment topology is an auth
+    # qualification boundary (Keycloak profile gating, startup/readiness).
+    # A Compose change must run the integration foundation, not only the
+    # exact-artifact gate.
+    "docker-compose.yaml",
     "api_service/Dockerfile",
     ".env-template",
     "tools/test_integration.sh",
     "pyproject.toml",
     "uv.lock",
+    # MoonLadderStudios/MoonMind#4128: production auth, session issuance,
+    # worker authority, route mounting, and configuration are integration
+    # qualification boundaries. A change to any of these files must run the
+    # hermetic integration_ci suite so a touched boundary cannot silently
+    # skip its required tests.
+    "api_service/auth.py",
+    "api_service/auth_providers.py",
+    "api_service/main.py",
+    "api_service/api/routers/worker_auth.py",
+    "moonmind/config/settings.py",
+    # MoonLadderStudios/MoonMind#4128 (rw-8): frontend transport is part of
+    # the same qualification boundary. The generated OpenAPI client and the
+    # tooling that produces it carry session/credential transport; a change
+    # here must run integration_ci so a transport regression cannot skip
+    # its required tests. Schema (api_service/db/, migrations/) is already
+    # covered by INTEGRATION_CI_PREFIXES; pins (pyproject/uv.lock/poetry.lock)
+    # select integration_ci via the force-full path and package-lock via the
+    # exact-artifact gate (pinned in the taxonomy test).
+    "tools/export_openapi.py",
+    "tools/generate_openapi_types.py",
+    "frontend/src/generated/openapi.ts",
 }
 
 INTEGRATION_CI_PREFIXES = (

@@ -1,6 +1,6 @@
 import os
 import re
-from typing import Annotated, Any, Literal, Optional, Sequence
+from typing import Annotated, Any, ClassVar, Literal, Optional, Sequence
 from urllib.parse import urlsplit
 
 from pydantic import AliasChoices, Field, field_validator, model_validator
@@ -1759,17 +1759,32 @@ class MemorySettings(BaseSettings):
     )
 
 class OIDCSettings(BaseSettings):
-    """OIDC settings"""
+    """OIDC settings.
+
+    Storage for the raw ``AUTH_PROVIDER`` selector. Interpretation of the
+    selector (validation, fresh-vs-upgrade classification, migration
+    decisions, and deployment policy) is owned by
+    ``moonmind.security.auth_modes_4120`` (#4120); production consumers
+    must use that owner instead of comparing this field directly.
+    """
+
+    # Canonical application-authentication selector
+    # (docs/Security/AuthenticationContracts.md). Supported target modes are
+    # `accounts`, `oidc`, `header`, and explicitly restricted local `disabled`.
+    # Retired selectors (`keycloak`, `default`, `google`, `local`) are rejected
+    # at API startup with migration guidance, never silently translated.
+    SUPPORTED_AUTH_PROVIDERS: ClassVar[tuple] = ("accounts", "oidc", "header", "disabled")
+    RETIRED_AUTH_PROVIDERS: ClassVar[tuple] = ("keycloak", "default", "google", "local")
 
     AUTH_PROVIDER: str = Field(
         "disabled",
-        description="Authentication provider selector (MoonLadderStudios/MoonMind#4116). Legacy values: 'disabled', 'default', 'keycloak', 'google'. Planned cutover values 'accounts', 'oidc', 'header' are recognized but not yet implemented (K3/K4 own the cutover) and refuse startup/requests fail-closed. Unknown values refuse startup; never silently disable authentication.",
+        description="Authentication provider: 'accounts', 'oidc', 'header', or 'disabled'.",
         alias="AUTH_PROVIDER",
     )
     OIDC_ISSUER_URL: Optional[str] = Field(
         None,
         alias="OIDC_ISSUER_URL",
-        description="URL of the OIDC provider, e.g., Keycloak.",
+        description="Issuer URL of the generic external OIDC provider for 'oidc' mode.",
     )
     OIDC_CLIENT_ID: Optional[str] = Field(None, alias="OIDC_CLIENT_ID")
     OIDC_CLIENT_SECRET: Optional[str] = Field(None, alias="OIDC_CLIENT_SECRET")
@@ -1790,6 +1805,47 @@ class OIDCSettings(BaseSettings):
     )
 
     model_config = SettingsConfigDict(populate_by_name=True, env_prefix="")
+
+    def validate_auth_provider(self) -> str:
+        """Return the normalized selector, failing fast on retired/unknown values.
+
+        Retired bundled-Keycloak selectors are rejected with migration guidance
+        (MoonLadderStudios/MoonMind#4129); they are never silently translated to
+        another mode. Unknown selectors fail closed the same way. The normalized
+        value is stored so later exact comparisons against canonical lowercase
+        modes (for example `"disabled"`) see the same selector that validation
+        approved; noncanonical spellings such as `DISABLED` or padded values
+        therefore select the intended mode instead of falling through to an
+        authenticated bearer dependency.
+
+        A blank/omitted selector returns ``""`` (undecided) without raising:
+        the omitted-fresh vs. omitted-populated decision is owned by
+        ``moonmind.security.auth_modes_4120.classify_deployment`` (#4120 req 3),
+        which selects ``accounts`` on a genuinely fresh database and raises a
+        protected ``MigrationRequiredError`` on a populated one. Callers that
+        need the production decision must classify; they must not treat blank
+        as ``disabled``.
+        """
+        provider = (self.AUTH_PROVIDER or "").strip().lower()
+        if not provider:
+            return ""
+        if provider in self.RETIRED_AUTH_PROVIDERS:
+            raise RuntimeError(
+                f"Unsupported AUTH_PROVIDER '{self.AUTH_PROVIDER}': the bundled "
+                "Keycloak integration was removed (#4129). Use 'accounts' for "
+                "built-in accounts, 'oidc' with OIDC_ISSUER_URL/OIDC_CLIENT_ID/"
+                "OIDC_CLIENT_SECRET for generic external OIDC, 'header' behind a "
+                "trusted proxy, or explicitly restricted local 'disabled'. "
+                "See docs/Security/AuthenticationContracts.md."
+            )
+        if provider not in self.SUPPORTED_AUTH_PROVIDERS:
+            raise RuntimeError(
+                f"Unknown AUTH_PROVIDER '{self.AUTH_PROVIDER}': supported modes are "
+                "'accounts', 'oidc', 'header', and explicitly restricted local "
+                "'disabled'. See docs/Security/AuthenticationContracts.md."
+            )
+        self.AUTH_PROVIDER = provider
+        return provider
 
 class FeatureFlagsSettings(BaseSettings):
     """Feature flag toggles for runtime surfaces."""
