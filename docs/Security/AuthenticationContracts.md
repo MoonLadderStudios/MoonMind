@@ -6,7 +6,7 @@
 **Owners:** MoonMind Engineering  
 **Audience:** API, dashboard, runtime, security contributors and operators  
 **Authority:** Application authentication modes, identity mapping, session/revocation, CSRF/origin, error semantics, and background-work policy for MoonMind user authentication. Freezes the target contract inventoried in `[KeycloakRemovalInventory-4117.md](../tmp/KeycloakRemovalInventory-4117.md)` (MoonLadderStudios/MoonMind#4117, parent epic #4116).  
-**Owning Surface:** `api_service/auth.py`, `api_service/auth_providers.py`, `api_service/main.py`, `moonmind/config/settings.py` (`OIDCSettings`), `api_service/db/models.py` (`User`)  
+**Owning Surface:** `api_service/auth.py`, `api_service/auth_providers.py`, `api_service/main.py`, `moonmind/config/settings.py` (`OIDCSettings`, process holder only), `moonmind/security/auth_modes.py` (canonical `AUTH_PROVIDER`/migration/secret/exposure/proxy/cookie/readiness owner), `api_service/db/models.py` (`User`)  
 **Related Docs:** [SecretsSystem.md](./SecretsSystem.md), [ProviderProfiles.md](./ProviderProfiles.md), [SettingsSystem.md](./SettingsSystem.md), [KeycloakRemovalPlan.md](../tmp/KeycloakRemovalPlan.md) (predecessor proposal from #4102; starting evidence only, not the deliverable)
 
 > [!NOTE]
@@ -33,7 +33,9 @@ hits.
 
 ## 2. Authentication modes
 
-One selector, `AUTH_PROVIDER` (`moonmind/config/settings.py`, `OIDCSettings`).
+One selector, `AUTH_PROVIDER` (`moonmind/security/auth_modes.py` canonical owner;
+`moonmind/config/settings.py` `OIDCSettings` holds the process value and delegates
+validation, it does not define a competing contract).
 No competing enable switch. Runtime-server `OMNIGENT_AUTH_*` variables never
 select MoonMind's mode, key, or identity store.
 

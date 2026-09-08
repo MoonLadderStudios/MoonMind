@@ -22,18 +22,13 @@ logger = logging.getLogger(__name__)
 _cached_current_user_dependency = None
 
 
-def _disabled_auth_fallback_user():
-    from types import SimpleNamespace
-
-    user_id_str = settings.oidc.DEFAULT_USER_ID or _DEFAULT_USER_ID
-    return SimpleNamespace(
-        id=uuid.UUID(user_id_str),
-        email=settings.oidc.DEFAULT_USER_EMAIL or "stub@example.com",
-        is_superuser=True,
-    )
-
-
 def _disabled_auth_test_user():
+    """Explicit test-only principal (never the production path).
+
+    Used only when ``settings.workflow.test_mode`` or ``PYTEST_CURRENT_TEST``
+    marks an explicit test override. Production database failures raise
+    ``503`` instead of synthesizing this stub.
+    """
     from types import SimpleNamespace
 
     return SimpleNamespace(id=None, email="stub@example.com", is_superuser=True)
@@ -58,17 +53,14 @@ def get_current_user():
     """Return a dependency that yields the current user.
 
     Behaviour:
-    • In normal operation with AUTH_PROVIDER == "disabled" we still try to load the
-      default user from the database (to keep behaviour unchanged for the running
-      API).
-    • **However** when running under unit-test environments the database is often
-      unavailable.  If we cannot reach it (e.g. connection refused) we gracefully
-      fall back to returning a lightweight stub user object so the rest of the
-      application code continues to work without a real database.
-    This removes the hard DB dependency from the vast majority of unit tests that
-    don’t need it, preventing the `[Errno 111] Connect call failed ('127.0.0.1',
-    5432)` failures that appeared after switching back to
-    `Depends(get_current_user())` in the routers.
+    • In normal operation with AUTH_PROVIDER == "disabled" we load the
+      default user from the database (explicit local single-user mode).
+    • Missing identity data or database unavailability fails closed with
+      ``503`` (``unavailable``) on the production path. It never synthesizes
+      an administrator stub (MoonLadderStudios/MoonMind#4120 R5): a missing
+      credential may be optional only at explicitly optional boundaries, and
+      test-only principals belong in explicit test dependency overrides
+      (``settings.workflow.test_mode``), never in production fallbacks.
     """
 
     global _cached_current_user_dependency
@@ -80,11 +72,13 @@ def get_current_user():
 
     if _cached_current_user_dependency is None:
 
-        async def _current_user_fallback():  # pragma: no cover – simple helper
+        async def _current_user_fallback():
             if settings.workflow.test_mode or os.getenv("PYTEST_CURRENT_TEST"):
+                # Explicit test-only override: unit-test environments without
+                # a database use a stub principal instead of requiring DB.
+                # Production (test_mode False, no PYTEST_CURRENT_TEST) never
+                # takes this path.
                 return _disabled_auth_test_user()
-            if os.getenv("MOONMIND_DISABLE_DEFAULT_USER_DB_LOOKUP") == "1":
-                return _disabled_auth_fallback_user()
 
             async def _load_default_user() -> User | None:
                 from api_service.db.base import get_async_session_context
@@ -103,14 +97,16 @@ def get_current_user():
                     user_obj.is_superuser = True
                     return user_obj
             except (Exception, asyncio.TimeoutError):
-                # Preserve fallback behaviour while surfacing lookup failures.
                 logger.warning(
-                    "Failed to load default user in disabled auth mode; falling back to stub user.",
+                    "Failed to load default user in disabled auth mode; failing closed.",
                     exc_info=True,
                 )
+                raise HTTPException(
+                    status_code=503, detail="Identity store unavailable"
+                )
 
-            # Fallback: lightweight stub with the minimal attributes used in code.
-            return _disabled_auth_fallback_user()
+            # No synthetic admin fallback: missing identity data fails closed.
+            raise HTTPException(status_code=503, detail="Default user not found")
 
         _cached_current_user_dependency = _current_user_fallback
 
