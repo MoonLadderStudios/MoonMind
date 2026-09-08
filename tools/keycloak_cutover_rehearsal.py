@@ -68,11 +68,17 @@ FORBIDDEN_RETIREMENT_PATTERNS = (
     re.compile(r"\bapp(lication)?\b.*\bvolume\b.*\b(delet|remov)", re.IGNORECASE),
     re.compile(r"\bvolume\b.{0,40}(delet|remov|drop)", re.IGNORECASE),
     re.compile(r"(delet|remov|drop).{0,40}\bvolume\b", re.IGNORECASE),
+    # Destructive database/role retirement is never a safe "stop service"
+    # plan: e.g. "delete keycloak database" or "remove keycloak database".
+    re.compile(r"(delet|remov|drop|destroy|wipe|purge).{0,40}\b(database|role)\b", re.IGNORECASE),
+    re.compile(r"\b(database|role)\b.{0,40}(delet|remov|drop|destroy|wipe|purge)", re.IGNORECASE),
+    re.compile(r"(delet|remov|drop|destroy|wipe|purge).{0,40}\bidentity\b.{0,40}\brows?\b", re.IGNORECASE),
 )
 
 _SECRET_PATTERN = re.compile(
-    r"(?i)(password|passwd|secret|bearer|cookie|session[_-]?token|refresh[_-]?token"
-    r"|authorization\s*:\s*[^\s]+|token\s*=\s*[^\s;]+)\s*[:=]\s*\S+"
+    r"(?i)(?:authorization\s*:\s*bearer\s+\S+"
+    r"|(?:password|passwd|secret|bearer|cookie|session[_-]?token|refresh[_-]?token"
+    r"|token)\s*[:=]\s*[^\s;,\"']+)"
 )
 
 
@@ -168,6 +174,17 @@ def check_prerequisites(repo_root: Path = REPO_ROOT) -> list[StepResult]:
     return results
 
 
+def _read_auth_provider_default(settings_text: str) -> str | None:
+    """Extract the AUTH_PROVIDER default contract from the settings module.
+
+    Only the declared ``AUTH_PROVIDER`` default counts as mode evidence;
+    unrelated literals elsewhere in the module (e.g. ``CACHE_BACKEND``) must
+    not flip the prerequisite.
+    """
+    m = re.search(r"AUTH_PROVIDER:\s*str\s*=\s*Field\(\s*\"([^\"]+)\"", settings_text)
+    return m.group(1) if m else None
+
+
 def _capability_present(pid: str, repo_root: Path = REPO_ROOT) -> bool:
     """Whether a prerequisite's owning capability is observable in the checkout.
 
@@ -193,10 +210,8 @@ def _capability_present(pid: str, repo_root: Path = REPO_ROOT) -> bool:
         )
     if pid == "4120-mode-key-setup":
         settings_text = _read_text(repo_root / "moonmind/config/settings.py") or ""
-        modes = set(
-            re.findall(r"'(disabled|keycloak|local|accounts|oidc|header)'", settings_text)
-        )
-        return bool(modes - {"disabled", "keycloak"})
+        default = _read_auth_provider_default(settings_text)
+        return default is not None and default not in {"disabled", "keycloak"}
     if pid == "4122-protected-recovery":
         tools_dir = repo_root / "tools"
         if not tools_dir.exists():
@@ -293,6 +308,13 @@ def check_inventory_survey(repo_root: Path = REPO_ROOT) -> StepResult:
     """Verify the sanitized survey can be collected hermetically."""
     survey = collect_inventory_survey(repo_root)
     missing = [k for k, v in survey["sources"].items() if v == "missing"]
+    # An absent realm export after integrated removal (#4129) is expected
+    # evidence of removal, not an unreadable required source.
+    if (
+        "keycloak/realm-export.json" in missing
+        and _capability_present("4129-removal", repo_root)
+    ):
+        missing = [k for k in missing if k != "keycloak/realm-export.json"]
     if missing:
         return StepResult(
             "inventory-survey", "failed",
@@ -340,13 +362,17 @@ def detect_capability_presence(repo_root: Path = REPO_ROOT) -> dict[str, str]:
         "tools/*keycloak*apply|dry* (excluding this gate); none present"
     )
     settings_text = _read_text(repo_root / "moonmind/config/settings.py") or ""
-    modes = set(re.findall(r"'(disabled|keycloak|local|accounts|oidc|header)'", settings_text))
-    presence["4120-mode-key-setup"] = (
-        f"AUTH_PROVIDER literals seen: {sorted(modes)}"
-        if modes - {"disabled", "keycloak"} else
-        "AUTH_PROVIDER still 'disabled'/'keycloak' only "
-        "(moonmind/config/settings.py); no accounts/oidc/header modes"
-    )
+    auth_default = _read_auth_provider_default(settings_text)
+    if auth_default is not None and auth_default not in {"disabled", "keycloak"}:
+        presence["4120-mode-key-setup"] = (
+            f"AUTH_PROVIDER default is {auth_default!r} "
+            "(moonmind/config/settings.py); mode/key setup landed"
+        )
+    else:
+        presence["4120-mode-key-setup"] = (
+            f"AUTH_PROVIDER default is {auth_default!r} "
+            "(moonmind/config/settings.py); still 'disabled'/'keycloak' only"
+        )
     # #4122: protected recovery tooling outside this gate.
     recovery_hits = [
         str(p) for p in sorted((repo_root / "tools").glob("*recover*"))
@@ -530,10 +556,44 @@ def collect_build_pins(repo_root: Path = REPO_ROOT) -> dict[str, Any]:
 def check_build_pins(repo_root: Path = REPO_ROOT) -> StepResult:
     """Verify exact pins/topology are collectible and hermetic/live split."""
     pins = collect_build_pins(repo_root)
+    # Every required pin must resolve; a single malformed source must not
+    # yield positive terminal evidence. The Keycloak image pin is exempt:
+    # "absent" is the expected post-removal (#4129) value.
+    unusable = []
     if pins.get("alembic_revisions") == "unknown":
+        unusable.append("alembic_revisions")
+    if pins.get("app_image_default") in (None, "unknown"):
+        unusable.append("app_image_default")
+    else:
+        # Validate the app image registry by hostname, not by substring:
+        # a registry string containing "ghcr.io/" at an arbitrary position
+        # must not count as a ghcr.io pin.
+        from urllib.parse import urlparse as _urlparse
+
+        _host = _urlparse("https://" + str(pins["app_image_default"])).hostname or ""
+        if _host != "ghcr.io":
+            unusable.append("app_image_default")
+    if pins.get("postgres_image") in (None, "unknown"):
+        unusable.append("postgres_image")
+    if pins.get("temporal_image") in (None, "unknown"):
+        unusable.append("temporal_image")
+    if pins.get("root_package_version") in (None, "unknown", "unparseable"):
+        unusable.append("root_package_version")
+    if pins.get("auth_provider_default") in (None, "unknown"):
+        unusable.append("auth_provider_default")
+    if pins.get("plan_status") in (None, "unknown-or-archived"):
+        unusable.append("plan_status")
+    if pins.get("realm_clients") == "unparseable":
+        unusable.append("realm_clients")
+    if not isinstance(pins.get("compose_services"), int) or pins["compose_services"] <= 0:
+        unusable.append("compose_services")
+    if unusable:
         return StepResult(
             "build-pins", "failed",
-            "Alembic versions directory unreadable; schema-version evidence missing.",
+            "Exact-build evidence incomplete; unusable pins: "
+            + ", ".join(unusable)
+            + ". Refusing positive topology evidence until every required "
+            "pin resolves.",
         )
     return StepResult(
         "build-pins", "completed",
@@ -601,6 +661,9 @@ def create_backup_envelope(
         try:
             target.chmod(0o600)
         except OSError:
+            # Best-effort permission hardening only: the envelope bytes are
+            # already persisted above, and verify_backup_envelope checks
+            # content integrity independently of file mode.
             pass
     return envelope
 
@@ -629,7 +692,15 @@ class MutationFreeze:
         self.frozen = False
 
     def check(self, mutation: str) -> tuple[bool, str]:
-        guarded = ("identity", "mapping", "privilege", "admin", "role")
+        # Explicit mutation categories refused during the frozen window.
+        # Account/user provisioning is an identity mutation and must be
+        # frozen alongside mapping/privilege changes; operational reads
+        # stay allowed.
+        guarded = (
+            "identity", "mapping", "privilege", "admin", "role",
+            "account", "user", "register", "signup", "credential",
+            "session", "login",
+        )
         if self.frozen and any(g in mutation.lower() for g in guarded):
             return False, (
                 f"refused {mutation!r} during frozen cutover window; "
@@ -847,7 +918,14 @@ def check_auth_boundary_replay(
 
 
 def check_rollback_plan(scope: str) -> StepResult:
-    """Validate a rollback scope name without touching any database."""
+    """Validate a rollback scope name without touching any database.
+
+    Only a structured, explicitly permitted scope completes: a matching
+    app/config/key restore with reconciliation or forward repair recorded.
+    Anything else is refused (destructive/silent-fallback), blocked
+    (snapshot without reconciliation), or unrecognized (no positive
+    evidence for absent or unsafe instructions).
+    """
     lowered = scope.lower()
     if "whole" in lowered and ("postgres" in lowered or "temporal" in lowered or "database" in lowered):
         return StepResult(
@@ -860,16 +938,34 @@ def check_rollback_plan(scope: str) -> StepResult:
             "rollback-scope", "failed",
             "Refused: never silently switch to disabled auth as a rollback.",
         )
+    if re.search(r"\b(drop|delete|remove|destroy|wipe|purge)\b.{0,40}\b(database|identity|role)\b", lowered) or \
+            re.search(r"\b(database|identity|role)\b.{0,40}\b(drop|delete|remove|destroy|wipe|purge)\b", lowered):
+        return StepResult(
+            "rollback-scope", "failed",
+            "Refused: destructive database/identity/role operation is not a "
+            "safe app/config/key rollback.",
+        )
     if "snapshot" in lowered and "reconcil" not in lowered and "forward" not in lowered:
         return StepResult(
             "rollback-scope", "blocked",
             "Blind snapshot restore after post-cutover identity writes requires "
             "reconciliation or forward repair first.",
         )
+    if (
+        "matching" in lowered
+        and ("app" in lowered or "config" in lowered or "key" in lowered)
+        and ("reconcil" in lowered or "forward" in lowered)
+    ):
+        return StepResult(
+            "rollback-scope", "completed",
+            "Rollback scope accepted hermetically: matching app/config/key restore with "
+            "session invalidation and reconciliation-before-restore rule recorded.",
+        )
     return StepResult(
-        "rollback-scope", "completed",
-        "Rollback scope accepted hermetically: matching app/config/key restore with "
-        "session invalidation and reconciliation-before-restore rule recorded.",
+        "rollback-scope", "blocked",
+        f"Unrecognized rollback scope {scope!r}; supply an explicit matching "
+        "app/config/key restore with reconciliation or forward repair. No "
+        "positive rollback evidence for absent or unstructured instructions.",
     )
 
 
@@ -901,12 +997,42 @@ def check_retirement_plan(actions: list[str]) -> StepResult:
 def check_workflow_history_authority(
     before: list[dict[str, Any]], after: list[dict[str, Any]]
 ) -> StepResult:
-    """Assert an auth change did not rewrite workflow command order/owner IDs."""
+    """Assert an auth change did not rewrite workflow command order/owner IDs.
+
+    Records are compared by stable ``workflow_id`` key, not by list
+    position, so a reordered or cross-associated evidence collection cannot
+    pass as exact replay.
+    """
     if len(before) != len(after):
         return StepResult(
             "workflow-history-authority", "failed",
             "Workflow history length changed across auth boundary; requires exact "
             "compatibility/replay evidence or bounded old-release drain.",
+        )
+    if all("workflow_id" in dict(b) and "workflow_id" in dict(a) for b, a in zip(before, after)) \
+            and any("workflow_id" in dict(r) for r in [*before, *after]):
+        before_by_id = {r["workflow_id"]: r for r in before}
+        after_by_id = {r["workflow_id"]: r for r in after}
+        if set(before_by_id) != set(after_by_id):
+            return StepResult(
+                "workflow-history-authority", "failed",
+                "Workflow identity set changed across auth boundary "
+                f"(before={sorted(before_by_id)}, after={sorted(after_by_id)}); "
+                "requires exact compatibility/replay evidence or bounded "
+                "old-release drain.",
+            )
+        for wid, b in before_by_id.items():
+            a = after_by_id[wid]
+            if b.get("owner_id") != a.get("owner_id") or b.get("commands") != a.get("commands"):
+                return StepResult(
+                    "workflow-history-authority", "failed",
+                    f"History rewrite detected on {wid}: owner/command "
+                    "order must be preserved across HTTP auth changes.",
+                )
+        return StepResult(
+            "workflow-history-authority", "completed",
+            f"Verified {len(before)} workflow histories readable with unchanged "
+            "workflow IDs, owner IDs, and command order.",
         )
     for b, a in zip(before, after):
         if b.get("owner_id") != a.get("owner_id") or b.get("commands") != a.get("commands"):
@@ -931,7 +1057,17 @@ def load_state(state_dir: Path, migration_id: str) -> dict[str, Any]:
     try:
         data = json.loads(state_file.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError):
-        return {"migration_id": migration_id, "runs": 0, "completed_steps": []}
+        # An existing but unreadable state file is corrupt durable evidence,
+        # not a fresh migration: fail closed and require explicit operator
+        # recovery instead of inventing replacement state that save_state
+        # would then persist over the only durable record.
+        return {
+            "migration_id": migration_id,
+            "runs": 0,
+            "completed_steps": [],
+            "_corrupt": True,
+            "_corrupt_path": str(state_file),
+        }
     return data
 
 
@@ -947,6 +1083,14 @@ def save_state(
     state_dir.mkdir(parents=True, exist_ok=True)
     state_file = state_dir / "k6_rehearsal_state.json"
     existing = load_state(state_dir, migration_id)
+    if existing.get("_corrupt"):
+        return False, (
+            f"corrupt rehearsal state at {existing.get('_corrupt_path')}: "
+            "existing state is unreadable; refusing to overwrite the only "
+            "durable record. Recover explicitly (inspect/restore the file "
+            "with the deployment owner, then re-run with the same "
+            "--migration-id)."
+        )
     if (
         state_file.exists()
         and existing.get("migration_id") != migration_id
@@ -957,6 +1101,18 @@ def save_state(
             f"requested {migration_id!r}; re-run with the same --migration-id or pass "
             "--allow-replace after operator review."
         )
+    if state_file.exists() and existing.get("migration_id") != migration_id and allow_replace:
+        # Replacement starts a new migration's evidence from scratch: never
+        # union the superseded migration's completed steps or run count.
+        completed = list(dict.fromkeys(step_names))
+        payload = {
+            "migration_id": migration_id,
+            "runs": 1,
+            "completed_steps": completed,
+            "issue": ISSUE_REF,
+        }
+        state_file.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+        return True, f"replaced state with migration {migration_id!r} (run 1)."
     completed = list(dict.fromkeys([*existing.get("completed_steps", []), *step_names]))
     payload = {
         "migration_id": migration_id,
@@ -1044,9 +1200,22 @@ def main(argv: list[str] | None = None) -> int:
     if args.mode in ("rollback-check", "all"):
         results.append(check_rollback_plan(args.rollback_scope))
     if args.mode in ("retirement-check", "all"):
-        actions = args.retire_action or ["stop service keycloak (identified from inventory)"]
+        if args.retire_action:
+            actions = args.retire_action
+        elif args.mode == "retirement-check":
+            # No fabricated plan: retirement-check without an explicit
+            # --retire-action stays blocked until the operator supplies an
+            # action derived from actual inventory.
+            actions = []
+        else:
+            actions = ["stop service keycloak (identified from inventory)"]
         results.append(check_retirement_plan(actions))
 
+    # Create the requested output directory before persisting state or
+    # writing the result, so a nested --json-out path cannot fail after the
+    # state file was already updated.
+    if args.json_out is not None:
+        args.json_out.parent.mkdir(parents=True, exist_ok=True)
     ok, msg = save_state(
         args.state_dir, args.migration_id,
         [r.name for r in results if r.status == "completed"],
