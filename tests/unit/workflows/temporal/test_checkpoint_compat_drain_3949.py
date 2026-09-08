@@ -19,12 +19,14 @@ from api_service.services.checkpoint_branch_service import (
     CheckpointBranchService,
     build_branch_turn_launch_idempotency_key,
 )
-from moonmind.workflows.temporal.checkpoint_compat_drain import (
+from moonmind.gates.checkpoint_compat_drain import (
     COMPAT_DRAIN_CONTRACT,
     CheckpointCompatDrainObservations,
     CheckpointCompatDrainUsage,
+    collect_checkpoint_compat_drain_observations,
     evaluate_checkpoint_compat_drain,
     evaluate_checkpoint_compat_drain_observations,
+    render_checkpoint_compat_drain_report,
     retention_reason,
 )
 
@@ -343,33 +345,98 @@ async def test_retained_persistence_handler_fails_closed_without_db(monkeypatch)
 @pytest.mark.asyncio
 async def test_retained_persistence_handler_fails_closed_without_artifact_storage(
     monkeypatch,
+    tmp_path,
 ):
-    """Artifact-storage denial also fails closed instead of persisting
-    partially: with the artifact service denied, the terminal persistence
-    handler must raise rather than record an unverifiable terminal."""
+    """Artifact-storage denial fails closed instead of persisting partially.
+
+    Terminal persistence must cross the artifact authority boundary: with a
+    working database and a denied artifact service, invoking
+    ``persist_checkpoint_branch_turn_terminal`` with an artifact-bearing
+    payload must raise from the artifact denial. The test records the
+    denial invocation so a regression that stops crossing the artifact
+    boundary (for example by calling a database-only handler) fails
+    instead of passing vacuously.
+    """
 
     import moonmind.workflows.temporal.workflows.checkpoint_branch_turn as turn_module
-
-    def _deny_artifact_service(*args, **kwargs):
-        raise RuntimeError("test denied unexpected artifact-storage I/O")
-
-    monkeypatch.setattr(
-        turn_module, "async_session_maker", _deny_session_maker
+    from moonmind.schemas.agent_runtime_models import AgentRunResult
+    from moonmind.workflows.temporal.workflows.checkpoint_branch_turn import (
+        CheckpointBranchRetainedEvidenceError,
     )
-    monkeypatch.setattr(
-        turn_module,
-        "get_checkpoint_branch_artifact_service",
-        _deny_artifact_service,
-    )
-    with pytest.raises(RuntimeError, match="denied unexpected"):
-        await turn_module.mark_checkpoint_branch_turn_running(
-            {
-                "workflowId": "wf-1",
-                "branchId": "b-1",
-                "branchTurnId": "t-1",
-                "agentRunWorkflowId": "run-1",
-            }
+    from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
+    from sqlalchemy.orm import sessionmaker
+
+    from api_service.db.models import Base
+
+    engine = create_async_engine(f"sqlite+aiosqlite:///{tmp_path}/denial.db")
+    try:
+        async with engine.begin() as connection:
+            await connection.run_sync(Base.metadata.create_all)
+        sessions = sessionmaker(
+            engine, class_=AsyncSession, expire_on_commit=False
         )
+        monkeypatch.setattr(turn_module, "async_session_maker", sessions)
+
+        artifact_calls: list[str] = []
+
+        def _deny_artifact_service(*args, **kwargs):
+            artifact_calls.append("get_checkpoint_branch_artifact_service")
+            raise RuntimeError("test denied unexpected artifact-storage I/O")
+
+        monkeypatch.setattr(
+            turn_module,
+            "get_checkpoint_branch_artifact_service",
+            _deny_artifact_service,
+        )
+
+        async with sessions() as session:
+            await CheckpointBranchService(session).create_branch_graph(
+                {
+                    "branchId": "branch-1",
+                    "label": "Artifact-denial terminal persistence",
+                    "branchTurnId": "turn-1",
+                    "source": {
+                        "workflowId": "source-workflow",
+                        "runId": "source-run",
+                        "logicalStepId": "implement",
+                        "sourceExecutionOrdinal": 1,
+                        "checkpointBoundary": "after_execution",
+                        "checkpointRef": "artifact://source/checkpoint",
+                        "checkpointDigest": "sha256:" + "a" * 64,
+                    },
+                    "workspacePolicy": "apply_previous_execution_diff_to_clean_baseline",
+                    "runtimeContextPolicy": "fresh_agent_run",
+                    "instructionRef": "artifact://source/instruction",
+                    "instructionDigest": "sha256:" + "b" * 64,
+                    "idempotencyKey": "create-turn-1",
+                }
+            )
+            await session.commit()
+
+        payload = {
+            "workflowId": "source-workflow",
+            "branchId": "branch-1",
+            "branchTurnId": "turn-1",
+            "principal": "service:test",
+            "sourceNamespace": "default",
+            "sourceRunId": "source-run",
+            "outcome": "failed",
+            "agentResult": AgentRunResult(
+                summary="test terminal with retained diagnostics",
+                diagnosticsRef="artifact://denied-diagnostics",
+            ).model_dump(by_alias=True, mode="json", exclude_none=True),
+        }
+        with pytest.raises(
+            CheckpointBranchRetainedEvidenceError,
+            match="not resolvable or retainable",
+        ):
+            await turn_module.persist_checkpoint_branch_turn_terminal(payload)
+        assert artifact_calls, (
+            "artifact denial was never exercised: terminal persistence did not "
+            "cross the artifact-storage authority boundary"
+        )
+    finally:
+        await engine.dispose()
 
 
 # --- Fail-closed probe observations (MoonMind#3949 scope 3) ------------------
@@ -434,6 +501,108 @@ def test_observations_reject_negative_counts_but_allow_unobservable():
         CheckpointCompatDrainObservations()
     )
     assert decision.may_remove_workflow_queue_handlers is False
+
+
+# --- Production probe wiring (MoonMind#3949 scope 3) ------------------------
+
+
+def test_probe_collector_binds_live_counts_to_observations():
+    observations = collect_checkpoint_compat_drain_observations(
+        open_pre_cutover_histories=0,
+        pending_old_queue_tasks=0,
+        supported_resets_pending=0,
+    )
+    decision = evaluate_checkpoint_compat_drain_observations(observations)
+    assert decision.may_remove_workflow_queue_handlers is True
+    assert decision.required_action == "safe_to_remove"
+
+
+def test_probe_collector_rejects_malformed_counts():
+    with pytest.raises(ValueError):
+        collect_checkpoint_compat_drain_observations(
+            open_pre_cutover_histories=-1,
+            pending_old_queue_tasks=0,
+            supported_resets_pending=0,
+        )
+
+
+def test_drain_report_names_probes_and_removal_checklist():
+    drained = evaluate_checkpoint_compat_drain_observations(
+        collect_checkpoint_compat_drain_observations(
+            open_pre_cutover_histories=0,
+            pending_old_queue_tasks=0,
+            supported_resets_pending=0,
+        )
+    )
+    report = render_checkpoint_compat_drain_report(
+        drained,
+        observations=collect_checkpoint_compat_drain_observations(
+            open_pre_cutover_histories=0,
+            pending_old_queue_tasks=0,
+            supported_resets_pending=0,
+        ),
+    )
+    assert COMPAT_DRAIN_CONTRACT in report
+    assert "TaskQueue=" in report
+    assert "checkpoint-branch-artifact-fleet-v1" in report
+    assert "Removal checklist" in report
+
+    retained = evaluate_checkpoint_compat_drain_observations(
+        CheckpointCompatDrainObservations()
+    )
+    retain_report = render_checkpoint_compat_drain_report(retained)
+    assert "Retain the workflow-queue checkpoint handlers" in retain_report
+    assert "Removal checklist" not in retain_report
+
+
+def test_drain_gate_stays_importable_without_heavy_dependencies():
+    """The gate lives in a lightweight namespace: stdlib-only import.
+
+    Regression test for tooling contexts where importing the gate through
+    the workflow package ``__init__`` chain fails before reaching the
+    stdlib-only definitions.
+    """
+
+    import subprocess
+    import sys
+    import textwrap
+
+    probe = textwrap.dedent(
+        """
+        import sys
+        class _Blocker:
+            BLOCKED = (
+                "sqlalchemy", "temporalio", "pydantic", "fastapi",
+                "fastapi_users", "api_service",
+            )
+            def find_module(self, name, path=None):
+                if name.split(".")[0] in self.BLOCKED:
+                    return self
+                return None
+            def load_module(self, name):
+                raise ImportError(f"blocked heavy dep: {name}")
+        sys.meta_path.insert(0, _Blocker())
+        for _mod in list(sys.modules):
+            if _mod.split(".")[0] in _Blocker.BLOCKED:
+                del sys.modules[_mod]
+        from moonmind.gates.checkpoint_compat_drain import (
+            evaluate_checkpoint_compat_drain,
+            CheckpointCompatDrainUsage,
+        )
+        assert evaluate_checkpoint_compat_drain(
+            CheckpointCompatDrainUsage()
+        ).may_remove_workflow_queue_handlers is True
+        print("stdlib-only import OK")
+        """
+    )
+    completed = subprocess.run(
+        [sys.executable, "-c", probe],
+        capture_output=True,
+        text=True,
+        timeout=60,
+    )
+    assert completed.returncode == 0, completed.stderr[-2000:]
+    assert "stdlib-only import OK" in completed.stdout
 
 
 # --- Operation identity across the queue move (MoonMind#3949 scope 1) --------

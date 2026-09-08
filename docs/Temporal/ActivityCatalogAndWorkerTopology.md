@@ -259,14 +259,19 @@ distinct states:
   worker process and its I/O authority until that removal lands.
 
 Removal is owned by the drain gate in
-`moonmind/workflows/temporal/checkpoint_compat_drain.py`
-(`evaluate_checkpoint_compat_drain`, contract
+`moonmind/gates/checkpoint_compat_drain.py`
+(`evaluate_checkpoint_compat_drain_observations`, contract
 `checkpoint-branch-artifact-fleet-drain-v1`), which reuses the canonical
 `evaluate_worker_drain` predicate (`outstanding == 0` → safe to remove).
-Deployment probes enter through `CheckpointCompatDrainObservations` /
+Deployment probes enter through `collect_checkpoint_compat_drain_observations`
+/ `CheckpointCompatDrainObservations` /
 `evaluate_checkpoint_compat_drain_observations`: any dimension that is
 unobservable (`None`: missing visibility or failed probe) retains compat
-and is named in `blocking_dimensions`. Drained means all three
+and is named in `blocking_dimensions`. `render_checkpoint_compat_drain_report`
+renders the exact operator procedure (visibility queries, history-marker
+inspection, removal checklist). Scoped visibility counts come from
+`TemporalExecutionService.get_drain_metrics` with the workflow task queue
+passed explicitly. Drained means all three
 deployment-observed dimensions reach zero:
 
 - open pre-cutover histories recorded without the

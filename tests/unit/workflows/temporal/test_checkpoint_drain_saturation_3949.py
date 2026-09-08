@@ -34,7 +34,7 @@ import asyncio
 
 import pytest
 
-from moonmind.workflows.temporal.checkpoint_compat_drain import (
+from moonmind.gates.checkpoint_compat_drain import (
     COMPAT_DRAIN_CONTRACT,
     CheckpointCompatDrainUsage,
     evaluate_checkpoint_compat_drain,

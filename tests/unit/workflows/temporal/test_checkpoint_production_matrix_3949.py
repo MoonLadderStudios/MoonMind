@@ -25,7 +25,7 @@ or second worker:
 Out of scope by design (verifier marks them unrecoverable in this
 runtime): live deployment drain probes, execution-under-load saturation,
 and compat removal itself. Compat stays retained; the drain gate in
-``checkpoint_compat_drain`` owns that sequencing.
+``moonmind.gates.checkpoint_compat_drain`` owns that sequencing.
 """
 
 from __future__ import annotations
