@@ -119,6 +119,11 @@ operator.
   (commit timestamp to final replica re-authorization check; clock starts at
   commit — see inventory §5.2). Clearing a cookie
   alone is not revocation.
+- Cache-hit recheck rule (K2 qualification): revocation is rechecked live on
+  every validation including session-cache hits; principal active status
+  (`is_active`) is enforced at authenticate/mint time and on full
+  (cache-miss) validation. Cache-hit status staleness is bounded by the 300s
+  session-cache cap, inside this 5-minute propagation bound.
 - Browser logout does not revoke independent worker credentials and does not
   cancel already-admitted workflows. Account disablement blocks new user actions
   immediately; already-admitted background work keeps its stored principal ID
