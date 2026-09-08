@@ -433,10 +433,13 @@ def validate_native_ui_http_fields(
     pagination = name in {"session_items", "terminal_view"}
     allowed_query = {"limit", "after", "before", "order"} if pagination else set()
     seen: set[str] = set()
+    cursor_values: dict[str, str] = {}
     for key, value in query:
         if key not in allowed_query or key in seen:
             deny()
         seen.add(key)
+        if key in {"after", "before"}:
+            cursor_values[key] = str(value or "").strip()
         if key == "limit" and (
             not value.isascii()
             or not value.isdigit()
@@ -446,6 +449,11 @@ def validate_native_ui_http_fields(
             deny()
         if key == "order" and value not in {"asc", "desc"}:
             deny()
+    # The durable replay path rejects simultaneous pagination cursors
+    # (see _terminal_items_query); enforce the same closed contract here
+    # before any upstream I/O so validation cannot depend on session lifecycle.
+    if pagination and cursor_values.get("after") and cursor_values.get("before"):
+        deny()
 
     fields = _NATIVE_HTTP_BODY_FIELDS.get((name, method))
     if fields is None:
