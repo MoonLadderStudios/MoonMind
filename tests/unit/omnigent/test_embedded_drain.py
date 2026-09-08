@@ -220,3 +220,24 @@ def test_launch_module_inventory_names_the_drain_gated_surfaces() -> None:
         "moonmind.omnigent.embedded_host_channel",
         "moonmind.omnigent.embedded_evidence",
     }
+
+
+def test_summarize_blocks_drain_while_cleanup_authority_remains() -> None:
+    disposition = summarize_embedded_drain(
+        active_embedded_sessions=0,
+        active_embedded_leases=0,
+        pending_cleanup_host_leases=2,
+    )
+
+    assert disposition["drained"] is False
+    assert disposition["blockers"] == ("pending_cleanup_host_leases:2",)
+    assert disposition["pendingCleanupHostLeases"] == 2
+
+
+def test_summarize_rejects_malformed_cleanup_count() -> None:
+    with pytest.raises(EmbeddedDrainError):
+        summarize_embedded_drain(
+            active_embedded_sessions=0,
+            active_embedded_leases=0,
+            pending_cleanup_host_leases=-1,
+        )

@@ -98,6 +98,9 @@ from moonmind.omnigent.bridge_artifacts import (
 # NOTE (#3955): the retired embedded host-route request payloads are plain API
 # contracts importable without the embedded launch modules, so the proxy-only
 # production path (and OpenAPI) never requires bridge_embedded at import time.
+# The retained-row decoder is equally launch-free (it imports only declarative
+# config constants), so production historical reads use it directly.
+from moonmind.omnigent.embedded_drain import decode_embedded_retained_session
 from moonmind.omnigent.embedded_host_requests import (
     EmbeddedHostHeartbeatRequest,
     EmbeddedHostRegisterRequest,
@@ -814,6 +817,12 @@ def _get_bridge_proxy(
 ) -> OmnigentBridgeSessionProxy | None:
     """Build the proxy-mode bridge over the configured stock Omnigent Server."""
 
+    if _config.host_protocol_mode == HOST_PROTOCOL_MODE_EMBEDDED:
+        # MoonLadderStudios/MoonMind#3955: the retired transport never owns
+        # this dependency. Return None here so the admission gate owns the
+        # 410 Gone surface instead of evidence/launch resolution failing
+        # first with 503/501.
+        return None
     if _config.host_protocol_mode == HOST_PROTOCOL_MODE_PROXY:
         gate = build_omnigent_gate()
         if not gate.enabled:
@@ -846,10 +855,17 @@ def _get_bridge_store(
 
 async def _require_mode_transition_safe(
     payload: BridgeSessionCreateRequest,
-    config: OmnigentBridgeConfig = Depends(_require_bridge_enabled),
+    config: OmnigentBridgeConfig = Depends(
+        _require_new_embedded_transport_admission
+    ),
     store: OmnigentBridgeSessionStore = Depends(_get_bridge_store),
 ) -> OmnigentBridgeConfig:
-    """Prevent a configured mode change from orphaning active session owners."""
+    """Prevent a configured mode change from orphaning active session owners.
+
+    Chains through the shared retired-transport admission gate so the 410
+    Gone surface for new embedded admission resolves before proxy/facade
+    dependencies and before this ownership check.
+    """
 
     idempotency_key = _clean(payload.labels.get(_IDEMPOTENCY_KEY_LABEL))
     active_modes = await store.active_host_protocol_modes(
@@ -883,19 +899,72 @@ def _get_embedded_host_facade(
     return build_embedded_host_facade(_config)
 
 
+async def _existing_embedded_retry_session_id(
+    *, store: OmnigentBridgeSessionStore, idempotency_key: str | None
+) -> str | None:
+    """Return the bound provider session id for an already-admitted retry.
+
+    A retry reuses the idempotency key whose first request persisted the
+    durable row (or crossed the host launch boundary) before losing its
+    response. Only a row with a bound ``omnigent_session_id`` counts: a
+    key with no row — or a row with no session yet — is still new admission.
+    A store without the ``get_existing`` reader offers no retry evidence,
+    so the lookup degrades to ``None`` (reject) instead of failing.
+    """
+
+    reader = getattr(store, "get_existing", None)
+    if not callable(reader) or not idempotency_key:
+        return None
+    existing = await reader(idempotency_key)
+    if existing is None:
+        return None
+    return _clean(getattr(existing, "omnigent_session_id", None))
+
+
+async def _require_new_embedded_transport_admission(
+    payload: BridgeSessionCreateRequest,
+    config: OmnigentBridgeConfig = Depends(_require_bridge_enabled),
+    store: OmnigentBridgeSessionStore = Depends(_get_bridge_store),
+) -> OmnigentBridgeConfig:
+    """Shared early admission gate for session creation (#3955).
+
+    Runs inside the ``config`` dependency chain — before the proxy/facade
+    dependencies — so new admission through the retired embedded transport
+    deterministically answers ``410 Gone`` with proxy guidance instead of
+    surfacing ``503``/``501`` from evidence or launch-module resolution
+    first. Retries that reuse an already-admitted idempotency key pass
+    through: they reconcile the recorded row, they do not admit new work.
+    """
+
+    if config.host_protocol_mode != HOST_PROTOCOL_MODE_EMBEDDED:
+        return config
+    idempotency_key = _clean((payload.labels or {}).get(_IDEMPOTENCY_KEY_LABEL))
+    if await _existing_embedded_retry_session_id(
+        store=store, idempotency_key=idempotency_key
+    ):
+        return config
+    _reject_new_embedded_transport_admission(config)
+    return config  # Unreachable: the rejection above always raises.
+
+
 async def _get_create_embedded_facade(
     _config: OmnigentBridgeConfig = Depends(_require_bridge_enabled),
 ) -> OmnigentEmbeddedHostProtocolFacade | None:
     # NOTE (#3955): admission-scoped dependency. New embedded admission is
-    # blocked at the trusted bridge-config selection boundary (enabled embedded
-    # configs fail fast at parse/startup) and at the live host-lifecycle routes
-    # via _require_embedded_mode (410 Gone), never by silently substituting
-    # proxy. Retained-row drain resolves separately through
-    # _resolve_session_control_facade so recorded sessions keep their cleanup
-    # owner while the deployment runs proxy mode.
+    # rejected at the shared early gate above (410 Gone), never by silently
+    # substituting proxy. A missing launch surface resolves to None here so
+    # the handler owns the actionable error (410 for new admission, the
+    # transport-free retained decoder or a closed 501 for recorded rows)
+    # instead of this dependency failing with an unhandled 500. Retained-row
+    # drain resolves separately through _resolve_session_control_facade so
+    # recorded sessions keep their cleanup owner while the deployment runs
+    # proxy mode.
     if _config.host_protocol_mode != HOST_PROTOCOL_MODE_EMBEDDED:
         return None
-    return build_embedded_host_facade(_config)
+    try:
+        return build_embedded_host_facade(_config)
+    except OmnigentBridgeModeUnsupportedError:
+        return None
 
 
 async def _persisted_host_protocol_mode(
@@ -915,6 +984,53 @@ async def _persisted_host_protocol_mode(
         return None
     mode = metadata.get("hostProtocolMode")
     return str(mode) if mode else None
+
+
+async def _retained_embedded_session_snapshot(
+    *, store: OmnigentBridgeSessionStore, session_id: str
+) -> dict[str, Any] | None:
+    """Project one retained embedded row without a live transport (#3955).
+
+    After the launch modules are removed, the embedded facade cannot be
+    built, but retained rows must stay readable: this fallback decodes only
+    the recorded mode, lifecycle state, and launch/cleanup-authority presence
+    through :func:`decode_embedded_retained_session`, plus the durable,
+    non-secret identifiers the row already carries. Provider endpoints,
+    credentials, and host/runner identities are never projected. Returns
+    ``None`` when no retained embedded row is bound to ``session_id``.
+    """
+
+    row = await store.get_session_by_provider_session_id(session_id)
+    if row is None:
+        return None
+    metadata = getattr(row, "metadata_", None)
+    decoded = decode_embedded_retained_session(
+        metadata if isinstance(metadata, dict) else {}
+    )
+    if not decoded["isEmbedded"]:
+        return None
+    return {
+        "id": session_id,
+        "status": row.status,
+        "agentId": row.omnigent_agent_id or "codex-native",
+        "hostId": row.omnigent_host_id,
+        "runnerId": row.omnigent_runner_id,
+        "retained": True,
+        "transportRetired": True,
+        "retainedDecoding": decoded,
+        "terminalEvidenceAvailable": bool(
+            row.terminal_refs or row.diagnostics_ref or row.final_snapshot_ref
+        ),
+        "diagnosticsRef": row.diagnostics_ref,
+        "moonmind": {
+            "workflowId": row.moonmind_workflow_id,
+            "agentRunId": row.moonmind_agent_run_id,
+            "idempotencyKey": row.idempotency_key,
+            "bridgeSessionId": row.bridge_session_id,
+            "bridgeLocal": True,
+            "hostProtocolMode": HOST_PROTOCOL_MODE_EMBEDDED,
+        },
+    }
 
 
 async def _resolve_session_control_facade(
@@ -1105,19 +1221,41 @@ async def create_omnigent_session(
     launch_default_agent: OmnigentAgentSelection | None = Depends(
         _get_launch_default_agent_selection
     ),
+    store: OmnigentBridgeSessionStore = Depends(_get_bridge_store),
 ) -> dict[str, Any]:
     """Create or reuse an Omnigent-shaped session in the configured bridge mode."""
 
-    # MoonLadderStudios/MoonMind#3955: creating through the retired embedded
-    # transport is rejected before any binding, session, or credential-consumer
-    # side effect. Proxy creation is unaffected.
-    _reject_new_embedded_transport_admission(config)
     binding = await _resolve_bridge_binding(
         user=user,
         service=service,
         principal_context=principal_context,
         payload=payload,
     )
+    # MoonLadderStudios/MoonMind#3955: creating through the retired embedded
+    # transport is rejected before any binding, session, or credential-consumer
+    # side effect — except a retry that reuses an already-admitted idempotency
+    # key, which reconciles the recorded row instead of admitting new work.
+    # Proxy creation is unaffected.
+    if config.host_protocol_mode == HOST_PROTOCOL_MODE_EMBEDDED:
+        retry_session_id = await _existing_embedded_retry_session_id(
+            store=store, idempotency_key=binding.idempotency_key
+        )
+        if retry_session_id:
+            if embedded_facade is None:
+                raise OmnigentBridgeError(
+                    "Embedded Omnigent bridge facade is unavailable",
+                    failure_class="system_error",
+                    status_code=501,
+                )
+            response = await embedded_facade.attach_session(
+                session_id=retry_session_id, binding=binding
+            )
+            dispatch = await embedded_facade.dispatch_runner(
+                idempotency_key=binding.idempotency_key
+            )
+            response.setdefault("moonmind", {})["runner"] = dispatch
+            return response
+    _reject_new_embedded_transport_admission(config)
     try:
         if config.host_protocol_mode == HOST_PROTOCOL_MODE_EMBEDDED:
             if embedded_facade is None:
@@ -1181,7 +1319,9 @@ async def get_omnigent_session(
 
     # Retained sessions resolve to their recorded owner (#3955): a retained
     # embedded row keeps draining through the embedded facade while the
-    # deployment runs proxy mode.
+    # deployment runs proxy mode. When the launch modules are gone and no
+    # facade can be built, the row stays readable through the
+    # transport-free retained decoder instead of surfacing 501.
     facade, _ = await _resolve_session_control_facade(
         session_id=session_id,
         config=config,
@@ -1190,10 +1330,46 @@ async def get_omnigent_session(
         store=store,
     )
     if facade is None:
-        raise HTTPException(
-            status_code=501,
-            detail={"code": "omnigent_bridge_mode_unsupported"},
+        retained = await _retained_embedded_session_snapshot(
+            store=store, session_id=session_id
         )
+        if retained is None:
+            raise HTTPException(
+                status_code=501,
+                detail={
+                    "code": EMBEDDED_TRANSPORT_RETIRED_CODE,
+                    "message": EMBEDDED_TRANSPORT_RETIRED_MESSAGE,
+                    "supportedAlternative": HOST_PROTOCOL_MODE_PROXY,
+                },
+            )
+        retained_owner = await store.get_session_owner(session_id)
+        if retained_owner is None:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail={
+                    "code": "omnigent_bridge_session_unknown",
+                    "message": (
+                        "No Omnigent bridge session is bound to the requested session id."
+                    ),
+                },
+            )
+        retained_principal = await resolve_execution_principal(
+            user=user,
+            service=service,
+            workflow_id_header=retained_owner.workflow_id,
+        )
+        if not retained_principal.workflow_id:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail={
+                    "code": "workflow_ownership_denied",
+                    "message": (
+                        "The authenticated principal does not own the workflow "
+                        "that owns this Omnigent session."
+                    ),
+                },
+            )
+        return retained
     owner = await facade.get_session_owner(session_id)
     if owner is None:
         # The bridge only exposes sessions it created/attached; an id it does
