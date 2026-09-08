@@ -21,7 +21,10 @@ from api_service.api.schemas import (
     WorkerPauseSnapshotResponse,
 )
 from api_service.db.models import SettingsAuditEvent, SettingsOverride
-from moonmind.schemas.workflow_control_models import WorkflowControlBatch
+from moonmind.schemas.workflow_control_models import (
+    WorkflowControlBatch,
+    WorkflowControlTarget,
+)
 
 
 _DEFAULT_SUBJECT_ID = UUID("00000000-0000-0000-0000-000000000000")
@@ -159,6 +162,16 @@ class SystemOperationsService:
         return await self.snapshot()
 
     async def _reconcile_control(self) -> WorkflowControlBatch | None:
+        """Resume the persisted control request, if it still needs progress.
+
+        Recovery trigger: progress requires a read (snapshot) or an idempotent
+        resubmission of the same recorded request; there is no autonomous
+        background reconciler. Closing the dashboard page is not cancellation
+        of the committed intent. Simultaneous readers serialize on the audit
+        row lock in ``_persist_control_progress`` and merge observations
+        without overwriting terminal target outcomes. Terminal batches
+        (``succeeded``/``empty``) never re-enter fan-out on reads.
+        """
         state_row = await self._state_row()
         current = dict(state_row.value_json or {}) if state_row is not None else {}
         request_id = current.get("controlRequestId")
@@ -172,7 +185,7 @@ class SystemOperationsService:
         if not raw:
             return None  # Historical acceptance counts cannot become safe-point evidence.
         batch = WorkflowControlBatch.model_validate(raw)
-        if batch.status == "succeeded":
+        if batch.status in {"succeeded", "empty"}:
             return batch
         sender = getattr(self._temporal_service, "send_quiesce_pause_signal" if batch.action == "Pause" else "send_quiesce_resume_signal", None)
         if not callable(sender):
@@ -188,6 +201,8 @@ class SystemOperationsService:
                     target.state, target.reason = previous.state, previous.reason
             batch.enumerated = merged.enumerated
             batch.enumeration_error = merged.enumeration_error
+            batch.enumeration_cursor = merged.enumeration_cursor
+            batch.enumeration_policy = merged.enumeration_policy
 
         try:
             observed = await sender(request_id=batch.request_id, batch=batch, on_progress=persist)
@@ -203,7 +218,17 @@ class SystemOperationsService:
     async def _persist_control_progress(
         self, audit_id: UUID, progress: WorkflowControlBatch,
     ) -> WorkflowControlBatch:
-        """Serialize observers and retain already-confirmed target outcomes."""
+        """Serialize observers and retain already-confirmed target outcomes.
+
+        Reads reconcile only the already-authorized stored command: the
+        (request_id, action, generation) authority must match and enumerated
+        target identities are immutable, so a read can never author a new
+        action, broaden target scope, or select a different generation.
+        Terminal observations (including already_terminal, unsupported, and
+        superseded) are never overwritten by older/stale progress. Each
+        command owns its audit row, so historical operation results stay
+        retained separately from the current request.
+        """
         row = await self._session.get(
             SettingsAuditEvent, audit_id, with_for_update=True, populate_existing=True,
         )
@@ -228,7 +253,7 @@ class SystemOperationsService:
                 prior = {target.update_id: target for target in stored.targets}
                 for index, target in enumerate(merged.targets):
                     previous = prior[target.update_id]
-                    if previous.state in {"safe_point", "resumed", "failed"} or (
+                    if previous.state in WorkflowControlTarget.TERMINAL_STATES or (
                         target.state == "requested" and previous.state != "requested"
                     ):
                         merged.targets[index] = previous
@@ -509,7 +534,7 @@ class SystemOperationsService:
         self, state: _QueueSystemMetadata, control: WorkflowControlBatch | None = None,
     ) -> list[OperationCommandDescriptorModel]:
         resume_available = state.workers_paused or (
-            control is not None and control.action == "Resume" and control.status != "succeeded"
+            control is not None and control.action == "Resume" and control.status not in {"succeeded", "empty"}
         )
         return [
             OperationCommandDescriptorModel(

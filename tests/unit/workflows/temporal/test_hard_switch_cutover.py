@@ -1,12 +1,18 @@
-from __future__ import annotations
+"""Canonical user-workflow start-contract tests (MM-730 hard switch complete).
 
-import json
-from pathlib import Path
+MoonLadderStudios/MoonMind#3951: startup resolves the ``MoonMind.UserWorkflow``
+type and v2 Task Queue from queue settings alone. No cutover record or
+release-note prose is consulted; stale cutover environment fails fast at
+settings validation. The workflow fleet keeps polling the legacy replay queue
+until retained histories drain, and ``moonmind.statuses.compat`` remains the
+historical-read loader for ``no_changes``/``NO_CHANGES`` outcomes.
+"""
+
+from __future__ import annotations
 
 import pytest
 
-from moonmind.config.settings import settings
-from moonmind.workflows.temporal import hard_switch_cutover
+from moonmind.config.settings import TemporalSettings, settings
 from moonmind.workflows.temporal.activity_catalog import (
     WORKFLOW_FLEET,
     WORKFLOW_TASK_QUEUE,
@@ -31,76 +37,12 @@ from moonmind.workflows.temporal.workflows.run import (
 )
 
 
-def _write_release_notes(tmp_path: Path) -> Path:
-    path = tmp_path / "MM-730-release-notes.md"
-    path.write_text(
-        "MoonMind no longer exposes Tasks as a product/runtime concept. "
-        "Use Workflow Execution, workflowId, runId, and Step Execution.\n\n"
-        "Compatibility redirects and task-shaped aliases are not kept.\n",
-        encoding="utf-8",
-    )
-    return path
-
-
-def _write_cutover_record(tmp_path: Path, *, release_notes_path: Path) -> Path:
-    path = tmp_path / "MM-730-cutover.json"
-    path.write_text(
-        json.dumps(
-            {
-                "jiraIssueKey": "MM-730",
-                "releaseMode": "coordinated_branch_release",
-                "legacyWorkflowType": "MoonMind.Run",
-                "newWorkflowType": "MoonMind.UserWorkflow",
-                "releaseNotesPath": str(release_notes_path),
-                "environments": [
-                    {
-                        "name": "ci",
-                        "decision": "drain",
-                        "recordedAt": "2026-05-24T00:00:00Z",
-                    }
-                ],
-                "affectedContracts": [
-                    {
-                        "kind": "workflow",
-                        "owner": "MoonMind.UserWorkflow",
-                        "strategy": "Use the renamed workflow type after cutover.",
-                    },
-                    {
-                        "kind": "activity",
-                        "owner": "MoonMind.UserWorkflow activities",
-                        "strategy": "Use renamed activity payloads after cutover.",
-                    },
-                    {
-                        "kind": "signal",
-                        "owner": "MoonMind.UserWorkflow signals",
-                        "strategy": "Use renamed signal shapes after cutover.",
-                    },
-                    {
-                        "kind": "update",
-                        "owner": "MoonMind.UserWorkflow updates",
-                        "strategy": "Use renamed update shapes after cutover.",
-                    },
-                ],
-            }
-        ),
-        encoding="utf-8",
-    )
-    return path
-
-
-def _renamed_contract_settings(tmp_path: Path):
-    release_notes_path = _write_release_notes(tmp_path)
-    cutover_record_path = _write_cutover_record(
-        tmp_path,
-        release_notes_path=release_notes_path,
-    )
+def _renamed_contract_settings():
     return settings.temporal.model_copy(
         update={
             "user_workflow_contract_mode": "renamed_contract",
             "workflow_task_queue": "mm.workflow",
             "user_workflow_v2_task_queue": "mm.workflow.user.v2",
-            "user_workflow_cutover_record_path": str(cutover_record_path),
-            "user_workflow_release_notes_path": str(release_notes_path),
         }
     )
 
@@ -117,21 +59,14 @@ def test_current_build_rejects_legacy_run_contract_mode() -> None:
         resolve_user_workflow_start_contract(temporal_settings)
 
 
-def test_renamed_contract_requires_cutover_record() -> None:
-    temporal_settings = settings.temporal.model_copy(
-        update={
-            "user_workflow_contract_mode": "renamed_contract",
-            "user_workflow_cutover_record_path": None,
-            "user_workflow_release_notes_path": None,
-        }
-    )
+def test_renamed_contract_resolves_without_cutover_files(tmp_path) -> None:
+    """Startup must not depend on migration prose or sample evidence."""
 
-    with pytest.raises(HardSwitchCutoverError, match="CUTOVER_RECORD_PATH"):
-        resolve_user_workflow_start_contract(temporal_settings)
-
-
-def test_renamed_contract_routes_new_starts_to_distinct_queue(tmp_path: Path) -> None:
-    temporal_settings = _renamed_contract_settings(tmp_path)
+    temporal_settings = _renamed_contract_settings()
+    missing_record = tmp_path / "absent-cutover-record.json"
+    missing_notes = tmp_path / "absent-release-notes.md"
+    assert not missing_record.exists()
+    assert not missing_notes.exists()
 
     contract = resolve_user_workflow_start_contract(temporal_settings)
 
@@ -140,10 +75,64 @@ def test_renamed_contract_routes_new_starts_to_distinct_queue(tmp_path: Path) ->
     assert contract.contract_mode == "renamed_contract"
 
 
-def test_workflow_task_queue_constant_stays_replay_stable_while_start_queue_is_lazy(
-    tmp_path: Path,
+def test_renamed_contract_requires_distinct_queue() -> None:
+    temporal_settings = _renamed_contract_settings().model_copy(
+        update={"user_workflow_v2_task_queue": "mm.workflow"}
+    )
+
+    with pytest.raises(HardSwitchCutoverError, match="distinct"):
+        resolve_user_workflow_start_contract(temporal_settings)
+
+
+def test_stale_cutover_environment_fails_fast(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Removed cutover paths must error instead of being silently ignored."""
+
+    monkeypatch.setenv(
+        "TEMPORAL_USER_WORKFLOW_CUTOVER_RECORD_PATH",
+        "docs/ReleaseNotes/MM-730-hard-switch-cutover.json",
+    )
+    with pytest.raises(ValueError, match="CUTOVER_RECORD_PATH.*obsolete"):
+        TemporalSettings()
+
+
+def test_stale_release_notes_environment_fails_fast(
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    temporal_settings = _renamed_contract_settings(tmp_path)
+    monkeypatch.setenv(
+        "TEMPORAL_USER_WORKFLOW_RELEASE_NOTES_PATH",
+        "docs/ReleaseNotes/MM-730-hard-switch-cutover.md",
+    )
+    with pytest.raises(ValueError, match="RELEASE_NOTES_PATH.*obsolete"):
+        TemporalSettings()
+
+
+def test_stale_cutover_environment_fails_fast_case_insensitive(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Lower-case spellings previously accepted must also fail fast."""
+
+    monkeypatch.setenv(
+        "temporal_user_workflow_cutover_record_path",
+        "docs/ReleaseNotes/MM-730-hard-switch-cutover.json",
+    )
+    with pytest.raises(ValueError, match="CUTOVER_RECORD_PATH.*obsolete"):
+        TemporalSettings()
+
+
+def test_renamed_contract_routes_new_starts_to_distinct_queue() -> None:
+    temporal_settings = _renamed_contract_settings()
+
+    contract = resolve_user_workflow_start_contract(temporal_settings)
+
+    assert contract.workflow_type == RENAMED_USER_WORKFLOW_TYPE
+    assert contract.task_queue == "mm.workflow.user.v2"
+    assert contract.contract_mode == "renamed_contract"
+
+
+def test_workflow_task_queue_constant_stays_replay_stable_while_start_queue_is_lazy() -> (
+    None
+):
+    temporal_settings = _renamed_contract_settings()
 
     assert WORKFLOW_TASK_QUEUE == "mm.workflow"
     assert get_workflow_task_queue(temporal_settings) == "mm.workflow.user.v2"
@@ -153,18 +142,16 @@ def test_workflow_task_queue_constant_stays_replay_stable_while_start_queue_is_l
     )
 
 
-def test_workflow_poll_task_queues_ignore_missing_replay_queue(tmp_path: Path) -> None:
-    temporal_settings = _renamed_contract_settings(tmp_path).model_copy(
+def test_workflow_poll_task_queues_ignore_missing_replay_queue() -> None:
+    temporal_settings = _renamed_contract_settings().model_copy(
         update={"workflow_task_queue": None}
     )
 
     assert get_workflow_poll_task_queues(temporal_settings) == ("mm.workflow.user.v2",)
 
 
-def test_merge_automation_workflow_fleet_does_not_poll_user_replay_queue(
-    tmp_path: Path,
-) -> None:
-    temporal_settings = _renamed_contract_settings(tmp_path).model_copy(
+def test_merge_automation_workflow_fleet_does_not_poll_user_replay_queue() -> None:
+    temporal_settings = _renamed_contract_settings().model_copy(
         update={
             "user_workflow_v2_task_queue": "mm.workflow.merge_automation",
             "merge_automation_workflow_task_queue": "mm.workflow.merge_automation",
@@ -176,34 +163,8 @@ def test_merge_automation_workflow_fleet_does_not_poll_user_replay_queue(
     )
 
 
-def test_renamed_contract_resolution_caches_cutover_file_validation(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    temporal_settings = _renamed_contract_settings(tmp_path)
-    hard_switch_cutover._resolve_renamed_user_workflow_start_contract.cache_clear()
-    load_count = 0
-    original_load_json_mapping = hard_switch_cutover._load_json_mapping
-
-    def counting_load_json_mapping(path: Path):
-        nonlocal load_count
-        load_count += 1
-        return original_load_json_mapping(path)
-
-    monkeypatch.setattr(
-        hard_switch_cutover,
-        "_load_json_mapping",
-        counting_load_json_mapping,
-    )
-
-    first = resolve_user_workflow_start_contract(temporal_settings)
-    second = resolve_user_workflow_start_contract(temporal_settings)
-
-    assert first == second
-    assert load_count == 1
-
-
-def test_worker_registration_serves_only_one_user_workflow_type(tmp_path: Path) -> None:
-    renamed_settings = _renamed_contract_settings(tmp_path)
+def test_worker_registration_serves_only_one_user_workflow_type() -> None:
+    renamed_settings = _renamed_contract_settings()
 
     renamed_types = list_registered_workflow_types_for_settings(renamed_settings)
 
@@ -211,10 +172,8 @@ def test_worker_registration_serves_only_one_user_workflow_type(tmp_path: Path) 
     assert LEGACY_USER_WORKFLOW_TYPE not in renamed_types
 
 
-def test_renamed_contract_workflow_fleet_polls_start_and_replay_queues(
-    tmp_path: Path,
-) -> None:
-    temporal_settings = _renamed_contract_settings(tmp_path)
+def test_renamed_contract_workflow_fleet_polls_start_and_replay_queues() -> None:
+    temporal_settings = _renamed_contract_settings()
     catalog = build_default_activity_catalog(temporal_settings)
     topology = describe_configured_worker(
         temporal_settings=temporal_settings.model_copy(
@@ -230,8 +189,8 @@ def test_renamed_contract_workflow_fleet_polls_start_and_replay_queues(
     )
 
 
-def test_client_routes_renamed_user_workflow_to_v2_queue(tmp_path: Path, monkeypatch) -> None:
-    temporal_settings = _renamed_contract_settings(tmp_path)
+def test_client_routes_renamed_user_workflow_to_v2_queue(monkeypatch) -> None:
+    temporal_settings = _renamed_contract_settings()
     monkeypatch.setattr(settings, "temporal", temporal_settings)
 
     adapter = TemporalClientAdapter()

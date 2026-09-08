@@ -16,9 +16,16 @@ owns from silent regression.
 
 from __future__ import annotations
 
+import sys
 from pathlib import Path
 
 import pytest
+
+from tools.check_documentation_architecture import metadata_fields
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+
+from _semantic_docs_3964 import assert_semantic_absent, assert_semantic_present
 
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
@@ -49,9 +56,7 @@ def test_standard_is_declarative_desired_state_not_a_tracker() -> None:
     text = _read(STANDARD_DOC)
 
     # Declarative status, not a migration/checklist/status framing.
-    assert "**Status:** Current standard and target direction" in text
-    # The standard explicitly declares itself a desired-state strategy, not a plan.
-    assert "not a migration plan or a checklist" in text
+    assert metadata_fields(text)["document class"] == "Canonical declarative"
     # No checklist/status checkbox framing leaks into the canonical standard.
     assert "- [ ]" not in text
     assert "- [x]" not in text
@@ -82,13 +87,20 @@ def test_standard_introduces_no_adr_or_decision_log_authority() -> None:
 def test_standard_does_not_force_bounded_contexts() -> None:
     text = _read(STANDARD_DOC)
     # Architectural boundary / ownership surface is the default, not Bounded Context.
-    assert "architectural boundary" in text
-    assert "ownership surface" in text
-    # Bounded Context is gated as a subtype behind boundary tests.
-    assert "subtype" in text.lower()
-    assert (
-        "the directory is an architectural boundary or ownership surface — not a Bounded Context"
-        in text
+    assert_semantic_present(
+        text,
+        ("architectural boundary", "ownership surface"),
+        context="DocumentationArchitecture.md boundary default",
+    )
+    # Bounded Context is gated as a subtype behind boundary tests (#3964:
+    # exact em-dash sentence loosened; the subtype gate is the contract).
+    assert_semantic_present(
+        text, ("subtype",), context="DocumentationArchitecture.md bounded-context gate"
+    )
+    assert_semantic_absent(
+        text,
+        ("bounded context is the default", "every module is a bounded context"),
+        context="DocumentationArchitecture.md",
     )
 
 
@@ -103,10 +115,20 @@ def test_standard_does_not_treat_specs_as_durable_docs() -> None:
 def test_standard_defers_to_document_model_no_second_authority() -> None:
     assert DOCUMENT_MODEL_DOC.exists()
     text = _read(STANDARD_DOC)
-    # The standard extends, not replaces, the Document Model — no second authority.
-    assert "extends, and does not replace" in text
+    # The standard extends, not replaces, the Document Model — no second authority
+    # (#3964: exact "extends, and does not replace" / "additive refinements"
+    # wording loosened to the underlying authority contract).
+    assert_semantic_present(
+        text,
+        ("extends", "does not replace"),
+        context="DocumentationArchitecture.md document-model deference",
+    )
     assert "MoonSpecDocumentModel.md" in text
-    assert "additive refinements" in text
+    assert_semantic_present(
+        text,
+        ("refinement",),
+        context="DocumentationArchitecture.md additive refinements",
+    )
 
 
 def test_conformance_review_is_non_canonical_working_doc_with_traceability() -> None:
@@ -140,7 +162,13 @@ def test_migration_plan_records_authority_conflict_outcome() -> None:
             "MM-900 completes without failing the required unit suite."
         )
     text = _read(MIGRATION_PLAN)
-    assert "MM-909 self-conformance and authority-conflict record" in text
+    # Self-traceability to the conformance record (#3964: exact title
+    # loosened; the link target and outcome heading are the contract).
+    assert_semantic_present(
+        text,
+        ("mm-909", "authority-conflict record"),
+        context="migration plan conformance traceability",
+    )
     assert "MoonSpecDocsArchitectureConformanceReview.md" in text
     # The recorded outcome: no unresolved authority conflict.
     assert "Unresolved documentation-authority conflicts:" in text
@@ -155,7 +183,11 @@ def test_stale_documentation_migration_plan_is_not_active_or_contradictory() -> 
     text = _read(STALE_MIGRATION_PLAN)
     assert "MM-928" in text
     assert "**Status:** Superseded / closed" in text
-    assert "no longer records active authority conflicts" in text
+    assert_semantic_present(
+        text,
+        ("no longer records active authority conflicts",),
+        context="stale migration plan closure",
+    )
     assert "## 7. Historical documentation-authority conflicts (closed)" in text
     assert "## 7. Unresolved documentation-authority conflicts" not in text
     assert "Draft / active" not in text

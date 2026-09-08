@@ -1,8 +1,12 @@
 from __future__ import annotations
 
 import re
+import sys
 from pathlib import Path
 
+sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
+
+from tools.check_documentation_architecture import metadata_fields
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
 
@@ -51,14 +55,11 @@ def test_canonical_docs_are_declarative_not_migration_tracking_surfaces() -> Non
         text = _read(path)
         assert "Implementation tracking:" not in text, path
         assert "migration checklists in canonical `docs/`" not in text, path
-        assert re.search(
-            r"^Last [Uu]pdated: 20\d{2}-\d{2}-\d{2}$",
-            text,
-            flags=re.MULTILINE,
-        ), path
+        metadata = metadata_fields(text)
+        assert re.fullmatch(r"20\d{2}-\d{2}-\d{2}", metadata["last updated"]), path
 
-    assert "**Status:** Draft" not in _read(RUN_HISTORY_DOC)
-    assert "Status: Normative" in _read(LEDGER_DOC)
+    assert metadata_fields(_read(RUN_HISTORY_DOC))["status"] != "Draft"
+    assert metadata_fields(_read(LEDGER_DOC))["status"] == "Normative"
 
 
 def test_temp_plan_cleanup_guard_removes_plan_after_final_dod_closes() -> None:
@@ -70,11 +71,17 @@ def test_temp_plan_cleanup_guard_removes_plan_after_final_dod_closes() -> None:
 
 
 def test_docs_do_not_inline_secrets_or_raw_evidence() -> None:
+    from moonmind.omnigent.conformance import SECRET_PATTERN as SHARED_SECRET_PATTERN
+
     checked_paths = [*CANONICAL_DOCS, ROADMAP_DOC]
     for path in checked_paths:
         text = _read(path)
         for pattern in SECRET_PATTERNS:
             assert pattern.search(text) is None, path
+        # Production shared-scanner twin (#3964): the canonical credential
+        # guardrail must agree, so deleting this doc assertion cannot hide a
+        # leak from the owning redaction boundary.
+        assert SHARED_SECRET_PATTERN.search(text) is None, path
         assert "BEGIN_PROVIDER_PAYLOAD" not in text, path
         assert "```diff" not in text, path
 

@@ -23,15 +23,7 @@ def _outputs(paths: list[str], **kwargs) -> dict[str, str]:
 
 @pytest.mark.parametrize(
     "changed_path",
-    [
-        "AGENTS.md",
-        "README.md",
-        "docs/DocumentationArchitecture.md",
-        "docs/Omnigent/CodexCreateToHostContract.md",
-        "docs/_viewpoints/ModuleContractSpecification.template.md",
-        "docs/assets/linked-image.png",
-        "docs/tmp/SomePlan.md",
-    ],
+    ["AGENTS.md", "docs/Development/PreCommitWorkflow.md"],
 )
 def test_docs_only_change_does_not_select_heavy_backend_suites(
     changed_path: str,
@@ -53,23 +45,6 @@ def test_docs_only_change_does_not_select_heavy_backend_suites(
         "frontend_browser_firefox": "false",
         "full_frontend": "false",
     }
-
-
-@pytest.mark.parametrize(
-    "changed_path",
-    [
-        "docs/Development/PreCommitWorkflow.md",
-        "docs/Steps/StepExecutionsAndCheckpointing.md",
-        "docs/Temporal/WorkflowTypeCatalogGenerated.md",
-        "docs/Temporal/WorkflowTypeCatalogAndLifecycle.md",
-    ],
-)
-def test_document_contracts_select_their_temporal_owner(changed_path: str) -> None:
-    selection = select_suites([changed_path], event_name="pull_request")
-    assert selection.unit_fast
-    assert selection.temporal_boundary
-    assert not selection.integration_ci
-    assert not selection.full_backend
 
 
 def test_backend_only_change_skips_frontend() -> None:
@@ -449,10 +424,17 @@ def test_non_omnigent_paths_are_not_contract_owned() -> None:
 def test_docs_only_change_never_selects_omnigent_gate() -> None:
     outputs = _outputs(["docs/Omnigent/Overview.md"])
 
-    assert outputs["unit_fast"] == "true"
     for key in OMNIGENT_CONTRACT_GATE_KEYS:
-        if key != "unit_fast":
-            assert outputs[key] == "false", key
+        assert outputs[key] == ("true" if key == "unit_fast" else "false"), key
+
+
+def test_markdown_renamed_away_still_selects_unit_fast() -> None:
+    # compute_changed_files.sh reports both rename endpoints, so the removed
+    # Markdown target keeps selecting the fast shard that owns the link,
+    # metadata, and contract checks for unchanged callers.
+    outputs = _outputs(["docs/Guide.md", "docs/Guide.txt"])
+
+    assert outputs["unit_fast"] == "true"
 
 
 # --- Tier-1 exact deployable-artifact gate (MoonLadderStudios/MoonMind#3710) ---

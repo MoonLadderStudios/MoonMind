@@ -76,8 +76,13 @@ async def store(tmp_path):
 
 
 def _embedded_config():
+    # Retired (#3955): the embedded facade is retained for in-flight cleanup
+    # and historical reads only. Tests exercise it through a disabled bridge
+    # declaration; an enabled embedded selection fails fast at the trusted
+    # selection boundary with the proxy alternative.
     return parse_bridge_config(
         {
+            "enabled": False,
             "compatibility": {"hostProtocolMode": HOST_PROTOCOL_MODE_EMBEDDED},
             "hostConnection": {
                 "embedded": {

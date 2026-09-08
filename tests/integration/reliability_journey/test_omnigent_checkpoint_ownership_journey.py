@@ -37,6 +37,11 @@ async def test_runtime_can_publish_beside_restored_verifier(
         member = tarfile.TarInfo("artifacts/verify.json")
         member.size = len(data)
         bundle.addfile(member, io.BytesIO(data))
+        script = b"#!/bin/sh\nprintf 'restored executable works\\n'\n"
+        member = tarfile.TarInfo("tools/verify.sh")
+        member.mode = 0o755
+        member.size = len(script)
+        bundle.addfile(member, io.BytesIO(script))
 
     class Artifacts:
         async def get_metadata(self, **_kwargs):
@@ -82,3 +87,13 @@ async def test_runtime_can_publish_beside_restored_verifier(
     )
     assert (workspace / "artifacts/pr.json").stat().st_uid == 1000
     assert (workspace / "artifacts/verify.json").read_bytes() == data
+    executed = subprocess.run(
+        [str(workspace / "tools/verify.sh")],
+        cwd=workspace,
+        user=1000,
+        group=1000,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    assert executed.stdout == "restored executable works\n"

@@ -1,1781 +1,465 @@
 # Workflow Remediation
 
-Omnigent remediation and approvals use the exact
-[immutable policy version](../Omnigent/PolicyAuthority.md).
-
-Release support for operator remediation through the normal product path is
-qualified by the versioned controlling artifact
-`moonmind.omnigent.remediation_matrix` (`operator-remediation-support-matrix/v1`);
-see [Operator remediation support matrix v1](../Omnigent/CodexSupportAndCutover.md#operator-remediation-support-matrix-v1).
-Autonomous mutating remediation stays fail-closed until every required row and
-operational gate passes. `admin_auto` is disabled in both remediation authoring
-surfaces and rejected by the ordinary Create service from the server-owned
-release status; a caller-supplied draft cannot bypass that boundary. Live
-qualification uses `tools/run_omnigent_live_conformance.py --mode remediation`,
-and combined release evidence is assembled with
-`tools/build_operator_remediation_release_evidence.py` from digest-bound,
-independently resolvable per-row observations.
-
-**Status:** Desired-state design
-**Document Class:** System / Feature Design View
-**Owners:** MoonMind Platform + dashboard
-**Last Updated:** 2026-08-13
-**Related:** `docs/Workflows/WorkflowDependencies.md`, `docs/Workflows/CheckpointBranchSystem.md`, `docs/Api/ExecutionsApiContract.md`, `docs/Workflows/WorkflowRunsApi.md`, `docs/Workflows/FollowUpWorkSystem.md`, `docs/Observability/LiveLogs.md`, `docs/ManagedAgents/CodexCliManagedSessions.md`, `docs/ManagedAgents/SharedManagedAgentAbstractions.md`, `docs/Security/ProviderProfiles.md`, `docs/Security/SecretsSystem.md`, `docs/ManagedAgents/DockerOutOfDocker.md`, `docs/Artifacts/ArtifactPresentationContract.md`, `docs/Temporal/StepLedgerAndProgressModel.md`, `docs/Temporal/WorkflowRunHistoryAndNewRunSemantics.md`, `docs/Temporal/SourceOfTruthAndProjectionModel.md`, `docs/Temporal/WorkflowTypeCatalogAndLifecycle.md`, `docs/Steps/StepExecutionsAndCheckpointing.md`, `docs/Steps/SkillSystem.md`, `docs/Omnigent/OmnigentAdapter.md`
-
----
+**Document class:** Canonical declarative system / feature design.
+**Status:** Accepted
+**Owners:** MoonMind Platform and dashboard.
 
 ## 1. Purpose
 
-This document defines the desired-state contract for **Workflow Remediation** in MoonMind.
+Workflow Remediation lets a normal MoonMind Workflow investigate another Workflow, attempt an authorized repair, verify the resulting work, and propose separately reviewable prevention changes. The target's original failure remains immutable. A successful repair is recorded on the remediation relationship and the resulting recovery execution or Checkpoint Branch, not by changing the failed source into a success.
 
-Workflow Remediation is the system that allows one MoonMind Workflow Execution to **troubleshoot, observe, and optionally intervene on another MoonMind Workflow Execution or run**. It is the architectural home for the “self-healing” feature: a Workflow Execution may be created specifically to investigate another Workflow Execution, read its durable evidence, follow its live observability stream when appropriate, and take typed, policy-bound administrative actions when allowed.
+A target is identified by workflow and pinned run. The remediator is a separate `MoonMind.UserWorkflow`. Immediate repair addresses the target objective or a specific operational condition. Prevention changes MoonMind, a preset, configuration, documentation, or a portable Skill to reduce recurrence. Either output may be useful independently, but neither may be mislabeled as the other.
 
-In this document:
-
-- a **target execution** is the Workflow Execution being investigated or repaired,
-- a **remediation Workflow Execution** is the follow-up Workflow Execution doing the investigation or repair,
-- **troubleshooting** means evidence collection and diagnosis,
-- **remediation** means diagnosis plus allowed intervention actions,
-- **immediate repair** means a bounded attempt to get the target Workflow Execution unstuck or completed now, using fresh target evidence and allowed actions when a plausible safe fix is available,
-- **long-term prevention** means a separately reviewable change to MoonMind, a reusable Agent Skill, or associated instructions that reduces the chance of the same failure recurring,
-- **self-healing** means automated or operator-triggered creation of remediation Workflow Executions under policy.
-
-The core design goal is:
-
-> MoonMind should let a Workflow Execution investigate another Workflow Execution, attempt a safe immediate repair when one is plausible, and produce a durable prevention fix when a systemic MoonMind or Skill improvement is found **without turning logs into the source of truth and without turning the agent into an unaudited root shell**.
-
----
+This document owns cross-workflow remediation, action authority, and repair-result interpretation. [Remediation Verification Cadence](RemediationVerificationCadence.md) owns bounded in-workflow repair attempts. [Workflow Run History and New Run Semantics](../Temporal/WorkflowRunHistoryAndNewRunSemantics.md#7a-failed-step-recovery-semantics) owns unchanged-input recovery. [Step Executions and Checkpointing](../Steps/StepExecutionsAndCheckpointing.md) and [Checkpoint Branches](CheckpointBranchSystem.md) own checkpoint and branch mechanics.
 
 ## 2. Why a separate system is required
 
-Workflow Remediation must be a first-class concept, separate from ordinary Workflow Execution dependencies.
+A remediation relationship is not `dependsOn`. Ordinary dependencies wait for prerequisite success. Remediation often starts because the target failed, stalled, or requested attention, and must be able to inspect that failure without waiting for it to disappear.
 
-Workflow Execution dependencies are intentionally narrow. They block one `MoonMind.UserWorkflow` on the successful terminal completion of another `MoonMind.UserWorkflow`. They do not import the upstream run’s plan DAG, internal context, logs, or artifacts into the dependent run. They also fail the dependent run when the upstream prerequisite ends in a non-success terminal state. That is the correct contract for orchestration ordering, but it is the wrong contract for troubleshooting and repair.
-
-Remediation needs the opposite behavior:
-
-1. it often starts **because** the target run failed, stalled, timed out, or requested attention;
-2. it must read the target run’s evidence instead of waiting for success;
-3. it may need to follow live progress while the target is still active;
-4. it may need to take bounded administrative actions such as clearing a stale slot, interrupting a managed turn, or restarting a managed container through a control-plane action.
-
-Therefore MoonMind needs a dedicated **remediation relationship** and a dedicated **privileged capability surface** rather than overloading `dependsOn`.
-
----
+The relationship grants no transitive authority. If B remediates A and C remediates B, C does not gain access to A. Target visibility, evidence access, model spending, operational mutation, approval, and repository publication are separate permissions.
 
 ## 3. Design goals
 
-Workflow Remediation must satisfy all of the following:
+The normal product journey must provide understandable authoring, pinned evidence, bounded diagnosis, the smallest safe intervention, durable action and verification evidence, cumulative progress, and an actionable terminal result. Missing evidence must lead to a bounded degraded diagnosis, explicit unavailability, or escalation, never fabricated success or an infinite wait.
 
-1. **Cross-Workflow troubleshooting**
-   - A new Workflow Execution can explicitly target another Workflow Execution.
-   - The target relationship is durable, inspectable, and visible in both directions.
-
-2. **Pinned evidence identity**
-   - The remediation Workflow Execution can target a logical execution by `workflowId`.
-   - It can also pin a specific run instance by `runId` so it does not silently drift when the target reruns or continues as new.
-
-3. **Artifact-first evidence access**
-   - The remediation Workflow Execution can read:
-     - execution detail,
-     - latest/current step ledger,
-     - selected step artifact refs,
-     - managed-run observability summaries,
-     - durable logs and diagnostics,
-     - continuity and control-boundary artifacts for managed sessions.
-
-4. **Optional live follow**
-   - When the target is active and observability supports it, the remediation Workflow Execution may follow live logs or structured observability events.
-   - Live follow is additive, not authoritative.
-
-5. **Typed administrative actions**
-   - The remediation Workflow Execution may execute allowed administrative actions through a MoonMind-owned action registry.
-   - Actions are explicit, validated, idempotent, and audited.
-
-6. **Privilege separation**
-   - A remediation Workflow Execution may run with stronger permissions than ordinary Workflow Executions.
-   - Those permissions are expressed through a named policy/profile, not through implicit raw host access.
-
-7. **Auditability**
-   - Every diagnosis, plan, action request, action result, and verification result must leave durable evidence.
-
-8. **Loop prevention**
-   - Remediation must not create unbounded self-healing loops or conflicting concurrent healers.
-
-9. **Graceful degradation**
-   - Historical runs with only merged logs or partial artifact coverage must still be troubleshootable.
-   - Missing evidence should degrade the remediation Workflow Execution, not deadlock it.
-
-10. **Immediate repair plus prevention**
-    - After diagnosis, a remediation Workflow Execution should first attempt the smallest safe repair that can unblock the target Workflow Execution now, such as resuming or retrying the failed step with corrected remediation context when policy, step replayability, and checkpoint evidence allow it.
-    - After the immediate repair succeeds, fails, or is ruled unsafe, the remediation Workflow Execution should look for a long-term fix in MoonMind code, configuration, presets, or Agent Skill instructions.
-    - When a long-term fix is identified and repository write authority is available, the remediation Workflow Execution should create a pull request instead of only writing a diagnosis.
-
----
+Security, resilience, and observability apply equally to Codex, Claude Code, and OpenCode through the generic Omnigent plane. Equivalent lifecycle guarantees do not imply identical provider-session capabilities or blanket support for every combination.
 
 ## 4. Non-goals
 
-This design does **not** attempt to provide:
+Remediation does not grant host shell, Docker socket, arbitrary SQL, unrestricted mounts or networking, storage keys, raw secret reads, or redaction bypass. It does not guarantee that every failure is repairable. It does not automatically merge prevention changes, promote repair branches, or spawn an administrator agent for every failure.
 
-- arbitrary raw shell access on the MoonMind host,
-- unrestricted Docker daemon access from the remediation runtime,
-- arbitrary SQL or direct database row editing by the agent,
-- silent import of another Workflow Execution’s entire workflow history into `initialParameters`,
-- cross-Workflow managed-session reuse,
-- a rule that every failed Workflow Execution automatically spawns an admin healer,
-- a guarantee that every failed Workflow Execution can be resumed, retried, or repaired in place,
-- automatic merge or self-application of MoonMind or Agent Skill prevention changes without review,
-- a guarantee that historical runs always have full structured event history,
-- a bypass around the Secrets System or artifact redaction rules,
-- a claim that Live Logs itself is the source of truth.
-
-MoonMind may still support operator handoff or manual terminal workflows elsewhere. This document only defines the **Workflow-based remediation system**.
-
----
+It must not introduce a second runtime coordinator, session model, checkpoint store, publication engine, approval owner, or verification policy implemented alongside the existing portable Skills.
 
 ## 5. Architectural stance
 
 ### 5.1 Remediation Workflow Executions remain `MoonMind.UserWorkflow`
 
-A remediation Workflow Execution should still be represented as a normal top-level `MoonMind.UserWorkflow` execution with additional nested semantics under `task.remediation`.
-
-This keeps remediation aligned with the existing Workflow-shaped create path, dashboard Workflow views, artifacts, step ledger, cancellation, rerun, and summary flows. A new top-level workflow type is not required in v1.
+Remediation uses the ordinary Workflow create/admission path, Step Execution ledger, artifacts, cancellation, and finalization. Its nested remediation object marks the relationship. The execution API and Workflow schema own the outer request envelope and historical `task` versus `workflow` decoding. A remediation-only serializer must not become a second authority or silently reinterpret retained input snapshots.
 
 ### 5.2 Remediation is a relationship, not a dependency
 
-A remediation Workflow Execution has a **directed link** to a target execution. The link is not a dependency gate. The remediation run starts immediately once created (or once its own schedule starts); it does not wait for the target to complete successfully.
+Persist both directions of the relationship before exposing accepted remediation. Pin target workflow, run, selected steps, and relevant checkpoint identity. The target may remain failed throughout a successful linked repair.
 
 ### 5.3 Control remains separate from observation
 
-Live Logs and observability remain passive observation surfaces. Intervention must occur through a separate MoonMind-owned action surface. A remediation Workflow Execution may use both, but it must not treat the log timeline itself as the control channel.
+Logs, native chat, and event streams are observations. Actions use authenticated typed control boundaries. Untrusted issue text, repository content, transcripts, diagnostics, or model proposals cannot change policy, choose credentials, authorize actions, or declare their own verification success.
 
 ### 5.4 Source of truth remains unchanged
 
-For the target execution:
+Temporal owns execution lifecycle. The plan and immutable input artifacts own authored work. Step Execution and checkpoint owners own progress and restoration evidence. Canonical session/turn owners govern live interaction. Result, publication, cleanup, and remediation read models project those owners without replacing them.
 
-- execution identity and lifecycle remain Temporal-owned,
-- planned structure remains owned by the plan artifact,
-- live step state remains owned by workflow state and step queries,
-- evidence remains owned by artifact linkage and managed-run observability,
-- projections remain read models, not a second workflow engine.
-
-Workflow Remediation is layered on top of those contracts; it does not redefine them.
+A refreshed database row is not automatically a fresh observation of Temporal, a provider process, or a host. Each operational claim identifies its actual owner and observation freshness.
 
 ### 5.5 Remediation reuses existing repair and evidence substrates
 
-Workflow Remediation must not create a second repair-attempt or evidence substrate. It should remain a `MoonMind.UserWorkflow` that targets another Workflow Execution, while reusing existing Step Execution, checkpoint, Checkpoint Branch, artifact, adapter evidence, and observability systems.
+[Primary Runtime Provider Strategy](../Omnigent/PrimaryRuntimeProviderStrategy.md) and [Harness Platform Design](../Omnigent/OmnigentHarnessPlatformDesign.md) apply to diagnosis, recovery, repair branches, verification, and prevention work.
 
-The remediation context artifact is a bounded index over existing evidence, not a parallel evidence store. It names the target, pinned run, relevant Step Execution manifests, checkpoint refs, recovery and incident manifests, branch refs, adapter capture refs, logs, diagnostics, and policy snapshots.
+New qualified coding-agent work uses `agentKind=external`, `agentId=omnigent`, with the exact harness, configuration, model, Host Class, materializer, and realizer recorded in its immutable execution plan. Runtime-specific differences remain small capability adapters. Direct and profile-bound paths are explicit, independently qualified compatibility paths, not silent recovery fallbacks.
 
-Checkpoint Branches are the preferred continuation primitive when remediation needs to run work with corrected instructions, a different branch, a different publish mode, a different runtime, or a different model. Failed-step recovery remains the path that preserves the original Workflow input and resumes from validated checkpoint evidence unchanged.
-
----
+A new repair branch has independently admitted execution authority. Its source checkpoint supplies content and lineage, not an active lease, old credential generation, approval, or an execution plan that may be blindly reused for changed work. Same-session continuation instead uses its existing canonical session/turn owner and cannot silently change immutable session dimensions.
 
 ## 6. Core invariants
 
-The following invariants are fixed:
-
-1. **A remediation Workflow Execution is explicitly marked.**
-   The canonical marker is `payload.task.remediation`.
-
-2. **A remediation Workflow Execution targets one logical execution and one pinned run snapshot.**
-   `target.workflowId` is required. `target.runId` is resolved and persisted at create time even if the user omitted it.
-
-3. **Remediation is non-transitive by default.**
-   If B remediates A and C remediates B, C does not automatically gain authority over A unless explicitly configured.
-
-4. **Remediation does not import unbounded upstream data into workflow history.**
-   Large logs, diagnostics, provider snapshots, and evidence bodies remain behind artifact refs or observability APIs.
-
-5. **All evidence access is server-mediated.**
-   Artifact refs are identifiers, not access grants. The remediation Workflow Execution never receives presigned URLs, raw storage keys, or raw local filesystem paths as durable context.
-
-6. **Administrative actions are typed and allowlisted.**
-   Remediation never implies “run any command the model suggests.”
-
-7. **Every side-effecting action is idempotent or safely keyed.**
-   Replays, retries, and duplicate requests must not create duplicate destructive actions.
-
-8. **Exclusive locking is required for acting on shared targets.**
-   Diagnosis may be parallelized later; mutation may not.
-
-9. **Secrets remain redacted.**
-   Stronger Workflow Execution authority does not override redaction, audit, or secret-reference rules.
-
-10. **Nested remediation is off by default.**
-    Automatic remediation of remediation Workflow Executions is disabled unless explicitly allowed by policy.
-
-11. **Force termination stays high-risk.**
-    Even for admin remediation, forced termination is treated as an ops-grade action, not a casual fallback.
-
-12. **Failure to resolve evidence never becomes infinite wait.**
-    The remediation Workflow Execution must degrade, escalate, or fail with a bounded reason.
-
----
+- Original source input, plan, failure, and accepted-step evidence remain immutable. New work has explicit lineage and semantic Step Execution identity.
+- A workspace checkpoint, provider-session continuity, a Git output branch, and publication evidence are different things. One does not prove another.
+- Source preservation and destination admission are checked independently. Valid saved bytes do not authorize model spending, a different account, or repository mutation.
+- Every mutation is policy-bound, expected-state-bound, conflict-controlled, idempotently identified, and auditable. An ambiguous acknowledgment requires reconciliation before repeat mutation.
+- Successful compute, saved work, action delivery, verified repair, prevention, publication, and cleanup have separate outcomes.
+- Missing support, changed authority, or invalid evidence is visible before mutation. Temporary capacity waits do not substitute another Profile, model, harness, host mode, or billing route.
+- No checkpointless path may infer authority from a local pathname, a surviving container, a branch name, or an agent's statement that files were saved.
+- Artifacts and historical results remain readable under their authorization and retention rules after hosts disappear. Recovery does not require keeping model credentials leased merely to retain non-sensitive work.
 
 ## 7. Submission contract
 
 ### 7.1 Canonical create path
 
-The canonical create path remains the Workflow-shaped submit flow that normalizes into `POST /api/executions`.
-
-Representative request:
+Use ordinary `POST /api/executions` admission. The following is an illustrative **nested remediation object**, not an independent complete create-request schema:
 
 ```json
 {
-  "type": "task",
-  "payload": {
-    "repository": "MoonLadderStudios/MoonMind",
-    "task": {
-      "instructions": "Investigate the target workflow execution, gather evidence, attempt the smallest safe immediate repair if one seems possible, verify the target outcome, then create a reviewable long-term MoonMind or Agent Skill fix if a recurrence-prevention change is identified.",
-      "runtime": { "mode": "codex" },
-      "remediation": {
-        "target": {
-          "workflowId": "mm:01ARZ3NDEKTSV4RRFFQ69G5FAV",
-          "runId": "8f15a7b2-6e48-44f0-a3ba-d2f0c8d96fd4",
-          "stepSelectors": [
-            { "logicalStepId": "run-tests", "attempt": 1 }
-          ],
-          "agentRunIds": ["tr_01HV8A3Y6Y3Q0QAB7M7H1R5Q7N"]
-        },
-        "mode": "snapshot_then_follow",
-        "authorityMode": "admin_auto",
-        "evidencePolicy": {
-          "includeStepLedger": true,
-          "includeObservabilitySummary": true,
-          "includeLogs": ["merged", "stdout", "stderr"],
-          "includeDiagnostics": true,
-          "includeProviderSnapshots": true,
-          "includeContinuityArtifacts": true,
-          "tailLines": 2000
-        },
-        "actionPolicyRef": "admin_healer_default",
-        "approvalPolicy": {
-          "mode": "risk_gated",
-          "autoAllowedRisk": "medium"
-        },
-        "lockPolicy": {
-          "scope": "target_execution",
-          "mode": "exclusive"
-        },
-        "trigger": {
-          "type": "manual",
-          "createdByWorkflowId": null
-        }
-      }
-    }
-  }
+  "target": {
+    "workflowId": "mm:target",
+    "runId": "source-run",
+    "stepSelectors": [{"logicalStepId": "implement", "attempt": 1}]
+  },
+  "mode": "snapshot_then_follow",
+  "authorityMode": "approval_gated",
+  "actionPolicyRef": "admin_healer_default",
+  "lockPolicy": {"scope": "target_execution", "mode": "exclusive"},
+  "trigger": {"type": "manual"}
 }
 ```
+
+The server resolves the authorized immutable policy version. A policy name or browser-provided readiness flag is not approval or execution authority.
 
 ### 7.2 Canonical normalized field
 
-The backend normalizes remediation intent into:
-
-```json
-{
-  "initialParameters": {
-    "task": {
-      "remediation": { "...": "..." }
-    }
-  }
-}
-```
-
-The `task.remediation` object is the durable contract. Compatibility routes may expose different shapes, but they must normalize into this nested object before `MoonMind.UserWorkflow` starts.
+The nested remediation contract travels with the normal immutable Workflow input. Existing `task.remediation` consumers and retained payloads must be reconciled through the providing execution-schema owner. New authoring must follow that owner's canonical envelope, reject conflicting aliases, and preserve source bytes/digests needed for history. This document does not create a second envelope or require a schema migration merely to repair the feature.
 
 ### 7.3 Field semantics
 
-#### `target.workflowId`
-Required durable identity of the target execution.
+`target.workflowId` is required. An omitted `target.runId` is resolved once at creation and persisted. Step selectors and AgentRun refs are bounded and must belong to that pinned run.
 
-#### `target.runId`
-Pinned target run instance. If omitted, the server resolves the latest/current run at create time and persists the resolved value.
+Modes are `snapshot`, `live_follow`, and `snapshot_then_follow`; the last is the normal default. Live observation remains optional and cannot be the only evidence path.
 
-#### `target.stepSelectors[]`
-Optional bounded selectors for steps the remediation Workflow Execution should prioritize. Each selector may include:
-- `logicalStepId`
-- `attempt`
-- `agentRunId`
+Ordinary manual authority modes are `observe_only` and `approval_gated`. `admin_auto` is reserved for separately qualified autonomous rollout and is rejected by ordinary authoring while that gate is closed. `evidencePolicy`, approval rules, locks, budgets, and triggers are validated hints or references under server-owned policy, never self-issued privileges.
 
-#### `target.agentRunIds[]`
-Optional direct observability bindings when the creator already knows which managed-run records matter.
-
-#### `mode`
-Allowed values:
-
-- `snapshot` — build a point-in-time evidence bundle only
-- `live_follow` — follow active observability where supported
-- `snapshot_then_follow` — create a point-in-time bundle, then continue live observation if possible
-
-Default: `snapshot_then_follow`.
-
-#### `authorityMode`
-Allowed values:
-
-- `observe_only`
-- `approval_gated`
-- `admin_auto`
-
-This field controls whether the Workflow Execution may only diagnose, may plan actions but require approval, or may execute actions automatically within policy.
-
-#### `evidencePolicy`
-Bounded hints controlling which evidence classes are requested and how much initial log context to include.
-
-#### `actionPolicyRef`
-Named policy describing the action allowlist, risk thresholds, lock requirements, verification requirements, and retry budget.
-
-#### `approvalPolicy`
-Policy for human approval requirements.
-
-#### `lockPolicy`
-Policy for lock scope and exclusivity.
-
-#### `trigger`
-Metadata describing how the remediation Workflow Execution was created:
-- `manual`
-- `on_failed`
-- `on_attention_required`
-- `on_stuck`
-- `policy`
-- `proposal_promoted`
+Trigger origin distinguishes manual, failure, attention, stuck, policy, and promoted-proposal origins where supported. An origin label cannot enable automatic mutation.
 
 ### 7.4 Create-time validation
 
-At create time, the platform must:
-
-1. require `task.remediation.target.workflowId`,
-2. resolve the target execution and verify caller visibility,
-3. reject malformed self-reference,
-4. reject unsupported target workflow types,
-5. resolve and persist a concrete `target.runId`,
-6. verify that selected `agentRunIds` belong to the target execution or selected steps,
-7. reject unsupported `authorityMode` values,
-8. validate `actionPolicyRef` existence and compatibility with the caller’s permission,
-9. reject nested remediation beyond policy limits,
-10. initialize a durable remediation link record supporting forward and reverse lookup.
+Resolve visibility, target type, pinned run, selected steps/AgentRuns, checkpoint linkage, policy and principal permissions, evidence/data-use scope, and nested-remediation limits. Reject self-targeting, conflicting identity, unsupported authority, and stale draft expectations before paid or mutating work. Persist an idempotent forward/reverse remediation link.
 
 ### 7.5 Convenience API
 
-MoonMind may expose a convenience route such as:
-
-```http
-POST /api/executions/{workflowId}/remediation
-```
-
-That route is only a control-plane convenience. It must expand into the same canonical execution create contract as `POST /api/executions`.
+A supported `POST /api/executions/{workflowId}/remediation` convenience route expands into the same create/admission contract. It cannot bypass visible authoring, policy, budget, or target validation.
 
 ### 7.6 Future automatic self-healing policy
 
-Automatic creation is intentionally a later layer. When MoonMind adds automatic self-healing, the triggering Workflow Execution may carry a bounded policy such as:
-
-```yaml
-task:
-  remediationPolicy:
-    enabled: true
-    triggers: ["failed", "attention_required", "stuck"]
-    createMode: "immediate_task"
-    templateRef: "admin_healer_default"
-    authorityMode: "approval_gated"
-    maxActiveRemediations: 1
-```
-
-The important rule is that **automatic remediation is policy-driven and bounded**, not an undocumented side effect of failure.
+Automatic creation is an independently authorized, bounded layer. Separate diagnosis-only automation from mutating automation. Freeze trigger, allowed action set, budget, concurrency, cooldown, maximum depth, and release-policy version. Keep manual diagnosis usable without enabling autonomous mutation.
 
 ### 7.7 Create-page first remediation flow
 
-The dashboard `Remediate` action opens `/workflows/new?intent=remediate&draftId=…` with an editable remediation draft instead of immediately submitting a hidden remediation run. The Create page prefills:
+`Remediate` opens `/workflows/new?intent=remediate&draftId=…`; it never immediately submits a hidden run. The operator sees immutable target identity and editable repair intent before submission.
 
-- target `workflowId` and pinned `runId`;
-- selected step or checkpoint refs when available;
-- repository `MoonLadderStudios/MoonMind` for MoonMind platform or prevention work;
-- starting and isolated Checkpoint work branches;
-- Codex via Omnigent runtime, Provider Profile, Agent Profile, execution target,
-  launch policy, model, effort, and retrieval controls from the target run;
-- default mode `snapshot_then_follow`;
-- default authority `approval_gated`;
-- default action policy `admin_healer_default`;
-- evidence, approval, mutation-lock, verification, and Checkpoint Branch policy;
-- branch and publish controls through the normal Create page fields.
+Normal execution authoring exposes **Runtime and one Profile**. Execution configuration, harness, Host Class, materializer, launch policy, and realizer are subordinate resolved authority, not another required selector chain, including behind Advanced mode. Genuinely optional supported model/effort or policy overrides remain available. Existing Codex and Claude OAuth Provider Profiles are reused rather than cloned into Omnigent-specific accounts.
 
-The UI separates immutable pinned target/run/failed-evidence identity from the
-editable repair intent. The operator edits instructions, repository, runtime,
-profiles, policy, branches, retrieval, and publish choices before ordinary
-`POST /api/executions` submission with `task.remediation`.
+The draft may suggest the target's compatible selection, but must preserve explicit edits and disclose unavailable historical choices. Displayed selection, submitted request, and admitted plan must agree. Incompatible or stale choices remain recoverable drafts with focused remedies, not silent defaults. These rules also apply to schedules, reruns, branch continue/fork, API, and MCP consumers.
 
-The tab-scoped draft is schema-versioned, timestamped, and expires after two
-hours. It is removed after a complete successful import into visible form state
-or explicit discard. Missing, malformed, expired, and cross-tab drafts surface
-distinct safe errors and never partially import. A local presence marker contains
-no target or repair content and exists only to explain cross-tab URLs.
+Keep the target repository/workspace, repair destination, and prevention repository distinct. MoonMind's repository may be selected for platform prevention work, but is not a substitute for the failed target's source. Publication remains a separate explicit choice.
 
----
+Drafts remain tab-scoped, schema-versioned, timestamped, and bounded to the existing two-hour import lifetime. Successful complete import or explicit discard removes the stored draft. Missing, malformed, expired, and cross-tab drafts have distinct safe errors and do not partially import. Presence markers contain no repair content. Draft import, metadata refresh, and immediate submission must preserve explicit input and current request identity.
 
 ## 8. Identity, linkage, and read models
 
 ### 8.1 Why both `workflowId` and `runId` are required
 
-MoonMind detail routes and compatibility views anchor on the logical execution identity (`workflowId`). However, the latest/current run may change when the target reruns or continues as new. Remediation needs both:
-
-- `workflowId` to identify the logical Workflow Execution,
-- `runId` to pin the evidence snapshot that the remediator started from.
+The workflow detail route anchors on logical identity. Evidence and actions pin exact run/step/attempt identity. Continue-As-New, rerun, or another actor's recovery cannot silently retarget a remediation.
 
 ### 8.2 Link directions
 
-The system must support both of these views:
-
-- **Remediator → Target**
-  - “Which execution is this remediation Workflow Execution investigating?”
-- **Target → Remediators**
-  - “Which remediation Workflow Executions have investigated or acted on this target?”
+Both target-to-remediators and remediator-to-target views link the pinned source, selected evidence, and resulting recovery workflow, branch, turn, or operational resource.
 
 ### 8.3 Durable linkage requirements
 
-The platform must persist enough data to support:
-
-- forward lookup from remediation Workflow Execution to target execution,
-- reverse lookup from target execution to remediation Workflow Executions,
-- pinned target run identity,
-- current remediation status,
-- current lock holder,
-- latest action summary,
-- final remediation outcome,
-- dashboard list/detail rendering.
+Persist the source identity, admitted repair intent, phase, action/approval/lock refs, cumulative attempt/head identity, resulting execution/branch/turn identity, verification target and scope, repair outcome, prevention outcome, and unresolved cleanup/operator work. A ref names evidence but does not grant access.
 
 ### 8.4 Read model expectations
 
-A derived remediation link read model is allowed for fast UI and API reads, but it must remain downstream of canonical sources.
-
-At minimum it should expose:
-
-```json
-{
-  "remediationWorkflowId": "mm:...",
-  "remediationRunId": "run_...",
-  "targetWorkflowId": "mm:...",
-  "targetRunId": "run_...",
-  "mode": "snapshot_then_follow",
-  "authorityMode": "admin_auto",
-  "status": "acting",
-  "activeLockScope": "target_execution",
-  "lastActionKind": "provider_profile.evict_stale_lease",
-  "resolution": null,
-  "createdAt": "2026-04-21T18:05:00Z",
-  "updatedAt": "2026-04-21T18:07:12Z"
-}
-```
+Project graph persistence, launch acceptance, running/terminal repair execution, verification pending/terminal, publication, promotion, archive, and cleanup independently. The immutable source may be `failed` while a linked result is verified to satisfy the repaired objective. Do not derive repair failure solely from the source row, or repair success solely from a branch's process exit.
 
 ### 8.5 Reverse lookup API
 
-A minimal desired-state surface is:
-
-```http
-GET /api/executions/{workflowId}/remediations?direction=inbound
-GET /api/executions/{workflowId}/remediations?direction=outbound
-```
-
-Where:
-- `inbound` means remediation Workflow Executions targeting this execution,
-- `outbound` means executions that this Workflow Execution is remediating.
-
-The link response also projects the immutable authored contract, detailed
-selected-step evidence, context generation/boundedness and per-class
-availability, diagnosis hints, lifecycle artifact index, latest bounded action
-request/result, final lifecycle summary, target-level verification outcome,
-Checkpoint Branch publication/promotion/archive state, and durable Workflow
-operator controls. These values come from canonical rows and artifacts, not
-rendered logs or chat.
+Existing inbound/outbound remediation reads under `/api/executions/{workflowId}/remediations` project authorized links, compact evidence availability, action capabilities, approvals, branch state, and result lineage. They do not expose arbitrary runtime bindings or implement lifecycle decisions in the browser.
 
 ### 8.6 Approval and Workflow operator APIs
 
-Authorized approval decisions use:
+Approval decisions use the existing `/api/executions/{remediationWorkflowId}/remediation/approvals/{requestId}` contract with approved/rejected decision and optional bounded comment. The persisted owner may use `denied` internally; transport spelling is normalized by that owner.
 
-```http
-POST /api/executions/{remediationWorkflowId}/remediation/approvals/{requestId}
-```
-
-The body is `{ "decision": "approved" | "rejected", "comment"?: "…" }`.
-The optional comment is the bounded decision rationale persisted by the durable
-approval owner. Expired, stale, terminal, mismatched, or self-approved requests
-fail closed.
-
-Operator takeover never grants raw Omnigent/runtime authority. It pauses the
-remediation Workflow through `POST /api/executions/{workflowId}/signal` with
-`Pause`; resume uses `Resume`, and cancellation uses the ordinary durable
-`POST /api/executions/{workflowId}/cancel` endpoint.
-
----
+Takeover uses supported ordinary Workflow controls. Pause/Resume of orchestration is not failed-step recovery and is not proof that every external process stopped. Cancellation uses `/api/executions/{workflowId}/cancel`. Use the supported Update/Signal protocol of the actual target type rather than an action-name-derived universal protocol.
 
 ## 9. Evidence and context model
 
 ### 9.1 Evidence sources
 
-The remediation Workflow Execution may need data from several MoonMind surfaces:
-
-1. **Execution detail**
-   - title, summary, lifecycle state, current run metadata, progress summary.
-
-2. **Step ledger**
-   - selected step status, attempt, summary, `agentRunId`, child refs, step-scoped artifact refs.
-
-3. **Managed-run observability**
-   - observability summary,
-   - stdout/stderr/merged logs,
-   - diagnostics,
-   - optional live-follow stream for active runs.
-
-4. **Execution-linked artifacts**
-   - output summaries,
-   - provider snapshots,
-   - run summaries,
-   - continuity artifacts,
-   - control-boundary artifacts.
-
-5. **Managed-session continuity**
-   - session summary,
-   - session checkpoints,
-   - session control events,
-   - reset boundaries,
-   - session identity metadata when relevant.
+Read authorized execution and step evidence, recovery/incident/Step Execution manifests, checkpoint and branch records, adapter capture/resource/terminal evidence, managed or canonical-session diagnostics and continuity, and durable logs. Native Omnigent interactions remain on the bound Workflow Chat surface. A provider URL or session ID is metadata, not artifact authority.
 
 ### 9.2 Remediation Context Builder
 
-MoonMind should introduce a **Remediation Context Builder** activity or service that resolves the target evidence and creates a single MoonMind-owned bundle artifact for the remediation Workflow Execution.
-
-Canonical output artifact:
-
-- path: `reports/remediation_context.json`
-- artifact type: `remediation.context`
-
-This artifact is the remediation Workflow Execution’s stable entrypoint. It should contain:
-- target identity,
-- selected steps,
-- observability refs,
-- recovery manifest refs,
-- incident reconstruction manifest refs,
-- Step Execution manifest refs,
-- checkpoint refs,
-- Checkpoint Branch refs,
-- adapter capture and diagnostics refs,
-- bounded summaries,
-- compact diagnosis hints,
-- live-follow cursor state if applicable,
-- action policy and approval policy snapshot,
-- lock policy snapshot.
-
-When available, the builder should resolve evidence in this order:
-
-1. target execution detail;
-2. failed-run recovery manifest;
-3. incident reconstruction manifest;
-4. Step Execution manifests;
-5. checkpoint artifacts and read models;
-6. Checkpoint Branch records and branch-turn context bundles;
-7. adapter capture manifests and provider diagnostics;
-8. step ledger projection;
-9. managed-run observability summaries, logs, and diagnostics;
-10. execution-linked artifacts and summaries.
-
-The builder may fall back to historical logs and summaries. Branch repair is allowed only when checkpoint validation succeeds.
+Reuse the existing builder and artifact services. `reports/remediation_context.json` is a bounded index, not another evidence store. Prefer authoritative recovery and Step Execution manifests before log-derived hypotheses. Include the selected evidence scope, availability/freshness, source and candidate identity, policy/approval/lock snapshot, and live cursor when supported.
 
 ### 9.3 Context artifact shape
 
-Representative shape:
-
-```json
-{
-  "schemaVersion": "v1",
-  "remediationWorkflowId": "mm:remediate_123",
-  "generatedAt": "2026-04-21T18:05:02Z",
-  "target": {
-    "workflowId": "mm:target_456",
-    "runId": "run_789",
-    "title": "Run integration tests",
-    "state": "awaiting_slot",
-    "closeStatus": null
-  },
-  "selectedSteps": [
-    {
-      "logicalStepId": "run-tests",
-      "attempt": 1,
-      "status": "awaiting_external",
-      "summary": "Waiting on managed runtime slot",
-      "agentRunId": "tr_01HV..."
-    }
-  ],
-  "evidence": {
-    "stepLedgerRef": { "artifact_id": "art_step_ledger_snapshot" },
-    "runSummaryRef": { "artifact_id": "art_run_summary" },
-    "agentRuns": [
-      {
-        "agentRunId": "tr_01HV...",
-        "observabilitySummaryRef": { "artifact_id": "art_obs_summary" },
-        "stdoutRef": { "artifact_id": "art_stdout" },
-        "stderrRef": { "artifact_id": "art_stderr" },
-        "mergedLogsRef": { "artifact_id": "art_merged" },
-        "diagnosticsRef": { "artifact_id": "art_diag" },
-        "providerSnapshotRef": { "artifact_id": "art_provider" }
-      }
-    ],
-    "continuityRefs": [
-      { "artifact_id": "art_session_summary", "kind": "session.summary" },
-      { "artifact_id": "art_reset_boundary", "kind": "session.reset_boundary" }
-    ]
-  },
-  "liveFollow": {
-    "mode": "snapshot_then_follow",
-    "supported": true,
-    "agentRunId": "tr_01HV...",
-    "resumeCursor": { "sequence": 3842 }
-  },
-  "policies": {
-    "authorityMode": "admin_auto",
-    "actionPolicyRef": "admin_healer_default",
-    "approvalPolicy": { "mode": "risk_gated", "autoAllowedRisk": "medium" },
-    "lockPolicy": { "scope": "target_execution", "mode": "exclusive" }
-  }
-}
-```
+The context records a schema version, generation and observation times, remediator and pinned target identities, selected steps, artifact refs, bounded diagnosis hints, per-class available/partial/unavailable/denied results, retrieval/data-use scope, and policy refs. Exact schema serialization belongs to its providing model. Missing data is not a successful empty result.
 
 ### 9.4 Boundedness rule
 
-The context artifact must stay **bounded**. It may include small excerpts or summaries, but not unbounded full log bodies. Full logs and rich diagnostics stay behind refs.
+Enforce count, byte, token, time, page, and retry bounds before expansion. Large evidence remains artifact-backed outside workflow history. Referenced content must actually be materialized through authorized readers when a Skill or verifier needs its bytes. Record residual truncation and exclusions rather than claiming complete inspection.
 
 ### 9.5 Evidence access surface for remediation Workflow Executions
 
-The remediation runtime should not scrape dashboard pages. It should receive a MoonMind-owned tool surface such as:
+Reuse `remediation.get_context`, bounded target artifact/log/event/checkpoint readers, `remediation.list_allowed_actions`, and typed `remediation.execute_action` through the existing API/Activity/MCP boundary. Live follow is optional. No dashboard scraping or broad proxy is required.
 
-- `remediation.get_context()`
-  Return the parsed `remediation.context` bundle.
-
-- `remediation.read_target_artifact(artifactRef, readMode?)`
-  Read a referenced artifact through normal artifact policy.
-
-- `remediation.read_target_logs(agentRunId, stream, cursor?, tailLines?)`
-  Read or tail target logs through the `/api/agent-runs` observability surfaces.
-
-- `remediation.follow_target_logs(agentRunId, fromSequence?)`
-  Live follow when supported.
-
-- `remediation.list_allowed_actions()`
-
-Action discovery is capability-truthful. Each catalog identity has an
-independently evaluated capability row containing `requestable`,
-`dryRunSupported`, `executionBackendReady`, `approvalBackendReady`,
-`verificationBackendReady`, `supportedTargetRuntimes`, `supportedHostModes`,
-`requiredEvidenceClasses`, and bounded `blockedReasons`. The executable list is
-the intersection of catalog enablement, immutable target policy,
-caller/profile permission, current target state and evidence, action-specific
-runtime and host support, live owning execution-adapter readiness, durable
-approval support, and authoritative verifier readiness. The owning service
-evaluates those inputs for the exact remediation link; static catalog
-enablement is not backend readiness.
-Checkpoint Branch execution readiness is derived from the registered production
-workflow, Activity catalog, and Activity handlers. Its verification readiness
-is derived independently from the registered remediation-verifier classifier;
-bridge metadata or a declared contract cannot make either boundary ready by
-itself.
-Actions without both an execution owner and verifier remain visible only in the
-capability matrix and are rejected before mutation. In particular, managed
-session terminate/restart, targeted janitor cleanup, cleanup verification,
-target annotation/verification, helper-container, and Omnigent host/lease
-actions are not executable until their missing owners are wired.
-Workflow Detail publishes the full evaluated matrix as `actionCapabilities`;
-`allowedActions` is derived only from rows whose `requestable` value is true.
-Disabled rows retain bounded reasons so operators can distinguish policy,
-target/evidence, runtime/host, execution, approval, and verification blockers
-before requesting an action.
-  Return action kinds allowed by `actionPolicyRef`.
-
-- `remediation.execute_action(actionKind, params, dryRun?)`
-  Request a typed intervention.
-
-- `remediation.verify_target(checks...)`
-  Re-read target health after an action.
-
-The exact transport may be internal API calls, activities, or MCP tools, but the capability boundary must be MoonMind-owned and typed.
+`actionCapabilities` distinguishes `requestable`, `dryRunSupported`, `executionBackendReady`, `approvalBackendReady`, `verificationBackendReady`, exact runtime/host support, required evidence, and bounded blocked reasons. `allowedActions` contains only requestable rows. Catalog membership, a registered classifier, or the presence of a worker handler is necessary evidence where applicable, not proof of a qualified end-to-end operation.
 
 ### 9.6 Live follow semantics
 
-Live follow is optional and best effort.
-
-Rules:
-
-1. the remediation Workflow Execution may follow only when:
-   - the target run is active,
-   - the target `agentRunId` supports live follow,
-   - policy allows it;
-
-2. the remediation Workflow Execution must persist a resume cursor such as last seen `sequence`;
-
-3. disconnects, worker restarts, or Workflow Execution retries must resume from durable cursor state when possible;
-
-4. when structured event history is unavailable, MoonMind may fall back to merged-log retrieval or artifact tailing;
-
-5. live follow must never become the only evidence path.
+Follow only authorized active targets whose canonical stream supports it. Persist cursors, bound reconnect/replay, distinguish gaps and epoch boundaries, and degrade to retained evidence without restarting business work. Projection/stream failure cannot change canonical execution outcome.
 
 ### 9.7 Evidence freshness before action
 
-Before executing a side-effecting action, the remediation Workflow Execution must re-read the target’s current bounded health view. The agent is allowed to start from a pinned snapshot, but it must not act on stale assumptions without a fresh precondition check.
+Revalidate target run, resource ownership/generation, expected state, policy/revocation, lock, approval, candidate head, and current action readiness at the trusted effect boundary. A stale page or earlier diagnosis is insufficient. Read failures remain unavailable rather than proof of absence or safe cleanup.
 
 ### 9.8 Immediate repair and prevention workflow
 
-Remediation is a two-track workflow:
+Choose the smallest safe action, verify its exact postcondition, then determine whether prevention work is warranted. A restored lease or resumed orchestration proves only that operational postcondition, not necessarily completion of the coding objective. A reviewable prevention PR does not prove the immediate repair worked.
 
-1. **Repair the current target if safe.** The remediation Workflow Execution must use the evidence bundle, fresh target health, allowed action list, and lock state to decide whether a bounded immediate repair is plausible. Examples include retrying a failed publish step with clarified remediation context, interrupting a stuck managed turn, clearing a stale session, evicting an orphaned slot lease, or requesting a targeted rerun/resume action. The repair attempt must be the smallest action likely to unblock the target and must not silently broaden into a full rerun or destructive action.
-2. **Verify the target outcome.** After an immediate repair action, the remediation Workflow Execution must call the verification surface and publish the result. Verification should distinguish `repaired`, `still_failed`, `not_attempted`, `unsafe`, `approval_required`, and `escalated` outcomes.
-3. **Prevent recurrence.** Regardless of whether the target was repaired, the remediation Workflow Execution should identify whether the failure points to a reusable MoonMind, preset, prompt, or Agent Skill defect. If it does, the Workflow Execution should prepare the smallest reviewable code, configuration, documentation, or Skill change and create a pull request when repository write authority and policy allow it.
-
-Immediate repair is not a substitute for long-term prevention. A successful target repair still requires a recurrence analysis, and a failed or unsafe repair can still produce a prevention pull request.
-
-Corrected-instruction retries are remediation interventions, not ordinary failed-step recovery. If the platform has a distinct Resume-from-failed-step action that preserves the original Workflow input snapshot unchanged, remediation must not overload that action with edited instructions. Any corrected instructions must be recorded as remediation repair context or a follow-up retry override with explicit provenance, not as a mutation of the original Workflow input.
-
-The remediation decision log must record:
-
-- the immediate repair candidate considered,
-- why it was attempted, skipped, denied, or escalated,
-- the action request/result and verification refs when attempted,
-- the root-cause category selected for long-term prevention,
-- the prevention branch, commit, and pull request URL when created,
-- the reason no prevention PR was created when the Workflow Execution only reports findings.
+Record attempted/skipped/denied/unsafe decisions, action and verification refs, resulting work identity, root-cause hypothesis and confidence limits, prevention branch/PR and its independent verification, and remaining operator work. Required publication is not silently changed to save-only success when credentials are missing.
 
 ### 9.9 Checkpoint-backed repair
 
-Corrected-instruction remediation should use Checkpoint Branches. When remediation needs to execute code or workflow work with different instructions, branch, publish mode, runtime, or model, it should call a Checkpoint Branch operation rather than silently editing the original workflow input or overloading failed-step Resume.
+Unchanged-input failed-step recovery preserves the original specification and resumes at a checkpoint-defined phase. Corrected instructions, changed model/effort, Profile, policy, retrieval, repository branch, publication choice, or other immutable authority requires a separately admitted Checkpoint Branch or fresh execution. Do not overload `RecoverFromFailedStep` with corrective text.
 
-A remediation-created branch should record:
+A repair branch records source workflow/run/step/ordinal/boundary and checkpoint digest, immutable new instruction refs/digest, destination selection and plan, workspace policy, isolated work branch where applicable, remediation provenance, and idempotency identity. Validate source content separately from destination authority. A supported fresh branch can use a currently authorized credential generation for the explicitly selected Profile; that does not revive the old lease or qualify same-session reattachment.
 
-- source workflow id and pinned source run id;
-- logical step id and Step Execution ordinal when applicable;
-- checkpoint boundary and checkpoint ref;
-- immutable instruction artifact ref and digest;
-- workspace policy;
-- runtime context policy;
-- publish mode;
-- remediation workflow/run provenance;
-- idempotency key.
-
-Failed-step recovery remains the path that preserves original inputs and resumes from validated checkpoint evidence. It must not accept edited instructions, alternate branch settings, or publish-mode changes. Those belong to a Checkpoint Branch or a fresh workflow created through Create.
-
-The remediation action and public Checkpoint Branch API call the same durable
-branch-turn execution owner. Creating the graph is not execution success: the
-action projection reports graph persistence, launch acceptance, active or
-terminal turn state, and verification readiness independently. A Checkpoint
-Branch action is requestable only when both that execution owner and the
-authoritative `checkpoint_branch` verifier are ready.
+Create, continue, and fork use the existing branch-turn owner. Continuation starts from the selected predecessor's committed candidate, not repeatedly from the root baseline. Compare is read-only. Publish, promote, and archive are separately authorized effects. Publication is not promotion, and archive cannot destroy content retained by another consumer.
 
 ### 9.10 Omnigent-backed remediation
 
-For Omnigent-backed target work, remediation consumes MoonMind artifacts harvested by the Omnigent adapter: normalized stream artifacts, snapshots, transcripts, workspace manifests, optional patch refs, PR metadata, and diagnostics.
+Use the generic realizer, canonical workspace owner, session/turn commands, and shared finalization. A semantic branch or cold destination gets fresh session/host ownership as required; retries reconcile the same admitted attempt instead of launching another one.
 
-Omnigent session ids, file ids, resource ids, runner ids, and provider URLs are runtime binding or diagnostics metadata. They are not MoonMind evidence authority and should not replace artifact refs.
-
-The durable `MoonMind.OmnigentSession` supervisor accepts an authorized,
-reference-only continuation signal, but remediation must not send hidden
-follow-up messages into a parent session. Corrective execution creates a fresh
-Checkpoint Branch turn with new canonical Omnigent session authority; an
-explicit same-session continuation remains owned and audited by the existing
-session supervisor.
-
----
+Explicit supported same-session interaction uses the canonical session supervisor and turn command boundary. Remediation never sends hidden corrective messages into a parent session or treats the existence of a supervisor as blanket resume support. Native chat readiness and historical evidence access remain independently observable.
 
 ## 10. Security and authority model
 
 ### 10.1 Authority modes
 
-Workflow Remediation defines three authority modes:
-
-#### `observe_only`
-The remediation Workflow Execution may:
-- read allowed evidence,
-- produce diagnosis artifacts,
-- suggest actions.
-
-It may **not** execute side-effecting actions.
-
-#### `approval_gated`
-The remediation Workflow Execution may:
-- read evidence,
-- propose concrete actions,
-- optionally perform dry runs,
-- execute actions only after required approval.
-
-#### `admin_auto`
-The remediation Workflow Execution may:
-- read evidence,
-- plan actions,
-- execute allowed actions automatically within policy,
-- still require approval for explicitly high-risk actions if the action policy says so.
+`observe_only` allows scoped reads and diagnosis, not mutation. `approval_gated` allows proposals and supported dry runs and executes only according to enforced approval policy. Future `admin_auto` requires server-owned release admission and a narrow authorized action set. It is not enabled by examples, a draft, a schedule, or an LLM decision.
 
 ### 10.2 Execution principal
 
-A remediation Workflow Execution with elevated authority should execute under a **named admin remediation principal or security profile**, not simply as the ordinary user runtime.
-
-Desired-state fields:
-
-```yaml
-task:
-  remediation:
-    securityProfileRef: admin_healer
-    actionPolicyRef: admin_healer_default
-```
-
-Audit must record both:
-- the requesting user or workflow,
-- the execution principal actually used for the privileged action.
+Audit the requesting actor and the named principal/security policy used by the trusted action owner. A model runtime may propose privileged actions without receiving the owner's host credentials or unrestricted operational permissions. A security-policy reference is not a second model-account Profile.
 
 ### 10.3 Permission model
 
-The control plane should distinguish:
-
-- permission to view a target execution,
-- permission to create a remediation Workflow Execution,
-- permission to request an admin remediation profile,
-- permission to approve high-risk actions,
-- permission to inspect remediation audit history.
-
-A user who can view a Workflow Execution should not automatically be able to launch an admin remediator against it.
+Check target visibility, evidence and raw-artifact access, remediator creation/model spending, action execution, approval, audit access, and each repository role independently. Source, collaboration, and publication credentials follow their providing connection/binding owners. Restoring a workspace restores none of these permissions.
 
 ### 10.4 Secret handling
 
-Privileged remediation does **not** bypass the Secrets System.
-
-Rules:
-- no raw secrets in remediation context artifacts,
-- no raw secrets in workflow payloads,
-- no raw secrets in run summaries,
-- no raw secrets in logs or diagnostics,
-- generated credential-bearing runtime files stay ephemeral by default,
-- remediation actions receive MoonMind-issued capabilities or narrowly materialized runtime context only where unavoidable.
+Secret-reference, scanning, redaction, and data-use rules apply before model disclosure and at outbound effects. No raw credentials, OAuth homes, approval grants, signed download URLs, or reusable capability secrets enter durable context, histories, logs, or archives. Retain only necessary bounded authority metadata under authorization.
 
 ### 10.5 Artifact and log access mediation
 
-Artifacts and logs must remain server-mediated.
-
-A remediation Workflow Execution may receive:
-- artifact refs,
-- MoonMind-issued read capability handles,
-- redacted or preview views,
-- typed observability APIs.
-
-It must not receive:
-- presigned storage URLs in durable context,
-- storage backend keys,
-- absolute local filesystem paths,
-- raw secret-bearing config bundles.
+Use authorized artifact/default-read projections. Safe preview access does not grant raw restore/publication permission. Denied raw content is not an invitation to read a local path or fall back to unrestricted storage. Validate digests, source identity, schema, completeness, retention, and freshness at use time.
 
 ### 10.6 High-risk actions
 
-Some actions remain inherently high-risk, even for an admin healer. Examples:
-- forced termination,
-- destructive container cleanup with uncertain ownership,
-- fresh rerun creation that may trigger duplicate external effects,
-- replacement of a managed session with continuity loss.
-
-The action registry must allow these to be marked as:
-- `low`,
-- `medium`,
-- `high`.
-
-The `approvalPolicy` then decides whether:
-- they are auto-allowed,
-- require operator approval,
-- are completely disabled.
+Force termination, destructive cleanup, session replacement, and reruns with external effects require their explicit policy/approval and verified ownership. They are not automatic responses to capacity waits, missing logs, or an uncertain result. Stop/fence credential consumers before release and before destructive operations on their resources.
 
 ### 10.7 Visibility and redaction posture
 
-Remediation does not change the rule that non-admin visibility is scoped to ownership and that unauthorized direct fetches must not leak execution existence. Admin remediation may see more, but its artifacts still follow redaction-safe display rules.
-
----
+Non-admin visibility remains owner-scoped. Unauthorized direct refs must not leak target existence. Administrative scope does not bypass artifact policy. Cache and asynchronous response identity include principal and exact target/result scope.
 
 ## 11. Remediation action registry
 
 ### 11.1 Rationale
 
-The user-facing desire may sound like “let the healer restart a container or free a slot,” but the implementation must not be “give the model host root.” MoonMind should instead expose a **typed action registry** backed by existing lifecycle surfaces, managed-session controls, provider-profile management, and Docker workload control-plane activities.
+Extend the existing typed registry and subsystem owners. An action is a scoped primitive, not another native implementation of portable Skill reasoning.
 
 ### 11.2 Canonical action kinds
 
-The initial registry should include at least the following action families.
+Keep existing execution pause/resume/cancel/force-terminate/rerun, session controls, provider/host/lease reconciliation, helper-container, targeted cleanup, and Checkpoint Branch families. Do not promise every registered family is executable. Enable only operations with real owning adapters, authorization, evidence, and the required verifier.
 
-#### Execution lifecycle actions
-- `execution.pause`
-- `execution.resume`
-- `execution.retry_failed_step_with_remediation_context`
-- `execution.request_rerun_same_workflow`
-- `execution.start_fresh_rerun`
-- `execution.cancel`
-- `execution.force_terminate`
-
-#### Managed-session actions
-- `session.interrupt_turn`
-- `session.clear`
-- `session.cancel`
-- `session.terminate`
-- `session.restart_container`
-
-#### Provider-profile / slot actions
-- `provider_profile.evict_stale_lease`
-
-#### Workload / container actions
-- `workload.restart_helper_container`
-- `workload.reap_orphan_container`
-
-#### Checkpoint Branch actions
-- `checkpoint_branch.create_from_remediation_context`
-- `checkpoint_branch.continue`
-- `checkpoint_branch.compare`
-- `checkpoint_branch.publish`
-- `checkpoint_branch.promote`
-- `checkpoint_branch.archive`
-
-The registry may later grow, but every new action kind must declare:
-- target type,
-- allowed inputs,
-- risk tier,
-- preconditions,
-- idempotency rules,
-- verification requirements,
-- audit payload shape.
+The historical `execution.retry_failed_step_with_remediation_context` name must not create a competing corrective retry engine. New corrective authoring uses explicit Checkpoint Branch intent. Any retained historical request is either deliberately translated under its recorded contract to a separately authorized branch or rejected before mutation. Keep compatibility only for demonstrated persisted consumers.
 
 ### 11.3 Action semantics notes
 
-#### `execution.pause` / `execution.resume`
-Backed by the ordinary execution signal surface. Use these when the target should stop progressing while evidence is reviewed or operator work occurs.
+`execution.resume` resumes paused orchestration; it is not checkpoint recovery. A supported active-run rerun may Continue-As-New; terminal rerun creates a linked fresh execution and cannot update a closed Temporal run. Session operations use exact canonical session/turn/epoch capability rather than constructing a managed-session route from a runtime label for every harness.
 
-#### `execution.retry_failed_step_with_remediation_context`
-A targeted immediate-repair action for a failed step when fresh evidence indicates the step may succeed with bounded corrective context. Example: a publish step failed because the Workflow instructions were ambiguous, and remediation can provide clarified publish instructions for that retry.
+Lease eviction or host/helper cleanup invokes its owning reconciliation mechanism. Age, workflow terminality, or an unresponsive process is not sufficient proof that a credential resource can be released or an unrelated workspace deleted. Targeted janitor actions cannot silently become global cleanup.
 
-This action must:
-- pin the source `workflowId`, source `runId`, failed step identity, and attempt,
-- preserve completed prior-step outputs by refs when resuming a linked follow-up execution,
-- record corrective context separately from the original Workflow input snapshot,
-- require step replayability, checkpoint availability, authorization, and policy approval before execution,
-- fail explicitly when checkpoint validation or restoration fails,
-- avoid silent fallback to a full rerun,
-- avoid retrying non-idempotent or externally side-effecting work unless policy and approval explicitly allow it.
-
-This action is distinct from an operator-facing failed-step recovery path that preserves original inputs unchanged. It is a remediation-specific intervention and must leave action, provenance, and verification artifacts.
-
-#### `execution.request_rerun_same_workflow`
-Represents Continue-As-New style rerun of the same logical execution where supported and accepted.
-
-#### `execution.start_fresh_rerun`
-Represents creation of a fresh execution with a new `workflowId`, preserving original parameters unless overridden.
-
-#### `execution.force_terminate`
-Ops-only. Used only for runaway execution or policy violation scenarios. This is never a “normal first fix.”
-
-#### `session.interrupt_turn`
-Interrupt an active managed turn without destroying the entire session.
-
-#### `session.clear`
-Perform the managed-session clear/reset operation, producing the normal control and reset-boundary artifacts and incrementing the session epoch.
-
-#### `session.restart_container`
-A stronger action than `session.clear`. It must be implemented by the owning managed-session plane or a MoonMind control-plane activity, not by handing raw Docker access to the agent. Restarting the session container must create an explicit continuity boundary and produce durable audit artifacts.
-
-#### `provider_profile.evict_stale_lease`
-Release a managed runtime slot lease when the lease is stale or orphaned according to policy and supervision evidence.
-
-#### `workload.restart_helper_container` / `workload.reap_orphan_container`
-These operate on workload containers that MoonMind launched through the Docker workload plane. They do not imply arbitrary image execution or unrestricted Docker access.
-
-#### `checkpoint_branch.create_from_remediation_context`
-Create a branch from a validated remediation context and checkpoint, then ask
-the shared branch-turn execution owner to launch its initial turn. Use this when
-corrected instructions, alternate branch settings, alternate publish mode, or a
-different runtime/model are required. This action must preserve source
-checkpoint identity, immutable instruction refs, workspace policy, runtime
-context policy, publish mode, remediation provenance, and idempotency key.
-
-Action delivery, terminal branch execution, and target repair are separate
-facts. The action may be `applied` after the durable owner accepts the launch,
-while `terminalBranchResultAvailable` and the trusted post-action verification
-outcome remain pending. Neither graph persistence nor a completed branch turn
-may claim that the original target was repaired.
+`checkpoint_branch.create_from_remediation_context` shares the public branch-turn execution owner. Its response distinguishes persisted graph, accepted launch, active/terminal turn, and verification. It never reports verified repair merely because creation succeeded.
 
 ### 11.4 Action request contract
 
-Representative shape:
-
-```json
-{
-  "schemaVersion": "v1",
-  "actionId": "ract_01HV...",
-  "actionKind": "provider_profile.evict_stale_lease",
-  "requestedBy": {
-    "workflowId": "mm:remediate_123",
-    "runId": "run_456",
-    "logicalStepId": "apply-remediation"
-  },
-  "target": {
-    "workflowId": "mm:target_789",
-    "runId": "run_321",
-    "resourceKind": "provider_profile_lease",
-    "resourceId": "profile:codex_openai_oauth_team"
-  },
-  "riskTier": "medium",
-  "dryRun": false,
-  "idempotencyKey": "mm:remediate_123:run_456:provider_profile.evict_stale_lease:profile:codex_openai_oauth_team",
-  "params": {
-    "reason": "lease exceeded max duration and owner execution is no longer active"
-  }
-}
-```
+Persist action ID and kind, authenticated actor/remediator, exact target workflow/run/resource, expected state/generation, normalized parameter digest, selected policy/approval/lock authority, stable idempotency key, dry-run meaning, before evidence, and verification contract. Bound all payloads. An unchanged key with changed semantic input is a conflict, not a replay.
 
 ### 11.5 Action result contract
 
-Representative shape:
+Distinguish accepted/queued, applied, no-op, approval-required, denied, precondition-failed, delivery-unknown, timed-out, failed, and canceled states according to the providing schema. Include the canonical operation and exact resulting workflow/run/branch/turn/resource identity, before/after refs, and unfinished verification/cleanup obligations.
 
-```json
-{
-  "schemaVersion": "v1",
-  "actionId": "ract_01HV...",
-  "status": "applied",
-  "appliedAt": "2026-04-21T18:09:11Z",
-  "message": "Lease evicted successfully.",
-  "beforeStateRef": { "artifact_id": "art_before" },
-  "afterStateRef": { "artifact_id": "art_after" },
-  "verificationRequired": true,
-  "verificationHint": "re-check slot availability and target state",
-  "sideEffects": [
-    "released provider profile lease"
-  ]
-}
-```
-
-Allowed `status` values should include:
-- `applied`
-- `no_op`
-- `rejected`
-- `precondition_failed`
-- `approval_required`
-- `timed_out`
-- `failed`
-
-This `status` is the action **delivery/application** status only. It is not the
-repair outcome. The trusted post-action verification phase (§11.6.1) publishes a
-separate `remediation.verification` artifact with a normalized repair outcome, so
-a delivered action or a persisted Checkpoint Branch never relabels the failed
-target as repaired.
+Transport acceptance is not effect completion. A lookup failure or lost acknowledgment cannot be turned into a safe no-op or a fresh mutation request. Reconcile the original operation identity first.
 
 ### 11.6 Risk tiers and verification
 
-Every side-effecting action must declare:
-- required risk tier,
-- precondition checks,
-- default verification procedure.
-
-Examples:
-- `provider_profile.evict_stale_lease` — verify lease age, owner liveness, and slot state afterward.
-- `execution.retry_failed_step_with_remediation_context` — verify the retried step started from the intended checkpoint, preserved prior-step refs were reused rather than re-executed, corrected remediation context was recorded, and the target reached the expected repaired or still-failed state.
-- `session.restart_container` — verify new session identity fields and new continuity boundary artifact.
-- `execution.request_rerun_same_workflow` — verify target run state changes and runId rollover if applicable.
+Every mutating action declares low/medium/high risk, preconditions, an evidence owner, postcondition, stabilization/deadline policy, and required verification scope. A contract may prove operational control completion without proving the original business objective. Expose that distinction.
 
 ### 11.6.1 Trusted post-action verification phase
 
-Action **delivery** and remediation **repair** are separate facts. Every
-side-effecting administrative action enters an explicit, trusted verification
-phase after it is delivered or applied. The phase never serializes an
-adapter-returned `verification` mapping and never defaults to a fabricated
-`verified`/`not_verified`; it re-reads fresh canonical evidence and classifies
-the actual repair outcome.
+Preserve the existing typed verification phase and outcome vocabulary: `verified_resolved`, `verified_no_change`, `still_failed`, `regressed`, `evidence_unavailable`, `approval_required`, `verification_failed`, and `canceled`. A separate lifecycle field represents verification that is pending or waiting for a result; do not overload a terminal outcome to mean that future work is still running.
 
-**Typed contract and capability-aware registry.** Each action kind declares a
-verification contract: the authoritative evidence owner, the target resource
-kind and identity to verify, the immediate expected state, an optional bounded
-stabilization interval and poll strategy, a terminal timeout, and the
-before/after evidence classes. The registry is capability-aware: an action is
-advertised as automatically verifiable only when an owning verifier and a
-readable evidence surface exist. Actions whose owning subsystem verifier is not
-wired (managed session, host/lease, container, cleanup, annotation) return a
-truthful `evidence_unavailable` capability rather than a fabricated result.
+Persist the action result before verification. Read fresh owner-backed evidence, never an adapter-supplied `verification` mapping or the pre-action cache. Bind the verifier to exact action, source, resulting execution/branch/turn, candidate digest, specification scope, and policy. Enforce identity even when a later run shares the same workflow ID.
 
-**Phase steps.** After delivery the phase (1) persists the immutable action
-result, (2) re-resolves the current target identity, (3) reads fresh canonical
-evidence rather than the pre-action context cache, (4) performs bounded
-stabilization/polling where the contract requires it, (5) publishes a typed
-verification result, and (6) updates the remediation/target projections without
-rewriting the target's original outcome. The phase performs no side effects of
-its own, so worker restart, Activity retry, and Temporal replay re-run it safely;
-the original action stays idempotent through the owning adapters' stable keys.
+For a repair branch or recovery workflow, verify its exact completed candidate and required downstream objective evidence. Do not require the immutable failed source row to become completed. Conversely, a later unrelated success of the source workflow cannot prove this repair. Branch process success alone is not objective verification, and an operational pause/cancel acknowledgment is not global host quiescence.
 
-**Normalized verification outcomes.** The `remediation.verification` artifact
-`status`/`outcome` is one of:
+Long-running repair verification has a durable pending obligation under the existing orchestration/action owner. Bounded polls may observe progress, but an HTTP/Activity polling window is not the lifetime of the repair. A terminal event or bounded durable reconciliation resumes verification without repeating the action. Browser disconnect, worker loss, delayed terminal evidence, and lost publication of a verification artifact preserve this obligation and its deadline.
 
-- `verified_resolved` — the target reached the expected repaired state;
-- `verified_no_change` — the action was accepted but the target did not change and no change was expected (including no-op and not-applied deliveries);
-- `still_failed` — the target remains in the failure state the action was meant to repair (for example a Checkpoint Branch was created as a candidate but the target objective is not yet resolved);
-- `regressed` — the target looked repaired immediately after the action, then degraded during stabilization;
-- `evidence_unavailable` — fresh evidence could not be read, or no owning verifier exists, degraded with a bounded reason;
-- `approval_required` — the action is approval-gated and repair is not yet verifiable;
-- `verification_failed` — the verifier itself failed;
-- `canceled` — verification was canceled.
-
-The artifact records the target state `before` the action, `immediateAfter`
-delivery, and `stabilized` after bounded stabilization, plus the resulting
-run/branch/session identity and the exact action linkage.
-
-### 11.7 Explicitly unsupported actions
-
-The registry must **not** support by default:
-
-- arbitrary host shell command execution,
-- arbitrary SQL,
-- arbitrary Docker image pull and run,
-- arbitrary volume mounts,
-- arbitrary network egress changes,
-- reading decrypted secret contents,
-- bypassing artifact redaction rules.
-
-If MoonMind later adds more powerful operations, they must still be expressed as typed actions with explicit target classes and audit, never as “raw admin console.”
-
----
+Record before, immediate-after, and stabilized observations when actually observed. Do not reconstruct a missing pre-action snapshot after retry, treat a failed later read as fresh earlier success, or invent no-change evidence for an ambiguous action. Verification-only retry does not repeat completed compute or mutation. A committed verdict is reused only for the same evidence and policy; a changed candidate requires a new verification attempt.
 
 ## 12. Locking, idempotency, and loop prevention
 
 ### 12.1 Why locks are required
 
-A healer with admin power can cause harm if:
-- two healers restart the same container,
-- one healer clears a session while another is inspecting it,
-- a stale retry repeats a destructive action,
-- automatic remediation loops keep rerunning the same failing target.
-
-Therefore remediation needs its own lock and action ledger.
+Use the existing remediation link/action ledger and actual resource owners, not a second global scheduler. Several workflow IDs may contend for the same host, credential, workspace, or publication destination.
 
 ### 12.2 Lock scopes
 
-Canonical lock scopes:
-
-- `target_execution`
-- `agent_run`
-- `managed_session`
-- `provider_profile_lease`
-- `workload_container`
-
-The default v1 mutation lock is `target_execution` with `exclusive` mode.
+Retain target-execution, AgentRun, managed/canonical session, provider-profile lease, and workload-container scopes as appropriate. The normal target mutation lock is exclusive. Read-only parallel diagnosis is permitted only under its evidence and budget policy.
 
 ### 12.3 Lock contract
 
-A lock record should capture:
-
-```json
-{
-  "lockId": "rlock_01HV...",
-  "scope": "target_execution",
-  "targetWorkflowId": "mm:target_123",
-  "targetRunId": "run_456",
-  "holderWorkflowId": "mm:remediate_789",
-  "holderRunId": "run_abc",
-  "createdAt": "2026-04-21T18:05:03Z",
-  "expiresAt": "2026-04-21T18:35:03Z",
-  "mode": "exclusive"
-}
-```
-
-Rules:
-- lock acquisition must be idempotent,
-- stale locks must expire or be recoverable,
-- lock loss must be surfaced explicitly,
-- the remediation Workflow Execution must not silently keep mutating after lock loss.
+Persist holder and exact target run/resource, generation/fence, expiry, and release/reconciliation state. A lost or expired lock prevents new mutation. Its expiry alone is not proof that the old consumer stopped. Stale completion cannot overwrite or release a replacement owner's resources.
 
 ### 12.4 Action idempotency
 
-Every action request must provide an idempotency key stable for the logical intended side effect.
-
-The remediation system must not rely solely on the generic execution update idempotency behavior because that cache is intentionally narrow. The remediation action ledger is the canonical idempotency surface for remediation actions.
+Bind the action key to normalized intent, target, policy, and expected state. Commit intent before effect, persist result before verification, and reconcile ambiguous acknowledgments through the effect owner. A narrow execution-update cache is not the remediation action ledger. Do not promise exactly-once external effects or billing when the external system cannot prove them.
 
 ### 12.5 Retry budget and cooldowns
 
-Each remediation Workflow Execution should carry:
-- max actions per target,
-- max attempts per action kind,
-- minimum cooldown between repeated identical actions,
-- terminal escalation condition.
+Persist maximum actions, per-kind attempts, branch count, full-verifier attempts, elapsed time, model budget, cooldown, and escalation disposition. A typical policy may allow three actions and two per kind, but examples do not override admitted limits. Count repeated requests separately from newly admitted semantic attempts.
 
-Example defaults:
-- no more than 3 side-effecting actions total,
-- no more than 1 `force_terminate`,
-- no more than 2 session restarts,
-- no repeated stale-lease eviction within the cooldown window.
+Cumulative repair attempts follow [Verification Cadence](RemediationVerificationCadence.md). No-progress uses validated candidate/evidence changes, not repeated verdict labels or changing timestamps. Checkpointless admission is limited to that document's explicit remotely verified exact-head contract and is not cold checkpoint recovery.
 
 ### 12.6 Nested remediation defaults
 
-Defaults:
-- a remediation Workflow Execution may not automatically spawn another remediation Workflow Execution;
-- a remediation Workflow Execution may not target itself;
-- a remediation Workflow Execution may not target another remediation Workflow Execution unless `allowNestedRemediation` is explicitly enabled by policy;
-- automatic self-healing depth defaults to 1.
+No self-targeting or automatic remediation of a remediator by default. Any explicitly enabled nested use has bounded depth and independently admitted scope, not inherited transitive privileges.
 
 ### 12.7 Target-change guard
 
-Before acting, the remediation Workflow Execution must compare:
-- pinned target `runId`,
-- current target `runId`,
-- current target state,
-- current target summary / session identity.
-
-If the target has materially changed, the action should either:
-- no-op,
-- re-diagnose,
-- escalate to approval.
-
----
+Changed run, checkpoint, candidate, policy, credential/resource generation, or expected state requires an explicit conflict, new diagnosis/admission, or policy-permitted no-op. An approval cannot bless a different target. Changes to a live target do not retarget a pinned historical repair result.
 
 ## 13. Runtime lifecycle
 
 ### 13.1 Remediation phases
 
-Remediation uses the existing top-level `mm_state` values of `MoonMind.UserWorkflow`. It does **not** require a new top-level state machine in v1. Instead it exposes a bounded remediation-specific phase field inside summary/read models.
-
-Recommended `remediationPhase` values:
-
-- `collecting_evidence`
-- `diagnosing`
-- `awaiting_approval`
-- `acting`
-- `verifying`
-- `resolved`
-- `escalated`
-- `failed`
+Use existing Workflow lifecycle plus bounded remediation phases such as collecting evidence, diagnosing, awaiting approval, acting, verifying, resolved, escalated, and failed. Waiting for capacity, target action, or verification is explicit and does not require another top-level workflow engine.
 
 ### 13.2 Recommended lifecycle
 
-```mermaid
-stateDiagram-v2
-    [*] --> collecting_evidence
-    collecting_evidence --> diagnosing
-    diagnosing --> awaiting_approval : high-risk action or policy gate
-    diagnosing --> acting : action selected
-    diagnosing --> resolved : no action needed
-    diagnosing --> escalated : unsafe or insufficient evidence
-
-    awaiting_approval --> acting : approved
-    awaiting_approval --> escalated : rejected or timed out
-
-    acting --> verifying
-    acting --> escalated : unrecoverable action failure
-
-    verifying --> resolved : target healthy
-    verifying --> diagnosing : more work still needed
-    verifying --> escalated : action budget exhausted
-
-    resolved --> [*]
-    escalated --> [*]
-```
+Collect evidence, diagnose, propose, acquire/revalidate mutation authority and approval, execute, verify, record repair/prevention, and release/reconcile. A diagnosis-only result may complete without mutation. Terminal escalation retains evidence and uncompleted obligations.
 
 ### 13.3 Recommended step structure
 
-A remediation Workflow Execution commonly follows these plan nodes:
-
-1. acquire lock,
-2. build evidence bundle,
-3. diagnose,
-4. propose remediation plan,
-5. request approval if needed,
-6. execute action,
-7. verify target,
-8. write remediation summary,
-9. release lock.
-
-This does not need to be a hard-coded universal plan, but the system should make these phases observable.
+Skills own diagnosis, coherent repairs, and objective-verification semantics. Native orchestration owns scope, admission, artifact delivery, execution scheduling, and result validation. Full objective verification is attempt-scoped; each independently risky administrative effect still gets its own targeted verification.
 
 ### 13.4 Cancellation semantics
 
-Rules:
-- canceling the remediation Workflow Execution cancels only the remediation Workflow Execution,
-- the target execution is not mutated by cancellation unless a specific action already requested that mutation,
-- canceling the target execution does not automatically cancel the remediation Workflow Execution,
-- the remediation Workflow Execution must still attempt best-effort lock release and final audit artifact publication.
+Canceling the remediator does not implicitly cancel or mutate the target. Canceling the target does not automatically cancel the remediator. Already accepted actions remain independently reconcilable. Requesting cancellation is not proof that an agent stopped.
+
+Finalization preserves verified compute and saved evidence before failure-prone publication/reporting. Verify the required durability handoff before deleting the sole useful workspace. Stopping credential consumers and releasing model capacity is separate from retaining non-sensitive content. Failed capture has a bounded fenced retention/reconciliation disposition, not unconditional cleanup or indefinite credential retention. All janitors honor the same persisted decision.
+
+Required checkpoint/durability policy remains owned by checkpoint, publication, and [Repository Access and Workspace Design](../RepositoryAccessAndWorkspaceDesign.md). Proposed artifact-only or credentialless recovery requires the owning policy reconciliation and implementation; it is not permission to bypass a currently required remote checkpoint.
 
 ### 13.5 Rerun semantics
 
-The target may change runs while remediation is active.
-
-Rules:
-- the pinned `target.runId` is the diagnosis snapshot anchor,
-- the remediation Workflow Execution may still inspect the current/latest target health before acting,
-- action policies may allow:
-  - `request_rerun_same_workflow`,
-  - `start_fresh_rerun`,
-  - neither,
-- when an action intentionally changes the target run, the remediation summary must record both the pinned run and the new resulting run if known.
+A new recovery execution or branch is a new result owner linked to the pinned failure. Exact rerun, edited retry, failed-step recovery, publication-only retry, and pause/resume remain distinct. Never silently turn failed recovery into fresh paid compute.
 
 ### 13.6 Continue-As-New state integrity
 
-If the remediation Workflow Execution continues as new, it must preserve:
-- target `workflowId`,
-- pinned target `runId`,
-- remediation context artifact ref,
-- acquired lock identity,
-- action ledger,
-- approval state,
-- retry budget state,
-- last seen live-follow cursor.
-
----
+Preserve pinned target, source/candidate refs, immutable selection, action/approval/lock and pending verification identities, attempt/action/model budgets, cooldown/deadline, live cursor, and cleanup obligations. Retained histories use their recorded commands and digests; changes require deliberate versioning and replay evidence.
 
 ## 14. Artifacts, summaries, and audit
 
 ### 14.1 Required remediation artifacts
 
-At minimum, a remediation Workflow Execution should produce:
+Reuse the existing artifact contracts and stable per-action/attempt labels:
 
-- `reports/remediation_context.json`
-  `artifact_type = remediation.context`
+- `reports/remediation_context.json` (`remediation.context`) and `reports/remediation_plan.json` (`remediation.plan`).
+- `logs/remediation_decision_log.ndjson` (`remediation.decision_log`).
+- `reports/remediation_action_request-<n>.json` and `reports/remediation_action_result-<n>.json` (`remediation.action_request` / `remediation.action_result`).
+- `reports/remediation_verification-<n>.json` (`remediation.verification`) and `reports/remediation_summary.json` (`remediation.summary`).
+- Immutable `remediation.approval_request` and `remediation.approval_decision` artifacts where approval is required.
 
-- `reports/remediation_plan.json`
-  `artifact_type = remediation.plan`
-
-- `logs/remediation_decision_log.ndjson`
-  `artifact_type = remediation.decision_log`
-
-- `reports/remediation_action_request-<n>.json`
-  `artifact_type = remediation.action_request`
-
-- `reports/remediation_action_result-<n>.json`
-  `artifact_type = remediation.action_result`
-
-- `reports/remediation_verification-<n>.json`
-  `artifact_type = remediation.verification`
-
-- `reports/remediation_summary.json`
-  `artifact_type = remediation.summary`
-
-These artifacts must obey the normal artifact presentation contract:
-- bounded safe metadata,
-- artifact refs rather than URLs,
-- correct preview/redaction handling,
-- no secrets in metadata or bodies.
+Missing optional preview/report output must not erase a committed valid result. Required evidence remains an unmet obligation when absent. Preview and raw access follow [Artifact Presentation](../Artifacts/ArtifactPresentationContract.md).
 
 ### 14.2 Target-side artifacts
 
-When the remediation Workflow Execution mutates a target-managed session or workload, the target side should also receive the normal continuity/control artifacts appropriate to that subsystem.
-
-Examples:
-- `session.control_event`
-- `session.reset_boundary`
-- target-side audit annotations
-- new diagnostics or summary artifacts
-
-The remediation Workflow Execution does not replace those subsystem-native artifacts; it adds a parallel remediation audit trail.
+Link subsystem-native control, continuity/reset, diagnostics, and resource evidence rather than copying it into a new lifecycle store. Target annotations link the repair without rewriting the original outcome.
 
 ### 14.3 Remediation summary block
 
-`reports/run_summary.json` for the remediation Workflow Execution should include a stable `remediation` block.
+The summary separates source failure, action delivery, repair execution, verification target/scope/outcome, resulting workflow/branch/turn, prevention and its verification, publication, save/retention, cleanup, and remaining operator work. A final `resolved_after_action` requires the relevant verified postcondition, with operational versus objective scope explicit.
 
-Representative shape:
-
-```json
-{
-  "remediation": {
-    "targetWorkflowId": "mm:target_123",
-    "targetRunId": "run_456",
-    "mode": "snapshot_then_follow",
-    "authorityMode": "admin_auto",
-    "actionsAttempted": [
-      {
-        "kind": "provider_profile.evict_stale_lease",
-        "status": "applied"
-      }
-    ],
-    "resolution": "resolved_after_action",
-    "lockConflicts": 0,
-    "approvalCount": 0,
-    "evidenceDegraded": false,
-    "escalated": false
-  }
-}
-```
-
-Recommended `resolution` values:
-- `not_applicable`
-- `diagnosis_only`
-- `no_action_needed`
-- `resolved_after_action`
-- `escalated`
-- `unsafe_to_act`
-- `lock_conflict`
-- `evidence_unavailable`
-- `failed`
-
-The final summary reports the immediate `repair` block and the long-term
-`prevention` block separately. The `repair` block carries the action
-`deliveryStatus`, the normalized repair `verificationOutcome` (§11.6.1), the
-resulting run/branch/session identity, and any `remainingOperatorWork`. The
-`prevention` block carries the prevention branch/PR `status` and its own
-`preventionVerificationOutcome`. A successfully delivered action or a prevention
-PR must not relabel the failed target as repaired: immediate repair verification
-and prevention verification stay distinct.
+Retain diagnosis-only, no-action-needed, escalated, unsafe-to-act, lock-conflict, evidence-unavailable, and failed dispositions. `NO_COMMIT` or a prevention PR is not by itself a repair verdict.
 
 ### 14.4 Target-side linkage summary
 
-The target execution detail view should show inbound remediation metadata such as:
-- active remediation count,
-- latest remediation title,
-- latest remediation status,
-- latest action kind,
-- last updated time.
-
-This may come from a derived link read model rather than from the target workflow summary itself.
+Show inbound remediation count, latest safe status, action, verification and result links, and observation freshness. Unknown projection state is not a reason to rerun work.
 
 ### 14.5 Control-plane audit events
 
-In addition to artifacts, MoonMind should persist structured audit events for remediation actions. The storage may reuse a general control-event mechanism or add a remediation-specific table, but it must record:
-- actor user,
-- execution principal,
-- remediation workflow/run,
-- target workflow/run,
-- action kind,
-- risk tier,
-- approval decision,
-- timestamps,
-- bounded metadata.
-
-Artifacts remain the operator-facing deep evidence; audit rows remain the compact queryable trail.
-
----
+Record requester, action principal, source/remediator/result identities, exact policy/approval and expected-state refs, intent/result digests, timestamps, idempotency, observed before/after evidence, verification, and release disposition. Keep metadata bounded, secret-safe, and authorized. Artifacts supply detailed evidence; audit records provide compact queryable linkage.
 
 ## 15. Dashboard UX
 
 ### 15.1 Create flow
 
-The dashboard should expose **Create remediation Workflow** from:
-- Workflow detail,
-- failed Workflow banners,
-- attention-required surfaces,
-- stuck Workflow surfaces,
-- provider-slot or session problem surfaces where applicable.
-
-The create UI should let the operator:
-- choose the pinned target run,
-- choose all steps or selected steps,
-- choose troubleshooting-only vs admin remediation,
-- choose live-follow mode,
-- choose or review the action policy,
-- preview which evidence will be attached.
+Offer Remediate from failure/attention/detail surfaces. Show pinned target, selected evidence, diagnosis versus approved repair intent, normal Runtime + Profile, publication choice, budget, and exact unavailable action reasons. Do not make a connection to GitHub a prerequisite for diagnosis where authorized evidence and runtime support suffice.
 
 ### 15.2 Target Workflow detail
 
-The target Workflow should show a **Remediation Workflows** panel with:
-- remediation Workflow/run links and lifecycle phase/status,
-- pinned target run and selected Step Execution/checkpoint,
-- authority plus authored profile/policy identity,
-- active mutation lock and release state,
-- diagnosis, action delivery, approval, explicit repair verification,
-  resolution, prevention, resulting run/branch/PR, and cleanup evidence.
-
-This is an annotation region. It never overwrites the original target outcome.
+Show immutable failure and a separate Remediation Workflows panel with pinned lineage, action/approval/lock state, linked candidate, pending/terminal verification, repair/prevention, and cleanup. A verified linked repair is visible even though the source remains failed.
 
 ### 15.3 Remediation Workflow detail
 
-The remediation Workflow detail should show a **Remediation Target** panel with:
-- target execution link,
-- pinned target run id,
-- selected steps,
-- current target state,
-- evidence bundle link,
-- immutable authored instructions/runtime/profile/policy/branch/retrieval/publish contract,
-- per-class evidence availability, freshness, boundedness, and degradation,
-- live-follow state and cursor,
-- action request/result authority chain, risk, expected state, policy decision,
-  idempotency, actor, approval, before/after refs, and delivery,
-- cumulative attempts and workspace head,
-- Checkpoint Branch source, isolated work branch, output, publication,
-  promotion, and archive state,
-- repair, prevention, cleanup, lease release, and unresolved operator work,
-- allowed actions with bounded disabled reasons,
-- approval state,
-- lock state.
+Show the Remediation Target panel, authored repair contract, evidence availability, current phase/wait, cumulative attempts and candidate head, full action authority chain, exact result identity, and required operator work. Advanced diagnostics explain execution configuration without creating extra ordinary account selectors.
 
 ### 15.4 Evidence presentation
 
-The dashboard should provide direct operator access to:
-- the remediation context artifact,
-- referenced target logs and diagnostics,
-- remediation decision log,
-- action request/result artifacts,
-- verification artifacts.
+Use existing authorized artifact renderers and server-selected default read refs. Generated content is inert untrusted content, not an executable control surface. Never fall back from a denied preview/raw read to local storage or an upstream provider URL.
 
 ### 15.5 Live follow behavior
 
-If live follow is active:
-- clearly label it as live observation,
-- show reconnect state,
-- preserve sequence position when reloading,
-- make epoch boundaries explicit for managed sessions,
-- fall back to durable artifacts when streaming is unavailable.
+Label live observations, reconnect/gap states, and cursor/epoch changes. Historical repair evidence remains usable independently of stream or native chat availability.
 
 ### 15.6 Operator handoff
 
-When a remediation Workflow Execution is `approval_gated` or encounters a high-risk action:
+Reuse `execution_remediation_links.approval_state` and its providing owner. Bind a request to exact action digest, target run/step/checkpoint/resource generation, immutable policy/security principal, reviewer class, expiry, and single-use state. Persist only redacted parameters and their digest. Requesters cannot approve their own request; high-risk actions require their stronger reviewer rule.
 
-The canonical approval owner is the `approval_state` lifecycle persisted on the
-`execution_remediation_links` record. Authority evaluation creates it once for
-the exact action request digest and stores only redacted parameters plus their
-digest. It records the remediation and target run identities, expected target
-state, checkpoint/Step Execution, bridge/session/host/lease identities,
-credential generation, immutable policy and security-profile authority,
-approval class, reviewer rule, actors, timestamps, and
-one of `pending`, `approved`, `denied`, `expired`, `stale`, or `consumed`.
-Retries with the same request digest reuse the record; a different request under
-the same approval identity fails closed.
-
-The owner also publishes immutable `remediation.approval_request` and
-`remediation.approval_decision` artifacts. Their stable labels make publication
-idempotent across worker restart, Activity retry, and Workflow replay. The
-approval state stores both artifact references; decision evidence points back to
-the request artifact, and later action, audit, verification, and target
-annotation evidence carries the same approval reference and projected artifact
-map.
-
-An `approvalRef` is an opaque lookup key, never evidence by itself. Immediately
-before adapter dispatch MoonMind resolves it from this record, checks decision,
-expiry, single-use state, action identity, and current target authority, and
-marks mismatches stale with a bounded reason code. A successful dispatch consumes
-the approval and links the decision bidirectionally with the action request,
-result, audit, verification, and target-annotation artifacts. Requesters cannot decide their own
-request, and the `high_risk_reviewer` rule requires a privileged reviewer.
-- show the proposed action,
-- show preconditions,
-- show expected blast radius,
-- allow authorized approve/deny with a recorded rationale,
-- show expired and stale decisions and why a new request is required,
-- expose durable Workflow cancellation/takeover without raw runtime authority,
-- keep the decision in the audit trail.
-
----
+Publish request/decision artifacts idempotently, link both through action, audit, and verification, and re-resolve the persisted decision immediately before dispatch. An opaque `approvalRef` is a lookup key, not proof. Changed input under the same identity is a conflict. Expired, stale, denied, or consumed authority cannot be replayed for a new effect. Display proposal, preconditions, blast radius, approve/deny, stale reasons, and supported cancellation/takeover.
 
 ## 16. Failure modes and edge cases
 
-The system must explicitly handle these cases.
+Reject invisible/missing targets without leaking existence. Preserve pinned identity when the target reruns. Diagnose historical partial logs with disclosed limits. Missing artifacts, stream outage, lock contention, stale approvals, removed Profiles, and unavailable action owners have distinct bounded outcomes.
 
-### 16.1 Target execution not found or not visible
-Fail create-time validation or fail early with a structured remediation error. Do not silently create a Workflow Execution with a null target.
-
-### 16.2 Target reran after remediation started
-Keep the pinned snapshot. Revalidate current health before acting. Do not silently retarget without recording it.
-
-### 16.3 Historical target has only merged logs
-Allow diagnosis using merged logs and partial artifacts. Surface `evidenceDegraded = true`.
-
-### 16.4 Missing or partial artifact refs
-Continue with partial evidence when safe. Record which evidence classes were unavailable.
-
-### 16.5 Live follow unavailable
-Fall back to `logs/merged`, `logs/stdout`, `logs/stderr`, diagnostics, and summaries.
-
-### 16.6 Lock conflict
-If another remediator owns the target mutation lock, either:
-- fail fast,
-- downgrade to observe-only,
-- queue for later if future policy supports that.
-Do not allow concurrent mutations by default.
-
-### 16.7 Precondition no longer holds
-Treat as `no_op` or `precondition_failed`, not as silent success.
-
-### 16.8 Stale lease already released
-Return `no_op` with verification evidence.
-
-### 16.9 Container restart target already gone
-Treat as `no_op` or `verification_failed` depending on desired action semantics.
-
-### 16.10 Forced termination attempted on non-runaway target
-Require approval or reject by policy. Forced termination is not the generic fallback for every failure.
-
-### 16.11 Remediation Workflow Execution itself fails
-Publish a final remediation summary and release locks. Automatic remediation of the failed remediator is off by default.
-
----
+An already-released lease or absent container is a verified no-op only when the owning subsystem proves the relevant identity and disposition. A failed lookup is unknown. Force termination is never a generic fallback. If the remediator fails, persist what was delivered, what still requires verification/cleanup, and how the existing reconciler can resume it without another mutation.
 
 ## 17. Recommended v1
 
-A practical v1 should ship with the following constraints:
+Manual creation, pinned targets, artifact-first context, bounded evidence tools, `observe_only` / `approval_gated`, a small **actually qualified** action subset, exclusive mutation authority, independent verification, and full audit form the minimum useful product.
 
-1. **Manual creation first**
-   - Operators create remediation Workflow Executions explicitly from the dashboard.
-   - `Remediate` opens Create with an editable draft rather than submitting a hidden run.
-
-2. **Pinned target run**
-   - Always persist `workflowId + runId`.
-
-3. **Artifact-first context bundle**
-   - Generate `reports/remediation_context.json` up front.
-   - Treat the context as a ref-only index over existing recovery, incident, Step Execution, checkpoint, branch, adapter, and observability artifacts.
-
-4. **MoonMind-owned evidence tools**
-   - Provide read access to:
-     - step ledger snapshot,
-     - target workflow-run observability summary,
-     - stdout/stderr/merged logs,
-     - diagnostics,
-     - selected artifacts.
-
-5. **Two authority modes only in v1**
-   - `observe_only`
-   - `approval_gated`
-
-6. **Small action registry**
-   - `execution.pause`
-   - `execution.resume`
-   - `checkpoint_branch.create_from_remediation_context`
-   - `execution.request_rerun_same_workflow`
-   - `session.interrupt_turn`
-   - `session.clear`
-   - `provider_profile.evict_stale_lease`
-   - `session.restart_container` if implemented through the owning plane
-   - no raw Docker or host shell
-
-7. **Exclusive mutation lock**
-   - one active remediator per target execution
-
-8. **Full audit artifacts**
-   - always publish context, plan, actions, verification, summary
-
-9. **Omnigent v1 fresh-session branch repair**
-   - do not send hidden same-session remediation messages into a parent Omnigent session until typed v2 lifecycle activities exist.
-
-This v1 is powerful enough to heal common MoonMind operational failures while staying aligned with the existing architecture.
-
----
+For coding repair, prioritize unchanged-input recovery and fresh-session Checkpoint Branch repair through the generic runtime. Do not require every optional administrator action, static host topology, unrelated connector feature, or legacy retirement stage before fixing those journeys. Missing capabilities stay truthfully unavailable until their own owners are ready.
 
 ## 18. Future extensions
 
-After v1, MoonMind may add:
-
-- automatic remediation policies,
-- richer action registry coverage,
-- finer-grained lock scopes,
-- policy-driven concurrent observe-only remediators,
-- historical per-run remediation analytics,
-- integration with stuck detection and finish-summary outcomes,
-- reusable remediation templates for common failure signatures,
-
-Future work should preserve the core rules of this document:
-artifact-first evidence, typed actions, explicit locks, strict audit, and no raw root shell.
-
----
+Narrow automation, additional action adapters, finer conflict scopes, safe parallel diagnosis, and richer history are extensions of the existing owners. They cannot weaken target, credential, checkpoint, approval, publication, or evidence boundaries. A simpler UI does not remove distinctions required for correct execution.
 
 ## 19. Acceptance criteria
 
-This document is complete enough to guide implementation when all of the following are true:
+Acceptance requires actual normal authoring to admission to runtime to result wiring, not merely models, registered handlers, an iframe, or successful graph persistence.
 
-1. `task.remediation` is accepted as the canonical create-time contract.
-2. The system distinguishes remediation from ordinary Workflow Execution dependencies.
-3. The create path resolves and persists a pinned target `runId`.
-4. A remediation context bundle artifact is generated and linked.
-5. A MoonMind-owned evidence access surface exists for remediation Workflow Executions.
-6. A typed action registry exists for side-effecting admin actions.
-7. Privileged remediation uses named policy/profile binding, not implicit host access.
-8. Exclusive mutation locking and a remediation action idempotency ledger are implemented.
-9. Remediation Workflow Executions emit the required audit artifacts and summary block.
-10. The dashboard can show forward and reverse remediation links.
-11. The system degrades safely when only partial historical evidence is available.
-12. Automatic self-healing, when later added, is policy-driven and bounded.
-13. Remediation Workflow Executions attempt the smallest safe immediate repair when one is plausible.
-14. Remediation Workflow Executions create a reviewable long-term MoonMind, preset, prompt, or Agent Skill prevention PR when recurrence analysis identifies an actionable systemic fix and repository write policy allows it.
-15. Checkpoint-backed repair uses Checkpoint Branch APIs when instructions, branch, publish mode, runtime, or model differ from the original target run.
-16. Provider-specific evidence is consumed through MoonMind artifact refs; provider session ids and URLs remain diagnostics/runtime binding metadata.
-17. Omnigent same-session continuation is blocked until typed v2 lifecycle activities exist.
+Required journeys include unchanged-input recovery with preserved earlier steps, source-host-destroyed cold restore, corrected-instruction branch repair, explicitly changed Profile/configuration admission, cumulative multi-attempt repair, durable pending verification, cancellation/restart/ambiguous acknowledgments, stale authority, missing evidence, denied approvals, and save/publication/cleanup failure without repeated completed effects.
 
----
+Verify each claimed Codex OAuth, Claude OAuth, keyed OpenCode, and credentialless OpenCode combination under its exact plan/image/materializer/host/policy evidence. Reuse shared qualification infrastructure and scenario evidence. Optional static support is separate. Source implementation, hermetic tests, real infrastructure, exact-artifact/protected-live qualification, and promotion are distinct claims.
+
+The existing `moonmind.omnigent.remediation_matrix` and `operator-remediation-support-matrix/v1` are the release-gate owners. `tools/run_omnigent_live_conformance.py --mode remediation` and `tools/build_operator_remediation_release_evidence.py` consume independently resolvable observations; extend those owners rather than create another matrix service. Repo-verifiable Skill completion does not waive required live/operator evidence. Autonomous mutation remains closed until its own exact evidence, permission, observability, cancellation, threshold, and rollback gates pass.
+
+Dated source observations, implementation gaps, issue disposition, and evidence links belong in the execution tracker and GitHub issues. Canonical acceptance is not completed by issue closure alone.
 
 ## Appendix A. Example action policy
 
-```yaml
-RemediationActionPolicy:
-  policy_id: admin_healer_default
-  allowed_actions:
-    - execution.pause
-    - execution.resume
-    - execution.retry_failed_step_with_remediation_context
-    - checkpoint_branch.create_from_remediation_context
-    - execution.request_rerun_same_workflow
-    - session.interrupt_turn
-    - session.clear
-    - provider_profile.evict_stale_lease
-  approval_rules:
-    default_mode: risk_gated
-    auto_allowed_risk: medium
-    always_require_approval:
-      - execution.force_terminate
-      - session.restart_container
-      - execution.retry_failed_step_with_remediation_context
-      - checkpoint_branch.create_from_remediation_context
-  verification_rules:
-    require_verification_for:
-      - execution.retry_failed_step_with_remediation_context
-      - checkpoint_branch.create_from_remediation_context
-      - execution.request_rerun_same_workflow
-      - session.clear
-      - provider_profile.evict_stale_lease
-  retry_budget:
-    max_total_actions: 3
-    max_per_action_kind: 2
-    cooldown_seconds:
-      provider_profile.evict_stale_lease: 300
-      session.clear: 120
-  locking:
-    default_scope: target_execution
-    mode: exclusive
-  nesting:
-    allow_nested_remediation: false
-```
+An illustrative manual policy enables only the exact supported subset, requires approvals according to immutable risk rules, verifies every effect, bounds actions/elapsed time, holds exclusive mutation authority, and disables nesting. Policy names such as `admin_healer_default` do not imply `admin_auto` or availability of every registered action.
 
 ## Appendix B. Example remediation summary
 
 ```json
 {
-  "schemaVersion": "v1",
-  "finishOutcome": {
-    "code": "NO_COMMIT",
-    "stage": "finalizing",
-    "reason": "target recovered after stale lease eviction"
+  "sourceOutcome": "failed",
+  "repair": {
+    "deliveryStatus": "accepted",
+    "verificationStatus": "pending",
+    "resultingIdentity": {
+      "branchId": "repair-branch",
+      "branchTurnId": "repair-turn"
+    },
+    "remainingOperatorWork": "Await verification of the exact repair candidate."
   },
-  "remediation": {
-    "targetWorkflowId": "mm:target_123",
-    "targetRunId": "run_456",
-    "mode": "snapshot_then_follow",
-    "authorityMode": "admin_auto",
-    "actionsAttempted": [
-      {
-        "kind": "provider_profile.evict_stale_lease",
-        "status": "applied"
-      }
-    ],
-    "immediateRepair": {
-      "status": "repaired",
-      "actionKind": "provider_profile.evict_stale_lease",
-      "verificationRef": { "artifact_id": "art_repair_verification" }
-    },
-    "prevention": {
-      "status": "pull_request_created",
-      "rootCauseCategory": "provider_profile_lease_recovery_gap",
-      "pullRequestUrl": "https://github.com/MoonLadderStudios/MoonMind/pull/1234"
-    },
-    "resolution": "resolved_after_action",
-    "evidenceDegraded": false,
-    "escalated": false
-  }
+  "prevention": {"status": "not_attempted"}
 }
 ```
 
+This is an explanatory result projection, not a replacement wire schema. No successful repair is asserted while verification is pending.
+
 ## Appendix C. Design rule summary
 
-Keep these rules stable even as implementation evolves:
-
-1. **Remediation is not dependency waiting.**
-2. **`workflowId` is the logical target identity; `runId` pins the evidence snapshot.**
-3. **Evidence is artifact-first and server-mediated.**
-4. **Live follow is helpful but never authoritative.**
-5. **The healer gets typed admin actions, not raw root.**
-6. **Every mutation is locked, idempotent, and audited.**
-7. **Managed-session and Docker actions must go through their owning control planes.**
-8. **Secrets stay redacted even for admin remediation.**
-9. **Loop prevention is required.**
-10. **The dashboard must make the relationship visible in both directions.**
-11. **Immediate repair and long-term prevention are separate outputs; a remediator may do either or both, but it must record its decision.**
-12. **Corrected-instruction retries must be recorded as remediation context, not as silent mutation of the original Workflow input.**
+One generic execution plane. One pinned source. One explicit result owner. Separate content from authority, delivery from verification, repair from prevention, and saved work from publication/cleanup. Preserve cumulative progress. Reuse existing owners and portable Skills. Keep missing support visible. Never recover by silently changing what the user authorized.

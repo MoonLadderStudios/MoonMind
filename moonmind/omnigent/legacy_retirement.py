@@ -1078,6 +1078,83 @@ RETIREMENT_INVENTORY: tuple[LegacyPathRecord, ...] = (
         ),
     ),
     LegacyPathRecord(
+        pathId="omnigent.embedded.transport_selection",
+        owner="omnigent-control-plane",
+        description=(
+            "Experimental embedded host/runner transport selection "
+            "(MoonLadderStudios/MoonMind#3955). New admission is disabled at the "
+            "trusted bridge-config selection boundary: an enabled bridge that "
+            "selects embedded_omnigent_compatible_server fails fast with the "
+            "proxy alternative. The literal survives only for decoding retained "
+            "session rows and historical evidence. Native Workflow Chat "
+            "embedded=1 presentation and shared bridge/session/event contracts "
+            "are not part of this path."
+        ),
+        family=ComponentFamily.BRIDGE_COMPATIBILITY,
+        generation=RuntimeGeneration.SHARED_LEGACY_SUBSTRATE,
+        retirementClass=RetirementClass.NEW_ADMISSION_DISABLED,
+        machineCheckableRef=(
+            "python:moonmind.omnigent.bridge_config:HOST_PROTOCOL_MODE_EMBEDDED"
+        ),
+        surfaces=(
+            "python:moonmind.omnigent.bridge_config:HOST_PROTOCOL_MODE_EMBEDDED",
+            "python:moonmind.omnigent.bridge_config:parse_bridge_config",
+        ),
+        activeResourceDependencies=frozenset(
+            {
+                ActiveOwnerKind.AGENT_RUN_OR_OMNIGENT_SESSION,
+                ActiveOwnerKind.HOST_BINDING_OR_LEASE,
+                ActiveOwnerKind.CREDENTIAL_CONSUMER,
+            }
+        ),
+        historicalReadDependency=True,
+        applicableCriteria=_BASE_CRITERIA,
+        earliestRemovalStage=RemovalStage.PRODUCT_SELECTORS,
+        removalGuardTest=(
+            "tests/unit/omnigent/test_embedded_transport_retirement_3955.py::"
+            "test_new_embedded_transport_admission_is_rejected"
+        ),
+    ),
+    LegacyPathRecord(
+        pathId="omnigent.embedded.launch_and_host_routes",
+        owner="omnigent-control-plane",
+        description=(
+            "Embedded host launch facade, host/runner tunnel channels, and "
+            "transport-specific HTTP/WebSocket routes "
+            "(MoonLadderStudios/MoonMind#3955). Retained for in-flight cleanup "
+            "and historical reads until bounded drain probes establish no active "
+            "or cleanup owner remains; physical removal follows at the launch "
+            "stage, never in the same change as the product selector."
+        ),
+        family=ComponentFamily.BRIDGE_COMPATIBILITY,
+        generation=RuntimeGeneration.SHARED_LEGACY_SUBSTRATE,
+        retirementClass=RetirementClass.NEW_ADMISSION_DISABLED,
+        machineCheckableRef=(
+            "python:moonmind.omnigent.bridge_embedded:"
+            "OmnigentEmbeddedHostProtocolFacade"
+        ),
+        surfaces=(
+            "python:moonmind.omnigent.bridge_embedded:"
+            "OmnigentEmbeddedHostProtocolFacade",
+            "python:moonmind.omnigent.embedded_host_channel:embedded_host_channels",
+        ),
+        activeResourceDependencies=frozenset(
+            {
+                ActiveOwnerKind.AGENT_RUN_OR_OMNIGENT_SESSION,
+                ActiveOwnerKind.HOST_BINDING_OR_LEASE,
+                ActiveOwnerKind.STATIC_OR_ON_DEMAND_HOST,
+                ActiveOwnerKind.INCOMPLETE_CLEANUP_OR_JANITOR,
+            }
+        ),
+        historicalReadDependency=True,
+        applicableCriteria=_BASE_CRITERIA,
+        earliestRemovalStage=RemovalStage.LAUNCH_ONLY_CODE,
+        removalGuardTest=(
+            "tests/unit/omnigent/test_embedded_transport_retirement_3955.py::"
+            "test_proxy_operates_with_embedded_launch_modules_unavailable"
+        ),
+    ),
+    LegacyPathRecord(
         pathId="omnigent.legacy.native_ui_compat",
         owner="omnigent-control-plane",
         description="Legacy native chat / Workflow Detail compatibility projection.",

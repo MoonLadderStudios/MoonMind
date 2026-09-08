@@ -693,6 +693,11 @@ The manifest contract (`manifest_contract.py`) enforces this at validation time 
 
 ---
 
+[1]: https://docs.temporal.io/glossary
+[2]: https://docs.temporal.io/cloud/limits
+[3]: https://docs.temporal.io/develop/python/workflows/message-passing
+[4]: https://github.com/temporalio/sdk-python#updates
+
 ## 20. Open questions
 
 1. **Manifest schema**: How expressive should dependencies be (simple DAG vs conditionals vs dynamic fan-out)?

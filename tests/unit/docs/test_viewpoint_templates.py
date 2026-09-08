@@ -7,6 +7,8 @@ from pathlib import Path
 
 import pytest
 
+from tools.check_documentation_architecture import metadata_fields
+
 REPO_ROOT = Path(__file__).resolve().parents[3]
 STANDARD = REPO_ROOT / "docs" / "DocumentationArchitecture.md"
 VIEWPOINTS_DIR = REPO_ROOT / "docs" / "_viewpoints"
@@ -33,8 +35,9 @@ def test_template_exists(filename: str) -> None:
 @pytest.mark.parametrize(("filename", "viewpoint"), list(CANONICAL_TEMPLATES.items()))
 def test_canonical_template_embeds_canonical_header(filename: str, viewpoint: str) -> None:
     text = _read(VIEWPOINTS_DIR / filename)
-    assert "**Document Class:** Canonical declarative" in text
-    assert f"**Viewpoint:** {viewpoint}" in text
+    metadata = metadata_fields(text)
+    assert metadata["document class"] == "Canonical declarative"
+    assert metadata["viewpoint"] == viewpoint
     for field in (
         "Updated",
         "Audience",
@@ -43,24 +46,24 @@ def test_canonical_template_embeds_canonical_header(filename: str, viewpoint: st
         "Related Docs",
         "Related Implementation",
     ):
-        assert f"**{field}:**" in text
+        assert metadata[field.lower()]
     for legacy_field in ("Owner", "Last Updated", "Related"):
-        assert f"**{legacy_field}:**" not in text
+        assert legacy_field.lower() not in metadata
     # Canonical viewpoints must not carry the imperative-plan markers.
     assert "Imperative working document" not in text
 
 
 def test_system_feature_design_template_uses_allowed_status_value() -> None:
     text = _read(VIEWPOINTS_DIR / "SystemFeatureDesignView.template.md")
-    assert "**Status:** Proposed" in text
-    assert "**Status:** Draft" not in text
+    assert metadata_fields(text)["status"] == "Proposed"
 
 
 def test_plan_template_embeds_imperative_plan_header() -> None:
     text = _read(VIEWPOINTS_DIR / PLAN_TEMPLATE)
-    assert "**Document Class:** Imperative working document" in text
-    assert "**Location policy:**" in text
-    assert "**Tracks:**" in text
+    metadata = metadata_fields(text)
+    assert metadata["document class"] == "Imperative working document"
+    assert metadata["location policy"]
+    assert metadata["tracks"]
     assert "Canonical declarative" not in text
 
 
@@ -88,6 +91,8 @@ def test_standard_references_each_template(filename: str) -> None:
 
 def test_standard_defines_both_headers_and_traceability() -> None:
     text = _read(STANDARD)
+    # Header examples are parsed in test_documentation_architecture_standard;
+    # the labels used to introduce them are ordinary editorial prose.
     # Source-issue traceability is preserved in the standard.
     assert "MM-900" in text
     assert "MM-906" in text

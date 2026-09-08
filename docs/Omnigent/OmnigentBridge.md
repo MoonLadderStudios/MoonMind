@@ -96,19 +96,35 @@ A successful design supports a stock Omnigent host. No custom host image or sour
 
 Deployment configuration may specify server URL, host authentication, endpoint refs, network routing, and standard Omnigent host settings. A custom MoonMind-specific host build is out of scope.
 
-### 2.4 Prefer proxy-first compatibility
+### 2.4 Proxy-only compatibility (embedded transport retired #3955)
 
-The bridge supports:
+The bridge selects:
 
 ```yaml
 hostProtocolMode:
   - upstream_omnigent_server_proxy
-  - embedded_omnigent_compatible_server
 ```
 
-`upstream_omnigent_server_proxy` is the preferred default because stock Omnigent Server already owns the host/runner tunnel.
+`upstream_omnigent_server_proxy` is the production default and the only
+selectable mode because stock Omnigent Server already owns the host/runner
+tunnel.
 
-`embedded_omnigent_compatible_server` implements enough compatible server behavior for an unchanged host to connect directly to MoonMind. Its exact auth and protocol contract is owned by `EmbeddedHostAuthCompatibility.md` and remains gated by conformance evidence.
+`embedded_omnigent_compatible_server` is retired and cannot admit new work: an
+enabled bridge that selects it fails fast with the proxy alternative, and live
+embedded host routes answer `410 Gone` (declared in OpenAPI so generated
+clients model the terminal `omnigent_embedded_transport_retired` payload;
+WebSocket denials carry the same code plus the proxy alternative as the close
+reason). The literal survives only so retained session rows and historical
+evidence keep decoding to their recorded mode. Session-scoped controls (read,
+stop, terminal cleanup, delete, elicitation, event and resource reads) dispatch
+by each session row's recorded mode, so retained embedded sessions keep their
+recorded cleanup owner until drained while the deployment runs proxy mode;
+new admission still follows the configured global mode and is never silently
+substituted.
+Its exact auth and protocol contract is owned by
+`EmbeddedHostAuthCompatibility.md`, which now documents the retired transport
+and its drain disposition. The native Workflow Chat `embedded=1` presentation
+option is unrelated to this transport and is preserved.
 
 ### 2.5 Preserve native UI, centralize authority
 
@@ -138,9 +154,13 @@ Responsibilities:
 - Stock Omnigent Server owns the host/runner tunnel.
 - The unchanged host continues to speak its native protocol.
 
-### 3.2 Embedded compatibility mode
+### 3.2 Embedded compatibility mode (retired #3955)
 
-The version, route, authentication, lifecycle, evidence, failure, upgrade, and rollback contract is authoritative in [`EmbeddedHostAuthCompatibility.md`](EmbeddedHostAuthCompatibility.md).
+> Retired: this topology no longer admits new work. The version, route,
+> authentication, lifecycle, evidence, failure, upgrade, and rollback contract
+> below is retained as the authoritative historical record in
+> [`EmbeddedHostAuthCompatibility.md`](EmbeddedHostAuthCompatibility.md) for
+> decoding retained sessions until drain completes.
 
 ```text
 MoonMind UI / API
@@ -485,7 +505,7 @@ omnigent_bridge_sessions
 
 `chat_binding_id` is an opaque authorization lookup key, not a bearer capability. The provider session id and upstream endpoint remain server-side. Caller permissions and effective capabilities are recomputed per request rather than trusted from mutable browser state.
 
-`omnigent_bridge_sessions` is the single canonical Omnigent session and idempotency store. It supersedes the removed `omnigent_external_runs` mapping without a parallel table or compatibility wrapper.
+`omnigent_bridge_sessions` is the canonical bridge binding and idempotency store within the bridge scope. It supersedes the removed `omnigent_external_runs` mapping without a parallel table or compatibility wrapper. Canonical session authority lives in `omnigent_sessions` and its control-plane repositories and turn commands; bridge rows retain attempt identity, evidence, and compatibility consumers.
 
 The coarse session `status` preserves `declared`, `creating`, `active`, `completed`, `failed`, `canceled`, and `timed_out`. Full non-lossy provider state remains per event.
 
@@ -1067,7 +1087,7 @@ Bridge code lives in the existing `moonmind/omnigent/` package. A parallel packa
 | Component | Owning module | Notes |
 |---|---|---|
 | Bridge configuration | `moonmind/omnigent/bridge_config.py` | Parses §6. |
-| Bridge Session Store | `moonmind/omnigent/bridge_store.py` | Canonical binding/idempotency store. |
+| Bridge Session Store | `moonmind/omnigent/bridge_store.py` | Canonical bridge binding/idempotency store; canonical session authority lives in the control-plane session repositories. |
 | Bridge schemas | `moonmind/schemas/omnigent_bridge_models.py` | Session/event/config/binding models. |
 | Durable ORM/migration | `api_service/db/models.py` plus migrations | §7 persistence. |
 | Session and Workflow Chat facades | `api_service/api/routers/omnigent_bridge.py`, `moonmind/omnigent/bridge_proxy.py` | Provider compatibility plus binding-scoped native UI/API. |

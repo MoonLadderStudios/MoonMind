@@ -843,6 +843,70 @@ async def test_restored_git_is_usable_without_imported_authority(tmp_path):
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("historical", [False, True])
+async def test_restore_preserves_execution_without_privileged_permissions(
+    tmp_path, historical
+):
+    archive = io.BytesIO()
+    modes = {"run.sh": 0o755, "data.txt": 0o644, "privileged.sh": 0o6777}
+    with tarfile.open(fileobj=archive, mode="w:gz") as bundle:
+        for name, mode in {**modes, ".git/hooks/pre-commit": 0o755}.items():
+            member = tarfile.TarInfo(name)
+            member.mode = mode
+            member.size = 2
+            bundle.addfile(member, io.BytesIO(b"ok"))
+    payload = archive.getvalue()
+    workspace_id = _workspace_id()
+    spec = (
+        _locator_spec(workspace_id, workspaceCheckpointRestoreRef="artifact://checkpoint")
+        if historical
+        else _authored_checkpoint_spec(workspace_id, payload)
+    )
+    await OmnigentWorkspaceMaterializer(
+        command_runner=_never_clone,
+        workspace_root=tmp_path,
+        artifact_service=FakeArtifactService({"checkpoint": payload}),
+    ).materialize(
+        _request(spec), runtime_uid=os.getuid(), runtime_gid=os.getgid()
+    )
+    workspace = tmp_path / "temporal_sandbox" / workspace_id / "repo"
+    for name, mode in modes.items():
+        restored_mode = (workspace / name).stat().st_mode
+        assert restored_mode & 0o111 == mode & 0o111
+        assert restored_mode & 0o666 == 0o600
+        assert restored_mode & 0o7000 == 0
+        assert (workspace / name).read_bytes() == b"ok"
+    assert not (workspace / ".git/hooks/pre-commit").exists()
+
+
+@pytest.mark.asyncio
+async def test_restore_permission_failure_does_not_promote_checkpoint(
+    tmp_path, monkeypatch
+):
+    payload = _tar_bytes([("run.sh", b"#!/bin/sh\n", "file")])
+    projector = WorkspaceArtifactProjector(FakeArtifactService({"checkpoint": payload}))
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    (workspace / "existing.txt").write_text("preserve current workspace")
+
+    def fail_chmod(*_args, **_kwargs):
+        raise PermissionError("cannot apply restored permissions")
+
+    monkeypatch.setattr("moonmind.omnigent.workspace_artifacts.os.chmod", fail_chmod)
+    with pytest.raises(WorkspaceArtifactProjectionError, match="could not be applied"):
+        await projector.project(
+            workspace,
+            checkpoint_ref="artifact://checkpoint",
+            workflow_id="workflow-1",
+            runtime_uid=os.getuid(),
+            runtime_gid=os.getgid(),
+            strict_admission=True,
+        )
+    assert (workspace / "existing.txt").read_text() == "preserve current workspace"
+    assert not (workspace / "run.sh").exists()
+
+
+@pytest.mark.asyncio
 async def test_external_git_bindings_and_thin_bundles_fail_closed(tmp_path):
     workspace_id = _workspace_id()
     service = FakeArtifactService({})

@@ -3,10 +3,15 @@
 from __future__ import annotations
 
 import json
+from collections.abc import AsyncIterator
+from contextlib import aclosing
 
 import httpx
 import pytest
 
+from moonmind.omnigent.bridge_artifacts import OmnigentContractError
+from moonmind.omnigent.bridge_events import build_omnigent_bridge_event
+from moonmind.schemas.agent_runtime_models import AgentExecutionRequest
 from moonmind.workflows.adapters.omnigent_client import (
     OmnigentClientError,
     OmnigentHttpClient,
@@ -306,6 +311,98 @@ def test_parse_sse_line_redacts_payload_and_rejects_malformed_frames() -> None:
 
     with pytest.raises(OmnigentClientError, match="Malformed Omnigent SSE frame"):
         parse_sse_line("data: not-json")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("payload", "error_type", "message"),
+    [
+        (
+            '{"type":"session.future_terminal","status":"completed"}',
+            OmnigentContractError,
+            "Unsupported Omnigent event type",
+        ),
+        (
+            '{"type":"response.delta","status":"future_status"}',
+            OmnigentContractError,
+            "Unsupported Omnigent status",
+        ),
+        (
+            '{"type":"response.delta","status":""}',
+            OmnigentContractError,
+            "Unsupported Omnigent status",
+        ),
+    ],
+    ids=[
+        "unknown-event",
+        "unknown-status",
+        "blank-status",
+    ],
+)
+async def test_stream_to_journal_rejects_critical_drift(
+    payload: str, error_type: type[Exception], message: str
+) -> None:
+    """#3954: a transport replacement must not skip drift and report success.
+
+    Exercise the public streaming client through the production normalizer,
+    with only the HTTP peer replaced. A later valid completion must never hide
+    the invalid frame, including when frames arrive across byte chunks.
+
+    Scope: this covers contract drift that the production Temporal handoff
+    propagates. ``omnigent_read_event_batch_activity`` normalizes collected
+    events with ``normalize_omnigent_observation`` outside its bounded
+    stream-read ``try`` block, so ``OmnigentContractError`` from unknown
+    event types/statuses fails the activity instead of degrading. Transport
+    parse failures (malformed JSON, non-object frames) instead raise
+    ``OmnigentClientError`` from ``stream_events()`` inside
+    ``collect_bounded_batch()`` and are degraded to ``readStatus="unavailable"``
+    while the authoritative snapshot remains terminal authority (see
+    ``_observe_after_wait``, which gates only on the snapshot status). Those
+    two cases are covered at the client contract level by
+    ``test_parse_sse_line_redacts_payload_and_rejects_malformed_frames`` and
+    are intentionally not part of this drift set.
+    """
+
+    wire = (
+        f"event: session.update\ndata: {payload}\n\n"
+        'event: response.completed\ndata: {"type":"response.completed"}\n\n'
+    ).encode()
+
+    class Stream(httpx.AsyncByteStream):
+        async def __aiter__(self) -> AsyncIterator[bytes]:
+            for offset in range(0, len(wire), 7):
+                yield wire[offset : offset + 7]
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        assert request.method == "GET"
+        assert request.url.path == "/v1/sessions/sess-audit/stream"
+        return httpx.Response(
+            200, headers={"Content-Type": "text/event-stream"}, stream=Stream()
+        )
+
+    client = OmnigentHttpClient(
+        base_url="https://omnigent.test", transport=httpx.MockTransport(handler)
+    )
+    request = AgentExecutionRequest(
+        agentKind="external",
+        agentId="omnigent",
+        correlationId="audit-3954",
+        idempotencyKey="audit-3954",
+    )
+    normalized = []
+    with pytest.raises(error_type, match=message):
+        async with aclosing(client.stream_events("sess-audit")) as events:
+            async for event in events:
+                normalized.append(
+                    build_omnigent_bridge_event(
+                        payload=event,
+                        sequence=len(normalized) + 1,
+                        request=request,
+                        omnigent_session_id="sess-audit",
+                    )
+                )
+
+    assert normalized == []
 
 
 @pytest.mark.asyncio

@@ -59,7 +59,9 @@ When a prerequisite fails, the dependent records bounded per-dependency metadata
 - human-readable message,
 - `resolution = "waiting_for_successful_rerun"`.
 
-When the same prerequisite is later rerun and reaches `completed` under the same `workflowId`, the per-dependency entry transitions to `resolution = "satisfied_after_rerun"` and the prerequisite is removed from the unresolved set. Once every prerequisite is satisfied, the gate clears and the dependent proceeds.
+If a supported lifecycle operation later produces `completed` under the declared prerequisite `workflowId`, the per-dependency entry transitions to `resolution = "satisfied_after_rerun"` and the prerequisite is removed from the unresolved set. Once every prerequisite is satisfied, the gate clears and the dependent proceeds.
+
+Terminal `RequestRerun` creates a new linked `workflowId`, as defined by the [rerun contract](../Temporal/WorkflowRunHistoryAndNewRunSemantics.md#7-new-run-semantics). Its success does not satisfy an edge targeting the closed source. Follow the returned destination, then cancel and recreate the dependent with that destination as its prerequisite, or use an explicitly authorized bypass/skip. Existing edges cannot be retargeted.
 
 The top-level run summary `resolution` will be `satisfied_after_rerun` if any prerequisite required at least one rerun cycle, or `satisfied` if every prerequisite cleared on first observation.
 
@@ -126,7 +128,7 @@ Under the wait-through-rerun contract, a failed prerequisite does **not** fail t
 2. The `failureCount` and `lastFailedAt` fields tell you how many failure cycles have happened and when the most recent failure occurred.
 3. The `terminalState`, `closeStatus`, and `failureCategory` fields explain the nature of the most recent failure.
 4. **Remediation paths:**
-   - Rerun the failed prerequisite. Once it reaches `completed` under the same `workflowId`, the dependent unblocks automatically. The dependent's resolution becomes `satisfied_after_rerun`.
+   - Rerun the failed prerequisite and follow the returned destination. A terminal rerun has a new `workflowId`; cancel and recreate the dependent against that destination if its success is required. Automatic `satisfied_after_rerun` applies only when the originally declared ID itself later completes.
    - If the prerequisite cannot be recovered, **cancel the dependent run** or use **Bypass Dependency Wait** to advance the dependent without that prerequisite.
    - Do **not** wait for the dependent to fail itself: under wait-through-rerun, it never will.
 
@@ -137,7 +139,7 @@ Workflows that started **before** `dependency-wait-through-rerun-v1` was deploye
 1. Check the `DependencyFailureError` detail in the run summary artifact (`reports/run_summary.json`) under the `dependencies` block.
 2. The `failedDependencyId` field identifies which prerequisite caused the failure.
 3. The `terminalState` and `failureCategory` fields explain the nature of the failure.
-4. **Remediation**: Fix or rerun the failed prerequisite, then rerun the dependent Workflow Execution. Newly created dependent runs use the wait-through-rerun behavior automatically.
+4. **Remediation**: Fix or rerun the failed prerequisite, then create a new dependent Workflow Execution whose declared prerequisite is the successful destination ID. Newly created dependent runs use the wait-through-rerun behavior automatically.
 
 ### Reverse Lookup Shows No Dependents
 
@@ -217,8 +219,8 @@ Sent to dependent workflows when a prerequisite reaches terminal state.
 
 1. Identify the failed prerequisite from the dependent run's Workflow detail dependency panel or run summary artifact (look for an outcome with `resolution = "waiting_for_successful_rerun"`).
 2. Diagnose the prerequisite failure (its terminal state, close status, failure category, and message are surfaced on the prerequisite link, and `failureCount` / `lastFailedAt` on the dependent's outcome).
-3. **Rerun the prerequisite Workflow Execution** — keeping the same `workflowId` is automatic when you use the standard rerun action.
-4. Once the prerequisite reaches `completed`, the dependent unblocks itself; no action is required on the dependent. Its dependency resolution becomes `satisfied_after_rerun`.
+3. **Rerun the prerequisite Workflow Execution** and follow the returned destination identity. Terminal rerun creates a new linked `workflowId` and leaves the failed source unchanged.
+4. To wait on that new destination, cancel and recreate the dependent with the returned `workflowId` as its prerequisite. The existing dependent does not automatically follow rerun lineage. Only completion under its originally declared ID can produce `satisfied_after_rerun` without operator intervention.
 5. If the prerequisite cannot be recovered:
    - **Bypass the dependency wait** on the dependent if the remaining prerequisites are no longer required, or
    - **Cancel the dependent run** if it should not proceed without the prerequisite, then create a new dependent run with corrected prerequisites.
