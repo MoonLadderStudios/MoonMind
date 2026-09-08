@@ -1,0 +1,7 @@
+{
+  "failureShapeId": "registry-source-credential-handoff",
+  "incidentWorkflowId": "mm:2c280690-b10b-4a4c-a17d-1fc42662dec5",
+  "image": "ghcr.io/moonladderstudios/tactics-ue-base@sha256:9251c83b0ef1da2b5c1c13568c21b7852dddf5124904b0a3f96297a8990f35b4",
+  "observedFailure": "Caller submitted a private image without registryCredentialRef; missing cache followed by anonymous pull failed image_pull_auth_failed. Deployment image aliases had no credential field.",
+  "invariant": "The selected deployment image and credential are authorized at API admission, checked at the worker boundary, and resolved only into per-job ephemeral Docker auth."
+}

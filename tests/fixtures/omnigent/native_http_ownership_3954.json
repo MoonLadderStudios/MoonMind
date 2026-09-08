@@ -1,0 +1,116 @@
+{
+  "issue": "MoonLadderStudios/MoonMind#3954",
+  "sourceCommit": "f04b0354fb5344c1ea8b92795ceb6760a9ad7595",
+  "httpOperations": [
+    {
+      "operation": "session_items",
+      "method": "GET",
+      "browserPath": "v1/sessions/b1/items",
+      "sourcePath": "omnigent/omnigent/server/routes/sessions/routes_items.py",
+      "entrypoint": "list_session_items"
+    },
+    {
+      "operation": "terminal_view",
+      "method": "GET",
+      "browserPath": "v1/sessions/b1/resources/terminals",
+      "sourcePath": "omnigent/omnigent/server/routes/sessions/routes_resources.py",
+      "entrypoint": "list_session_terminals"
+    },
+    {
+      "operation": "terminal_create",
+      "method": "POST",
+      "browserPath": "v1/sessions/b1/resources/terminals",
+      "sourcePath": "omnigent/omnigent/server/routes/sessions/routes_resources.py",
+      "entrypoint": "create_session_terminal"
+    },
+    {
+      "operation": "terminal_status",
+      "method": "GET",
+      "browserPath": "v1/sessions/b1/resources/terminals/t1",
+      "sourcePath": "omnigent/omnigent/server/routes/sessions/routes_resources.py",
+      "entrypoint": "get_session_terminal"
+    },
+    {
+      "operation": "terminal_close",
+      "method": "DELETE",
+      "browserPath": "v1/sessions/b1/resources/terminals/t1",
+      "sourcePath": "omnigent/omnigent/server/routes/sessions/routes_resources.py",
+      "entrypoint": "delete_session_terminal"
+    },
+    {
+      "operation": "terminal_shell",
+      "method": "POST",
+      "browserPath": "v1/sessions/b1/resources/environments/default/shell",
+      "sourcePath": "omnigent/omnigent/server/routes/sessions/routes_resources.py",
+      "entrypoint": "run_environment_shell"
+    },
+    {
+      "operation": "workspace_edit",
+      "method": "PUT",
+      "browserPath": "v1/sessions/b1/resources/environments/default/filesystem/a.py",
+      "sourcePath": "omnigent/omnigent/server/routes/sessions/routes_resources.py",
+      "entrypoint": "write_environment_file"
+    },
+    {
+      "operation": "workspace_edit",
+      "method": "PATCH",
+      "browserPath": "v1/sessions/b1/resources/environments/default/filesystem/a.py",
+      "sourcePath": "omnigent/omnigent/server/routes/sessions/routes_resources.py",
+      "entrypoint": "edit_environment_file"
+    },
+    {
+      "operation": "workspace_delete",
+      "method": "DELETE",
+      "browserPath": "v1/sessions/b1/resources/environments/default/filesystem/a.py",
+      "sourcePath": "omnigent/omnigent/server/routes/sessions/routes_resources.py",
+      "entrypoint": "delete_environment_path"
+    },
+    {
+      "operation": "resource_upload",
+      "method": "POST",
+      "browserPath": "v1/sessions/b1/resources/files",
+      "sourcePath": "omnigent/omnigent/server/routes/sessions/routes_resources.py",
+      "entrypoint": "upload_session_file"
+    }
+  ],
+  "requestShapes": [
+    {
+      "operation": "terminal_create",
+      "method": "POST",
+      "entrypoint": "create_session_terminal",
+      "fields": [
+        "terminal",
+        "session_key"
+      ]
+    },
+    {
+      "operation": "terminal_shell",
+      "method": "POST",
+      "entrypoint": "run_environment_shell",
+      "fields": [
+        "command",
+        "timeout"
+      ]
+    },
+    {
+      "operation": "workspace_edit",
+      "method": "PUT",
+      "entrypoint": "write_environment_file",
+      "fields": [
+        "content",
+        "encoding",
+        "create_parents"
+      ]
+    },
+    {
+      "operation": "workspace_edit",
+      "method": "PATCH",
+      "entrypoint": "edit_environment_file",
+      "fields": [
+        "old_text",
+        "new_text",
+        "replace_all"
+      ]
+    }
+  ]
+}

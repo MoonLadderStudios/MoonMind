@@ -15,6 +15,7 @@ from api_service.auth_providers import get_current_user_optional
 from api_service.db.base import get_async_session
 from api_service.db.models import User
 from moonmind.config.settings import settings
+from moonmind.security.auth_modes_4120 import is_disabled_local_mode
 from moonmind.schemas.temporal_artifact_models import (
     ArtifactCollectionResponse,
     ArtifactCollectionRowModel,
@@ -199,7 +200,7 @@ async def _get_temporal_artifact_service(
 async def _resolve_principal(
     user: Optional[User] = Depends(get_current_user_optional()),
 ) -> str:
-    if settings.oidc.AUTH_PROVIDER == "disabled":
+    if is_disabled_local_mode():
         user_id = getattr(user, "id", None)
         return str(user_id or settings.oidc.DEFAULT_USER_ID or _DEFAULT_USER_ID)
 

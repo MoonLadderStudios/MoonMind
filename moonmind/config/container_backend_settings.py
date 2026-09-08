@@ -23,7 +23,7 @@ from typing import Any, Final, Mapping
 
 from pydantic import ValidationError
 
-from moonmind.schemas.container_job_models import CacheMount
+from moonmind.schemas.container_job_models import CacheMount, ContainerJobSpec
 
 #: The only backend kind this deployment supports. A second backend kind
 #: (Podman, containerd, Kubernetes, endpoint pools) is explicitly out of scope.
@@ -41,7 +41,7 @@ PYTHON_TEST_LOCAL_IMAGE: Final[str] = "moonmind-python-tests:local"
 PYTHON_TEST_RECIPE_VERSION: Final[str] = "v1"
 
 #: Deployment-declared registry image sources, as a JSON array of
-#: ``{"sourceRef", "image", "pullPolicy"}`` objects.
+#: ``{"sourceRef", "image", "pullPolicy", "registryCredentialRef"}`` objects.
 IMAGE_SOURCES_ENV_KEY: Final[str] = "MOONMIND_CONTAINER_BACKEND_IMAGE_SOURCES"
 
 #: Deployment-declared named-volume cache sources, as a JSON array of
@@ -52,7 +52,7 @@ CACHE_SOURCES_ENV_KEY: Final[str] = "MOONMIND_CONTAINER_BACKEND_CACHE_SOURCES"
 #: is a configuration error rather than an ignored field, because every omitted
 #: key falls back to the permissive default.
 _IMAGE_SOURCE_KEYS: Final[frozenset[str]] = frozenset(
-    {"sourceRef", "image", "pullPolicy"}
+    {"sourceRef", "image", "pullPolicy", "registryCredentialRef"}
 )
 _CACHE_SOURCE_KEYS: Final[frozenset[str]] = frozenset(
     {"cacheRef", "volumeName", "target", "readOnly"}
@@ -120,6 +120,7 @@ class RegistryImageSource:
     source_ref: str
     image: str
     pull_policy: str = "if-missing"
+    registry_credential_ref: str | None = None
 
 
 @dataclass(frozen=True)
@@ -333,10 +334,28 @@ def _declared_image_sources(
                 f"{field} declares duplicate sourceRef {source_ref!r}"
             )
         seen.add(source_ref)
+        # Reuse the public credential-reference validator; secret values never
+        # belong in deployment image declarations either. Empty interpolation
+        # has the same meaning as an omitted optional credential reference.
+        credential_ref = item.get("registryCredentialRef") or None
+        try:
+            credential_ref = ContainerJobSpec.model_validate(
+                {
+                    "image": image,
+                    "registryCredentialRef": credential_ref,
+                    "workspaceRef": {"kind": "sandbox", "workspaceId": "declaration"},
+                    "resources": {"cpuMillis": 100, "memoryMiB": 64},
+                }
+            ).registry_credential_ref
+        except ValidationError as exc:
+            raise ContainerBackendConfigError(
+                f"{field} requires a valid image and opaque registryCredentialRef"
+            ) from exc
         sources.append(
             RegistryImageSource(
                 source_ref=source_ref,
                 image=image,
+                registry_credential_ref=credential_ref,
                 # First use is cold-start provisioning, not an operator-only
                 # prewarm requirement. Private registries still fail through
                 # the normal credential-aware pull contract when authorization

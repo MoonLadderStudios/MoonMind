@@ -314,14 +314,7 @@ def test_phase6_integration_ci_suite_stays_focused_on_highest_risk_seams() -> No
 
 def test_phase6_artifact_authorization_tests_require_oidc() -> None:
     """Phase 6: artifact authorization tests must toggle AUTH_PROVIDER to
-    exercise real ownership checks, not rely on disabled auth.
-
-    MoonLadderStudios/MoonMind#4128: the pre-cutover suite toggles the
-    ``keycloak`` literal; the cutover may replace it with accounts/OIDC/header
-    mode literals. Either is accepted, but a suite that never leaves disabled
-    mode — or that drops the negative authorization coverage — regresses this
-    gate.
-    """
+    exercise real ownership checks, not rely on disabled auth."""
     authz_test = (
         REPO_ROOT
         / "tests"
@@ -330,7 +323,7 @@ def test_phase6_artifact_authorization_tests_require_oidc() -> None:
         / "test_temporal_artifact_authorization.py"
     ).read_text(encoding="utf-8")
     assert "AUTH_PROVIDER" in authz_test
-    assert "disabled" in authz_test or "keycloak" in authz_test or "oidc" in authz_test.lower()
+    assert "oidc" in authz_test
     assert "TemporalArtifactAuthorizationError" in authz_test
 
 

@@ -140,6 +140,14 @@ def disabled_env_keys(monkeypatch):
     yield
 
 
+@pytest.fixture
+def authenticated_mode(monkeypatch):
+    from moonmind.config.settings import settings
+
+    monkeypatch.setattr(settings.oidc, "AUTH_PROVIDER", "oidc", raising=False)
+    yield
+
+
 @pytest.hookimpl(tryfirst=True)
 def pytest_pyfunc_call(pyfuncitem: pytest.Function) -> bool | None:
     """Execute `@pytest.mark.asyncio` tests without requiring pytest-asyncio."""

@@ -15,7 +15,7 @@ from fastapi import Depends, Header, HTTPException, status
 
 from api_service.auth_providers import get_current_user_optional
 from api_service.db.models import User
-from moonmind.config.settings import settings
+from moonmind.security.auth_modes_4120 import is_disabled_local_mode
 
 @dataclasses.dataclass
 class _WorkerRequestAuth:
@@ -48,7 +48,7 @@ async def _require_worker_auth(
         )
 
     if (
-        settings.oidc.AUTH_PROVIDER != "disabled"
+        not is_disabled_local_mode()
         and getattr(user, "id", None) is not None
     ):
         return _WorkerRequestAuth(
