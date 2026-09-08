@@ -10244,6 +10244,21 @@ async def _exact_rerun_parameters_from_snapshot(
         publish_mode = str(publish.get("mode") or "").strip()
         if publish_mode:
             parameters["publishMode"] = publish_mode
+    # Retired (#4105): an exact rerun restores historical authority verbatim,
+    # so explicit `rag` / `followUpRetrieval` blocks must surface the promised
+    # resubmit-without guidance instead of being accepted as new work and
+    # silently stripped downstream.
+    try:
+        reject_retired_vector_fields(parameters, field_path="parameters")
+        reject_retired_vector_fields(workflow_payload, field_path="workflow")
+    except WorkflowContractError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail={
+                "code": "retired_vector_retrieval",
+                "message": str(exc),
+            },
+        ) from exc
     return parameters
 
 
@@ -12309,11 +12324,21 @@ def _build_recurring_target(
         task_payload.pop("propose_tasks", None)
         task_payload.pop("proposalPolicy", None)
         task_payload.pop("proposal_policy", None)
+        try:
+            reject_retired_vector_fields(
+                task_payload, field_path=f"payload.{task_key}"
+            )
+        except WorkflowContractError as exc:
+            raise _invalid_workflow_request(str(exc)) from exc
         target_payload[task_key] = task_payload
     target_payload.pop("proposeTasks", None)
     target_payload.pop("propose_tasks", None)
     target_payload.pop("proposalPolicy", None)
     target_payload.pop("proposal_policy", None)
+    try:
+        reject_retired_vector_fields(target_payload, field_path="payload")
+    except WorkflowContractError as exc:
+        raise _invalid_workflow_request(str(exc)) from exc
     _stamp_recurring_runtime_metadata(target_payload, runtime_metadata)
     return {
         "workflowType": workflow_type,

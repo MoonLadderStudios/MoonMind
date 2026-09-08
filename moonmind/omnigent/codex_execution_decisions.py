@@ -342,8 +342,14 @@ def enforce_required_follow_up_retrieval(
     if not authored_follow_up:
         return
     enabled = authored_follow_up.get("enabled") is True
+    # Note: use identity checks for None/False so numeric 0 budgets count as
+    # explicit retired content (0 == False in Python).
     has_retired_content = enabled or any(
-        value not in (None, False, "", [], {})
+        value is not None
+        and value is not False
+        and value != ""
+        and value != []
+        and value != {}
         for key, value in authored_follow_up.items()
         if key != "enabled"
     )
