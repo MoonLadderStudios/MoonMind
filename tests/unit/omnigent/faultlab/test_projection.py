@@ -13,8 +13,8 @@ needed to replay each authority handoff.
 
 from __future__ import annotations
 
-from moonmind.omnigent.faultlab import FaultPlan, project_run, run_plan
-from moonmind.omnigent.faultlab.scenario import (
+from tools.omnigent_faultlab import FaultPlan, project_run, run_plan
+from tools.omnigent_faultlab.scenario import (
     CommandWindow,
     LogicalOperation,
     ResponseBehavior,

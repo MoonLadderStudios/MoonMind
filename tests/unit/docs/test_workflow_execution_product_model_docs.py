@@ -1,4 +1,11 @@
+import sys
 from pathlib import Path
+
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+
+from _semantic_docs_3964 import assert_semantic_present
+
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
 PRODUCT_MODEL = REPO_ROOT / "docs" / "Temporal" / "WorkflowExecutionProductModel.md"
@@ -15,7 +22,13 @@ def _read(path: Path) -> str:
 def test_workflow_execution_product_model_defines_required_terms() -> None:
     text = _read(PRODUCT_MODEL)
 
-    assert "MoonMind does not define a separate product entity named Task." in text
+    # No separate product entity named Task (#3964: exact sentence loosened
+    # to the entity-denial contract).
+    assert_semantic_present(
+        text,
+        ("does not define a separate product entity named task",),
+        context="product model task-entity denial",
+    )
     assert "Workflow Execution" in text
     assert "`workflowId`" in text
     assert "`runId`" in text

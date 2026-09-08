@@ -726,12 +726,14 @@ Pagination rules:
 | Start workflow | `POST /api/executions` | Start workflow |
 | Edit inputs | `POST /api/executions/{workflowId}/update` | `UpdateInputs` |
 | Rename / retitle | `POST /api/executions/{workflowId}/update` | `SetTitle` |
-| Start new run | `POST /api/executions/{workflowId}/update` | `RequestRerun` (renames to `RequestNewRun` in the hard switch) |
+| Start new run | `POST /api/executions/{workflowId}/update` | `RequestRerun`; follow the returned destination execution |
 | Approve | `POST /api/executions/{workflowId}/signal` | `Approve` |
 | Pause | `POST /api/executions/{workflowId}/signal` | `Pause` |
 | Resume paused workflow | `POST /api/executions/{workflowId}/signal` | `Resume` |
 | Recover from failed step | `POST /api/executions/{workflowId}/recover-from-failed-step` | Linked follow-up execution |
 | Cancel | `POST /api/executions/{workflowId}/cancel` | Graceful cancel by default |
+
+A supported active rerun may retain workflowId through Continue-As-New. Terminal rerun creates a new linked workflowId/runId and preserves the closed source. The console follows `execution.workflowId` and `execution.redirectPath` from the update response, not an assumption based on `applied = continue_as_new`. [Executions API Contract, section 12](../Api/ExecutionsApiContract.md#12-update-execution) owns admission and response details.
 
 `ExternalEvent` is part of the execution contract, but normally appears as a system/integration path rather than a direct user-facing button.
 

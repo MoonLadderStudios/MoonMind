@@ -8,7 +8,7 @@ provider and the model-based reliability suite that proves Omnigent lifecycle
 invariants under dropped, duplicated, delayed, reordered, ambiguous, and
 contradictory provider, host, lease, activity, and cleanup behavior.
 
-The framework lives in `moonmind/omnigent/faultlab/` and is deliberately
+The framework lives in `tools/omnigent_faultlab/` and is deliberately
 side-effect-free: no database, network, filesystem, Docker, artifact, logging,
 telemetry, or Temporal dependency. That is what lets one scenario be replayed
 from unit, reliability-journey, and (future) Temporal / API / browser layers
@@ -140,7 +140,7 @@ replay corpus.
   only — never as a required PR gate. The window is selected by namespaced env
   vars (`MOONMIND_FAULTLAB_ROTATING_SEEDS`, `MOONMIND_FAULTLAB_SEED_OFFSET`,
   `MOONMIND_FAULTLAB_SEED_COUNT`) resolved by
-  `moonmind/omnigent/faultlab/ci_seeds.py`; with those vars unset every consumer
+  `tools/omnigent_faultlab/ci_seeds.py`; with those vars unset every consumer
   falls back to the fixed PR corpus. The sweep is bounded by an explicit
   scenario-count window and a wall-time budget
   (`MOONMIND_FAULTLAB_TIME_BUDGET_SECONDS`), and every failure writes a
@@ -148,7 +148,7 @@ replay corpus.
   `MOONMIND_FAULTLAB_DIAGNOSTICS_DIR` for upload.
 - **Repository/concurrency, Temporal, API/browser, and exact-image layers**
   consume the same scenarios and provider ledger through the boundary-neutral
-  projection in `moonmind/omnigent/faultlab/projection.py` (`project_run`), which
+  projection in `tools/omnigent_faultlab/projection.py` (`project_run`), which
   turns an execution trace into an ordered, secret-safe logical command stream.
   Each projected command carries its attempt disposition (attempt count, crash
   windows, per-attempt transport responses, whether a receipt was delivered) so a
@@ -178,12 +178,18 @@ replay corpus.
     (required CI). The browser counterpart
     `frontend/src/browser/omnigentFaultReplay.browser.test.ts` exercises the real
     Workflow Detail parse/dedup contract under `npm run ui:test:browser`.
-  - **Exact-image** — `moonmind/omnigent/faultlab/image_smoke.py` runs a bounded
-    deterministic fault matrix. The `omnigent-fault-image-smoke` workflow runs it
-    *inside* the deployable API and worker images as the packaged module
-    `python -m moonmind.omnigent.faultlab.image_smoke` (which ships in the image's
-    own `moonmind` install; `tools/run_omnigent_fault_image_smoke.py` is only a
-    local wrapper) so image authority drift (#3694) fails the smoke. Each role leg
+  - **Exact-image** — `tools/omnigent_faultlab/image_smoke.py` runs a bounded
+    deterministic fault matrix. The faultlab harness is test-only tooling under
+    `tools/` and is absent from the production `moonmind` package and deployable
+    image (MoonLadderStudios/MoonMind#3958). The `omnigent-fault-image-smoke`
+    workflow mounts only the checkout's `tools/` at `/src/tools` and runs
+    `python -m tools.omnigent_faultlab.image_smoke` *inside* the deployable API
+    and worker images with `PYTHONPATH=/app:/src` — production modules resolve
+    from the image's own `/app` install while the harness resolves from the
+    mount (`tools/run_omnigent_fault_image_smoke.py` is only a local wrapper) —
+    so image authority drift (#3694) fails the smoke. The driver additionally
+    fails unless production imports resolve under `/app`, so checkout sources
+    can never mask a broken image. Each role leg
     resolves that role's real startup module in the image and the report records
     the image's own verified build id plus the pinned digest as provenance. The
     matrix core is proven hermetically in
