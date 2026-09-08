@@ -722,8 +722,12 @@ async def test_resolve_elicitation_proxies_compatibility_route() -> None:
 
 
 async def test_non_proxy_mode_fails_fast() -> None:
+    # Retired (#3955): the proxy facade still refuses a retained embedded
+    # declaration (drain path). Enabled embedded admission fails earlier, at
+    # the trusted bridge-config selection boundary.
     embedded = parse_bridge_config(
         {
+            "enabled": False,
             "compatibility": {
                 "hostProtocolMode": "embedded_omnigent_compatible_server"
             },

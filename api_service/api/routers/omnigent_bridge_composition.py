@@ -29,6 +29,9 @@ from moonmind.omnigent.bridge_config import (
     HOST_PROTOCOL_MODE_PROXY,
     OmnigentBridgeConfig,
 )
+# NOTE (#3955): the embedded launch facade is imported lazily inside
+# build_embedded_host_facade / verify_embedded_host_request so the proxy-only
+# production path never requires the retired embedded launch modules.
 from moonmind.omnigent.bridge_proxy import OmnigentBridgeSessionProxy
 from moonmind.omnigent.bridge_store import OmnigentBridgeSessionStore
 from moonmind.omnigent.embedded_drain import probe_embedded_drain
@@ -322,8 +325,15 @@ async def project_upstream_inventory_failure(
 
 def build_embedded_host_facade(
     config: OmnigentBridgeConfig,
+    *,
+    drain_retained_sessions: bool = False,
 ) -> OmnigentEmbeddedHostProtocolFacade:
-    """Build the embedded host facade for drain continuity routes only.
+    """Build the embedded host facade for admission or retained-row drain.
+
+    ``drain_retained_sessions=True`` (#3955) bypasses the global-mode gate so
+    stop, terminal cleanup, delete, and reads for already-recorded embedded
+    rows keep reaching their recorded owner while the deployment runs proxy
+    mode; new admission stays refused inside the facade.
 
     Imported lazily so proxy-only composition (and its tests) succeed with
     the embedded launch modules unavailable; the error names the retirement
@@ -344,6 +354,7 @@ def build_embedded_host_facade(
     return _EmbeddedFacade(
         run_store=build_bridge_session_store(),
         config=config,
+        drain_retained_sessions=drain_retained_sessions,
     )
 
 

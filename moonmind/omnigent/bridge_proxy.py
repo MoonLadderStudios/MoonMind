@@ -94,11 +94,13 @@ class OmnigentBridgeError(RuntimeError):
         failure_class: str = "integration_error",
         status_code: int | None = None,
         code: str | None = None,
+        public_details: dict[str, Any] | None = None,
     ) -> None:
         super().__init__(message)
         self.failure_class = failure_class
         self.status_code = status_code
         self.code = code or _stable_error_code(failure_class, status_code)
+        self.public_details: dict[str, Any] = dict(public_details or {})
 
 
 class BridgeSessionCreateRequest(BaseModel):

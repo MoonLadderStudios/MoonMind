@@ -46,8 +46,12 @@ from moonmind.omnigent.retirement_surfaces import surface_exists
 
 
 def _embedded_config():
+    # Retired (#3955, merged base): an enabled embedded selection fails fast
+    # at parse, so drain-continuity fixtures declare the retained mode on a
+    # disabled bridge; retirement is enforced at admission, not at parse.
     return parse_bridge_config(
         {
+            "enabled": False,
             "compatibility": {"hostProtocolMode": HOST_PROTOCOL_MODE_EMBEDDED},
             "hostConnection": {
                 "embedded": {
@@ -115,8 +119,9 @@ def test_removal_stays_blocked_until_drain_and_evidence() -> None:
 
 
 def test_embedded_config_still_parses_for_drain_continuity() -> None:
-    # Deployments with in-flight embedded sessions must still boot so those
-    # sessions drain; retirement is enforced at admission, not at parse.
+    # A disabled bridge may still declare the retained embedded mode so
+    # in-flight sessions drain and historical rows decode; retirement is
+    # enforced at admission, not at parse. Enabled embedded fails fast.
     config = _embedded_config()
 
     assert config.host_protocol_mode == HOST_PROTOCOL_MODE_EMBEDDED
@@ -160,9 +165,9 @@ def test_embedded_readiness_advertises_retirement_not_capacity() -> None:
     }
     readiness = _embedded_config().readiness(evidence_validation=validation)
 
-    # Evidence still validates for in-flight drain, but the transport must
-    # not read as available for new work.
-    assert readiness["conformanceState"] == "ready"
+    # A disabled bridge declaring the retained embedded mode still projects
+    # the retirement row (never capacity for new work).
+    assert readiness["conformanceState"] == "disabled"
     assert readiness["retirement"] == embedded_transport_retirement()
     assert readiness["retirement"]["newAdmissionAllowed"] is False
 

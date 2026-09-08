@@ -1,4 +1,4 @@
-# Embedded host authentication compatibility
+# Embedded host authentication compatibility (retired transport)
 
 **Document Class:** Canonical declarative
 
@@ -140,6 +140,10 @@ independently, pass schema and secret-scan validation, match the active
 MoonMind build/configuration and immutable image identities, and remain
 unexpired, even drain-time continuity stays gated. Proxy mode remains the
 production default and supported topology until the full #3519 matrix passes.
+Retired-transport denials are explicit: HTTP routes answer `410 Gone` with code
+`omnigent_embedded_transport_retired`, and WebSocket handshakes close with
+`4404` carrying `omnigent_embedded_transport_retired` plus the
+`upstream_omnigent_server_proxy` alternative as the close reason.
 
 ## Launch modes, rollout, and rollback
 
@@ -147,7 +151,9 @@ Static Compose and on-demand Docker are separate support rows. Each must prove
 the same registration, authentication, session, reconnect, resource, terminal,
 and cleanup contract before it can be advertised for embedded mode. An
 unproven row is unavailable with an actionable readiness reason; success in one
-mode does not imply support for the other.
+mode does not imply support for the other. No embedded support row is
+advertised anymore: readiness and the support matrix report the proxy-only
+topology.
 
 Selecting embedded mode was explicit and versioned; since #3955 it is retired
 for new sessions and only retained sessions drain. Missing, stale, revoked, or

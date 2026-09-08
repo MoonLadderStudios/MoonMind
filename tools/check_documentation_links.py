@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """MM-3966 bounded local documentation link/anchor verifier.
 
-Advisory-only: this helper NEVER blocks CI. It validates *local* Markdown
+The standalone CLI is advisory by default; required documentation unit tests
+also consume its findings. It validates *local* Markdown
 link targets under ``docs/`` so reviewers catch broken relative paths,
 images, reference-style links, and ``#anchor`` fragments without claiming the
 broader architecture checker (``tools/check_documentation_architecture.py``)
