@@ -5342,10 +5342,22 @@ def test_agent_child_cancellation_propagation_preserves_pre_patch_histories(
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("review_available", [True, False])
+@pytest.mark.parametrize(
+    ("review_available", "stop_verdict", "stop_action", "stop_authority_enabled"),
+    [(True, None, None, True), (False, None, None, True)]
+    + [
+        (True, verdict, action, enabled)
+        for verdict in ("ADDITIONAL_WORK_NEEDED", "NO_DETERMINATION")
+        for action in ("needs_human", "blocked")
+        for enabled in (True, False)
+    ],
+)
 async def test_run_execution_stage_records_review_evidence(
     monkeypatch: pytest.MonkeyPatch,
     review_available: bool,
+    stop_verdict: str | None,
+    stop_action: str | None,
+    stop_authority_enabled: bool,
 ) -> None:
     _configure_workflow_runtime(monkeypatch)
     workflow = MoonMindRunWorkflow()
@@ -5396,6 +5408,13 @@ async def test_run_execution_stage_records_review_evidence(
                     activity_type="step.review",
                 )
                 return await handler(payload)
+            if stop_verdict:
+                return {
+                    "verdict": stop_verdict,
+                    "recommendedNextAction": stop_action,
+                    "remainingWorkRef": "art_remaining_work",
+                    "recoverableInCurrentRuntime": False,
+                }
             return {
                 "verdict": "PASS",
                 "confidence": 0.91,
@@ -5472,15 +5491,23 @@ async def test_run_execution_stage_records_review_evidence(
         "execute_typed_activity",
         fake_execute_typed_activity,
     )
-    monkeypatch.setattr(run_module.workflow, "patched", lambda _patch_id: True)
+    monkeypatch.setattr(
+        run_module.workflow,
+        "patched",
+        lambda patch_id: (
+            stop_authority_enabled
+            if patch_id == run_module.RUN_VERIFIER_REMEDIATION_STOP_AUTHORITY_PATCH
+            else True
+        ),
+    )
 
-    if review_available:
+    if review_available and not stop_verdict:
         await workflow._run_execution_stage(
             parameters={"repo": "MoonLadderStudios/MoonMind"},
             plan_ref="art_plan_1",
         )
     else:
-        with pytest.raises(ValueError, match="NO_DETERMINATION"):
+        with pytest.raises(ValueError, match=stop_verdict or "NO_DETERMINATION"):
             await workflow._run_execution_stage(
                 parameters={"repo": "MoonLadderStudios/MoonMind"},
                 plan_ref="art_plan_1",
@@ -5498,6 +5525,27 @@ async def test_run_execution_stage_records_review_evidence(
         }
     ]
     step = workflow.get_step_ledger()["steps"][0]
+    if stop_verdict:
+        assert len(child_invocations) == len(review_snapshots) == 1
+        terminal_manifest = next(
+            payload for payload in reversed(written_review_payloads)
+            if payload.get("terminalDisposition")
+        )
+        expected_disposition = (
+            stop_action if stop_authority_enabled else (
+                "failed_with_remaining_work"
+                if stop_verdict == "ADDITIONAL_WORK_NEEDED" else "needs_human"
+            )
+        )
+        expected_status = "blocked" if expected_disposition == "blocked" else "failed"
+        assert terminal_manifest["terminalDisposition"] == expected_disposition
+        assert terminal_manifest["status"] == expected_status
+        # Step ledger lifecycle uses failed; the manifest owns the blocked outcome.
+        assert step["status"] == "failed"
+        assert step["checks"][0]["remainingWorkRef"] == "art_remaining_work"
+        assert step["checks"][0]["recommendedNextAction"] == stop_action
+        assert workflow._publish_status != "published"
+        return
     if not review_available:
         assert len(child_invocations) == 1
         assert len(review_snapshots) == 1
@@ -5880,9 +5928,7 @@ async def test_run_execution_stage_stops_downstream_handoff_when_gate_budget_exh
     assert failed_check["confidence"] == "medium"
     assert failed_check["remainingWorkRef"] == "art_remaining_work_1"
     assert failed_check["recommendedNextAction"] == "needs_human"
-    assert step_execution_payloads[-1]["terminalDisposition"] == (
-        "failed_with_remaining_work"
-    )
+    assert step_execution_payloads[-1]["terminalDisposition"] == "needs_human"
     assert step_execution_payloads[-1]["checks"][0]["gateResultRef"] == "art_review_1"
     assert step_execution_payloads[-1]["checks"][0]["gateVerdict"] == (
         "ADDITIONAL_WORK_NEEDED"
@@ -6055,9 +6101,7 @@ async def test_run_execution_stage_stops_downstream_handoff_when_no_progress_bud
         "Structured gate stopped before downstream handoff."
     )
     budget = step_execution_payloads[-1]["budget"]
-    assert step_execution_payloads[-1]["terminalDisposition"] == (
-        "failed_with_remaining_work"
-    )
+    assert step_execution_payloads[-1]["terminalDisposition"] == "needs_human"
     assert budget["maxAttempts"] == 3
     assert budget["attemptsConsumed"] == 1
     assert budget["remainingExecutions"] == 2
@@ -6219,9 +6263,7 @@ async def test_run_execution_stage_continues_independent_nodes_after_gate_stop(
         "implement",
         "publish",
     ]
-    assert terminal_payloads[0]["terminalDisposition"] == (
-        "failed_with_remaining_work"
-    )
+    assert terminal_payloads[0]["terminalDisposition"] == "needs_human"
     assert terminal_payloads[-1]["terminalDisposition"] == "accepted"
 
 
@@ -6405,3 +6447,45 @@ async def test_run_execution_stage_retries_agent_runtime_reviews_with_feedback_i
     assert review_payloads[0]["recommendedNextAction"] == "reattempt_current_step"
     assert review_payloads[1]["verdict"] == "FULLY_IMPLEMENTED"
     assert step["artifacts"]["stepExecutionManifestRef"] == "art_attempt_2_terminal"
+
+
+@pytest.mark.parametrize("patch_enabled", [False, True])
+@pytest.mark.parametrize("action", ["blocked", "needs_human", "reattempt_current_step"])
+def test_verifier_contradiction_validation_preserves_recorded_payloads(
+    monkeypatch, patch_enabled, action
+):
+    monkeypatch.setattr(
+        run_module.workflow,
+        "patched",
+        lambda patch: (
+            patch_enabled
+            if patch == run_module.RUN_VERIFIER_REMEDIATION_STOP_AUTHORITY_PATCH
+            else True
+        ),
+    )
+    parent = MoonMindRunWorkflow()
+    gate = parent._moonspec_verify_gate_result(
+        {
+            "moonSpecVerify": {
+                "verdict": "FULLY_IMPLEMENTED",
+                "recommendedNextAction": action,
+            }
+        }
+    )
+    assert gate.verdict == (
+        "NO_DETERMINATION" if patch_enabled else "FULLY_IMPLEMENTED"
+    )
+    assert gate.invalid is patch_enabled
+    transition = parent._resolve_gate_transition(
+        verdict=gate,
+        ordered_nodes=[
+            {
+                "id": "verify",
+                "annotations": {"issueImplementRole": "moonspec-verification-gate"},
+            }
+        ],
+        current_index=0,
+    )
+    assert (transition.routing_disposition == "exit_remediation_loop") is (
+        not patch_enabled
+    )

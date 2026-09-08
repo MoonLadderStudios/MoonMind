@@ -628,8 +628,16 @@ async def test_prepare_managed_codex_turn_adds_moonspec_verify_artifact_hint() -
     assert '"reattempt_current_step"' in prepared
     assert '`FULLY_IMPLEMENTED`, set `recommendedNextAction` to "advance"' in prepared
     assert "workflow runtime owns routing" in prepared
+    assert "Follow the resolved Skill's continuation decision" in prepared
+    assert "honors explicit `needs_human` or `blocked`" in prepared
+    assert "stops for `ADDITIONAL_WORK_NEEDED` and `NO_DETERMINATION`" in prepared
+    assert "stop automatic verifier retry and implementation remediation" in prepared
     assert "read-only verifier must not ask its own rerun" in prepared
-    assert 'Use "reattempt_current_step" only when rerunning this verifier' in prepared
+    assert "permits a separate authorized remediation step" in prepared
+    assert '"reattempt_current_step" only when rerunning this verifier' in prepared
+    assert "false` alone does not prohibit separate remediation" in prepared
+    assert "canonical value that contradicts its verdict fails contract validation" in prepared
+    assert "advisory semantic metadata" not in prepared
     assert "raw diagnostic" in prepared
     assert "map-entry" in prepared
     assert "missing map assets" in prepared
@@ -3371,6 +3379,13 @@ async def test_agent_runtime_publish_artifacts_links_remediation_verification_at
         ("ADDITIONAL_WORK_NEEDED", None, "reattempt_current_step"),
         ("NO_DETERMINATION", "needs_human", "needs_human"),
         ("NO_DETERMINATION", "blocked", "blocked"),
+        ("FULLY_IMPLEMENTED", "blocked", "blocked"),
+        ("FULLY_IMPLEMENTED", "needs_human", "needs_human"),
+        ("FULLY_IMPLEMENTED", "reattempt_current_step", "reattempt_current_step"),
+        ("ADDITIONAL_WORK_NEEDED", "advance", "advance"),
+        ("NO_DETERMINATION", "advance", "advance"),
+        ("BLOCKED", "advance", "advance"),
+        ("FAILED_UNRECOVERABLE", "reattempt_current_step", "reattempt_current_step"),
     ],
 )
 async def test_agent_runtime_publish_artifacts_canonicalizes_moonspec_next_action(
@@ -3453,7 +3468,34 @@ async def test_agent_runtime_publish_artifacts_canonicalizes_moonspec_next_actio
                 assert verify_payload["rawRecommendedNextAction"] == action
             else:
                 assert "rawRecommendedNextAction" not in verify_payload
-            assert "contractViolations" not in verify_payload
+            from moonmind.workflows.skills.approval_policy import (
+                parse_step_gate_result,
+                recommended_next_actions,
+            )
+
+            if expected_action not in recommended_next_actions(verdict):
+                assert "incompatible" in verify_payload["contractViolations"][0]
+                gate = parse_step_gate_result(verify_payload)
+                assert gate.verdict == "NO_DETERMINATION"
+                assert gate.recommended_next_action == "blocked"
+                assert gate.invalid and gate.degraded
+                from moonmind.workflows.temporal.workflows import run as run_module
+
+                monkeypatch.setattr(run_module.workflow, "patched", lambda _patch: True)
+                parent = run_module.MoonMindRunWorkflow()
+                parent._record_moonspec_verify_gate(
+                    node_id="verify", outputs={"moonSpecVerify": verify_payload}
+                )
+                assert parent._blocking_moonspec_gate_reason()
+                assert (
+                    parent._moonspec_verify_gate_result(
+                        {"moonSpecVerify": verify_payload}
+                    ).verdict
+                    == "NO_DETERMINATION"
+                )
+                assert parent._publish_status != "published"
+            else:
+                assert "contractViolations" not in verify_payload
             AgentRunResult(**result.model_dump(mode="json", by_alias=True))
 
 
