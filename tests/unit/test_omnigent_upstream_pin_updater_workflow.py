@@ -43,6 +43,8 @@ def test_updater_uses_minimum_permissions() -> None:
     propose_permissions = workflow["jobs"]["propose"]["permissions"]
     assert propose_permissions["contents"] == "write"
     assert propose_permissions["pull-requests"] == "write"
+    # Evidence download via `gh run download` needs the actions API.
+    assert propose_permissions["actions"] == "read"
 
 
 def test_updater_never_runs_fetched_code_or_production_secrets() -> None:
@@ -115,3 +117,50 @@ def test_updater_leaves_pin_intact_without_candidate() -> None:
     )
     assert "candidate_available" in workflow["jobs"]["propose"]["if"]
     assert "needs.qualify.result == 'success'" in workflow["jobs"]["propose"]["if"]
+    # A dry run must not create branches, move pointers, or push.
+    assert "dry_run" in workflow["jobs"]["propose"]["if"]
+
+
+def test_updater_passes_untrusted_tags_as_env_data() -> None:
+    raw = WORKFLOW_PATH.read_text(encoding="utf-8")
+    assert "needs.plan.outputs.candidate_tag" in raw  # outputs + env only
+    for step in (
+        workflow_steps("propose", "Attach evidence artifacts to the branch"),
+        workflow_steps("propose", "Open or update the single candidate PR"),
+    ):
+        assert "needs.plan.outputs.candidate_tag" not in step.get("run", ""), step.get("name")
+
+
+def workflow_steps(job: str, name: str) -> dict:
+    for step in _workflow()["jobs"][job]["steps"]:
+        if step.get("name") == name:
+            return step
+    raise AssertionError(f"missing step {name!r} in job {job!r}")
+
+
+def test_updater_qualifies_the_candidate_commit() -> None:
+    steps = _workflow()["jobs"]["qualify"]["steps"]
+    run_text = "\n".join(step.get("run", "") for step in steps)
+    env_text = "\n".join(
+        str(step.get("env", "")) for step in steps
+    )
+    assert "uv pip install --system -e .[tests]" in run_text
+    assert "needs.plan.outputs.candidate_commit" in env_text
+    assert "git submodule update --init" in run_text
+    assert "rev-parse HEAD" in run_text
+    assert "mark_tested" in run_text
+
+
+def test_updater_stages_evidence_loudly_and_verifies_remote() -> None:
+    raw = WORKFLOW_PATH.read_text(encoding="utf-8")
+    assert "git add -f" in raw
+    assert "not staged" in raw
+    assert "does not match submodule remote" in raw
+    assert "gh workflow run pytest-unit-tests.yml" in raw
+
+
+def test_updater_updates_pin_consumers_with_gitlink() -> None:
+    steps = _workflow()["jobs"]["propose"]["steps"]
+    run_text = "\n".join(step.get("run", "") for step in steps)
+    assert "PINNED_OMNIGENT_COMMIT" in run_text
+    assert "native_ui_network_contract_v1.json" in run_text
