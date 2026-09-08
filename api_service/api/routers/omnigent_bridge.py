@@ -3102,6 +3102,8 @@ async def embedded_omnigent_host_tunnel(websocket: WebSocket, host_id: str) -> N
         )
         await websocket.close(code=close_code, reason=exc.code)
     except WebSocketDisconnect:
+        # The peer went away mid-tunnel; the finally block below still runs
+        # best-effort channel/facade cleanup, so there is nothing to send.
         pass
     except (EmbeddedHostChannelError, UpstreamHostProtocolError):
         await websocket.close(code=4400)
@@ -3113,6 +3115,8 @@ async def embedded_omnigent_host_tunnel(websocket: WebSocket, host_id: str) -> N
             try:
                 embedded_host_channels.disconnect(channel)
             except (EmbeddedHostChannelError, OmnigentBridgeModeUnsupportedError):
+                # Best-effort teardown: the socket is already closing, and a
+                # failed disconnect must not mask the original tunnel outcome.
                 pass
         if facade is None:
             pass
@@ -3124,6 +3128,8 @@ async def embedded_omnigent_host_tunnel(websocket: WebSocket, host_id: str) -> N
                 # was closing; terminal state remains authoritative.
                 pass
             except OmnigentBridgeModeUnsupportedError:
+                # Best-effort teardown on a retired transport: launch modules
+                # may be absent, and disconnect must not fail the close path.
                 pass
 
 
@@ -3201,6 +3207,8 @@ async def embedded_omnigent_runner_tunnel(websocket: WebSocket, runner_id: str) 
         while True:
             channel.accept_frame(await websocket.receive_text())
     except WebSocketDisconnect:
+        # The runner went away mid-tunnel; the finally block below still runs
+        # best-effort channel/facade cleanup, so there is nothing to send.
         pass
     except EmbeddedHostChannelError:
         await websocket.close(code=4400)
@@ -3211,6 +3219,8 @@ async def embedded_omnigent_runner_tunnel(websocket: WebSocket, runner_id: str) 
             try:
                 embedded_host_channels.disconnect_runner(channel)
             except (EmbeddedHostChannelError, OmnigentBridgeModeUnsupportedError):
+                # Best-effort teardown: the socket is already closing, and a
+                # failed disconnect must not mask the original tunnel outcome.
                 pass
             try:
                 disconnect_facade = build_embedded_host_facade(config)
@@ -3226,6 +3236,8 @@ async def embedded_omnigent_runner_tunnel(websocket: WebSocket, runner_id: str) 
                     # terminal evidence remains authoritative over disconnect.
                     pass
                 except OmnigentBridgeModeUnsupportedError:
+                    # Best-effort teardown on a retired transport: launch modules
+                    # may be absent, and disconnect must not fail the close path.
                     pass
 
 
