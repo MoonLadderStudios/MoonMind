@@ -191,7 +191,10 @@ retained here and backlinks resolved. Necessary operator upgrade guidance is not
 erased prematurely. Backlink audit 2026-09-08: this document is the only
 canonical-doc reference to the temporary plan, held as an explicit
 non-authoritative pointer (header Authority field); no other canonical doc treats
-the plan as authoritative for shipped behavior.
+the plan as authoritative for shipped behavior. Re-verified in the #4130
+remediation pass: repository-wide search still finds no other canonical-doc
+reference to the plan, and #4128 product evidence remains absent
+(unimplemented), so the placeholder link above stays unresolved by design.
 
 ## 9. Verification
 
@@ -210,5 +213,14 @@ Shipped-behavior checks for this document:
   unshipped-mode claims (serializes FastAPI routes only); `moonmind/cli.py`
   exposes no auth selectors and `moonmind/container_job_cli.py` sends only the
   worker bearer machine credential documented in §5.
+- Rendered-configuration equivalence for the shipped `disabled` default
+  (statically verified; live `docker compose config` output and dashboard
+  browser capture remain outstanding): `docker-compose.yaml` interpolates
+  `AUTH_PROVIDER=${AUTH_PROVIDER:-disabled}`, `OIDCSettings.AUTH_PROVIDER`
+  defaults to `"disabled"` (`moonmind/config/settings.py`), and `.env-template`
+  leaves `# AUTH_PROVIDER="disabled"` commented out so fresh and existing
+  databases keep the default when the variable is omitted. Live rendered output
+  and a no-login dashboard capture belong to #4128 product evidence and are not
+  invented here.
 - `tests/unit/docs/test_authentication_system_docs.py` pins these contracts so
   future implementation PRs update the doc and the test together.
