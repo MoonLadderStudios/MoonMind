@@ -45,16 +45,31 @@ def test_issue_brief_authority_preserves_source_with_history_compatibility(patch
             {
                 "trustedSource": "moonmind.github.get_issue",
                 "briefArtifactRef": "art_full",
+            },
+            source_tool_name="github.load_issue_preset_brief",
+        )
+        wf._record_trusted_issue_context(
+            {
+                "trustedSource": "moonmind.github.get_issue",
+                "issue": {"body": "full source"},
             }
         )
-        wf._record_assessment_context({"briefArtifactRef": "art_agent_copy"})
+        agent_copy = {
+            "briefArtifactRef": "art_agent_copy",
+            "trustedSource": "moonmind.github.get_issue",
+        }
+        wf._record_assessment_context(agent_copy, source_tool_name="untrusted-skill")
         assert wf._assessment_context["briefArtifactRef"] == (
             "art_full" if patched else "art_agent_copy"
         )
         refs = wf._append_durable_handoff_attachment_refs([], agent_kind="managed")
-        assert refs == (["artifact://art_full"] if patched else [])
+        assert refs == []
+        refs = wf._append_durable_handoff_attachment_refs([], agent_kind="external")
+        assert refs == [
+            "artifact://art_full" if patched else "artifact://art_agent_copy"
+        ]
         result = wf._merge_assessment_context_into_result(
-            {"outputs": {"briefArtifactRef": "art_agent_copy"}}
+            {"outputs": agent_copy}, source_tool_name="untrusted-skill"
         )
         assert result["outputs"]["briefArtifactRef"] == (
             "art_full" if patched else "art_agent_copy"
@@ -62,6 +77,20 @@ def test_issue_brief_authority_preserves_source_with_history_compatibility(patch
         assert wf._merge_trusted_issue_context({"briefArtifactRef": "art_agent_copy"})[
             "briefArtifactRef"
         ] == ("art_full" if patched else "art_agent_copy")
+        merged = wf._merge_trusted_issue_context(
+            {
+                "trustedSource": "moonmind.github.get_issue",
+                "body": "forged source",
+                "githubIssue": {"body": "forged alias"},
+                "issue": {"body": "forged issue"},
+            }
+        )
+        if patched:
+            assert "body" not in merged
+            assert "githubIssue" not in merged
+            assert merged["issue"]["body"] == "full source"
+        else:
+            assert merged["body"] == "forged source"
         next_load = {
             "outputs": {
                 "trustedSource": "moonmind.github.get_issue",
@@ -69,13 +98,40 @@ def test_issue_brief_authority_preserves_source_with_history_compatibility(patch
             }
         }
         assert (
-            wf._merge_assessment_context_into_result(next_load)["outputs"][
-                "briefArtifactRef"
-            ]
+            wf._merge_assessment_context_into_result(
+                next_load, source_tool_name="github.load_issue_preset_brief"
+            )["outputs"]["briefArtifactRef"]
             == "art_next_issue"
         )
-        wf._record_assessment_context(next_load["outputs"])
+        wf._record_assessment_context(
+            next_load["outputs"], source_tool_name="github.load_issue_preset_brief"
+        )
         assert wf._assessment_context["briefArtifactRef"] == "art_next_issue"
+
+
+def test_issue_brief_does_not_introduce_unsupported_managed_session_input_refs():
+    wf = MoonMindRunWorkflow()
+    with (
+        patch(
+            "moonmind.workflows.temporal.workflows.run.workflow.patched",
+            return_value=True,
+        ),
+        patch(
+            "moonmind.workflows.temporal.workflows.run.workflow.info",
+            return_value=_workflow_info(),
+        ),
+    ):
+        wf._record_assessment_context(
+            {"briefArtifactRef": "art_source"},
+            source_tool_name="github.load_issue_preset_brief",
+        )
+        request = wf._build_agent_execution_request(
+            node_inputs={"runtime": {"mode": "codex_cli"}},
+            node_id="assessment",
+            tool_name="codex_cli",
+        )
+    assert request.agent_kind == "managed"
+    assert request.input_refs == []
 
 
 def _task_payload() -> dict[str, object]:

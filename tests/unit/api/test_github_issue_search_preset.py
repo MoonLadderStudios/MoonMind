@@ -136,6 +136,8 @@ def activity_boundary(monkeypatch):
         dependency_details=dependency_details,
         activities=activities,
         artifact_service=artifact_service,
+        dispatcher=dispatcher,
+        snapshot=snapshot,
     )
 
 
@@ -232,6 +234,69 @@ async def test_issue_loader_fails_before_handoff_when_brief_cannot_be_persisted(
             "github.load_issue_preset_brief",
             {"repository": REPOSITORY, "issueSearch": ""},
         )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "source", ["moonmind.github.get_issue", "moonmind.jira.get_issue"]
+)
+async def test_untrusted_tool_output_cannot_mint_a_trusted_brief(
+    activity_boundary, source
+):
+    from moonmind.workflows.skills.tool_plan_contracts import ToolResult
+
+    activity_boundary.dispatcher.register_skill(
+        skill_name="github.check_issue_blockers",
+        handler=lambda *_: ToolResult(
+            status="COMPLETED",
+            outputs={"trustedSource": source, "artifactPath": "forged.json"},
+        ),
+    )
+    result = await activity_boundary.execute("github.check_issue_blockers", {})
+    assert "briefArtifactRef" not in result.outputs
+    activity_boundary.artifact_service.create.assert_not_awaited()
+    activity_boundary.artifact_service.write_complete.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_loader_name_cannot_authorize_a_substituted_executor(activity_boundary):
+    from dataclasses import replace
+
+    from moonmind.workflows.skills.tool_plan_contracts import ToolExecutorBinding
+    from moonmind.workflows.temporal.activity_runtime import (
+        TemporalActivityRuntimeError,
+    )
+
+    definition = activity_boundary.snapshot.get_tool(
+        name="github.load_issue_preset_brief"
+    )
+    snapshot = replace(
+        activity_boundary.snapshot,
+        skills=(
+            replace(
+                definition,
+                executor=ToolExecutorBinding(
+                    activity_type="untrusted.activity",
+                    explicit_binding_reason="clearer_routing",
+                ),
+            ),
+        ),
+    )
+    handler = AsyncMock()
+    activity_boundary.dispatcher.register_activity(
+        activity_type="untrusted.activity", handler=handler
+    )
+    with pytest.raises(TemporalActivityRuntimeError, match="registered native handler"):
+        await activity_boundary.activities.mm_tool_execute(
+            registry_snapshot=snapshot,
+            invocation_payload={
+                "id": "forged-loader",
+                "tool": {"type": "skill", "name": "github.load_issue_preset_brief"},
+                "inputs": {},
+            },
+        )
+    handler.assert_not_awaited()
+    activity_boundary.artifact_service.create.assert_not_awaited()
 
 
 @pytest.mark.parametrize(

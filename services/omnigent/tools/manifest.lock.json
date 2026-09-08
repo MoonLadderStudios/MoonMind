@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "bundleVersion": "gh-2.76.2-1",
+  "bundleVersion": "gh-2.76.2-container-v1",
   "tools": [
     {
       "name": "gh",
@@ -21,6 +21,21 @@
       },
       "path": "bin/gh",
       "versionProbe": ["--version"]
+    },
+    {
+      "name": "docker",
+      "version": "container-v1",
+      "sourcePath": "../scripts/moonmind-container-cli.py",
+      "platforms": {
+        "linux/amd64": {
+          "executableSha256": "8ce5b264451fc9b17c7db1f1dfa9cd19121ff37c9450911dd5d43dcdee1979e4"
+        },
+        "linux/arm64": {
+          "executableSha256": "8ce5b264451fc9b17c7db1f1dfa9cd19121ff37c9450911dd5d43dcdee1979e4"
+        }
+      },
+      "path": "bin/moonmind",
+      "versionProbe": ["--help"]
     }
   ]
 }

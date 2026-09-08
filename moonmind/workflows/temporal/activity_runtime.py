@@ -249,6 +249,7 @@ from moonmind.workflows.temporal.runtime.strategies.codex_cli import (
     append_managed_codex_runtime_note,
 )
 from moonmind.workflows.temporal.story_output_tools import (
+    ISSUE_BRIEF_LOADER_TOOL_NAMES,
     JIRA_CHECK_BLOCKERS_TOOL_NAME,
     JIRA_LOAD_PRESET_BRIEF_TOOL_NAME,
     JIRA_UPDATE_ISSUE_STATUS_TOOL_NAME,
@@ -2558,6 +2559,23 @@ class TemporalSkillActivities:
                 principal or "system:deployment",
             )
 
+        selector = invocation_payload.get("tool") or invocation_payload.get("skill")
+        selected_name = (
+            str(selector.get("name") or selector.get("id") or "").strip()
+            if isinstance(selector, Mapping)
+            else ""
+        )
+        is_issue_loader = selected_name in ISSUE_BRIEF_LOADER_TOOL_NAMES
+        if is_issue_loader:
+            definition = resolved_snapshot.get_tool(name=selected_name)
+            if definition.executor.activity_type not in {
+                "mm.tool.execute",
+                "mm.skill.execute",
+            }:
+                raise TemporalActivityRuntimeError(
+                    "Trusted issue loaders require their registered native handler"
+                )
+
         try:
             result = await execute_skill_activity(
                 invocation_payload=invocation_payload,
@@ -2574,8 +2592,7 @@ class TemporalSkillActivities:
         outputs = result.outputs
         if (
             result.status == "COMPLETED"
-            and outputs.get("trustedSource")
-            in {"moonmind.github.get_issue", "moonmind.jira.get_issue"}
+            and is_issue_loader
             and outputs.get("artifactPath")
         ):
             if resolved_artifact_service is None:

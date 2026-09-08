@@ -46,6 +46,25 @@ workspace locator, workflow, Step Execution, runtime, and host lease to the
 session capability. Its bearer is transported on stdin into a read-only capability
 file; only the file selector crosses the host, runner, and harness environment
 boundaries. Missing or unsupported workspace authority fails before launch.
+The host persists non-sensitive correlation and bearer-file selectors in one
+run-owned shell profile used by login shells and the projected `moonmind`
+executable. The admitted `docker` tool binding delivers that executable even when
+the execution does not require `gh`.
+
+The materialized workspace attachment owns repository access mode. Container-job
+capabilities bind that mode as `workspaceReadOnly`; a read-only repository policy
+or existing-workspace grant therefore remains read-only inside submitted jobs.
+The scoped API applies the signed restriction before persistence, regardless of
+an omitted or false caller value, and the worker enforces it on both bind and
+volume-subpath mounts. A caller may request stricter access but cannot weaken the
+session restriction.
+
+Capability schema v3 requires the access claim. Pre-v3 session capabilities fail
+closed and require a fresh host lease or managed session after deployment; they
+cannot authorize a new job using an unknown repository access policy. Already
+admitted job histories retain their recorded behavior: an omitted
+`spec.workspaceReadOnly` preserves the historical writable workspace and exact
+serialized request, while newly scoped read-only jobs persist the restriction.
 
 The selected daemon owns a persistent image store. Pulled and locally provisioned
 images remain reusable by later jobs and workflows until deployment-level image
