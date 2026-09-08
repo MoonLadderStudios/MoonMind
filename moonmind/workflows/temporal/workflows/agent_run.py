@@ -257,6 +257,12 @@ OMNIGENT_EXECUTION_PLAN_ADMISSION_PATCH_ID = (
 OMNIGENT_PRE_ACTIVITY_CAPACITY_ADMISSION_PATCH_ID = (
     "agent-run-omnigent-pre-activity-capacity-admission-v1"
 )
+OMNIGENT_CAPACITY_PAYLOAD_PREFLIGHT_PATCH_ID = (
+    "agent-run-omnigent-capacity-payload-preflight-v1"
+)
+# Keep the complete request, including duplicated admission identities, well
+# below Temporal's transport ceiling. Large context belongs in artifact refs.
+OMNIGENT_EXECUTION_HANDOFF_MAX_BYTES = 64 * 1024
 # MoonLadderStudios/MoonMind#3880 requirement 4: an advertised pre-Activity
 # admission path must not silently restore Activity-side queueing, so a plan
 # that names the Activity as its capacity owner is rejected before execution.
@@ -3785,6 +3791,39 @@ class MoonMindAgentRun:
             )
         _, step_execution_id = self._omnigent_owner_identities(request)
         self._omnigent_admission_epoch += 1
+        admitted_request = request.model_copy(
+            update={
+                "admitted_provider_capacity": AdmittedProviderCapacity(
+                    leaseOwnerId=workflow.info().workflow_id,
+                    profiles=tuple(
+                        AdmittedProviderProfileCapacity.model_validate(item)
+                        for item in profiles
+                    ),
+                    executionPlanRef=plan_ref,
+                    agentRunWorkflowId=workflow.info().workflow_id,
+                    agentRunRunId=workflow.info().run_id,
+                    stepExecutionId=step_execution_id,
+                    idempotencyKey=request.idempotency_key,
+                    admissionEpoch=self._omnigent_admission_epoch,
+                )
+            }
+        )
+        # Validate the actual Activity handoff before either capacity owner is
+        # contacted. Checking the original request alone misses the extra key
+        # copy in its ticket. Retained histories preserve their recorded grant
+        # and Activity ordering rather than failing a newly introduced budget.
+        if workflow.patched(OMNIGENT_CAPACITY_PAYLOAD_PREFLIGHT_PATCH_ID):
+            payload_bytes = len(
+                admitted_request.model_dump_json(by_alias=True).encode("utf-8")
+            )
+            if payload_bytes > OMNIGENT_EXECUTION_HANDOFF_MAX_BYTES:
+                raise ApplicationError(
+                    "Agent execution request including admitted capacity must "
+                    f"serialize to <= {OMNIGENT_EXECUTION_HANDOFF_MAX_BYTES} bytes; "
+                    "use compact request identities and artifact refs for context",
+                    type="AgentExecutionPayloadTooLarge",
+                    non_retryable=True,
+                )
         await self._admit_omnigent_provider_capacity(
             request=request,
             runtime_id=profiles[0]["providerRuntimeId"],
@@ -3812,23 +3851,7 @@ class MoonMindAgentRun:
             # go back to the queue immediately.
             await self._release_omnigent_provider_capacity(request=request)
             raise
-        return request.model_copy(
-            update={
-                "admitted_provider_capacity": AdmittedProviderCapacity(
-                    leaseOwnerId=workflow.info().workflow_id,
-                    profiles=tuple(
-                        AdmittedProviderProfileCapacity.model_validate(item)
-                        for item in profiles
-                    ),
-                    executionPlanRef=plan_ref,
-                    agentRunWorkflowId=workflow.info().workflow_id,
-                    agentRunRunId=workflow.info().run_id,
-                    stepExecutionId=step_execution_id,
-                    idempotencyKey=request.idempotency_key,
-                    admissionEpoch=self._omnigent_admission_epoch,
-                )
-            }
-        )
+        return admitted_request
 
     def _omnigent_admits_capacity_before_activity(
         self,

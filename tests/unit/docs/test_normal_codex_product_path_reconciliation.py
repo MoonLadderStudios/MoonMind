@@ -14,7 +14,12 @@ from __future__ import annotations
 
 import json
 import re
+import sys
 from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+
+from _semantic_docs_3964 import assert_semantic_present
 
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
@@ -55,25 +60,62 @@ def test_universal_canonical_identity_named_in_every_consuming_doc() -> None:
 def test_no_caller_authored_host_or_daemon_authority() -> None:
     text = _read(RECONCILIATION)
     assert "caller-authored `session.hostId`" in text
-    assert "No caller authors host, daemon, session, path, or credential authority." in text
+    # No caller authors host/daemon/session/path/credential authority (#3964:
+    # exact sentence loosened; the production adapter twin in
+    # test_skill_contracts_3964.py rejects caller-provided hostId in code).
+    assert_semantic_present(
+        text,
+        ("no caller authors", "credential authority"),
+        context="reconciliation caller-authority prohibition",
+    )
 
 
 def test_no_silent_fallback_is_pinned() -> None:
     text = _read(RECONCILIATION)
-    invariant = (
-        "An explicit Omnigent selection never silently runs through direct Codex, "
-        "another Provider Profile, another host mode, an arbitrary static host, or "
-        "a broader network/mount policy."
+    # Explicit selection never silently substitutes another runtime path
+    # (#3964: the three-sentence invariant paragraph loosened to its semantic
+    # contract; the production failure taxonomy twin in
+    # test_skill_contracts_3964.py proves fail-closed behavior in code).
+    # P2 (Codex review): scope the terms to the bounded §5 failure-matrix
+    # section so unrelated occurrences elsewhere (e.g. "never silently
+    # filled" in the projection table) cannot satisfy a removed contract.
+    section_start = text.index("## 5. Complete failure and evidence matrix")
+    section_end = text.index("## 6. Evidence-qualified support language")
+    section = text[section_start:section_end]
+    assert_semantic_present(
+        section,
+        ("explicit", "never silently", "direct codex"),
+        context="reconciliation no-silent-fallback invariant",
     )
-    assert invariant in text
-    assert "fail-closed with no silent fallback" in text
+    assert_semantic_present(
+        section,
+        ("denied or failed", "is an error"),
+        context="reconciliation denied-selection error invariant",
+    )
+    assert_semantic_present(
+        text,
+        ("fail-closed", "no silent fallback"),
+        context="reconciliation fail-closed summary",
+    )
 
 
 def test_release_last_ordering_is_pinned() -> None:
     text = _read(RECONCILIATION)
-    assert "Provider Profile capacity is released last" in text
-    assert "no release before cleanup" in text.lower() or "release before cleanup" in text
-    assert "auxiliary cleanup/publication failure never overwrites `primaryStatus`" in text
+    assert_semantic_present(
+        text,
+        ("provider profile capacity is released last",),
+        context="reconciliation release-last ordering",
+    )
+    assert_semantic_present(
+        text,
+        ("no release before cleanup",),
+        context="reconciliation no-release-before-cleanup",
+    )
+    assert_semantic_present(
+        text,
+        ("never overwrites", "primaryStatus"),
+        context="reconciliation auxiliary-failure precedence",
+    )
 
 
 def test_evidence_qualified_support_vocabulary_is_present() -> None:
@@ -90,7 +132,11 @@ def test_evidence_qualified_support_vocabulary_is_present() -> None:
     ):
         assert f"**{term}**" in text, term
     # Unproven rows are not promoted to supported by this reconciliation.
-    assert "must not imply completion of checkpoint resume/branching" in text
+    assert_semantic_present(
+        text,
+        ("must not imply completion", "checkpoint resume"),
+        context="reconciliation unproven-rows guard",
+    )
 
 
 def test_fail_closed_cutover_is_pinned() -> None:

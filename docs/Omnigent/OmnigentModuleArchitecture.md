@@ -62,7 +62,7 @@ dependency direction.
 | `api_service/api/routers/omnigent_*.py` | Route contract, authorization, serialization | UI facade |
 | `api_service/api/routers/omnigent_bridge_composition.py` | Which concrete store, transport, facade, and credential profile backs a bridge route | Composition |
 | `moonmind/omnigent/conformance.py`, `exact_artifact_conformance.py`, `workflow_chat_acceptance.py`, `control_plane/timeline.py` | Conformance, acceptance, and timeline evidence | Evidence |
-| `moonmind/omnigent/faultlab/` | Fault-injection corpus, reference model, and invariants for the reconciler | Evidence (test-facing) |
+| `tools/omnigent_faultlab/` | Fault-injection corpus, reference model, and invariants for the reconciler | Evidence (test-facing) |
 | `moonmind/omnigent/legacy_retirement.py`, `session_migration_inventory.py`, `session_supervisor_rollback.py` | #3712 retirement inventory, migration inventory, rollback authority | Governance |
 
 ## 3. Allowed dependency direction

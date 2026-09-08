@@ -190,7 +190,7 @@ An unadmitted draft may change context and recompile normally. Once execution au
 
 ### 9.3 Rerun mode
 
-RequestRerun uses confirmed or edited form values through normal admission. The original run remains immutable. A new run may preserve workflowId under the lifecycle contract but has distinct run/input/plan and publication-scope identity.
+RequestRerun uses confirmed or supported edited form values through normal admission. Rerun mode targets a terminal source, so the service creates a new workflowId/runId linked to that immutable source; the UI follows the returned `execution.workflowId` and `execution.redirectPath`. Only a separately supported active-run Continue-As-New retains workflowId. The existing `applied = continue_as_new` response value alone does not distinguish these operations. Replacing an admitted Omnigent plan requires a new execution through normal admission; the update route rejects replacement inputs with 409 `omnigent_execution_plan_replacement_required`. See [Executions API Contract, section 12](../Api/ExecutionsApiContract.md#12-update-execution) for response and validation semantics.
 
 A rerun changes neither historical child policy nor remote effects already performed. Reusing a logical child idempotency key with conflicting target/policy must produce an explicit conflict or existing-child disposition, not a duplicate launch or false acceptance of the new settings.
 

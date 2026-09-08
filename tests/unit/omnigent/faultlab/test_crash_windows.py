@@ -10,11 +10,11 @@ from datetime import datetime, timezone
 
 import pytest
 
-from moonmind.omnigent.faultlab import FaultPlan, apply_decision, run_plan
-from moonmind.omnigent.faultlab.harness import _initial_durable, _intent
-from moonmind.omnigent.faultlab.invariants import violations
-from moonmind.omnigent.faultlab.provider import ProgrammableFakeProvider
-from moonmind.omnigent.faultlab.scenario import (
+from tools.omnigent_faultlab import FaultPlan, apply_decision, run_plan
+from tools.omnigent_faultlab.harness import _initial_durable, _intent
+from tools.omnigent_faultlab.invariants import violations
+from tools.omnigent_faultlab.provider import ProgrammableFakeProvider
+from tools.omnigent_faultlab.scenario import (
     CommandWindow,
     LogicalOperation,
 )

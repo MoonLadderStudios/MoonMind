@@ -1420,6 +1420,13 @@ Schema upgrades preserve existing rows and indexes so a retained grant can
 retry unchanged after migration. A downgrade to bounded columns must refuse
 while any retained identity exceeds that bound.
 
+Before taking Provider Profile or host capacity, new Omnigent executions validate
+the complete serialized Activity request, including its admission ticket, against
+a 64 KiB handoff budget. Oversized requests fail with an actionable error before
+acquiring a lease. The ticket preserves the full request idempotency key; other
+session identity limits still apply. Retained histories keep their recorded
+admission path through the workflow's payload-preflight patch marker.
+
 The owning workflow is an identity for a **workflow-owned** lease only, and a
 partial unique index enforces it there. One Activity-owned step legitimately
 binds several Provider Profiles from the same runtime — each lease gets its own

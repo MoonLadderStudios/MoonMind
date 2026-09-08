@@ -6,6 +6,7 @@ and the incremental adoption policy to ``docs/DocumentationArchitecture.md``.
 """
 
 import re
+import sys
 from pathlib import Path
 
 from tools.check_documentation_architecture import (
@@ -15,6 +16,10 @@ from tools.check_documentation_architecture import (
 from tools.check_documentation_architecture import (
     main as check_architecture,
 )
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+
+from _semantic_docs_3964 import assert_semantic_present
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
 STANDARD_DOC = REPO_ROOT / "docs" / "DocumentationArchitecture.md"
@@ -90,11 +95,21 @@ def test_module_architecture_is_preferred_filename() -> None:
 def test_system_filename_is_durable_and_design_filename_is_transitional() -> None:
     text = _read()
     assert "<SystemName>System.md" in text
-    assert "durable system or capability description" in text
+    assert_semantic_present(
+        text,
+        ("durable system or capability description",),
+        context="system filename durability",
+    )
     assert "<FeatureName>Design.md" in text
-    assert "transitional design" in text
-    assert (
-        "promote or supersede it when the design becomes settled desired state" in text
+    assert_semantic_present(
+        text, ("transitional design",), context="design filename transience"
+    )
+    # Settled designs are promoted or superseded (#3964: exact sentence
+    # loosened to the lifecycle contract).
+    assert_semantic_present(
+        text,
+        ("promote or supersede", "settled desired state"),
+        context="design promotion lifecycle",
     )
 
 
@@ -106,7 +121,13 @@ def test_docs_capitalization_variants_covered() -> None:
 
 def test_filename_alone_does_not_define_authority() -> None:
     text = _read()
-    assert "Filename alone does not define authority" in text
+    # Authority ladder heading (#3964: exact heading loosened; class +
+    # declared-authority + precedence ladder is the contract).
+    assert_semantic_present(
+        text,
+        ("filename alone does not define authority",),
+        context="filename authority rule",
+    )
     # Authority is established by class, declared Authority, and the precedence
     # ladder (§7) -- not by a separate documentation index that does not exist.
     assert "its declared Authority" in text
@@ -118,8 +139,16 @@ def test_filename_alone_does_not_define_authority() -> None:
 def test_incremental_adoption_policy_present() -> None:
     text = _read()
     assert "Incremental Adoption Policy" in text
-    assert "new and substantially-edited docs first" in text.lower()
-    assert "no retroactive metadata-only churn PR is mandated" in text
+    assert_semantic_present(
+        text,
+        ("new and substantially-edited docs first",),
+        context="incremental adoption scope",
+    )
+    assert_semantic_present(
+        text,
+        ("no retroactive metadata-only churn",),
+        context="incremental adoption churn guard",
+    )
 
 
 def test_stable_canonical_claim_id_families_present() -> None:
@@ -158,7 +187,14 @@ def test_claim_id_validation_is_advisory_by_default(
 
 def test_downstream_minor_local_adjustment_path_documented() -> None:
     text = _read()
-    assert "preserving the MoonSpec document classes and authority rules" in text
+    assert_semantic_present(
+        text, ("minor local adjustments",), context="downstream adjustment path"
+    )
+    assert_semantic_present(
+        text,
+        ("preserving", "document classes", "authority rules"),
+        context="downstream adjustment constraints",
+    )
 
 
 def test_source_traceability_preserved() -> None:

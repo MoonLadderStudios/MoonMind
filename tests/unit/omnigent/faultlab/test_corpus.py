@@ -9,8 +9,8 @@ from pathlib import Path
 
 import pytest
 
-from moonmind.omnigent.faultlab import FaultPlan, run_plan
-from moonmind.omnigent.faultlab.corpus import (
+from tools.omnigent_faultlab import FaultPlan, run_plan
+from tools.omnigent_faultlab.corpus import (
     INITIAL_CORPUS,
     ingest_incident,
     load_corpus_dir,
@@ -18,11 +18,11 @@ from moonmind.omnigent.faultlab.corpus import (
     scenario_violations,
     write_scenario_file,
 )
-from moonmind.omnigent.faultlab.harness import ObservationFault
-from moonmind.omnigent.faultlab.invariants import violations
-from moonmind.omnigent.faultlab.scenario import ResponseBehavior
+from tools.omnigent_faultlab.harness import ObservationFault
+from tools.omnigent_faultlab.invariants import violations
+from tools.omnigent_faultlab.scenario import ResponseBehavior
 
-_PACKAGED_SCENARIOS = Path(__file__).parents[4] / "moonmind" / "omnigent" / "faultlab" / "scenarios"
+_PACKAGED_SCENARIOS = Path(__file__).parents[4] / "tools" / "omnigent_faultlab" / "scenarios"
 
 
 def test_initial_corpus_is_non_empty_and_covers_key_invariants():
@@ -65,7 +65,7 @@ def test_ingest_incident_minimizes_and_stores(tmp_path):
     # This plan does not violate a real invariant (the reducer is correct), so
     # ingest_incident would raise. Instead assert the write/load round trip on a
     # scenario built from the plan.
-    from moonmind.omnigent.faultlab.conversions import plan_to_scenario
+    from tools.omnigent_faultlab.conversions import plan_to_scenario
 
     scenario = plan_to_scenario(
         plan, scenario_id="ingested-demo", source_ref="#3698", invariant="eventual_convergence"
