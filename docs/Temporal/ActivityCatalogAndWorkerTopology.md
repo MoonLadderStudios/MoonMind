@@ -308,7 +308,14 @@ Measured capability inventory (workflow fleet):
 Under bounded concurrent load the consolidated worker retains every
 handoff's control record before its cleanup record with the drain gate
 staying decisive per input (`test_consolidated_worker_retains_control_and_cleanup_progress_under_load`;
-rehearsal, not production saturation proof). New persistence is proven to
+rehearsal, not production saturation proof). A stdlib-only decision-level
+companion (`test_checkpoint_drain_saturation_3949.py`) extends the same
+property to 100 concurrent workflow-decision handoffs with per-turn
+control-before-cleanup ordering. Temporal execution-under-load proof
+(concurrent `CheckpointBranchTurn` executions retaining control/cleanup
+progress under saturation) remains integration scope and requires either
+required-CI execution evidence or explicit reviewer acceptance of these
+rehearsals plus the retry/timeout budgets below. New persistence is proven to
 reach the artifacts fleet exclusively by
 `test_new_{success,failure,cancellation}_reaches_artifacts_fleet_with_real_handlers_3949`
 plus `test_transient_terminal_retry_reuses_owned_row_on_artifacts_fleet_3949`,
