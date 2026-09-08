@@ -159,6 +159,17 @@ class SystemOperationsService:
         return await self.snapshot()
 
     async def _reconcile_control(self) -> WorkflowControlBatch | None:
+        """Resume the persisted request on read with bounded observer work.
+
+        Reads reconcile only an already authorized stored command: the request
+        identity, generation, and enumerated target set are never broadened or
+        regenerated here. Terminal batches (succeeded/failed/empty) perform no
+        Temporal work. Concurrent observers serialize through the audit row lock
+        and reuse stable per-target Update IDs, so simultaneous reads cannot
+        issue duplicate effects. Closing the page never cancels committed
+        intent; progress after a browser disconnect requires a later read or
+        idempotent resubmission of the same request.
+        """
         state_row = await self._state_row()
         current = dict(state_row.value_json or {}) if state_row is not None else {}
         request_id = current.get("controlRequestId")
@@ -172,7 +183,14 @@ class SystemOperationsService:
         if not raw:
             return None  # Historical acceptance counts cannot become safe-point evidence.
         batch = WorkflowControlBatch.model_validate(raw)
-        if batch.status == "succeeded":
+        if batch.status in {"succeeded", "failed", "empty"}:
+            return batch
+        # A newer command replaced this request: older observations must not
+        # overwrite the current requested state or report a new generation
+        # confirmed. Only the current state's request reconciles. Legacy
+        # batches without a generation still reconcile.
+        current_version = int(current.get("version") or 0)
+        if batch.generation and current_version and batch.generation != current_version:
             return batch
         sender = getattr(self._temporal_service, "send_quiesce_pause_signal" if batch.action == "Pause" else "send_quiesce_resume_signal", None)
         if not callable(sender):
@@ -214,6 +232,9 @@ class SystemOperationsService:
             progress.request_id, progress.action, progress.generation,
         ):
             raise ValueError("Control progress has a different request authority")
+        # Successor runs (Continue-As-New/reset/same workflow ID) never inherit
+        # the pinned run identity: enumerated targets are immutable, so a new
+        # run requires a new request/generation through the admission policy.
         merged = progress.model_copy(deep=True)
         if stored.enumerated:
             identities = lambda batch: {
@@ -221,17 +242,63 @@ class SystemOperationsService:
                 for target in batch.targets
             }
             if not progress.enumerated:
-                merged = stored
+                # A non-enumerated observer (e.g. a later-page enumeration
+                # failure checkpoint) may only add safe progress: keep stored
+                # confirmed targets and merge newly discovered pending targets.
+                known = {(t.workflow_id, t.run_id) for t in stored.targets}
+                additions = [
+                    t for t in progress.targets
+                    if (t.workflow_id, t.run_id) not in known
+                ]
+                if additions:
+                    merged = stored.model_copy(deep=True)
+                    merged.targets.extend(additions)
+                    merged.enumeration_error = progress.enumeration_error
+                    merged.enumeration_cursor = progress.enumeration_cursor
+                    merged.selection_policy = progress.selection_policy or stored.selection_policy
+                else:
+                    merged = stored
             elif identities(stored) != identities(progress):
-                raise ValueError("Enumerated control targets are immutable")
+                # Paged enumeration checkpoints persist partial target lists
+                # with enumerated=False; only a fully enumerated batch may
+                # close the set, and it must extend (never rewrite) the set.
+                stored_identities = identities(stored)
+                progress_identities = identities(progress)
+                if stored_identities - progress_identities:
+                    raise ValueError("Enumerated control targets are immutable")
+                merged = progress.model_copy(deep=True)
+                prior = {target.update_id: target for target in stored.targets}
+                for index, target in enumerate(merged.targets):
+                    previous = prior.get(target.update_id)
+                    if previous is None:
+                        continue
+                    if previous.state in {"safe_point", "resumed", "failed", "already_terminal", "unsupported", "superseded"} or (
+                        target.state == "requested" and previous.state != "requested"
+                    ):
+                        merged.targets[index] = previous
             else:
                 prior = {target.update_id: target for target in stored.targets}
                 for index, target in enumerate(merged.targets):
                     previous = prior[target.update_id]
-                    if previous.state in {"safe_point", "resumed", "failed"} or (
+                    if previous.state in {"safe_point", "resumed", "failed", "already_terminal", "unsupported", "superseded"} or (
                         target.state == "requested" and previous.state != "requested"
                     ):
                         merged.targets[index] = previous
+        else:
+            # Pre-enumeration progress checkpoints (partial paged targets) merge
+            # by identity so a resumed scan keeps safe progress.
+            if not progress.enumerated and stored.targets and progress.targets:
+                known = {(t.workflow_id, t.run_id) for t in stored.targets}
+                merged_targets = list(stored.targets)
+                for target in progress.targets:
+                    if (target.workflow_id, target.run_id) not in known:
+                        merged_targets.append(target)
+                        known.add((target.workflow_id, target.run_id))
+                merged = stored.model_copy(deep=True)
+                merged.targets = merged_targets
+                merged.enumeration_error = progress.enumeration_error
+                merged.enumeration_cursor = progress.enumeration_cursor
+                merged.selection_policy = progress.selection_policy or stored.selection_policy
         row.new_value_json = {
             **dict(row.new_value_json), "control": merged.model_dump(by_alias=True),
             "status": merged.status, "resultStatus": merged.status,

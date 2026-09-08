@@ -532,3 +532,142 @@ async def test_command_refreshes_state_loaded_before_another_session_commits(
         assert result.system.version == 3
         assert stale_row.value_json["version"] == 3
         assert result.system.workers_paused is True
+
+
+@pytest.mark.asyncio
+async def test_terminal_control_batches_skip_snapshot_reconciliation(
+    system_operations_session_maker,
+):
+    """Snapshot reads perform no Temporal work for terminal batches."""
+    from moonmind.schemas.workflow_control_models import WorkflowControlBatch, WorkflowControlTarget
+
+    class CountingTemporalService(FakeTemporalService):
+        def __init__(self) -> None:
+            super().__init__()
+            self.calls = 0
+
+        async def send_quiesce_pause_signal(self, *, request_id, batch, on_progress):
+            self.calls += 1
+            return batch
+
+        async def send_quiesce_resume_signal(self, *, request_id, batch, on_progress):
+            self.calls += 1
+            return batch
+
+    terminal_states = {
+        "succeeded": ["safe_point"],
+        "failed": ["failed"],
+        "empty": [],
+    }
+    temporal = CountingTemporalService()
+    async with system_operations_session_maker() as session:
+        service = SystemOperationsService(session, temporal_service=temporal)
+        for terminal, states in terminal_states.items():
+            key = f"terminal-bound-{terminal}"
+            await service.submit(
+                WorkerOperationCommand(
+                    action="resume", reason="Terminal bound",
+                    idempotencyKey=key,
+                ),
+                actor_user_id=None,
+            )
+            audit = await service._audit_event_by_idempotency_key(key)
+            batch = WorkflowControlBatch.model_validate(audit.new_value_json["control"])
+            batch.enumerated = True
+            batch.targets = [WorkflowControlTarget(
+                workflowId=f"{key}-wf-{i}", runId=f"run-{i}", updateId=f"update-{i}", state=state,
+            ) for i, state in enumerate(states)]
+            await service._persist_control_progress(audit.id, batch)
+            calls_before = temporal.calls
+            snapshot = await service.snapshot()
+            assert snapshot.control.status == terminal
+            assert temporal.calls == calls_before
+
+
+@pytest.mark.asyncio
+async def test_snapshot_does_not_reconcile_superseded_generation(
+    system_operations_session_maker,
+):
+    """Older observations never overwrite the current requested state."""
+    temporal = FakeTemporalService()
+    async with system_operations_session_maker() as session:
+        service = SystemOperationsService(session, temporal_service=temporal)
+        await service.submit(
+            WorkerOperationCommand(
+                action="pause", mode="quiesce", reason="First command",
+                confirmation="pause", idempotencyKey="first-command",
+            ),
+            actor_user_id=None,
+        )
+        await service.submit(
+            WorkerOperationCommand(
+                action="resume", reason="Newer command replaces the request",
+                idempotencyKey="newer-command",
+            ),
+            actor_user_id=None,
+        )
+        stale = await service._audit_event_by_idempotency_key("first-command")
+        from moonmind.schemas.workflow_control_models import WorkflowControlBatch
+
+        stale_batch = WorkflowControlBatch.model_validate(stale.new_value_json["control"])
+        with __import__("pytest").raises(ValueError, match="request authority"):
+            await service._persist_control_progress(stale.id, stale_batch.model_copy(update={
+                "generation": stale_batch.generation + 1,
+            }))
+        snapshot = await service.snapshot()
+        assert snapshot.control.request_id == "newer-command"
+
+
+@pytest.mark.asyncio
+async def test_confirmed_terminal_dispositions_survive_stale_observers(
+    system_operations_session_maker,
+):
+    """already_terminal/unsupported/superseded are retained like safe_point."""
+    from moonmind.schemas.workflow_control_models import WorkflowControlBatch
+
+    async with system_operations_session_maker() as session:
+        service = SystemOperationsService(session)
+        await service.submit(
+            WorkerOperationCommand(
+                action="pause", mode="quiesce", reason="Terminal dispositions",
+                confirmation="pause", idempotencyKey="terminal-dispositions",
+            ),
+            actor_user_id=None,
+        )
+        audit = await service._audit_event_by_idempotency_key("terminal-dispositions")
+        batch = WorkflowControlBatch.model_validate(audit.new_value_json["control"])
+        batch.enumerated = True
+        batch.targets = [WorkflowControlTarget(
+            workflowId=f"workflow-{i}", runId=f"run-{i}", updateId=f"update-{i}", state=state,
+        ) for i, state in enumerate(["already_terminal", "unsupported", "superseded"])]
+        await service._persist_control_progress(audit.id, batch)
+        stale = batch.model_copy(deep=True)
+        for target in stale.targets:
+            target.state, target.reason = "requested", None
+        merged = await service._persist_control_progress(audit.id, stale)
+        assert [target.state for target in merged.targets] == [
+            "already_terminal", "unsupported", "superseded",
+        ]
+
+
+@pytest.mark.asyncio
+async def test_empty_enumeration_reports_empty_scope(system_operations_session_maker):
+    """No eligible runs is reported as empty, never as workflow-confirmed."""
+    from moonmind.schemas.workflow_control_models import WorkflowControlBatch
+
+    async with system_operations_session_maker() as session:
+        service = SystemOperationsService(session)
+        await service.submit(
+            WorkerOperationCommand(
+                action="pause", mode="quiesce", reason="Empty scope",
+                confirmation="pause", idempotencyKey="empty-scope",
+            ),
+            actor_user_id=None,
+        )
+        audit = await service._audit_event_by_idempotency_key("empty-scope")
+        batch = WorkflowControlBatch.model_validate(audit.new_value_json["control"])
+        batch.enumerated = True
+        batch.targets = []
+        await service._persist_control_progress(audit.id, batch)
+        snapshot = await service.snapshot()
+        assert snapshot.control.status == "empty"

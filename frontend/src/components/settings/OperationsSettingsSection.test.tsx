@@ -568,6 +568,7 @@ describe('OperationsSettingsSection deployment update card', () => {
     ['unknown', 'unknown', 'Pause partially confirmed'],
     ['failed', 'failed', 'Pause failed'],
     ['safe_point', 'succeeded', 'Workers quiesced'],
+    ['already_terminal', 'succeeded', 'Workers quiesced'],
   ])('renders %s control evidence without promoting acceptance', async (state, signalStatus, label) => {
     const originalFetch = fetchSpy.getMockImplementation()!;
     fetchSpy.mockImplementation((input, init) => {
@@ -584,7 +585,7 @@ describe('OperationsSettingsSection deployment update card', () => {
     renderOperations();
     expect(await screen.findByRole('heading', { name: label })).toBeTruthy();
     expect(await screen.findByText('Control confirmations')).toBeTruthy();
-    if (state !== 'safe_point') expect(screen.queryByRole('heading', { name: 'Workers quiesced' })).toBeNull();
+    if (!['safe_point', 'already_terminal'].includes(state)) expect(screen.queryByRole('heading', { name: 'Workers quiesced' })).toBeNull();
   });
 
   it('acknowledges an accepted pause without a success toast', async () => {
@@ -607,6 +608,24 @@ describe('OperationsSettingsSection deployment update card', () => {
     fireEvent.click(within(card).getByRole('button', { name: /pause workers/i }));
     expect(await within(card).findByText('Pause request recorded. Check the workflow confirmations below.')).toBeTruthy();
     expect(within(card).queryByText(/paused successfully/i)).toBeNull();
+  });
+
+  it('explains an enumerated empty scope instead of claiming quiescence', async () => {
+    const originalFetch = fetchSpy.getMockImplementation()!;
+    fetchSpy.mockImplementation((input, init) => {
+      if (String(input) === '/api/workers') {
+        return Promise.resolve({ ok: true, json: async () => ({
+          ...workerSnapshot,
+          system: { ...workerSnapshot.system, workersPaused: true, mode: 'quiesce' },
+          signalStatus: 'empty',
+          control: { enumerated: true, targets: [] },
+        }) } as Response);
+      }
+      return originalFetch(input, init);
+    });
+    renderOperations();
+    expect(await screen.findByRole('heading', { name: 'Admission paused; no eligible running workflows found' })).toBeTruthy();
+    expect(screen.queryByRole('heading', { name: 'Workers quiesced' })).toBeNull();
   });
 
 });
