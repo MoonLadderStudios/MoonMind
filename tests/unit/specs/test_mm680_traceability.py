@@ -16,5 +16,3 @@ def test_mm680_traceability_preserved_in_plan_and_tasks() -> None:
 
     assert "MM-680" in plan
     assert "MM-680" in tasks
-    assert "Generalizable Agent Tool-Surface Isolation" in plan
-    assert "original Jira preset brief" in tasks

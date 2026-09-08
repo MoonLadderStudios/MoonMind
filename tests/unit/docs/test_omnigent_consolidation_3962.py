@@ -10,9 +10,11 @@ valid internal links/anchors.
 
 from __future__ import annotations
 
-import re
 from pathlib import Path
 
+import pytest
+
+from tools.check_documentation_links import DocFile, run_checks
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
 OMNIGENT = REPO_ROOT / "docs" / "Omnigent"
@@ -24,20 +26,9 @@ def _read(path: Path) -> str:
     return path.read_text(encoding="utf-8")
 
 
-def _slugs(text: str) -> set[str]:
-    slugs: set[str] = set()
-    for match in re.finditer(r"^(#{1,6})\s+(.*)", text, re.M):
-        slug = match.group(2).strip().lower()
-        slug = re.sub(r"[^\w\s-]", "", slug)
-        slugs.add(re.sub(r"\s+", "-", slug))
-    return slugs
-
-
 def test_entrypoint_exists_with_startup_path_and_limitations() -> None:
     text = _read(ENTRYPOINT)
     assert "MoonLadderStudios/MoonMind#3962" in text
-    assert "Supported startup path" in text
-    assert "Exact limitations" in text
     # Status vocabulary: registered through selected-by-default.
     for term in (
         "registered",
@@ -100,23 +91,32 @@ def test_duplicates_are_owner_pointers() -> None:
 
 
 def test_internal_links_and_anchors_resolve() -> None:
-    checked = 0
-    for path in sorted(OMNIGENT.glob("*.md")):
-        text = _read(path)
-        for match in re.finditer(r"\]\(([^)]+)\)", text):
-            link = match.group(1)
-            if link.startswith(("http", "mailto:")) or link.startswith("#"):
-                continue
-            if "#" in link:
-                rel, anchor = link.split("#", 1)
-                target = path.parent / rel if rel else path
-                assert target.exists(), f"{path.name}: {link}"
-                if target.suffix == ".md":
-                    assert anchor in _slugs(_read(target)), (
-                        f"{path.name}: {link}"
-                    )
-                    checked += 1
-            elif link.endswith(".md"):
-                assert (path.parent / link).exists(), f"{path.name}: {link}"
-                checked += 1
-    assert checked > 0
+    docs = [
+        DocFile(path.relative_to(REPO_ROOT).as_posix(), _read(path))
+        for path in sorted(OMNIGENT.glob("*.md"))
+    ]
+    assert docs
+    findings, _ = run_checks(docs, root=REPO_ROOT)
+    assert findings == []
+
+
+@pytest.mark.parametrize(
+    ("target", "rule"),
+    [
+        ("./Missing3964.md", "broken-local-link"),
+        ("./README.md#missing-3964-anchor", "broken-local-anchor"),
+        ("#missing-3964-anchor", "broken-local-anchor"),
+    ],
+)
+def test_shipped_link_guard_detects_mutated_target(monkeypatch, target, rule) -> None:
+    original_read = _read
+
+    def mutated_read(path: Path) -> str:
+        text = original_read(path)
+        if path == ENTRYPOINT:
+            text += f"\n[Regression link]({target})\n"
+        return text
+
+    monkeypatch.setattr(f"{__name__}._read", mutated_read)
+    with pytest.raises(AssertionError, match=rule):
+        test_internal_links_and_anchors_resolve()

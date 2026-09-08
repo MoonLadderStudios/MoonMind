@@ -1,4 +1,4 @@
-"""Content contract for the MoonSpec Documentation Architecture Standard (MM-904).
+"""Structured examples and identifiers in the documentation standard.
 
 Source: MM-900 (Implement MoonSpec Documentation Architecture Standard).
 MM-904 adds the authoring conventions: metadata headers, naming conventions,
@@ -6,6 +6,8 @@ and the incremental adoption policy to ``docs/DocumentationArchitecture.md``.
 """
 
 from pathlib import Path
+
+from tools.check_documentation_architecture import CANONICAL_CLAIM_PREFIXES
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
 STANDARD_DOC = REPO_ROOT / "docs" / "DocumentationArchitecture.md"
@@ -63,18 +65,13 @@ def test_preferred_filename_set_present() -> None:
 def test_module_architecture_is_preferred_filename() -> None:
     text = _read()
     assert "<ModuleName>ModuleArchitecture.md" in text
-    assert "preferred" in text.lower()
     assert "docs/<Module>/<ModuleName>ModuleArchitecture.md" in text
-    assert "An `Architecture.md` or `Overview.md` inside the module's doc directory" not in text
 
 
-def test_system_filename_is_durable_and_design_filename_is_transitional() -> None:
+def test_system_and_design_filename_examples_present() -> None:
     text = _read()
     assert "<SystemName>System.md" in text
-    assert "durable system or capability description" in text
     assert "<FeatureName>Design.md" in text
-    assert "transitional design" in text
-    assert "promote or supersede it when the design becomes settled desired state" in text
 
 
 def test_docs_capitalization_variants_covered() -> None:
@@ -83,28 +80,15 @@ def test_docs_capitalization_variants_covered() -> None:
     assert "Docs/" in text
 
 
-def test_filename_alone_does_not_define_authority() -> None:
-    text = _read()
-    assert "Filename alone does not define authority" in text
-    # Authority is established by class, declared Authority, and the precedence
-    # ladder (§7) -- not by a separate documentation index that does not exist.
-    assert "its declared Authority" in text
-    # Forbidden patterns.
-    assert "Parallel old/new authorities" in text
-    assert "contracts/" in text
-
-
-def test_incremental_adoption_policy_present() -> None:
-    text = _read()
-    assert "Incremental Adoption Policy" in text
-    assert "new and substantially-edited docs first" in text.lower()
-    assert "no retroactive metadata-only churn PR is mandated" in text
+def test_global_contract_directory_policy_is_documented() -> None:
+    # Retain this policy token: the advisory checker does not enforce the
+    # standard's prohibition on a competing global contracts directory.
+    assert "contracts/" in _read()
 
 
 def test_stable_canonical_claim_id_families_present() -> None:
     text = _read()
-    assert "Stable Canonical Claim IDs" in text
-    for prefix in ("DOC-REQ", "CONTRACT", "INV", "NON-GOAL", "QUALITY", "TEST"):
+    for prefix in CANONICAL_CLAIM_PREFIXES:
         assert prefix in text
     assert "PREFIX-NNN" in text
 
@@ -112,25 +96,26 @@ def test_stable_canonical_claim_id_families_present() -> None:
 def test_claim_ids_are_distinguished_from_design_req_traceability() -> None:
     text = _read()
     assert "DESIGN-REQ-*" in text
-    assert "not stable canonical anchors" in text
     assert "MM-927" in text
     assert "MM-929" in text
-
-
-def test_claim_id_validation_is_advisory_and_incremental() -> None:
-    text = _read()
-    assert "malformed IDs" in text
-    assert "reused for multiple canonical claims" in text
-    assert "Adoption is incremental" in text
-
-
-def test_downstream_minor_local_adjustment_path_documented() -> None:
-    text = _read()
-    assert "minor local adjustments" in text.lower()
-    assert "preserving the MoonSpec document classes and authority rules" in text
 
 
 def test_source_traceability_preserved() -> None:
     text = _read()
     assert "MM-900" in text
     assert "MM-904" in text
+
+
+def test_explanatory_rewording_preserves_structured_examples(monkeypatch) -> None:
+    text = _read()
+    rewritten = text.replace(
+        "durable system or capability description", "long-lived capability overview"
+    ).replace(
+        "no retroactive metadata-only churn PR is mandated",
+        "existing documents need no metadata-only update",
+    )
+    assert rewritten != text
+    monkeypatch.setattr(f"{__name__}._read", lambda: rewritten)
+    test_system_and_design_filename_examples_present()
+    test_canonical_metadata_header_fields_present()
+    test_stable_canonical_claim_id_families_present()

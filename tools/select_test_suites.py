@@ -84,6 +84,10 @@ API_COMPONENT_GLOBS = ("api_service/auth*",)
 
 TEMPORAL_BOUNDARY_EXACT = {
     "moonmind/schemas/managed_session_models.py",
+    # Portable conformance commands and document contracts still live in the
+    # Temporal shard. Ordinary Markdown is handled by unit-fast below.
+    "docs/Development/PreCommitWorkflow.md",
+    "docs/Steps/StepExecutionsAndCheckpointing.md",
     # MoonLadderStudios/MoonMind#3959: the mechanical catalog generator, its
     # generated reference, and the canonical lifecycle doc carrying the
     # lifecycle anchors the generator links must select the drift and
@@ -590,7 +594,13 @@ def select_suites(
         for path in paths
     )
     selection = SuiteSelection(
-        unit_fast=bool(backend_paths) or profile_authoring_changed,
+        # Markdown may contain metadata, executable examples, links and Skill
+        # instructions. Extension alone cannot exempt it from required CI.
+        # Include non-Markdown docs assets too: deleting a link target must
+        # re-run the surviving document checks.
+        unit_fast=bool(backend_paths)
+        or profile_authoring_changed
+        or any(path.endswith(".md") or path.startswith("docs/") for path in paths),
         unit_slow=any(
             _matches(path, prefixes=UNIT_SLOW_PREFIXES) for path in backend_paths
         ),
