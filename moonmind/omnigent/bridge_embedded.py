@@ -67,7 +67,6 @@ from moonmind.omnigent.embedded_host_requests import (
     EmbeddedHostHeartbeatRequest,
     EmbeddedHostRegisterRequest,
     EmbeddedHostSessionEventRequest,
-    _bounded_mapping,
 )
 
 logger = structlog.get_logger(__name__)
