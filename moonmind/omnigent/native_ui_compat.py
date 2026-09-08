@@ -42,8 +42,8 @@ from pathlib import Path
 from typing import Any
 
 from moonmind.omnigent.workflow_chat_facade import (
-    CAP_READ_RESOURCES,
     CAP_VIEW_TRANSCRIPT,
+    CODE_MALFORMED_PAYLOAD,
     FACADE_OPERATIONS,
     FacadeOperation,
     WorkflowChatFacadeError,
@@ -82,10 +82,8 @@ CLASS_TERMINAL_ATTACH = "terminal_attach"
 CLASS_TERMINAL_INPUT = "terminal_input"
 CLASS_TERMINAL_RESIZE = "terminal_resize"
 CLASS_TERMINAL_CLOSE = "terminal_close"
-CLASS_EXEC_LOG = "execution_log"
 CLASS_BROWSER_PANE = "browser_pane"
 CLASS_SUBAGENT = "subagent_tree"
-CLASS_TASK = "task_todo"
 
 # --- Capability keys the facade never grants (mirror workflow_chat_facade) -----
 # Native operations use the canonical capability names resolved by
@@ -97,10 +95,6 @@ CAP_VIEW_TERMINAL = "viewTerminal"
 CAP_CLOSE_TERMINAL = "closeTerminal"
 CAP_MUTATE_WORKSPACE = "mutateWorkspace"
 CAP_UPLOAD_FILES = "uploadFiles"
-CAP_OPEN_BROWSER = "openBrowser"
-CAP_VIEW_SUBAGENTS = "viewSubagents"
-CAP_CONTROL_SUBAGENTS = "controlSubagents"
-CAP_CHANGE_GOAL = "changeGoal"
 CAP_RECONNECT_SESSION = "reconnectSession"
 
 # --- Stable, non-enumerating compatibility diagnostic codes -------------------
@@ -295,17 +289,10 @@ _PINNED_HTTP_ROUTES: tuple[NativeUiRoute, ...] = (
     _reviewed_http(rf"v1/sessions/{_SESSION}/resources/terminals/{_TERMINAL}", name="terminal_status", methods=("GET",), operation_class=CLASS_TERMINAL_VIEW, capability=CAP_VIEW_TERMINAL),
     _reviewed_http(rf"v1/sessions/{_SESSION}/resources/terminals/{_TERMINAL}", name="terminal_close", methods=("DELETE",), operation_class=CLASS_TERMINAL_CLOSE, capability=CAP_CLOSE_TERMINAL, mutation=True),
     _reviewed_http(rf"v1/sessions/{_SESSION}/resources/environments/default/shell", name="terminal_shell", methods=("POST",), operation_class=CLASS_TERMINAL_CREATE, capability=CAP_CREATE_TERMINAL, mutation=True),
-    _reviewed_http(rf"v1/sessions/{_SESSION}/resources/terminals/{_TERMINAL}/logs", name="execution_logs", methods=("GET",), operation_class=CLASS_EXEC_LOG, capability=CAP_READ_RESOURCES),
     _reviewed_http(rf"v1/sessions/{_SESSION}/resources/environments/default/filesystem/(?P<res_path>.+)", name="workspace_edit", methods=("PUT", "PATCH"), operation_class=CLASS_RESOURCE_MUTATE, capability=CAP_MUTATE_WORKSPACE, mutation=True),
     _reviewed_http(rf"v1/sessions/{_SESSION}/resources/environments/default/filesystem/(?P<res_path>.+)", name="workspace_delete", methods=("DELETE",), operation_class=CLASS_RESOURCE_MUTATE, capability=CAP_MUTATE_WORKSPACE, mutation=True),
     _reviewed_http(rf"v1/sessions/{_SESSION}/resources/files", name="resource_upload", methods=("POST",), operation_class=CLASS_RESOURCE_MUTATE, capability=CAP_UPLOAD_FILES, mutation=True),
-    _reviewed_http(rf"v1/sessions/{_SESSION}/resources/files/(?P<file_id>[^/]+)/content", name="resource_download", methods=("GET",), operation_class=CLASS_RESOURCE_READ, capability=CAP_READ_RESOURCES),
-    _reviewed_http(rf"v1/sessions/{_SESSION}/resources/files/(?P<file_id>[^/]+)/attach", name="resource_attach", methods=("POST",), operation_class=CLASS_RESOURCE_MUTATE, capability=CAP_UPLOAD_FILES, mutation=True),
-    _reviewed_http(rf"v1/sessions/{_SESSION}/browser(?:/.*)?", name="browser_pane", methods=("GET", "POST", "DELETE"), operation_class=CLASS_BROWSER_PANE, capability=CAP_OPEN_BROWSER, mutation=True),
-    _reviewed_http(rf"v1/sessions/{_SESSION}/subagents(?:/.*)?", name="subagent_tree", methods=("GET",), operation_class=CLASS_SUBAGENT, capability=CAP_VIEW_SUBAGENTS),
-    _reviewed_http(rf"v1/sessions/{_SESSION}/subagents(?:/.*)?", name="subagent_control", methods=("POST",), operation_class=CLASS_SUBAGENT, capability=CAP_CONTROL_SUBAGENTS, mutation=True),
-    _reviewed_http(rf"v1/sessions/{_SESSION}/tasks(?:/.*)?", name="task_todo", methods=("GET",), operation_class=CLASS_TASK, capability=CAP_VIEW_TRANSCRIPT),
-    _reviewed_http(rf"v1/sessions/{_SESSION}/tasks(?:/.*)?", name="task_mutate", methods=("POST", "PATCH"), operation_class=CLASS_TASK, capability=CAP_CHANGE_GOAL, mutation=True),
+    _compat_review_http(rf"v1/sessions/{_SESSION}/browser/(?:action_request|action_claim/[^/]+|action_result/[^/]+)", name="browser_pane", methods=("POST",), operation_class=CLASS_BROWSER_PANE, mutation=True),
     _reviewed_http(r"v1/hosts", name="host_liveness", methods=("GET",), operation_class=CLASS_LIVENESS, capability=None),
     _reviewed_http(r"v1/runners/(?P<runner_id>[^/]+)/status", name="runner_liveness", methods=("GET",), operation_class=CLASS_LIVENESS, capability=None),
     _reviewed_http(rf"v1/sessions/{_SESSION}/reconnect", name="session_reconnect", methods=("POST",), operation_class=CLASS_RECONNECT, capability=CAP_RECONNECT_SESSION, mutation=True),
@@ -390,6 +377,101 @@ def classify_native_ui_http(method: str, path: str) -> NativeUiRouteMatch | None
             params["_browser_path"] = candidate
             return NativeUiRouteMatch(route=route, params=params)
     return None
+
+
+# Closed browser-authored request fields at PINNED_OMNIGENT_COMMIT. These are
+# admission constraints, not implementations of upstream terminal/filesystem
+# semantics. See the source-anchored fixture and #3954 ownership audit.
+_NATIVE_HTTP_BODY_FIELDS: dict[tuple[str, str], dict[str, type]] = {
+    ("terminal_create", "POST"): {"terminal": str, "session_key": str},
+    ("terminal_shell", "POST"): {"command": str, "timeout": int},
+    ("workspace_edit", "PUT"): {
+        "content": str, "encoding": str, "create_parents": bool,
+    },
+    ("workspace_edit", "PATCH"): {
+        "old_text": str, "new_text": str, "replace_all": bool,
+    },
+    ("session_reconnect", "POST"): {},
+}
+_NATIVE_HTTP_REQUIRED_FIELDS = {
+    ("terminal_create", "POST"): {"terminal", "session_key"},
+    ("terminal_shell", "POST"): {"command"},
+    ("workspace_edit", "PATCH"): {"old_text", "new_text"},
+}
+# MoonMind compare-and-set inputs are consumed locally, never sent upstream.
+NATIVE_HTTP_PRECONDITIONS = frozenset({
+    "expectedSessionEpoch", "expectedActiveTurn", "expectedElicitation",
+    "expectedTerminalState", "expectedAgentProfileDigest",
+    "expectedProviderProfileGeneration", "expectedLaunchSnapshotRef",
+    "expectedPolicyDigest",
+})
+
+
+def validate_native_ui_http_fields(
+    match: NativeUiRouteMatch,
+    *,
+    method: str,
+    query: list[tuple[str, str]],
+    body: Any,
+) -> None:
+    """Reject drift before claims, scanning, credentials, or upstream I/O.
+
+    No field named by the caller is reflected in the diagnostic. Unknown nested
+    objects cannot pass the scalar contracts. Multipart is parsed and bounded
+    at the HTTP boundary; its only permitted part is ``file``.
+    """
+
+    def deny() -> None:
+        raise NativeUiCompatibilityError(
+            "The request fields do not match the reviewed native operation.",
+            failure_class="user_error",
+            status_code=400,
+            code=CODE_MALFORMED_PAYLOAD,
+        )
+
+    name = match.route.name
+    pagination = name in {"session_items", "terminal_view"}
+    allowed_query = {"limit", "after", "before", "order"} if pagination else set()
+    seen: set[str] = set()
+    for key, value in query:
+        if key not in allowed_query or key in seen:
+            deny()
+        seen.add(key)
+        if key == "limit" and (
+            not value.isascii()
+            or not value.isdigit()
+            or len(value) > 4
+            or not 1 <= int(value) <= 1000
+        ):
+            deny()
+        if key == "order" and value not in {"asc", "desc"}:
+            deny()
+
+    fields = _NATIVE_HTTP_BODY_FIELDS.get((name, method))
+    if fields is None:
+        if body is not None:
+            deny()
+        return
+    if not isinstance(body, dict):
+        deny()
+    assert isinstance(body, dict)
+    if not _NATIVE_HTTP_REQUIRED_FIELDS.get((name, method), set()) <= body.keys():
+        deny()
+    for key, value in body.items():
+        if key in NATIVE_HTTP_PRECONDITIONS:
+            if value is not None and type(value) not in {str, int}:
+                deny()
+            continue
+        expected = fields.get(key)
+        if type(value) is not expected:
+            deny()
+        if (
+            key in {"terminal", "session_key", "command", "encoding"}
+            and not value.strip()
+        ):
+            deny()
+        if key == "timeout" and value <= 0:
+            deny()
 
 
 def upstream_http_path(match: NativeUiRouteMatch, provider_session_id: str) -> str:
@@ -545,21 +627,18 @@ def compatibility_map() -> dict[str, Any]:
 
 
 __all__ = [
+    "NATIVE_HTTP_PRECONDITIONS",
+    "validate_native_ui_http_fields",
     "CAP_ATTACH_TERMINAL",
-    "CAP_CHANGE_GOAL",
     "CAP_CLOSE_TERMINAL",
-    "CAP_CONTROL_SUBAGENTS",
     "CAP_CREATE_TERMINAL",
     "CAP_MUTATE_WORKSPACE",
-    "CAP_OPEN_BROWSER",
     "CAP_RECONNECT_SESSION",
     "CAP_UPLOAD_FILES",
-    "CAP_VIEW_SUBAGENTS",
     "CAP_VIEW_TERMINAL",
     "CAP_WRITE_TERMINAL",
     "CLASS_BROWSER_PANE",
     "CLASS_CONTROL",
-    "CLASS_EXEC_LOG",
     "CLASS_LIVENESS",
     "CLASS_RECONNECT",
     "CLASS_RESOURCE_MUTATE",
@@ -568,7 +647,6 @@ __all__ = [
     "CLASS_SESSION_IMPORT",
     "CLASS_STREAM",
     "CLASS_SUBAGENT",
-    "CLASS_TASK",
     "CLASS_TERMINAL_ATTACH",
     "CLASS_TERMINAL_CLOSE",
     "CLASS_TERMINAL_CREATE",
