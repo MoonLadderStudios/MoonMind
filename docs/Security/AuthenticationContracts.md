@@ -6,7 +6,7 @@
 **Owners:** MoonMind Engineering  
 **Audience:** API, dashboard, runtime, security contributors and operators  
 **Authority:** Application authentication modes, identity mapping, session/revocation, CSRF/origin, error semantics, and background-work policy for MoonMind user authentication. Freezes the target contract inventoried in `[KeycloakRemovalInventory-4117.md](../tmp/KeycloakRemovalInventory-4117.md)` (MoonLadderStudios/MoonMind#4117, parent epic #4116).  
-**Owning Surface:** `api_service/auth.py`, `api_service/auth_providers.py`, `api_service/main.py`, `moonmind/config/settings.py` (`OIDCSettings`), `api_service/db/models.py` (`User`)  
+**Owning Surface:** `api_service/auth.py`, `api_service/auth_providers.py`, `api_service/main.py`, `moonmind/config/settings.py` (`OIDCSettings` storage), `moonmind/security/auth_modes_4120.py` (selector owner, #4120), `api_service/db/models.py` (`User`)  
 **Related Docs:** [SecretsSystem.md](./SecretsSystem.md), [ProviderProfiles.md](./ProviderProfiles.md), [SettingsSystem.md](./SettingsSystem.md), [KeycloakRemovalPlan.md](../tmp/KeycloakRemovalPlan.md) (predecessor proposal from #4102; starting evidence only, not the deliverable)
 
 > [!NOTE]
