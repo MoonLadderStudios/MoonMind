@@ -26,7 +26,9 @@ def saved_preset_capability_check(
     definition_id = recurrence.get("definitionId")
     if not definition_id:
         return None
-    task = parameters.get("task") or {}
+    task = parameters.get("workflow")
+    if not isinstance(task, Mapping):
+        task = parameters.get("task") or {}
     presets: list[dict[str, str]] = []
 
     def add(node: Mapping[str, Any], scope: str = "global") -> None:
