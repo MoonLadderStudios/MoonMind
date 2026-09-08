@@ -16110,19 +16110,18 @@ describe("Task Create MM-641 authoring validation", () => {
     ) as HTMLElement;
     expect(controls).not.toBeNull();
 
-    // Author retrieval in Advanced mode, then hide the controls again before
-    // submitting.
+    // Retired (#4105): no editable retrieval inputs remain. Opening Advanced
+    // mode shows the retired notice, then hiding the controls again before
+    // submitting still sends no vector fields.
     fireEvent.click(within(controls).getByLabelText("Advanced mode"));
-    fireEvent.click(
-      screen.getByLabelText(
+    expect(
+      screen.getByText(/Built-in vector retrieval has been retired/i),
+    ).toBeTruthy();
+    expect(
+      screen.queryByLabelText(
         "Require initial context (fail the step if unavailable)",
       ),
-    );
-    fireEvent.click(
-      screen.getByLabelText(
-        "Allow the session to request additional context during the run",
-      ),
-    );
+    ).toBeNull();
     fireEvent.click(within(controls).getByLabelText("Advanced mode"));
     expect(
       document.querySelector('[data-testid="context-retrieval-controls"]'),
@@ -16159,38 +16158,30 @@ describe("Task Create MM-641 authoring validation", () => {
     ) as HTMLElement;
     expect(controls).not.toBeNull();
 
-    // Author retrieval, turn Advanced mode off to clear it, then turn it back
-    // on to adjust an unrelated advanced control.
+    // Retired (#4105): toggling Advanced mode off and on never restores
+    // editable retrieval inputs; only the retired notice renders.
     fireEvent.click(within(controls).getByLabelText("Advanced mode"));
-    fireEvent.click(
-      screen.getByLabelText(
-        "Require initial context (fail the step if unavailable)",
-      ),
-    );
-    fireEvent.click(
-      screen.getByLabelText(
-        "Allow the session to request additional context during the run",
-      ),
-    );
+    expect(
+      screen.getByText(/Built-in vector retrieval has been retired/i),
+    ).toBeTruthy();
     fireEvent.click(within(controls).getByLabelText("Advanced mode"));
     fireEvent.click(within(controls).getByLabelText("Advanced mode"));
 
-    // The reopened controls are unauthored again instead of showing the values
-    // the operator already cleared.
+    // The reopened controls show the retired notice instead of editable
+    // retrieval authoring.
     expect(
-      (
-        screen.getByLabelText(
-          "Require initial context (fail the step if unavailable)",
-        ) as HTMLInputElement
-      ).checked,
-    ).toBe(false);
+      screen.getByText(/Built-in vector retrieval has been retired/i),
+    ).toBeTruthy();
     expect(
-      (
-        screen.getByLabelText(
-          "Allow the session to request additional context during the run",
-        ) as HTMLInputElement
-      ).checked,
-    ).toBe(false);
+      screen.queryByLabelText(
+        "Require initial context (fail the step if unavailable)",
+      ),
+    ).toBeNull();
+    expect(
+      screen.queryByLabelText(
+        "Allow the session to request additional context during the run",
+      ),
+    ).toBeNull();
 
     fireEvent.click(screen.getByRole("button", { name: "Start Workflow" }));
 

@@ -91,6 +91,18 @@ _RETIRED_VECTOR_MESSAGE = (
 )
 
 
+def _is_absent_vector_value(item: object) -> bool:
+    """Return True for absent/empty/disabled retrieval values.
+
+    Uses identity checks for ``None``/``False`` so numeric ``0`` is treated
+    as an explicit value (``0 == False`` in Python) rather than as absent.
+    """
+
+    if item is None or item is False:
+        return True
+    return item == "" or item == [] or item == {}
+
+
 def _is_explicit_vector_requirement(field: str, value: object) -> bool:
     """Distinguish absent optional enrichment from an explicit retired request.
 
@@ -115,7 +127,8 @@ def _is_explicit_vector_requirement(field: str, value: object) -> bool:
                 remainder = {
                     key: item
                     for key, item in value.items()
-                    if key not in {"enabled", "Enabled"} and item not in (None, False, "", [], {})
+                    if key not in {"enabled", "Enabled"}
+                    and not _is_absent_vector_value(item)
                 }
                 return bool(remainder and any(
                     key in {
@@ -129,8 +142,7 @@ def _is_explicit_vector_requirement(field: str, value: object) -> bool:
             return True
         # ``rag``: explicit when any collection/authority flag is set.
         return any(
-            item not in (None, False, "", [], {})
-            for item in value.values()
+            not _is_absent_vector_value(item) for item in value.values()
         )
     # Non-mapping truthy values (e.g. ``rag: true``) are explicit; falsy are not.
     return bool(value)
