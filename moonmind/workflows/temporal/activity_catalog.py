@@ -556,6 +556,15 @@ def build_default_activity_catalog(
             retries=_activity_retries(max_attempts=5, max_interval_seconds=60),
         ),
         TemporalActivityDefinition(
+            activity_type="plan.check_preset_capabilities",
+            family="plan",
+            capability_class="llm",
+            task_queue=cfg.activity_llm_task_queue,
+            fleet=LLM_FLEET,
+            timeouts=TemporalActivityTimeouts(30, 120),
+            retries=_activity_retries(max_attempts=3, max_interval_seconds=30),
+        ),
+        TemporalActivityDefinition(
             activity_type="plan.generate",
             family="plan",
             capability_class="llm",

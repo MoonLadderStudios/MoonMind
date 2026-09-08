@@ -71,6 +71,10 @@ with workflow.unsafe.imports_passed_through():
         is_jules_agent_runtime_node,
     )
     from moonmind.workflows.executions.routing import _coerce_bool
+    from moonmind.workflows.executions.preset_readiness import (
+        SAVED_PRESET_CAPABILITY_READINESS_PATCH,
+        saved_preset_capability_check,
+    )
     from moonmind.workflows.executions.prepared_context import (
         ExecutionContextBundle,
         branch_turn_step_execution_manifest_projection,
@@ -11516,6 +11520,55 @@ class MoonMindRunWorkflow:
         input_ref: Optional[str],
         plan_ref: Optional[str],
     ) -> Optional[str]:
+        # A new scheduled execution must validate its saved requirements even
+        # when it supplies a plan. Recorded histories and durable continuations
+        # keep their admitted inputs and already validated progress.
+        if (
+            workflow.patched(SAVED_PRESET_CAPABILITY_READINESS_PATCH)
+            and not getattr(workflow.info(), "continued_run_id", None)
+        ):
+            try:
+                check = saved_preset_capability_check(
+                    parameters, principal=self._owner_id or ""
+                )
+            except (ValueError, TypeError, AttributeError):
+                raise exceptions.ApplicationError(
+                    "Saved schedule preset provenance is invalid; review and "
+                    "reapply its presets before retrying.",
+                    type="saved_preset_capabilities_unavailable",
+                    non_retryable=True,
+                ) from None
+            if check is not None:
+                route = DEFAULT_ACTIVITY_CATALOG.resolve_activity(
+                    "plan.check_preset_capabilities"
+                )
+                readiness = await workflow.execute_activity(
+                    "plan.check_preset_capabilities",
+                    check.model_dump(),
+                    **self._execute_kwargs_for_route(route),
+                )
+                if (
+                    not isinstance(readiness, Mapping)
+                    or readiness.get("status") != "ready"
+                ):
+                    if (
+                        isinstance(readiness, Mapping)
+                        and readiness.get("status") == "refresh_required"
+                        and isinstance(readiness.get("message"), str)
+                        and readiness["message"].strip()
+                    ):
+                        raise exceptions.ApplicationError(
+                            str(readiness["message"]),
+                            dict(readiness),
+                            type="saved_preset_capabilities_stale",
+                            non_retryable=True,
+                        )
+                    raise exceptions.ApplicationError(
+                        "Saved schedule capability readiness is unavailable; inspect "
+                        "the schedule's preset definitions before retrying.",
+                        type="saved_preset_capabilities_unavailable",
+                        non_retryable=True,
+                    )
         if plan_ref:
             return plan_ref
 

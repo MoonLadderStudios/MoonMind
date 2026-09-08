@@ -158,6 +158,26 @@ Validate static child incompatibilities before parent launch or tracker mutation
 
 Blockers identify status, capability, contributing source, safe target identifiers, check, reason, and remediation. Never include raw tokens, auth headers, cookies, API keys, environment dumps, or unnecessary private content.
 
+New recurring executions check the current declared requirements of their saved
+presets before planning or agent launch, including executions with a saved plan.
+`plan.check_preset_capabilities` reads the scoped catalog at an Activity boundary;
+the workflow carries only compact preset provenance and admitted requirements.
+A missing capability or unavailable source returns `saved_preset_capabilities_stale`
+with the affected presets and a plan-refresh path. Unknown readiness never
+authorizes launch. A preset content change that adds no unmet requirement does
+not block an otherwise valid schedule.
+
+Saved schedules do not inherit new capabilities merely because a deployment
+updated its presets. Reapply the current presets in Workflow Create and admit a
+replacement schedule, preserving authored inputs, repository, provider profile,
+model, effort, publication policy, and cadence; retire the previous schedule
+after the replacement is verified. Refreshing admission evidence or restarting
+workers does not rewrite the saved task. The check does not grant permissions,
+edit steps, or change runtime selection. Historical provenance without a scope
+uses the preset catalog's global default; personal presets use the execution
+owner and cannot substitute another owner's definition. Recorded pre-check
+histories and Continue-As-New executions retain their admitted progress.
+
 ## 9. Authorization and policy boundary
 
 Capability satisfaction requires deployment policy, target policy, principal authorization, approval/autonomy policy, qualified runtime preparation, and safe credential handling. It cannot exceed the admitted publication scope or turn a requested None into permission for recovery push.
