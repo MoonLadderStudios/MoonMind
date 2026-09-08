@@ -18,7 +18,7 @@ from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 from api_service import main as api_main
 from tests.integration.reliability.helpers import load_replay
 
-pytestmark = [pytest.mark.asyncio, pytest.mark.integration, pytest.mark.integration_ci]
+pytestmark = [pytest.mark.asyncio, pytest.mark.integration, pytest.mark.reliability_journey]
 
 
 @pytest.mark.parametrize(
