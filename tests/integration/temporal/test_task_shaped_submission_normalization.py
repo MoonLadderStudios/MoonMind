@@ -25,6 +25,13 @@ from tests.helpers.step_type_payloads import preset_step, skill_step, tool_step
 
 pytestmark = [pytest.mark.integration, pytest.mark.integration_ci]
 
+# Pre-cutover authenticated-mode selector (MoonLadderStudios/MoonMind#4128
+# rw-7): the submission boundary branches on ``AUTH_PROVIDER != "disabled"``,
+# so this literal means "any authenticated mode", not Keycloak specifically.
+# The Keycloak-removal cutover (#4118-4127) must repoint this constant to the
+# production accounts/OIDC/header mode literal instead of editing each test.
+_AUTHENTICATED_PROVIDER_MODE = "keycloak"
+
 
 def _client() -> tuple[TestClient, AsyncMock]:
     app = FastAPI()
@@ -655,7 +662,7 @@ def test_task_shaped_submission_boundary_rejects_wrong_owner_binary_ref(
 ) -> None:
     """MM-628: unauthorized binary refs fail before execution creation."""
 
-    monkeypatch.setattr(settings.oidc, "AUTH_PROVIDER", "keycloak")
+    monkeypatch.setattr(settings.oidc, "AUTH_PROVIDER", _AUTHENTICATED_PROVIDER_MODE)
     monkeypatch.setattr(settings.workflow, "agent_job_attachment_enabled", True)
     test_client, service = _client()
     artifact_id = "art_01MM628INTWRONGOWNER0000"
