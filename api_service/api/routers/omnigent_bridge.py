@@ -4266,6 +4266,42 @@ for _facade_method in ("GET", "POST", "PUT", "PATCH", "DELETE"):
     )
 
 
+def _retained_embedded_history_read(
+    operation_name: str,
+    *,
+    body: dict[str, Any] | None,
+    session_status: str,
+    provider_session_id: str,
+) -> bool:
+    """Return whether a retained embedded row may serve this operation locally.
+
+    Retained embedded-transport sessions (MoonLadderStudios/MoonMind#3955)
+    keep readable history through the durable journal/snapshots and drain
+    through the janitor-owned terminal-cleanup probes. Live proxy dispatch
+    with their retired provider-session ids is never allowed: the journal
+    replay stream and durable terminal snapshots are safe, terminal
+    harvest/cleanup mutations keep their existing terminal path, and every
+    other live operation must fail closed with the retired-transport error.
+    """
+
+    if operation_name == "stream_events":
+        return True
+    if (
+        operation_name in {"get_session", "list_sessions"}
+        and is_read_only(session_status)
+        and not provider_session_id
+    ):
+        return True
+    if operation_name == "post_event" and is_read_only(session_status):
+        event_type = str((body or {}).get("type") or "")
+        if required_capability_for_event(event_type) in {
+            "harvestEvidence",
+            "cleanupSession",
+        }:
+            return True
+    return False
+
+
 async def _dispatch_workflow_chat_facade(
     *,
     chat_binding_id: str,
@@ -4331,6 +4367,15 @@ async def _dispatch_workflow_chat_facade(
     bridge_session_id = str(getattr(row, "bridge_session_id", "") or "").strip()
     provider_session_id = str(getattr(row, "omnigent_session_id", "") or "").strip()
     session_status = str(getattr(row, "status", "") or "")
+    # Retained embedded-transport rows keep their recorded mode after retirement
+    # (MoonLadderStudios/MoonMind#3955): their provider-session ids belong to
+    # the retired transport and must never be dispatched to the proxy
+    # endpoint. They stay readable through the durable journal/snapshots and
+    # drain through the janitor-owned terminal-cleanup probes.
+    retained_embedded_transport = (
+        str((getattr(row, "metadata_", None) or {}).get("hostProtocolMode") or "")
+        == RETIRED_HOST_PROTOCOL_MODE_EMBEDDED
+    )
     # Capabilities are recomputed from trusted status *and* intersected with the
     # binding's stored policy so a disabled operation is never re-advertised or
     # re-authorized from status alone.
@@ -4492,6 +4537,22 @@ async def _dispatch_workflow_chat_facade(
         }
 
     facade = proxy
+    if retained_embedded_transport and not _retained_embedded_history_read(
+        operation.name,
+        body=body,
+        session_status=session_status,
+        provider_session_id=provider_session_id,
+    ):
+        raise WorkflowChatFacadeError(
+            "The experimental embedded Omnigent host transport was retired "
+            "(MoonLadderStudios/MoonMind#3955). This retained session keeps "
+            "its recorded mode and readable history until drained; select "
+            "'upstream_omnigent_server_proxy' for new work.",
+            failure_class="user_error",
+            status_code=status.HTTP_410_GONE,
+            code="omnigent_embedded_transport_retired",
+            public_details={"supportedTransport": HOST_PROTOCOL_MODE_PROXY},
+        )
     if operation.name != "stream_events" and facade is None:
         raise WorkflowChatFacadeError(
             "The Omnigent bridge host protocol mode does not support this route.",
