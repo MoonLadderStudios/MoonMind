@@ -260,8 +260,10 @@ async def _sync_omnigent_bootstrap_agent_profile() -> bool:
             return True
         config = resolve_bridge_config()
         if config.host_protocol_mode != HOST_PROTOCOL_MODE_PROXY:
-            # Embedded deployments own their inventory through the authenticated
-            # host protocol; the stock local bootstrap applies only to proxy mode.
+            # Retired (#3955): only a disabled bridge can still declare the
+            # embedded literal (for retained-row decoding). A disabled bridge
+            # owns no inventory sync; the stock local bootstrap applies only
+            # to proxy mode.
             return True
         inventory = await OmnigentHttpClient(
             base_url=resolved_server_url(),
@@ -2484,15 +2486,11 @@ async def startup_event():
     ).ready
     app.state.omnigent_bootstrap_initial_ready = omnigent_bootstrap_ready
     await _sync_env_managed_secrets()
-    # Embedded mode is an authority-sensitive enablement boundary. Evidence
-    # refs cannot make it ready when its pinned verifier or SecretRef fails.
-    from api_service.api.routers.omnigent_bridge import embedded_host_auth_preflight
-
-    embedded_auth = await embedded_host_auth_preflight()
-    if not embedded_auth["ready"]:
-        raise RuntimeError(
-            f"Embedded Omnigent host authentication preflight failed: {embedded_auth['code']}"
-        )
+    # MoonLadderStudios/MoonMind#3955 retired the experimental embedded host
+    # transport: startup no longer runs an embedded host-auth preflight or
+    # gates on it. Proxy mode is the only supported transport; retained
+    # embedded sessions drain through the janitor-owned terminal-cleanup
+    # probes after startup instead of blocking it.
 
     # Ensure default user and profile exist if auth is disabled
     if settings.oidc.AUTH_PROVIDER == "disabled":

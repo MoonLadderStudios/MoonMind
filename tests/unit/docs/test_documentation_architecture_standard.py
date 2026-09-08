@@ -1,19 +1,25 @@
-"""Structured examples and identifiers in the documentation standard.
+"""Content contract for the MoonSpec Documentation Architecture Standard (MM-904).
 
 Source: MM-900 (Implement MoonSpec Documentation Architecture Standard).
 MM-904 adds the authoring conventions: metadata headers, naming conventions,
 and the incremental adoption policy to ``docs/DocumentationArchitecture.md``.
 """
 
+import re
+import sys
 from pathlib import Path
-
-import pytest
 
 from tools.check_documentation_architecture import (
     CANONICAL_CLAIM_PREFIXES,
-    DocFile,
-    run_checks,
+    metadata_fields,
 )
+from tools.check_documentation_architecture import (
+    main as check_architecture,
+)
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+
+from _semantic_docs_3964 import assert_semantic_present
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
 STANDARD_DOC = REPO_ROOT / "docs" / "DocumentationArchitecture.md"
@@ -28,7 +34,15 @@ def test_standard_doc_exists() -> None:
 
 
 def test_canonical_metadata_header_fields_present() -> None:
-    text = _read()
+    headers = [
+        metadata_fields(block)
+        for block in re.findall(r"```markdown\n(.*?)\n```", _read(), re.DOTALL)
+    ]
+    header = next(
+        header
+        for header in headers
+        if header.get("document class") == "Canonical declarative"
+    )
     for field in (
         "Document Class",
         "Status",
@@ -39,20 +53,24 @@ def test_canonical_metadata_header_fields_present() -> None:
         "Related Docs",
         "Related Implementation",
     ):
-        assert f"**{field}:**" in text, f"missing canonical metadata field: {field}"
+        assert header[field.lower()], f"missing canonical metadata field: {field}"
 
 
 def test_imperative_plan_header_fields_present() -> None:
-    text = _read()
+    headers = [
+        metadata_fields(block)
+        for block in re.findall(r"```markdown\n(.*?)\n```", _read(), re.DOTALL)
+    ]
+    header = next(
+        header
+        for header in headers
+        if header.get("document class") == "Imperative working document"
+    )
     for field in ("Canonical Target", "Delete/Archive Trigger"):
-        assert f"**{field}:**" in text, f"missing imperative-plan field: {field}"
+        assert header[field.lower()], f"missing imperative-plan field: {field}"
     # The Document Class value uses the canonical MoonSpec Document Model class
     # name; "plan" is reserved for the concrete type/filename/status, not the class.
-    assert "Imperative working document" in text
-
-
-def test_optional_rationale_section_documented() -> None:
-    assert "rationale" in _read().lower()
+    assert header["document class"] == "Imperative working document"
 
 
 def test_preferred_filename_set_present() -> None:
@@ -74,10 +92,25 @@ def test_module_architecture_is_preferred_filename() -> None:
     assert "docs/<Module>/<ModuleName>ModuleArchitecture.md" in text
 
 
-def test_system_and_design_filename_examples_present() -> None:
+def test_system_filename_is_durable_and_design_filename_is_transitional() -> None:
     text = _read()
     assert "<SystemName>System.md" in text
+    assert_semantic_present(
+        text,
+        ("durable system or capability description",),
+        context="system filename durability",
+    )
     assert "<FeatureName>Design.md" in text
+    assert_semantic_present(
+        text, ("transitional design",), context="design filename transience"
+    )
+    # Settled designs are promoted or superseded (#3964: exact sentence
+    # loosened to the lifecycle contract).
+    assert_semantic_present(
+        text,
+        ("promote or supersede", "settled desired state"),
+        context="design promotion lifecycle",
+    )
 
 
 def test_docs_capitalization_variants_covered() -> None:
@@ -86,10 +119,36 @@ def test_docs_capitalization_variants_covered() -> None:
     assert "Docs/" in text
 
 
-def test_global_contract_directory_policy_is_documented() -> None:
-    # Retain this policy token: the advisory checker does not enforce the
-    # standard's prohibition on a competing global contracts directory.
-    assert "contracts/" in _read()
+def test_filename_alone_does_not_define_authority() -> None:
+    text = _read()
+    # Authority ladder heading (#3964: exact heading loosened; class +
+    # declared-authority + precedence ladder is the contract).
+    assert_semantic_present(
+        text,
+        ("filename alone does not define authority",),
+        context="filename authority rule",
+    )
+    # Authority is established by class, declared Authority, and the precedence
+    # ladder (§7) -- not by a separate documentation index that does not exist.
+    assert "its declared Authority" in text
+    # Forbidden patterns.
+    assert "Parallel old/new authorities" in text
+    assert "contracts/" in text
+
+
+def test_incremental_adoption_policy_present() -> None:
+    text = _read()
+    assert "Incremental Adoption Policy" in text
+    assert_semantic_present(
+        text,
+        ("new and substantially-edited docs first",),
+        context="incremental adoption scope",
+    )
+    assert_semantic_present(
+        text,
+        ("no retroactive metadata-only churn",),
+        context="incremental adoption churn guard",
+    )
 
 
 def test_stable_canonical_claim_id_families_present() -> None:
@@ -102,58 +161,43 @@ def test_stable_canonical_claim_id_families_present() -> None:
 def test_claim_ids_are_distinguished_from_design_req_traceability() -> None:
     text = _read()
     assert "DESIGN-REQ-*" in text
+    assert "not stable canonical anchors" in text
     assert "MM-927" in text
     assert "MM-929" in text
+
+
+def test_claim_id_validation_is_advisory_by_default(
+    tmp_path, monkeypatch, capsys
+) -> None:
+    # Exercise the existing operator entrypoint instead of a sentence claiming
+    # it is advisory. The separate mutation suite pins detection itself.
+    from tools import check_documentation_architecture as checker
+
+    root = tmp_path / "docs"
+    root.mkdir()
+    (root / "Example.md").write_text("# Example\n### INV-bad Claim\n", encoding="utf-8")
+    monkeypatch.setattr(checker, "all_doc_paths", lambda: ["docs/Example.md"])
+    load_docs = checker.load_docs
+    monkeypatch.setattr(
+        checker, "load_docs", lambda paths: load_docs(paths, root=tmp_path)
+    )
+    assert check_architecture(["--scope", "all", "--format", "json"]) == 0
+    assert "malformed-claim-id" in capsys.readouterr().out
+
+
+def test_downstream_minor_local_adjustment_path_documented() -> None:
+    text = _read()
+    assert_semantic_present(
+        text, ("minor local adjustments",), context="downstream adjustment path"
+    )
+    assert_semantic_present(
+        text,
+        ("preserving", "document classes", "authority rules"),
+        context="downstream adjustment constraints",
+    )
 
 
 def test_source_traceability_preserved() -> None:
     text = _read()
     assert "MM-900" in text
     assert "MM-904" in text
-
-
-@pytest.mark.parametrize(
-    ("description", "adoption"),
-    [
-        (
-            "A durable system or capability description.",
-            "No retroactive metadata-only churn PR is mandated.",
-        ),
-        (
-            "A long-lived capability overview.",
-            "Existing documents need no metadata-only update.",
-        ),
-    ],
-    ids=["original-prose", "both-sentences-reworded"],
-)
-def test_explanatory_rewording_preserves_structured_examples(
-    description: str, adoption: str
-) -> None:
-    # Keep the replay input fixed: editing the live standard must not turn a
-    # literal prose replacement into a failing no-op assertion.
-    text = f"""# Example system
-
-**Document Class:** Canonical declarative
-
-| Filename suffix | Use for |
-|---|---|
-| `<SystemName>System.md` | {description} |
-
-{adoption}
-
-### DOC-REQ-001 Stable requirement
-The example keeps its metadata and claim identity through prose edits.
-"""
-    path = "docs/ExampleSystem.md"
-    assert run_checks([DocFile(path=path, text=text)]) == []
-
-    # Independent invalid inputs keep both semantic guards observable for
-    # every prose variant, using the same checker as the operator CLI.
-    missing_metadata = text.replace("**Document Class:** Canonical declarative", "")
-    assert {f.rule for f in run_checks([DocFile(path=path, text=missing_metadata)])} == {
-        "missing-document-class"
-    }
-    malformed_claim = text.replace("DOC-REQ-001", "DOC-REQ-1")
-    assert {f.rule for f in run_checks([DocFile(path=path, text=malformed_claim)])} == {
-        "malformed-claim-id"
-    }

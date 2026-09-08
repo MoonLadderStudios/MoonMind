@@ -134,16 +134,12 @@ def clear_registry_caches() -> None:
     """Drop cached registry maps so tests that inject registrations stay visible."""
 
     from moonmind.workflows.temporal import workflow_registry
-    from moonmind.workflows.temporal.hard_switch_cutover import (
-        _resolve_renamed_user_workflow_start_contract,
-    )
 
     for helper in (
         workflow_registry.workflow_fleet_workflow_classes,
         workflow_registry.workflow_fleet_activity_handlers,
         workflow_registry.workflow_projection_scopes,
         workflow_registry.checkpoint_branch_activity_handlers,
-        _resolve_renamed_user_workflow_start_contract,
     ):
         cache_clear = getattr(helper, "cache_clear", None)
         if callable(cache_clear):
