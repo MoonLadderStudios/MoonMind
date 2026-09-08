@@ -21,8 +21,10 @@ from api_service.services.checkpoint_branch_service import (
 )
 from moonmind.workflows.temporal.checkpoint_compat_drain import (
     COMPAT_DRAIN_CONTRACT,
+    CheckpointCompatDrainObservations,
     CheckpointCompatDrainUsage,
     evaluate_checkpoint_compat_drain,
+    evaluate_checkpoint_compat_drain_observations,
     retention_reason,
 )
 
@@ -366,5 +368,172 @@ async def test_retained_persistence_handler_fails_closed_without_artifact_storag
                 "branchId": "b-1",
                 "branchTurnId": "t-1",
                 "agentRunWorkflowId": "run-1",
+            }
+        )
+
+
+# --- Fail-closed probe observations (MoonMind#3949 scope 3) ------------------
+
+
+def test_fully_observable_zero_drain_unblocks_via_observations():
+    decision = evaluate_checkpoint_compat_drain_observations(
+        CheckpointCompatDrainObservations(
+            open_pre_cutover_histories=0,
+            pending_old_queue_tasks=0,
+            supported_resets_pending=0,
+        )
+    )
+    assert decision.may_remove_workflow_queue_handlers is True
+    assert decision.required_action == "safe_to_remove"
+    assert decision.outstanding == 0
+    assert decision.blocking_dimensions == ()
+
+
+@pytest.mark.parametrize(
+    "observations",
+    [
+        CheckpointCompatDrainObservations(),
+        CheckpointCompatDrainObservations(open_pre_cutover_histories=None),
+        CheckpointCompatDrainObservations(pending_old_queue_tasks=None),
+        CheckpointCompatDrainObservations(supported_resets_pending=None),
+        CheckpointCompatDrainObservations(
+            open_pre_cutover_histories=0,
+            pending_old_queue_tasks=None,
+            supported_resets_pending=0,
+        ),
+        CheckpointCompatDrainObservations(
+            open_pre_cutover_histories=2,
+            pending_old_queue_tasks=None,
+            supported_resets_pending=1,
+        ),
+    ],
+)
+def test_unobservable_probe_dimension_retains_compat(observations):
+    """Missing visibility or a failed probe is never a clean drain."""
+
+    decision = evaluate_checkpoint_compat_drain_observations(observations)
+    assert decision.may_remove_workflow_queue_handlers is False
+    assert decision.required_action == "retain_compat"
+    assert decision.outstanding > 0
+    assert decision.blocking_dimensions, "unobservable drain must name blockers"
+    reason = retention_reason(decision)
+    assert COMPAT_DRAIN_CONTRACT in reason
+    for dimension in decision.blocking_dimensions:
+        assert dimension in reason
+
+
+def test_observations_reject_negative_counts_but_allow_unobservable():
+    with pytest.raises(ValueError):
+        CheckpointCompatDrainObservations(open_pre_cutover_histories=-1)
+    with pytest.raises(ValueError):
+        CheckpointCompatDrainObservations(pending_old_queue_tasks=-1)
+    with pytest.raises(ValueError):
+        CheckpointCompatDrainObservations(supported_resets_pending=-1)
+    # None (unobservable/failed probe) is the fail-closed sentinel, not an error.
+    decision = evaluate_checkpoint_compat_drain_observations(
+        CheckpointCompatDrainObservations()
+    )
+    assert decision.may_remove_workflow_queue_handlers is False
+
+
+# --- Operation identity across the queue move (MoonMind#3949 scope 1) --------
+
+
+def test_checkpoint_handler_activity_names_are_stable_operation_identity():
+    from temporalio import activity as activity_api
+
+    from moonmind.workflows.temporal.workflow_registry import (
+        checkpoint_branch_activity_handlers,
+    )
+
+    names = {
+        activity_api._Definition.must_from_callable(handler).name
+        for handler in checkpoint_branch_activity_handlers()
+    }
+    assert names == {
+        "checkpoint_branch.turn.mark_running",
+        "checkpoint_branch.turn.persist_terminal",
+        "checkpoint_branch.turn.persist_terminal_rejection",
+    }
+
+
+def test_artifacts_and_workflow_fleets_share_identical_handler_objects():
+    """The queue move preserves operation identity: same handler objects."""
+
+    from moonmind.workflows.temporal.activity_catalog import (
+        ARTIFACTS_FLEET,
+        build_default_activity_catalog,
+    )
+    from moonmind.workflows.temporal.activity_runtime import build_activity_bindings
+    from moonmind.workflows.temporal.workflow_registry import (
+        checkpoint_branch_activity_handlers,
+        workflow_fleet_activity_handlers,
+    )
+
+    expected = set(checkpoint_branch_activity_handlers())
+    assert expected <= set(workflow_fleet_activity_handlers())
+    catalog = build_default_activity_catalog()
+    focused_types = {
+        "checkpoint_branch.turn.mark_running",
+        "checkpoint_branch.turn.persist_terminal",
+        "checkpoint_branch.turn.persist_terminal_rejection",
+    }
+    from moonmind.workflows.temporal.activity_catalog import TemporalActivityCatalog
+
+    focused = TemporalActivityCatalog(
+        activities=tuple(
+            item for item in catalog.activities if item.activity_type in focused_types
+        ),
+        fleets=catalog.fleets,
+    )
+    bindings = build_activity_bindings(focused, fleets=[ARTIFACTS_FLEET])
+    assert {binding.handler for binding in bindings} == expected
+
+
+# --- Terminal fail-closed evidence (MoonMind#3949 scope 4) --------------------
+
+
+@pytest.mark.asyncio
+async def test_terminal_persistence_fails_closed_without_db(monkeypatch):
+    """A DB outage raises instead of recording an unverifiable terminal."""
+
+    import moonmind.workflows.temporal.workflows.checkpoint_branch_turn as turn_module
+    from moonmind.schemas.agent_runtime_models import AgentRunResult
+
+    monkeypatch.setattr(turn_module, "async_session_maker", _deny_session_maker)
+    payload = {
+        "workflowId": "wf-1",
+        "branchId": "b-1",
+        "branchTurnId": "t-1",
+        "principal": "service:test",
+        "sourceNamespace": "default",
+        "sourceRunId": "source-run",
+        "outcome": "failed",
+        "agentResult": AgentRunResult(summary="test terminal").model_dump(
+            by_alias=True, mode="json", exclude_none=True
+        ),
+    }
+    with pytest.raises(RuntimeError, match="denied unexpected database"):
+        await turn_module.persist_checkpoint_branch_turn_terminal(payload)
+
+
+@pytest.mark.asyncio
+async def test_rejection_persistence_fails_closed_without_db(monkeypatch):
+    """The rejection fallback also fails closed instead of partial writes."""
+
+    import moonmind.workflows.temporal.workflows.checkpoint_branch_turn as turn_module
+
+    monkeypatch.setattr(turn_module, "async_session_maker", _deny_session_maker)
+    with pytest.raises(RuntimeError, match="denied unexpected database"):
+        await turn_module.persist_checkpoint_branch_turn_terminal_rejection(
+            {
+                "workflowId": "wf-1",
+                "branchId": "b-1",
+                "branchTurnId": "t-1",
+                "principal": "service:test",
+                "sourceNamespace": "default",
+                "sourceRunId": "source-run",
+                "requestedOutcome": "failed",
+                "terminalPayloadDigest": "sha256:" + "a" * 64,
             }
         )

@@ -263,7 +263,11 @@ Removal is owned by the drain gate in
 (`evaluate_checkpoint_compat_drain`, contract
 `checkpoint-branch-artifact-fleet-drain-v1`), which reuses the canonical
 `evaluate_worker_drain` predicate (`outstanding == 0` → safe to remove).
-Drained means all three deployment-observed dimensions reach zero:
+Deployment probes enter through `CheckpointCompatDrainObservations` /
+`evaluate_checkpoint_compat_drain_observations`: any dimension that is
+unobservable (`None`: missing visibility or failed probe) retains compat
+and is named in `blocking_dimensions`. Drained means all three
+deployment-observed dimensions reach zero:
 
 - open pre-cutover histories recorded without the
   `checkpoint-branch-artifact-fleet-v1` marker (`get_drain_metrics`

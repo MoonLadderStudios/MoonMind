@@ -121,6 +121,89 @@ def evaluate_checkpoint_compat_drain(
     )
 
 
+@dataclass(frozen=True, slots=True)
+class CheckpointCompatDrainObservations:
+    """Deployment probe observations feeding the drain gate.
+
+    Each dimension is a live deployment count or ``None`` when that
+    dimension is unobservable (missing visibility, failed probe, or an
+    explicitly unsupported reset ledger). ``None`` is fail-closed: an
+    unobservable dimension retains the compat registration, so fixture
+    replay or a partial probe can never authorize removal.
+
+    Source dimensions (MoonLadderStudios/MoonMind#3949 scope 3):
+
+    - ``open_pre_cutover_histories``: ``get_drain_metrics`` scoped to the
+      workflow task queue, filtered to histories recorded without the
+      ``checkpoint-branch-artifact-fleet-v1`` marker.
+    - ``pending_old_queue_tasks``: pending-activity inspection for
+      ``checkpoint_branch.turn.*`` tasks still addressed to the workflow
+      queue.
+    - ``supported_resets_pending``: retained histories with a supported
+      reset obligation that has not been discharged.
+    """
+
+    open_pre_cutover_histories: int | None = None
+    pending_old_queue_tasks: int | None = None
+    supported_resets_pending: int | None = None
+
+    def __post_init__(self) -> None:
+        for dimension in (
+            "open_pre_cutover_histories",
+            "pending_old_queue_tasks",
+            "supported_resets_pending",
+        ):
+            value = getattr(self, dimension)
+            if value is None:
+                continue
+            if not isinstance(value, int) or value < 0:
+                raise ValueError(
+                    f"{dimension} must be a non-negative int or None, got {value!r}"
+                )
+
+
+def evaluate_checkpoint_compat_drain_observations(
+    observations: CheckpointCompatDrainObservations,
+) -> CheckpointCompatDrainDecision:
+    """Evaluate the drain gate from possibly-unobservable probe results.
+
+    Fully observable inputs delegate to :func:`evaluate_checkpoint_compat_drain`
+    so the removal predicate stays identical to the canonical
+    ``evaluate_worker_drain`` rule. Any ``None`` (unobservable/failed probe)
+    dimension retains compat and is named in ``blocking_dimensions``; each
+    such dimension contributes one unit to ``outstanding`` so the verdict is
+    never zero-outstanding while unobservable.
+    """
+
+    pairs = (
+        ("open_pre_cutover_histories", observations.open_pre_cutover_histories),
+        ("pending_old_queue_tasks", observations.pending_old_queue_tasks),
+        ("supported_resets_pending", observations.supported_resets_pending),
+    )
+    unobservable = tuple(name for name, value in pairs if value is None)
+    if not unobservable:
+        return evaluate_checkpoint_compat_drain(
+            CheckpointCompatDrainUsage(
+                open_pre_cutover_histories=(
+                    observations.open_pre_cutover_histories or 0
+                ),
+                pending_old_queue_tasks=(observations.pending_old_queue_tasks or 0),
+                supported_resets_pending=(observations.supported_resets_pending or 0),
+            )
+        )
+    known_outstanding = sum(value for _, value in pairs if isinstance(value, int))
+    outstanding = known_outstanding + len(unobservable)
+    blocking = unobservable + tuple(
+        name for name, value in pairs if isinstance(value, int) and value > 0
+    )
+    return CheckpointCompatDrainDecision(
+        outstanding=outstanding,
+        may_remove_workflow_queue_handlers=False,
+        required_action=REQUIRED_ACTION_RETAIN,
+        blocking_dimensions=blocking,
+    )
+
+
 def retention_reason(decision: CheckpointCompatDrainDecision) -> str:
     """Return a stable human-readable reason for the drain verdict."""
 
