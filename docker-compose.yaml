@@ -212,7 +212,31 @@ services:
       - MOONMIND_SESSION_SECRET=${MOONMIND_SESSION_SECRET:-}
       - MOONMIND_SESSION_SECRET_PREVIOUS=${MOONMIND_SESSION_SECRET_PREVIOUS:-}
       - MOONMIND_SESSION_SECRET_FILE=${MOONMIND_SESSION_SECRET_FILE:-/app/var/secrets/moonmind_session_secret}
-      - JWT_SECRET=${JWT_SECRET:-devsecret} # Legacy JWT fallback; placeholder values are rejected by the session-secret validator
+      # Legacy JWT fallback, honored only for explicit non-placeholder values.
+      # Leave unset for local-first startup: the deployment-owned secret above
+      # is generated once and persisted. Placeholder values are rejected at
+      # API startup (fail closed with migration guidance).
+      - JWT_SECRET=${JWT_SECRET:-}
+      # Explicit disabled/local-mode exposure at the deployment boundary
+      # (#4120 R5). MOONMIND_API_PUBLISH_HOST names the host interface the API
+      # is published on; empty means no validated loopback claim (wildcard
+      # publish), which explicit disabled mode rejects unless documented
+      # trusted-ingress evidence is supplied. A container listening on
+      # 0.0.0.0 inside its network is not proof of safe loopback.
+      - MOONMIND_API_PUBLISH_HOST=${MOONMIND_API_PUBLISH_HOST:-}
+      - MOONMIND_API_HOST_PORT=${MOONMIND_API_HOST_PORT:-7000}
+      - MOONMIND_ADDITIONAL_LISTENERS=${MOONMIND_ADDITIONAL_LISTENERS:-}
+      - MOONMIND_PROXY_BYPASS_POSSIBLE=${MOONMIND_PROXY_BYPASS_POSSIBLE:-}
+      - MOONMIND_DISABLED_TRUSTED_INGRESS_EVIDENCE=${MOONMIND_DISABLED_TRUSTED_INGRESS_EVIDENCE:-}
+      # Public base URL, trusted proxies, and cookie policy (#4120 R6).
+      # Unknown/untrusted forwarded host/proto headers never decide redirects
+      # or secure-cookie policy; they are honored only with explicit
+      # MOONMIND_TRUSTED_PROXIES plus MOONMIND_TRUST_FORWARDED_HEADERS=1.
+      # Production requires HTTPS except on explicit loopback.
+      - MOONMIND_PUBLIC_BASE_URL=${MOONMIND_PUBLIC_BASE_URL:-}
+      - MOONMIND_TRUSTED_PROXIES=${MOONMIND_TRUSTED_PROXIES:-}
+      - MOONMIND_TRUST_FORWARDED_HEADERS=${MOONMIND_TRUST_FORWARDED_HEADERS:-}
+      - MOONMIND_DEV_LOOPBACK_HTTP_ALLOW=${MOONMIND_DEV_LOOPBACK_HTTP_ALLOW:-}
     env_file:
       - path: .env
         required: false
