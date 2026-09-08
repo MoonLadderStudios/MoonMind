@@ -212,7 +212,10 @@ async def get_or_create_default_user(
 # #4124-era session contracts replace it. fastapi-users and PyJWT stay as
 # retained dependencies: the User model/migrations couple to the former and
 # managed-session/fanout/proxy capabilities use JWT-secret-backed tokens.
-bearer_transport = BearerTransport(tokenUrl="auth/jwt/login")
+# tokenUrl is intentionally empty: it is OpenAPI docs metadata only (it does
+# not affect bearer validation), and no token-issuance route remains to
+# advertise after #4129 removed /api/v1/auth/* and /auth/jwt/*.
+bearer_transport = BearerTransport(tokenUrl="")
 
 def get_jwt_strategy() -> JWTStrategy:
     return JWTStrategy(secret=settings.security.JWT_SECRET_KEY, lifetime_seconds=3600)
