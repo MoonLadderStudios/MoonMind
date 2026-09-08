@@ -76,7 +76,7 @@
     ]
   },
   "contractSha256": "f8db251f4de1712e6c8fe260011c2c34c4b94d6e7bca5c87f6399e1354ebd814",
-  "moonmindFacadeDigest": "18f5242b92ad40f36cec9d9de779e9f1142e0b779afe246ab63425c02b5c628f",
+  "moonmindFacadeDigest": "0b457458e4bef162f62ec98a4c039eef1fb3b7c4ba15f142431897c7f6971922",
   "routes": [
     "liveness",
     "native_server_info",
