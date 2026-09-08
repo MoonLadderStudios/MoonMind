@@ -91,6 +91,7 @@ EVIDENCE_GROUPS = {
     "failureAndRestartMatrix": (
         "tests/integration/reliability_journey/"
         "test_omnigent_cumulative_remediation_journey.py",
+        "tests/integration/omnigent/test_embedded_recovery.py",
     ),
     "rolloutAndReplay": (
         "tests/unit/workflows/adapters/test_external_adapter_registry.py",
@@ -129,6 +130,7 @@ COMMANDS = (
         "test_omnigent_cumulative_remediation_journey.py",
         "tests/unit/workflows/temporal/test_remediation_workspace_head.py",
         "tests/unit/workflows/temporal/workflows/test_run_integration.py",
+        "tests/integration/omnigent/test_embedded_recovery.py",
         "tests/unit/workflows/adapters/test_external_adapter_registry.py",
         "tests/unit/workflows/temporal/test_temporal_workers.py",
         "tests/unit/workflows/temporal/workflows/test_run_bounded_story_loop.py",

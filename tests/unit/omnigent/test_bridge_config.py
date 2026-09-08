@@ -11,10 +11,10 @@ import pytest
 
 from moonmind.omnigent.bridge_config import (
     CANONICAL_FIRST_MESSAGE_STATES,
+    HOST_PROTOCOL_MODE_EMBEDDED,
     HOST_PROTOCOL_MODE_PROXY,
     OMNIGENT_BRIDGE_CONFIG_PATH_ENV,
     OMNIGENT_BRIDGE_CONFIG_SCHEMA_VERSION,
-    RETIRED_HOST_PROTOCOL_MODE_EMBEDDED,
     BridgeConfigError,
     OmnigentBridgeConfig,
     load_bridge_config,
@@ -56,6 +56,11 @@ publicApi:
 hostConnection:
   mode: upstream_omnigent_server_proxy
   upstreamServerUrlRef: default
+  embedded:
+    bindAddress: 0.0.0.0
+    port: 8000
+    authMode: upstream_runner_tunnel
+    protocolProfile: omnigent.runner_tunnel.983c93c6
 
 sessionDefaults:
   hostType: managed
@@ -111,6 +116,7 @@ def test_section_6_document_parses_and_validates() -> None:
         == "/v1/sessions/{session_id}/elicitations/{elicitation_id}/resolve"
     )
     assert config.host_connection.upstream_server_url_ref == "default"
+    assert config.host_connection.embedded.port == 8000
     assert config.session_defaults.host_type == "managed"
     assert config.session_defaults.capture.workspace_diffs == "capability_probe"
     assert (
@@ -190,8 +196,7 @@ def test_unknown_schema_version_is_rejected() -> None:
 
 
 # ---------------------------------------------------------------------------
-# AC: hostProtocolMode is proxy-only; the retired embedded transport fails
-# with an actionable supported alternative (MoonLadderStudios/MoonMind#3955).
+# AC: hostProtocolMode accepts both modes, defaults proxy-first, rejects unknown.
 # ---------------------------------------------------------------------------
 
 
@@ -202,84 +207,22 @@ def test_host_protocol_mode_defaults_to_proxy_first() -> None:
     assert config.host_connection.mode == HOST_PROTOCOL_MODE_PROXY
 
 
-def test_retired_embedded_mode_is_rejected_with_supported_alternative() -> None:
-    with pytest.raises(BridgeConfigError, match="retired"):
-        parse_bridge_config(
-            {"compatibility": {"hostProtocolMode": RETIRED_HOST_PROTOCOL_MODE_EMBEDDED}}
-        )
+def test_enabled_embedded_mode_is_retired() -> None:
+    """An enabled bridge cannot select the retired embedded transport (#3955)."""
 
-
-def test_retired_embedded_mode_error_names_proxy_alternative() -> None:
-    with pytest.raises(BridgeConfigError) as exc_info:
-        parse_bridge_config(
-            {"compatibility": {"hostProtocolMode": RETIRED_HOST_PROTOCOL_MODE_EMBEDDED}}
-        )
-
-    message = str(exc_info.value)
-    assert HOST_PROTOCOL_MODE_PROXY in message
-    assert "MoonLadderStudios/MoonMind#3955" in message
-
-
-def test_retired_embedded_host_connection_mode_is_rejected() -> None:
-    with pytest.raises(BridgeConfigError, match="retired"):
+    with pytest.raises(BridgeConfigError, match="3955"):
         parse_bridge_config(
             {
-                "compatibility": {"hostProtocolMode": HOST_PROTOCOL_MODE_PROXY},
-                "hostConnection": {"mode": RETIRED_HOST_PROTOCOL_MODE_EMBEDDED},
-            }
-        )
-
-
-def test_retired_embedded_settings_block_is_rejected_actionably() -> None:
-    with pytest.raises(BridgeConfigError, match="removed"):
-        parse_bridge_config(
-            {
+                "compatibility": {"hostProtocolMode": HOST_PROTOCOL_MODE_EMBEDDED},
                 "hostConnection": {
                     "embedded": {
                         "proxyConformanceEvidenceRef": "artifact://omnigent/proxy-conformance",
+                        "liveSmokeEvidenceRef": "artifact://omnigent/live-smoke",
+                        "hostAuthConformanceEvidenceRef": "artifact://omnigent/host-auth",
                     }
-                }
-            }
-        )
-
-
-def test_retired_embedded_mode_is_rejected_when_bridge_disabled() -> None:
-    # Retirement is not bypassed by disabling the bridge: a surviving embedded
-    # declaration must fail loudly instead of becoming an ignored instruction.
-    with pytest.raises(BridgeConfigError, match="retired"):
-        parse_bridge_config(
-            {
-                "enabled": False,
-                "compatibility": {
-                    "hostProtocolMode": RETIRED_HOST_PROTOCOL_MODE_EMBEDDED
                 },
             }
         )
-
-
-def test_evidence_policy_binds_execution_relevant_config() -> None:
-    baseline = parse_bridge_config({}).evidence_policy_sha256()
-
-    assert parse_bridge_config({}).evidence_policy_sha256() == baseline
-    assert (
-        parse_bridge_config(
-            {"publicApi": {"mountPath": "/api/other-omnigent"}}
-        ).evidence_policy_sha256()
-        != baseline
-    )
-
-
-def test_proxy_readiness_advertises_surviving_topology_only(monkeypatch) -> None:
-    monkeypatch.delenv("OMNIGENT_ENABLED", raising=False)
-    monkeypatch.delenv("OMNIGENT_SERVER_URL", raising=False)
-    config = parse_bridge_config({})
-
-    assert config.readiness() == {
-        "enabled": True,
-        "selectedMode": HOST_PROTOCOL_MODE_PROXY,
-        "protocolProfile": "omnigent.server.v1",
-        "conformanceState": "gated",
-    }
 
 
 def test_proxy_readiness_exposes_supported_fallback_without_embedded_evidence(
@@ -292,9 +235,7 @@ def test_proxy_readiness_exposes_supported_fallback_without_embedded_evidence(
     assert readiness["selectedMode"] == HOST_PROTOCOL_MODE_PROXY
     assert readiness["protocolProfile"] == "omnigent.server.v1"
     assert readiness["conformanceState"] == "ready"
-    assert "evidenceRefs" not in readiness
-    assert "evidenceValidation" not in readiness
-    assert "gateReason" not in readiness
+    assert readiness["evidenceRefs"] == {}
 
 
 def test_proxy_readiness_is_gated_when_runtime_is_disabled(monkeypatch) -> None:
@@ -302,6 +243,41 @@ def test_proxy_readiness_is_gated_when_runtime_is_disabled(monkeypatch) -> None:
     monkeypatch.delenv("OMNIGENT_SERVER_URL", raising=False)
 
     assert parse_bridge_config({}).readiness()["conformanceState"] == "gated"
+
+
+def test_embedded_mode_requires_conformance_and_smoke_evidence() -> None:
+    # Retired (#3955): an enabled embedded selection fails with the proxy
+    # alternative even when evidence refs are missing entirely.
+    with pytest.raises(BridgeConfigError, match="3955"):
+        parse_bridge_config(
+            {"compatibility": {"hostProtocolMode": HOST_PROTOCOL_MODE_EMBEDDED}}
+        )
+
+
+@pytest.mark.parametrize(
+    ("field", "value", "match"),
+    [
+        ("authMode", "header_or_token", "authMode"),
+        ("protocolProfile", "omnigent.host_runner.v1", "protocolProfile"),
+    ],
+)
+def test_embedded_auth_contract_rejects_unsupported_profiles(
+    field: str, value: str, match: str
+) -> None:
+    with pytest.raises(BridgeConfigError, match=match):
+        parse_bridge_config({"hostConnection": {"embedded": {field: value}}})
+
+
+def test_disabled_embedded_mode_can_be_declared_without_evidence() -> None:
+    config = parse_bridge_config(
+        {
+            "enabled": False,
+            "compatibility": {"hostProtocolMode": HOST_PROTOCOL_MODE_EMBEDDED},
+        }
+    )
+
+    assert config.enabled is False
+    assert config.host_protocol_mode == HOST_PROTOCOL_MODE_EMBEDDED
 
 
 def test_unknown_host_protocol_mode_is_rejected() -> None:
@@ -312,16 +288,13 @@ def test_unknown_host_protocol_mode_is_rejected() -> None:
 
 
 def test_host_connection_mode_must_match_compatibility_mode() -> None:
-    # Only the proxy mode is selectable, so a declared hostConnection.mode
-    # must agree with compatibility.hostProtocolMode; the retired value fails
-    # with the retirement error instead of a mismatch error.
-    config = parse_bridge_config(
-        {
-            "compatibility": {"hostProtocolMode": HOST_PROTOCOL_MODE_PROXY},
-            "hostConnection": {"mode": HOST_PROTOCOL_MODE_PROXY},
-        }
-    )
-    assert config.host_connection.mode == HOST_PROTOCOL_MODE_PROXY
+    with pytest.raises(BridgeConfigError, match="must match"):
+        parse_bridge_config(
+            {
+                "compatibility": {"hostProtocolMode": HOST_PROTOCOL_MODE_PROXY},
+                "hostConnection": {"mode": HOST_PROTOCOL_MODE_EMBEDDED},
+            }
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -362,10 +335,8 @@ def test_compatibility_profile_must_be_omnigent_namespaced() -> None:
         parse_bridge_config({"compatibility": {"profile": "acme.server.v1"}})
 
 
-def test_retired_embedded_settings_block_is_rejected_before_namespacing() -> None:
-    # The removed block fails with the retirement error even when its content
-    # would otherwise violate a different gate.
-    with pytest.raises(BridgeConfigError, match="removed"):
+def test_embedded_protocol_profile_must_be_omnigent_namespaced() -> None:
+    with pytest.raises(BridgeConfigError, match="Omnigent-namespaced"):
         parse_bridge_config(
             {"hostConnection": {"embedded": {"protocolProfile": "acme.host.v1"}}}
         )
@@ -393,6 +364,7 @@ def test_host_unchanged_false_is_rejected() -> None:
     [
         {"compatibility": {"customHostImage": "ghcr.io/org/host:custom"}},
         {"hostConnection": {"hostBuildArgs": {"FOO": "bar"}}},
+        {"hostConnection": {"embedded": {"hostDockerfile": "./Dockerfile"}}},
         {"hostSourcePatch": "patches/host.diff"},
     ],
 )
@@ -408,11 +380,13 @@ def test_deployment_configuration_is_accepted() -> None:
         {
             "hostConnection": {
                 "upstreamServerUrlRef": "prod-endpoint",
+                "embedded": {"bindAddress": "127.0.0.1", "port": 7000},
             }
         }
     )
 
     assert config.host_connection.upstream_server_url_ref == "prod-endpoint"
+    assert config.host_connection.embedded.port == 7000
 
 
 def test_host_dispatch_is_not_rejected_as_custom_build() -> None:

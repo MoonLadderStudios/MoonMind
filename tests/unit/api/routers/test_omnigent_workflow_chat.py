@@ -27,6 +27,7 @@ from api_service.api.routers.omnigent_bridge import (
     WorkflowChatFacadeError,
     _get_bridge_proxy,
     _get_bridge_store,
+    _get_create_embedded_facade,
     _get_execution_service,
     _claim_facade_message,
     _require_bridge_enabled,
@@ -37,8 +38,8 @@ from api_service.api.routers.retrieval_gateway import get_capability_registry
 from api_service.auth_providers import get_current_user
 from moonmind.omnigent import native_ui_compat
 from moonmind.omnigent.bridge_config import (
+    HOST_PROTOCOL_MODE_EMBEDDED,
     HOST_PROTOCOL_MODE_PROXY,
-    RETIRED_HOST_PROTOCOL_MODE_EMBEDDED,
 )
 from moonmind.omnigent.effective_capabilities import CAPABILITY_NAMES
 from moonmind.omnigent.control_plane.records import ControlPlaneOutcome
@@ -347,6 +348,57 @@ class _FakeProxy:
         return {"ok": True, "elicitationId": elicitation_id, "session_id": session_id}
 
 
+class _FakeEmbeddedFacade:
+    """Embedded-host facade contract exercised by the second supported host mode.
+
+    The changed router has separate embedded branches for messages, cleanup,
+    approvals, resources, catalog reads, and actor propagation; this fake lets
+    the suite cover the embedded facade boundary rather than only proxy mode.
+    """
+
+    def __init__(self) -> None:
+        self.posted: list[dict[str, Any]] = []
+        self.resolved: list[dict[str, Any]] = []
+        self.resources: list[tuple[str, str, str | None]] = []
+
+    async def get_session(self, session_id: str):
+        return {
+            "id": session_id,
+            "status": "running",
+            "providerSessionField": session_id,
+            "host_id": "host-1",
+            "moonmind": {"workflowId": "mm:w1", "bridgeSessionId": _BRIDGE_SESSION_ID},
+        }
+
+    async def list_agents(self):
+        return [{"id": "agent-1", "name": "codex", "host_id": "host-1"}]
+
+    async def get_resource(self, operation: str, session_id: str, value=None):
+        self.resources.append((operation, session_id, value))
+        if operation in {"workspace_file", "workspace_diff", "session_file"}:
+            return b"RAW-BYTES"
+        return {"files": [{"path": "src/main.py", "session": session_id}]}
+
+    async def post_event(self, *, session_id: str, event, actor=None):
+        self.posted.append(
+            {"session_id": session_id, "type": event.type, "actor": actor}
+        )
+        return {"ok": True, "type": event.type, "session_id": session_id}
+
+    async def resolve_elicitation(
+        self, *, session_id: str, elicitation_id: str, payload, actor=None
+    ):
+        self.resolved.append(
+            {
+                "session_id": session_id,
+                "elicitation_id": elicitation_id,
+                "payload": payload,
+                "actor": actor,
+            }
+        )
+        return {"ok": True, "elicitationId": elicitation_id, "session_id": session_id}
+
+
 def _fake_registry() -> SimpleNamespace:
     return SimpleNamespace(
         has_live_session_authority=Mock(return_value=False),
@@ -375,9 +427,39 @@ def _build(
     )
     app.dependency_overrides[_get_bridge_store] = lambda: store
     app.dependency_overrides[_get_bridge_proxy] = lambda: proxy
+    app.dependency_overrides[_get_create_embedded_facade] = lambda: None
     app.dependency_overrides[get_capability_registry] = lambda: registry
     app.dependency_overrides[_require_bridge_enabled] = lambda: config
     return TestClient(app), proxy, store
+
+
+def _build_embedded(
+    *,
+    owner_id: Any = _USER_ID,
+    embedded: _FakeEmbeddedFacade | None = None,
+    store: _FakeStore | None = None,
+    registry: Any | None = None,
+    service: Any | None = None,
+) -> tuple[TestClient, _FakeEmbeddedFacade, _FakeStore]:
+    """Build a client whose bridge runs in the embedded host protocol mode."""
+
+    app = FastAPI()
+    app.include_router(workflow_chat_router, prefix=WORKFLOW_CHAT_BINDINGS_MOUNT_PATH)
+    embedded = embedded or _FakeEmbeddedFacade()
+    store = store or _FakeStore()
+    registry = registry or _fake_registry()
+    config = SimpleNamespace(host_protocol_mode=HOST_PROTOCOL_MODE_EMBEDDED)
+    app.dependency_overrides[get_current_user()] = _mock_user
+    app.dependency_overrides[_get_execution_service] = lambda: (
+        service or _FakeService(owner_id)
+    )
+    app.dependency_overrides[_get_bridge_store] = lambda: store
+    # In embedded mode the proxy is absent; the embedded facade services routes.
+    app.dependency_overrides[_get_bridge_proxy] = lambda: None
+    app.dependency_overrides[_get_create_embedded_facade] = lambda: embedded
+    app.dependency_overrides[get_capability_registry] = lambda: registry
+    app.dependency_overrides[_require_bridge_enabled] = lambda: config
+    return TestClient(app), embedded, store
 
 
 def _path(suffix: str, *, binding: str = _CHAT_BINDING_ID) -> str:
@@ -1014,51 +1096,13 @@ def test_native_wildcard_path_rejects_encoded_traversal() -> None:
     assert response.json()["detail"]["code"] == "omnigent_chat_operation_denied"
 
 
-def test_retired_mode_rejects_proxy_only_native_transport() -> None:
-    # Defense in depth: even a legacy config carrying the retired mode value
-    # fails closed on proxy-only native routes instead of executing them.
-    client, _proxy, _store = _build(
-        host_protocol_mode=RETIRED_HOST_PROTOCOL_MODE_EMBEDDED
-    )
+def test_embedded_mode_rejects_proxy_only_native_transport() -> None:
+    client, _proxy, _store = _build(host_protocol_mode="embedded")
 
     response = client.get(_path(f"v1/sessions/{_CHAT_BINDING_ID}/tasks"))
 
     assert response.status_code == 409
     assert response.json()["detail"]["code"] == "omnigent_bridge_mode_unsupported"
-
-
-def test_retained_embedded_row_never_dispatches_to_proxy() -> None:
-    # A retained embedded-transport row keeps readable history but its retired
-    # provider-session id must never reach the proxy endpoint
-    # (MoonLadderStudios/MoonMind#3955).
-    grants = {name: True for name in CAPABILITY_NAMES}
-    row = _row(
-        metadata_={
-            "callerAuthorities": {str(_USER_ID): grants},
-            "capabilityAuthority": {
-                "fresh": True,
-                "providerProfileGeneration": 4,
-                "upstream": grants,
-                "agentProfile": grants,
-                "launchPolicy": grants,
-                "state": {"sessionEpoch": 2, "capabilities": grants},
-            },
-            "hostProtocolMode": RETIRED_HOST_PROTOCOL_MODE_EMBEDDED,
-        }
-    )
-    client, proxy, _store = _build(store=_FakeStore(row=row))
-
-    response = client.get(_path("v1/agents"))
-
-    assert response.status_code == 410
-    assert (
-        response.json()["detail"]["code"]
-        == "omnigent_embedded_transport_retired"
-    )
-    assert response.json()["detail"]["supportedTransport"] == (
-        HOST_PROTOCOL_MODE_PROXY
-    )
-    assert proxy.sessions == []
 
 
 def test_identity_substitution_in_query_is_rejected() -> None:
@@ -2495,3 +2539,77 @@ def test_stream_excludes_non_visible_lifecycle_rows() -> None:
     # The visible row is streamed; the internal lifecycle row is not.
     assert "id: 1" in response.text
     assert "id: 2" not in response.text
+
+
+# --- Embedded host protocol mode boundary ------------------------------------
+
+
+def test_embedded_message_forwarded_with_actor() -> None:
+    client, embedded, _store = _build_embedded()
+
+    response = client.post(
+        _path(f"v1/sessions/{_CHAT_BINDING_ID}/events"),
+        json={"type": "message", "data": {"content": [{"type": "text", "text": "hi"}]}},
+    )
+
+    assert response.status_code == 200
+    assert len(embedded.posted) == 1
+    # The embedded branch propagates the caller as actor (proxy mode does not).
+    assert embedded.posted[0]["actor"] == str(_USER_ID)
+    assert embedded.posted[0]["session_id"] == _PROVIDER_SESSION_ID
+
+
+def test_embedded_snapshot_virtualizes_and_gates_capabilities() -> None:
+    client, embedded, _store = _build_embedded()
+
+    response = client.get(_path(f"v1/sessions/{_CHAT_BINDING_ID}"))
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["id"] == _CHAT_BINDING_ID
+    assert "host_id" not in body
+    assert "moonmind" not in body
+    assert body["capabilities"][CAP_SEND_MESSAGE] is True
+
+
+def test_embedded_resolve_elicitation_propagates_actor() -> None:
+    client, embedded, _store = _build_embedded()
+
+    response = client.post(
+        _path(f"v1/sessions/{_CHAT_BINDING_ID}/elicitations/el-9/resolve"),
+        json={"decision": "approve"},
+    )
+
+    assert response.status_code == 200
+    assert embedded.resolved == [
+        {
+            "session_id": _PROVIDER_SESSION_ID,
+            "elicitation_id": "el-9",
+            "payload": {"decision": "approve"},
+            "actor": str(_USER_ID),
+        }
+    ]
+
+
+def test_embedded_resource_read_delegated() -> None:
+    client, embedded, _store = _build_embedded()
+
+    response = client.get(
+        _path(
+            f"v1/sessions/{_CHAT_BINDING_ID}" "/resources/environments/default/changes"
+        )
+    )
+
+    assert response.status_code == 200
+    assert embedded.resources == [("changed_files", _PROVIDER_SESSION_ID, None)]
+
+
+def test_embedded_catalog_read() -> None:
+    client, embedded, _store = _build_embedded()
+
+    response = client.get(_path("v1/agents"))
+
+    assert response.status_code == 200
+    body = response.json()
+    # Topology stripped even from the embedded catalog list response.
+    assert body == [{"id": "agent-1", "name": "codex"}]

@@ -722,12 +722,25 @@ async def test_resolve_elicitation_proxies_compatibility_route() -> None:
 
 
 async def test_non_proxy_mode_fails_fast() -> None:
-    # The proxy facade fails fast on any non-proxy mode without substituting
-    # another transport (MoonLadderStudios/MoonMind#3955 retired the embedded
-    # transport, so the retired value can no longer be constructed here; any
-    # unsupported mode value exercises the same guard).
-    non_proxy = SimpleNamespace(host_protocol_mode="unsupported_mode")
-    proxy = _proxy(_FakeStore(), _FakeClient(), config=non_proxy)
+    # Retired (#3955): the proxy facade still refuses a retained embedded
+    # declaration (drain path). Enabled embedded admission fails earlier, at
+    # the trusted bridge-config selection boundary.
+    embedded = parse_bridge_config(
+        {
+            "enabled": False,
+            "compatibility": {
+                "hostProtocolMode": "embedded_omnigent_compatible_server"
+            },
+            "hostConnection": {
+                "embedded": {
+                    "proxyConformanceEvidenceRef": "artifact://omnigent/proxy-conformance",
+                    "liveSmokeEvidenceRef": "artifact://omnigent/live-smoke",
+                    "hostAuthConformanceEvidenceRef": "artifact://omnigent/host-auth",
+                }
+            },
+        }
+    )
+    proxy = _proxy(_FakeStore(), _FakeClient(), config=embedded)
     req = BridgeSessionCreateRequest(
         host_type="managed", workspace="https://github.com/org/repo#main"
     )

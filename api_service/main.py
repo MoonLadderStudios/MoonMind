@@ -260,8 +260,10 @@ async def _sync_omnigent_bootstrap_agent_profile() -> bool:
             return True
         config = resolve_bridge_config()
         if config.host_protocol_mode != HOST_PROTOCOL_MODE_PROXY:
-            # Embedded deployments own their inventory through the authenticated
-            # host protocol; the stock local bootstrap applies only to proxy mode.
+            # Retired (#3955): only a disabled bridge can still declare the
+            # embedded literal (for retained-row decoding). A disabled bridge
+            # owns no inventory sync; the stock local bootstrap applies only
+            # to proxy mode.
             return True
         inventory = await OmnigentHttpClient(
             base_url=resolved_server_url(),

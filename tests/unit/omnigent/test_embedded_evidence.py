@@ -1,0 +1,177 @@
+"""Acceptance-gate evidence tests for MoonLadderStudios/MoonMind#3425."""
+
+from __future__ import annotations
+
+import subprocess
+from datetime import datetime, timedelta, timezone
+from pathlib import Path
+
+import pytest
+
+from moonmind.omnigent.embedded_evidence import (
+    EMBEDDED_EVIDENCE_SCHEMA_VERSION,
+    EMBEDDED_PROTOCOL_PROFILE,
+    EmbeddedEvidenceError,
+    validate_embedded_evidence,
+)
+from moonmind.omnigent.host_auth_adapter import (
+    PINNED_OMNIGENT_COMMIT,
+    assert_pinned_omnigent_auth_contract,
+)
+
+
+NOW = datetime(2026, 7, 21, tzinfo=timezone.utc)
+SHA = "a" * 64
+
+
+def test_pinned_source_commit_matches_initialized_submodule() -> None:
+    submodule = Path(__file__).parents[3] / "omnigent"
+    if not (submodule / "omnigent").is_dir():
+        pytest.skip("Omnigent submodule is not initialized")
+
+    actual_commit = subprocess.run(
+        ["git", "rev-parse", "HEAD"],
+        cwd=submodule,
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout.strip()
+
+    assert actual_commit == PINNED_OMNIGENT_COMMIT
+    assert_pinned_omnigent_auth_contract()
+
+
+def _claim(**overrides):
+    claim = {
+        "schemaVersion": EMBEDDED_EVIDENCE_SCHEMA_VERSION,
+        "claimType": "live_smoke",
+        "status": "passed",
+        "moonmindBuildIdentity": "build-3425",
+        "bridgeConfigSha256": SHA,
+        "omnigentSourceCommit": PINNED_OMNIGENT_COMMIT,
+        "protocolProfile": EMBEDDED_PROTOCOL_PROFILE,
+        "supportedHostModes": ["static_compose", "on_demand_docker"],
+        "hostArchitecture": "linux/amd64",
+        "images": {
+            "server": f"ghcr.io/omnigent/server@sha256:{'1' * 64}",
+            "host": f"ghcr.io/omnigent/host@sha256:{'2' * 64}",
+        },
+        "testMatrix": {
+            "stock-host-codex": {
+                "status": "passed",
+                "evidenceRefs": ["artifact-id"],
+            }
+        },
+        "generatedAt": NOW.isoformat(),
+        "expiresAt": (NOW + timedelta(days=1)).isoformat(),
+        "supersededBy": None,
+        "revokedAt": None,
+        "secretScan": "passed",
+        "cleanup": "passed",
+        "producer": "workflow:omnigent-embedded-conformance",
+    }
+    claim.update(overrides)
+    return claim
+
+
+def test_accepts_current_passing_policy_bound_claim() -> None:
+    result = validate_embedded_evidence(
+        _claim(),
+        expected_claim_type="live_smoke",
+        moonmind_build_identity="build-3425",
+        bridge_config_sha256=SHA,
+        expected_host_architecture="linux/amd64",
+        expected_images=_claim()["images"],
+        now=NOW,
+    )
+
+    assert result.status == "passed"
+    assert result.supported_host_modes == ("static_compose", "on_demand_docker")
+
+
+@pytest.mark.parametrize(
+    ("override", "match"),
+    [
+        ({"status": "failed"}, "malformed"),
+        ({"revokedAt": NOW.isoformat()}, "revoked"),
+        ({"supersededBy": "new-artifact"}, "superseded"),
+        ({"secretScan": "failed"}, "malformed"),
+        ({"cleanup": "failed"}, "malformed"),
+        ({"images": {}}, "images"),
+        ({"supportedHostModes": []}, "supportedHostModes"),
+    ],
+)
+def test_rejects_failed_revoked_or_incomplete_claims(override, match) -> None:
+    with pytest.raises(EmbeddedEvidenceError, match=match):
+        validate_embedded_evidence(
+            _claim(**override),
+            expected_claim_type="live_smoke",
+            moonmind_build_identity="build-3425",
+            bridge_config_sha256=SHA,
+            expected_host_architecture="linux/amd64",
+            expected_images=_claim()["images"],
+            now=NOW,
+        )
+
+
+@pytest.mark.parametrize(
+    ("kwargs", "match"),
+    [
+        ({"expected_claim_type": "proxy_conformance"}, "claim type"),
+        ({"moonmind_build_identity": "other-build"}, "different MoonMind"),
+        ({"bridge_config_sha256": "b" * 64}, "different bridge"),
+        ({"now": NOW + timedelta(days=2)}, "expired"),
+    ],
+)
+def test_rejects_stale_or_incompatible_policy(kwargs, match) -> None:
+    arguments = {
+        "expected_claim_type": "live_smoke",
+        "moonmind_build_identity": "build-3425",
+        "bridge_config_sha256": SHA,
+        "expected_host_architecture": "linux/amd64",
+        "expected_images": _claim()["images"],
+        "now": NOW,
+    }
+    arguments.update(kwargs)
+    with pytest.raises(EmbeddedEvidenceError, match=match):
+        validate_embedded_evidence(_claim(), **arguments)
+
+
+def test_rejects_not_yet_valid_claim() -> None:
+    with pytest.raises(EmbeddedEvidenceError, match="not yet valid"):
+        validate_embedded_evidence(
+            _claim(
+                generatedAt=(NOW + timedelta(minutes=1)).isoformat(),
+                expiresAt=(NOW + timedelta(days=1)).isoformat(),
+            ),
+            expected_claim_type="live_smoke",
+            moonmind_build_identity="build-3425",
+            bridge_config_sha256=SHA,
+            expected_host_architecture="linux/amd64",
+            expected_images=_claim()["images"],
+            now=NOW,
+        )
+
+
+@pytest.mark.parametrize(
+    ("claim_override", "argument_override", "match"),
+    [
+        ({"hostArchitecture": "linux/arm64"}, {}, "host architecture"),
+        ({}, {"expected_images": {"server": "other", "host": "other"}}, "runtime images"),
+        ({"images": {**_claim()["images"], "debug": "private"}}, {}, "server and host roles"),
+    ],
+)
+def test_rejects_evidence_for_another_deployment_or_unknown_image_roles(
+    claim_override, argument_override, match
+) -> None:
+    arguments = {
+        "expected_claim_type": "live_smoke",
+        "moonmind_build_identity": "build-3425",
+        "bridge_config_sha256": SHA,
+        "expected_host_architecture": "linux/amd64",
+        "expected_images": _claim()["images"],
+        "now": NOW,
+    }
+    arguments.update(argument_override)
+    with pytest.raises(EmbeddedEvidenceError, match=match):
+        validate_embedded_evidence(_claim(**claim_override), **arguments)

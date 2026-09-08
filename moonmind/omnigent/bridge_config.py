@@ -20,10 +20,13 @@ construction:
 * **Keep the host unchanged (§2.3).** ``compatibility.hostUnchanged`` must be
   ``true``. Only deployment configuration is accepted; any configuration that
   requires a custom host build is rejected.
-* **Proxy-only compatibility (§2.4, MoonLadderStudios/MoonMind#3955).**
-  ``hostProtocolMode`` accepts only ``upstream_omnigent_server_proxy``; the
-  experimental ``embedded_omnigent_compatible_server`` transport was retired
-  and explicit requests for it fail fast with a supported alternative.
+* **Proxy-only compatibility (§2.4, retired embedded transport #3955).**
+  ``hostProtocolMode`` accepts ``upstream_omnigent_server_proxy`` as the only
+  selectable production mode and defaults to it. An explicit operator request
+  for ``embedded_omnigent_compatible_server`` on an enabled bridge fails fast
+  with an actionable error naming the proxy alternative; the embedded value is
+  never silently substituted. The embedded literal is retained only so retained
+  session rows and historical evidence keep decoding to their recorded mode.
   Unknown modes fail fast.
 * **MoonMind authority (§1).** The authority map (``temporal=moonmind``,
   ``artifacts=moonmind``, ``liveExecution=omnigent_host``) is validated and
@@ -66,44 +69,17 @@ OMNIGENT_BRIDGE_CONFIG_SCHEMA_VERSION = "moonmind.omnigent_bridge.v1"
 # protocol mode, and custom mount path/routes are honored (OB-§6, §21.1).
 OMNIGENT_BRIDGE_CONFIG_PATH_ENV = "OMNIGENT_BRIDGE_CONFIG_PATH"
 
-# §2.4 host protocol mode. Proxy is the only supported transport:
-# MoonLadderStudios/MoonMind#3955 retired the experimental embedded host/runner
-# transport. The retired value is kept as a named constant only so explicit
-# requests for it fail with an actionable message instead of a generic
-# literal-mismatch error; it must never be reintroduced as a selectable mode.
+# §2.4 host protocol modes. Proxy is the only selectable production mode since
+# the experimental embedded transport retired (#3955). The embedded literal is
+# retained so retained session rows and historical evidence keep decoding to
+# their recorded mode; it must never admit new work on an enabled bridge.
 HOST_PROTOCOL_MODE_PROXY = "upstream_omnigent_server_proxy"
-RETIRED_HOST_PROTOCOL_MODE_EMBEDDED = "embedded_omnigent_compatible_server"
+HOST_PROTOCOL_MODE_EMBEDDED = "embedded_omnigent_compatible_server"
 
 HostProtocolMode = Literal[
     "upstream_omnigent_server_proxy",
+    "embedded_omnigent_compatible_server",
 ]
-
-
-def _reject_retired_host_protocol_mode(field_name: str, value: Any) -> str:
-    """Reject the retired embedded transport with a supported alternative.
-
-    The retired mode is never silently substituted with proxy mode: callers
-    must explicitly select ``upstream_omnigent_server_proxy``. Existing
-    sessions retain their recorded mode and cleanup owner until drained;
-    retained history does not require resubmitting anything under proxy mode.
-    """
-
-    candidate = str(value).strip() if isinstance(value, str) else value
-    if candidate == RETIRED_HOST_PROTOCOL_MODE_EMBEDDED:
-        raise BridgeConfigError(
-            f"{field_name} '{RETIRED_HOST_PROTOCOL_MODE_EMBEDDED}' was retired "
-            "with the experimental embedded host transport "
-            "(MoonLadderStudios/MoonMind#3955): it no longer admits new hosts, "
-            "sessions, or credential consumers. Select "
-            f"'{HOST_PROTOCOL_MODE_PROXY}' instead. Existing sessions keep "
-            "their recorded mode and cleanup owner until drained."
-        )
-    if candidate != HOST_PROTOCOL_MODE_PROXY:
-        raise BridgeConfigError(
-            f"{field_name} '{value}' is unsupported: the Omnigent bridge only "
-            f"implements '{HOST_PROTOCOL_MODE_PROXY}' (§2.4)."
-        )
-    return candidate
 
 # §9.3 first-message idempotency state machine, in canonical order.
 CANONICAL_FIRST_MESSAGE_STATES: tuple[str, ...] = (
@@ -327,13 +303,6 @@ class BridgeCompatibility(BaseModel):
     def _profile_must_be_omnigent(cls, value: Any) -> str:
         return _require_omnigent_profile("compatibility.profile", value)
 
-    @field_validator("host_protocol_mode", mode="before")
-    @classmethod
-    def _mode_must_be_supported(cls, value: Any) -> str:
-        return _reject_retired_host_protocol_mode(
-            "compatibility.hostProtocolMode", value
-        )
-
     @field_validator("host_unchanged")
     @classmethod
     def _host_must_be_unchanged(cls, value: bool) -> bool:
@@ -419,26 +388,60 @@ class BridgePublicApi(BaseModel):
         return candidate
 
 
-def _reject_retired_embedded_settings(data: Mapping[str, Any]) -> None:
-    """Reject the removed ``hostConnection.embedded`` settings block.
+class BridgeEmbeddedHostConnection(BaseModel):
+    """Embedded host-facing server settings (§6) for embedded mode."""
 
-    The experimental embedded host transport was retired
-    (MoonLadderStudios/MoonMind#3955). A removed setting must fail actionably
-    rather than become an ignored instruction: deployments that still declare
-    the block must delete it and select
-    ``upstream_omnigent_server_proxy``. Retained session history and its
-    read-only decoding do not require this block.
-    """
+    model_config = ConfigDict(populate_by_name=True, extra="forbid")
 
-    host_connection = data.get("hostConnection")
-    if isinstance(host_connection, Mapping) and "embedded" in host_connection:
-        raise BridgeConfigError(
-            "hostConnection.embedded was removed with the experimental embedded "
-            "host transport (MoonLadderStudios/MoonMind#3955): delete the "
-            "'embedded' block and select hostProtocolMode "
-            f"'{HOST_PROTOCOL_MODE_PROXY}'. Retained session history does not "
-            "require this block."
+    bind_address: str = Field("0.0.0.0", alias="bindAddress")
+    port: int = Field(8000, ge=1, le=65535)
+    auth_mode: str = Field("upstream_runner_tunnel", alias="authMode")
+    protocol_profile: str = Field(
+        "omnigent.runner_tunnel.983c93c6", alias="protocolProfile"
+    )
+    proxy_conformance_evidence_ref: str | None = Field(
+        None, alias="proxyConformanceEvidenceRef"
+    )
+    live_smoke_evidence_ref: str | None = Field(None, alias="liveSmokeEvidenceRef")
+    host_auth_conformance_evidence_ref: str | None = Field(
+        None, alias="hostAuthConformanceEvidenceRef"
+    )
+
+    @model_validator(mode="after")
+    def _auth_contract_is_supported(self) -> "BridgeEmbeddedHostConnection":
+        if self.auth_mode != "upstream_runner_tunnel":
+            raise BridgeConfigError(
+                "hostConnection.embedded.authMode must be 'upstream_runner_tunnel'."
+            )
+        if self.protocol_profile != "omnigent.runner_tunnel.983c93c6":
+            raise BridgeConfigError(
+                "hostConnection.embedded.protocolProfile must be "
+                "'omnigent.runner_tunnel.983c93c6'."
+            )
+        return self
+
+    @field_validator("protocol_profile")
+    @classmethod
+    def _protocol_profile_must_be_omnigent(cls, value: Any) -> str:
+        return _require_omnigent_profile(
+            "hostConnection.embedded.protocolProfile", value
         )
+
+    @field_validator(
+        "proxy_conformance_evidence_ref",
+        "live_smoke_evidence_ref",
+        "host_auth_conformance_evidence_ref",
+    )
+    @classmethod
+    def _evidence_ref_must_be_non_empty(cls, value: Any) -> str | None:
+        if value is None:
+            return None
+        candidate = str(value).strip()
+        if not candidate:
+            raise BridgeConfigError(
+                "embedded enablement evidence refs must not be empty"
+            )
+        return candidate
 
 
 class BridgeHostConnection(BaseModel):
@@ -452,13 +455,9 @@ class BridgeHostConnection(BaseModel):
 
     mode: HostProtocolMode | None = None
     upstream_server_url_ref: str = Field("default", alias="upstreamServerUrlRef")
-
-    @field_validator("mode", mode="before")
-    @classmethod
-    def _mode_must_be_supported(cls, value: Any) -> str | None:
-        if value is None:
-            return None
-        return _reject_retired_host_protocol_mode("hostConnection.mode", value)
+    embedded: BridgeEmbeddedHostConnection = Field(
+        default_factory=BridgeEmbeddedHostConnection
+    )
 
 
 class BridgeCaptureDefaults(BaseModel):
@@ -568,6 +567,17 @@ class OmnigentBridgeConfig(BaseModel):
                 f"compatibility.hostProtocolMode '{compat_mode}': the bridge has a "
                 f"single active host protocol mode (§2.4)."
             )
+        if self.enabled and compat_mode == HOST_PROTOCOL_MODE_EMBEDDED:
+            raise BridgeConfigError(
+                "embedded_omnigent_compatible_server mode is retired and cannot "
+                "admit new work (MoonLadderStudios/MoonMind#3955): select "
+                "'upstream_omnigent_server_proxy' for compatibility.hostProtocolMode "
+                "(and the matching hostConnection.mode) instead. The embedded "
+                "value is preserved only for decoding retained session rows and "
+                "historical evidence; it is never silently substituted with proxy "
+                "mode. Existing sessions retain their recorded mode/endpoint and "
+                "cleanup owner until drained."
+            )
         return self
 
     @property
@@ -586,31 +596,83 @@ class OmnigentBridgeConfig(BaseModel):
         }
 
     def evidence_policy_sha256(self) -> str:
-        """Bind evidence to execution-relevant config."""
+        """Bind evidence to execution-relevant config without self-referential refs."""
 
         payload = self.model_dump(mode="json", by_alias=True)
+        embedded = payload["hostConnection"]["embedded"]
+        for key in (
+            "proxyConformanceEvidenceRef",
+            "liveSmokeEvidenceRef",
+            "hostAuthConformanceEvidenceRef",
+        ):
+            embedded[key] = None
         encoded = json.dumps(payload, sort_keys=True, separators=(",", ":")).encode()
         return hashlib.sha256(encoded).hexdigest()
 
-    def readiness(self) -> dict[str, Any]:
-        """Return non-secret, operator-visible proxy readiness.
+    def readiness(
+        self,
+        *,
+        evidence_validation: Mapping[str, Mapping[str, Any]] | None = None,
+        host_mode: Literal["static_compose", "on_demand_docker"] | None = None,
+    ) -> dict[str, Any]:
+        """Return non-secret, operator-visible mode/conformance readiness."""
 
-        The retired embedded transport is no longer advertised: support and
-        readiness surfaces expose only the surviving proxy topology
-        (MoonLadderStudios/MoonMind#3955).
-        """
-
+        embedded = self.host_connection.embedded
+        evidence = {
+            "proxyConformance": embedded.proxy_conformance_evidence_ref,
+            "liveSmoke": embedded.live_smoke_evidence_ref,
+            "hostAuthConformance": embedded.host_auth_conformance_evidence_ref,
+        }
+        selected_embedded = self.host_protocol_mode == HOST_PROTOCOL_MODE_EMBEDDED
         proxy_ready = build_omnigent_gate().enabled
-        return {
+        validation = dict(evidence_validation or {})
+        evidence_ready = bool(validation) and all(
+            validation.get(key, {}).get("status") == "passed"
+            and (
+                (
+                    set(validation.get(key, {}).get("supportedHostModes", ()))
+                    >= {"static_compose", "on_demand_docker"}
+                )
+                if host_mode is None
+                else host_mode
+                in validation.get(key, {}).get("supportedHostModes", ())
+            )
+            for key in evidence
+        )
+        result = {
             "enabled": self.enabled,
             "selectedMode": self.host_protocol_mode,
-            "protocolProfile": self.compatibility.profile,
+            "protocolProfile": (
+                embedded.protocol_profile
+                if selected_embedded
+                else self.compatibility.profile
+            ),
+            "upstreamComponentVersion": (
+                embedded.protocol_profile.rsplit(".", 1)[-1]
+                if selected_embedded
+                else None
+            ),
             "conformanceState": (
                 "ready"
-                if self.enabled and proxy_ready
+                if self.enabled
+                and (
+                    evidence_ready if selected_embedded else proxy_ready
+                )
                 else "disabled" if not self.enabled else "gated"
             ),
+            "evidenceRefs": evidence if selected_embedded else {},
         }
+        if selected_embedded:
+            result["evidenceValidation"] = validation
+            if not evidence_ready:
+                result["gateReason"] = (
+                    "embedded_host_mode_evidence_required"
+                    if host_mode is not None
+                    else "validated_embedded_evidence_required"
+                )
+        if host_mode is not None:
+            result["hostMode"] = host_mode
+        return result
 
 
 # ---------------------------------------------------------------------------
@@ -647,7 +709,6 @@ def parse_bridge_config(data: Mapping[str, Any]) -> OmnigentBridgeConfig:
 
     _reject_external_vocabulary(data)
     _reject_host_build_configuration(data)
-    _reject_retired_embedded_settings(data)
 
     try:
         return OmnigentBridgeConfig.model_validate(dict(data))
@@ -705,14 +766,15 @@ def resolve_bridge_config(
 
 __all__ = [
     "CANONICAL_FIRST_MESSAGE_STATES",
+    "HOST_PROTOCOL_MODE_EMBEDDED",
     "HOST_PROTOCOL_MODE_PROXY",
     "OMNIGENT_BRIDGE_CONFIG_PATH_ENV",
     "OMNIGENT_BRIDGE_CONFIG_SCHEMA_VERSION",
-    "RETIRED_HOST_PROTOCOL_MODE_EMBEDDED",
     "BridgeAuthority",
     "BridgeCaptureDefaults",
     "BridgeCompatibility",
     "BridgeConfigError",
+    "BridgeEmbeddedHostConnection",
     "BridgeHostConnection",
     "BridgeIdempotency",
     "BridgeObservability",

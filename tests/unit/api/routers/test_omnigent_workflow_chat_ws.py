@@ -34,6 +34,7 @@ from api_service.api.routers.omnigent_bridge import (
     WS_CLOSE_TRANSPORT_UNSUPPORTED,
     _get_bridge_proxy,
     _get_bridge_store,
+    _get_create_embedded_facade,
     _get_execution_service,
     _filter_session_updates_watch_frame,
     _relay_native_websocket,
@@ -164,6 +165,7 @@ def _build(
     )
     app.dependency_overrides[_get_bridge_store] = lambda: store
     app.dependency_overrides[_get_bridge_proxy] = object
+    app.dependency_overrides[_get_create_embedded_facade] = lambda: None
     app.dependency_overrides[_require_bridge_enabled] = lambda: config
     return TestClient(app)
 
