@@ -10,5 +10,15 @@
   },
   "childNumbers": [4117, 4118, 4119],
   "eligibleLeaf": 4101,
-  "faults": ["open_child", "checked_but_open_child", "child_reopened_at_confirmation", "unknown_child_state"]
+  "faults": ["open_child", "checked_but_open_child", "child_reopened_at_confirmation", "unknown_child_state"],
+  "markdownCases": [
+    {"name": "numeric-title-short", "body": "## Child issues\n- #10 — 2FA support\n", "children": [10]},
+    {"name": "numeric-title-long", "body": "## Child issues\n- #10 — 12-factor cleanup\n", "children": [10]},
+    {"name": "nested-heading", "body": "## Child issues\n### Backend\n- #10\n", "children": [10]},
+    {"name": "indented-heading", "body": "  ## Child issues\n- #10\n", "children": [10]},
+    {"name": "fenced-example", "body": "```markdown\n## Child issues\n- #10\n```\n", "children": []},
+    {"name": "html-comment-example", "body": "<!--\n## Child issues\n- #10\n-->\n", "children": []},
+    {"name": "indented-code-example", "body": "    ## Child issues\n    - #10\n", "children": []},
+    {"name": "example-inside-child-section", "body": "## Child issues\n~~~markdown\n## Related issues\n- #90\n~~~\n- #10\n", "children": [10]}
+  ]
 }
