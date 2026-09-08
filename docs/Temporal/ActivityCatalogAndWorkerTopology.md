@@ -276,6 +276,11 @@ Checkpoint-branch routing states (MoonLadderStudios/MoonMind#3949):
   separation is not privilege separation: the actual boundary is the
   fleet service (`temporal-worker-workflow` vs `temporal-worker-artifacts`)
   with its capabilities, privileges, secrets, mounts, and egress policy.
+  The deployed workflow service still carries artifact-S3 env, the secrets
+  volume, and the agent-workspaces mount for the retained compatibility
+  handlers above; that delta is compatibility-scoped, not new-only
+  authority, and is pinned by the deploy-manifest audit in
+  `test_checkpoint_fleet_isolation_3949.py` (MoonLadderStudios/MoonMind#3949).
 
 This registration is the current state, not the intended end state. The
 intended least-privilege boundary keeps the workflow fleet Temporal-only with
