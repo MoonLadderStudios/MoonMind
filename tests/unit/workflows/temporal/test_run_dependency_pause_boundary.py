@@ -3,8 +3,10 @@ from __future__ import annotations
 
 import asyncio
 import gc
+import json
 from contextlib import asynccontextmanager
 from datetime import timedelta
+from pathlib import Path
 from uuid import uuid4
 
 import pytest
@@ -17,6 +19,7 @@ from moonmind.schemas.temporal_activity_models import DependencyStatusSnapshotIn
 from moonmind.workflows.temporal.workflows.run import (
     DEFAULT_ACTIVITY_CATALOG,
     DEPENDENCY_RECONCILE_INTERVAL,
+    RUN_CANONICAL_DEPENDENCY_PARAMETERS_PATCH,
     RUN_DEPENDENCY_PAUSE_SAFE_BOUNDARY_PATCH,
     MoonMindUserWorkflow,
 )
@@ -71,7 +74,7 @@ async def _wait_for_query(handle, query: str, **expected):
 
 
 @asynccontextmanager
-async def _dependency_workflow(state: str):
+async def _dependency_workflow(state: str, *, input_payload=None, wait_for_gate=True):
     """Keep the production workflow and activity invocation; supply only the snapshot."""
     queue = f"dependency-pause-{uuid4()}"
     snapshot = DependencySnapshot(state)
@@ -96,7 +99,7 @@ async def _dependency_workflow(state: str):
             ):
                 handle = await env.client.start_workflow(
                     MoonMindUserWorkflow.run,
-                    {
+                    input_payload or {
                         "workflow_type": "MoonMind.UserWorkflow",
                         "initial_parameters": {"task": {"dependsOn": ["prerequisite"]}},
                     },
@@ -112,12 +115,13 @@ async def _dependency_workflow(state: str):
                     ]),
                 )
                 try:
-                    await _wait_for_query(
-                        handle, "get_status", state="waiting_on_dependencies"
-                    )
-                    async with asyncio.timeout(5):
-                        while not snapshot.calls:
-                            await asyncio.sleep(0.01)
+                    if wait_for_gate:
+                        await _wait_for_query(
+                            handle, "get_status", state="waiting_on_dependencies"
+                        )
+                        async with asyncio.timeout(5):
+                            while not snapshot.calls:
+                                await asyncio.sleep(0.01)
                     yield env, handle, snapshot
                 finally:
                     await handle.terminate(reason="Dependency pause boundary test complete")
@@ -171,6 +175,56 @@ async def test_dependency_wait_confirms_pause_and_replays(state, system_control)
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("state", ["", "new_provider_state", "failed", "canceled", "timed_out"])
+async def test_canonical_dependencies_keep_non_success_waiting(state):
+    async with _dependency_workflow(
+        state, input_payload=_canonical_dependency_input()
+    ) as (_env, handle, _snapshot):
+        history = await handle.fetch_history()
+        assert _scheduled_activities(history) == ["execution.dependency_status_snapshot"]
+        assert (await handle.query("get_status"))["state"] == "waiting_on_dependencies"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("dependencies", [None, [], ["prerequisite"]])
+async def test_canonical_dependencies_ready_at_start(dependencies):
+    payload = _canonical_dependency_input()
+    if dependencies is None:
+        payload["initial_parameters"]["workflow"].pop("dependsOn")
+    else:
+        payload["initial_parameters"]["workflow"]["dependsOn"] = dependencies
+    async with _dependency_workflow(
+        "completed", input_payload=payload, wait_for_gate=False
+    ) as (_env, handle, snapshot):
+        await _wait_for_query(handle, "get_status", state="planning")
+        assert snapshot.calls == ([["prerequisite"]] if dependencies else [])
+        assert _scheduled_activities(await handle.fetch_history())[-1] == "plan.generate"
+
+
+@pytest.mark.asyncio
+async def test_canonical_dependency_history_before_fix_replays(monkeypatch):
+    """Do not insert dependency commands into histories that already began work."""
+    patched = workflow.patched
+    with monkeypatch.context() as legacy:
+        legacy.setattr(workflow, "patched", lambda patch_id: (
+            False if patch_id == RUN_CANONICAL_DEPENDENCY_PARAMETERS_PATCH
+            else patched(patch_id)
+        ))
+        async with _dependency_workflow(
+            "executing", input_payload=_canonical_dependency_input(), wait_for_gate=False
+        ) as (_env, handle, snapshot):
+            await _wait_for_query(handle, "get_status", state="planning")
+            assert snapshot.calls == []
+            history = await handle.fetch_history()
+            assert _scheduled_activities(history) == ["plan.generate"]
+
+    await Replayer(
+        workflows=[MoonMindUserWorkflow],
+        workflow_runner=UnsandboxedWorkflowRunner(),
+    ).replay_workflow(history)
+
+
+@pytest.mark.asyncio
 async def test_dependency_pause_history_before_safe_boundary_patch_replays(monkeypatch):
     """Replay a minimal old dependency timer history with actual no-argument Updates."""
     patched = workflow.patched
@@ -196,3 +250,57 @@ async def test_dependency_pause_history_before_safe_boundary_patch_replays(monke
         workflows=[MoonMindUserWorkflow],
         workflow_runner=UnsandboxedWorkflowRunner(),
     ).replay_workflow(history)
+
+
+def _canonical_dependency_input():
+    """Minimized worker input from the Fix and Review Loop dependency incident."""
+    return json.loads((
+        Path(__file__).parents[3]
+        / "fixtures/temporal/workflow_dependencies/canonical_start.json"
+    ).read_text())
+
+
+def _scheduled_activities(history):
+    return [
+        event.activity_task_scheduled_event_attributes.activity_type.name
+        for event in history.events
+        if event.HasField("activity_task_scheduled_event_attributes")
+    ]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "runtime", [None, "omnigent", "codex_cli", "claude_code", "jules", "openclaw"]
+)
+async def test_canonical_dependencies_block_planning_and_child_launch(runtime):
+    payload = _canonical_dependency_input()
+    parameters = payload["initial_parameters"]
+    if runtime is not None:
+        parameters["targetRuntime"] = runtime
+        parameters["workflow"]["runtime"] = {"mode": runtime}
+    async with _dependency_workflow("executing", input_payload=payload) as (
+        _env, handle, snapshot
+    ):
+        assert snapshot.calls == [["prerequisite"]]
+        history = await handle.fetch_history()
+        assert _scheduled_activities(history) == ["execution.dependency_status_snapshot"]
+        assert not any(
+            event.HasField("start_child_workflow_execution_initiated_event_attributes")
+            for event in history.events
+        )
+
+        await handle.signal("DependencyResolved", {
+            "prerequisiteWorkflowId": "prerequisite",
+            "terminalState": "completed",
+            "closeStatus": "completed",
+            "resolvedAt": "2026-09-08T23:02:00Z",
+        })
+        await _wait_for_query(handle, "get_status", state="planning")
+        history = await handle.fetch_history()
+        assert _scheduled_activities(history)[:2] == [
+            "execution.dependency_status_snapshot", "plan.generate"
+        ]
+        await Replayer(
+            workflows=[MoonMindUserWorkflow],
+            workflow_runner=UnsandboxedWorkflowRunner(),
+        ).replay_workflow(history)
