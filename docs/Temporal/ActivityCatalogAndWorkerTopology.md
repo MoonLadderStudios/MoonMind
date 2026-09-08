@@ -284,13 +284,37 @@ authority (`async_session_maker`, `CheckpointBranchService`, retained
 artifact refs in `workflows/checkpoint_branch_turn.py`) because the
 retained handlers execute old persistence tasks in that process. The four
 `agent_run.py` metadata helpers need none of it (proven behaviorally by
-`test_checkpoint_compat_drain_3949.py`, which runs the helpers with
-database I/O denied while the persistence handler fails closed). New-only
-workflow processing must carry only what its real helpers require; while
-the topology stays consolidated, the justified permission set is exactly
+`test_checkpoint_compat_drain_3949.py`, which runs all four helpers with
+database I/O denied and provider/Docker/artifact configuration removed,
+while the persistence handlers fail closed).
+New-only workflow processing must carry only what its real helpers require;
+while the topology stays consolidated, the justified permission set is exactly
 the retained handlers' persistence authority plus the helpers' catalog
 and registry reads — and the drain gate above is what retires the
 persistence half.
+
+Measured capability inventory (workflow fleet):
+
+| Handler | Needs database | Needs provider/Docker/artifact-storage I/O |
+|---|---|---|
+| `integration.resolve_adapter_metadata` | no | no (registry + settings read only) |
+| `integration.get_activity_route` | no | no (catalog read only) |
+| `integration.resolve_external_adapter` | no | no (registry read only) |
+| `integration.external_adapter_execution_style` | no | no (registry read only) |
+| `checkpoint_branch.turn.mark_running` | yes (`mark_turn_running`) | yes (durable turn row) |
+| `checkpoint_branch.turn.persist_terminal` | yes (`lock` + `finalize`) | yes (artifact retention + result/diagnostics writes) |
+| `checkpoint_branch.turn.persist_terminal_rejection` | yes | yes (rejection row terminalization) |
+
+Under bounded concurrent load the consolidated worker retains every
+handoff's control record before its cleanup record with the drain gate
+staying decisive per input (`test_consolidated_worker_retains_control_and_cleanup_progress_under_load`;
+rehearsal, not production saturation proof). New persistence is proven to
+reach the artifacts fleet exclusively by
+`test_new_{success,failure,cancellation}_reaches_artifacts_fleet_with_real_handlers_3949`
+plus `test_transient_terminal_retry_reuses_owned_row_on_artifacts_fleet_3949`,
+which bind the real handler objects only on the artifacts worker and assert
+the serving queue, timeouts, retry budget, and durable row state from the
+recorded history.
 
 This registration is the current state, not the intended end state. The
 intended least-privilege boundary keeps the workflow fleet Temporal-only with

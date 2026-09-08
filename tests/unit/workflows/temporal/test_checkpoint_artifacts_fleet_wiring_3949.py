@@ -315,3 +315,77 @@ def test_retry_timeout_budgets_retain_progress_under_saturation():
         assert route.retries.max_attempts >= 3
         assert 0 < route.timeouts.start_to_close_seconds <= 300
         assert 0 < route.timeouts.schedule_to_close_seconds <= 600
+
+
+# --- 6. Command type and cancellation/retry routing (MoonMind#3949 scope 1) ---
+#
+# The persistence calls are regular Temporal Activities: the recorded
+# command must be ActivityTaskScheduled (``workflow.execute_activity``),
+# never a local-activity invocation, on every path including the
+# cancellation shield and the mark-running retry entry.
+
+
+def test_persistence_never_schedules_local_activities():
+    source = WORKFLOW_SRC.read_text()
+    assert "execute_local_activity(" not in source
+    assert "start_local_activity(" not in source
+    assert "workflow.start_activity(" not in source
+
+
+def test_every_persistence_site_is_an_activity_command_with_route_options():
+    """All three persistence call sites honor the patch routing.
+
+    ``mark_running`` (run entry, retried on handoff failure),
+    ``persist_terminal`` and the ``persist_terminal_rejection`` fallback
+    (both inside ``_persist_terminal``) schedule ``execute_activity`` with
+    the route-options spread. Cancellation reaches the same path through
+    ``_persist_cancellation_terminal`` -> ``_persist_terminal``.
+    """
+    tree = ast.parse(WORKFLOW_SRC.read_text())
+    scheduled: dict[str, list[tuple[str, ast.Call]]] = {}
+    for node in ast.walk(tree):
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            for child in ast.walk(node):
+                if not isinstance(child, ast.Call):
+                    continue
+                func = child.func
+                if not (
+                    isinstance(func, ast.Attribute)
+                    and func.attr == "execute_activity"
+                ):
+                    continue
+                if not child.args or not isinstance(child.args[0], ast.Constant):
+                    continue
+                name = child.args[0].value
+                if isinstance(name, str) and name.startswith(
+                    "checkpoint_branch.turn."
+                ):
+                    scheduled.setdefault(name, []).append((node.name, child))
+    assert set(scheduled) == set(PERSISTENCE_TYPES), scheduled.keys()
+    assert len(scheduled["checkpoint_branch.turn.mark_running"]) == 1
+    assert len(scheduled["checkpoint_branch.turn.persist_terminal"]) == 1
+    assert len(scheduled["checkpoint_branch.turn.persist_terminal_rejection"]) == 1
+    for name, sites in scheduled.items():
+        for enclosing, call in sites:
+            assert enclosing in ("run", "_persist_terminal"), (
+                f"{name} scheduled outside the routed paths"
+            )
+            as_source = ast.dump(call)
+            assert "_persistence_route_options" in as_source or (
+                "activity_options" in as_source
+            ), f"{name} schedules without patch route options"
+
+
+def test_cancellation_terminalizes_through_the_routed_persist_path():
+    source = WORKFLOW_SRC.read_text()
+    assert "async def _persist_cancellation_terminal" in source
+    # The shielded cancellation task delegates to _persist_terminal, which
+    # owns the route options and the rejection fallback; cancellation never
+    # schedules persistence directly and so cannot bypass the fleet queue.
+    block = source.split("async def _persist_cancellation_terminal")[1].split(
+        "@workflow.run"
+    )[0]
+    assert "self._persist_terminal(" in block
+    assert "execute_activity" not in block
+    assert "ActivityCancellationType.ABANDON" in source
+    assert "asyncio.shield(terminal_task)" in source
