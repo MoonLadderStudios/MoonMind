@@ -63,15 +63,20 @@ def test_router_has_no_unconditional_top_level_launch_import() -> None:
     assert not unconditional, sorted(unconditional)
 
 
+def _importfrom_bound_names(node: ast.ImportFrom) -> set[str]:
+    return {
+        alias.asname or alias.name.split(".")[0] for alias in node.names
+    }
+
+
 def test_router_defines_fail_closed_launch_fallbacks() -> None:
+    # The router carries no fail-closed import shim for the launch path: its
+    # design is lazy imports plus one annotation fallback. Every launch-path
+    # symbol the router uses must therefore resolve without importing the
+    # launch modules — assigned as a fallback, imported at top level from a
+    # non-launch module, or imported lazily inside a function whose failure
+    # maps to an actionable retirement error.
     tree = _parse_router()
-    bound: set[str] = set()
-    for node in ast.walk(tree):
-        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
-            bound.add(node.name)
-        elif isinstance(node, ast.Name) and isinstance(node.ctx, ast.Store):
-            bound.add(node.id)
-    # ``embedded_host_channels`` is assigned inside the except fallback.
     assigned: set[str] = set()
     for node in ast.walk(tree):
         if isinstance(node, ast.Assign):
@@ -80,8 +85,25 @@ def test_router_defines_fail_closed_launch_fallbacks() -> None:
                     assigned.add(target.id)
                 elif isinstance(target, ast.Attribute):
                     assigned.add(target.attr)
-    assert _FALLBACK_NAMES <= (bound | assigned), sorted(
-        _FALLBACK_NAMES - (bound | assigned)
+    top_level_imported: set[str] = set()
+    for node in tree.body:
+        if isinstance(node, ast.ImportFrom):
+            if node.module not in _LAUNCH_MODULES:
+                top_level_imported.update(_importfrom_bound_names(node))
+        elif isinstance(node, ast.Import):
+            top_level_imported.update(
+                alias.asname or alias.name.split(".")[0]
+                for alias in node.names
+            )
+    lazy_imported: set[str] = set()
+    for node in ast.walk(tree):
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            for child in ast.walk(node):
+                if isinstance(child, ast.ImportFrom):
+                    lazy_imported.update(_importfrom_bound_names(child))
+    resolvable = assigned | top_level_imported | lazy_imported
+    assert _FALLBACK_NAMES <= resolvable, sorted(
+        _FALLBACK_NAMES - resolvable
     )
 
 
@@ -118,7 +140,18 @@ for module in (
 
 import api_service.api.routers.omnigent_bridge as router
 
-assert router._EMBEDDED_LAUNCH_MODULES_AVAILABLE is False
+import typing
+
+# The launch modules are genuinely unavailable in this probe, and the
+# router's facade annotation degrades to its fail-closed fallback.
+try:
+    import moonmind.omnigent.bridge_embedded  # noqa: F401
+except ImportError:
+    pass
+else:
+    raise AssertionError("launch modules must be unavailable in this probe")
+
+assert router.OmnigentEmbeddedHostProtocolFacade is typing.Any
 
 from moonmind.omnigent.bridge_config import parse_bridge_config
 from api_service.api.routers.omnigent_bridge_composition import (

@@ -123,7 +123,18 @@ import api_service.api.routers.omnigent_bridge as router
 from fastapi import HTTPException
 from moonmind.omnigent.bridge_config import parse_bridge_config
 
-assert router._EMBEDDED_LAUNCH_MODULES_AVAILABLE is False
+import typing
+
+# The launch modules are genuinely unavailable in this probe, and the
+# router's facade annotation degrades to its fail-closed fallback.
+try:
+    import moonmind.omnigent.bridge_embedded  # noqa: F401
+except ImportError:
+    pass
+else:
+    raise AssertionError("launch modules must be unavailable in this probe")
+
+assert router.OmnigentEmbeddedHostProtocolFacade is typing.Any
 
 # The drain route must be registered on the production router.
 paths = {
