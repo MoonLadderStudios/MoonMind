@@ -34,6 +34,21 @@ The system preserves these properties:
 
 Presets do not replace Skills, require per-preset React forms, grant execution rights, or create a second publishing engine. Their expanded steps pass the normal policy, runtime, repository, and publication boundaries.
 
+Trusted issue loaders persist the complete GitHub or Jira brief as a linked JSON
+artifact before returning to the workflow. The existing `briefArtifactRef` carries
+that source into attachment-capable assessment, implementation, remediation,
+and verification workspaces. Direct managed Codex sessions retain their existing
+prepared-context path because their session adapter rejects raw input refs.
+Inline context may be shortened for prompt limits;
+the full attachment remains authoritative. Agent-generated copies do not replace
+the loader's brief. Loader authority comes from the dispatched native tool identity,
+never from an agent's `trustedSource` field. Artifact storage failure stops the
+handoff before assessment.
+
+GitHub implementation presets declare `docker` for their repository verification
+work. Admission validates Docker readiness; agents use the
+scoped Docker Backend Service to execute tests.
+
 ## Core Concepts
 
 | Concept | Meaning |
@@ -189,6 +204,8 @@ The durable minimum is the issue key. Optional enrichment is fetched/validated t
 `github-issue-search-and-implement` uses the workflow repository binding. Its typed `github.load_issue_preset_brief` operation accepts `issueSearch`: a nonempty query selects GitHub's best available open issue match, skipping issues already marked status in-progress; an empty query scans open issues in descending creation order for the first candidate without blocker evidence and without an in-progress status. The scan is bounded to five pages of 100 candidates, excludes pull requests, and records pages/candidates examined. Missing, malformed, incomplete, or exhausted evidence stops before implementation or issue mutation.
 
 Explicit `Depends on`, `Completion depends on`, and `Integration prerequisites:` sentences contribute prerequisite evidence. Short references, qualified references, issue URLs, and inclusive numeric ranges are resolved through the selected repository's authorized access, with at most 100 declared prerequisites per candidate. The scan shares a 100-request prerequisite-lookup budget and reuses validated repeated identities. Exhaustion requests an explicit issue or narrower search. Confirmation uses fresh prerequisite reads with its own 100-request budget and re-fetches current issue detail to reject an in-progress status added between search and brief loading; the later implementation preflight also checks current state.
+
+Issue lists under `Child issues` or `Sub-issues` headings declare completion prerequisites through that same lookup. Markdown section nesting and legal heading indentation apply: categorized children remain in scope until a heading of the same or higher level ends the section. Fenced code, indented code, and HTML-comment examples do not declare children. Bulleted, numbered, and checkbox entries may start with short or qualified issue references, issue URLs, or Markdown links to issues. A spaced dash starts the child title; spaced ranges require an explicit `#` endpoint, such as `#10 — #12`, so `#10 — 2FA support` cannot invent a range. GitHub issue state is authoritative regardless of a checked or unchecked box: an open child blocks the parent, closed children allow its remaining requirements to be assessed, and unverifiable child state stops admission. Parent links, sibling related-work sections, and contextual references after a child entry do not become dependencies. This prevents automatic selection of an unfinished parent epic while its implementation belongs to open child issues; explicit selection is protected by the same implementation preflight.
 
 Open prerequisites block admission; closed prerequisites do not. Only the leading reference list after a declaration contributes dependencies, not subsequent parent/related prose. Unknown or unavailable evidence blocks. These checks do not edit labels or issue content.
 

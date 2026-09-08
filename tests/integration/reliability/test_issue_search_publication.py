@@ -12,6 +12,7 @@ from unittest.mock import AsyncMock
 
 import httpx
 import pytest
+import pytest_asyncio
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 from api_service.db.models import Base
@@ -23,6 +24,11 @@ from moonmind.workflows.skills.tool_registry import ToolRegistrySnapshot
 from moonmind.workflows.temporal.activity_runtime import (
     TemporalSkillActivities,
     _default_registry_skill_payload,
+)
+from moonmind.workflows.temporal.artifacts import (
+    LocalTemporalArtifactStore,
+    TemporalArtifactRepository,
+    TemporalArtifactService,
 )
 from moonmind.workflows.temporal.story_output_tools import (
     register_story_output_tool_handlers,
@@ -42,6 +48,21 @@ from .helpers import load_replay
 pytestmark = [pytest.mark.asyncio, pytest.mark.reliability_journey]
 
 
+@pytest_asyncio.fixture
+async def artifact_service(tmp_path):
+    engine = create_async_engine(f"sqlite+aiosqlite:///{tmp_path}/artifacts.db")
+    try:
+        async with engine.begin() as connection:
+            await connection.run_sync(Base.metadata.create_all)
+        async with async_sessionmaker(engine, expire_on_commit=False)() as session:
+            yield TemporalArtifactService(
+                TemporalArtifactRepository(session),
+                store=LocalTemporalArtifactStore(tmp_path / "artifacts"),
+            )
+    finally:
+        await engine.dispose()
+
+
 @pytest.mark.parametrize(
     "inputs,restart_count",
     [
@@ -53,7 +74,7 @@ pytestmark = [pytest.mark.asyncio, pytest.mark.reliability_journey]
 )
 @pytest.mark.parametrize("pr_created", [True, False, "unavailable"])
 async def test_search_publication_recovers_missing_pr_before_status(
-    tmp_path, monkeypatch, inputs, restart_count, pr_created
+    tmp_path, monkeypatch, inputs, restart_count, pr_created, artifact_service
 ):
     evidence = load_replay("issue-search-publication-handoff", "manifest.json")
     repository = evidence["repository"]
@@ -65,7 +86,8 @@ async def test_search_publication_recovers_missing_pr_before_status(
         "number": number,
         "state": "open",
         "title": "Dispose of completed temporary plans",
-        "body": "Preserve active dependencies and durable evidence.",
+        "body": "Preserve active dependencies and durable evidence.\n" * 180
+        + "Keep the complete acceptance criteria.",
         "html_url": f"https://github.com/{repository}/issues/{number}",
         "labels": [],
     }
@@ -125,12 +147,7 @@ async def test_search_publication_recovers_missing_pr_before_status(
         ),
     )
     activities = TemporalSkillActivities(
-        dispatcher=dispatcher,
-        artifact_service=SimpleNamespace(
-            read=AsyncMock(
-                return_value=(None, {"verdict": evidence["assessmentVerdict"]})
-            )
-        ),
+        dispatcher=dispatcher, artifact_service=artifact_service
     )
 
     async def invoke(payload):
@@ -156,14 +173,28 @@ async def test_search_publication_recovers_missing_pr_before_status(
         }
     )
     assert selected.status == "COMPLETED"
+    brief_ref = selected.outputs["briefArtifactRef"]
+    _brief, brief_bytes = await artifact_service.read(
+        artifact_id=brief_ref, principal="test:search-publication"
+    )
+    assert json.loads(brief_bytes)["issue"]["body"] == issue["body"]
+    assessment, _upload = await artifact_service.create(
+        principal="test:search-publication", content_type="application/json"
+    )
+    assessment = await artifact_service.write_complete(
+        artifact_id=assessment.artifact_id,
+        principal="test:search-publication",
+        content_type="application/json",
+        payload=json.dumps({"verdict": evidence["assessmentVerdict"]}).encode(),
+    )
     parent = MoonMindRunWorkflow()
     parent._owner_id = "test:search-publication"
     parent._repo = repository
     parent._record_trusted_issue_context(selected.outputs)
     parent._assessment_context = {
         "assessmentVerdict": evidence["assessmentVerdict"],
-        "assessmentArtifactRef": "art_assessment",
-        "briefArtifactRef": "art_brief",
+        "assessmentArtifactRef": assessment.artifact_id,
+        "briefArtifactRef": brief_ref,
         "assessedRepository": repository,
         "assessedBranch": "main",
     }

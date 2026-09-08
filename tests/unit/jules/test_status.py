@@ -18,9 +18,9 @@ def test_normalize_jules_status_maps_success_aliases() -> None:
 def test_normalize_jules_status_defaults_missing_values_to_pending() -> None:
     snapshot = normalize_jules_status(None)
 
-    assert snapshot.provider_status == "pending"
-    assert snapshot.provider_status_token == "pending"
-    assert snapshot.normalized_status == "queued"
+    assert snapshot.provider_status == "unknown"
+    assert snapshot.provider_status_token == ""
+    assert snapshot.normalized_status == "unknown"
     assert snapshot.terminal is False
 
 def test_normalize_jules_status_distinguishes_canceled_and_unknown() -> None:

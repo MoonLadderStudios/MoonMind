@@ -10,6 +10,7 @@ tags:
 requiredCapabilities:
 - git
 - gh
+- docker
 annotations:
   sourceSkill: github-issue-implement
   issueProvider: github

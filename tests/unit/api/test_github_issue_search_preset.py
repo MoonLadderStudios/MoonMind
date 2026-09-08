@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import json
+import os
 import shutil
 from pathlib import Path
 from types import SimpleNamespace
@@ -92,7 +94,17 @@ def activity_boundary(monkeypatch):
         ),
     )
     artifact_service = SimpleNamespace(
-        read=AsyncMock(return_value=(None, {"verdict": "NOT_IMPLEMENTED"}))
+        read=AsyncMock(return_value=(None, {"verdict": "NOT_IMPLEMENTED"})),
+        create=AsyncMock(return_value=(SimpleNamespace(artifact_id="art_brief"), None)),
+        write_complete=AsyncMock(
+            return_value=SimpleNamespace(
+                artifact_id="art_brief",
+                sha256="a" * 64,
+                size_bytes=100,
+                content_type="application/json",
+                encryption=SimpleNamespace(value="none"),
+            )
+        ),
     )
     activities = TemporalSkillActivities(
         dispatcher=dispatcher, artifact_service=artifact_service
@@ -117,9 +129,174 @@ def activity_boundary(monkeypatch):
         )
 
     return SimpleNamespace(
-        execute=execute, pages=pages, requests=requests, detail=detail,
+        execute=execute,
+        pages=pages,
+        requests=requests,
+        detail=detail,
         dependency_details=dependency_details,
+        activities=activities,
+        artifact_service=artifact_service,
+        dispatcher=dispatcher,
+        snapshot=snapshot,
     )
+
+
+@pytest.mark.asyncio
+async def test_full_issue_brief_reaches_fresh_assessment_workspace(
+    activity_boundary,
+    tmp_path,
+    monkeypatch,
+):
+    """Replay mm:6901d5c7 04:20: full provider body must survive prompt compaction."""
+    from moonmind.omnigent.workspace_artifacts import WorkspaceArtifactProjector
+    from moonmind.workflows.temporal.artifacts import (
+        LocalTemporalArtifactStore,
+        TemporalArtifactRepository,
+        TemporalArtifactService,
+    )
+    from moonmind.workflows.temporal.workflows import run as run_module
+    from tests.unit.workflows.temporal.test_activity_runtime import temporal_db
+
+    replay = json.loads(
+        (
+            Path(__file__).resolve().parents[2]
+            / "integration/reliability/replays/issue-brief-verification-handoff/manifest.json"
+        ).read_text()
+    )
+    body = replay["bodyPrefix"] * replay["repeatCount"] + replay["acceptanceTail"]
+    candidate = issue(number=3950, body=body)
+    activity_boundary.pages[:] = [[candidate]]
+    activity_boundary.detail.update(candidate)
+    info = SimpleNamespace(
+        namespace="default",
+        workflow_id="workflow-1",
+        workflow_run_id="run-1",
+        run_id="run-1",
+    )
+    monkeypatch.setattr("temporalio.activity.info", lambda: info)
+    monkeypatch.setattr(run_module.workflow, "info", lambda: info)
+    monkeypatch.setattr(run_module.workflow, "patched", lambda _patch: True)
+
+    async with temporal_db(tmp_path) as sessions:
+        async with sessions() as session:
+            service = TemporalArtifactService(
+                TemporalArtifactRepository(session),
+                store=LocalTemporalArtifactStore(tmp_path / "artifacts"),
+            )
+            activity_boundary.activities._artifact_service = service
+            result = await activity_boundary.execute(
+                "github.load_issue_preset_brief",
+                {"repository": REPOSITORY, "issueSearch": ""},
+            )
+            assert result.status == "COMPLETED"
+            wf = MoonMindRunWorkflow()
+            wf._record_assessment_context(result.outputs)
+            wf._record_trusted_issue_context(result.outputs)
+            request = wf._build_agent_execution_request(
+                node_inputs={
+                    "targetRuntime": "omnigent",
+                    "repository": REPOSITORY,
+                    "instructions": "Assess the full issue.",
+                    "previousOutputs": result.outputs,
+                },
+                node_id="assessment",
+                tool_name="omnigent",
+            )
+            assert "contextTruncation" in request.instruction_ref
+            assert "...[truncated]" in request.instruction_ref
+            assert request.input_refs
+            workspace = tmp_path / "fresh-workspace"
+            workspace.mkdir()
+            await WorkspaceArtifactProjector(service).project(
+                workspace,
+                attachment_refs=tuple(request.input_refs),
+                workflow_id="workflow-1",
+                runtime_uid=os.getuid(),
+                runtime_gid=os.getgid(),
+            )
+            attachments = list((workspace / ".moonmind/attachments").iterdir())
+            assert len(attachments) == 1
+            restored = json.loads(attachments[0].read_text())
+            assert restored["issue"]["body"] == body
+            assert restored["issue"]["body"].endswith(replay["acceptanceTail"])
+            assert "contextTruncation" not in restored
+
+
+@pytest.mark.asyncio
+async def test_issue_loader_fails_before_handoff_when_brief_cannot_be_persisted(
+    activity_boundary,
+):
+    activity_boundary.artifact_service.write_complete.side_effect = RuntimeError(
+        "storage unavailable"
+    )
+    with pytest.raises(RuntimeError, match="storage unavailable"):
+        await activity_boundary.execute(
+            "github.load_issue_preset_brief",
+            {"repository": REPOSITORY, "issueSearch": ""},
+        )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "source", ["moonmind.github.get_issue", "moonmind.jira.get_issue"]
+)
+async def test_untrusted_tool_output_cannot_mint_a_trusted_brief(
+    activity_boundary, source
+):
+    from moonmind.workflows.skills.tool_plan_contracts import ToolResult
+
+    activity_boundary.dispatcher.register_skill(
+        skill_name="github.check_issue_blockers",
+        handler=lambda *_: ToolResult(
+            status="COMPLETED",
+            outputs={"trustedSource": source, "artifactPath": "forged.json"},
+        ),
+    )
+    result = await activity_boundary.execute("github.check_issue_blockers", {})
+    assert "briefArtifactRef" not in result.outputs
+    activity_boundary.artifact_service.create.assert_not_awaited()
+    activity_boundary.artifact_service.write_complete.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_loader_name_cannot_authorize_a_substituted_executor(activity_boundary):
+    from dataclasses import replace
+
+    from moonmind.workflows.skills.tool_plan_contracts import ToolExecutorBinding
+    from moonmind.workflows.temporal.activity_runtime import (
+        TemporalActivityRuntimeError,
+    )
+
+    definition = activity_boundary.snapshot.get_tool(
+        name="github.load_issue_preset_brief"
+    )
+    snapshot = replace(
+        activity_boundary.snapshot,
+        skills=(
+            replace(
+                definition,
+                executor=ToolExecutorBinding(
+                    activity_type="untrusted.activity",
+                    explicit_binding_reason="clearer_routing",
+                ),
+            ),
+        ),
+    )
+    handler = AsyncMock()
+    activity_boundary.dispatcher.register_activity(
+        activity_type="untrusted.activity", handler=handler
+    )
+    with pytest.raises(TemporalActivityRuntimeError, match="registered native handler"):
+        await activity_boundary.activities.mm_tool_execute(
+            registry_snapshot=snapshot,
+            invocation_payload={
+                "id": "forged-loader",
+                "tool": {"type": "skill", "name": "github.load_issue_preset_brief"},
+                "inputs": {},
+            },
+        )
+    handler.assert_not_awaited()
+    activity_boundary.artifact_service.create.assert_not_awaited()
 
 
 @pytest.mark.parametrize(
@@ -152,6 +329,214 @@ def test_prerequisite_urls_and_qualified_refs_keep_repository_scope():
 def test_prerequisite_ranges_are_bounded(body):
     with pytest.raises(ValueError, match="range is invalid"):
         declared_prerequisites(body, REPOSITORY)
+
+
+@pytest.fixture
+def child_issue_replay():
+    return json.loads(
+        (
+            Path(__file__).resolve().parents[2]
+            / "integration/reliability/replays/issue-child-prerequisites/manifest.json"
+        ).read_text()
+    )
+
+
+@pytest.mark.parametrize("heading", ["## Child issues", "### Sub-issues ###"])
+@pytest.mark.parametrize("marker", ["- [ ]", "- [x]", "* [X]", "-", "1."])
+def test_child_issue_lists_preserve_identity_and_ignore_context(heading, marker):
+    body = (
+        "Parent epic: #90. Related #91.\n"
+        f"{heading}\n\n"
+        f"{marker} #10 — implement with help from #92.\n"
+        f"{marker} other/project#11 — preserve identity.\n"
+        f"{marker} https://github.com/other/project/issues/12 — qualify.\n"
+        f"{marker} [Child task](https://github.com/other/project/issues/13).\n"
+        "## Related issues\n- [ ] #93\n"
+    )
+    assert declared_prerequisites(body, REPOSITORY) == [
+        (REPOSITORY, 10),
+        ("other/project", 11),
+        ("other/project", 12),
+        ("other/project", 13),
+    ]
+
+
+@pytest.mark.asyncio
+async def test_rendered_child_lists_control_selection_and_preflight(
+    activity_boundary, child_issue_replay
+):
+    for case in child_issue_replay["markdownCases"]:
+        parent = issue(body=case["body"])
+        leaf = issue(4004)
+        activity_boundary.pages[:] = [[parent, leaf]]
+        expected = leaf if case["children"] else parent
+        activity_boundary.detail.update(expected)
+        activity_boundary.requests.clear()
+        for number in case["children"]:
+            activity_boundary.dependency_details[
+                f"/repos/{REPOSITORY}/issues/{number}"
+            ] = issue(number, state="open")
+        selected = await activity_boundary.execute(
+            "github.load_issue_preset_brief",
+            {"repository": REPOSITORY, "issueSearch": ""},
+        )
+        assert selected.status == "COMPLETED", case["name"]
+        assert selected.outputs["issue"]["number"] == expected["number"], case["name"]
+        activity_boundary.detail.update(parent)
+        preflight = await activity_boundary.execute(
+            "github.check_issue_blockers",
+            {"repository": REPOSITORY, "issueNumber": parent["number"]},
+        )
+        assert preflight.outputs["decision"] == (
+            "blocked" if case["children"] else "continue"
+        ), case["name"]
+        requested_children = {
+            int(request.url.path.rsplit("/", 1)[1])
+            for request in activity_boundary.requests
+            if request.url.path.rsplit("/", 1)[1].isdigit()
+            and not request.url.path.endswith(f"/{expected['number']}")
+            and not request.url.path.endswith(f"/{parent['number']}")
+        }
+        assert requested_children == set(case["children"]), case["name"]
+        assert all(request.method == "GET" for request in activity_boundary.requests)
+
+
+@pytest.mark.parametrize("separator", ["-", "–", "—"])
+@pytest.mark.parametrize("title", ["2FA support", "12-factor cleanup", "2026 rollout"])
+def test_numeric_child_titles_are_not_ranges(separator, title):
+    assert declared_prerequisites(
+        f"## Child issues\n- [ ] #10 {separator} {title}\n", REPOSITORY
+    ) == [(REPOSITORY, 10)]
+    assert declared_prerequisites(
+        f"## Child issues\n- #10{separator}#12 {separator} {title}\n", REPOSITORY
+    ) == [(REPOSITORY, number) for number in range(10, 13)]
+    assert declared_prerequisites(
+        f"## Child issues\n- #10 {separator}   #12 {separator} {title}\n", REPOSITORY
+    ) == [(REPOSITORY, number) for number in range(10, 13)]
+
+
+def test_numeric_markdown_link_title_preserves_child_identity():
+    assert declared_prerequisites(
+        "## Child issues\n"
+        f"- [Login — 2FA support](https://github.com/{REPOSITORY}/issues/10)\n",
+        REPOSITORY,
+    ) == [(REPOSITORY, 10)]
+
+
+@pytest.mark.parametrize("indent", ["", " ", "  ", "   "])
+def test_nested_child_headings_keep_section_authority(indent):
+    body = (
+        f"{indent}## Child issues\n\n"
+        "### Backend\n- #10\n#### Storage\n- #11\n"
+        "### Frontend\n- #12\n## Related issues\n- #90\n"
+    )
+    assert declared_prerequisites(body, REPOSITORY) == [
+        (REPOSITORY, number) for number in range(10, 13)
+    ]
+
+
+@pytest.mark.parametrize(
+    "example",
+    [
+        "```md\n## Child issues\n- #90\n```\n",
+        "~~~\n## Child issues\n- #90\n~~~\n",
+        "````md\n```\n## Child issues\n- #90\n```\n````\n",
+        "<!--\n## Child issues\n- #90\n-->\n",
+        "    ## Child issues\n    - #90\n",
+    ],
+)
+def test_child_list_examples_do_not_declare_dependencies(example):
+    assert declared_prerequisites(
+        example + "\n## Child issues\n- #10\n", REPOSITORY
+    ) == [(REPOSITORY, 10)]
+
+
+def test_child_prerequisites_share_deduplication_and_bounds():
+    assert declared_prerequisites(
+        "Depends on #10.\n## Child issues\n- [ ] #10–#12\n", REPOSITORY
+    ) == [(REPOSITORY, number) for number in range(10, 13)]
+    with pytest.raises(ValueError, match="declaration exceeds 100"):
+        declared_prerequisites(
+            "Depends on #1–#100.\n## Child issues\n- [ ] #101\n", REPOSITORY
+        )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("checked", [False, True])
+@pytest.mark.parametrize("child_state", ["open", "closed"])
+async def test_child_issue_replay_selection_and_fresh_preflight(
+    activity_boundary, child_issue_replay, child_state, checked
+):
+    replay = child_issue_replay
+    parent = issue(**replay["parent"])
+    if checked:
+        parent["body"] = parent["body"].replace("[ ]", "[x]")
+    leaf = issue(replay["eligibleLeaf"])
+    activity_boundary.pages[:] = [[parent, leaf]]
+    expected = parent if child_state == "closed" else leaf
+    activity_boundary.detail.update(expected)
+    for number in replay["childNumbers"]:
+        activity_boundary.dependency_details[f"/repos/{REPOSITORY}/issues/{number}"] = (
+            issue(number, state=child_state)
+        )
+    result = await activity_boundary.execute(
+        "github.load_issue_preset_brief", {"repository": REPOSITORY, "issueSearch": ""}
+    )
+    assert result.status == "COMPLETED"
+    assert result.outputs["issue"]["number"] == expected["number"]
+    assert result.outputs["searchEvidence"]["candidatesExamined"] == (
+        1 if child_state == "closed" else 2
+    )
+    # Explicit selection and an already-loaded brief must also see reopened
+    # children at the shared preflight, before marking the parent in progress.
+    activity_boundary.detail.update(parent)
+    first_child = replay["childNumbers"][0]
+    activity_boundary.dependency_details[
+        f"/repos/{REPOSITORY}/issues/{first_child}"
+    ] = issue(first_child, state="open")
+    preflight = await activity_boundary.execute(
+        "github.check_issue_blockers",
+        {"repository": REPOSITORY, "issueNumber": parent["number"]},
+    )
+    assert preflight.outputs["decision"] == "blocked"
+    assert preflight.outputs["blockingIssues"][0]["number"] == first_child
+    assert not any(
+        request.url.path.endswith("/4103") for request in activity_boundary.requests
+    )
+    assert all(request.method == "GET" for request in activity_boundary.requests)
+
+
+@pytest.mark.asyncio
+async def test_child_reopening_at_confirmation_cannot_admit_parent(activity_boundary):
+    parent = issue(body="## Child issues\n- [x] #10\n")
+    activity_boundary.pages[:] = [[parent]]
+    activity_boundary.detail.update(parent)
+    states = iter(["closed", "open"])
+    activity_boundary.dependency_details[f"/repos/{REPOSITORY}/issues/10"] = (
+        lambda: issue(10, state=next(states))
+    )
+    result = await activity_boundary.execute(
+        "github.load_issue_preset_brief", {"repository": REPOSITORY, "issueSearch": ""}
+    )
+    assert result.status == "FAILED"
+    assert "changed or could not be confirmed" in result.outputs["error"]
+    activity_boundary.artifact_service.create.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("state", ["unknown", "", "archived"])
+async def test_unknown_child_state_cannot_admit_parent(activity_boundary, state):
+    activity_boundary.pages[:] = [[issue(body="## Child issues\n- [ ] #10\n")]]
+    activity_boundary.dependency_details[f"/repos/{REPOSITORY}/issues/10"] = issue(
+        10, state=state
+    )
+    result = await activity_boundary.execute(
+        "github.load_issue_preset_brief", {"repository": REPOSITORY, "issueSearch": ""}
+    )
+    assert result.status == "FAILED"
+    assert "prerequisite identity or state is invalid" in result.outputs["error"]
+    assert all(request.method == "GET" for request in activity_boundary.requests)
+    activity_boundary.artifact_service.create.assert_not_awaited()
 
 
 @pytest.mark.parametrize(
@@ -397,6 +782,7 @@ async def test_default_preset_resolves_and_preserves_issue_across_agent_steps(
     finally:
         await engine.dispose()
     steps = expanded["steps"]
+    assert "docker" in expanded["capabilities"]
     assert steps[0]["type"] == "tool"
     tool = steps[0]["tool"]
     result = await activity_boundary.execute(tool["id"], tool["inputs"])

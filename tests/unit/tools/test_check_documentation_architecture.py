@@ -7,6 +7,7 @@ import json
 import sys
 from pathlib import Path
 
+import pytest
 
 MODULE_PATH = (
     Path(__file__).resolve().parents[3] / "tools" / "check_documentation_architecture.py"
@@ -151,6 +152,24 @@ def test_documentation_architecture_standard_not_miscounted_as_system_view() -> 
         ),
     ]
     assert mod.check_duplicate_canonical_authority(docs) == []
+
+
+@pytest.mark.parametrize("filename", ["Overview.md", "ThingSystem.md", "ThingDesign.md"])
+def test_authority_comes_from_declaration_regardless_of_filename(filename) -> None:
+    """#3964: replacing prose must still detect a second declared system view."""
+    primary = _doc(
+        "docs/Architecture.md",
+        "# Primary\n**Document Class:** System Architecture View\n",
+    )
+    other = _doc(f"docs/Other/{filename}", "# Other\nOrdinary explanatory prose.\n")
+    assert mod.check_duplicate_canonical_authority([primary, other]) == []
+
+    conflicting = _doc(
+        other.path, other.text + "\n**Document Class:** System Architecture View\n"
+    )
+    assert _rules(mod.check_duplicate_canonical_authority([primary, conflicting])) == {
+        "duplicate-canonical-authority"
+    }
 
 
 def test_contract_without_authority_statement_flagged() -> None:
@@ -361,6 +380,28 @@ def test_default_full_scan_is_non_blocking(capsys) -> None:
     rc = mod.main(["--scope", "all"])
     capsys.readouterr()
     assert rc == 0
+
+
+@pytest.mark.parametrize("scope_args", [[], ["--scope", "changed"]])
+def test_incremental_default_reports_changed_violations_without_retroactive_churn(
+    monkeypatch, capsys, scope_args
+) -> None:
+    """Exercise the CLI default, with independent invalid metadata/claim fixtures."""
+    docs = [
+        _doc("docs/Old.md", "# Old\nLegacy prose without metadata.\n"),
+        _doc("docs/New.md", "# New\n### DOC-REQ-1 Malformed claim\n"),
+    ]
+    monkeypatch.setattr(mod, "all_doc_paths", lambda: [d.path for d in docs])
+    monkeypatch.setattr(mod, "changed_doc_paths", lambda _base: ["docs/New.md"])
+    monkeypatch.setattr(mod, "load_docs", lambda _paths: docs)
+
+    assert mod.main(["--format", "json", *scope_args]) == 0
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["advisory_only"] is True
+    assert {f["path"] for f in payload["findings"]} == {"docs/New.md"}
+    assert {f["rule"] for f in payload["findings"]} == {
+        "missing-document-class", "malformed-claim-id"
+    }
 
 
 def test_strict_mode_returns_nonzero_when_findings_exist(capsys) -> None:

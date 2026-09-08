@@ -48,6 +48,7 @@ from moonmind.runtime_intent import (
     RuntimeIntentValidationError,
     validate_runtime_tier_intent,
 )
+from moonmind.workflows.executions.preset_readiness import SavedPresetCapabilitiesInput
 from moonmind.workflows.temporal.remediation_loop import (
     RemediationLoopSpec,
     validate_remediation_loop_agent_instructions,
@@ -1892,6 +1893,74 @@ class PresetCatalogService:
             undefined=StrictUndefined,
         )
 
+    async def check_saved_capabilities(
+        self, request: SavedPresetCapabilitiesInput
+    ) -> dict[str, Any]:
+        """Check saved requirements without granting capabilities or editing steps."""
+        admitted = set(_normalize_capabilities(request.required_capabilities))
+        gaps: list[dict[str, Any]] = []
+        for saved in request.presets:
+            slug = saved["slug"]
+            scope = _normalize_scope(saved.get("scope", "global"))
+            scope_ref = saved.get("scopeRef")
+            if scope is PresetScopeType.PERSONAL:
+                scope_ref = scope_ref or request.principal
+                if scope_ref != request.principal:
+                    raise PresetValidationError(
+                        "Saved personal preset owner does not match the execution owner."
+                    )
+            scope_ref = _normalize_scope_ref(scope, scope_ref)
+            try:
+                template = await self._get_template_for_scope(
+                    slug=_normalize_slug(slug), scope=scope, scope_ref=scope_ref
+                )
+            except PresetNotFoundError:
+                gaps.append(
+                    {"slug": slug, "scope": scope.value, "reason": "preset_unavailable"}
+                )
+                continue
+            try:
+                required = await self._current_declared_capabilities(
+                    template,
+                    path=[_template_path_label(slug=template.slug)],
+                    visited={(scope.value, template.slug, scope_ref)},
+                )
+            except PresetValidationError as exc:
+                gaps.append(
+                    {
+                        "slug": slug,
+                        "scope": scope.value,
+                        "reason": "preset_composition_unavailable",
+                        "errors": exc.errors,
+                    }
+                )
+                continue
+            missing = sorted(set(required) - admitted)
+            if missing:
+                gaps.append(
+                    {"slug": slug, "scope": scope.value, "missingCapabilities": missing}
+                )
+        if not gaps:
+            return {"status": "ready"}
+        missing = sorted(
+            {cap for gap in gaps for cap in gap.get("missingCapabilities", [])}
+        )
+        detail = ", ".join(missing) if missing else "an available preset definition"
+        return {
+            "status": "refresh_required",
+            "code": "saved_preset_capabilities_stale",
+            "definitionId": request.definition_id,
+            "missingCapabilities": missing,
+            "presets": gaps,
+            "message": (
+                f"Saved schedule requires a plan refresh: missing {detail}. "
+                "In Workflow Create, reapply the listed presets and save a replacement "
+                "schedule with the same repository, runtime, model, effort, and cadence; "
+                "then retire the old schedule. Review the newly required capabilities "
+                "before admission. Restarting workers does not refresh saved requirements."
+            ),
+        }
+
     async def _get_template_for_scope(
         self,
         *,
@@ -2376,6 +2445,118 @@ class PresetCatalogService:
             validated.append(step_payload)
         return validated
 
+    async def _resolve_include_target(
+        self,
+        include: Mapping[str, Any],
+        *,
+        scope: PresetScopeType,
+        scope_ref: str | None,
+        path: list[str],
+        visited: set[tuple[str, str, str | None]],
+    ) -> tuple[Preset, str, list[str]]:
+        """Resolve one include using the same authority rules for every reader."""
+        include_slug = _normalize_slug(str(include.get("slug") or ""))
+        include_alias = _normalize_slug(str(include.get("alias") or ""))
+        include_scope = _normalize_scope(str(include.get("scope") or scope.value))
+        include_scope_ref = (
+            None if include_scope is PresetScopeType.GLOBAL else scope_ref
+        )
+        include_path = [
+            *path,
+            _template_path_label(
+                slug=include_slug,
+                alias=include_alias,
+            ),
+        ]
+        if (
+            scope is PresetScopeType.GLOBAL
+            and include_scope is PresetScopeType.PERSONAL
+        ):
+            message = (
+                "Global presets cannot include personal presets at "
+                f"{_format_include_path(include_path)}."
+            )
+            raise _include_tree_error(
+                message=message,
+                code="preset_include_scope_violation",
+                include_path=include_path,
+            )
+        target_key = (include_scope.value, include_slug, include_scope_ref)
+        if target_key in visited:
+            message = (
+                "Preset include cycle detected at "
+                f"{_format_include_path(include_path)}."
+            )
+            raise _include_tree_error(
+                message=message,
+                code="preset_include_cycle",
+                include_path=include_path,
+            )
+        try:
+            child_template = await self._get_template_for_scope(
+                slug=include_slug,
+                scope=include_scope,
+                scope_ref=include_scope_ref,
+            )
+        except PresetError as exc:
+            message = (
+                f"Preset include target unavailable at "
+                f"{_format_include_path(include_path)}: {exc}"
+            )
+            raise _include_tree_error(
+                message=message,
+                code="preset_include_missing",
+                include_path=include_path,
+            ) from exc
+        if child_template.release_status is PresetReleaseStatus.INACTIVE:
+            message = (
+                f"Preset include target is inactive at "
+                f"{_format_include_path(include_path)}."
+            )
+            raise _include_tree_error(
+                message=message,
+                code="preset_include_inactive",
+                include_path=include_path,
+            )
+        return child_template, include_alias, include_path
+
+    async def _current_declared_capabilities(
+        self,
+        template: Preset,
+        *,
+        path: list[str],
+        visited: set[tuple[str, str, str | None]],
+    ) -> list[str]:
+        """Read the current declared graph without rendering or mutating a plan."""
+        capabilities = list(template.required_capabilities or [])
+        for index, step in enumerate(template.steps or [], start=1):
+            if not _preset_step_enabled(step.get("enabled", True)):
+                continue
+            kind = str(step.get("kind") or _STEP_KIND).strip().lower()
+            if (
+                kind == _STEP_KIND
+                and str(step.get("type") or "").strip().lower() == _STEP_TYPE_PRESET
+            ):
+                include = _preset_step_to_include(step, index=index)
+            elif kind == _INCLUDE_KIND:
+                include = step
+            else:
+                continue
+            child, _alias, child_path = await self._resolve_include_target(
+                include,
+                scope=template.scope_type,
+                scope_ref=template.scope_ref,
+                path=path,
+                visited=visited,
+            )
+            child_key = (child.scope_type.value, child.slug, child.scope_ref)
+            capabilities.extend(
+                await self._current_declared_capabilities(
+                    child, path=child_path, visited={*visited, child_key}
+                )
+            )
+        return _normalize_capabilities(capabilities)
+
     async def _expand_preset_steps(
         self,
         *,
@@ -2432,68 +2613,22 @@ class PresetCatalogService:
                 rendered.pop("presetVersion", None)
                 kind = _INCLUDE_KIND
             if kind == _INCLUDE_KIND:
-                include_slug = _normalize_slug(str(rendered.get("slug") or ""))
-                include_alias = _normalize_slug(str(rendered.get("alias") or ""))
-                include_scope = _normalize_scope(str(rendered.get("scope") or scope.value))
-                include_scope_ref = (
-                    None
-                    if include_scope is PresetScopeType.GLOBAL
-                    else scope_ref
+                child_template, include_alias, include_path = (
+                    await self._resolve_include_target(
+                        rendered,
+                        scope=scope,
+                        scope_ref=scope_ref,
+                        path=path,
+                        visited=visited,
+                    )
                 )
-                include_path = [
-                    *path,
-                    _template_path_label(
-                        slug=include_slug,
-                        alias=include_alias,
-                    ),
-                ]
-                if scope is PresetScopeType.GLOBAL and include_scope is PresetScopeType.PERSONAL:
-                    message = (
-                        "Global presets cannot include personal presets at "
-                        f"{_format_include_path(include_path)}."
-                    )
-                    raise _include_tree_error(
-                        message=message,
-                        code="preset_include_scope_violation",
-                        include_path=include_path,
-                    )
-                target_key = (include_scope.value, include_slug, include_scope_ref)
-                if target_key in visited:
-                    message = (
-                        "Preset include cycle detected at "
-                        f"{_format_include_path(include_path)}."
-                    )
-                    raise _include_tree_error(
-                        message=message,
-                        code="preset_include_cycle",
-                        include_path=include_path,
-                    )
-                try:
-                    child_template = await self._get_template_for_scope(
-                        slug=include_slug,
-                        scope=include_scope,
-                        scope_ref=include_scope_ref,
-                    )
-                except PresetError as exc:
-                    message = (
-                        f"Preset include target unavailable at "
-                        f"{_format_include_path(include_path)}: {exc}"
-                    )
-                    raise _include_tree_error(
-                        message=message,
-                        code="preset_include_missing",
-                        include_path=include_path,
-                    ) from exc
-                if child_template.release_status is PresetReleaseStatus.INACTIVE:
-                    message = (
-                        f"Preset include target is inactive at "
-                        f"{_format_include_path(include_path)}."
-                    )
-                    raise _include_tree_error(
-                        message=message,
-                        code="preset_include_inactive",
-                        include_path=include_path,
-                    )
+                include_scope = child_template.scope_type
+                include_scope_ref = child_template.scope_ref
+                target_key = (
+                    include_scope.value,
+                    child_template.slug,
+                    include_scope_ref,
+                )
                 input_mapping = rendered.get("inputMapping") or {}
                 if not isinstance(input_mapping, dict):
                     message = (

@@ -146,11 +146,13 @@ async def test_status_and_fetch_result_prefer_pull_request_url():
     status = await adapter.status("task-pr")
     result = await adapter.fetch_result("task-pr")
 
-    assert status.status == "completed"
-    assert status.metadata["normalizedStatus"] == "completed"
+    # A provider PR URL is evidence only: classification stays running until
+    # the provider reports completion; the URL is exposed via metadata.
+    assert status.status == "running"
+    assert status.metadata["normalizedStatus"] == "running"
     assert status.metadata["externalUrl"] == "https://github.com/org/repo/pull/123"
     assert status.metadata["pullRequestUrl"] == "https://github.com/org/repo/pull/123"
-    assert result.metadata["normalizedStatus"] == "completed"
+    assert result.metadata["normalizedStatus"] == "running"
     assert result.metadata["externalUrl"] == "https://github.com/org/repo/pull/123"
     assert result.metadata["pullRequestUrl"] == "https://github.com/org/repo/pull/123"
 
@@ -166,7 +168,7 @@ async def test_status_and_fetch_result_prefer_response_pull_request_url_field():
     status = await adapter.status("task-pr")
     result = await adapter.fetch_result("task-pr")
 
-    assert status.status == "completed"
+    assert status.status == "running"
     assert status.metadata["externalUrl"] == "https://github.com/org/repo/pull/456"
     assert status.metadata["pullRequestUrl"] == "https://github.com/org/repo/pull/456"
     assert result.metadata["externalUrl"] == "https://github.com/org/repo/pull/456"

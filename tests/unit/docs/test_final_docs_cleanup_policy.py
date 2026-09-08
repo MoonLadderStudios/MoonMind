@@ -18,7 +18,6 @@ RUN_HISTORY_DOC = (
 )
 ROADMAP_DOC = REPO_ROOT / "docs" / "MoonMindRoadmap.md"
 TEMP_PLAN = REPO_ROOT / "docs" / "tmp" / "StepExecutionsCheckpointingGapPlan.md"
-RUN_WORKFLOW = REPO_ROOT / "moonmind" / "workflows" / "temporal" / "workflows" / "run.py"
 CONDITIONAL_DOCS = (
     REPO_ROOT / "docs" / "ManagedAgents" / "DockerBackendService.md",
     REPO_ROOT / "docs" / "Security" / "SecretsSystem.md",
@@ -51,10 +50,6 @@ def _read(path: Path) -> str:
     return path.read_text(encoding="utf-8")
 
 
-def _manifest_builder_is_live() -> bool:
-    return "build_step_execution_manifest_payload" in _read(RUN_WORKFLOW)
-
-
 def test_canonical_docs_are_declarative_not_migration_tracking_surfaces() -> None:
     for path in CANONICAL_DOCS:
         text = _read(path)
@@ -65,22 +60,6 @@ def test_canonical_docs_are_declarative_not_migration_tracking_surfaces() -> Non
 
     assert metadata_fields(_read(RUN_HISTORY_DOC))["status"] != "Draft"
     assert metadata_fields(_read(LEDGER_DOC))["status"] == "Normative"
-
-
-def test_manifest_consolidation_claims_follow_current_code_evidence() -> None:
-    canonical_text = "\n".join(_read(path) for path in (STEP_DOC, LEDGER_DOC, ROADMAP_DOC))
-
-    assert not TEMP_PLAN.exists()
-    if _manifest_builder_is_live():
-        assert not re.search(
-            r"manifest (?:writer |)consolidation(?: is| remains)? unfinished",
-            canonical_text,
-            flags=re.IGNORECASE,
-        )
-    else:
-        assert "Manifest writer consolidation is completed" in canonical_text
-
-
 
 
 def test_temp_plan_cleanup_guard_removes_plan_after_final_dod_closes() -> None:

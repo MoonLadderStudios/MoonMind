@@ -87,7 +87,7 @@ async def test_omnigent_bootstrap_retries_with_capped_backoff_and_maintains_inve
     )
 
     with pytest.raises(asyncio.CancelledError):
-        await api_main._maintain_omnigent_bootstrap_reconciliation(initial_ready=False)
+        await api_main._maintain_omnigent_bootstrap_reconciliation()
 
     assert delays == [5, 10, 120, 120]
     assert reconciliations == [True, True, False]
@@ -511,7 +511,7 @@ async def test_catalog_outage_does_not_retry_registry_image_refresh(
     )
 
     with pytest.raises(asyncio.CancelledError):
-        await api_main._maintain_omnigent_bootstrap_reconciliation(initial_ready=False)
+        await api_main._maintain_omnigent_bootstrap_reconciliation()
 
     # Aggregate readiness stays false, so the loop keeps retrying with capped
     # backoff, but images are refreshed only on the first pass.
@@ -557,7 +557,7 @@ async def test_image_policy_outage_keeps_retrying_registry_refresh(
     )
 
     with pytest.raises(asyncio.CancelledError):
-        await api_main._maintain_omnigent_bootstrap_reconciliation(initial_ready=False)
+        await api_main._maintain_omnigent_bootstrap_reconciliation()
 
     assert image_refreshes == [True, True]
 

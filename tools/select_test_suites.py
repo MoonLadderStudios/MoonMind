@@ -96,6 +96,14 @@ TEMPORAL_BOUNDARY_EXACT = {
     # authority the generator cites; registry edits must re-run the drift and
     # composition checks.
     "services/temporal/scripts/bootstrap-namespace.sh",
+    # MoonLadderStudios/MoonMind#3964: the step-execution contract vocabulary
+    # guard (tests/unit/workflows/temporal/test_step_execution_contract_names.py)
+    # reads these paths; changes there must re-run the temporal-boundary shard
+    # that owns the guard.
+    "moonmind/schemas/step_execution_models.py",
+    "moonmind/schemas/agent_runtime_models.py",
+    "moonmind/workflows/executions/execution_contract.py",
+    "docs/Steps/StepExecutionsAndCheckpointing.md",
 }
 
 TEMPORAL_BOUNDARY_PREFIXES = (
