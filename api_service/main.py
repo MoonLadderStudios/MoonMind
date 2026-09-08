@@ -119,6 +119,9 @@ from api_service.auth import (
     auth_backend,
     fastapi_users,
 )
+from api_service.auth_providers import (
+    normalize_auth_provider as _normalize_auth_provider,
+)
 from moonmind.config.settings import settings
 from moonmind.provider_profiles.oauth_policy import is_codex_oauth_profile
 from moonmind.utils.logging import SecretRedactor
@@ -884,16 +887,23 @@ API_AUTH_PREFIX = "/api/v1/auth"  # Defined a constant for clarity
 # MoonLadderStudios/MoonMind#4116 K3/K4: planned accounts/oidc/header modes
 # have no auth-route behavior yet; mounting the legacy FastAPI Users
 # issuance/registration paths there would silently use the wrong authority.
+# Comparisons use the normalized selector so case/whitespace variants (e.g.
+# "Disabled", " ACCOUNTS ") take the same branch; unknown values mount
+# nothing and fail closed at startup validation instead.
 _AUTH_PLANNED_MODES = ("accounts", "oidc", "header")
 
-if settings.oidc.AUTH_PROVIDER in _AUTH_PLANNED_MODES:
+_NORMALIZED_AUTH_PROVIDER = _normalize_auth_provider(settings.oidc.AUTH_PROVIDER)
+
+if _NORMALIZED_AUTH_PROVIDER in _AUTH_PLANNED_MODES:
     logger.warning(
         "AUTH_PROVIDER is '%s', which is not yet implemented; skipping "
         "fastapi-users auth routers rather than mounting a substitute "
         "authority.",
         settings.oidc.AUTH_PROVIDER,
     )
-elif settings.oidc.AUTH_PROVIDER != "keycloak":
+elif _NORMALIZED_AUTH_PROVIDER == "keycloak":
+    logger.info("AUTH_PROVIDER is 'keycloak'. Skipping fastapi-users auth routers.")
+elif _NORMALIZED_AUTH_PROVIDER in ("disabled", "default", "google"):
     logger.info(
         f"AUTH_PROVIDER is '{settings.oidc.AUTH_PROVIDER}'. Including fastapi-users auth routers."
     )
@@ -923,7 +933,16 @@ elif settings.oidc.AUTH_PROVIDER != "keycloak":
         tags=["users"],
     )
 else:
-    logger.info("AUTH_PROVIDER is 'keycloak'. Skipping fastapi-users auth routers.")
+    # Unknown AUTH_PROVIDER: mount no auth routes. Startup validation
+    # (_initialize_oidc_provider) refuses unknown selectors with migration
+    # guidance; mounting nothing here keeps the import-time state fail-closed
+    # even if startup validation is bypassed.
+    logger.warning(
+        "AUTH_PROVIDER is '%s', which is not a recognized value; skipping "
+        "fastapi-users auth routers rather than mounting a substitute "
+        "authority.",
+        settings.oidc.AUTH_PROVIDER,
+    )
 
 app.add_middleware(
     CORSMiddleware,
@@ -2533,7 +2552,9 @@ async def startup_event():
     # probes after startup instead of blocking it.
 
     # Ensure default user and profile exist if auth is disabled
-    if settings.oidc.AUTH_PROVIDER == "disabled":
+    # (MoonLadderStudios/MoonMind#4116: normalized comparison so variants
+    # like "Disabled" take the same branch as "disabled").
+    if _normalize_auth_provider(settings.oidc.AUTH_PROVIDER) == "disabled":
         logger.info(
             "Auth provider is 'disabled'. Ensuring default user and profile exist on startup."
         )

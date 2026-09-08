@@ -39,11 +39,25 @@ SUPPORTED_AUTH_PROVIDERS = frozenset({"disabled", "default", "keycloak", "google
 # FastAPI Users authority.
 _PLANNED_AUTH_PROVIDERS = frozenset({"accounts", "oidc", "header"})
 
+# Legacy literals retained until the K3/K4 cutover lands (see
+# docs/tmp/KeycloakRemovalPlan.md §K5 ordering). Unknown values must fail
+# closed and never resolve through a substitute authority.
+
+
+def normalize_auth_provider(provider: str | None = None) -> str:
+    """Normalize an AUTH_PROVIDER selector for comparison.
+
+    Strips surrounding whitespace and lowercases so operator-supplied
+    variants such as "Disabled" or " ACCOUNTS " take the same branch as
+    their canonical lowercase form. Returns "" for None/blank input.
+    """
+    value = provider if provider is not None else settings.oidc.AUTH_PROVIDER
+    return (value or "").strip().lower()
+
 
 def is_planned_auth_provider(provider: str | None = None) -> bool:
     """Return True when the selector names a planned mode with no behavior yet."""
-    value = provider if provider is not None else settings.oidc.AUTH_PROVIDER
-    return (value or "").strip().lower() in _PLANNED_AUTH_PROVIDERS
+    return normalize_auth_provider(provider) in _PLANNED_AUTH_PROVIDERS
 
 
 async def _planned_mode_unavailable() -> None:
@@ -59,6 +73,22 @@ async def _planned_mode_unavailable() -> None:
             "Authentication mode is not yet implemented; "
             "see docs/tmp/KeycloakRemovalPlan.md K3/K4. "
             "Refusing to authenticate rather than using a substitute authority."
+        ),
+    )
+
+
+async def _unknown_mode_unavailable() -> None:
+    """Fail closed for unknown AUTH_PROVIDER values at the request boundary.
+
+    Startup validation (`validate_auth_provider`) refuses unknown selectors
+    with a RuntimeError, but settings mutated after startup must still fail
+    closed here rather than silently resolving through FastAPI Users.
+    """
+    raise HTTPException(
+        status_code=503,
+        detail=(
+            "Unknown authentication mode; refusing to authenticate. "
+            "See docs/tmp/KeycloakRemovalPlan.md K3."
         ),
     )
 
@@ -145,9 +175,16 @@ def get_current_user():
         # behavior yet. Fail closed rather than silently resolving through
         # the FastAPI Users authority.
         return _planned_mode_unavailable
-    if settings.oidc.AUTH_PROVIDER != "disabled":
-        # Keycloak / default auth modes – just use the fastapi-users dependency
+    normalized = normalize_auth_provider()
+    if normalized == "disabled":
+        pass  # disabled single-user path below
+    elif normalized in SUPPORTED_AUTH_PROVIDERS:
+        # Keycloak / default / google auth modes – just use the fastapi-users dependency
         return current_active_user
+    else:
+        # Unknown selector mutated after startup validation: fail closed
+        # rather than resolving through a substitute authority.
+        return _unknown_mode_unavailable
 
     if _cached_current_user_dependency is None:
 
@@ -210,9 +247,12 @@ def get_current_user_optional():
 
     if is_planned_auth_provider():
         return _planned_mode_unavailable
-    if settings.oidc.AUTH_PROVIDER != "disabled":
+    normalized = normalize_auth_provider()
+    if normalized == "disabled":
+        return get_current_user()
+    if normalized in SUPPORTED_AUTH_PROVIDERS:
         return current_active_user_optional
-    return get_current_user()
+    return _unknown_mode_unavailable
 
 async def get_auth_manager(
     db: AsyncSession = Depends(get_async_session),
@@ -228,10 +268,11 @@ def get_auth_router():
         # K3/K4 own the replacement routes. Mount nothing rather than the
         # legacy FastAPI Users issuance/registration paths.
         return router
-    if settings.oidc.AUTH_PROVIDER == "keycloak":
+    normalized = normalize_auth_provider()
+    if normalized == "keycloak":
         # Keycloak routes would be included here
         pass
-    elif settings.oidc.AUTH_PROVIDER == "default":
+    elif normalized == "default":
         router.include_router(
             fastapi_users.get_auth_router(auth_backend),
             prefix="/auth/jwt",
@@ -242,4 +283,7 @@ def get_auth_router():
             prefix="/auth",
             tags=["auth"],
         )
+    # "disabled", "google" (discovery is startup-only), and unknown values
+    # mount no legacy issuance paths here: unknown values fail closed at
+    # startup/request boundaries rather than gaining a substitute authority.
     return router
