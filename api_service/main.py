@@ -675,6 +675,108 @@ async def _initialize_oidc_provider(app: FastAPI):
     # discovery against a retired issuer. Generic external OIDC discovery is owned
     # by the #4124 contract; this step performs no outbound DNS/connect attempt.
     settings.oidc.validate_auth_provider()
+    # K3 (#4120 R2): resolve the explicit MoonMind control-plane configuration
+    # from MoonMind-owned inputs only. Runtime-server OMNIGENT_AUTH_* ambient
+    # values never select MoonMind behavior; the resolved object is passed
+    # into the K2 qualification boundary by later (K4) wiring. Stored on
+    # app.state for readiness/diagnostics; redacted in logs.
+    try:
+        from moonmind.security.auth_modes import (
+            build_auth_diagnostics,
+            resolve_control_plane_config,
+            resolve_session_secret,
+        )
+
+        secret = resolve_session_secret()
+        control_plane = resolve_control_plane_config(
+            mode=settings.oidc.AUTH_PROVIDER, cookie_secret=secret
+        )
+        app.state.moonmind_control_plane_auth = control_plane.to_qualification_kwargs()
+        app.state.moonmind_auth_diagnostics = build_auth_diagnostics(
+            mode=settings.oidc.AUTH_PROVIDER,
+            db_reachable=True,
+            secret_configured=True,
+        )
+    except Exception as exc:
+        from moonmind.utils.logging import SecretRedactor as _Redactor
+
+        redacted = _Redactor.from_environ().scrub(str(exc))
+        logger.warning("MoonMind control-plane auth preflight deferred: %s", redacted)
+        app.state.moonmind_control_plane_auth = None
+        app.state.moonmind_auth_diagnostics = None
+
+
+async def _resolve_auth_bootstrap_decision(app: FastAPI) -> None:
+    """Resolve the K3 fresh-vs-pre-cutover bootstrap decision (best effort).
+
+    Uses the versioned, persisted migration decision (#4119 contract via
+    ``moonmind.security.auth_modes``), never a heuristic such as "no account
+    has a password". A populated database with omitted, legacy, or
+    contradictory configuration is reported actionably as
+    ``require-operator-choice`` in readiness/diagnostics and the startup log
+    without modifying owners; the API listener still starts so the operator
+    can record the protected decision. Fresh databases proceed through the
+    normal production path.
+    """
+    from moonmind.security.auth_modes import (
+        AuthMigrationDecision,
+        decide_auth_bootstrap,
+        load_migration_decision,
+    )
+
+    def _mode_explicitly_set() -> bool:
+        return "AUTH_PROVIDER" in os.environ and str(os.environ["AUTH_PROVIDER"]).strip() != ""
+
+    try:
+        mode = settings.oidc.AUTH_PROVIDER
+    except Exception:
+        mode = "disabled"
+    decision_path = os.environ.get("MOONMIND_AUTH_MIGRATION_DECISION_FILE", "")
+    try:
+        migration: AuthMigrationDecision | None = load_migration_decision(decision_path or None)
+    except Exception as exc:
+        logger.error(
+            "Auth migration decision unreadable; operator choice required: %s",
+            SecretRedactor.from_environ().scrub(str(exc)),
+        )
+        app.state.moonmind_auth_bootstrap = None
+        return
+    try:
+        async with get_async_session_context() as session:
+            result = await session.execute(text('SELECT COUNT(*) FROM "user"'))
+            user_count = int(result.scalar() or 0)
+    except Exception:
+        # Database unreachable: readiness reports degraded; do not block the
+        # listener on an authority we cannot observe.
+        app.state.moonmind_auth_bootstrap = None
+        return
+    try:
+        bootstrap = decide_auth_bootstrap(
+            mode=mode,
+            mode_explicitly_set=_mode_explicitly_set(),
+            db_has_users=user_count > 0,
+            migration_decision=migration,
+        )
+    except Exception as exc:
+        logger.error(
+            "Auth bootstrap decision failed: %s",
+            SecretRedactor.from_environ().scrub(str(exc)),
+        )
+        app.state.moonmind_auth_bootstrap = None
+        return
+    app.state.moonmind_auth_bootstrap = bootstrap
+    if bootstrap.action == "require-operator-choice":
+        logger.error(
+            "Authentication requires an explicit protected operator choice: %s",
+            bootstrap.reason,
+        )
+    else:
+        logger.info(
+            "Auth bootstrap: action=%s mode=%s fresh=%s",
+            bootstrap.action,
+            bootstrap.mode,
+            bootstrap.fresh_install,
+        )
 
 
 @asynccontextmanager
@@ -753,21 +855,59 @@ _api_start_time = time.monotonic()
 
 @health_router.get("/healthz")
 async def health_check():
-    """Health endpoint with database connectivity probe."""
+    """Health endpoint with database connectivity probe.
+
+    Keeps the historical ``{status, db, uptime_seconds}`` shape and adds
+    distinguishable authentication readiness (``auth_mode``,
+    ``auth_readiness``, ``setup_required``) without secret values (#4120 R7).
+    Infrastructure readiness (``status``/``db``), authentication readiness,
+    and required operator setup stay distinct fields.
+    """
+    from moonmind.security.auth_modes import build_auth_readiness
+
     uptime = int(time.monotonic() - _api_start_time)
     try:
         async with get_async_session_context() as session:
             await session.execute(text("SELECT 1"))
-        return {"status": "ok", "db": "connected", "uptime_seconds": uptime}
+        db_ok = True
     except Exception:
-        return JSONResponse(
-            status_code=503,
-            content={
-                "status": "degraded",
-                "db": "unreachable",
-                "uptime_seconds": uptime,
-            },
+        db_ok = False
+    try:
+        mode = settings.oidc.AUTH_PROVIDER
+    except Exception:
+        mode = "disabled"
+    bootstrap = getattr(app.state, "moonmind_auth_bootstrap", None)
+    try:
+        readiness = build_auth_readiness(
+            db_reachable=db_ok, mode=mode, bootstrap=bootstrap
         )
+    except Exception:
+        readiness = None
+    base = {"status": "ok", "db": "connected", "uptime_seconds": uptime}
+    if readiness is not None:
+        base.update(
+            {
+                "auth_mode": readiness.mode,
+                "auth_readiness": readiness.authentication,
+                "setup_required": readiness.setup_required,
+            }
+        )
+    if not db_ok:
+        content = {
+            "status": "degraded",
+            "db": "unreachable",
+            "uptime_seconds": uptime,
+        }
+        if readiness is not None:
+            content.update(
+                {
+                    "auth_mode": readiness.mode,
+                    "auth_readiness": readiness.authentication,
+                    "setup_required": readiness.setup_required,
+                }
+            )
+        return JSONResponse(status_code=503, content=content)
+    return base
 
 
 @app.get("/", include_in_schema=False)
@@ -2408,6 +2548,7 @@ async def startup_event():
 
     _assert_omnigent_configuration_is_current()
     await _initialize_oidc_provider(app)  # Fail fast on retired selectors; no discovery fetch
+    await _resolve_auth_bootstrap_decision(app)  # K3 (#4120 R3): fresh vs pre-cutover
     _register_settings_change_subscribers()
     try:
         from moonmind.rag.service import ContextRetrievalService

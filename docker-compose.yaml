@@ -185,15 +185,34 @@ services:
       - MOONMIND_MANAGED_RUNTIME_JANITOR_MAX_DELETE_PATHS=${MOONMIND_MANAGED_RUNTIME_JANITOR_MAX_DELETE_PATHS:-100}
       - MOONMIND_MANAGED_RUNTIME_JANITOR_MAX_DELETE_BYTES=${MOONMIND_MANAGED_RUNTIME_JANITOR_MAX_DELETE_BYTES:-}
       - MOONMIND_MANAGED_RUNTIME_JANITOR_LOCK_PATH=${MOONMIND_MANAGED_RUNTIME_JANITOR_LOCK_PATH:-/work/agent_jobs/.janitor.lock}
-      # Generic external OIDC (MoonLadderStudios/MoonMind#4124). No bundled
-      # identity provider remains; leave the issuer unset unless an external
-      # IdP is configured. Retired `keycloak`/`default`/`google` selectors are
-      # rejected at API startup with migration guidance (#4129).
-      - AUTH_PROVIDER=${AUTH_PROVIDER:-disabled} # accounts, oidc, header, or disabled
+      # MoonMind application authentication (#4120; see
+      # docs/Security/AuthenticationContracts.md). One AUTH_PROVIDER selector:
+      # accounts (fresh-install default via the normal production path),
+      # oidc (generic external IdP), header (trusted proxy only), or explicitly
+      # restricted local disabled. Retired `keycloak`/`default`/`google`/`local`
+      # selectors are rejected at API startup with migration guidance (#4129);
+      # they are never translated and there is no implicit provider fallback.
+      # OMNIGENT_AUTH_* variables belong to the runtime server and never
+      # select MoonMind behavior. Fresh setup stays `docker compose up -d`
+      # with no mandatory `.env`; populated databases with omitted/legacy
+      # configuration stop actionably pending the versioned migration decision
+      # file (MOONMIND_AUTH_MIGRATION_DECISION_FILE).
+      - AUTH_PROVIDER=${AUTH_PROVIDER:-disabled} # accounts, oidc, header, or explicitly restricted local disabled
       - OIDC_ISSUER_URL=${OIDC_ISSUER_URL:-} # Generic external issuer URL for 'oidc'
       - OIDC_CLIENT_ID=${OIDC_CLIENT_ID:-} # Generic external client ID for 'oidc'
       - OIDC_CLIENT_SECRET=${OIDC_CLIENT_SECRET:-} # Generic external client secret for 'oidc'
-      - JWT_SECRET=${JWT_SECRET:-devsecret} # For 'disabled' auth provider (legacy JWT)
+      - MOONMIND_AUTH_MIGRATION_DECISION_FILE=${MOONMIND_AUTH_MIGRATION_DECISION_FILE:-/app/var/secrets/moonmind_auth_migration_decision.json}
+      # Deployment-owned MoonMind session-signing secret (durable across
+      # restarts/replicas via the moonmind_secrets volume mounted below).
+      # Leave unset for local-first startup: one 32-byte value is generated
+      # and persisted with single-generation concurrency semantics. Explicit
+      # placeholder values (for example 'devsecret') are rejected at startup;
+      # rotation is staged via MOONMIND_SESSION_SECRET_PREVIOUS through the
+      # session owner, never by regenerating on each boot.
+      - MOONMIND_SESSION_SECRET=${MOONMIND_SESSION_SECRET:-}
+      - MOONMIND_SESSION_SECRET_PREVIOUS=${MOONMIND_SESSION_SECRET_PREVIOUS:-}
+      - MOONMIND_SESSION_SECRET_FILE=${MOONMIND_SESSION_SECRET_FILE:-/app/var/secrets/moonmind_session_secret}
+      - JWT_SECRET=${JWT_SECRET:-devsecret} # Legacy JWT fallback; placeholder values are rejected by the session-secret validator
     env_file:
       - path: .env
         required: false

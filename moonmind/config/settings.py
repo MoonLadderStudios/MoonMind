@@ -1759,7 +1759,15 @@ class MemorySettings(BaseSettings):
     )
 
 class OIDCSettings(BaseSettings):
-    """OIDC settings"""
+    """MoonMind user-auth settings (selector owned by ``moonmind.security.auth_modes``).
+
+    The canonical ``AUTH_PROVIDER`` contract (supported modes, retired
+    selectors, fail-fast migration guidance, no alias layer or implicit
+    fallback) lives in :mod:`moonmind.security.auth_modes`. This settings
+    class remains the process configuration holder for backwards-compatible
+    attribute access (``settings.oidc.AUTH_PROVIDER``), but validation
+    delegates to the canonical owner so every consumer observes one contract.
+    """
 
     # Canonical application-authentication selector
     # (docs/Security/AuthenticationContracts.md). Supported target modes are
@@ -1802,6 +1810,9 @@ class OIDCSettings(BaseSettings):
     def validate_auth_provider(self) -> str:
         """Return the normalized selector, failing fast on retired/unknown values.
 
+        Delegates to the canonical owner
+        (:func:`moonmind.security.auth_modes.validate_auth_provider`) so the
+        OIDC-scoped settings holder never defines a competing contract.
         Retired bundled-Keycloak selectors are rejected with migration guidance
         (MoonLadderStudios/MoonMind#4129); they are never silently translated to
         another mode. Unknown selectors fail closed the same way. The normalized
@@ -1811,22 +1822,9 @@ class OIDCSettings(BaseSettings):
         therefore select the intended mode instead of falling through to an
         authenticated bearer dependency.
         """
-        provider = (self.AUTH_PROVIDER or "").strip().lower()
-        if provider in self.RETIRED_AUTH_PROVIDERS:
-            raise RuntimeError(
-                f"Unsupported AUTH_PROVIDER '{self.AUTH_PROVIDER}': the bundled "
-                "Keycloak integration was removed (#4129). Use 'accounts' for "
-                "built-in accounts, 'oidc' with OIDC_ISSUER_URL/OIDC_CLIENT_ID/"
-                "OIDC_CLIENT_SECRET for generic external OIDC, 'header' behind a "
-                "trusted proxy, or explicitly restricted local 'disabled'. "
-                "See docs/Security/AuthenticationContracts.md."
-            )
-        if provider not in self.SUPPORTED_AUTH_PROVIDERS:
-            raise RuntimeError(
-                f"Unknown AUTH_PROVIDER '{self.AUTH_PROVIDER}': supported modes are "
-                "'accounts', 'oidc', 'header', and explicitly restricted local "
-                "'disabled'. See docs/Security/AuthenticationContracts.md."
-            )
+        from moonmind.security.auth_modes import validate_auth_provider as _canonical
+
+        provider = _canonical(self.AUTH_PROVIDER)
         self.AUTH_PROVIDER = provider
         return provider
 
