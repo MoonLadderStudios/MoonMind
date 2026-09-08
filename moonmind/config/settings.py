@@ -1804,7 +1804,12 @@ class OIDCSettings(BaseSettings):
 
         Retired bundled-Keycloak selectors are rejected with migration guidance
         (MoonLadderStudios/MoonMind#4129); they are never silently translated to
-        another mode. Unknown selectors fail closed the same way.
+        another mode. Unknown selectors fail closed the same way. The normalized
+        value is stored so later exact comparisons against canonical lowercase
+        modes (for example `"disabled"`) see the same selector that validation
+        approved; noncanonical spellings such as `DISABLED` or padded values
+        therefore select the intended mode instead of falling through to an
+        authenticated bearer dependency.
         """
         provider = (self.AUTH_PROVIDER or "").strip().lower()
         if provider in self.RETIRED_AUTH_PROVIDERS:
@@ -1822,6 +1827,7 @@ class OIDCSettings(BaseSettings):
                 "'accounts', 'oidc', 'header', and explicitly restricted local "
                 "'disabled'. See docs/Security/AuthenticationContracts.md."
             )
+        self.AUTH_PROVIDER = provider
         return provider
 
 class FeatureFlagsSettings(BaseSettings):
