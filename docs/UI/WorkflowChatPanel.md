@@ -174,8 +174,6 @@ Binding rules:
 
 Every native application request that crosses the MoonMind origin—HTML/bootstrap, session snapshot, history, message, stream, resource, terminal, approval, control, reconnect, and WebSocket traffic—must pass through the binding-scoped MoonMind bridge boundary.
 
-User-versus-machine credential boundaries for this surface (MoonMind login vs. worker/container-job, provider, and Omnigent runtime credentials, bearer transport, and the same-origin facade) are owned by [AuthenticationSystem.md](../Security/AuthenticationSystem.md) §5; this document does not define a parallel credential contract.
-
 For every request and reconnect, the bridge must:
 
 1. authenticate the MoonMind caller,

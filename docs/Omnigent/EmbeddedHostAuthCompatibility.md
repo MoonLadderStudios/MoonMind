@@ -108,8 +108,7 @@ on each accepted operation. Readiness and errors expose only safe profile,
 generation, pinned-commit, and failure-code metadata.
 
 The binding token is a runner control-plane credential, distinct from Omnigent
-user authentication and MoonMind user/operator authentication (canonical
-user-versus-machine boundaries: [AuthenticationSystem.md](../Security/AuthenticationSystem.md) §5). Authorization
+user authentication and MoonMind user/operator authentication. Authorization
 Bearer values, cookies, query/path values, execution-principal headers, and
 workflow payload values are not runner credentials. A successful verification
 returns only a token-derived runner identifier and the profile version; raw
