@@ -88,6 +88,7 @@ __all__ = [
     "is_auth_provider_explicit",
     "resolve_production_mode",
     "classify_deployment",
+    "is_missing_schema_error",
     "parse_migration_decision",
     "format_migration_decision",
     "ensure_migration_decision_table_sql",
@@ -280,6 +281,34 @@ def resolve_production_mode(
             "migration preflight. See docs/Security/AuthenticationContracts.md."
         )
     return "accounts"
+
+
+_MISSING_SCHEMA_MARKERS = ("does not exist", "no such table", "unknown database")
+
+
+def is_missing_schema_error(exc: BaseException) -> bool:
+    """Whether a users-probe failure evidences an unmigrated store.
+
+    A missing users table (or database) means no users can exist, so the
+    probe result is genuinely fresh. Any other failure (refused connection,
+    authentication, timeouts) says nothing about stored data and must abort
+    rather than guess. Matches across the chained causes so driver-wrapped
+    errors (asyncpg, sqlite) are recognised."""
+    seen: set[int] = set()
+    stack = [exc]
+    while stack:
+        current = stack.pop()
+        if id(current) in seen:
+            continue
+        seen.add(id(current))
+        if any(
+            marker in str(current).lower() for marker in _MISSING_SCHEMA_MARKERS
+        ):
+            return True
+        for chained in (getattr(current, "__cause__", None), getattr(current, "__context__", None)):
+            if isinstance(chained, BaseException):
+                stack.append(chained)
+    return False
 
 
 @dataclass(frozen=True)

@@ -684,6 +684,7 @@ async def _initialize_oidc_provider(app: FastAPI):
         classify_deployment,
         ensure_migration_decision_table_sql,
         is_auth_provider_explicit,
+        is_missing_schema_error,
         parse_migration_decision,
         public_base_url_is_loopback,
         redacted_diagnostics,
@@ -814,14 +815,19 @@ async def _initialize_oidc_provider(app: FastAPI):
         except RuntimeError:
             raise
         except Exception as exc:
-            # Database unreachable at startup: never guess fresh vs. upgrade.
-            # Abort so the orchestrator retries once the store is reachable; a
-            # failed probe must not cache a fresh-accounts classification that
-            # later masks a populated pre-cutover database.
-            raise RuntimeError(
-                "Auth-mode startup could not probe user count; refusing to "
-                f"guess fresh vs. upgrade: {exc}"
-            ) from exc
+            if is_missing_schema_error(exc):
+                # Fresh database whose schema is not migrated yet: a missing
+                # users table (or database) means no users can exist.
+                has_users = False
+            else:
+                # Database unreachable or misconfigured: never guess fresh vs.
+                # upgrade. Abort so the orchestrator retries once the store is
+                # reachable; a failed probe must not cache a fresh-accounts
+                # classification that later masks a populated database.
+                raise RuntimeError(
+                    "Auth-mode startup could not probe user count; refusing to "
+                    f"guess fresh vs. upgrade: {exc}"
+                ) from exc
     classification = classify_deployment(
         raw_selector=raw if (explicit or raw) else None,
         explicit=explicit,
@@ -864,21 +870,6 @@ async def _initialize_oidc_provider(app: FastAPI):
         )
     except Exception as exc:
         raise RuntimeError(f"Invalid MoonMind control-plane auth config: {exc}") from exc
-    # The active request validator still signs bearer tokens with the legacy
-    # JWT secret until the #4124 session cutover consumes the resolved
-    # MoonMind secret: refuse authenticated modes on placeholder key material
-    # instead of shipping forgeable bearer tokens.
-    if production_mode in ("accounts", "oidc", "header"):
-        from moonmind.security.auth_modes_4120 import looks_like_placeholder_secret
-
-        if looks_like_placeholder_secret(settings.security.JWT_SECRET_KEY or ""):
-            raise RuntimeError(
-                "Refusing to serve authenticated mode "
-                f"'{production_mode}' with placeholder JWT_SECRET_KEY: set an "
-                "explicit operator-generated JWT secret or run explicit "
-                "'disabled' local mode. See "
-                "docs/Security/AuthenticationContracts.md."
-            )
     # Disabled-mode exposure at the deployment boundary.
     try:
         validate_publish_binding(

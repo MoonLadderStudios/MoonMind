@@ -129,6 +129,18 @@ def test_migration_decision_ddl_is_idempotent_single_row():
     assert "CHECK (id = 1)" in sql
 
 
+def test_missing_schema_error_detection():
+    assert m.is_missing_schema_error(
+        RuntimeError('relation "users" does not exist')
+    ) is True
+    assert m.is_missing_schema_error(Exception("no such table: users")) is True
+    chained = RuntimeError("probe failed")
+    chained.__cause__ = RuntimeError('relation "users" does not exist')
+    assert m.is_missing_schema_error(chained) is True
+    assert m.is_missing_schema_error(ConnectionRefusedError("refused")) is False
+    assert m.is_missing_schema_error(RuntimeError("boom")) is False
+
+
 # ---------------------------------------------------------------------------
 # 4. Durable signing secrets
 # ---------------------------------------------------------------------------
