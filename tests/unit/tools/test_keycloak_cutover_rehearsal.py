@@ -231,6 +231,7 @@ def test_run_gate_includes_new_hermetic_steps_and_stays_deployment_blocked() -> 
     for name in (
         "inventory-survey", "build-pins", "backup-freeze-drain",
         "failure-injection", "dual-issuance", "auth-boundary-replay",
+        "rollback-scope", "retirement-plan",
     ):
         assert by_name[name].status == "completed", (name, by_name[name].evidence)
     assert any(r.status == "blocked" for r in results)
