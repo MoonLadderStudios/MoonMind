@@ -853,52 +853,6 @@ def _get_bridge_store(
     return build_bridge_session_store()
 
 
-async def _require_mode_transition_safe(
-    payload: BridgeSessionCreateRequest,
-    config: OmnigentBridgeConfig = Depends(
-        _require_new_embedded_transport_admission
-    ),
-    store: OmnigentBridgeSessionStore = Depends(_get_bridge_store),
-) -> OmnigentBridgeConfig:
-    """Prevent a configured mode change from orphaning active session owners.
-
-    Chains through the shared retired-transport admission gate so the 410
-    Gone surface for new embedded admission resolves before proxy/facade
-    dependencies and before this ownership check.
-    """
-
-    idempotency_key = _clean(payload.labels.get(_IDEMPOTENCY_KEY_LABEL))
-    active_modes = await store.active_host_protocol_modes(
-        exclude_idempotency_key=idempotency_key
-    )
-    conflicts = {
-        mode: count
-        for mode, count in active_modes.items()
-        if mode != config.host_protocol_mode
-    }
-    if conflicts:
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail={
-                "code": "omnigent_bridge_mode_transition_blocked",
-                "message": (
-                    "The configured Omnigent host protocol mode cannot take "
-                    "ownership while active sessions belong to another or an "
-                    "unknown mode. Drain or terminalize those sessions first."
-                ),
-                "selectedMode": config.host_protocol_mode,
-                "activeSessionModes": conflicts,
-            },
-        )
-    return config
-
-
-def _get_embedded_host_facade(
-    _config: OmnigentBridgeConfig = Depends(_require_embedded_mode),
-) -> OmnigentEmbeddedHostProtocolFacade:
-    return build_embedded_host_facade(_config)
-
-
 async def _existing_embedded_retry_session_id(
     *, store: OmnigentBridgeSessionStore, idempotency_key: str | None
 ) -> str | None:
@@ -945,6 +899,52 @@ async def _require_new_embedded_transport_admission(
         return config
     _reject_new_embedded_transport_admission(config)
     return config  # Unreachable: the rejection above always raises.
+
+
+async def _require_mode_transition_safe(
+    payload: BridgeSessionCreateRequest,
+    config: OmnigentBridgeConfig = Depends(
+        _require_new_embedded_transport_admission
+    ),
+    store: OmnigentBridgeSessionStore = Depends(_get_bridge_store),
+) -> OmnigentBridgeConfig:
+    """Prevent a configured mode change from orphaning active session owners.
+
+    Chains through the shared retired-transport admission gate so the 410
+    Gone surface for new embedded admission resolves before proxy/facade
+    dependencies and before this ownership check.
+    """
+
+    idempotency_key = _clean(payload.labels.get(_IDEMPOTENCY_KEY_LABEL))
+    active_modes = await store.active_host_protocol_modes(
+        exclude_idempotency_key=idempotency_key
+    )
+    conflicts = {
+        mode: count
+        for mode, count in active_modes.items()
+        if mode != config.host_protocol_mode
+    }
+    if conflicts:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail={
+                "code": "omnigent_bridge_mode_transition_blocked",
+                "message": (
+                    "The configured Omnigent host protocol mode cannot take "
+                    "ownership while active sessions belong to another or an "
+                    "unknown mode. Drain or terminalize those sessions first."
+                ),
+                "selectedMode": config.host_protocol_mode,
+                "activeSessionModes": conflicts,
+            },
+        )
+    return config
+
+
+def _get_embedded_host_facade(
+    _config: OmnigentBridgeConfig = Depends(_require_embedded_mode),
+) -> OmnigentEmbeddedHostProtocolFacade:
+    return build_embedded_host_facade(_config)
 
 
 async def _get_create_embedded_facade(
