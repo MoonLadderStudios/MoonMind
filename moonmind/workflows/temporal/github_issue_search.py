@@ -8,6 +8,7 @@ from dataclasses import dataclass, field
 from typing import Any
 
 import httpx
+from markdown_it import MarkdownIt
 
 from moonmind.workflows.adapters.github_service import GitHubService
 
@@ -23,7 +24,7 @@ class PrerequisiteLookup:
 def declared_prerequisites(body: str, repository: str) -> list[tuple[str, int]]:
     """Read declared prerequisites and child lists, never contextual issue links."""
     declarations = [
-        match.group(1)
+        (match.group(1), False)
         for match in re.finditer(
             r"(?:\bCompletion depends on|\bIntegration prerequisites:|"
             r"(?:^|(?<=[.!?]))[ \t]*(?:[-*] )?Depends on:?)\s*"
@@ -35,22 +36,32 @@ def declared_prerequisites(body: str, repository: str) -> list[tuple[str, int]]:
     # Child lists declare completion dependencies even when a stale checkbox
     # claims completion. Their state is resolved by the same GitHub lookup as
     # sentence declarations, with one shared identity cache and request budget.
-    in_child_section = False
-    for line in body.splitlines():
-        heading = re.match(r"^#{1,6}[ \t]+(.+?)\s*#*\s*$", line)
-        if heading:
-            in_child_section = heading.group(1).casefold() in {
+    child_section_level: int | None = None
+    tokens = MarkdownIt("commonmark").parse(body)
+    for index, token in enumerate(tokens):
+        if token.type == "heading_open" and token.level == 0:
+            level = int(token.tag[1:])
+            if child_section_level is not None and level <= child_section_level:
+                child_section_level = None
+            if child_section_level is None and tokens[index + 1].content.casefold() in {
                 "child issues",
                 "sub-issues",
-            }
-        elif in_child_section:
-            entry = re.match(
-                r"[ \t]*(?:[-*+]|\d+[.)])[ \t]+(?:\[[ xX]\][ \t]+)?(.+)", line
-            )
-            if entry:
-                declarations.append(entry.group(1))
+            }:
+                child_section_level = level
+        elif (
+            child_section_level is not None
+            and token.type == "inline"
+            and index >= 2
+            and tokens[index - 1].type == "paragraph_open"
+            and tokens[index - 2].type == "list_item_open"
+        ):
+            # Only the first paragraph of a rendered list item declares a
+            # child. Markdown parsing excludes code and HTML-comment examples
+            # while retaining legal heading indentation and nested sections.
+            entry = re.sub(r"^\[[ xX]\]\s+", "", token.content)
+            declarations.append((entry, True))
     refs: list[tuple[str, int]] = []
-    for declaration in declarations:
+    for declaration, is_child in declarations:
         text = re.sub(
             r"\[[^\]\n]*\]\((https://github\.com/[\w.-]+/[\w.-]+/issues/[1-9]\d*)\)",
             r"\1",
@@ -61,6 +72,10 @@ def declared_prerequisites(body: str, repository: str) -> list[tuple[str, int]]:
             r"\1#\2",
             text,
         )
+        if is_child:
+            # A spaced dash introduces a title, including numeric titles such
+            # as "2FA support". A spaced range must name its endpoint with #.
+            text = re.split(r"\s+[-–—]\s+(?![\s#])", text, maxsplit=1)[0]
         # Consume only the leading reference list. Prose after the list can
         # contain parent, related, or other contextual issue references.
         text = re.sub(r"^issues?\s+", "", text, flags=re.IGNORECASE)
