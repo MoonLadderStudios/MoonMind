@@ -45,8 +45,28 @@ def test_stale_concurrent_migration_refused_without_allow_replace(tmp_path: Path
     ok, msg = rehearsal.save_state(state_dir, "mig-2", ["b"])
     assert not ok
     assert "stale/concurrent" in msg
-    ok_replace, _ = rehearsal.save_state(state_dir, "mig-2", ["b"], allow_replace=True)
-    assert ok_replace
+
+
+def test_corrupt_state_fails_closed_without_overwrite(tmp_path: Path) -> None:
+    state_dir = tmp_path / "state"
+    state_dir.mkdir()
+    (state_dir / "k6_rehearsal_state.json").write_text("{corrupt!!!")
+    ok, msg = rehearsal.save_state(state_dir, "mig-1", ["a"])
+    assert not ok
+    assert "corrupt" in msg
+    # The only durable record must survive, not be overwritten.
+    assert (state_dir / "k6_rehearsal_state.json").read_text() == "{corrupt!!!"
+
+
+def test_allow_replace_resets_progress_for_new_migration(tmp_path: Path) -> None:
+    state_dir = tmp_path / "state"
+    assert rehearsal.save_state(state_dir, "mig-1", ["a"])[0]
+    ok, _ = rehearsal.save_state(state_dir, "mig-2", ["b"], allow_replace=True)
+    assert ok
+    payload = json.loads((state_dir / "k6_rehearsal_state.json").read_text())
+    assert payload["migration_id"] == "mig-2"
+    assert payload["completed_steps"] == ["b"]
+    assert payload["runs"] == 1
 
 
 def test_rollback_refuses_whole_database_restore() -> None:
@@ -72,6 +92,28 @@ def test_retirement_refuses_broad_down_v() -> None:
 def test_retirement_refuses_volume_deletion() -> None:
     result = rehearsal.check_retirement_plan(["delete app volume moonmind_data"])
     assert result.status == "failed"
+
+
+def test_retirement_refuses_destructive_database_actions() -> None:
+    assert rehearsal.check_retirement_plan(["delete keycloak database"]).status == "failed"
+    assert rehearsal.check_retirement_plan(["remove keycloak database"]).status == "failed"
+    assert rehearsal.check_retirement_plan(["drop keycloak database"]).status == "failed"
+
+
+def test_retirement_check_without_action_stays_blocked(tmp_path: Path) -> None:
+    import subprocess
+    import sys
+
+    proc = subprocess.run(
+        [sys.executable, "tools/keycloak_cutover_rehearsal.py",
+         "--mode", "retirement-check",
+         "--state-dir", str(tmp_path / "state"),
+         "--migration-id", "retire-no-action"],
+        capture_output=True, text=True, cwd=Path(__file__).resolve().parents[3],
+    )
+    assert proc.returncode == 0, proc.stderr
+    summary = json.loads(proc.stdout)
+    assert summary["steps"][0]["status"] == "blocked"
 
 
 def test_retirement_blocked_without_identified_service() -> None:
@@ -107,6 +149,14 @@ def test_run_gate_keeps_plan_unarchived_and_deployment_blocked(tmp_path: Path) -
 def test_evidence_sanitizes_secrets() -> None:
     redacted = rehearsal.sanitize("login with password: hunter2 and token= abc123")
     assert "hunter2" not in redacted
+    assert "abc123" not in redacted
+
+
+def test_evidence_redacts_bearer_tokens_and_assignments() -> None:
+    redacted = rehearsal.sanitize("Authorization: Bearer abc123-def456")
+    assert "abc123-def456" not in redacted
+    redacted = rehearsal.sanitize("api call with token=supersecretvalue")
+    assert "supersecretvalue" not in redacted
 
 
 def test_inventory_survey_collects_counts_without_identity_exports() -> None:
@@ -187,8 +237,95 @@ def test_mutation_freeze_refuses_identity_mutations_only_when_frozen() -> None:
     freeze.freeze()
     assert not freeze.check("create identity mapping")[0]
     assert not freeze.check("grant admin privilege")[0]
+    # Account provisioning is an identity mutation and stays frozen.
+    assert not freeze.check("create account")[0]
+    assert not freeze.check("create user")[0]
+    assert not freeze.check("register user")[0]
     # Unrelated operational reads stay allowed even when frozen.
     assert freeze.check("read smoke-test status")[0]
+
+
+def test_rollback_accepts_only_structured_scope() -> None:
+    ok = rehearsal.check_rollback_plan("matching app/config/key restore with reconciliation")
+    assert ok.status == "completed"
+    assert rehearsal.check_rollback_plan("nonsense").status == "blocked"
+    assert rehearsal.check_rollback_plan("drop keycloak database").status == "failed"
+    assert rehearsal.check_rollback_plan("delete keycloak identity rows").status == "failed"
+
+
+def test_workflow_history_authority_compares_workflow_ids() -> None:
+    before = [
+        {"workflow_id": "wf-a", "owner_id": "o1", "commands": ["start", "poll"]},
+        {"workflow_id": "wf-b", "owner_id": "o2", "commands": ["start"]},
+    ]
+    swapped = [
+        {"workflow_id": "wf-b", "owner_id": "o2", "commands": ["start"]},
+        {"workflow_id": "wf-a", "owner_id": "o1", "commands": ["start", "poll"]},
+    ]
+    # Same identities by key (reordered collection) still verifies.
+    assert rehearsal.check_workflow_history_authority(before, swapped).status == "completed"
+    # Cross-associated identities must fail even with matching owners/commands.
+    other = [
+        {"workflow_id": "wf-x", "owner_id": "o1", "commands": ["start", "poll"]},
+        {"workflow_id": "wf-y", "owner_id": "o2", "commands": ["start"]},
+    ]
+    assert rehearsal.check_workflow_history_authority(before, other).status == "failed"
+
+
+def test_build_pins_fail_when_any_required_pin_unusable(tmp_path: Path) -> None:
+    # Malformed compose content must not yield positive topology evidence.
+    (tmp_path / "api_service/migrations/versions").mkdir(parents=True)
+    (tmp_path / "api_service/migrations/versions/0001_init.py").write_text("# init\n")
+    result = rehearsal.check_build_pins(tmp_path)
+    assert result.status == "failed"
+
+
+def test_json_out_parent_created_before_state(tmp_path: Path) -> None:
+    import subprocess
+    import sys
+
+    out = tmp_path / "nested" / "dir" / "out.json"
+    proc = subprocess.run(
+        [sys.executable, "tools/keycloak_cutover_rehearsal.py",
+         "--mode", "preflight",
+         "--state-dir", str(tmp_path / "state"),
+         "--migration-id", "json-out-test",
+         "--json-out", str(out)],
+        capture_output=True, text=True, cwd=Path(__file__).resolve().parents[3],
+    )
+    assert proc.returncode in (0, 2), proc.stderr
+    assert out.exists()
+
+
+def test_inventory_survey_passes_after_realm_export_removal(tmp_path: Path) -> None:
+    # After integrated removal deletes keycloak/realm-export.json, the
+    # expected absence must not fail the survey.
+    (tmp_path / "docker-compose.yaml").write_text(
+        "services:\n  app:\n    image: app:latest\n"
+    )
+    for rel in (
+        "moonmind/config/settings.py",
+        "api_service/main.py",
+        "api_service/auth_providers.py",
+        "api_service/db/models.py",
+        "init_db_scripts/01-create-dbs.sh",
+        ".env-template",
+    ):
+        p = tmp_path / rel
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_text("# no auth surfaces here\n")
+    assert rehearsal._capability_present("4129-removal", tmp_path)
+    result = rehearsal.check_inventory_survey(tmp_path)
+    assert result.status == "completed", result.evidence
+
+
+def test_app_image_pin_validated_by_hostname() -> None:
+    pins = rehearsal.collect_build_pins()
+    from urllib.parse import urlparse
+
+    host = urlparse("https://" + pins["app_image_default"]).hostname
+    # Exact hostname validation, not a substring match.
+    assert host == "ghcr.io"
 
 
 def test_dual_issuance_refuses_concurrent_old_and_new() -> None:
@@ -262,11 +399,19 @@ def test_capability_probes_flip_when_sibling_capability_lands(tmp_path: Path) ->
     assert rehearsal._capability_present("4119-mapping-revision", tmp_path)
     by_name = {s.name: s for s in rehearsal.check_prerequisites(tmp_path)}
     assert by_name["prerequisite-4119-mapping-revision"].status == "completed"
-    # #4120: a new AUTH_PROVIDER literal flips the probe.
+    # #4120: a new AUTH_PROVIDER default flips the probe.
     settings_dir = tmp_path / "moonmind/config"
     settings_dir.mkdir(parents=True)
-    (settings_dir / "settings.py").write_text("MODES = ('disabled', 'local')\n")
+    (settings_dir / "settings.py").write_text(
+        'AUTH_PROVIDER: str = Field("local", alias="AUTH_PROVIDER")\n'
+    )
     assert rehearsal._capability_present("4120-mode-key-setup", tmp_path)
+    # An unrelated literal elsewhere in the module must not flip the probe.
+    (settings_dir / "settings.py").write_text(
+        'AUTH_PROVIDER: str = Field("disabled", alias="AUTH_PROVIDER")\n'
+        "CACHE_BACKEND = 'local'\n"
+    )
+    assert not rehearsal._capability_present("4120-mode-key-setup", tmp_path)
     # #4122: a recovery tool outside this gate flips the probe.
     tools_dir = tmp_path / "tools"
     tools_dir.mkdir(parents=True)
