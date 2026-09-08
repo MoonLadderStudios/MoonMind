@@ -92,10 +92,12 @@ __all__ = [
     "format_migration_decision",
     "ensure_migration_decision_table_sql",
     "resolve_moonmind_auth_config",
+    "looks_like_placeholder_secret",
     "resolve_session_secret",
     "validate_publish_binding",
     "evaluate_ingress_fixture",
     "validate_public_base_url",
+    "public_base_url_is_loopback",
     "cookie_policy_for_base_url",
     "validate_trusted_proxy_config",
     "validate_callback_origin",
@@ -427,7 +429,8 @@ _PLACEHOLDER_SECRETS = frozenset(
 _MIN_SECRET_BYTES = 32
 
 
-def _looks_placeholder(value: str) -> bool:
+def looks_like_placeholder_secret(value: str) -> bool:
+    """Whether a secret value is blank or a known placeholder shape."""
     normalized = value.strip().lower()
     if not normalized:
         return True
@@ -440,6 +443,22 @@ def _looks_placeholder(value: str) -> bool:
     if normalized in ("devsecret", "dev-secret", "development"):
         return True
     return False
+
+
+def _durable_key_bytes(stored: bytes) -> bytes | None:
+    """Return persisted key material verbatim when it is complete.
+
+    Generated keys are exact-length binary material and reload byte-for-byte:
+    random keys may legitimately edge with ASCII whitespace, so stripping on
+    read would shorten them below the floor and brick restarts. Files shorter
+    than the floor return ``None`` so callers fail closed with context.
+    Longer files (e.g. operator-provisioned material with a trailing newline)
+    are used verbatim; length is the gate, and reads are stable across
+    restarts because the file itself does not change.
+    """
+    if len(stored) >= _MIN_SECRET_BYTES:
+        return bytes(stored)
+    return None
 
 
 def _secret_to_bytes(value: str) -> bytes:
@@ -496,10 +515,10 @@ def resolve_session_secret(
     path = Path(key_path) if key_path is not None else default_session_key_path()
     if explicit_secret is not None:
         # An explicitly provided blank is a misconfiguration, not an
-        # omission: _looks_placeholder rejects blanks alongside known
+        # omission: looks_like_placeholder_secret rejects blanks alongside known
         # placeholder shapes so callers cannot silently fall through to
         # durable generation with an operator intent to provide material.
-        if _looks_placeholder(str(explicit_secret)):
+        if looks_like_placeholder_secret(str(explicit_secret)):
             raise AuthModeError(
                 "The provided MoonMind session secret is an insecure placeholder. "
                 "Provide explicit operator-generated key material of at least "
@@ -523,17 +542,15 @@ def resolve_session_secret(
                 f"Unable to read the MoonMind session key at {path}: {exc}. "
                 "Failing closed rather than regenerating."
             ) from exc
-        # Persisted files store raw bytes; tolerate a trailing newline from
-        # operator provisioning but nothing else.
-        candidate = stored.strip()
-        if len(candidate) < _MIN_SECRET_BYTES:
+        candidate = _durable_key_bytes(stored)
+        if candidate is None:
             raise AuthModeError(
                 f"The MoonMind session key at {path} is incomplete "
-                f"({len(candidate)} bytes); at least {_MIN_SECRET_BYTES} bytes "
+                f"({len(stored)} bytes); at least {_MIN_SECRET_BYTES} bytes "
                 "are required. Rotate through the session owner with fresh "
                 "operator-generated material."
             )
-        return bytes(candidate)
+        return candidate
     if for_remote_production:
         raise AuthModeError(
             "No MoonMind session secret is configured for a remote production "
@@ -554,18 +571,19 @@ def resolve_session_secret(
     except FileExistsError:
         # A concurrent replica won the race; use its durable generation.
         try:
-            stored = path.read_bytes().strip()
+            stored = path.read_bytes()
         except OSError as exc:
             raise AuthModeError(
                 f"Concurrent session-key bootstrap lost the creation race and "
                 f"could not read the winner's key at {path}: {exc}."
             ) from exc
-        if len(stored) < _MIN_SECRET_BYTES:
+        candidate = _durable_key_bytes(stored)
+        if candidate is None:
             raise AuthModeError(
                 f"The concurrently created MoonMind session key at {path} is "
                 "incomplete; failing closed rather than minting a second key."
             )
-        return bytes(stored)
+        return candidate
     except OSError as exc:
         raise AuthModeError(
             f"Unable to persist the MoonMind session key at {path}: {exc}."
@@ -715,6 +733,25 @@ def _is_loopback_host(host: str) -> bool:
         return ipaddress.ip_address(normalized).is_loopback
     except ValueError:
         return False
+
+
+def public_base_url_is_loopback(value: str | None) -> bool:
+    """Whether a public base URL addresses a loopback host.
+
+    The hostname is parsed (never substring-matched), so remote hosts such
+    as ``https://localhost.example.com`` or URLs whose path/query mentions
+    ``127.0.0.1`` are not mistaken for local, while bracketed IPv6 loopback
+    (``http://[::1]:7000``) is recognised. Blank or unparseable values
+    return ``False`` (fail closed); callers keep their own blank handling.
+    """
+    raw = (value or "").strip()
+    if not raw:
+        return False
+    try:
+        host = urlsplit(raw).hostname or ""
+    except ValueError:
+        return False
+    return _is_loopback_host(host)
 
 
 @dataclass(frozen=True)
