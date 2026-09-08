@@ -71,6 +71,10 @@ with workflow.unsafe.imports_passed_through():
         is_jules_agent_runtime_node,
     )
     from moonmind.workflows.executions.routing import _coerce_bool
+    from moonmind.workflows.executions.preset_readiness import (
+        SAVED_PRESET_CAPABILITY_READINESS_PATCH,
+        saved_preset_capability_check,
+    )
     from moonmind.workflows.executions.prepared_context import (
         ExecutionContextBundle,
         branch_turn_step_execution_manifest_projection,
@@ -11516,6 +11520,55 @@ class MoonMindRunWorkflow:
         input_ref: Optional[str],
         plan_ref: Optional[str],
     ) -> Optional[str]:
+        # A new scheduled execution must validate its saved requirements even
+        # when it supplies a plan. Recorded histories and durable continuations
+        # keep their admitted inputs and already validated progress.
+        if (
+            workflow.patched(SAVED_PRESET_CAPABILITY_READINESS_PATCH)
+            and not getattr(workflow.info(), "continued_run_id", None)
+        ):
+            try:
+                check = saved_preset_capability_check(
+                    parameters, principal=self._owner_id or ""
+                )
+            except (ValueError, TypeError, AttributeError):
+                raise exceptions.ApplicationError(
+                    "Saved schedule preset provenance is invalid; review and "
+                    "reapply its presets before retrying.",
+                    type="saved_preset_capabilities_unavailable",
+                    non_retryable=True,
+                ) from None
+            if check is not None:
+                route = DEFAULT_ACTIVITY_CATALOG.resolve_activity(
+                    "plan.check_preset_capabilities"
+                )
+                readiness = await workflow.execute_activity(
+                    "plan.check_preset_capabilities",
+                    check.model_dump(),
+                    **self._execute_kwargs_for_route(route),
+                )
+                if (
+                    not isinstance(readiness, Mapping)
+                    or readiness.get("status") != "ready"
+                ):
+                    if (
+                        isinstance(readiness, Mapping)
+                        and readiness.get("status") == "refresh_required"
+                        and isinstance(readiness.get("message"), str)
+                        and readiness["message"].strip()
+                    ):
+                        raise exceptions.ApplicationError(
+                            str(readiness["message"]),
+                            dict(readiness),
+                            type="saved_preset_capabilities_stale",
+                            non_retryable=True,
+                        )
+                    raise exceptions.ApplicationError(
+                        "Saved schedule capability readiness is unavailable; inspect "
+                        "the schedule's preset definitions before retrying.",
+                        type="saved_preset_capabilities_unavailable",
+                        non_retryable=True,
+                    )
         if plan_ref:
             return plan_ref
 
@@ -19831,11 +19884,13 @@ class MoonMindRunWorkflow:
             "story_breakdown_path",
             "storyBreakdownMarkdownPath",
             "story_breakdown_markdown_path",
-            # Context retrieval (RAG) authoring surfaces (#3514): initial
-            # ContextPack overrides and in-session follow-up retrieval policy,
-            # plus the repository/tenant scope the retrieval budget binds to.
-            "rag",
-            "followUpRetrieval",
+            # Built-in vector retrieval is retired (#4105): `rag` /
+            # `followUpRetrieval` are never forwarded into new agent requests.
+            # Admission rejects explicit retired requirements for new work, so
+            # stripping here is a no-op for post-retirement workflows; for
+            # pre-retirement in-flight histories it keeps replay deterministic
+            # (in-flight decoding/schedule retirement is coordinated with the
+            # cutover child) instead of failing workflow tasks on construction.
             "repository",
             "tenant",
             "tenantId",

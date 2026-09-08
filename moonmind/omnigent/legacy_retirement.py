@@ -1199,6 +1199,61 @@ RETIREMENT_INVENTORY: tuple[LegacyPathRecord, ...] = (
             "test_direct_and_profile_bound_generations_are_independently_decided"
         ),
     ),
+    # ------------------------------------------------- embedded host transport
+    # MoonLadderStudios/MoonMind#3955 retires the experimental embedded
+    # host/runner transport without removing native chat or historical
+    # evidence. Stage 1 (this row): new admission is disabled while
+    # in-flight sessions drain through their recorded mode/endpoint and
+    # cleanup owner. The native Workflow Chat ``embedded=1`` presentation
+    # option and the shared bridge/session/event/idempotency contracts are
+    # not part of this row and stay supported.
+    LegacyPathRecord(
+        pathId="omnigent.legacy.embedded_host_transport",
+        owner="omnigent-control-plane",
+        description=(
+            "Retired embedded host/runner transport admission enforcement "
+            "(MoonLadderStudios/MoonMind#3955): the trusted selection and "
+            "HTTP boundaries that reject new sessions, hosts, and credential "
+            "consumers through the experimental embedded transport with an "
+            "actionable proxy alternative. Launch facade, tunnel channels, "
+            "and transport routes are tracked separately by "
+            "omnigent.embedded.launch_and_host_routes; retained sessions "
+            "drain through their recorded mode/endpoint and cleanup owner. "
+            "Proxy mode is the supported topology."
+        ),
+        family=ComponentFamily.BRIDGE_COMPATIBILITY,
+        generation=RuntimeGeneration.SHARED_LEGACY_SUBSTRATE,
+        retirementClass=RetirementClass.NEW_ADMISSION_DISABLED,
+        machineCheckableRef=(
+            "python:moonmind.omnigent.bridge_config:"
+            "assert_new_embedded_transport_admission_allowed"
+        ),
+        surfaces=(
+            "python:moonmind.omnigent.bridge_config:"
+            "assert_new_embedded_transport_admission_allowed",
+            "python:moonmind.omnigent.bridge_config:"
+            "embedded_transport_retirement",
+            "python:api_service.api.routers.omnigent_bridge:"
+            "_reject_new_embedded_transport_admission",
+            "python:api_service.api.routers.omnigent_bridge:"
+            "_require_new_embedded_transport_admission",
+        ),
+        activeResourceDependencies=frozenset(
+            {
+                ActiveOwnerKind.AGENT_RUN_OR_OMNIGENT_SESSION,
+                ActiveOwnerKind.HOST_BINDING_OR_LEASE,
+                ActiveOwnerKind.CREDENTIAL_CONSUMER,
+                ActiveOwnerKind.INCOMPLETE_CLEANUP_OR_JANITOR,
+            }
+        ),
+        historicalReadDependency=True,
+        applicableCriteria=_BASE_CRITERIA,
+        earliestRemovalStage=RemovalStage.PRODUCT_SELECTORS,
+        removalGuardTest=(
+            "tests/unit/api/routers/test_omnigent_bridge_embedded_retirement.py::"
+            "test_new_embedded_session_creates_nothing_and_names_proxy"
+        ),
+    ),
     # ------------------------------------------------------- migration tooling
     LegacyPathRecord(
         pathId="omnigent.legacy.session_migration_inventory",

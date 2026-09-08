@@ -1,11 +1,11 @@
-"""Unit tests for JulesStatusSnapshot and normalize_jules_status in moonmind.jules.status."""
+"""Unit tests for JulesStatusClassification and normalize_jules_status in moonmind.jules.status."""
 
 from __future__ import annotations
 
 import pytest
 
 from moonmind.jules.status import (
-    JulesStatusSnapshot,
+    JulesStatusClassification,
     normalize_jules_status,
 )
 
@@ -71,16 +71,14 @@ class TestNormalizeJulesStatus:
     @pytest.mark.parametrize("raw_status", [None, "", "  ", "mystery", "UNEXPECTED"])
     def test_unknown_statuses(self, raw_status: str | None) -> None:
         snapshot = normalize_jules_status(raw_status)
-        # None and blank both default to "pending" → queued
-        if raw_status is None or not str(raw_status or "").strip():
-            assert snapshot.normalized_status == "queued"
-        else:
-            assert snapshot.normalized_status == "unknown"
+        # Blank/None and unrecognized tokens classify as unknown (never a
+        # fabricated queued state); unknown is non-terminal.
+        assert snapshot.normalized_status == "unknown"
         assert snapshot.terminal is False
 
     def test_snapshot_has_all_expected_fields(self) -> None:
         snapshot = normalize_jules_status("completed")
-        assert isinstance(snapshot, JulesStatusSnapshot)
+        assert isinstance(snapshot, JulesStatusClassification)
         assert snapshot.provider_status == "completed"
         assert snapshot.provider_status_token == "completed"
         assert snapshot.normalized_status == "completed"

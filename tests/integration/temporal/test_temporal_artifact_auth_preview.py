@@ -35,7 +35,7 @@ async def test_preview_metadata_is_exposed_for_restricted_artifacts(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setattr(settings.oidc, "AUTH_PROVIDER", "local")
+    monkeypatch.setattr(settings.oidc, "AUTH_PROVIDER", "oidc")
     async with _db(tmp_path) as maker:
         async with maker() as session:
             service = TemporalArtifactService(

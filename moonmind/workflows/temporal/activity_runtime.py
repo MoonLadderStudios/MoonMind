@@ -41,7 +41,7 @@ from moonmind.security.outbound_scan import (
     scan_outbound_bundle,
     scan_outbound_text,
 )
-from moonmind.jules.status import JulesStatusSnapshot, normalize_jules_status
+from moonmind.jules.status import JulesStatusClassification, normalize_jules_status
 from moonmind.workflows.temporal.runtime.workspace_locators import (
     SandboxWorkspaceRecordStore,
     resolve_managed_workspace_locator,
@@ -88,6 +88,7 @@ from moonmind.schemas.workspace_locator_models import (
 )
 from moonmind.workflows.report_output import report_output_display_name
 from moonmind.workflows.checkpoint_branches import generate_checkpoint_branch_name
+from moonmind.workflows.executions.preset_readiness import SavedPresetCapabilitiesInput
 from moonmind.workflows.executions.routing import _coerce_bool
 from moonmind.workflows.executions.runtime_capabilities import (
     resolve_runtime_execution_capabilities,
@@ -946,6 +947,7 @@ _ACTIVITY_HANDLER_ATTRS: dict[str, tuple[str, str]] = {
     "manifest.compile": ("manifest", "manifest_compile"),
     "manifest.write_summary": ("manifest", "manifest_write_summary"),
     "plan.generate": ("plans", "plan_generate"),
+    "plan.check_preset_capabilities": ("plans", "plan_check_preset_capabilities"),
     "plan.validate": ("plans", "plan_validate"),
     "mm.tool.execute": ("skills", "mm_tool_execute"),
     "mm.skill.execute": ("skills", "mm_skill_execute"),
@@ -2274,6 +2276,16 @@ class TemporalPlanActivities:
     ) -> None:
         self._artifact_service = artifact_service
         self._planner = planner
+
+    async def plan_check_preset_capabilities(
+        self, request: dict[str, Any]
+    ) -> dict[str, Any]:
+        from api_service.db.base import get_async_session_context
+        from api_service.services.presets.catalog import PresetCatalogService
+
+        check = SavedPresetCapabilitiesInput.model_validate(request)
+        async with get_async_session_context() as session:
+            return await PresetCatalogService(session).check_saved_capabilities(check)
 
     async def plan_generate(
         self,
@@ -4735,7 +4747,7 @@ class TemporalIntegrationActivities:
         )
 
     @staticmethod
-    def _status_snapshot(raw_status: str | None) -> JulesStatusSnapshot:
+    def _status_snapshot(raw_status: str | None) -> JulesStatusClassification:
         return normalize_jules_status(raw_status)
 
     @staticmethod
@@ -4743,23 +4755,25 @@ class TemporalIntegrationActivities:
         *,
         provider_status: str | None,
         normalized_hint: str | None,
-    ) -> JulesStatusSnapshot:
+    ) -> JulesStatusClassification:
         snapshot = normalize_jules_status(provider_status)
         token = str(normalized_hint or "").strip().lower()
         if token == "cancelled":
             token = "canceled"
-        if token not in {"queued", "running", "completed", "failed", "canceled", "unknown"}:
+        if token not in {"queued", "running", "completed", "failed", "canceled", "unknown", "awaiting_feedback"}:
             return snapshot
 
         terminal = token in {"completed", "failed", "canceled"}
-        return JulesStatusSnapshot(
+        return JulesStatusClassification(
             provider_status=snapshot.provider_status,
             provider_status_token=snapshot.provider_status_token,
-            normalized_status=token,
+            normalized_status=token,  # type: ignore[arg-type]
             terminal=terminal,
             succeeded=token == "completed",
             failed=token == "failed",
             canceled=token == "canceled",
+            is_known=snapshot.is_known,
+            is_missing=snapshot.is_missing,
         )
 
     async def _write_failure_summary_artifact(
@@ -9773,12 +9787,10 @@ class TemporalAgentRuntimeActivities:
             '"reattempt_current_step" only when rerunning this verifier can '
             "obtain different controlling evidence. `recoverableInCurrentRuntime: "
             "false` alone does not prohibit separate remediation.\n"
-            "- Treat integration, e2e, smoke, quickstart, map-entry, UI/browser, "
-            "deployment, and external-service checks as advisory when they depend "
-            "on unavailable non-repo assets, services, credentials, or tooling; "
-            "missing map assets or environment-only failures must be reported as "
-            "non-blocking limitations, not used as the sole reason for a blocking "
-            "verdict.\n"
+            "- Follow the resolved Skill's evidence policy: distinguish optional "
+            "environment diagnostics from mandatory acceptance prerequisites, "
+            "and preserve the required owner, evidence, and resume check for "
+            "prerequisites an authorized remediation step cannot supply.\n"
             "- Still return the Markdown MoonSpec Verification Report in the assistant response."
         )
         return instructions.rstrip() + "\n\n" + block
