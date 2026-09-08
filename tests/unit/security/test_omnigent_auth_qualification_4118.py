@@ -489,16 +489,13 @@ def test_no_ambient_auth_state_at_import():
         for var in scrubbed:
             child_env.pop(var, None)
         repo_root = Path(__file__).resolve().parents[3]
+        check_code = (
+            "from moonmind.security import omnigent_auth_qualification as q; "
+            "assert q.SUPPORTED_MODES == "
+            '("accounts", "oidc", "header", "disabled"), q.SUPPORTED_MODES'
+        )
         subprocess.run(
-            [
-                sys.executable,
-                "-c",
-                "from moonmind.security import "
-                "omnigent_auth_qualification as q;"
-                "assert q.SUPPORTED_MODES == "
-                '("accounts", "oidc", "header", "disabled"), '
-                "q.SUPPORTED_MODES",
-            ],
+            [sys.executable, "-c", check_code],
             check=True,
             cwd=repo_root,
             env=child_env,

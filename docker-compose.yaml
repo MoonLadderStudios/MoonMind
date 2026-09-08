@@ -192,15 +192,18 @@ services:
       - MOONMIND_MANAGED_RUNTIME_JANITOR_LOCK_PATH=${MOONMIND_MANAGED_RUNTIME_JANITOR_LOCK_PATH:-/work/agent_jobs/.janitor.lock}
       # MoonMind application authentication (MoonLadderStudios/MoonMind#4120).
       # One selector, AUTH_PROVIDER: accounts, oidc, header, or explicitly
-      # restricted local disabled. Omitted selects accounts on a genuinely
-      # fresh database through the same production path as explicit accounts
-      # (protected first-owner setup, no mandatory .env); a populated
-      # database with an omitted selector stops actionably pending
+      # restricted local disabled. The Compose default is explicit `disabled`
+      # so a zero-config `docker compose up` stays usable: omitted/blank
+      # selects accounts through the production path (protected first-owner
+      # setup), but the accounts onboarding routes do not exist yet, so an
+      # empty default would 401 the fresh dashboard with no recourse. Opt in
+      # to accounts/oidc/header explicitly; a populated database with an
+      # omitted selector stops actionably pending
       # MOONMIND_AUTH_MIGRATION_DECISION (no silent disable, no new owner).
       # Retired `keycloak`/`default`/`google` selectors are rejected at API
       # startup with migration guidance (#4129). OMNIGENT_AUTH_* never
       # selects MoonMind auth.
-      - AUTH_PROVIDER=${AUTH_PROVIDER:-} # accounts, oidc, header, or disabled; empty = fresh->accounts, upgrade->migration_required
+      - AUTH_PROVIDER=${AUTH_PROVIDER:-disabled} # explicit local default; set accounts/oidc/header to opt in
       - MOONMIND_AUTH_MIGRATION_DECISION=${MOONMIND_AUTH_MIGRATION_DECISION:-}
       - OIDC_ISSUER_URL=${OIDC_ISSUER_URL:-} # Generic external issuer URL for 'oidc'
       - OIDC_CLIENT_ID=${OIDC_CLIENT_ID:-} # Generic external client ID for 'oidc'

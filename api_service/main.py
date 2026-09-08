@@ -685,6 +685,7 @@ async def _initialize_oidc_provider(app: FastAPI):
         ensure_migration_decision_table_sql,
         is_auth_provider_explicit,
         parse_migration_decision,
+        public_base_url_is_loopback,
         redacted_diagnostics,
         resolve_moonmind_auth_config,
         resolve_session_secret,
@@ -703,8 +704,25 @@ async def _initialize_oidc_provider(app: FastAPI):
     else:
         raw = ""
     decision = parse_migration_decision(os.environ.get(MIGRATION_DECISION_ENV_VAR))
+    # A malformed local principal ID is a deterministic configuration error:
+    # fail startup actionably instead of masking it as transient 503s on the
+    # request path.
+    try:
+        from uuid import UUID as _UUID
+
+        from api_service.auth import _DEFAULT_USER_ID as _fallback_user_id
+
+        _UUID(settings.oidc.DEFAULT_USER_ID or _fallback_user_id)
+    except Exception as exc:
+        raise RuntimeError(
+            "Invalid DEFAULT_USER_ID for disabled local mode: must parse "
+            f"as a UUID: {exc}"
+        ) from exc
     has_users: bool | None = None
-    if not explicit and not raw:
+    # Probe whenever the fresh/setup decision needs account state: omitted
+    # selectors (fresh vs. pre-cutover) and explicit `accounts` (fresh setup
+    # vs. established). Other explicit modes never derive setup from it.
+    if (not explicit and not raw) or (explicit and raw.lower() == "accounts"):
         # Omitted selector: distinguish fresh vs. pre-cutover via a bounded
         # users probe plus the versioned persisted migration decision (#4119
         # contract). Fresh (no users) takes the accounts production path;
@@ -732,6 +750,37 @@ async def _initialize_oidc_provider(app: FastAPI):
                         "operator-held env decision only."
                     )
                 else:
+                    if decision is not None:
+                        # Persist an accepted operator-held decision so a later
+                        # deployment without the env var keeps working instead
+                        # of regressing to migration_required (#4119 contract).
+                        # Best-effort: the env decision stays authoritative.
+                        try:
+                            from datetime import datetime, timezone
+
+                            await session.execute(
+                                text(
+                                    f"INSERT INTO {MIGRATION_DECISION_TABLE} "
+                                    "(id, mode, version, decided_at) VALUES "
+                                    "(1, :mode, :version, :decided_at) "
+                                    "ON CONFLICT (id) DO UPDATE SET mode = "
+                                    "EXCLUDED.mode, version = EXCLUDED.version, "
+                                    "decided_at = EXCLUDED.decided_at"
+                                ),
+                                {
+                                    "mode": decision.mode,
+                                    "version": decision.version,
+                                    "decided_at": datetime.now(timezone.utc),
+                                },
+                            )
+                            await session.commit()
+                        except Exception:
+                            await session.rollback()
+                            logger.warning(
+                                "Auth-mode startup could not persist the accepted "
+                                "migration decision; continuing with the "
+                                "operator-held env decision only."
+                            )
                     if decision is None:
                         try:
                             row = (
@@ -764,14 +813,15 @@ async def _initialize_oidc_provider(app: FastAPI):
                                     ) from exc
         except RuntimeError:
             raise
-        except Exception:
-            # Database unreachable at startup: fail closed later via healthz;
-            # do not guess fresh vs. upgrade here.
-            has_users = False
-            logger.warning(
-                "Auth-mode startup could not probe user count; "
-                "treating as undecided fresh path pending DB readiness."
-            )
+        except Exception as exc:
+            # Database unreachable at startup: never guess fresh vs. upgrade.
+            # Abort so the orchestrator retries once the store is reachable; a
+            # failed probe must not cache a fresh-accounts classification that
+            # later masks a populated pre-cutover database.
+            raise RuntimeError(
+                "Auth-mode startup could not probe user count; refusing to "
+                f"guess fresh vs. upgrade: {exc}"
+            ) from exc
     classification = classify_deployment(
         raw_selector=raw if (explicit or raw) else None,
         explicit=explicit,
@@ -784,7 +834,9 @@ async def _initialize_oidc_provider(app: FastAPI):
     # Durable signing secret: fresh local startup generates once; remote
     # production requires explicit material; placeholders always rejected.
     public_base = os.environ.get("MOONMIND_PUBLIC_BASE_URL", "").strip()
-    is_remote = bool(public_base) and "localhost" not in public_base and "127.0.0.1" not in public_base
+    # Hostname-parsed, never substring-matched: `https://localhost.example.com`
+    # is remote while `http://[::1]:7000` is local. Blank stays local-only.
+    is_remote = bool(public_base) and not public_base_url_is_loopback(public_base)
     try:
         session_secret = resolve_session_secret(
             explicit_secret=os.environ.get("MOONMIND_SESSION_SECRET")
@@ -812,6 +864,21 @@ async def _initialize_oidc_provider(app: FastAPI):
         )
     except Exception as exc:
         raise RuntimeError(f"Invalid MoonMind control-plane auth config: {exc}") from exc
+    # The active request validator still signs bearer tokens with the legacy
+    # JWT secret until the #4124 session cutover consumes the resolved
+    # MoonMind secret: refuse authenticated modes on placeholder key material
+    # instead of shipping forgeable bearer tokens.
+    if production_mode in ("accounts", "oidc", "header"):
+        from moonmind.security.auth_modes_4120 import looks_like_placeholder_secret
+
+        if looks_like_placeholder_secret(settings.security.JWT_SECRET_KEY or ""):
+            raise RuntimeError(
+                "Refusing to serve authenticated mode "
+                f"'{production_mode}' with placeholder JWT_SECRET_KEY: set an "
+                "explicit operator-generated JWT secret or run explicit "
+                "'disabled' local mode. See "
+                "docs/Security/AuthenticationContracts.md."
+            )
     # Disabled-mode exposure at the deployment boundary.
     try:
         validate_publish_binding(

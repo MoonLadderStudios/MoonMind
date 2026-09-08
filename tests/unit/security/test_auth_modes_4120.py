@@ -275,6 +275,21 @@ def test_base_url_and_forwarded_trust():
         )
 
 
+def test_public_base_url_loopback_uses_hostname_not_substring():
+    assert m.public_base_url_is_loopback("http://127.0.0.1:7000") is True
+    assert m.public_base_url_is_loopback("http://localhost:7000") is True
+    assert m.public_base_url_is_loopback("http://[::1]:7000") is True
+    assert m.public_base_url_is_loopback("https://app.example.com") is False
+    # Substring mimics are remote: hostname parsing, not matching.
+    assert m.public_base_url_is_loopback("https://localhost.example.com") is False
+    assert (
+        m.public_base_url_is_loopback("https://app.example.com/127.0.0.1/x")
+        is False
+    )
+    assert m.public_base_url_is_loopback("") is False
+    assert m.public_base_url_is_loopback(None) is False
+
+
 # ---------------------------------------------------------------------------
 # 7. Readiness kinds and secret-free diagnostics
 # ---------------------------------------------------------------------------
