@@ -242,6 +242,22 @@ verified against the function body — seven handlers, not one):
 - adapter/metadata helpers from `workflows/agent_run.py`: `integration.resolve_adapter_metadata`, `integration.get_activity_route`, `integration.resolve_external_adapter`, `integration.external_adapter_execution_style`
 - checkpoint-persistence handlers from `workflows/checkpoint_branch_turn.py` (via `checkpoint_branch_activity_handlers()`): `checkpoint_branch.turn.mark_running`, `checkpoint_branch.turn.persist_terminal`, `checkpoint_branch.turn.persist_terminal_rejection` — retained for replay/in-flight compatibility of pre-cutover histories; no new calls route there.
 
+New-write routing, retained compatibility, and the final topology are
+distinct states:
+
+- **New writes** schedule `checkpoint_branch.turn.*` on the artifacts fleet
+  (`mm.activity.artifacts`) behind the `checkpoint-branch-artifact-fleet-v1`
+  patch marker. The catalog (`activity_catalog.py`) and the artifacts worker
+  binding (`activity_runtime.py`) own that route.
+- **Retained compatibility** keeps the same handler implementations
+  registered on the workflow fleet only so pre-cutover histories recorded
+  without a queue override can replay and drain. Fixture replay proves
+  history compatibility, not deployed drainage.
+- **Final topology** removes the workflow-queue persistence registration,
+  its dead dependency injection, and now-unneeded permissions only after
+  old consumers have a verified disposition. Queue separation is not privilege separation: the retained handlers still share the workflow
+  worker process and its I/O authority until that removal lands.
+
 This registration is the current state, not the intended end state. The
 intended least-privilege boundary keeps the workflow fleet Temporal-only with
 no artifact, provider-mutation, or runtime-supervision I/O; whether
