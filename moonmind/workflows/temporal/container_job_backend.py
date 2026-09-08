@@ -1631,6 +1631,14 @@ class DockerContainerJobBackend:
                 ContainerJobFailureClass.IMAGE_USE_DENIED,
                 "registry credential does not match the authorized reference",
             )
+        if authorization is not None and (
+            normalize_image_reference(authorization.reference).identity
+            != normalize_image_reference(image).identity
+        ):
+            raise ContainerJobBackendError(
+                ContainerJobFailureClass.REPOSITORY_SCOPE_MISMATCH,
+                "resolved image does not match the authorized reference",
+            )
         if credential_ref is not None:
             return await self._acquire_private_image(
                 request, image, policy, credential_ref
@@ -1799,15 +1807,6 @@ class DockerContainerJobBackend:
             )
         normalized = normalize_image_reference(image)
         self._enforce_authorized_scope(normalized, authorization)
-        if (
-            normalize_image_reference(authorization.reference).identity
-            != normalized.identity
-        ):
-            raise ContainerJobBackendError(
-                ContainerJobFailureClass.REPOSITORY_SCOPE_MISMATCH,
-                "resolved image does not match the authorized reference",
-            )
-
         # A local inspect needs no registry authentication.
         inspect_code, stdout, _ = await self._runner(
             ("image", "inspect", "--format", "{{.Id}}", image)

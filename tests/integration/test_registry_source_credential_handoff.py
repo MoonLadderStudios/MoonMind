@@ -236,12 +236,20 @@ async def test_unauthorized_source_fails_before_workflow(
 
 @pytest.mark.parametrize(
     "change",
-    ["credential", "removed_credential", "image", "missing_decision", "unknown_source"],
+    [
+        "credential", "removed_credential", "image", "missing_decision",
+        "unknown_source", "public_image", "public_protected_image",
+    ],
 )
 async def test_changed_or_legacy_authority_fails_before_docker(
     session, tmp_path, monkeypatch, change
 ):
-    inp = await submit(session, config=backend_settings())
+    initial = (
+        backend_settings(credential=None, image="alpine:3.22")
+        if change.startswith("public_")
+        else backend_settings()
+    )
+    inp = await submit(session, config=initial)
     config = backend_settings()
     if change == "credential":
         config = backend_settings(credential="db://different")
@@ -251,6 +259,10 @@ async def test_changed_or_legacy_authority_fails_before_docker(
         config = backend_settings(image=IMAGE.split("@")[0] + ":different")
     elif change == "unknown_source":
         config = resolve_container_backend_settings({})
+    elif change == "public_image":
+        config = backend_settings(credential=None, image="alpine:3.23")
+    elif change == "public_protected_image":
+        config = backend_settings(credential=None, image=IMAGE)
     else:
         # Previously persisted source submissions had no authorization payload.
         inp.registry_authorization = None
@@ -282,4 +294,34 @@ async def test_changed_or_legacy_authority_fails_before_docker(
         )
     assert error.value.non_retryable
     runner.assert_not_awaited()
+    resolver.assert_not_awaited()
+
+
+@pytest.mark.parametrize("legacy", [False, True])
+async def test_public_alias_reuses_equivalent_admitted_image(session, tmp_path, legacy):
+    inp = await submit(
+        session, config=backend_settings(credential=None, image="alpine:3.22")
+    )
+    runner = AsyncMock(return_value=(0, DIGEST.encode(), b""))
+    resolver = AsyncMock()
+    runtime = TemporalAgentRuntimeActivities(container_job_backend=DockerContainerJobBackend(
+        workspace_root=tmp_path,
+        settings=backend_settings(
+            credential=None, image="docker.io/library/alpine:3.22"
+        ),
+        command_runner=runner,
+        registry_auth_resolver=resolver,
+    ))
+    result = await runtime.container_job_acquire_image({
+        "jobId": inp.job_id,
+        "ownershipToken": inp.ownership_token,
+        "request": inp.request.model_dump(mode="json", by_alias=True),
+        # Credential-free jobs persisted before alias authorization remain valid.
+        "registryAuthorization": None if legacy else inp.registry_authorization.model_dump(
+            by_alias=True
+        ),
+        "resolvedWorkspaceRef": str(tmp_path),
+    })
+    assert result["imageObservation"]["cacheHit"] is True
+    runner.assert_awaited_once()
     resolver.assert_not_awaited()
