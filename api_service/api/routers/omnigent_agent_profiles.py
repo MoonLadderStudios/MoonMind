@@ -17,7 +17,6 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from api_service.api.routers.omnigent_bridge import (
     _get_bridge_proxy,
-    _get_create_embedded_facade,
     _require_bridge_enabled,
 )
 from api_service.api.routers.provider_profiles import (
@@ -53,11 +52,7 @@ from api_service.services.omnigent_agent_smoke_service import (
     run_profile_readiness_checks,
     run_smoke_validation,
 )
-from moonmind.omnigent.bridge_config import (
-    HOST_PROTOCOL_MODE_EMBEDDED,
-    OmnigentBridgeConfig,
-)
-from moonmind.omnigent.bridge_embedded import OmnigentEmbeddedHostProtocolFacade
+from moonmind.omnigent.bridge_config import OmnigentBridgeConfig
 from moonmind.omnigent.bridge_proxy import (
     OmnigentBridgeError,
     OmnigentBridgeSessionProxy,
@@ -677,13 +672,8 @@ async def _refresh_upstream_projection(
     *,
     config: OmnigentBridgeConfig,
     proxy: OmnigentBridgeSessionProxy | None,
-    embedded_facade: OmnigentEmbeddedHostProtocolFacade | None,
 ) -> None:
-    facade = (
-        embedded_facade
-        if config.host_protocol_mode == HOST_PROTOCOL_MODE_EMBEDDED
-        else proxy
-    )
+    facade = proxy
     if facade is None:
         raise HTTPException(503, "Omnigent inventory bridge is unavailable")
     try:
@@ -705,13 +695,12 @@ def _bridge_refresh(
     *,
     config: OmnigentBridgeConfig,
     proxy: OmnigentBridgeSessionProxy | None,
-    embedded_facade: OmnigentEmbeddedHostProtocolFacade | None,
 ):
     """Bind the upstream-projection refresh to the readiness-check core."""
 
     async def _refresh() -> None:
         await _refresh_upstream_projection(
-            session, config=config, proxy=proxy, embedded_facade=embedded_facade
+            session, config=config, proxy=proxy
         )
 
     return _refresh
@@ -1162,9 +1151,6 @@ async def validate_profile(
     artifact_service: TemporalArtifactService = Depends(_get_temporal_artifact_service),
     bridge_config: OmnigentBridgeConfig = Depends(_require_bridge_enabled),
     bridge_proxy: OmnigentBridgeSessionProxy | None = Depends(_get_bridge_proxy),
-    embedded_facade: OmnigentEmbeddedHostProtocolFacade | None = Depends(
-        _get_create_embedded_facade
-    ),
 ) -> dict[str, Any]:
     """Perform bounded, credential-free readiness validation before activation."""
     _require_provider_profile_permission(current_user, "provider_profiles.write")
@@ -1185,7 +1171,6 @@ async def validate_profile(
             session,
             config=bridge_config,
             proxy=bridge_proxy,
-            embedded_facade=embedded_facade,
         ),
         read_bundle_bytes=_artifact_bundle_reader(artifact_service, current_user),
     )
@@ -1222,9 +1207,6 @@ async def smoke_validate_profile(
     artifact_service: TemporalArtifactService = Depends(_get_temporal_artifact_service),
     bridge_config: OmnigentBridgeConfig = Depends(_require_bridge_enabled),
     bridge_proxy: OmnigentBridgeSessionProxy | None = Depends(_get_bridge_proxy),
-    embedded_facade: OmnigentEmbeddedHostProtocolFacade | None = Depends(
-        _get_create_embedded_facade
-    ),
 ) -> dict[str, Any]:
     """Run an operator-triggered bounded smoke preflight (Sec 7).
 
@@ -1247,11 +1229,7 @@ async def smoke_validate_profile(
     if target is None:
         raise HTTPException(404, "profile version not found")
 
-    facade = (
-        embedded_facade
-        if bridge_config.host_protocol_mode == HOST_PROTOCOL_MODE_EMBEDDED
-        else bridge_proxy
-    )
+    facade = bridge_proxy
     diagnostics: list[str] = []
 
     async def _preflight():
@@ -1262,7 +1240,6 @@ async def smoke_validate_profile(
                 session,
                 config=bridge_config,
                 proxy=bridge_proxy,
-                embedded_facade=embedded_facade,
             ),
             read_bundle_bytes=_artifact_bundle_reader(artifact_service, current_user),
         )
@@ -1542,9 +1519,6 @@ async def resolve_snapshot(
     current_user: User = Depends(get_current_user()),
     bridge_config: OmnigentBridgeConfig = Depends(_require_bridge_enabled),
     bridge_proxy: OmnigentBridgeSessionProxy | None = Depends(_get_bridge_proxy),
-    embedded_facade: OmnigentEmbeddedHostProtocolFacade | None = Depends(
-        _get_create_embedded_facade
-    ),
 ) -> dict[str, Any]:
     """Resolve and persist the exact immutable selection at an authoring boundary."""
     _require_provider_profile_permission(current_user, "provider_profiles.write")
@@ -1614,7 +1588,6 @@ async def resolve_snapshot(
             session,
             config=bridge_config,
             proxy=bridge_proxy,
-            embedded_facade=embedded_facade,
         )
         projection_id = projection_identity(
             target.document["endpointRef"],

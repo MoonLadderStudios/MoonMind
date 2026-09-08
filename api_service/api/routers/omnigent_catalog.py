@@ -49,7 +49,6 @@ from moonmind.config.container_backend_settings import (
     resolve_container_backend_settings,
 )
 from moonmind.config.settings import settings
-from moonmind.omnigent.bridge_config import HOST_PROTOCOL_MODE_EMBEDDED
 from moonmind.omnigent.control_plane.identities import (
     EGRESS_CLEANUP_AUTHORITY_KEY,
     EGRESS_CLEANUP_AUTHORITY_VERSION,
@@ -85,10 +84,8 @@ from moonmind.utils.logging import redact_sensitive_payload
 
 from .omnigent_bridge import (
     _compatibility_diagnostics,
-    _resolve_embedded_evidence,
     get_bridge_config,
 )
-from .omnigent_bridge_composition import evaluate_active_host_auth_readiness
 
 router = APIRouter(prefix="/api/omnigent", tags=["Omnigent Catalog"])
 
@@ -444,10 +441,7 @@ def _deployment_reasons(config: Any, bridge: dict[str, Any]) -> list[GateReason]
     runtime_gate = build_omnigent_gate()
     if not runtime_gate.enabled:
         reasons.append(_reason("rollout_gate_disabled"))
-    if (
-        config.host_protocol_mode != HOST_PROTOCOL_MODE_EMBEDDED
-        and not _valid_server_url(resolved_server_url())
-    ):
+    if not _valid_server_url(resolved_server_url()):
         reasons.append(_reason("bridge_endpoint_unavailable"))
     if os.getenv("MOONMIND_WORKSPACE_RESOLVER_ENABLED", "true").lower() not in {
         "1",
@@ -938,12 +932,7 @@ async def get_omnigent_codex_catalog_readiness(
 
     _require_provider_profile_permission(current_user, "provider_profiles.read")
     config = get_bridge_config()
-    evidence = (
-        await _resolve_embedded_evidence(config)
-        if config.enabled and config.host_protocol_mode == HOST_PROTOCOL_MODE_EMBEDDED
-        else None
-    )
-    bridge = config.readiness(evidence_validation=evidence)
+    bridge = config.readiness()
     configured_canary_token = os.getenv(
         "MOONMIND_OMNIGENT_ACCEPTANCE_CANARY_TOKEN", ""
     ).strip()
@@ -971,16 +960,10 @@ async def get_omnigent_codex_catalog_readiness(
     live_readiness = await _live_deployment_readiness()
     if (
         config.enabled
-        and config.host_protocol_mode != HOST_PROTOCOL_MODE_EMBEDDED
         and _valid_server_url(resolved_server_url())
         and not live_readiness.endpoint_ready
     ):
         deployment_reasons.append(_reason("bridge_endpoint_not_ready"))
-    auth: dict[str, Any] | None = None
-    if config.enabled and config.host_protocol_mode == HOST_PROTOCOL_MODE_EMBEDDED:
-        auth = await evaluate_active_host_auth_readiness()
-        if not auth.get("ready"):
-            deployment_reasons.append(_reason("host_auth_unavailable"))
 
     rows = list(
         (
@@ -1250,13 +1233,6 @@ async def get_omnigent_codex_catalog_readiness(
                 and profile.provider_runtime not in static_ready_runtimes
             ):
                 policy_reasons.append(_reason("static_host_not_ready"))
-            if config.host_protocol_mode == HOST_PROTOCOL_MODE_EMBEDDED:
-                mode_readiness = config.readiness(
-                    evidence_validation=evidence,
-                    host_mode=policy.host_mode,
-                )
-                if mode_readiness["conformanceState"] != "ready":
-                    policy_reasons.append(_reason("bridge_conformance_gated"))
             if not policy_reasons:
                 launch_policies_by_ref[policy.ref] = LaunchPolicyReadiness(
                     ref=policy.ref,
@@ -1500,7 +1476,7 @@ async def get_omnigent_codex_catalog_readiness(
     # resolved here: doing so would add a fail-closed dependency that returns
     # 503 in a proxy-first deployment without a seeded default policy.
     diagnostics = _compatibility_diagnostics(
-        config=config, readiness=bridge, auth=auth, policy_authority=None
+        config=config, readiness=bridge, policy_authority=None
     )
     diagnostics["capabilitySummary"] = sorted(
         {

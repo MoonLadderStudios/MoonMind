@@ -6,9 +6,11 @@ The fault-injection scenario engines, YAML fixtures, and command drivers live
 under ``tools/omnigent_faultlab/`` (test/developer tooling) and must not ship
 in the production ``moonmind`` package or deployable image. Production-needed
 evidence validation (``conformance``, ``exact_artifact_conformance``,
-``embedded_acceptance``, ``live_verification_health``) stays in
+``live_verification_health``) stays in
 ``moonmind/omnigent/`` and the runtime catalog/readiness path must import from
-there — never from ``tests`` or the test-only harness.
+there — never from ``tests`` or the test-only harness. (``embedded_acceptance``
+was removed with the retired embedded host transport,
+MoonLadderStudios/MoonMind#3955, and is intentionally absent from this list.)
 """
 
 from __future__ import annotations
@@ -34,7 +36,6 @@ PROD_ROOTS = (
 RUNTIME_VALIDATOR_MODULES = (
     "moonmind/omnigent/conformance.py",
     "moonmind/omnigent/exact_artifact_conformance.py",
-    "moonmind/omnigent/embedded_acceptance.py",
     "moonmind/omnigent/live_verification_health.py",
 )
 
@@ -111,7 +112,6 @@ def test_runtime_validators_do_not_require_faultlab() -> None:
 
     for validator in (
         "moonmind.omnigent.conformance",
-        "moonmind.omnigent.embedded_acceptance",
         "moonmind.omnigent.exact_artifact_conformance",
         "moonmind.omnigent.live_verification_health",
     ):
