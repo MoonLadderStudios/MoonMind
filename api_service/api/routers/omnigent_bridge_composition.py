@@ -31,6 +31,7 @@ from moonmind.omnigent.bridge_config import (
 )
 from moonmind.omnigent.bridge_proxy import OmnigentBridgeSessionProxy
 from moonmind.omnigent.bridge_store import OmnigentBridgeSessionStore
+from moonmind.omnigent.embedded_drain import probe_embedded_drain
 from moonmind.omnigent.host_auth_contracts import (
     HostAuthCredentialProfile,
     HostAuthProfileError,
@@ -86,6 +87,24 @@ def build_bridge_session_store() -> OmnigentBridgeSessionStore:
     """Return the durable bridge session store bound to the API database."""
 
     return OmnigentBridgeSessionStore(async_session_maker)
+
+
+async def probe_embedded_transport_drain(
+    *, store: OmnigentBridgeSessionStore | None = None
+) -> dict[str, Any]:
+    """Report the live drain disposition for the retired embedded transport.
+
+    MoonLadderStudios/MoonMind#3955 (plan step 2): the production caller that
+    wires durable counts into
+    :func:`moonmind.omnigent.embedded_drain.summarize_embedded_drain` — active
+    embedded sessions from ``active_host_protocol_modes`` and active embedded
+    host leases from ``list_embedded_host_readiness``. Transport removal is
+    gated on this probe reporting drained; a store failure propagates rather
+    than implying drain.
+    """
+
+    owned = store if store is not None else build_bridge_session_store()
+    return await probe_embedded_drain(owned)
 
 
 def build_host_auth_store() -> HostAuthProfileStore:
@@ -343,6 +362,7 @@ __all__ = [
     "evaluate_embedded_host_auth_readiness",
     "project_upstream_inventory",
     "project_upstream_inventory_failure",
+    "probe_embedded_transport_drain",
     "resolve_active_host_auth_profile",
     "resolve_default_bridge_policy_snapshot",
     "revoke_active_host_auth_profile",

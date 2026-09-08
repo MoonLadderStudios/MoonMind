@@ -144,5 +144,47 @@ __all__ = [
     "EMBEDDED_LAUNCH_MODULES",
     "EmbeddedDrainError",
     "decode_embedded_retained_session",
+    "probe_embedded_drain",
     "summarize_embedded_drain",
 ]
+
+
+async def probe_embedded_drain(store: Any) -> dict[str, Any]:
+    """Wire durable embedded counts from the owning store into the summary.
+
+    Source issue: MoonLadderStudios/MoonMind#3955 (plan step 2, acceptance
+    "in-flight cleanup and retained historical reads have a verified
+    disposition").
+
+    ``store`` is duck-typed to the two canonical durable readers owned by
+    :class:`moonmind.omnigent.bridge_store.OmnigentBridgeSessionStore` —
+    ``active_host_protocol_modes()`` for non-terminal sessions and
+    ``list_embedded_host_readiness()`` for active host leases — so this
+    module still imports no store, channel, launch, evidence, or DB modules.
+    Only the ``embedded_omnigent_compatible_server`` mode count and the lease
+    list length flow into :func:`summarize_embedded_drain`; provider session
+    ids, host ids, endpoints, and credentials are never projected.
+
+    A store failure propagates instead of implying drain: missing evidence
+    is a blocker, never an implicit drain, and the caller observes the
+    failure directly.
+    """
+
+    modes = await store.active_host_protocol_modes()
+    if not isinstance(modes, Mapping):
+        raise EmbeddedDrainError(
+            "active_host_protocol_modes must return a mapping, "
+            f"got {type(modes).__name__}"
+        )
+    leases = await store.list_embedded_host_readiness()
+    try:
+        active_sessions = int(modes.get(HOST_PROTOCOL_MODE_EMBEDDED, 0) or 0)
+    except (TypeError, ValueError) as exc:
+        raise EmbeddedDrainError(
+            "active embedded session count must be an int, "
+            f"got {modes.get(HOST_PROTOCOL_MODE_EMBEDDED)!r}"
+        ) from exc
+    return summarize_embedded_drain(
+        active_embedded_sessions=active_sessions,
+        active_embedded_leases=len(leases),
+    )
