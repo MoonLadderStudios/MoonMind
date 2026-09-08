@@ -21,8 +21,16 @@ import logging
 import os
 import time
 from datetime import UTC, datetime, timedelta
-from typing import Any, Literal
+from typing import TYPE_CHECKING, Any, Literal
 from uuid import uuid4
+
+if TYPE_CHECKING:  # pragma: no cover - annotations only; runtime stays lazy
+    from moonmind.omnigent.bridge_embedded import (
+        EmbeddedHostHeartbeatRequest as EmbeddedHostHeartbeatRequest,
+        EmbeddedHostRegisterRequest as EmbeddedHostRegisterRequest,
+        EmbeddedHostSessionEventRequest as EmbeddedHostSessionEventRequest,
+        OmnigentEmbeddedHostProtocolFacade as OmnigentEmbeddedHostProtocolFacade,
+    )
 
 import aiohttp
 from fastapi import (
@@ -86,12 +94,31 @@ from moonmind.omnigent.bridge_artifacts import (
     LocalOmnigentArtifactGateway,
     OmnigentArtifactError,
 )
-from moonmind.omnigent.bridge_embedded import (
-    EmbeddedHostHeartbeatRequest,
-    EmbeddedHostRegisterRequest,
-    EmbeddedHostSessionEventRequest,
-    OmnigentEmbeddedHostProtocolFacade,
-)
+try:  # MoonLadderStudios/MoonMind#3955: proxy-only wiring must import without
+    # the retired embedded launch modules. Embedded handlers fail actionably
+    # through the retirement row when these are unavailable; see the fallbacks.
+    from moonmind.omnigent.bridge_embedded import (
+        EmbeddedHostHeartbeatRequest,
+        EmbeddedHostRegisterRequest,
+        EmbeddedHostSessionEventRequest,
+        OmnigentEmbeddedHostProtocolFacade,
+    )
+    _EMBEDDED_LAUNCH_MODULES_AVAILABLE = True
+except ImportError:  # pragma: no cover - removal-stage fallback
+    _EMBEDDED_LAUNCH_MODULES_AVAILABLE = False
+
+    class OmnigentEmbeddedHostProtocolFacade:  # type: ignore[no-redef]
+        """Placeholder so proxy routes import without launch modules."""
+
+    class EmbeddedHostRegisterRequest(BaseModel):  # type: ignore[no-redef]
+        model_config = ConfigDict(populate_by_name=True, extra="allow")
+
+    class EmbeddedHostHeartbeatRequest(BaseModel):  # type: ignore[no-redef]
+        model_config = ConfigDict(populate_by_name=True, extra="allow")
+
+    class EmbeddedHostSessionEventRequest(BaseModel):  # type: ignore[no-redef]
+        model_config = ConfigDict(populate_by_name=True, extra="allow")
+        type: str = Field(default="")
 from moonmind.omnigent.bridge_proxy import (
     BridgePrincipalBinding,
     BridgeSessionCreateRequest,
@@ -107,14 +134,50 @@ from moonmind.omnigent.bridge_store import (
     OmnigentIdempotencyError,
 )
 from moonmind.omnigent.control_plane.turn_sources import TurnSource
-from moonmind.omnigent.embedded_evidence import (
-    EmbeddedEvidenceError,
-    validate_embedded_evidence,
-)
-from moonmind.omnigent.embedded_host_channel import (
-    EmbeddedHostChannelError,
-    embedded_host_channels,
-)
+try:  # MoonLadderStudios/MoonMind#3955: see the bridge_embedded fallback above.
+    from moonmind.omnigent.embedded_evidence import (
+        EmbeddedEvidenceError,
+        validate_embedded_evidence,
+    )
+except ImportError:  # pragma: no cover - removal-stage fallback
+    class EmbeddedEvidenceError(ValueError):  # type: ignore[no-redef]
+        """Placeholder so evidence gating fails closed without launch modules."""
+
+    def validate_embedded_evidence(*args: Any, **kwargs: Any) -> Any:  # type: ignore[no-redef]
+        raise EmbeddedEvidenceError(
+            "The embedded Omnigent host transport is unavailable "
+            f"({EMBEDDED_TRANSPORT_RETIRED_CODE}, retirement row "
+            f"{EMBEDDED_TRANSPORT_RETIREMENT_PATH_ID}); select "
+            f"'{HOST_PROTOCOL_MODE_PROXY}' for new work."
+        )
+try:  # MoonLadderStudios/MoonMind#3955: see the bridge_embedded fallback above.
+    from moonmind.omnigent.embedded_host_channel import (
+        EmbeddedHostChannelError,
+        embedded_host_channels,
+    )
+except ImportError:  # pragma: no cover - removal-stage fallback
+    class EmbeddedHostChannelError(RuntimeError):  # type: ignore[no-redef]
+        """Placeholder so tunnel handlers fail closed without launch modules."""
+
+    class _UnavailableEmbeddedHostChannels:
+        """Fail-closed stand-in for the retired channel registry."""
+
+        def _unavailable(self, *args: Any, **kwargs: Any) -> Any:
+            raise EmbeddedHostChannelError(
+                "The embedded Omnigent host transport is unavailable "
+                f"({EMBEDDED_TRANSPORT_RETIRED_CODE}, retirement row "
+                f"{EMBEDDED_TRANSPORT_RETIREMENT_PATH_ID}); select "
+                f"'{HOST_PROTOCOL_MODE_PROXY}' for new work."
+            )
+
+        connect = _unavailable
+        connect_runner = _unavailable
+        disconnect = _unavailable
+        disconnect_runner = _unavailable
+        authenticate_runner = _unavailable
+        revoke_runner_binding = _unavailable
+
+    embedded_host_channels = _UnavailableEmbeddedHostChannels()  # type: ignore[no-redef]
 from moonmind.omnigent.host_protocol_adapter import UpstreamHostProtocolError
 from moonmind.omnigent.host_auth_contracts import (
     HostAuthCredentialProfile,
@@ -2874,12 +2937,20 @@ async def embedded_omnigent_host_tunnel(websocket: WebSocket, host_id: str) -> N
     except OmnigentBridgeError as exc:
         await websocket.close(code=4401, reason=exc.code)
         return
+    except OmnigentBridgeModeUnsupportedError:
+        # MoonLadderStudios/MoonMind#3955 removal stage: launch modules are
+        # unavailable, so the retired transport fails actionably instead of
+        # crashing on a bare ImportError. Proxy routes never reach this path.
+        await websocket.close(code=4401, reason=EMBEDDED_TRANSPORT_RETIRED_CODE)
+        return
     await websocket.accept()
-    channel = embedded_host_channels.connect(
-        host_id=host_id, send_text=websocket.send_text
-    )
-    facade = build_embedded_host_facade(config)
+    channel = None
+    facade = None
     try:
+        channel = embedded_host_channels.connect(
+            host_id=host_id, send_text=websocket.send_text
+        )
+        facade = build_embedded_host_facade(config)
         while True:
             frame_text = await websocket.receive_text()
             # Re-resolve safe profile state for every frame so immediate
@@ -2902,14 +2973,26 @@ async def embedded_omnigent_host_tunnel(websocket: WebSocket, host_id: str) -> N
         pass
     except (EmbeddedHostChannelError, UpstreamHostProtocolError):
         await websocket.close(code=4400)
+    except OmnigentBridgeModeUnsupportedError:
+        # Removal stage: actionable close instead of a bare ImportError crash.
+        await websocket.close(code=4401, reason=EMBEDDED_TRANSPORT_RETIRED_CODE)
     finally:
-        embedded_host_channels.disconnect(channel)
-        try:
-            await facade.disconnect_host(host_id=host_id, auth=auth)
-        except OmnigentBridgeError:
-            # The durable lease may already have terminalized while the socket
-            # was closing; terminal state remains authoritative.
+        if channel is not None:
+            try:
+                embedded_host_channels.disconnect(channel)
+            except (EmbeddedHostChannelError, OmnigentBridgeModeUnsupportedError):
+                pass
+        if facade is None:
             pass
+        else:
+            try:
+                await facade.disconnect_host(host_id=host_id, auth=auth)
+            except OmnigentBridgeError:
+                # The durable lease may already have terminalized while the socket
+                # was closing; terminal state remains authoritative.
+                pass
+            except OmnigentBridgeModeUnsupportedError:
+                pass
 
 
 @router.websocket("/v1/runners/{runner_id}/tunnel")
@@ -2935,7 +3018,17 @@ async def embedded_omnigent_runner_tunnel(websocket: WebSocket, runner_id: str) 
             or binding.credential_generation is None
         ):
             raise EmbeddedHostChannelError("runner has no active durable binding")
-        from moonmind.omnigent.embedded_host_channel import derive_runner_binding_token
+        try:
+            from moonmind.omnigent.embedded_host_channel import (
+                derive_runner_binding_token,
+            )
+        except ImportError as exc:
+            # Removal stage: no live transport to derive a binding against.
+            raise EmbeddedHostChannelError(
+                "The embedded Omnigent host transport is unavailable "
+                f"({EMBEDDED_TRANSPORT_RETIRED_CODE}); select "
+                f"'{HOST_PROTOCOL_MODE_PROXY}' for new work."
+            ) from exc
 
         binding_token = derive_runner_binding_token(
             resolved_host_runner_token(),
@@ -2956,6 +3049,9 @@ async def embedded_omnigent_runner_tunnel(websocket: WebSocket, runner_id: str) 
     except (EmbeddedHostChannelError, UpstreamHostProtocolError):
         await websocket.close(code=4401)
         return
+    except OmnigentBridgeModeUnsupportedError:
+        await websocket.close(code=4401, reason=EMBEDDED_TRANSPORT_RETIRED_CODE)
+        return
     await websocket.accept()
     channel = None
     try:
@@ -2964,7 +3060,11 @@ async def embedded_omnigent_runner_tunnel(websocket: WebSocket, runner_id: str) 
             send_text=websocket.send_text,
             hello_text=await websocket.receive_text(),
         )
-        facade = build_embedded_host_facade(config)
+        try:
+            facade = build_embedded_host_facade(config)
+        except OmnigentBridgeModeUnsupportedError:
+            await websocket.close(code=4401, reason=EMBEDDED_TRANSPORT_RETIRED_CODE)
+            return
         await facade.record_runner_tunnel_ready(runner_id=runner_id)
         while True:
             channel.accept_frame(await websocket.receive_text())
@@ -2972,16 +3072,29 @@ async def embedded_omnigent_runner_tunnel(websocket: WebSocket, runner_id: str) 
         pass
     except EmbeddedHostChannelError:
         await websocket.close(code=4400)
+    except OmnigentBridgeModeUnsupportedError:
+        await websocket.close(code=4401, reason=EMBEDDED_TRANSPORT_RETIRED_CODE)
     finally:
         if channel is not None:
-            embedded_host_channels.disconnect_runner(channel)
-            facade = build_embedded_host_facade(config)
             try:
-                await facade.record_runner_tunnel_disconnected(runner_id=runner_id)
-            except (EmbeddedHostChannelError, OmnigentIdempotencyError):
-                # Terminal exit processing may have won the race. Its durable
-                # terminal evidence remains authoritative over disconnect.
+                embedded_host_channels.disconnect_runner(channel)
+            except (EmbeddedHostChannelError, OmnigentBridgeModeUnsupportedError):
                 pass
+            try:
+                disconnect_facade = build_embedded_host_facade(config)
+            except OmnigentBridgeModeUnsupportedError:
+                disconnect_facade = None
+            if disconnect_facade is not None:
+                try:
+                    await disconnect_facade.record_runner_tunnel_disconnected(
+                        runner_id=runner_id
+                    )
+                except (EmbeddedHostChannelError, OmnigentIdempotencyError):
+                    # Terminal exit processing may have won the race. Its durable
+                    # terminal evidence remains authoritative over disconnect.
+                    pass
+                except OmnigentBridgeModeUnsupportedError:
+                    pass
 
 
 @router.post("/v1/hosts/{host_id}/heartbeat", response_model=dict)
