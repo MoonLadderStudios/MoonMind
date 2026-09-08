@@ -393,6 +393,12 @@ def _probe_server_and_ui(
     liveness_path = probe_route_templates()["liveness"]
     env = dict(postgres_env(database_url))
     env["MOONMIND_ALLOW_LOCAL_ENCRYPTION_KEY_GENERATION"] = "1"
+    # Pin the documented zero-config default: an omitted AUTH_PROVIDER
+    # classifies a fresh database as `accounts` (secure default), which
+    # requires bearer credentials the credential-free UI capture does not
+    # have. The probe verifies the deployable image serves its compiled UI,
+    # so it runs the explicit local default that `docker compose up` ships.
+    env["AUTH_PROVIDER"] = "disabled"
 
     signals: list[dict[str, Any]] = []
     ui_signals: list[dict[str, Any]] = []
