@@ -136,21 +136,8 @@ def upstream_provenance() -> dict[str, Any]:
     for rel in UPSTREAM_FILES:
         p = root / rel
         files[rel] = hashlib.sha256(p.read_bytes()).hexdigest() if p.exists() else "missing"
-    try:
-        import subprocess
-
-        pin = subprocess.run(
-            ["git", "-C", str(root), "rev-parse", "HEAD"],
-            capture_output=True,
-            text=True,
-            timeout=10,
-        ).stdout.strip()
-    except Exception:
-        pin = UPSTREAM_PIN
-    return {
-        "upstream_commit": pin or UPSTREAM_PIN,
+    base: dict[str, Any] = {
         "expected_pin": UPSTREAM_PIN,
-        "pin_match": (pin or UPSTREAM_PIN) == UPSTREAM_PIN,
         "package": "pinned omnigent submodule (no PyPI indirection; no mutable-main pin)",
         "files_sha256": files,
         "supported_entrypoints": list(SUPPORTED_ENTRYPOINTS),
@@ -162,6 +149,31 @@ def upstream_provenance() -> dict[str, Any]:
             "omnigent.server.accounts_store.SqlAlchemyAccountStore (sync concrete store)",
             "runtime server / embedded host transport",
         ],
+    }
+    # Fail closed when submodule git metadata is absent: never report another
+    # repository's HEAD (e.g. the superproject's, which `git -C <dir>`
+    # falls through to) as the upstream commit.
+    if not (root / ".git").exists():
+        return {
+            **base,
+            "upstream_commit": "unknown (omnigent submodule not initialized)",
+            "pin_match": False,
+        }
+    try:
+        import subprocess
+
+        pin = subprocess.run(
+            ["git", "-C", str(root), "rev-parse", "HEAD"],
+            capture_output=True,
+            text=True,
+            timeout=10,
+        ).stdout.strip()
+    except Exception:
+        pin = ""
+    return {
+        **base,
+        "upstream_commit": pin or "unknown (upstream git lookup failed)",
+        "pin_match": (pin or "") == UPSTREAM_PIN,
     }
 
 
@@ -320,6 +332,20 @@ def resolve_validated_identity(
 
 
 def _token_cache_key(token: str, secret: bytes) -> str:
+    """Derive the session-cache key via the qualified upstream primitive.
+
+    Delegates to ``omnigent.server.oidc.hmac_digest`` whenever the pinned
+    upstream module is loaded (always the case for adapter-issued sessions,
+    since construction loads upstream primitives first). The stdlib fallback
+    implements the identical HMAC-SHA256 construction for direct unit use
+    without an upstream import.
+    """
+    import sys
+
+    oidc_mod = sys.modules.get("omnigent.server.oidc")
+    digest = getattr(oidc_mod, "hmac_digest", None)
+    if callable(digest):
+        return digest(token, secret)
     return hmac.new(secret, token.encode("utf-8"), hashlib.sha256).hexdigest()
 
 
