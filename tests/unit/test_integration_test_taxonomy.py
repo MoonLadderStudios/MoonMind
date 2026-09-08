@@ -368,3 +368,45 @@ def test_keycloak_removal_auth_boundaries_select_integration_ci() -> None:
     outputs = _outputs(["api_service/api/routers/workflow_console.py"])
     assert outputs["api_component"] == "true"
     assert outputs["integration_ci"] == "false"
+
+
+def test_keycloak_removal_frontend_transport_schema_and_pin_boundaries() -> None:
+    """MoonLadderStudios/MoonMind#4128 rw-8: transport/schema/pin selection.
+
+    Frontend transport (generated OpenAPI client + the tooling that produces
+    it) must run integration_ci; identity schema changes must run
+    integration_ci via the db/migration prefixes; backend pins must run
+    integration_ci via the force-full path and the frontend lock must still
+    select the exact-artifact gate that qualifies built assets.
+    """
+    from tools.select_test_suites import select_suites
+
+    def _outputs(paths: list[str]) -> dict[str, str]:
+        return select_suites(paths, event_name="pull_request").as_outputs()
+
+    for changed_path in (
+        "frontend/src/generated/openapi.ts",
+        "tools/export_openapi.py",
+        "tools/generate_openapi_types.py",
+    ):
+        outputs = _outputs([changed_path])
+        assert outputs["integration_ci"] == "true", changed_path
+
+    # Schema boundary: covered by the db/migration prefixes, pinned here so
+    # a selector refactor cannot silently drop it.
+    for changed_path in (
+        "api_service/db/models.py",
+        "api_service/migrations/versions/0001_identity.py",
+    ):
+        outputs = _outputs([changed_path])
+        assert outputs["integration_ci"] == "true", changed_path
+
+    # Pin boundaries: backend locks run the full backend gate (which
+    # includes integration_ci); the frontend lock qualifies built assets
+    # through the exact-artifact gate.
+    outputs = _outputs(["poetry.lock"])
+    assert outputs["integration_ci"] == "true"
+    assert outputs["full_backend"] == "true"
+
+    outputs = _outputs(["package-lock.json"])
+    assert outputs["exact_artifact"] == "true"

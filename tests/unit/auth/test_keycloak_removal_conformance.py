@@ -163,3 +163,104 @@ def test_no_hardcoded_keycloak_credentials_in_api_sources() -> None:
         assert "KEYCLOAK_ADMIN_PASSWORD" not in src, relative
         assert "KC_ADMIN_PW" not in src, relative
         assert "changeme" not in src, relative
+
+
+def test_mounted_auth_routes_have_no_keycloak_legacy_mount() -> None:
+    """Narrow no-reintroduction guard (rw-9): mounted routes.
+
+    Pre-cutover inventory: production auth routers mount at
+    ``API_AUTH_PREFIX`` (``/api/v1/auth``) and the ``keycloak`` branch of
+    ``get_auth_router`` mounts no routes (``pass`` placeholder). A future
+    ``/auth/keycloak``-style legacy mount without a test owner here is a
+    regression. Removal must update this test when the topology lands.
+    """
+    main_src = _read("api_service/main.py")
+    providers_src = _read("api_service/auth_providers.py")
+
+    assert 'API_AUTH_PREFIX = "/api/v1/auth"' in main_src
+    for legacy_prefix in (
+        'prefix="/auth/keycloak"',
+        "prefix='/auth/keycloak'",
+        'prefix="/keycloak"',
+        'prefix="/api/v1/auth/keycloak"',
+    ):
+        assert legacy_prefix not in main_src, legacy_prefix
+        assert legacy_prefix not in providers_src, legacy_prefix
+
+    # The keycloak placeholder branch must not mount any router.
+    keycloak_idx = providers_src.index(
+        'settings.oidc.AUTH_PROVIDER == "keycloak"'
+    )
+    keycloak_tail = providers_src[keycloak_idx : keycloak_idx + 400]
+    keycloak_block = keycloak_tail.split("elif")[0]
+    assert "pass" in keycloak_block
+    assert "include_router" not in keycloak_block
+
+
+def test_current_jwt_transport_uses_app_secret_not_oidc_secret() -> None:
+    """Narrow no-reintroduction guard (rw-9): accepted old tokens.
+
+    Pre-cutover inventory: the active JWT transport validates against the
+    app ``JWT_SECRET_KEY`` via ``BearerTransport`` (``auth/jwt/login``), not
+    against ``OIDC_CLIENT_SECRET`` and not via a Keycloak introspection
+    branch in ``api_service/auth.py``. Accepting old Keycloak-issued tokens
+    through a new branch without a test owner here is a regression.
+    """
+    auth_src = _read("api_service/auth.py")
+
+    assert 'BearerTransport(tokenUrl="auth/jwt/login")' in auth_src
+    assert "settings.security.JWT_SECRET_KEY" in auth_src
+    assert "OIDC_CLIENT_SECRET" not in auth_src
+    assert "keycloak" not in auth_src.lower()
+
+
+def test_keycloak_topology_pin_and_secret_indirection() -> None:
+    """Narrow no-reintroduction guard (rw-9): topology and config.
+
+    Pre-cutover inventory: the Keycloak service image is pinned to an exact
+    tag (never ``latest``), stays opt-in via its profile, and every Keycloak
+    secret flows through ``${...}`` indirection rather than a hardcoded
+    literal. Changing the pin, the profile gating, or the indirection
+    without updating this test is a regression. Removal must delete the
+    service and update this test in the same change.
+    """
+    import yaml
+
+    compose_src = _read("docker-compose.yaml")
+    compose = yaml.safe_load(compose_src)
+    keycloak = compose["services"]["keycloak"]
+
+    assert keycloak["image"] == "quay.io/keycloak/keycloak:24.0"
+    assert "latest" not in keycloak["image"]
+    assert "keycloak" in keycloak.get("profiles", [])
+
+    assert "${KC_ADMIN_PW" in compose_src
+    assert "${KC_DB_PW" in compose_src
+    assert "KEYCLOAK_ADMIN_PASSWORD: ${KC_ADMIN_PW" in compose_src
+
+
+def test_no_hardcoded_keycloak_secrets_in_compose_and_env_template() -> None:
+    """Narrow secret-leak guard beyond API sources (rw-9).
+
+    ``.env-template`` ships empty OIDC secret placeholders (no live IdP
+    secret, no Keycloak admin password literal); ``docker-compose.yaml``
+    carries the ``changeme`` example only behind ``${...}`` indirection for
+    the local realm example. A hardcoded secret literal outside that
+    indirection is a regression. Legitimate historical migration comments
+    and negative-test fixtures that merely mention Keycloak are classified
+    by the other guards in this module, not by this literal scan.
+    """
+    env_template = _read(".env-template")
+    compose_src = _read("docker-compose.yaml")
+
+    assert "KEYCLOAK_ADMIN_PASSWORD" not in env_template
+    assert "KC_ADMIN_PW" not in env_template
+    for line in env_template.splitlines():
+        stripped = line.strip()
+        if stripped.startswith("OMNIGENT_OIDC_CLIENT_SECRET="):
+            _, _, value = stripped.partition("=")
+            assert value.strip().strip('"').strip("'") == ""
+
+    for lineno, line in enumerate(compose_src.splitlines(), start=1):
+        if "changeme" in line:
+            assert "${" in line, f"docker-compose.yaml:{lineno} hardcoded secret"
