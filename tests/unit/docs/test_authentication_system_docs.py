@@ -11,6 +11,9 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parents[3]
 DOC = REPO_ROOT / "docs" / "Security" / "AuthenticationSystem.md"
 SETTINGS = REPO_ROOT / "moonmind" / "config" / "settings.py"
+ENV_TEMPLATE = REPO_ROOT / ".env-template"
+COMPOSE = REPO_ROOT / "docker-compose.yaml"
+CHAT_PANEL_DOC = REPO_ROOT / "docs" / "UI" / "WorkflowChatPanel.md"
 MCP_DOC = REPO_ROOT / "docs" / "ExternalAgents" / "ModelContextProtocol.md"
 ARTIFACT_DOC = (
     REPO_ROOT / "docs" / "Temporal" / "WorkflowArtifactSystemDesign.md"
@@ -94,3 +97,33 @@ def test_combined_stack_doc_separates_runtime_from_control_plane_auth() -> None:
     combined = _read(COMBINED_DOC)
     assert "OMNIGENT_AUTH_*" in combined or "Omnigent runtime server" in combined
     assert "control-plane" in combined
+
+
+def test_canonical_doc_states_shipped_transport_and_error_behavior() -> None:
+    text = _read(DOC)
+    assert "Authorization: Bearer" in text
+    assert "3600" in text
+    assert "no cookie/CSRF" in text
+    assert "Invalid DEFAULT_USER_ID" in text
+    assert "Default user not found" in text
+    assert "get_current_user_optional" in text
+
+
+def test_env_template_documents_control_plane_selector_truthfully() -> None:
+    text = _read(ENV_TEMPLATE)
+    assert "AUTH_PROVIDER" in text
+    assert "docs/Security/AuthenticationSystem.md" in text
+    assert "`disabled`" in text
+    assert "`keycloak`" in text
+    assert "not shipped" in text
+    assert "OMNIGENT_AUTH_*" in text
+
+
+def test_compose_selector_comments_match_shipped_modes() -> None:
+    text = _read(COMPOSE)
+    assert "local, google, or disabled" not in text
+    assert "or keycloak (legacy opt-in, pending removal)" in text
+
+
+def test_workflow_chat_panel_points_at_canonical_auth_owner() -> None:
+    assert "AuthenticationSystem.md" in _read(CHAT_PANEL_DOC)
