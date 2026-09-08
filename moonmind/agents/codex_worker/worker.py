@@ -71,7 +71,7 @@ from moonmind.jules.runtime import JULES_RUNTIME_DISABLED_MESSAGE
 from moonmind.jules.runtime import (
     build_runtime_gate_state as build_jules_runtime_gate_state,
 )
-from moonmind.jules.status import JulesStatusSnapshot, normalize_jules_status
+from moonmind.jules.status import JulesStatusClassification, normalize_jules_status
 from moonmind.rag.settings import RagRuntimeSettings
 from moonmind.schemas.jules_models import JulesCreateTaskRequest, JulesGetTaskRequest
 from moonmind.workflows.adapters.jules_client import JulesClient, JulesClientError
@@ -10192,7 +10192,7 @@ class CodexWorker:
         raise RuntimeError(JULES_RUNTIME_DISABLED_MESSAGE)
 
     @staticmethod
-    def _normalize_jules_status(raw_status: str | None) -> JulesStatusSnapshot:
+    def _normalize_jules_status(raw_status: str | None) -> JulesStatusClassification:
         """Return the shared Jules status snapshot used across worker paths."""
 
         return normalize_jules_status(raw_status)

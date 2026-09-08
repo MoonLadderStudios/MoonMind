@@ -13,6 +13,7 @@ tags:
 requiredCapabilities:
 - git
 - gh
+- docker
 annotations:
   implementsPreset: github-issue-implement
   issueProvider: github

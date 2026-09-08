@@ -6,59 +6,38 @@ from typing import Any, Literal, Optional
 
 from pydantic import AliasChoices, BaseModel, ConfigDict, Field
 
-JulesNormalizedStatus = Literal[
-    "queued",
-    "running",
-    "completed",
-    "failed",
-    "canceled",
-    "unknown",
-    "awaiting_feedback",
-]
+from moonmind.jules.vocabulary import (
+    JULES_WIRE_STATUS_MAP,
+    JulesNormalizedStatus,
+    classify_jules_status,
+)
 
-_JULES_STATUS_MAP: dict[str, JulesNormalizedStatus] = {
-    "accepted": "queued",
-    "assigned": "queued",
-    # -- Actual Jules API State enum values (case-insensitive) --
-    "awaiting_plan_approval": "running",
-    "awaiting_user_feedback": "awaiting_feedback",
-    "blocked": "running",
-    "canceled": "canceled",
-    "cancelled": "canceled",
-    "completed": "completed",
-    "created": "queued",
-    "done": "completed",
-    "errored": "failed",
-    "failed": "failed",
-    "failure": "failed",
-    "finished": "completed",
-    "in_progress": "running",
-    "open": "queued",
-    "paused": "running",
-    "pending": "queued",
-    "planning": "running",
-    "queued": "queued",
-    "resolved": "completed",
-    "running": "running",
-    "started": "running",
-    "state_unspecified": "unknown",
-    "submitted": "queued",
-    "success": "completed",
-    "timed_out": "failed",
-    "timeout": "failed",
-}
+# Single canonical wire map lives in moonmind.jules.vocabulary; this alias
+# preserves the historical import surface for tests and adapters.
+_JULES_STATUS_MAP = dict(JULES_WIRE_STATUS_MAP)
+
 
 def normalize_jules_status(raw_status: str | None) -> JulesNormalizedStatus:
-    """Map raw Jules task status values to the provider-neutral status set."""
+    """Map raw Jules task status values to the provider-neutral status set.
 
-    normalized = str(raw_status or "").strip().lower()
-    if not normalized:
+    Execution-critical boundary: blank/None maps to ``unknown`` (display-safe
+    for missing provider data); unmapped tokens raise
+    :class:`JulesUnknownStatusError`, which subclasses
+    ``moonmind.schemas.agent_runtime_models.UnsupportedStatusError`` so
+    existing ``pytest.raises(UnsupportedStatusError)`` guards keep working.
+    Callers that only need a display projection should use
+    :func:`classify_jules_status` directly.
+    """
+
+    classification = classify_jules_status(raw_status)
+    if classification.is_missing:
         return "unknown"
-    mapped = _JULES_STATUS_MAP.get(normalized)
-    if mapped is None:
-        from moonmind.schemas.agent_runtime_models import raise_unsupported_status
-        raise_unsupported_status(raw_status or "")
-    return mapped
+    if classification.normalized_status == "unknown":
+        # The explicit provider sentinel (state_unspecified) is a known
+        # unknown: report it. Truly unmapped tokens reject fail-closed.
+        if _JULES_STATUS_MAP.get(classification.provider_status_token) == "unknown":
+            return "unknown"
+    return classification.require_known()
 
 class GitHubRepoContext(BaseModel):
     """Context to use a GitHub repo in a Jules session.

@@ -23,6 +23,8 @@ from api_service.services.omnigent_agent_profile_service import (
 )
 from api_service.services.omnigent_policies import OmnigentPolicyService
 from moonmind.omnigent.bridge_config import (
+    EMBEDDED_TRANSPORT_RETIRED_CODE,
+    EMBEDDED_TRANSPORT_RETIREMENT_PATH_ID,
     HOST_PROTOCOL_MODE_EMBEDDED,
     HOST_PROTOCOL_MODE_PROXY,
     OmnigentBridgeConfig,
@@ -30,10 +32,9 @@ from moonmind.omnigent.bridge_config import (
 # NOTE (#3955): the embedded launch facade is imported lazily inside
 # build_embedded_host_facade / verify_embedded_host_request so the proxy-only
 # production path never requires the retired embedded launch modules.
-if TYPE_CHECKING:  # pragma: no cover - typing only, never a runtime import
-    from moonmind.omnigent.bridge_embedded import OmnigentEmbeddedHostProtocolFacade
 from moonmind.omnigent.bridge_proxy import OmnigentBridgeSessionProxy
 from moonmind.omnigent.bridge_store import OmnigentBridgeSessionStore
+from moonmind.omnigent.embedded_drain import probe_embedded_drain
 from moonmind.omnigent.host_auth_contracts import (
     HostAuthCredentialProfile,
     HostAuthProfileError,
@@ -56,6 +57,9 @@ from moonmind.workflows.temporal.artifacts import (
     TemporalArtifactRepository,
     TemporalArtifactService,
 )
+
+if TYPE_CHECKING:  # pragma: no cover - annotation only; runtime import stays lazy
+    from moonmind.omnigent.bridge_embedded import OmnigentEmbeddedHostProtocolFacade
 
 # The bridge resolves its persisted default runtime authority under one runtime
 # id. Which runtime backs the bridge is composition, not a route decision.
@@ -86,6 +90,24 @@ def build_bridge_session_store() -> OmnigentBridgeSessionStore:
     """Return the durable bridge session store bound to the API database."""
 
     return OmnigentBridgeSessionStore(async_session_maker)
+
+
+async def probe_embedded_transport_drain(
+    *, store: OmnigentBridgeSessionStore | None = None
+) -> dict[str, Any]:
+    """Report the live drain disposition for the retired embedded transport.
+
+    MoonLadderStudios/MoonMind#3955 (plan step 2): the production caller that
+    wires durable counts into
+    :func:`moonmind.omnigent.embedded_drain.summarize_embedded_drain` — active
+    embedded sessions from ``active_host_protocol_modes`` and active embedded
+    host leases from ``list_embedded_host_readiness``. Transport removal is
+    gated on this probe reporting drained; a store failure propagates rather
+    than implying drain.
+    """
+
+    owned = store if store is not None else build_bridge_session_store()
+    return await probe_embedded_drain(owned)
 
 
 def build_host_auth_store() -> HostAuthProfileStore:
@@ -129,8 +151,20 @@ async def verify_embedded_host_request(
 ):
     """Resolve host-auth credentials and verify one embedded host request."""
 
-    from moonmind.omnigent.bridge_embedded import verify_embedded_host_auth
-
+    # MoonLadderStudios/MoonMind#3955: the embedded launch modules stay out of
+    # this module's top-level imports so proxy-only composition never requires
+    # them. An embedded drain route that can no longer import them fails
+    # actionably (naming the retirement row and the supported proxy
+    # alternative) instead of crashing on a bare ImportError.
+    try:
+        from moonmind.omnigent.bridge_embedded import verify_embedded_host_auth
+    except ImportError as exc:
+        raise OmnigentBridgeModeUnsupportedError(
+            "The embedded Omnigent host transport is unavailable "
+            f"({EMBEDDED_TRANSPORT_RETIRED_CODE}, retirement row "
+            f"{EMBEDDED_TRANSPORT_RETIREMENT_PATH_ID}); select "
+            f"'{HOST_PROTOCOL_MODE_PROXY}' for new work."
+        ) from exc
     resolved = await resolve_host_auth_credentials(
         profile=await resolve_active_host_auth_profile()
     )
@@ -300,10 +334,24 @@ def build_embedded_host_facade(
     stop, terminal cleanup, delete, and reads for already-recorded embedded
     rows keep reaching their recorded owner while the deployment runs proxy
     mode; new admission stays refused inside the facade.
-    """
-    from moonmind.omnigent.bridge_embedded import OmnigentEmbeddedHostProtocolFacade
 
-    return OmnigentEmbeddedHostProtocolFacade(
+    Imported lazily so proxy-only composition (and its tests) succeed with
+    the embedded launch modules unavailable; the error names the retirement
+    row and the supported proxy alternative instead of a bare ImportError.
+    """
+
+    try:
+        from moonmind.omnigent.bridge_embedded import (
+            OmnigentEmbeddedHostProtocolFacade as _EmbeddedFacade,
+        )
+    except ImportError as exc:
+        raise OmnigentBridgeModeUnsupportedError(
+            "The embedded Omnigent host transport is unavailable "
+            f"({EMBEDDED_TRANSPORT_RETIRED_CODE}, retirement row "
+            f"{EMBEDDED_TRANSPORT_RETIREMENT_PATH_ID}); select "
+            f"'{HOST_PROTOCOL_MODE_PROXY}' for new work."
+        ) from exc
+    return _EmbeddedFacade(
         run_store=build_bridge_session_store(),
         config=config,
         drain_retained_sessions=drain_retained_sessions,
@@ -325,6 +373,7 @@ __all__ = [
     "evaluate_embedded_host_auth_readiness",
     "project_upstream_inventory",
     "project_upstream_inventory_failure",
+    "probe_embedded_transport_drain",
     "resolve_active_host_auth_profile",
     "resolve_default_bridge_policy_snapshot",
     "revoke_active_host_auth_profile",

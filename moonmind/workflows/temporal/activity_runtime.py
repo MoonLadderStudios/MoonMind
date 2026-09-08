@@ -23,7 +23,7 @@ import tempfile
 import threading
 import time
 import tarfile
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import UTC, datetime, timedelta
 from io import BytesIO
 from pathlib import Path
@@ -41,7 +41,7 @@ from moonmind.security.outbound_scan import (
     scan_outbound_bundle,
     scan_outbound_text,
 )
-from moonmind.jules.status import JulesStatusSnapshot, normalize_jules_status
+from moonmind.jules.status import JulesStatusClassification, normalize_jules_status
 from moonmind.workflows.temporal.runtime.workspace_locators import (
     SandboxWorkspaceRecordStore,
     resolve_managed_workspace_locator,
@@ -88,6 +88,7 @@ from moonmind.schemas.workspace_locator_models import (
 )
 from moonmind.workflows.report_output import report_output_display_name
 from moonmind.workflows.checkpoint_branches import generate_checkpoint_branch_name
+from moonmind.workflows.executions.preset_readiness import SavedPresetCapabilitiesInput
 from moonmind.workflows.executions.routing import _coerce_bool
 from moonmind.workflows.executions.runtime_capabilities import (
     resolve_runtime_execution_capabilities,
@@ -249,6 +250,7 @@ from moonmind.workflows.temporal.runtime.strategies.codex_cli import (
     append_managed_codex_runtime_note,
 )
 from moonmind.workflows.temporal.story_output_tools import (
+    ISSUE_BRIEF_LOADER_TOOL_NAMES,
     JIRA_CHECK_BLOCKERS_TOOL_NAME,
     JIRA_LOAD_PRESET_BRIEF_TOOL_NAME,
     JIRA_UPDATE_ISSUE_STATUS_TOOL_NAME,
@@ -945,6 +947,7 @@ _ACTIVITY_HANDLER_ATTRS: dict[str, tuple[str, str]] = {
     "manifest.compile": ("manifest", "manifest_compile"),
     "manifest.write_summary": ("manifest", "manifest_write_summary"),
     "plan.generate": ("plans", "plan_generate"),
+    "plan.check_preset_capabilities": ("plans", "plan_check_preset_capabilities"),
     "plan.validate": ("plans", "plan_validate"),
     "mm.tool.execute": ("skills", "mm_tool_execute"),
     "mm.skill.execute": ("skills", "mm_skill_execute"),
@@ -2274,6 +2277,16 @@ class TemporalPlanActivities:
         self._artifact_service = artifact_service
         self._planner = planner
 
+    async def plan_check_preset_capabilities(
+        self, request: dict[str, Any]
+    ) -> dict[str, Any]:
+        from api_service.db.base import get_async_session_context
+        from api_service.services.presets.catalog import PresetCatalogService
+
+        check = SavedPresetCapabilitiesInput.model_validate(request)
+        async with get_async_session_context() as session:
+            return await PresetCatalogService(session).check_saved_capabilities(check)
+
     async def plan_generate(
         self,
         request: Mapping[str, Any] | PlanGenerateInput | None = None,
@@ -2558,8 +2571,25 @@ class TemporalSkillActivities:
                 principal or "system:deployment",
             )
 
+        selector = invocation_payload.get("tool") or invocation_payload.get("skill")
+        selected_name = (
+            str(selector.get("name") or selector.get("id") or "").strip()
+            if isinstance(selector, Mapping)
+            else ""
+        )
+        is_issue_loader = selected_name in ISSUE_BRIEF_LOADER_TOOL_NAMES
+        if is_issue_loader:
+            definition = resolved_snapshot.get_tool(name=selected_name)
+            if definition.executor.activity_type not in {
+                "mm.tool.execute",
+                "mm.skill.execute",
+            }:
+                raise TemporalActivityRuntimeError(
+                    "Trusted issue loaders require their registered native handler"
+                )
+
         try:
-            return await execute_skill_activity(
+            result = await execute_skill_activity(
                 invocation_payload=invocation_payload,
                 registry_snapshot=resolved_snapshot,
                 dispatcher=self._dispatcher,
@@ -2567,6 +2597,52 @@ class TemporalSkillActivities:
             )
         except ToolFailure as exc:
             raise _tool_failure_application_error(exc) from exc
+
+        # The trusted loader owns the complete brief. Persist it before the
+        # workflow compacts inline context, rather than asking an assessment
+        # agent in a fresh workspace to reconstruct that source from a preview.
+        outputs = result.outputs
+        if (
+            result.status == "COMPLETED"
+            and is_issue_loader
+            and outputs.get("artifactPath")
+        ):
+            if resolved_artifact_service is None:
+                raise TemporalActivityRuntimeError(
+                    "Trusted issue brief requires durable artifact storage"
+                )
+            from temporalio import activity
+
+            try:
+                info = activity.info()
+            except RuntimeError:
+                info = None
+            brief_ref = await _write_json_artifact(
+                resolved_artifact_service,
+                principal=principal or "system:agent_runtime",
+                payload=dict(outputs),
+                execution_ref=(
+                    ExecutionRef(
+                        namespace=info.namespace,
+                        workflow_id=info.workflow_id,
+                        run_id=info.workflow_run_id,
+                        link_type="input.issue_brief_handoff",
+                    )
+                    if info is not None
+                    else None
+                ),
+                metadata_json={
+                    "name": "issue-brief.json",
+                    "path": outputs["artifactPath"],
+                    "producer": "activity:mm.tool.execute",
+                    "labels": ["issue_brief"],
+                },
+            )
+            result = replace(
+                result,
+                outputs={**outputs, "briefArtifactRef": brief_ref.artifact_id},
+            )
+        return result
 
     async def mm_tool_execute(
         self,
@@ -4671,7 +4747,7 @@ class TemporalIntegrationActivities:
         )
 
     @staticmethod
-    def _status_snapshot(raw_status: str | None) -> JulesStatusSnapshot:
+    def _status_snapshot(raw_status: str | None) -> JulesStatusClassification:
         return normalize_jules_status(raw_status)
 
     @staticmethod
@@ -4679,23 +4755,25 @@ class TemporalIntegrationActivities:
         *,
         provider_status: str | None,
         normalized_hint: str | None,
-    ) -> JulesStatusSnapshot:
+    ) -> JulesStatusClassification:
         snapshot = normalize_jules_status(provider_status)
         token = str(normalized_hint or "").strip().lower()
         if token == "cancelled":
             token = "canceled"
-        if token not in {"queued", "running", "completed", "failed", "canceled", "unknown"}:
+        if token not in {"queued", "running", "completed", "failed", "canceled", "unknown", "awaiting_feedback"}:
             return snapshot
 
         terminal = token in {"completed", "failed", "canceled"}
-        return JulesStatusSnapshot(
+        return JulesStatusClassification(
             provider_status=snapshot.provider_status,
             provider_status_token=snapshot.provider_status_token,
-            normalized_status=token,
+            normalized_status=token,  # type: ignore[arg-type]
             terminal=terminal,
             succeeded=token == "completed",
             failed=token == "failed",
             canceled=token == "canceled",
+            is_known=snapshot.is_known,
+            is_missing=snapshot.is_missing,
         )
 
     async def _write_failure_summary_artifact(
@@ -7664,7 +7742,7 @@ class TemporalAgentRuntimeActivities:
         def _canonicalize_moonspec_verify_gate_payload(
             gate_payload: Mapping[str, Any],
         ) -> dict[str, Any]:
-            """Derive MoonSpec gate action from verdict, preserving model output."""
+            """Preserve the Skill's canonical action; repair missing/invalid values."""
 
             canonical_payload = dict(gate_payload)
             recoverable_raw = (
@@ -7688,6 +7766,10 @@ class TemporalAgentRuntimeActivities:
             raw_action_text = (
                 raw_action.strip() if isinstance(raw_action, str) else None
             )
+            if raw_action_text in recommended_next_actions():
+                canonical_payload["recommendedNextAction"] = raw_action_text
+                canonical_payload.pop("recommended_next_action", None)
+                return canonical_payload
             if raw_action is not None and raw_action_text != canonical_action:
                 canonical_payload.setdefault(
                     "rawRecommendedNextAction",
@@ -7951,7 +8033,12 @@ class TemporalAgentRuntimeActivities:
                 == "reattempt_current_step"
             )
             remaining_work = gate_payload.get("remainingWork")
-            if additional_work_declared and isinstance(remaining_work, list):
+            remaining_work_declared = additional_work_declared or (
+                str(declared_verdict or "").strip().upper() == "NO_DETERMINATION"
+                and gate_payload.get("recommendedNextAction") in {"needs_human", "blocked"}
+                and isinstance(remaining_work, list)
+            )
+            if remaining_work_declared and isinstance(remaining_work, list):
                 # Workflow history carries only a stable semantic digest; the
                 # resolved verifier's full structured gaps remain in its
                 # artifact. This lets the progress gate compare attempts
@@ -8011,7 +8098,7 @@ class TemporalAgentRuntimeActivities:
                 gate_payload,
                 "remainingWorkRef",
                 "remaining_work_ref",
-            ) and additional_work_declared:
+            ) and remaining_work_declared:
                 # The resolved verifier bundle owns the remaining-work
                 # semantics. Its published JSON is therefore the durable
                 # evidence when the portable contract emits structured
@@ -9680,27 +9767,30 @@ class TemporalAgentRuntimeActivities:
             "`recoverableInCurrentRuntime`, and `remainingWork` fields.\n"
             f"- `verdict` must be exactly one of: {verdict_values}.\n"
             f"- `recommendedNextAction` must be exactly one of: {next_action_values}. "
-            "Any other model-authored value is contract drift; MoonMind preserves "
+            "Any unknown model-authored value is contract drift; MoonMind preserves "
             "it as a raw diagnostic and derives the canonical action from the "
-            "verdict.\n"
+            "verdict. A canonical value that contradicts its verdict fails "
+            "contract validation; it is not silently replaced with a default.\n"
             '- For `FULLY_IMPLEMENTED`, set `recommendedNextAction` to "advance"; '
             "do not encode pull request creation or any other workflow-specific "
             "destination in this field.\n"
-            "- `recommendedNextAction` is advisory semantic metadata. The workflow "
-            "runtime owns routing and selects the next logical plan node. Never "
+            "- Follow the resolved Skill's continuation decision. The workflow "
+            "runtime owns routing and honors explicit `needs_human` or `blocked` "
+            "stops for `ADDITIONAL_WORK_NEEDED` and `NO_DETERMINATION`; these stop "
+            "automatic verifier retry and implementation remediation. Never "
             "encode a remediation node, publication node, or pull request destination.\n"
             "- For `ADDITIONAL_WORK_NEEDED`, include bounded concrete remaining "
             "work, recoverability, and evidence references. A read-only verifier "
             "must not ask its own rerun to perform implementation remediation.\n"
-            '- Use "reattempt_current_step" only when rerunning this verifier can '
-            "obtain different evidence, especially for a recoverable "
-            "`NO_DETERMINATION`.\n"
-            "- Treat integration, e2e, smoke, quickstart, map-entry, UI/browser, "
-            "deployment, and external-service checks as advisory when they depend "
-            "on unavailable non-repo assets, services, credentials, or tooling; "
-            "missing map assets or environment-only failures must be reported as "
-            "non-blocking limitations, not used as the sole reason for a blocking "
-            "verdict.\n"
+            '- For `ADDITIONAL_WORK_NEEDED`, "reattempt_current_step" permits a '
+            "separate authorized remediation step. For `NO_DETERMINATION`, use "
+            '"reattempt_current_step" only when rerunning this verifier can '
+            "obtain different controlling evidence. `recoverableInCurrentRuntime: "
+            "false` alone does not prohibit separate remediation.\n"
+            "- Follow the resolved Skill's evidence policy: distinguish optional "
+            "environment diagnostics from mandatory acceptance prerequisites, "
+            "and preserve the required owner, evidence, and resume check for "
+            "prerequisites an authorized remediation step cannot supply.\n"
             "- Still return the Markdown MoonSpec Verification Report in the assistant response."
         )
         return instructions.rstrip() + "\n\n" + block

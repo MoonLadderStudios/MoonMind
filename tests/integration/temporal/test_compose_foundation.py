@@ -249,8 +249,11 @@ def test_omnigent_hosts_use_versioned_read_only_tool_bundle():
 
     configured_version = initializer["environment"]["MOONMIND_GH_VERSION"]
     compose_default_version = configured_version.removesuffix("}").rsplit(":-", 1)[1]
-    assert tool_manifest["bundleVersion"] == f"gh-{compose_default_version}-1"
-    assert tool_manifest["tools"][0]["version"] == compose_default_version
+    assert tool_manifest["bundleVersion"] == f"gh-{compose_default_version}-container-v1"
+    tools_by_name = {tool["name"]: tool for tool in tool_manifest["tools"]}
+    assert tools_by_name["gh"]["version"] == compose_default_version
+    assert tools_by_name["docker"]["version"] == "container-v1"
+    assert tools_by_name["docker"]["path"] == "bin/moonmind"
 
     assert initializer["image"] == (
         "${OMNIGENT_GH_IMAGE:-serversideup/github-cli:alpine-2.76.2}"
@@ -291,7 +294,11 @@ def test_api_host_port_mapping_and_optional_env_file_for_mm_969():
     services = compose["services"]
 
     api_service = services["api"]
-    assert api_service["ports"] == ["${MOONMIND_API_HOST_PORT:-7000}:8000"]
+    # #4120 req 5: the operator-facing publish host is part of the mapping so
+    # disabled local mode stays loopback-bound unless trusted ingress is set.
+    assert api_service["ports"] == [
+        "${MOONMIND_API_PUBLISH_HOST:-127.0.0.1}:${MOONMIND_API_HOST_PORT:-7000}:8000"
+    ]
     assert api_service["restart"] == "unless-stopped"
 
     healthcheck = " ".join(str(part) for part in api_service["healthcheck"]["test"])

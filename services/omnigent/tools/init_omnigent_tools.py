@@ -157,11 +157,24 @@ def initialize(lock_path: Path, output_root: Path) -> None:
     try:
         for index, tool in enumerate(lock["tools"]):
             selected = tool["platforms"][platform_key]
-            archive = staging / f"artifact-{index}.tar.gz"
-            _download(selected["url"], archive, selected["sha256"])
             executable = staging / _safe_relative_path(tool["path"])
-            _extract_executable(archive, selected["archivePath"], executable)
-            archive.unlink()
+            if tool.get("sourcePath"):
+                source = lock_path.parent / tool["sourcePath"]
+                if (
+                    source.is_symlink()
+                    or not source.is_file()
+                    or hashlib.sha256(source.read_bytes()).hexdigest()
+                    != selected["executableSha256"]
+                ):
+                    raise RuntimeError(f"SHA-256 mismatch for {tool['name']} source")
+                executable.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copyfile(source, executable)
+                executable.chmod(0o555)
+            else:
+                archive = staging / f"artifact-{index}.tar.gz"
+                _download(selected["url"], archive, selected["sha256"])
+                _extract_executable(archive, selected["archivePath"], executable)
+                archive.unlink()
             subprocess.run(
                 [str(executable), *tool["versionProbe"]],
                 check=True,

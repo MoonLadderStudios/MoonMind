@@ -96,6 +96,14 @@ TEMPORAL_BOUNDARY_EXACT = {
     # authority the generator cites; registry edits must re-run the drift and
     # composition checks.
     "services/temporal/scripts/bootstrap-namespace.sh",
+    # MoonLadderStudios/MoonMind#3964: the step-execution contract vocabulary
+    # guard (tests/unit/workflows/temporal/test_step_execution_contract_names.py)
+    # reads these paths; changes there must re-run the temporal-boundary shard
+    # that owns the guard.
+    "moonmind/schemas/step_execution_models.py",
+    "moonmind/schemas/agent_runtime_models.py",
+    "moonmind/workflows/executions/execution_contract.py",
+    "docs/Steps/StepExecutionsAndCheckpointing.md",
 }
 
 TEMPORAL_BOUNDARY_PREFIXES = (
@@ -590,7 +598,11 @@ def select_suites(
         for path in paths
     )
     selection = SuiteSelection(
-        unit_fast=bool(backend_paths) or profile_authoring_changed,
+        # Markdown includes executable examples, Skill contracts, metadata,
+        # and internal links. The existing fast shard owns those checks.
+        unit_fast=bool(backend_paths)
+        or profile_authoring_changed
+        or any(path.endswith(".md") for path in paths),
         unit_slow=any(
             _matches(path, prefixes=UNIT_SLOW_PREFIXES) for path in backend_paths
         ),
