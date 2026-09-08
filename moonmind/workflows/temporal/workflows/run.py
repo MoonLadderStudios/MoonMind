@@ -71,6 +71,10 @@ with workflow.unsafe.imports_passed_through():
         is_jules_agent_runtime_node,
     )
     from moonmind.workflows.executions.routing import _coerce_bool
+    from moonmind.workflows.executions.preset_readiness import (
+        SAVED_PRESET_CAPABILITY_READINESS_PATCH,
+        saved_preset_capability_check,
+    )
     from moonmind.workflows.executions.prepared_context import (
         ExecutionContextBundle,
         branch_turn_step_execution_manifest_projection,
@@ -95,6 +99,7 @@ with workflow.unsafe.imports_passed_through():
         JIRA_BACKED_AGENT_SKILLS,
     )
     from moonmind.workflows.temporal.story_output_tools import (
+        ISSUE_BRIEF_LOADER_TOOL_NAMES,
         JIRA_CHECK_BLOCKERS_TOOL_NAME,
     )
     from moonmind.workflows.temporal.typed_execution import execute_typed_activity
@@ -617,6 +622,7 @@ RUN_ASSESSMENT_PARAMETER_INJECTION_PATCH = "run-assessment-parameter-injection-v
 RUN_ASSESSMENT_CONSUMER_HANDOFF_PATCH = "run-assessment-consumer-handoff-v1"
 RUN_ASSESSMENT_ATTACHMENT_HANDOFF_PATCH = "run-assessment-attachment-handoff-v1"
 RUN_ISSUE_BRIEF_ATTACHMENT_HANDOFF_PATCH = "run-issue-brief-attachment-handoff-v1"
+RUN_TRUSTED_ISSUE_BRIEF_AUTHORITY_PATCH = "run-trusted-issue-brief-authority-v1"
 RUN_MOONSPEC_VERIFY_ATTACHMENT_HANDOFF_PATCH = (
     "run-moonspec-verify-attachment-handoff-v1"
 )
@@ -9834,6 +9840,7 @@ class MoonMindRunWorkflow:
         outputs: Mapping[str, Any],
         *,
         request: AgentExecutionRequest | None = None,
+        source_tool_name: str | None = None,
     ) -> None:
         record_aliases = self._patched_or_false_outside_workflow(
             RUN_JIRA_BLOCKER_RECHECK_ASSESSMENT_CONTEXT_ALIAS_PATCH
@@ -9843,6 +9850,16 @@ class MoonMindRunWorkflow:
             ("assessmentVerdict", "assessment_verdict"),
             ("briefArtifactRef", "brief_artifact_ref"),
         ):
+            if (
+                aliases[0] == "briefArtifactRef"
+                and self._patched_or_false_outside_workflow(
+                    RUN_TRUSTED_ISSUE_BRIEF_AUTHORITY_PATCH
+                )
+                and self._assessment_context.get("briefArtifactRef")
+                and source_tool_name not in ISSUE_BRIEF_LOADER_TOOL_NAMES
+            ):
+                # Agent-produced copies cannot replace the loader's source.
+                continue
             for key in aliases:
                 value = outputs.get(key)
                 if value in (None, "", {}, []):
@@ -9872,7 +9889,9 @@ class MoonMindRunWorkflow:
                 self._assessment_context.pop("assessedRepository", None)
                 self._assessment_context.pop("assessedBranch", None)
 
-    def _merge_assessment_context_into_result(self, execution_result: Any) -> Any:
+    def _merge_assessment_context_into_result(
+        self, execution_result: Any, *, source_tool_name: str | None = None
+    ) -> Any:
         if not self._assessment_context:
             return execution_result
         outputs = self._get_from_result(execution_result, "outputs")
@@ -9886,6 +9905,22 @@ class MoonMindRunWorkflow:
             ("assessmentVerdict", "assessment_verdict"),
             ("briefArtifactRef", "brief_artifact_ref"),
         ):
+            if (
+                aliases[0] == "briefArtifactRef"
+                and self._patched_or_false_outside_workflow(
+                    RUN_TRUSTED_ISSUE_BRIEF_AUTHORITY_PATCH
+                )
+                and self._assessment_context.get("briefArtifactRef")
+            ):
+                if source_tool_name in ISSUE_BRIEF_LOADER_TOOL_NAMES:
+                    # A new trusted load may select a different issue.
+                    continue
+                for alias in aliases:
+                    if alias == aliases[0] or alias in merged_outputs:
+                        value = self._assessment_context["briefArtifactRef"]
+                        changed = changed or merged_outputs.get(alias) != value
+                        merged_outputs[alias] = value
+                continue
             if any(
                 merged_outputs.get(alias) not in (None, "", {}, []) for alias in aliases
             ):
@@ -9928,7 +9963,14 @@ class MoonMindRunWorkflow:
         ):
             value = self._assessment_context.get(key)
             if value not in (None, "", {}, []):
-                merged.setdefault(key, value)
+                if key in {"briefArtifactRef", "brief_artifact_ref"} and (
+                    self._patched_or_false_outside_workflow(
+                        RUN_TRUSTED_ISSUE_BRIEF_AUTHORITY_PATCH
+                    )
+                ):
+                    merged[key] = value
+                else:
+                    merged.setdefault(key, value)
         if self._patched_or_false_outside_workflow(
             RUN_MOONSPEC_GATE_PREVIOUS_OUTPUTS_HANDOFF_PATCH
         ):
@@ -9946,6 +9988,18 @@ class MoonMindRunWorkflow:
                 if gate_result_ref:
                     merged["moonSpecVerifyArtifactRef"] = gate_result_ref
         if not self._trusted_issue_context:
+            return merged if merged != previous_outputs else previous_outputs
+        if self._patched_or_false_outside_workflow(
+            RUN_TRUSTED_ISSUE_BRIEF_AUTHORITY_PATCH
+        ):
+            # The context recorded from the dispatched loader owns source
+            # fields even when a later tool copies or spoofs trustedSource.
+            copied_source = self._trusted_previous_outputs_context(
+                {**merged, "trustedSource": self._trusted_issue_context["trustedSource"]}
+            )
+            for key in copied_source or {}:
+                merged.pop(key, None)
+            merged.update(self._trusted_issue_context)
             return merged if merged != previous_outputs else previous_outputs
         if self._trusted_previous_outputs_context(previous_outputs):
             return merged if merged != previous_outputs else previous_outputs
@@ -11466,6 +11520,55 @@ class MoonMindRunWorkflow:
         input_ref: Optional[str],
         plan_ref: Optional[str],
     ) -> Optional[str]:
+        # A new scheduled execution must validate its saved requirements even
+        # when it supplies a plan. Recorded histories and durable continuations
+        # keep their admitted inputs and already validated progress.
+        if (
+            workflow.patched(SAVED_PRESET_CAPABILITY_READINESS_PATCH)
+            and not getattr(workflow.info(), "continued_run_id", None)
+        ):
+            try:
+                check = saved_preset_capability_check(
+                    parameters, principal=self._owner_id or ""
+                )
+            except (ValueError, TypeError, AttributeError):
+                raise exceptions.ApplicationError(
+                    "Saved schedule preset provenance is invalid; review and "
+                    "reapply its presets before retrying.",
+                    type="saved_preset_capabilities_unavailable",
+                    non_retryable=True,
+                ) from None
+            if check is not None:
+                route = DEFAULT_ACTIVITY_CATALOG.resolve_activity(
+                    "plan.check_preset_capabilities"
+                )
+                readiness = await workflow.execute_activity(
+                    "plan.check_preset_capabilities",
+                    check.model_dump(),
+                    **self._execute_kwargs_for_route(route),
+                )
+                if (
+                    not isinstance(readiness, Mapping)
+                    or readiness.get("status") != "ready"
+                ):
+                    if (
+                        isinstance(readiness, Mapping)
+                        and readiness.get("status") == "refresh_required"
+                        and isinstance(readiness.get("message"), str)
+                        and readiness["message"].strip()
+                    ):
+                        raise exceptions.ApplicationError(
+                            str(readiness["message"]),
+                            dict(readiness),
+                            type="saved_preset_capabilities_stale",
+                            non_retryable=True,
+                        )
+                    raise exceptions.ApplicationError(
+                        "Saved schedule capability readiness is unavailable; inspect "
+                        "the schedule's preset definitions before retrying.",
+                        type="saved_preset_capabilities_unavailable",
+                        non_retryable=True,
+                    )
         if plan_ref:
             return plan_ref
 
@@ -14073,8 +14176,18 @@ class MoonMindRunWorkflow:
                 self._record_assessment_context(
                     outputs_for_story_output,
                     request=agent_request_for_context,
+                    source_tool_name=(
+                        tool_name if agent_request_for_context is None else None
+                    ),
                 )
-                self._record_trusted_issue_context(outputs_for_story_output)
+                if (
+                    not workflow.patched(RUN_TRUSTED_ISSUE_BRIEF_AUTHORITY_PATCH)
+                    or (
+                        agent_request_for_context is None
+                        and tool_name in ISSUE_BRIEF_LOADER_TOOL_NAMES
+                    )
+                ):
+                    self._record_trusted_issue_context(outputs_for_story_output)
                 previous_step_outputs = outputs_for_story_output
                 story_output_result = outputs_for_story_output.get("storyOutput")
                 if isinstance(story_output_result, Mapping):
@@ -15259,7 +15372,11 @@ class MoonMindRunWorkflow:
         if preserve_assessment_context:
             outputs = self._get_from_result(current_result, "outputs")
             if isinstance(outputs, Mapping):
-                self._record_assessment_context(outputs, request=agent_request)
+                self._record_assessment_context(
+                    outputs,
+                    request=agent_request,
+                    source_tool_name=tool_name if agent_request is None else None,
+                )
         while self._jira_blocker_waitable_result(
             current_result,
             tool_type=tool_type,
@@ -15428,11 +15545,16 @@ class MoonMindRunWorkflow:
                     break
             if preserve_assessment_context:
                 current_result = self._merge_assessment_context_into_result(
-                    current_result
+                    current_result,
+                    source_tool_name=tool_name if agent_request is None else None,
                 )
                 outputs = self._get_from_result(current_result, "outputs")
                 if isinstance(outputs, Mapping):
-                    self._record_assessment_context(outputs, request=agent_request)
+                    self._record_assessment_context(
+                        outputs,
+                        request=agent_request,
+                        source_tool_name=tool_name if agent_request is None else None,
+                    )
             self._record_step_result_evidence(
                 node_id,
                 execution_result=current_result,

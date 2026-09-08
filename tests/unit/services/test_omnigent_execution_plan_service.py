@@ -1130,6 +1130,36 @@ async def test_workflow_cannot_self_attest_an_unknown_capability(
 
 
 @pytest.mark.asyncio
+async def test_docker_only_plan_materializes_the_projected_container_cli(monkeypatch):
+    from unittest.mock import AsyncMock
+    from moonmind.omnigent.host_services.mounted_tools import OmnigentMountedToolService
+    from moonmind.omnigent.host_services.github_credentials import (
+        OmnigentGithubCredentialService,
+    )
+
+    monkeypatch.setattr(
+        service,
+        "resolve_execution_evidence",
+        lambda payload, **_kwargs: (_protected_support_evidence(payload), "supported"),
+    )
+    result = await _compile_opencode_plan(
+        monkeypatch,
+        artifacts=_ArtifactService(),
+        launch_policy_ref="opencode-on-demand@1",
+        plan_store=_PlanStore(object()),
+        extra_parameters={"requiredCapabilities": ["docker"]},
+    )
+    resolved = result.envelope.payload.resolvedTools
+    assert resolved["tools"] == ["docker"]
+    mounts = await OmnigentMountedToolService(
+        backend=SimpleNamespace(run=AsyncMock())
+    ).materialize(resolved)
+    assert mounts[0]["tools"][0]["path"] == "bin/moonmind"
+    assert mounts[0]["tools"][0]["executableDigests"]
+    assert not OmnigentGithubCredentialService.required(resolved)
+
+
+@pytest.mark.asyncio
 async def test_selected_omnigent_runtime_is_safe_for_pre_cutover_worker(
     monkeypatch,
 ) -> None:

@@ -735,6 +735,14 @@ def _enforce_container_capability_scope(
                 ),
             },
         )
+    if capability.workspace_read_only:
+        # The caller can request stricter access, but only the signed session
+        # authority can restrict its omitted or false workspace flag. Persist
+        # this decision before handing the job to Temporal or the Docker worker.
+        submission.spec.workspace_read_only = True
+        payload.arguments = submission.model_dump(
+            mode="json", by_alias=True, exclude_none=True
+        )
 
 
 @router.post("/container/tools/call", response_model=ToolCallResponse)

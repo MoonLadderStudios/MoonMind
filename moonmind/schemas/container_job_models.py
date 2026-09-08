@@ -254,6 +254,11 @@ class ContainerJobSpec(ContractModel):
         max_length=128,
     )
     workspace_ref: WorkspaceLocator = Field(alias="workspaceRef")
+    # None preserves the exact serialized shape of already-admitted v1 jobs.
+    # Scoped transports stamp True from signed read-only session authority.
+    workspace_read_only: bool | None = Field(
+        None, alias="workspaceReadOnly", strict=True
+    )
     command: list[str] = Field(default_factory=list, max_length=128)
     entrypoint: list[str] = Field(default_factory=list, max_length=32)
     workdir: str = Field("/workspace", pattern=r"^/workspace(?:/[^/]+)*$", max_length=512)

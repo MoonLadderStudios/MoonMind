@@ -1689,7 +1689,7 @@ async def test_execution_owner_can_read_linked_artifact_from_other_principal(
 ) -> None:
     """MM-628: browser reads may use execution ownership, not storage ownership alone."""
 
-    monkeypatch.setattr(artifact_module.settings.oidc, "AUTH_PROVIDER", "keycloak")
+    monkeypatch.setattr(artifact_module.settings.oidc, "AUTH_PROVIDER", "oidc")
     async with temporal_db(tmp_path) as session_maker:
         async with session_maker() as session:
             repo = TemporalArtifactRepository(session)

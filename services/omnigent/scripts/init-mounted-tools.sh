@@ -22,6 +22,6 @@ case "$reported" in
   *" $version "*) ;;
   *) echo "gh version mismatch: expected $version" >&2; exit 65 ;;
 esac
-printf '{"schemaVersion":1,"bundleVersion":"gh-%s-container-v1","tools":[{"name":"gh","version":"%s","path":"bin/gh","versionProbe":["--version"]},{"name":"moonmind","version":"container-v1","path":"bin/moonmind","versionProbe":["--help"]}]}\n' \
+printf '{"schemaVersion":1,"bundleVersion":"gh-%s-container-v1","tools":[{"name":"gh","version":"%s","path":"bin/gh","versionProbe":["--version"]},{"name":"docker","version":"container-v1","path":"bin/moonmind","versionProbe":["--help"]}]}\n' \
   "$version" "$version" > "$output/manifest.json"
 chmod -R a-w "$output"

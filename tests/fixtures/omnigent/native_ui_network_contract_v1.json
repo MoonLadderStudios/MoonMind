@@ -53,9 +53,17 @@
       {
         "path": "omnigent/web/src/shell/ImportSessionsPanel.tsx",
         "sha256": "f78b0ac8bb1ad3d0c01a9230ef6414e66158bac2a15ef1f6e57b01eae28e62f5"
+      },
+      {
+        "path": "omnigent/omnigent/server/routes/sessions/routes_items.py",
+        "sha256": "236d49711b041f7a602b19e419e8596f0896f987d8cff4733a41598cf8be855c"
+      },
+      {
+        "path": "omnigent/omnigent/runner/app.py",
+        "sha256": "accaf80bdf2692b17992be389a64299cad6cceb75aef94a8977577a9a8c3a961"
       }
     ],
-    "routeCount": 45,
+    "routeCount": 38,
     "dimensions": [
       "pathPattern",
       "methods",
@@ -67,8 +75,8 @@
       "apiBaseDiscovery"
     ]
   },
-  "contractSha256": "aba290935dfe66a23e748c1449290b0865f6900e7d2a1822d809b3043ac1a6a4",
-  "moonmindFacadeDigest": "afeb499a6f016821753a80de53f2401c461d33549e47611a4cd550031262979a",
+  "contractSha256": "f8db251f4de1712e6c8fe260011c2c34c4b94d6e7bca5c87f6399e1354ebd814",
+  "moonmindFacadeDigest": "0b457458e4bef162f62ec98a4c039eef1fb3b7c4ba15f142431897c7f6971922",
   "routes": [
     "liveness",
     "native_server_info",
@@ -98,17 +106,10 @@
     "terminal_status",
     "terminal_close",
     "terminal_shell",
-    "execution_logs",
     "workspace_edit",
     "workspace_delete",
     "resource_upload",
-    "resource_download",
-    "resource_attach",
     "browser_pane",
-    "subagent_tree",
-    "subagent_control",
-    "task_todo",
-    "task_mutate",
     "host_liveness",
     "runner_liveness",
     "session_reconnect",

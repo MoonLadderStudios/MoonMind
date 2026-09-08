@@ -53,7 +53,7 @@ class TestArtifactAuthorizationBoundaries:
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
         """When OIDC is enabled, a non-owner principal must be denied read access."""
-        monkeypatch.setattr(settings.oidc, "AUTH_PROVIDER", "keycloak")
+        monkeypatch.setattr(settings.oidc, "AUTH_PROVIDER", "oidc")
         async with _db(tmp_path) as maker:
             async with maker() as session:
                 service = TemporalArtifactService(
@@ -92,7 +92,7 @@ class TestArtifactAuthorizationBoundaries:
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
         """Service principals (service:*) bypass ownership checks for reads."""
-        monkeypatch.setattr(settings.oidc, "AUTH_PROVIDER", "keycloak")
+        monkeypatch.setattr(settings.oidc, "AUTH_PROVIDER", "oidc")
         async with _db(tmp_path) as maker:
             async with maker() as session:
                 service = TemporalArtifactService(
@@ -122,7 +122,7 @@ class TestArtifactAuthorizationBoundaries:
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
         """When OIDC is enabled, a non-owner principal must be denied mutation access."""
-        monkeypatch.setattr(settings.oidc, "AUTH_PROVIDER", "keycloak")
+        monkeypatch.setattr(settings.oidc, "AUTH_PROVIDER", "oidc")
         async with _db(tmp_path) as maker:
             async with maker() as session:
                 service = TemporalArtifactService(
@@ -215,7 +215,7 @@ class TestArtifactAuthorizationBoundaries:
     ) -> None:
         """MM-628: linked input attachment reads are authorized by execution owner."""
 
-        monkeypatch.setattr(settings.oidc, "AUTH_PROVIDER", "keycloak")
+        monkeypatch.setattr(settings.oidc, "AUTH_PROVIDER", "oidc")
         async with _db(tmp_path) as maker:
             async with maker() as session:
                 service = TemporalArtifactService(

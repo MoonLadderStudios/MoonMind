@@ -563,6 +563,14 @@ jobs:
         run: |
           python -m pip install --upgrade pip uv
           uv pip install --system -e .
+      - name: Verify scoped CLI through the pinned native runner
+        # Keep upstream's dependencies isolated from the application driver.
+        # This replay uses real native Codex filters and local subprocesses;
+        # its container API fixture is loopback-only and needs no provider.
+        run: |
+          uv sync --project omnigent --frozen --no-dev
+          omnigent/.venv/bin/python \
+            tests/integration/reliability/replays/issue-brief-verification-handoff/runner_boundary.py
       - name: Set up Node for the hosted-UI capture
         uses: actions/setup-node@v7
         with:
@@ -767,8 +775,10 @@ jobs:
           if-no-files-found: ignore
 
   verify-test-shard-ownership:
+    # Always runs (MoonLadderStudios/MoonMind#3950): exclusive shard ownership
+    # is a static repository invariant, so targeted PRs must be gated too —
+    # gating only full_backend selections left targeted changes unverified.
     needs: select-test-suites
-    if: needs.select-test-suites.outputs.full_backend == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
@@ -795,10 +805,18 @@ jobs:
         run: python tools/verify_test_shard_ownership.py
 
   ci-required:
-    # Pure, no-checkout result aggregator for required backend CI
-    # (MoonLadderStudios/MoonMind#3326). It performs no repository operations:
-    # no checkout, no submodules, no Python/Node setup, no repository command.
-    # It evaluates every dependency and reports every failure before exiting.
+    # Pure, no-checkout result aggregator for required CI
+    # (MoonLadderStudios/MoonMind#3326, #3950). It performs no repository
+    # operations: no checkout, no submodules, no Python/Node setup, no
+    # repository command. It evaluates every dependency and reports every
+    # failure before exiting.
+    #
+    # Single required-result linkage: backend gates plus the frontend
+    # aggregator (test-frontend) and the generated-contract aggregator
+    # (check-generated-contracts) all report here, so a selected job's
+    # collected tests and evidence always resolve to this one required
+    # result. The leaf frontend/contract jobs stay enforced through their
+    # own aggregators; this job requires the aggregators themselves.
     needs:
       - select-test-suites
       - preflight-policy
@@ -812,6 +830,8 @@ jobs:
       - omnigent-exact-artifact
       - omnigent-deterministic-conformance
       - verify-test-shard-ownership
+      - test-frontend
+      - check-generated-contracts
     if: always()
     runs-on: ubuntu-latest
     timeout-minutes: 5
@@ -886,8 +906,23 @@ jobs:
           require_selected "omnigent-deterministic-conformance" \
             "${{ needs.select-test-suites.outputs.omnigent_conformance }}" \
             "${{ needs.omnigent-deterministic-conformance.result }}"
-          require_selected "verify-test-shard-ownership" \
-            "${{ needs.select-test-suites.outputs.full_backend }}" \
+
+          # Always-run aggregators (MoonLadderStudios/MoonMind#3950): both
+          # test-frontend and check-generated-contracts use `if: always()`
+          # and exit non-zero when a selected child fails, exiting zero on
+          # an intentional skip. They always produce a meaningful result,
+          # so require their success unconditionally — a failing frontend
+          # or generated-contract gate must fail ci-required.
+          require_always "test-frontend" \
+            "${{ needs.test-frontend.result }}"
+          require_always "check-generated-contracts" \
+            "${{ needs.check-generated-contracts.result }}"
+
+          # Always-run static invariant (MoonLadderStudios/MoonMind#3950):
+          # verify-test-shard-ownership has no selection gate, so aggregate
+          # it unconditionally. Gating it on full_backend tripped a
+          # success-but-unselected failure on every targeted PR.
+          require_always "verify-test-shard-ownership" \
             "${{ needs.verify-test-shard-ownership.result }}"
 
           if [[ "$failures" -gt 0 ]]; then

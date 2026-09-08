@@ -12,6 +12,7 @@ from moonmind.schemas.agent_runtime_models import (
     AgentRunStatus,
     ProviderCapabilityDescriptor,
 )
+from moonmind.jules.vocabulary import require_known_jules_status
 from moonmind.schemas.jules_models import (
     JulesCreateTaskRequest,
     JulesGetTaskRequest,
@@ -19,7 +20,6 @@ from moonmind.schemas.jules_models import (
     JulesSendMessageRequest,
     JulesTaskResponse,
     SourceContext,
-    normalize_jules_status,
 )
 from moonmind.workflows.adapters.base_external_agent_adapter import (
     BaseExternalAgentAdapter,
@@ -35,19 +35,31 @@ _JULES_TO_AGENT_RUN_STATUS: dict[str, str] = {
     "completed": "completed",
     "failed": "failed",
     "canceled": "canceled",
-    "unknown": "awaiting_callback",
 }
 
+
 def _to_agent_status(raw_status: str | None) -> str:
-    normalized = normalize_jules_status(raw_status)
+    # Execution-critical boundary: unknown/missing statuses raise
+    # JulesUnknownStatusError (a provider-neutral UnsupportedStatusError)
+    # instead of polling as awaiting_callback.
+    normalized = require_known_jules_status(
+        raw_status, context="jules_agent_adapter"
+    )
     return _JULES_TO_AGENT_RUN_STATUS[normalized]
 
 def _normalize_jules_task(response: JulesTaskResponse) -> str:
-    """Determine normalized status, treating PR creation as success."""
-    normalized = normalize_jules_status(response.status)
-    if normalized == "running" and response.pull_request_url:
-        return "completed"
-    return normalized
+    """Determine normalized status from provider state only.
+
+    A provider pull-request URL is exposed as evidence (externalUrl /
+    pullRequestUrl metadata) and never promotes ``running`` to ``completed``:
+    provider progress is not verified AgentRun success.
+
+    Execution-critical boundary: unknown/missing provider statuses raise
+    instead of returning a display-safe ``unknown``.
+    """
+    return require_known_jules_status(
+        response.status, context="jules_agent_adapter"
+    )
 
 def _preferred_external_url(response: JulesTaskResponse) -> str | None:
     """Prefer the PR URL once available; otherwise fall back to session URL."""

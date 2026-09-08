@@ -1,12 +1,8 @@
+"""Static public contract vocabulary, owned by temporal-boundary (#3964)."""
+
 from __future__ import annotations
 
 from pathlib import Path
-
-import pytest
-
-
-pytestmark = [pytest.mark.integration, pytest.mark.integration_ci]
-
 
 BOUNDARY_PATHS = (
     Path("moonmind/schemas/step_execution_models.py"),
@@ -50,3 +46,18 @@ def test_step_execution_boundary_contracts_do_not_reintroduce_stale_names() -> N
 
     for required in REQUIRED_SELECTED_CONTRACT_TERMS:
         assert required in combined
+
+
+def test_document_change_selects_actual_temporal_shard_owner(request) -> None:
+    from tools.select_test_suites import select_suites
+    from tools.verify_test_shard_ownership import CollectedNode, owners
+
+    node = CollectedNode(
+        request.node.nodeid,
+        Path(__file__).relative_to(Path(__file__).resolve().parents[4]).as_posix(),
+        frozenset(marker.name for marker in request.node.iter_markers()),
+    )
+    assert owners(node) == {"temporal-boundary"}
+    assert select_suites(
+        ["docs/Steps/StepExecutionsAndCheckpointing.md"], event_name="pull_request"
+    ).temporal_boundary
