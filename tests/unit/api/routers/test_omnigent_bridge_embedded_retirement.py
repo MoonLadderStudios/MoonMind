@@ -229,7 +229,7 @@ def test_embedded_retry_with_admitted_key_reconciles_instead_of_rejecting() -> N
     app.dependency_overrides[_require_bridge_enabled] = _embedded_config
     app.dependency_overrides[_get_bridge_proxy] = lambda: None
     app.dependency_overrides[_get_create_embedded_facade] = lambda: facade
-    app.dependency_overrides[_get_bridge_store] = lambda: _RetryCapableStore()
+    app.dependency_overrides[_get_bridge_store] = _RetryCapableStore
     app.dependency_overrides[_get_launch_default_agent_selection] = lambda: None
 
     response = TestClient(app).post(_CREATE_PATH, json=_create_body())
