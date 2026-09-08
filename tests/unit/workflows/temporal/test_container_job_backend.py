@@ -200,6 +200,34 @@ async def test_create_applies_hardening_shm_pids_and_labels(tmp_path) -> None:
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("read_only", [None, False, True])
+async def test_historical_activity_preserves_workspace_access_at_launch(
+    tmp_path, read_only
+):
+    """Missing access flags retain the persisted v1 request and writable mount."""
+    (tmp_path / "art_workspace").mkdir()
+    commands = []
+    backend = DockerContainerJobBackend(
+        workspace_root=tmp_path, command_runner=_recording_runner(commands)
+    )
+    historical_payload = _request(tmp_path).model_dump(
+        mode="json", by_alias=True, exclude_none=True
+    )
+    historical_payload["request"]["spec"].pop("workspaceReadOnly", None)
+    if read_only is not None:
+        historical_payload["request"]["spec"]["workspaceReadOnly"] = read_only
+    request = ContainerJobActivityRequest.model_validate(historical_payload)
+    assert (
+        request.model_dump(mode="json", by_alias=True, exclude_none=True)
+        == historical_payload
+    )
+    await backend.create_container(request)
+    created = next(command for command in commands if command[0] == "create")
+    mount = created[created.index("--mount") + 1]
+    assert mount.endswith(",readonly") is bool(read_only)
+
+
+@pytest.mark.asyncio
 async def test_bridge_launch_requires_attestation_and_uses_restricted_network(
     tmp_path,
 ) -> None:

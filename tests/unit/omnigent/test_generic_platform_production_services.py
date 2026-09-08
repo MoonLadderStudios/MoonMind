@@ -249,7 +249,7 @@ async def test_exact_host_opencode_probe_composes_both_environment_builders() ->
     ]
     assert "from omnigent.host.connect import _build_runner_env" in argv[5]
     assert "from omnigent.opencode_native_app_server import filtered_server_env" in argv[5]
-    assert "moonmind-opencode-context" in argv[5]
+    assert "moonmind-context" in argv[5]
     assert "env=runner_env" in argv[5]
     assert argv[6:] == ["gh", "auth", "status", "--hostname", "github.com"]
     assert kwargs == {"timeout_seconds": 30.0, "check": False}
@@ -921,6 +921,13 @@ async def test_github_credential_projection_transports_secret_only_on_stdin(
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
+    "capability_name,capability_file",
+    [
+        ("MOONMIND_EXECUTION_FANOUT_BEARER_TOKEN", "execution-fanout"),
+        ("MOONMIND_CONTAINER_JOBS_BEARER_TOKEN", "container-jobs"),
+    ],
+)
+@pytest.mark.parametrize(
     "expected_host_id",
     [
         None,
@@ -943,6 +950,8 @@ async def test_host_volume_initializers_use_setup_authority(
     host_api_token: str,
     expected_secret_payloads: list[bytes],
     expected_host_id: str | None,
+    capability_name: str,
+    capability_file: str,
 ) -> None:
     calls: list[tuple[list[str], dict[str, object]]] = []
 
@@ -1032,10 +1041,8 @@ async def test_host_volume_initializers_use_setup_authority(
             "MOONMIND_TASK_WORKFLOW_ID": "workflow-1",
             "MOONMIND_STEP_ID": "step-1",
             "MOONMIND_RUNTIME_ID": "opencode-native",
-            "MOONMIND_REPOSITORY_CONNECTION_REF": (
-                "repository-connection:git-default"
-            ),
-            "MOONMIND_EXECUTION_FANOUT_BEARER_TOKEN": "scoped-fanout-token",
+            "MOONMIND_REPOSITORY_CONNECTION_REF": ("repository-connection:git-default"),
+            capability_name: "scoped-fanout-token",
         },
     )
 
@@ -1043,20 +1050,18 @@ async def test_host_volume_initializers_use_setup_authority(
     assert len(setup_runs) == len(expected_secret_payloads) + 1
     for argv in setup_runs:
         assert argv[argv.index("--user") + 1] == "0:0"
-    workload_create = next(argv for argv, _kwargs in calls if argv[:2] == ["docker", "create"])
+    workload_create = next(
+        argv for argv, _kwargs in calls if argv[:2] == ["docker", "create"]
+    )
     assert workload_create[workload_create.index("--user") + 1] == "1000:1000"
     from uuid import NAMESPACE_URL, uuid5
 
     launched_id = expected_host_id or str(uuid5(NAMESPACE_URL, owner_ref))
     assert f"OMNIGENT_HOST_ID={launched_id}" in workload_create
     assert "OMNIGENT_HOST_NAME=mm-host-test" in workload_create
-    assert "scoped-fanout-token" not in json.dumps(
-        [argv for argv, _kwargs in calls]
-    )
+    assert "scoped-fanout-token" not in json.dumps([argv for argv, _kwargs in calls])
     assert [
-        kwargs["input_bytes"]
-        for _argv, kwargs in calls
-        if kwargs.get("input_bytes")
+        kwargs["input_bytes"] for _argv, kwargs in calls if kwargs.get("input_bytes")
     ] == expected_secret_payloads
     assert script_inputs["runtime_environment"] == {
         "MOONMIND_URL": "http://api:8000",
@@ -1064,14 +1069,169 @@ async def test_host_volume_initializers_use_setup_authority(
         "MOONMIND_TASK_WORKFLOW_ID": "workflow-1",
         "MOONMIND_STEP_ID": "step-1",
         "MOONMIND_RUNTIME_ID": "opencode-native",
-        "MOONMIND_REPOSITORY_CONNECTION_REF": (
-            "repository-connection:git-default"
-        ),
-        "MOONMIND_EXECUTION_FANOUT_BEARER_TOKEN_FILE": (
-            "/run/moonmind-host-auth/execution-fanout"
-        ),
+        "MOONMIND_REPOSITORY_CONNECTION_REF": ("repository-connection:git-default"),
+        capability_name + "_FILE": (f"/run/moonmind-host-auth/{capability_file}"),
     }
     assert script_inputs["control_credential_available"] is bool(host_api_token)
+
+
+@pytest.mark.parametrize(
+    "harness_id", ["opencode-native", "codex-native", "claude-code-native"]
+)
+@pytest.mark.parametrize("relative_path", [None, "repo"])
+def test_generic_container_capability_reaches_python_test_submission(
+    harness_id, relative_path
+):
+    from api_service.api.routers.mcp_tools import (
+        ToolCallRequest,
+        _enforce_container_capability_scope,
+    )
+    from fastapi import HTTPException
+    from moonmind.container_job_cli import python_test_submission
+    from moonmind.security.container_job_capabilities import (
+        verify_container_job_session_capability,
+    )
+
+    replay = json.loads(
+        (
+            Path(__file__).resolve().parents[2]
+            / "integration/reliability/replays/issue-brief-verification-handoff/manifest.json"
+        ).read_text()
+    )["containerSubmission"]
+    request = AgentExecutionRequest.model_validate(
+        {
+            "agentKind": "external",
+            "agentId": "omnigent",
+            "correlationId": "workflow-1",
+            "idempotencyKey": "step-1",
+            "parameters": {"requiredCapabilities": replay["requiredCapabilities"]},
+            "workspaceSpec": {
+                "workspaceLocator": {
+                    "kind": "sandbox",
+                    "workspaceId": "sandbox-1",
+                    **({"relativePath": relative_path} if relative_path else {}),
+                }
+            },
+            "stepExecution": {
+                "workflowId": "workflow-1",
+                "runId": "run-1",
+                "logicalStepId": "node-1",
+                "executionOrdinal": 1,
+                "stepExecutionId": "workflow-1:run-1:node-1:execution:1",
+                "runtimeContextPolicy": "fresh_agent_run",
+            },
+        }
+    )
+    plan = _plan("test/model")
+    plan = create_execution_plan_envelope(
+        {
+            **plan.payload.model_dump(mode="json", by_alias=True),
+            "harnessId": harness_id,
+        }
+    )
+    environment = OmnigentRuntimeEnvironmentService(
+        moonmind_url="http://api:8000",
+        signing_secret="test-secret",
+    ).build(
+        request=request,
+        plan=plan,
+        host_lease_ref="lease-1",
+        launch_policy=get_launch_policy("omnigent-on-demand@1"),
+        workspace_attachment={"accessMode": "read-only"},
+    )
+    capability = verify_container_job_session_capability(
+        environment["MOONMIND_CONTAINER_JOBS_BEARER_TOKEN"],
+        secret="test-secret",
+    )
+    submission = python_test_submission(replay["testTargets"], env=environment)
+    assert submission["spec"]["workspaceRef"] == {
+        "kind": "sandbox",
+        "workspaceId": capability.workspace_id,
+        "relativePath": "repo",
+    }
+    assert capability.workspace_id == "sandbox-1"
+    assert capability.runtime_id == harness_id
+    assert capability.workspace_read_only is True
+    assert (
+        capability.agent_run_id
+        == capability.owner.principal_id
+        == "workflow-1:run-1:node-1:execution:1"
+    )
+    assert submission["source"]["workflowId"] == capability.workflow_id == "workflow-1"
+    assert (
+        submission["source"]["omnigentConversationId"]
+        == capability.session_id
+        == "lease-1"
+    )
+    assert (
+        environment["MOONMIND_CONTAINER_JOBS_MCP_URL"]
+        == "http://api:8000/mcp/container"
+    )
+    assert "MOONMIND_EXECUTION_FANOUT_BEARER_TOKEN" not in environment
+    _enforce_container_capability_scope(
+        ToolCallRequest(tool="container.submit", arguments=submission),
+        capability,
+    )
+    submission["spec"]["workspaceRef"]["workspaceId"] = "another-workspace"
+    with pytest.raises(HTTPException) as denied:
+        _enforce_container_capability_scope(
+            ToolCallRequest(tool="container.submit", arguments=submission),
+            capability,
+        )
+    assert denied.value.status_code == 403
+
+
+@pytest.mark.parametrize(
+    "locator",
+    [
+        None,
+        {"kind": "external_state", "artifactRef": "art_1"},
+        {"kind": "sandbox", "workspaceId": "x", "relativePath": "../other"},
+    ],
+)
+def test_generic_container_capability_rejects_missing_or_unsupported_workspace(locator):
+    request = AgentExecutionRequest.model_validate(
+        {
+            "agentKind": "external",
+            "agentId": "omnigent",
+            "correlationId": "wf",
+            "idempotencyKey": "step",
+            "parameters": {"requiredCapabilities": ["docker"]},
+            "workspaceSpec": {"workspaceLocator": locator},
+        }
+    )
+    with pytest.raises(HarnessPlatformError, match="sandbox workspace locator"):
+        OmnigentRuntimeEnvironmentService(
+            moonmind_url="http://api:8000", signing_secret="test"
+        ).build(
+            request=request,
+            plan=_plan("test/model"),
+            host_lease_ref="lease",
+            launch_policy=get_launch_policy("omnigent-on-demand@1"),
+        )
+
+
+def test_generic_host_without_container_requirement_gets_no_container_authority():
+    request = AgentExecutionRequest.model_validate(
+        {
+            "agentKind": "external",
+            "agentId": "omnigent",
+            "correlationId": "wf",
+            "idempotencyKey": "step",
+            "parameters": {"requiredCapabilities": ["git"]},
+        }
+    )
+    assert (
+        OmnigentRuntimeEnvironmentService(
+            moonmind_url="http://api:8000", signing_secret="test"
+        ).build(
+            request=request,
+            plan=_plan("test/model"),
+            host_lease_ref="lease",
+            launch_policy=get_launch_policy("omnigent-on-demand@1"),
+        )
+        == {}
+    )
 
 
 def test_generic_host_mints_scoped_fanout_from_step_authority(
