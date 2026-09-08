@@ -7604,13 +7604,6 @@ export interface components {
             /** Secretref */
             secretRef?: string | null;
         };
-        /** ErrorModel */
-        ErrorModel: {
-            /** Detail */
-            detail: string | {
-                [key: string]: string;
-            };
-        };
         /**
          * EvidenceRefStatusModel
          * @description Compact ref availability state for one Step Execution evidence category.
