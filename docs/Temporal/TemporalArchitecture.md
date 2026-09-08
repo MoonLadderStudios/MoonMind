@@ -1015,8 +1015,8 @@ Dead-letter posture:
 
 Rerun posture:
 
-- `RequestRerun` means Continue-As-New for the same logical execution only where permitted by the run-history/rerun contract
-- terminal rerun behavior must be explicitly implemented; do not assume closed executions accept ordinary updates
+- active `RequestRerun` may Continue-As-New for the same logical execution only where the workflow type supports the [run-history/rerun contract](WorkflowRunHistoryAndNewRunSemantics.md#7-new-run-semantics)
+- terminal `RequestRerun` uses the service-owned fresh-start path with a new linked Workflow ID and Run ID, leaving the closed source unchanged; clients follow the returned destination and closed executions receive no ordinary update
 - failed-step recovery is not `RequestRerun`; it is a separate linked follow-up execution with pinned source Workflow ID and Run ID
 
 ---

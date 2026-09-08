@@ -1,6 +1,7 @@
 # Workflow Remediation
 
 **Document class:** Canonical declarative system / feature design.
+**Status:** Accepted
 **Owners:** MoonMind Platform and dashboard.
 
 ## 1. Purpose
