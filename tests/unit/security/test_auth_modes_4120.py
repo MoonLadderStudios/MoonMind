@@ -43,7 +43,7 @@ def test_owner_is_single_reader_of_storage():
     # Production consumers go through the owner; storage keeps the raw value.
     from moonmind.config import settings as settings_module
 
-    assert hasattr(settings_module.settings.oidc, "AUTH_PROVIDER")
+    assert hasattr(settings_module.oidc, "AUTH_PROVIDER")
     assert callable(m.get_effective_auth_provider)
     assert callable(m.is_disabled_local_mode)
 

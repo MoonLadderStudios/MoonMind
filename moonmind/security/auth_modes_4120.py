@@ -494,7 +494,11 @@ def resolve_session_secret(
       are inputs.
     """
     path = Path(key_path) if key_path is not None else default_session_key_path()
-    if explicit_secret is not None and str(explicit_secret).strip() != "":
+    if explicit_secret is not None:
+        # An explicitly provided blank is a misconfiguration, not an
+        # omission: _looks_placeholder rejects blanks alongside known
+        # placeholder shapes so callers cannot silently fall through to
+        # durable generation with an operator intent to provide material.
         if _looks_placeholder(str(explicit_secret)):
             raise AuthModeError(
                 "The provided MoonMind session secret is an insecure placeholder. "
@@ -905,10 +909,18 @@ _SECRET_KEY_HINTS = (
     "auth",
 )
 
+# Non-secret enumerated keys that merely describe authentication state.
+# ``auth`` is an intentionally broad redaction hint (it also covers
+# ``authorization`` material), so these documented enum keys opt out
+# explicitly instead of narrowing the hint.
+_REDACT_EXEMPT_KEYS = frozenset({"auth_mode", "auth_readiness"})
+
 
 def redact_value(key: str, value: Any) -> Any:
     """Redact secret-looking values; non-secret values pass through."""
     lowered = str(key or "").lower()
+    if lowered in _REDACT_EXEMPT_KEYS:
+        return value
     if any(hint in lowered for hint in _SECRET_KEY_HINTS):
         if value is None or (isinstance(value, str) and value.strip() == ""):
             return "(unset)"

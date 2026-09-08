@@ -116,7 +116,7 @@ def test_rendered_ingress_matrix_covers_deployment_boundary():
     assert results["internal-reachable"].allowed is True
 
 
-def test_production_control_plane_ignores_hostile_runtime_ambient():
+def test_production_control_plane_ignores_hostile_runtime_ambient(tmp_path, monkeypatch):
     secret = secrets.token_bytes(32)
     hostile = {
         "OMNIGENT_AUTH_PROVIDER": "header",
@@ -133,6 +133,11 @@ def test_production_control_plane_ignores_hostile_runtime_ambient():
     assert config.cookie_name not in q.UPSTREAM_SESSION_COOKIES
     # Request-time helper with the classified production mode behaves the
     # same way under contradictory ambient values and same-origin use.
+    # It reads the durable deployment-owned key (never generates at request
+    # time), so provision one through the supported key-path override.
+    key_file = tmp_path / "moonmind_session_key"
+    key_file.write_bytes(secrets.token_bytes(32))
+    monkeypatch.setenv("MOONMIND_SESSION_KEY_PATH", str(key_file))
     settings.oidc.AUTH_PROVIDER = "accounts"
     try:
         built = build_moonmind_control_plane_config(
