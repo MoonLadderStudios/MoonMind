@@ -1820,6 +1820,7 @@ async def _apply_owned_session_control(
             failure_class="user_error",
             status_code=status.HTTP_410_GONE,
             code="omnigent_embedded_transport_retired",
+            public_details={"supportedTransport": HOST_PROTOCOL_MODE_PROXY},
         )
     assert proxy is not None
     return await proxy.post_event(session_id=session_id, event=payload)

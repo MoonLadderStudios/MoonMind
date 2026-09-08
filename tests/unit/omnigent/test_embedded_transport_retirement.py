@@ -13,7 +13,7 @@ from __future__ import annotations
 import importlib.util
 from pathlib import Path
 
-REPO_ROOT = Path(__file__).resolve().parents[2]
+REPO_ROOT = Path(__file__).resolve().parents[3]
 
 RETIRED_LAUNCH_MODULES = (
     "moonmind.omnigent.bridge_embedded",
@@ -62,7 +62,7 @@ def test_proxy_production_wiring_imports_without_retired_modules() -> None:
     import api_service.api.routers.omnigent_catalog as catalog
     import moonmind.omnigent.bridge_config as bridge_config
     import moonmind.omnigent.bridge_proxy as bridge_proxy
-    import moonmind.omnigent.bridge_store as bridge_store
+    from moonmind.omnigent import bridge_store
 
     assert bridge_config.HOST_PROTOCOL_MODE_PROXY == "upstream_omnigent_server_proxy"
     for module in (

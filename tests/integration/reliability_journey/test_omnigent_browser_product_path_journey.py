@@ -42,10 +42,9 @@ from tests.unit.omnigent.test_oauth_profile_lifecycle import (
 from tests.unit.omnigent.test_policy_authority import policy_document
 
 # The rollout gate deliberately composes the production-owner fixtures rather
-# than replacing bridge and embedded-host behavior with journey-local fakes.
+# than replacing bridge behavior with journey-local fakes.
 pytest_plugins = (
     "tests.integration.omnigent.test_bridge_conformance",
-    "tests.integration.omnigent.test_embedded_recovery",
     "tests.integration.omnigent.test_execute_fake_server",
 )
 
@@ -372,28 +371,6 @@ async def test_controlling_bridge_failure_and_recovery_owners(
     )
     await bridge.test_real_store_api_page_and_sse_project_gap_cursor_terminal_and_redaction(
         bridge_harness, monkeypatch, tmp_path
-    )
-
-
-async def test_controlling_restart_owner(store, session_factory) -> None:
-    """Execute the durable disconnect/restart authorization owner."""
-
-    from tests.integration.omnigent import test_embedded_recovery as recovery
-
-    await recovery.test_disconnect_restart_reconnect_and_retry_matrix(
-        store, session_factory
-    )
-
-
-async def test_controlling_first_message_reconciliation_owner(
-    store, session_factory
-) -> None:
-    """Execute response-before-persist reconciliation at the durable owner."""
-
-    from tests.integration.omnigent import test_embedded_recovery as recovery
-
-    await recovery.test_embedded_response_before_persist_reconciles_and_digest_change_fails_closed(
-        store, session_factory
     )
 
 

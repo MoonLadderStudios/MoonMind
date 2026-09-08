@@ -3095,7 +3095,7 @@ export interface paths {
         put?: never;
         /**
          * Create Omnigent Session
-         * @description Create or reuse an Omnigent-shaped session in the configured bridge mode.
+         * @description Create or reuse an Omnigent-shaped session over the proxy transport.
          */
         post: operations["create_omnigent_session_api_omnigent_v1_sessions_post"];
         delete?: never;
@@ -3501,10 +3501,10 @@ export interface paths {
         get?: never;
         put?: never;
         /**
-         * Register Embedded Omnigent Host
-         * @description Register an unchanged host against MoonMind's embedded host facade.
+         * Retired Embedded Host Registration
+         * @description Reject retired embedded host registration without substituting proxy.
          */
-        post: operations["register_embedded_omnigent_host_api_omnigent_v1_hosts_register_post"];
+        post: operations["retired_embedded_host_registration_api_omnigent_v1_hosts_register_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -3521,10 +3521,10 @@ export interface paths {
         get?: never;
         put?: never;
         /**
-         * Heartbeat Embedded Omnigent Host
-         * @description Accept a host heartbeat through the embedded host facade.
+         * Retired Embedded Host Heartbeat
+         * @description Reject retired embedded host heartbeats.
          */
-        post: operations["heartbeat_embedded_omnigent_host_api_omnigent_v1_hosts__host_id__heartbeat_post"];
+        post: operations["retired_embedded_host_heartbeat_api_omnigent_v1_hosts__host_id__heartbeat_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -3541,10 +3541,10 @@ export interface paths {
         get?: never;
         put?: never;
         /**
-         * Ingest Embedded Omnigent Host Event
-         * @description Ingest host/session events into the canonical bridge projection.
+         * Retired Embedded Host Session Event
+         * @description Reject retired embedded host/session event ingestion.
          */
-        post: operations["ingest_embedded_omnigent_host_event_api_omnigent_v1_hosts__host_id__sessions__session_id__events_post"];
+        post: operations["retired_embedded_host_session_event_api_omnigent_v1_hosts__host_id__sessions__session_id__events_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -7702,50 +7702,6 @@ export interface components {
             /** Queuewhenbusy */
             queueWhenBusy: boolean;
         };
-        /**
-         * EmbeddedHostHeartbeatRequest
-         * @description Host heartbeat payload.
-         */
-        EmbeddedHostHeartbeatRequest: {
-            /** Status */
-            status?: string | null;
-            /** Capabilities */
-            capabilities?: {
-                [key: string]: unknown;
-            };
-        } & {
-            [key: string]: unknown;
-        };
-        /**
-         * EmbeddedHostRegisterRequest
-         * @description Host registration payload accepted from an unchanged Omnigent host.
-         */
-        EmbeddedHostRegisterRequest: {
-            /** Hostid */
-            hostId?: string | null;
-            /** Runnerid */
-            runnerId?: string | null;
-            /** Capabilities */
-            capabilities?: {
-                [key: string]: unknown;
-            };
-        } & {
-            [key: string]: unknown;
-        };
-        /**
-         * EmbeddedHostSessionEventRequest
-         * @description Host-to-MoonMind session event payload.
-         */
-        EmbeddedHostSessionEventRequest: {
-            /** Type */
-            type: string;
-            /** Data */
-            data?: {
-                [key: string]: unknown;
-            };
-        } & {
-            [key: string]: unknown;
-        };
         /** EndpointPolicy */
         EndpointPolicy: {
             /** Ref */
@@ -10403,7 +10359,7 @@ export interface components {
         };
         /**
          * OmnigentPublicErrorDetail
-         * @description Stable error detail shared by proxy and embedded public routes.
+         * @description Stable error detail shared by bridge public routes.
          */
         OmnigentPublicErrorDetail: {
             /** Code */
@@ -22287,18 +22243,14 @@ export interface operations {
             };
         };
     };
-    register_embedded_omnigent_host_api_omnigent_v1_hosts_register_post: {
+    retired_embedded_host_registration_api_omnigent_v1_hosts_register_post: {
         parameters: {
             query?: never;
             header?: never;
             path?: never;
             cookie?: never;
         };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["EmbeddedHostRegisterRequest"];
-            };
-        };
+        requestBody?: never;
         responses: {
             /** @description Successful Response */
             200: {
@@ -22311,18 +22263,9 @@ export interface operations {
                     };
                 };
             };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
         };
     };
-    heartbeat_embedded_omnigent_host_api_omnigent_v1_hosts__host_id__heartbeat_post: {
+    retired_embedded_host_heartbeat_api_omnigent_v1_hosts__host_id__heartbeat_post: {
         parameters: {
             query?: never;
             header?: never;
@@ -22331,11 +22274,7 @@ export interface operations {
             };
             cookie?: never;
         };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["EmbeddedHostHeartbeatRequest"];
-            };
-        };
+        requestBody?: never;
         responses: {
             /** @description Successful Response */
             200: {
@@ -22359,7 +22298,7 @@ export interface operations {
             };
         };
     };
-    ingest_embedded_omnigent_host_event_api_omnigent_v1_hosts__host_id__sessions__session_id__events_post: {
+    retired_embedded_host_session_event_api_omnigent_v1_hosts__host_id__sessions__session_id__events_post: {
         parameters: {
             query?: never;
             header?: never;
@@ -22369,11 +22308,7 @@ export interface operations {
             };
             cookie?: never;
         };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["EmbeddedHostSessionEventRequest"];
-            };
-        };
+        requestBody?: never;
         responses: {
             /** @description Successful Response */
             200: {
