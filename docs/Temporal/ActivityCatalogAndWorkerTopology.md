@@ -250,8 +250,13 @@ Checkpoint-branch routing states (MoonLadderStudios/MoonMind#3949):
   (`mm.activity.artifacts`, capability class `artifacts`) via
   `CheckpointBranchTurn._persistence_route_options`. The catalog maps the
   same three types to the artifacts fleet with stable timeouts/retries, and
-  the artifacts worker binds the same handler implementations with their
-  required artifact-store/database dependencies.
+  the artifacts worker binds the same handler implementations. The three
+  handlers resolve through `direct_handlers` with no injected implementation
+  argument; their database authority arrives through internal
+  `async_session_maker` session creation inside the activity code, not
+  through injected topology privileges — which is why the inventory names
+  `(artifact_store, database)` while the artifacts topology privilege label
+  stays `(artifact_store,)`.
 - **Retained compatibility:** pre-marker histories keep their recorded
   workflow-queue behavior and execute against the retained
   `workflow_fleet_activity_handlers`. Fixture replay

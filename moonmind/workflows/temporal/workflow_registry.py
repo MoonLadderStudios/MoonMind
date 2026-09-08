@@ -401,6 +401,14 @@ def workflow_fleet_capability_inventory() -> dict[str, Any]:
             "activity_types": CHECKPOINT_BRANCH_PERSISTENCE_ACTIVITY_TYPES,
             "capability_class": "artifacts",
             "required_authority": ("artifact_store", "database"),
+            "authority_source": (
+                "internal async_session_maker session creation inside the "
+                "activity implementations, not injected worker bindings "
+                "(build_activity_bindings resolves these three types through "
+                "direct_handlers with no implementation argument); this "
+                "reconciles the database claim against the artifacts topology "
+                "(artifact_store,) privilege label"
+            ),
             "scope": (
                 "narrowly scoped I/O only while pre-cutover tasks/histories "
                 "remain; do not strip before the drain owner confirms disposition"
