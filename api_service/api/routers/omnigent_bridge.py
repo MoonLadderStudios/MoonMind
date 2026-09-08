@@ -308,13 +308,13 @@ class OmnigentStreamEvent(BaseModel):
 
 _PUBLIC_ERROR_RESPONSES = {
     code: {"model": OmnigentPublicErrorResponse}
-    for code in (400, 403, 404, 409, 410, 500, 501, 502, 503)
+    for code in (400, 403, 404, 409, 500, 501, 502, 503)
 }
 
 # Retired embedded-transport routes always answer 410 Gone (#3955). Declare it
 # explicitly on those routes so OpenAPI clients model the terminal response
 # and its omnigent_embedded_transport_retired payload.
-_EMBEDDED_RETIRED_RESPONSES = {
+_EMBEDDED_RETIRED_RESPONSE = {
     410: {
         "model": OmnigentPublicErrorResponse,
         "description": (
@@ -322,7 +322,6 @@ _EMBEDDED_RETIRED_RESPONSES = {
             "(omnigent_embedded_transport_retired)."
         ),
     },
-    **_PUBLIC_ERROR_RESPONSES,
 }
 
 # WebSocket close reason carried by retired embedded-transport denials (#3955):
@@ -2892,7 +2891,7 @@ async def revoke_embedded_host_auth_profile(
 @router.post(
     "/v1/hosts/register",
     response_model=dict,
-    responses=_EMBEDDED_RETIRED_RESPONSES,
+    responses=_EMBEDDED_RETIRED_RESPONSE,
 )
 async def register_embedded_omnigent_host(
     payload: EmbeddedHostRegisterRequest,
@@ -3076,7 +3075,7 @@ async def embedded_omnigent_runner_tunnel(websocket: WebSocket, runner_id: str) 
 @router.post(
     "/v1/hosts/{host_id}/heartbeat",
     response_model=dict,
-    responses=_EMBEDDED_RETIRED_RESPONSES,
+    responses=_EMBEDDED_RETIRED_RESPONSE,
 )
 async def heartbeat_embedded_omnigent_host(
     host_id: str,
@@ -3097,7 +3096,7 @@ async def heartbeat_embedded_omnigent_host(
 @router.post(
     "/v1/hosts/{host_id}/sessions/{session_id}/events",
     response_model=dict,
-    responses=_EMBEDDED_RETIRED_RESPONSES,
+    responses=_EMBEDDED_RETIRED_RESPONSE,
 )
 async def ingest_embedded_omnigent_host_event(
     host_id: str,

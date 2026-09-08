@@ -230,9 +230,13 @@ def test_proxy_operates_with_embedded_launch_modules_unavailable() -> None:
             "import api_service.api.routers.omnigent_bridge as bridge_router",
             "paths = {getattr(route, 'path', '') for route in bridge_router.router.routes}",
             "assert '/v1/hosts/register' in paths",
-            "assert 410 in bridge_router._PUBLIC_ERROR_RESPONSES",
-            "retired = [r for r in bridge_router.router.routes if getattr(r, 'path', '') in {'/v1/hosts/register'}]",
-            "assert retired and 410 in (retired[0].responses or {})",
+            "retired = [r for r in bridge_router.router.routes if getattr(r, 'path', '') in {",
+            "    '/v1/hosts/register',",
+            "    '/v1/hosts/{host_id}/heartbeat',",
+            "    '/v1/hosts/{host_id}/sessions/{session_id}/events',",
+            "}]",
+            "assert len(retired) == 3",
+            "assert all(410 in (r.responses or {}) for r in retired)",
             "assert 'moonmind.omnigent.bridge_embedded' not in sys.modules",
             "assert 'moonmind.omnigent.embedded_host_channel' not in sys.modules",
             "assert 'moonmind.omnigent.embedded_evidence' not in sys.modules",
@@ -314,7 +318,6 @@ def test_retired_host_routes_declare_410_in_openapi() -> None:
 
     from api_service.api.routers import omnigent_bridge as bridge_router
 
-    assert 410 in bridge_router._PUBLIC_ERROR_RESPONSES
     wanted = {
         "/v1/hosts/register",
         "/v1/hosts/{host_id}/heartbeat",
