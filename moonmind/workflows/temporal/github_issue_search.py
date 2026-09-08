@@ -21,20 +21,45 @@ class PrerequisiteLookup:
 
 
 def declared_prerequisites(body: str, repository: str) -> list[tuple[str, int]]:
-    """Read explicit prerequisite sentences, never parent/related issue links."""
-    declarations = re.finditer(
-        r"(?:\bCompletion depends on|\bIntegration prerequisites:|"
-        r"(?:^|(?<=[.!?]))[ \t]*(?:[-*] )?Depends on:?)\s*"
-        r"(.+?)(?=\.(?:\s|$)|\n|$)",
-        body,
-        re.IGNORECASE | re.MULTILINE,
-    )
+    """Read declared prerequisites and child lists, never contextual issue links."""
+    declarations = [
+        match.group(1)
+        for match in re.finditer(
+            r"(?:\bCompletion depends on|\bIntegration prerequisites:|"
+            r"(?:^|(?<=[.!?]))[ \t]*(?:[-*] )?Depends on:?)\s*"
+            r"(.+?)(?=\.(?:\s|$)|\n|$)",
+            body,
+            re.IGNORECASE | re.MULTILINE,
+        )
+    ]
+    # Child lists declare completion dependencies even when a stale checkbox
+    # claims completion. Their state is resolved by the same GitHub lookup as
+    # sentence declarations, with one shared identity cache and request budget.
+    in_child_section = False
+    for line in body.splitlines():
+        heading = re.match(r"^#{1,6}[ \t]+(.+?)\s*#*\s*$", line)
+        if heading:
+            in_child_section = heading.group(1).casefold() in {
+                "child issues",
+                "sub-issues",
+            }
+        elif in_child_section:
+            entry = re.match(
+                r"[ \t]*(?:[-*+]|\d+[.)])[ \t]+(?:\[[ xX]\][ \t]+)?(.+)", line
+            )
+            if entry:
+                declarations.append(entry.group(1))
     refs: list[tuple[str, int]] = []
     for declaration in declarations:
         text = re.sub(
+            r"\[[^\]\n]*\]\((https://github\.com/[\w.-]+/[\w.-]+/issues/[1-9]\d*)\)",
+            r"\1",
+            declaration,
+        )
+        text = re.sub(
             r"https://github\.com/([\w.-]+/[\w.-]+)/issues/(\d+)",
             r"\1#\2",
-            declaration.group(1),
+            text,
         )
         # Consume only the leading reference list. Prose after the list can
         # contain parent, related, or other contextual issue references.
