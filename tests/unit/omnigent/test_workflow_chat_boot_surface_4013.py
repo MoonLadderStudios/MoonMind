@@ -23,7 +23,6 @@ from api_service.api.routers.omnigent_bridge import (
     WORKFLOW_CHAT_BINDINGS_MOUNT_PATH,
     _get_bridge_proxy,
     _get_bridge_store,
-    _get_create_embedded_facade,
     _get_execution_service,
     _require_bridge_enabled,
     workflow_chat_router,
@@ -173,7 +172,6 @@ def _build(row=None):
     app.dependency_overrides[_get_execution_service] = lambda: _FakeService(_USER_ID)
     app.dependency_overrides[_get_bridge_store] = lambda: store
     app.dependency_overrides[_get_bridge_proxy] = lambda: proxy
-    app.dependency_overrides[_get_create_embedded_facade] = lambda: None
     app.dependency_overrides[get_capability_registry] = lambda: registry
     app.dependency_overrides[_require_bridge_enabled] = lambda: config
     return TestClient(app, raise_server_exceptions=False), proxy

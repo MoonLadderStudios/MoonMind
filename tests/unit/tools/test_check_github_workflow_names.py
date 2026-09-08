@@ -37,7 +37,6 @@ def test_current_workflows_have_stable_names() -> None:
             "Provider / Omnigent Concurrency Qualification"
         ),
         "omnigent-live-conformance.yml": "Provider / Omnigent Live Conformance",
-        "omnigent-embedded-acceptance.yml": "Provider / Omnigent Embedded Acceptance",
         "omnigent-fault-image-smoke.yml": "Provider / Omnigent Fault Image Smoke",
         "omnigent-live-verification-health.yml": (
             "Provider / Omnigent Live Verification Health"
