@@ -190,12 +190,9 @@ async def test_worker_auth_missing_credential_is_unauthorized(monkeypatch):
 
 
 def test_no_mode_mounts_legacy_auth_routes(monkeypatch):
-    # Post-#4129: the legacy helper router is empty in every mode; no
+    # Post-#4129: the legacy helper router was deleted with its callers; no
     # login/register/reset route remains reachable through this path.
-    for mode in ("disabled", "accounts", "oidc", "header"):
-        monkeypatch.setattr(settings.oidc, "AUTH_PROVIDER", mode)
-        router = auth_providers_module.get_auth_router()
-        assert router.routes == []
+    assert not hasattr(auth_providers_module, "get_auth_router")
 
 
 def test_retired_selectors_rejected_with_migration_guidance():

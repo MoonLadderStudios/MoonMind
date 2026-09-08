@@ -3,7 +3,7 @@ import logging
 import os
 import uuid
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import Depends, HTTPException
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from api_service.auth import (
@@ -115,10 +115,6 @@ def get_current_user():
         _cached_current_user_dependency = _current_user_fallback
 
     return _cached_current_user_dependency
-
-def get_auth_router():
-    """Return the legacy helper router: empty since #4129 removed all legacy routes."""
-    return APIRouter()
 
 def get_current_user_optional():
     """Return an auth dependency that tolerates missing bearer credentials.
