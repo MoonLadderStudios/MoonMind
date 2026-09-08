@@ -10404,7 +10404,7 @@ def test_create_task_shaped_execution_rejects_other_users_completed_input_attach
     """MM-628: another user's completed artifact cannot be attached to a new execution."""
 
     test_client, service, user = client
-    monkeypatch.setattr(settings.oidc, "AUTH_PROVIDER", "keycloak")
+    monkeypatch.setattr(settings.oidc, "AUTH_PROVIDER", "oidc")
     monkeypatch.setattr(settings.workflow, "agent_job_attachment_enabled", True)
     service.create_execution.return_value = _build_execution_record()
     artifact_id = "art_01MM628WRONGOWNER0000000"
@@ -10451,7 +10451,7 @@ def test_create_task_shaped_execution_rejects_service_owned_attachment_for_user(
     """MM-628: service ownership does not make an artifact attachable by any user."""
 
     test_client, service, _user = client
-    monkeypatch.setattr(settings.oidc, "AUTH_PROVIDER", "keycloak")
+    monkeypatch.setattr(settings.oidc, "AUTH_PROVIDER", "oidc")
     monkeypatch.setattr(settings.workflow, "agent_job_attachment_enabled", True)
     artifact_id = "art_01MM628SERVICEOWNER0000"
     test_client.app.dependency_overrides[get_async_session] = lambda: _artifact_session(

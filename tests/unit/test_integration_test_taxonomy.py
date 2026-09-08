@@ -323,5 +323,5 @@ def test_phase6_artifact_authorization_tests_require_oidc() -> None:
         / "test_temporal_artifact_authorization.py"
     ).read_text(encoding="utf-8")
     assert "AUTH_PROVIDER" in authz_test
-    assert "keycloak" in authz_test
+    assert "oidc" in authz_test
     assert "TemporalArtifactAuthorizationError" in authz_test

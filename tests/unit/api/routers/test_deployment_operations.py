@@ -305,7 +305,7 @@ def test_mutable_tag_update_submission_without_reason_is_not_stale_idempotent(
 def test_non_admin_cannot_submit_deployment_update(
     user_client: TestClient, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    monkeypatch.setattr(settings.oidc, "AUTH_PROVIDER", "default")
+    monkeypatch.setattr(settings.oidc, "AUTH_PROVIDER", "accounts")
     response = user_client.post(
         "/api/v1/operations/deployment/update",
         json=_valid_update_payload(),

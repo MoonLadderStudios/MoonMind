@@ -189,16 +189,26 @@ async def test_worker_auth_missing_credential_is_unauthorized(monkeypatch):
 # ---------------------------------------------------------------------------
 
 
-def test_keycloak_mode_mounts_no_legacy_auth_routes(monkeypatch):
-    monkeypatch.setattr(settings.oidc, "AUTH_PROVIDER", "keycloak")
-    router = auth_providers_module.get_auth_router()
-    assert router.routes == []
+def test_no_mode_mounts_legacy_auth_routes(monkeypatch):
+    # Post-#4129: the legacy helper router was deleted with its callers; no
+    # login/register/reset route remains reachable through this path.
+    assert not hasattr(auth_providers_module, "get_auth_router")
 
 
-def test_default_mode_mounts_legacy_jwt_routes(monkeypatch):
-    monkeypatch.setattr(settings.oidc, "AUTH_PROVIDER", "default")
-    router = auth_providers_module.get_auth_router()
-    assert len(router.routes) > 0
+def test_retired_selectors_rejected_with_migration_guidance():
+    for retired in ("keycloak", "default", "google", "local"):
+        settings.oidc.AUTH_PROVIDER = retired
+        try:
+            with pytest.raises(RuntimeError, match="removed|Unknown"):
+                settings.oidc.validate_auth_provider()
+        finally:
+            settings.oidc.AUTH_PROVIDER = "disabled"
+    for supported in ("accounts", "oidc", "header", "disabled"):
+        settings.oidc.AUTH_PROVIDER = supported
+        try:
+            assert settings.oidc.validate_auth_provider() == supported
+        finally:
+            settings.oidc.AUTH_PROVIDER = "disabled"
 
 
 def test_central_integration_points_exist():
