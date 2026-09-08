@@ -9,6 +9,7 @@ import {
   defaultContextRetrievalAuthoring,
   explainRetrievalDenials,
   hasAuthoredContextRetrieval,
+  hasRetiredRetrievalParameters,
   parseContextRetrievalParameters,
   retrievalCeilingsFromRuntimeConfig,
 } from './contextRetrievalAuthoring';
@@ -21,7 +22,7 @@ const NARROW_CEILINGS: RetrievalCeilings = {
   allowFallback: false,
 };
 
-describe('contextRetrievalAuthoring', () => {
+describe('contextRetrievalAuthoring (retired #4105)', () => {
   it('uses deployment-provided collection and budget ceilings', () => {
     const ceilings = retrievalCeilingsFromRuntimeConfig({
       collections: ['knowledge'],
@@ -65,31 +66,18 @@ describe('contextRetrievalAuthoring', () => {
   });
 
   it('caps maxQueries at the backend contract ceiling (100)', () => {
-    // The backend `RetrievalCapabilityIssue.max_queries` is le=100; the UI
-    // ceiling must match so 101-120 is not accepted only to fail issuance.
     expect(DEFAULT_RETRIEVAL_CEILINGS.maxQueries.max).toBe(100);
-    const value = defaultContextRetrievalAuthoring();
-    value.followUp.enabled = true;
-    value.followUp.collections = ['repo'];
-    value.followUp.maxQueries = 120;
-    const compiled = compileContextRetrievalParameters(value);
-    expect(compiled.followUpRetrieval).toMatchObject({ maxQueries: 100 });
   });
 
-  it('compiles rag and followUpRetrieval fragments', () => {
+  it('compiles to no vector fields for new writes (retired)', () => {
     const value = defaultContextRetrievalAuthoring();
     value.initial.collections = ['repo', 'docs'];
     value.initial.allowStale = true;
     value.followUp.enabled = true;
     value.followUp.collections = ['repo'];
     value.followUp.topK = 6;
-    const compiled = compileContextRetrievalParameters(value);
-    expect(compiled.rag).toEqual({ collections: ['repo', 'docs'], allowStale: true });
-    expect(compiled.followUpRetrieval).toMatchObject({
-      enabled: true,
-      collections: ['repo'],
-      topK: 6,
-    });
+    expect(compileContextRetrievalParameters(value)).toEqual({});
+    expect(hasAuthoredContextRetrieval(value)).toBe(false);
   });
 
   it('does not emit followUpRetrieval when disabled', () => {
@@ -97,7 +85,7 @@ describe('contextRetrievalAuthoring', () => {
     value.initial.required = true;
     const compiled = compileContextRetrievalParameters(value);
     expect(compiled.followUpRetrieval).toBeUndefined();
-    expect(compiled.rag).toEqual({ required: true });
+    expect(compiled.rag).toBeUndefined();
   });
 
   it('explains denied combinations for the operator', () => {
@@ -122,24 +110,29 @@ describe('contextRetrievalAuthoring', () => {
     expect(denials.some((d) => d.includes('required but disabled'))).toBe(true);
   });
 
-  it('round-trips through parse/compile', () => {
-    const value = defaultContextRetrievalAuthoring();
-    value.initial.collections = ['docs'];
-    value.followUp.enabled = true;
-    value.followUp.collections = ['repo'];
-    value.followUp.budgetPreset = 'generous';
-    value.followUp.topK = 16;
-    value.followUp.maxContextTokens = 16384;
-    value.followUp.maxQueries = 24;
-    value.followUp.latencyMs = 8000;
-    const compiled = compileContextRetrievalParameters(value);
-    const restored = parseContextRetrievalParameters(
-      compiled as Record<string, unknown>,
-    );
+  it('keeps historical payloads readable via parse', () => {
+    const restored = parseContextRetrievalParameters({
+      rag: { collections: ['docs'] },
+      followUpRetrieval: { enabled: true, collections: ['repo'] },
+    });
     expect(restored.initial.collections).toEqual(['docs']);
     expect(restored.followUp.enabled).toBe(true);
     expect(restored.followUp.collections).toEqual(['repo']);
-    // preset detected from the numeric budget
-    expect(restored.followUp.budgetPreset).toBe('generous');
+  });
+
+  it('detects retired parameters on historical payloads', () => {
+    expect(hasRetiredRetrievalParameters(null)).toBe(false);
+    expect(hasRetiredRetrievalParameters({})).toBe(false);
+    expect(
+      hasRetiredRetrievalParameters({ followUpRetrieval: { enabled: false } }),
+    ).toBe(false);
+    expect(
+      hasRetiredRetrievalParameters({ rag: { collections: ['docs'] } }),
+    ).toBe(true);
+    expect(
+      hasRetiredRetrievalParameters({
+        followUpRetrieval: { enabled: true, collections: ['repo'] },
+      }),
+    ).toBe(true);
   });
 });

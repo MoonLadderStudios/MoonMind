@@ -73,6 +73,112 @@ _REMOVED_FOLLOW_UP_MESSAGE = (
 )
 
 
+#: Built-in vector retrieval/indexing fields retired by
+#: MoonLadderStudios/MoonMind#4105. New writes must not advertise or accept a
+#: built-in vector capability the removal release cannot execute. Historical
+#: records remain readable through detail/artifact projections; only new
+#: admission is rejected here.
+_RETIRED_VECTOR_FIELDS = {
+    "rag": "rag",
+    "followUpRetrieval": "followUpRetrieval",
+    "follow_up_retrieval": "followUpRetrieval",
+}
+_RETIRED_VECTOR_MESSAGE = (
+    "has been retired (MoonLadderStudios/MoonMind#4105). Remove the vector "
+    "retrieval/indexing fields and use explicit attachments, artifact refs, or "
+    "scoped workspace access instead. Historical details remain readable; "
+    "resubmit without retired requirements to start new work."
+)
+
+
+def _is_explicit_vector_requirement(field: str, value: object) -> bool:
+    """Distinguish absent optional enrichment from an explicit retired request.
+
+    Absent/empty/disabled values (``None``, ``{}``, ``{"enabled": False}``,
+    all-falsy mappings) are not a request for retired behavior and must not be
+    rejected, so default flows keep working. Anything carrying real retrieval
+    authority (collections, required flags, budgets, enabled sessions) is
+    explicit and must fail before scheduling rather than being silently
+    dropped with changed semantics.
+    """
+
+    if value is None:
+        return False
+    if isinstance(value, Mapping):
+        if not value:
+            return False
+        if field == "followUpRetrieval":
+            enabled = value.get("enabled", value.get("Enabled", False))
+            # ``{"enabled": False}`` alone (or with only falsy siblings) is the
+            # explicit-absent form, not a retired request.
+            if enabled is not True:
+                remainder = {
+                    key: item
+                    for key, item in value.items()
+                    if key not in {"enabled", "Enabled"} and item not in (None, False, "", [], {})
+                }
+                return bool(remainder and any(
+                    key in {
+                        "required", "collections", "topK", "top_k", "maxContextTokens",
+                        "maxQueries", "latencyMs", "maxLifetimeSeconds",
+                        "overlayPolicy", "staleOverlayAllowed", "fallbackAllowed",
+                        "filters", "repository", "tenantId",
+                    }
+                    for key in remainder
+                ))
+            return True
+        # ``rag``: explicit when any collection/authority flag is set.
+        return any(
+            item not in (None, False, "", [], {})
+            for item in value.values()
+        )
+    # Non-mapping truthy values (e.g. ``rag: true``) are explicit; falsy are not.
+    return bool(value)
+
+
+def reject_retired_vector_fields(
+    value: object,
+    *,
+    field_path: str,
+) -> None:
+    """Reject explicit built-in vector retrieval requirements at admission.
+
+    Empty/absent/disabled values pass so normal authoring needs no vector
+    settings. Explicit ``rag`` / ``followUpRetrieval`` requirements raise
+    ``WorkflowContractError`` with an actionable message before any Temporal
+    start, host launch, paid work, or external mutation.
+    """
+
+    if not isinstance(value, Mapping):
+        return
+    for source_field, canonical_field in _RETIRED_VECTOR_FIELDS.items():
+        if source_field not in value:
+            continue
+        if not _is_explicit_vector_requirement(canonical_field, value[source_field]):
+            continue
+        raise WorkflowContractError(
+            f"{field_path}.{canonical_field} {_RETIRED_VECTOR_MESSAGE}"
+        )
+
+
+def strip_absent_vector_fields(value: dict[str, Any]) -> dict[str, Any]:
+    """Drop absent/empty/disabled vector fields so they never reach new plans.
+
+    Explicit retired requests must be rejected with
+    :func:`reject_retired_vector_fields` first; this helper only removes the
+    non-explicit residue (``{}``, ``{"enabled": False}``, ``None``) so stale
+    hidden state, drafts, and seeds cannot reintroduce retired authority.
+    """
+
+    for source_field in _RETIRED_VECTOR_FIELDS:
+        if source_field not in value:
+            continue
+        canonical = _RETIRED_VECTOR_FIELDS[source_field]
+        if not _is_explicit_vector_requirement(canonical, value[source_field]):
+            value.pop(source_field, None)
+    return value
+
+
 def reject_removed_follow_up_fields(
     value: object,
     *,
@@ -2089,6 +2195,7 @@ class WorkflowExecutionSpec(BaseModel):
         if not isinstance(value, Mapping):
             return value
         reject_removed_follow_up_fields(value, field_path="workflow")
+        reject_retired_vector_fields(value, field_path="workflow")
         reject_workflow_capability_identity_versions(value, field_path="workflow")
         payload = dict(value)
         runtime_node = payload.get("runtime")
@@ -2279,6 +2386,7 @@ class CanonicalWorkflowExecutionPayload(BaseModel):
         if not isinstance(value, Mapping):
             return value
         reject_removed_follow_up_fields(value, field_path="payload")
+        reject_retired_vector_fields(value, field_path="payload")
         return value
 
     @field_validator("repository", mode="before")
@@ -3112,6 +3220,8 @@ __all__ = [
     "is_self_managed_publish_skill",
     "normalize_queue_job_payload",
     "reject_removed_follow_up_fields",
+    "reject_retired_vector_fields",
+    "strip_absent_vector_fields",
     "resolve_publish_mode_for_skill",
     "reject_workflow_capability_identity_versions",
     "strip_workflow_capability_identity_versions",

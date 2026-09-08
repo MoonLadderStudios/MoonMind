@@ -321,8 +321,10 @@ from moonmind.workflows.executions.execution_contract import (
     is_non_repository_side_effect_skill,
     is_self_managed_publish_skill,
     reject_removed_follow_up_fields,
+    reject_retired_vector_fields,
     reject_workflow_capability_identity_versions,
     resolve_publish_mode_for_skill,
+    strip_absent_vector_fields,
 )
 from moonmind.workflows.executions.repository_contract import (
     RepositoryContractError,
@@ -10803,6 +10805,14 @@ async def _create_execution_from_workflow_request(
     try:
         reject_removed_follow_up_fields(payload, field_path="payload")
         reject_removed_follow_up_fields(task_payload, field_path="workflow")
+        reject_retired_vector_fields(payload, field_path="payload")
+        reject_retired_vector_fields(task_payload, field_path="workflow")
+        for candidate_path, candidate in (
+            ("payload.initialParameters", payload.get("initialParameters")),
+            ("payload.initial_parameters", payload.get("initial_parameters")),
+        ):
+            if isinstance(candidate, dict):
+                reject_retired_vector_fields(candidate, field_path=candidate_path)
     except WorkflowContractError as exc:
         raise _invalid_workflow_request(str(exc)) from exc
     _reject_submit_version_identity(task_payload)
@@ -11359,13 +11369,19 @@ async def _create_execution_from_workflow_request(
         initial_parameters["parentWorkflowId"] = principal.workflow_id
     if isinstance(payload.get("omnigent"), Mapping):
         initial_parameters["omnigent"] = dict(payload["omnigent"])
-    # Context retrieval (RAG) authoring: initial ContextPack overrides (#3513)
-    # and in-session follow-up retrieval policy (#3514). Lifted here next to the
-    # omnigent block so the authored values reach the run's initial parameters.
-    if isinstance(payload.get("rag"), Mapping):
-        initial_parameters["rag"] = dict(payload["rag"])
-    if isinstance(payload.get("followUpRetrieval"), Mapping):
-        initial_parameters["followUpRetrieval"] = dict(payload["followUpRetrieval"])
+    # Built-in vector retrieval authoring retired (#4105): explicit `rag` /
+    # `followUpRetrieval` requirements fail before scheduling with an
+    # actionable validation result. Absent/empty/disabled values are stripped
+    # so stale drafts cannot reintroduce retired authority; they are never
+    # silently dropped with changed semantics when explicit.
+    try:
+        reject_retired_vector_fields(payload, field_path="payload")
+    except WorkflowContractError as exc:
+        raise _invalid_workflow_request(str(exc)) from exc
+    payload.pop("rag", None)
+    payload.pop("followUpRetrieval", None)
+    payload.pop("follow_up_retrieval", None)
+    strip_absent_vector_fields(initial_parameters)
     if "modelTier" in runtime_payload:
         initial_parameters["modelTier"] = runtime_payload.get("modelTier")
     if "tierFallback" in runtime_payload:
@@ -12248,6 +12264,13 @@ def _build_recurring_target(
             if "initialParameters" in target_payload
             else target_payload.get("initial_parameters")
         )
+        if isinstance(initial_parameters, Mapping):
+            try:
+                reject_retired_vector_fields(
+                    dict(initial_parameters), field_path="payload.initialParameters"
+                )
+            except WorkflowContractError as exc:
+                raise _invalid_workflow_request(str(exc)) from exc
         target: dict[str, Any] = {
             "workflowType": workflow_type,
             "initialParameters": (

@@ -312,128 +312,46 @@ def compile_follow_up_retrieval_policy(
 ) -> dict[str, Any]:
     """Compile the runtime ``followUpRetrieval`` block carried by the launch snapshot.
 
-    In-session (follow-up) retrieval grants the host an authorized capability, so
-    it is an authority boundary and stays disabled unless an authoring surface
-    explicitly enables it via ``parameters["followUpRetrieval"]``. Deployment
-    policy (``boundaries.rag``) supplies the default budgets; the gateway and the
-    server budget snapshot enforce the deployment ceilings, so this block is only
-    the authored per-run ceiling and never a broadening of policy.
+    Built-in vector retrieval is retired (MoonLadderStudios/MoonMind#4105):
+    newly compiled plans carry no vector capability descriptors. This function
+    always returns ``{"enabled": False}`` so no new launch snapshot mints
+    native Qdrant/embedding/collection/overlay authority. Explicit authored
+    requests are rejected by :func:`enforce_required_follow_up_retrieval`
+    before host launch; historical snapshots remain readable downstream.
     """
 
-    authored: dict[str, Any] = {}
-    if isinstance(parameters, Mapping):
-        raw = parameters.get("followUpRetrieval")
-        if isinstance(raw, Mapping):
-            authored = dict(raw)
-    if authored.get("enabled") is not True:
-        return {"enabled": False}
-
-    rag: dict[str, Any] = {}
-    boundaries = (
-        policy_snapshot.get("boundaries")
-        if isinstance(policy_snapshot, Mapping)
-        else None
-    )
-    if isinstance(boundaries, Mapping) and isinstance(boundaries.get("rag"), Mapping):
-        rag = dict(boundaries["rag"])
-
-    collections = list(
-        dict.fromkeys(
-            str(item).strip()
-            for item in authored.get("collections", ())
-            if str(item).strip()
-        )
-    )
-    repository = str(repository or "").strip()
-    tenant_id = str(tenant_id or "").strip()
-    policy_version = (
-        str(policy_snapshot.get("policyRef") or "").strip()
-        if isinstance(policy_snapshot, Mapping)
-        else ""
-    )
-
-    if not (repository and tenant_id and policy_version and collections):
-        # Enabling without a resolvable scope would only yield an auditable 409
-        # from the gateway; keep the capability unavailable with an explicit,
-        # non-fatal reason instead of persisting a broken authority block.
-        return {"enabled": False, "reason": "incomplete_follow_up_retrieval_scope"}
-
-    block: dict[str, Any] = {
-        "enabled": True,
-        "required": bool(authored.get("required", False)),
-        "repository": repository,
-        "tenantId": tenant_id,
-        "policyVersion": policy_version,
-        "collections": collections,
-        "overlayPolicy": (
-            "skip" if str(authored.get("overlayPolicy")) == "skip" else "include"
-        ),
-        "staleOverlayAllowed": bool(authored.get("staleOverlayAllowed", False)),
-        "fallbackAllowed": bool(authored.get("fallbackAllowed", False)),
-    }
-
-    filters = authored.get("filters")
-    if isinstance(filters, Mapping):
-        compiled_filters = {
-            str(key): str(value)
-            for key, value in filters.items()
-            if str(key).strip() and str(value).strip()
-        }
-        if compiled_filters:
-            block["filters"] = compiled_filters
-
-    for field in _FOLLOW_UP_RETRIEVAL_INT_FIELDS:
-        coerced = _coerce_positive_int(authored.get(field))
-        if coerced is not None:
-            block[field] = coerced
-
-    # Clamp the policy-backed budgets to ``boundaries.rag`` so an authored run
-    # override can only ever narrow deployment policy, never broaden it. When the
-    # author omitted the field the policy value becomes the ceiling; when both are
-    # present the tighter (minimum) value wins. The gateway clamps host requests
-    # against deployment *environment* limits, not the selected policy, so the
-    # selected-policy ceiling must be folded in here or a run could receive a
-    # larger retrieval budget than its policy authorizes.
-    for block_field, policy_key in (
-        ("latencyMs", "latencyBudgetMs"),
-        ("maxContextTokens", "tokenBudget"),
-    ):
-        policy_value = _coerce_positive_int(rag.get(policy_key))
-        if policy_value is None:
-            continue
-        authored_value = block.get(block_field)
-        block[block_field] = (
-            min(authored_value, policy_value)
-            if isinstance(authored_value, int)
-            else policy_value
-        )
-
-    return block
+    return {"enabled": False}
 
 
 def enforce_required_follow_up_retrieval(
     authored_follow_up: Mapping[str, Any] | None,
     compiled_block: Mapping[str, Any],
 ) -> None:
-    """Fail the launch when required follow-up retrieval cannot be made available.
+    """Fail the launch when built-in vector retrieval is explicitly requested.
 
-    Follow-up retrieval is an authority boundary. When an operator explicitly
-    enables it with ``required: true`` the advertised guarantee must hold: if the
-    compiled capability is unavailable (for example an incomplete, unresolvable
-    scope), the step must block instead of silently launching with retrieval
-    disabled. Optional retrieval (``required`` unset/false) degrades quietly.
+    Built-in vector retrieval is retired (MoonLadderStudios/MoonMind#4105):
+    any explicit ``followUpRetrieval`` requirement (``enabled: true`` or a
+    non-empty retired configuration) must fail before host launch, paid work,
+    or external mutation, without silently weakening the request into a
+    retrieval-free launch. Absent/empty/disabled values pass so normal flows
+    need no vector settings.
     """
 
     if not isinstance(authored_follow_up, Mapping):
         return
-    if authored_follow_up.get("enabled") is not True:
+    if not authored_follow_up:
         return
-    if not bool(authored_follow_up.get("required")):
+    enabled = authored_follow_up.get("enabled") is True
+    has_retired_content = enabled or any(
+        value not in (None, False, "", [], {})
+        for key, value in authored_follow_up.items()
+        if key != "enabled"
+    )
+    if not has_retired_content:
         return
-    if compiled_block.get("enabled") is True:
-        return
-    reason = str(compiled_block.get("reason") or "follow_up_retrieval_unavailable")
     raise OmnigentOAuthHostError(
-        f"required follow-up retrieval is unavailable: {reason}",
-        code="OMNIGENT_REQUIRED_FOLLOW_UP_RETRIEVAL_UNAVAILABLE",
+        "built-in vector retrieval has been retired "
+        "(MoonLadderStudios/MoonMind#4105). Remove followUpRetrieval and use "
+        "explicit attachments, artifact refs, or scoped workspace access instead.",
+        code="OMNIGENT_RETIRED_VECTOR_RETRIEVAL",
     )

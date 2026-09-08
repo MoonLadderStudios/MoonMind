@@ -19884,11 +19884,13 @@ class MoonMindRunWorkflow:
             "story_breakdown_path",
             "storyBreakdownMarkdownPath",
             "story_breakdown_markdown_path",
-            # Context retrieval (RAG) authoring surfaces (#3514): initial
-            # ContextPack overrides and in-session follow-up retrieval policy,
-            # plus the repository/tenant scope the retrieval budget binds to.
-            "rag",
-            "followUpRetrieval",
+            # Built-in vector retrieval is retired (#4105): `rag` /
+            # `followUpRetrieval` are never forwarded into new agent requests.
+            # Admission rejects explicit retired requirements for new work, so
+            # stripping here is a no-op for post-retirement workflows; for
+            # pre-retirement in-flight histories it keeps replay deterministic
+            # (in-flight decoding/schedule retirement is coordinated with the
+            # cutover child) instead of failing workflow tasks on construction.
             "repository",
             "tenant",
             "tenantId",
