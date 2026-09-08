@@ -317,8 +317,6 @@ def test_parse_sse_line_redacts_payload_and_rejects_malformed_frames() -> None:
 @pytest.mark.parametrize(
     ("payload", "error_type", "message"),
     [
-        ("not-json", OmnigentClientError, "Malformed Omnigent SSE frame"),
-        ("[]", OmnigentClientError, "Malformed Omnigent SSE frame"),
         (
             '{"type":"session.future_terminal","status":"completed"}',
             OmnigentContractError,
@@ -336,8 +334,6 @@ def test_parse_sse_line_redacts_payload_and_rejects_malformed_frames() -> None:
         ),
     ],
     ids=[
-        "malformed-json",
-        "non-object",
         "unknown-event",
         "unknown-status",
         "blank-status",
@@ -351,6 +347,20 @@ async def test_stream_to_journal_rejects_critical_drift(
     Exercise the public streaming client through the production normalizer,
     with only the HTTP peer replaced. A later valid completion must never hide
     the invalid frame, including when frames arrive across byte chunks.
+
+    Scope: this covers contract drift that the production Temporal handoff
+    propagates. ``omnigent_read_event_batch_activity`` normalizes collected
+    events with ``normalize_omnigent_observation`` outside its bounded
+    stream-read ``try`` block, so ``OmnigentContractError`` from unknown
+    event types/statuses fails the activity instead of degrading. Transport
+    parse failures (malformed JSON, non-object frames) instead raise
+    ``OmnigentClientError`` from ``stream_events()`` inside
+    ``collect_bounded_batch()`` and are degraded to ``readStatus="unavailable"``
+    while the authoritative snapshot remains terminal authority (see
+    ``_observe_after_wait``, which gates only on the snapshot status). Those
+    two cases are covered at the client contract level by
+    ``test_parse_sse_line_redacts_payload_and_rejects_malformed_frames`` and
+    are intentionally not part of this drift set.
     """
 
     wire = (

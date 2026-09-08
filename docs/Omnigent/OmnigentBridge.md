@@ -485,7 +485,7 @@ omnigent_bridge_sessions
 
 `chat_binding_id` is an opaque authorization lookup key, not a bearer capability. The provider session id and upstream endpoint remain server-side. Caller permissions and effective capabilities are recomputed per request rather than trusted from mutable browser state.
 
-`omnigent_bridge_sessions` is the single canonical Omnigent session and idempotency store. It supersedes the removed `omnigent_external_runs` mapping without a parallel table or compatibility wrapper.
+`omnigent_bridge_sessions` is the canonical bridge binding and idempotency store within the bridge scope. It supersedes the removed `omnigent_external_runs` mapping without a parallel table or compatibility wrapper. Canonical session authority lives in `omnigent_sessions` and its control-plane repositories and turn commands; bridge rows retain attempt identity, evidence, and compatibility consumers.
 
 The coarse session `status` preserves `declared`, `creating`, `active`, `completed`, `failed`, `canceled`, and `timed_out`. Full non-lossy provider state remains per event.
 
@@ -1067,7 +1067,7 @@ Bridge code lives in the existing `moonmind/omnigent/` package. A parallel packa
 | Component | Owning module | Notes |
 |---|---|---|
 | Bridge configuration | `moonmind/omnigent/bridge_config.py` | Parses §6. |
-| Bridge Session Store | `moonmind/omnigent/bridge_store.py` | Canonical binding/idempotency store. |
+| Bridge Session Store | `moonmind/omnigent/bridge_store.py` | Canonical bridge binding/idempotency store; canonical session authority lives in the control-plane session repositories. |
 | Bridge schemas | `moonmind/schemas/omnigent_bridge_models.py` | Session/event/config/binding models. |
 | Durable ORM/migration | `api_service/db/models.py` plus migrations | §7 persistence. |
 | Session and Workflow Chat facades | `api_service/api/routers/omnigent_bridge.py`, `moonmind/omnigent/bridge_proxy.py` | Provider compatibility plus binding-scoped native UI/API. |
