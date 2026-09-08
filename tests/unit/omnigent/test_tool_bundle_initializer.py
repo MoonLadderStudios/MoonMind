@@ -125,3 +125,29 @@ def test_initializer_rejects_volume_version_manifest_mismatch(
 
     with pytest.raises(RuntimeError, match="version does not match"):
         initializer.initialize(_fixture_lock(tmp_path), tmp_path / "output")
+
+
+@pytest.mark.parametrize("platform_key", ["linux/amd64", "linux/arm64"])
+def test_deployment_container_cli_source_is_digest_pinned(
+    tmp_path, monkeypatch, platform_key
+):
+    lock_path = (
+        Path(__file__).resolve().parents[3]
+        / "services/omnigent/tools/manifest.lock.json"
+    )
+    lock = json.loads(lock_path.read_text())
+    tool = next(tool for tool in lock["tools"] if tool["name"] == "docker")
+    tool["sourcePath"] = str((lock_path.parent / tool["sourcePath"]).resolve())
+    lock["tools"] = [tool]
+    isolated_lock = tmp_path / "manifest.lock.json"
+    isolated_lock.write_text(json.dumps(lock))
+    monkeypatch.setattr(initializer, "_platform_key", lambda: platform_key)
+    initializer.initialize(isolated_lock, tmp_path / "output")
+    executable = tmp_path / "output/bin/moonmind"
+    assert executable.read_bytes() == Path(tool["sourcePath"]).read_bytes()
+    assert not executable.stat().st_mode & 0o222
+
+    tool["platforms"][platform_key]["executableSha256"] = "0" * 64
+    isolated_lock.write_text(json.dumps(lock))
+    with pytest.raises(RuntimeError, match="SHA-256 mismatch for docker source"):
+        initializer.initialize(isolated_lock, tmp_path / "invalid")

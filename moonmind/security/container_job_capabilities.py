@@ -13,7 +13,7 @@ from typing import Any, Literal
 from moonmind.schemas.container_job_models import OwnerIdentity
 
 _AUDIENCE = "moonmind-container-jobs"
-_VERSION = 2
+_VERSION = 3
 
 
 class ContainerJobCapabilityError(ValueError):
@@ -34,6 +34,7 @@ class ContainerJobSessionCapability:
     workspace_kind: Literal["managed_runtime", "sandbox"]
     workspace_id: str
     workspace_relative_path: str
+    workspace_read_only: bool
     expires_at: int
 
 
@@ -71,6 +72,7 @@ def mint_container_job_session_capability(
     workspace_kind: Literal["managed_runtime", "sandbox"] = "managed_runtime",
     workspace_id: str | None = None,
     workspace_relative_path: str = "repo",
+    workspace_read_only: bool = False,
     lifetime_seconds: int,
     now: int | None = None,
 ) -> str:
@@ -88,6 +90,10 @@ def mint_container_job_session_capability(
     if workspace_kind not in {"managed_runtime", "sandbox"}:
         raise ContainerJobCapabilityError(
             "unsupported container-job capability workspace kind"
+        )
+    if not isinstance(workspace_read_only, bool):
+        raise ContainerJobCapabilityError(
+            "container-job capability workspace access must be boolean"
         )
     issued_at = int(time.time() if now is None else now)
     normalized_workspace_id = _required_text(
@@ -110,6 +116,7 @@ def mint_container_job_session_capability(
             workspace_relative_path,
             field="workspaceRelativePath",
         ),
+        "workspaceReadOnly": workspace_read_only,
         "iat": issued_at,
         "exp": issued_at + lifetime_seconds,
     }
@@ -166,6 +173,11 @@ def verify_container_job_session_capability(
         raise ContainerJobCapabilityError("invalid container-job capability")
     if workspace_kind not in {"managed_runtime", "sandbox"}:
         raise ContainerJobCapabilityError("invalid container-job capability")
+    workspace_read_only = payload.get("workspaceReadOnly")
+    if not isinstance(workspace_read_only, bool):
+        raise ContainerJobCapabilityError(
+            "invalid container-job capability workspace access"
+        )
     return ContainerJobSessionCapability(
         owner=owner,
         agent_run_id=_required_text(payload.get("agentRunId"), field="agentRunId"),
@@ -183,6 +195,7 @@ def verify_container_job_session_capability(
             payload.get("workspaceRelativePath"),
             field="workspaceRelativePath",
         ),
+        workspace_read_only=workspace_read_only,
         expires_at=expires_at,
     )
 

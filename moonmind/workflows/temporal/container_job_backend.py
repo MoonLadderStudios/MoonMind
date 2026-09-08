@@ -2145,6 +2145,8 @@ class DockerContainerJobBackend:
             workspace_mount = (
                 f"type=bind,src={request.resolved_workspace_ref},dst=/workspace"
             )
+        if spec.workspace_read_only:
+            workspace_mount += ",readonly"
         args = [
             "create",
             "--name",

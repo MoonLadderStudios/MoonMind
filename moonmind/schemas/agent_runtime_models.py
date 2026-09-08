@@ -597,10 +597,10 @@ class RuntimeCommandRenderResult(BaseModel):
     fallback_event: dict[str, Any] | None = Field(None, alias="fallbackEvent")
     diagnostics: dict[str, Any] = Field(default_factory=dict)
     invocation: RuntimeCommandInvocation | None = None
-
 class UnsupportedStatusError(ValueError):
     """Raised when an unknown or unsupported provider status is encountered."""
     pass
+
 
 def raise_unsupported_status(raw_status: str, context: str = "") -> NoReturn:
     """Consistently format and raise an UnsupportedStatusError."""

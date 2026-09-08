@@ -3904,6 +3904,43 @@ async def test_dynamic_verifier_preserves_legacy_attempt_payload_before_evidence
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("stop_patch_enabled", [False, True])
+async def test_dynamic_verifier_stop_has_replay_safe_routing(
+    mock_run_workflow,
+    monkeypatch,
+    stop_patch_enabled,
+):
+    mock_run_workflow._initialize_remediation_loop_controller(
+        ordered_nodes=[_loop_controller_node(_dynamic_loop_spec_payload())]
+    )
+    mock_run_workflow._write_json_artifact = AsyncMock(
+        return_value="artifact://decision/stop"
+    )
+    monkeypatch.setattr(
+        run_workflow_module.workflow,
+        "patched",
+        lambda patch: stop_patch_enabled
+        and patch
+        == (run_workflow_module.RUN_VERIFIER_REMEDIATION_STOP_AUTHORITY_PATCH),
+    )
+    nodes = []
+    admitted = await mock_run_workflow._evaluate_dynamic_remediation_verification(
+        ordered_nodes=nodes,
+        verdict="ADDITIONAL_WORK_NEEDED",
+        gate_result_ref="artifact://gate/latest",
+        remaining_work_ref="artifact://remaining/latest",
+        recommended_next_action="needs_human",
+    )
+    assert admitted is not stop_patch_enabled
+    assert len(nodes) == (0 if stop_patch_enabled else 2)
+    state = mock_run_workflow._remediation_loop_state
+    assert state.consumed_budgets.attempts == (0 if stop_patch_enabled else 1)
+    assert state.phase == (
+        "needs_human" if stop_patch_enabled else "remediation_running"
+    )
+
+
+@pytest.mark.asyncio
 async def test_dynamic_verifier_promotes_canonical_checkpoint_to_remediation_head(
     mock_run_workflow: MoonMindRunWorkflow,
     monkeypatch: pytest.MonkeyPatch,

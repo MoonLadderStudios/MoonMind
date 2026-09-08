@@ -841,6 +841,7 @@ def evaluate_attempt_continuation(
     budget: LoopBudget,
     checkpoint_available: bool,
     policy_allowed: bool,
+    recommended_next_action: str | None = None,
 ) -> LoopStopDecision:
     if not policy_allowed:
         return _stop(
@@ -854,6 +855,17 @@ def evaluate_attempt_continuation(
             attempt,
             state=LoopStopState.FAILED_UNRECOVERABLE,
             reason="checkpoint_unavailable",
+            diagnostics_ref=gate.diagnostics_ref,
+        )
+
+    if gate.verdict in {"ADDITIONAL_WORK_NEEDED", "NO_DETERMINATION"} and (
+        recommended_next_action in {"needs_human", "blocked"}
+    ):
+        return _stop(
+            attempt,
+            state=LoopStopState(recommended_next_action),
+            reason=f"verification_requested_{recommended_next_action}",
+            remaining_work_ref=gate.remaining_work_ref,
             diagnostics_ref=gate.diagnostics_ref,
         )
 

@@ -6876,6 +6876,8 @@ export interface components {
             imageSourceRef?: string | null;
             /** Workspaceref */
             workspaceRef: components["schemas"]["SandboxWorkspaceLocator"] | components["schemas"]["ManagedWorkspaceLocator"] | components["schemas"]["ExternalStateLocator"];
+            /** Workspacereadonly */
+            workspaceReadOnly?: boolean | null;
             /** Command */
             command?: string[];
             /** Entrypoint */

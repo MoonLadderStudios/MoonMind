@@ -247,6 +247,7 @@ class GenericOmnigentHostRuntime:
                 plan=plan,
                 host_lease_ref=host_lease_ref,
                 launch_policy=launch_policy,
+                workspace_attachment=prepared.workspace_attachment,
             )
         )
         spec = HostLaunchSpec.model_validate(
