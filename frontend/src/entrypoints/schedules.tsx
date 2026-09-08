@@ -28,11 +28,12 @@ import {
 const SCHEDULES_MOBILE_MEDIA_QUERY = '(max-width: 720px)';
 
 /**
- * Sync context-retrieval authoring into a schedule's raw target JSON
- * (MoonMind#3514). The target's `initialParameters` carries the run params, so
- * `rag` / `followUpRetrieval` live there. Returns the parsed authoring value and
- * a writer that produces an updated target-JSON string, or null when the JSON
- * cannot be parsed (the raw textarea then remains the sole editor).
+ * Retired context-retrieval schedule sync (MoonLadderStudios/MoonMind#4105).
+ * Historical schedule targets remain readable via
+ * `parseContextRetrievalParameters`; writes always strip `rag` /
+ * `followUpRetrieval` so saved schedules cannot reactivate the removed
+ * feature. Returns the parsed authoring value and a writer that produces an
+ * updated target-JSON string, or null when the JSON cannot be parsed.
  */
 function readScheduleContextRetrieval(
   targetJson: string,

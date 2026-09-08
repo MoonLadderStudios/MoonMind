@@ -31,6 +31,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from api_service.db import models as db_models
 from moonmind.config.settings import settings
+from moonmind.security.auth_modes_4120 import is_disabled_local_mode
 from moonmind.core.artifacts import assert_model_agnostic_metadata
 
 logger = logging.getLogger(__name__)
@@ -1321,7 +1322,7 @@ class TemporalArtifactService:
         *,
         principal: str,
     ) -> None:
-        if settings.oidc.AUTH_PROVIDER == "disabled":
+        if is_disabled_local_mode():
             return
         owner = self._owner_principal(artifact)
         if owner and owner != principal and not self._is_service_principal(principal):
@@ -1355,7 +1356,7 @@ class TemporalArtifactService:
         *,
         principal: str,
     ) -> None:
-        if settings.oidc.AUTH_PROVIDER == "disabled":
+        if is_disabled_local_mode():
             return
         owner = self._owner_principal(artifact)
         if owner and owner != principal and not self._is_service_principal(principal):
@@ -2336,7 +2337,7 @@ class TemporalArtifactService:
         link_type: str | None = None,
         latest_only: bool = False,
     ) -> list[db_models.TemporalArtifact]:
-        if settings.oidc.AUTH_PROVIDER != "disabled" and not principal:
+        if not is_disabled_local_mode() and not principal:
             raise TemporalArtifactAuthorizationError("principal required")
         if latest_only and link_type:
             latest = await self._repository.latest_for_execution_link(
@@ -2354,7 +2355,7 @@ class TemporalArtifactService:
                 link_type=link_type,
             )
 
-        if settings.oidc.AUTH_PROVIDER == "disabled":
+        if is_disabled_local_mode():
             return artifacts
 
         visible: list[db_models.TemporalArtifact] = []

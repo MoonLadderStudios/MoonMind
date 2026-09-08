@@ -1291,6 +1291,14 @@ async def test_create_execution_persists_dependency_edges_and_supports_lookups(
         assert source is not None
         assert source.parameters["workflow"]["dependsOn"] == [dep1.workflow_id, dep2.workflow_id]
 
+        # The worker must receive the same canonical dependency envelope that
+        # admission persists and the dashboard displays.
+        start_args = mock_client_adapter.start_workflow.await_args.kwargs["input_args"]
+        assert "task" not in start_args["initial_parameters"]
+        assert start_args["initial_parameters"]["workflow"]["dependsOn"] == [
+            dep1.workflow_id, dep2.workflow_id
+        ]
+
         prerequisites = await service.list_prerequisites(dependent.workflow_id)
         assert [edge.prerequisite_workflow_id for edge in prerequisites] == [
             dep1.workflow_id,

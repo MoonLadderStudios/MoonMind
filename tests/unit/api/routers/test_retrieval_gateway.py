@@ -83,36 +83,29 @@ def _request_stub() -> SimpleNamespace:
 
 
 def test_bridge_capability_derives_identity_and_clamps_narrowing() -> None:
-    issue = _bridge_authoritative_issue(
-        _bridge_row(),
-        BridgeRetrievalCapabilityIssue(
-            collections=["docs"],
-            filters={"branch": "main"},
-            lifetime_seconds=600,
-            top_k=3,
-            max_context_tokens=500,
-        ),
-    )
-
-    assert issue.tenant_id == "tenant-1"
-    assert issue.repository == "MoonMind"
-    assert issue.run_id == "run-1"
-    assert issue.workspace_id == "workspace-1"
-    assert issue.host_id == "host-1"
-    assert issue.session_id == "session-1"
-    assert issue.collections == ["docs"]
-    assert issue.top_k == 3
-    assert issue.max_context_tokens == 500
-    assert issue.lifetime_seconds == 120
+    """Retired (#4105): new issuance from an enabled snapshot fails 410."""
+    with pytest.raises(HTTPException) as retired:
+        _bridge_authoritative_issue(
+            _bridge_row(),
+            BridgeRetrievalCapabilityIssue(
+                collections=["docs"],
+                filters={"branch": "main"},
+                lifetime_seconds=600,
+                top_k=3,
+                max_context_tokens=500,
+            ),
+        )
+    assert retired.value.status_code == 410
 
 
 def test_bridge_capability_rejects_caller_scope_broadening() -> None:
-    with pytest.raises(HTTPException) as denied:
+    # Retired issuance fails before scope checks; disabled snapshots stay 403.
+    with pytest.raises(HTTPException) as retired:
         _bridge_authoritative_issue(
             _bridge_row(),
             BridgeRetrievalCapabilityIssue(collections=["private"]),
         )
-    assert denied.value.status_code == 403
+    assert retired.value.status_code == 410
 
     with pytest.raises(HTTPException) as inactive:
         _bridge_authoritative_issue(
@@ -123,18 +116,19 @@ def test_bridge_capability_rejects_caller_scope_broadening() -> None:
 
 
 def test_bridge_capability_lifetime_is_clamped_to_authority_expiry() -> None:
+    """Retired (#4105): enabled snapshots fail issuance regardless of expiry."""
     row = _bridge_row()
     row.effective_launch_snapshot_json["followUpRetrieval"][
         "authorityExpiresAt"
     ] = 1_000_045
 
-    issue = _bridge_authoritative_issue(
-        row,
-        BridgeRetrievalCapabilityIssue(lifetime_seconds=120),
-        now=1_000_000,
-    )
-
-    assert issue.lifetime_seconds == 45
+    with pytest.raises(HTTPException) as retired:
+        _bridge_authoritative_issue(
+            row,
+            BridgeRetrievalCapabilityIssue(lifetime_seconds=120),
+            now=1_000_000,
+        )
+    assert retired.value.status_code == 410
 
 
 def test_bridge_capability_rejects_expired_or_invalid_authority() -> None:
@@ -146,7 +140,8 @@ def test_bridge_capability_rejects_expired_or_invalid_authority() -> None:
         _bridge_authoritative_issue(
             expired, BridgeRetrievalCapabilityIssue(), now=2
         )
-    assert expired_error.value.status_code == 409
+    # Retirement is checked before expiry decoding for enabled snapshots.
+    assert expired_error.value.status_code == 410
 
     invalid = _bridge_row()
     invalid.effective_launch_snapshot_json["followUpRetrieval"][
@@ -156,7 +151,7 @@ def test_bridge_capability_rejects_expired_or_invalid_authority() -> None:
         _bridge_authoritative_issue(
             invalid, BridgeRetrievalCapabilityIssue(), now=1
         )
-    assert invalid_error.value.status_code == 409
+    assert invalid_error.value.status_code == 410
 
 
 def test_unscoped_capability_issuance_route_is_not_exposed() -> None:
@@ -1149,7 +1144,7 @@ def test_session_result_is_not_readable_by_another_capability(tmp_path) -> None:
 
 
 def test_bridge_capability_refuses_authority_inside_minimum_lifetime() -> None:
-    """Authority with <30s left is refused, not clamped into a 500."""
+    """Retired (#4105): enabled snapshots fail issuance regardless of lifetime."""
     row = _bridge_row()
     row.effective_launch_snapshot_json["followUpRetrieval"][
         "authorityExpiresAt"
@@ -1160,15 +1155,14 @@ def test_bridge_capability_refuses_authority_inside_minimum_lifetime() -> None:
             row, BridgeRetrievalCapabilityIssue(lifetime_seconds=120), now=1_000_000
         )
 
-    assert refused.value.status_code == 409
-    assert "30s remaining" in refused.value.detail
+    assert refused.value.status_code == 410
 
 
 @pytest.mark.asyncio
-async def test_bridge_capability_issuance_is_bounded_per_scope(
+async def test_bridge_capability_issuance_is_retired(
     tmp_path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """A retried POST must not multiply the immutable query allowance."""
+    """Retired (#4105): issuance mints nothing and writes no events."""
     monkeypatch.setenv("MOONMIND_FOLLOWUP_RETRIEVAL_COLLECTIONS", "repo,docs")
     registry = RetrievalCapabilityRegistry(tmp_path)
 
@@ -1181,11 +1175,12 @@ async def test_bridge_capability_issuance_is_bounded_per_scope(
 
         async def append_events(self, bridge_session_id, events):
             self.events.extend(events)
+            raise AssertionError("Retired issuance must not record events.")
 
     store = Store()
 
-    async def issue():
-        return await issue_bridge_retrieval_capability(
+    with pytest.raises(HTTPException) as retired:
+        await issue_bridge_retrieval_capability(
             "bridge-1",
             BridgeRetrievalCapabilityIssue(),
             registry=registry,
@@ -1193,20 +1188,8 @@ async def test_bridge_capability_issuance_is_bounded_per_scope(
             user=SimpleNamespace(id="user-1"),
             service=_OwnedExecutionService(),
         )
-
-    first = await issue()
-    assert first["capabilityId"]
-
-    with pytest.raises(HTTPException) as bounded:
-        await issue()
-    assert bounded.value.status_code == 409
-    assert bounded.value.detail["code"] == "retrieval_capability_already_active"
-    assert bounded.value.detail["capabilityId"] == first["capabilityId"]
-
-    # After the live capability is revoked a replacement may be issued.
-    registry.revoke(first["capabilityId"])
-    second = await issue()
-    assert second["capabilityId"] != first["capabilityId"]
+    assert retired.value.status_code == 410
+    assert store.events == []
 
 
 @pytest.mark.asyncio

@@ -64,6 +64,44 @@ async def session(tmp_path) -> AsyncSession:
     await engine.dispose()
 
 
+async def test_prepare_checkpoint_branch_workspace_rejects_retired_vector(
+    session: AsyncSession,
+) -> None:
+    emitted: list[tuple[str, Mapping[str, Any], str]] = []
+
+    async def write_artifact(
+        artifact_kind: str,
+        payload: Mapping[str, Any],
+        content_type: str,
+    ) -> tuple[str, str]:
+        emitted.append((artifact_kind, payload, content_type))
+        return f"artifact://MM-1090/{artifact_kind}", f"sha256:{artifact_kind}"
+
+    with pytest.raises(ValueError, match="4105"):
+        await prepare_checkpoint_branch_workspace(
+            session=session,
+            binding_input=_binding_input(
+                headCommit="def5678",
+                patchRef="artifact://patches/checkpoint.patch",
+                pullRequestUrl="https://github.test/moon/mind/pull/1",
+            ),
+            known_refs={"feature/mm-1087-source"},
+            current_ref="feature/mm-1087-source",
+            instruction_ref="artifact://MM-1090/input.branch_turn.instructions.md",
+            instruction_digest="sha256:instructions",
+            artifact_writer=write_artifact,
+            root_workflow_id="MM-1087",
+            source_run_id="run-MM-1087",
+            source_execution_ordinal=1,
+            follow_up_retrieval={
+                "enabled": True,
+                "collections": ["repo"],
+                "maxQueries": 4,
+            },
+        )
+    assert emitted == []
+
+
 async def test_prepare_checkpoint_branch_workspace_persists_binding_and_artifacts(
     session: AsyncSession,
 ) -> None:
@@ -92,11 +130,7 @@ async def test_prepare_checkpoint_branch_workspace_persists_binding_and_artifact
         root_workflow_id="MM-1087",
         source_run_id="run-MM-1087",
         source_execution_ordinal=1,
-        follow_up_retrieval={
-            "enabled": True,
-            "collections": ["repo"],
-            "maxQueries": 4,
-        },
+        follow_up_retrieval=None,
     )
     await session.commit()
 
@@ -134,11 +168,8 @@ async def test_prepare_checkpoint_branch_workspace_persists_binding_and_artifact
     assert turn.step_execution_manifest_ref is None
     assert turn.runtime_agent_run_id is None
     assert turn.provider_session_id is None
-    assert turn.diagnostics["followUpRetrieval"] == {
-        "enabled": True,
-        "collections": ["repo"],
-        "maxQueries": 4,
-    }
+    # Retired (#4105): new turns persist no vector retrieval state.
+    assert "followUpRetrieval" not in (turn.diagnostics or {})
 
     binding = await session.get(WorkflowCheckpointBranchGitBinding, "cbr_MM-1090")
     assert binding is not None
