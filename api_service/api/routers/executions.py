@@ -104,6 +104,7 @@ from api_service.services.checkpoint_branch_turn_execution import (
     get_checkpoint_branch_artifact_service,
 )
 from moonmind.config.settings import settings
+from moonmind.security.auth_modes_4120 import is_disabled_local_mode
 from moonmind.statuses.compat import (
     canonicalize_finish_outcome_code_alias,
     normalize_no_commit_finish_summary,
@@ -8111,7 +8112,7 @@ async def _validate_and_collect_task_input_attachments(
                 )
             owner = str(getattr(artifact, "created_by_principal", None) or "").strip()
             if (
-                settings.oidc.AUTH_PROVIDER != "disabled"
+                not is_disabled_local_mode()
                 and owner
                 and owner != principal
                 and not principal.startswith("service:")
