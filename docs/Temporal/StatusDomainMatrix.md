@@ -2,8 +2,8 @@
 
 Status: Normative
 Owners: MoonMind Platform
-Last updated: 2026-07-01
-Source issue: MM-1080; preserves MM-1073 traceability
+Last updated: 2026-09-08
+Source issue: MM-1080; preserves MM-1073 traceability; Jules consolidation MoonLadderStudios/MoonMind#3952
 
 This document is the canonical cross-domain matrix for MoonMind status tokens. It names the owner, value set, storage/API surface, and conversion boundary for each status domain so downstream cleanup can make domain-specific changes without treating similarly named tokens as interchangeable.
 
@@ -18,7 +18,7 @@ The former workflow status model remains only an archival pointer. Do not use ar
 | `temporalStatus` | Executions API adapter | `running`, `completed`, `failed`, `canceled` | API JSON field `temporalStatus`; schema `ExecutionModel.temporalStatus` | Derived from `closeStatus`: `null -> running`, `completed -> completed`, `canceled -> canceled`, and failure-like close statuses -> `failed`. It is a simplified client-facing lifecycle value, not a workflow-owned state machine. |
 | Step ledger status | `MoonMind.UserWorkflow` step ledger and dashboard | `pending`, `ready`, `executing`, `awaiting_external`, `reviewing`, `completed`, `failed`, `skipped`, `canceled` | Workflow query such as `GetStepLedger`; API step rows `status`; docs/Temporal/StepLedgerAndProgressModel.md | This domain describes operator-facing plan-step progress. It is not interchangeable with workflow lifecycle state or provider normalized status. |
 | Step execution artifact status | Step-execution artifact manifest contract | `pending`, `preparing`, `executing`, `running`, `checking`, `completed`, `succeeded`, `failed`, `blocked`, `canceled`, `superseded` | Step execution artifact content type `application/vnd.moonmind.step-execution+json;version=1`; schemas `moonmind.schemas.step_execution_models.StepExecutionStatus` and `moonmind.schemas.temporal_models.StepExecutionStatus` | This domain describes durable step-execution evidence artifacts. Convert to step ledger status only at an explicit workflow/API projection boundary. |
-| Provider normalized status | External provider adapters | Portable base: `queued`, `running`, `completed`, `failed`, `canceled`, `unknown`; provider extensions must be adapter-owned, such as Jules `awaiting_feedback` | Adapter result field `normalizedStatus` / internal `normalized_status`; provider monitoring payloads and artifacts | Provider-native tokens such as `in-progress` belong at provider boundaries and are normalized by the adapter. Do not promote provider-native spelling into workflow lifecycle or step ledger domains. |
+| Provider normalized status | External provider adapters | Portable base: `queued`, `running`, `completed`, `failed`, `canceled`, `unknown`; provider extensions must be adapter-owned, such as Jules `awaiting_feedback` | Adapter result field `normalizedStatus` / internal `normalized_status`; provider monitoring payloads and artifacts | Provider-native tokens such as `in-progress` belong at provider boundaries and are normalized by the adapter. Do not promote provider-native spelling into workflow lifecycle or step ledger domains. Jules canonical wire vocabulary lives in `moonmind/jules/vocabulary.py` (`classify_jules_status` display-safe, `require_known_jules_status` execution-critical). Blank/None/whitespace and unrecognized tokens classify as `unknown` (never fabricated `queued`/`running`, never terminal/success). A provider pull-request URL is evidence exposed as `externalUrl`/`pullRequestUrl` metadata and never promotes `running` to `completed`; provider progress is not verified AgentRun success. Historical `provider_status="pending"` spellings retain their `queued` meaning. |
 
 ## Audit Actions
 

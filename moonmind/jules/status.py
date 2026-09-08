@@ -1,85 +1,56 @@
-"""Shared Jules status normalization helpers."""
+"""Shared Jules status normalization helpers.
+
+Canonical classification lives in :mod:`moonmind.jules.vocabulary`; this
+module preserves the historical snapshot return contract for existing callers
+(activity runtime, worker polling) while delegating mapping to the single
+reviewed wire map. Blank/None now classifies as ``unknown`` (never a
+fabricated queued state).
+"""
 
 from __future__ import annotations
 
-from dataclasses import dataclass
-from typing import Literal
+from typing import Any
 
-JulesNormalizedStatus = Literal[
-    "queued",
-    "running",
-    "completed",
-    "failed",
-    "canceled",
-    "unknown",
-    "awaiting_feedback",
-]
+from moonmind.jules.vocabulary import (
+    JULES_CANCELED_PROVIDER_STATUSES as _CANCELED,
+)
+from moonmind.jules.vocabulary import (
+    JULES_FAILED_PROVIDER_STATUSES as _FAILED,
+)
+from moonmind.jules.vocabulary import (
+    JULES_SUCCESS_PROVIDER_STATUSES as _SUCCESS,
+)
+from moonmind.jules.vocabulary import (
+    JULES_TERMINAL_FAILURE_PROVIDER_STATUSES as _TERMINAL_FAILURE,
+)
+from moonmind.jules.vocabulary import (
+    JULES_TERMINAL_SUCCESS_PROVIDER_STATUSES as _TERMINAL_SUCCESS,
+)
+from moonmind.jules.vocabulary import (
+    JULES_WIRE_STATUS_MAP,
+    JulesNormalizedStatus,
+    JulesStatusClassification,
+    JulesUnknownStatusError,
+    classify_jules_status,
+    is_jules_terminal_status,
+    require_known_jules_status,
+)
 
 JULES_DEFAULT_PROVIDER_STATUS = "pending"
-JULES_SUCCESS_PROVIDER_STATUSES = frozenset(
-    {"completed", "success", "done", "resolved", "finished"}
-)
-JULES_CANCELED_PROVIDER_STATUSES = frozenset({"cancelled", "canceled"})
-JULES_FAILED_PROVIDER_STATUSES = frozenset(
-    {"error", "failed", "rejected", "timed_out", "timeout"}
-)
-JULES_TERMINAL_SUCCESS_PROVIDER_STATUSES = JULES_SUCCESS_PROVIDER_STATUSES
-JULES_TERMINAL_FAILURE_PROVIDER_STATUSES = frozenset(
-    {
-        *JULES_CANCELED_PROVIDER_STATUSES,
-        *JULES_FAILED_PROVIDER_STATUSES,
-    }
-)
-_JULES_QUEUED_PROVIDER_STATUSES = frozenset({"pending", "queued"})
-_JULES_RUNNING_PROVIDER_STATUSES = frozenset(
-    {"running", "in_progress", "in-progress", "processing"}
-)
-_JULES_AWAITING_FEEDBACK_PROVIDER_STATUSES = frozenset(
-    {"awaiting_user_feedback"}
-)
+JULES_SUCCESS_PROVIDER_STATUSES = _SUCCESS
+JULES_CANCELED_PROVIDER_STATUSES = _CANCELED
+JULES_FAILED_PROVIDER_STATUSES = _FAILED
+JULES_TERMINAL_SUCCESS_PROVIDER_STATUSES = _TERMINAL_SUCCESS
+JULES_TERMINAL_FAILURE_PROVIDER_STATUSES = _TERMINAL_FAILURE
 
-@dataclass(frozen=True, slots=True)
-class JulesStatusSnapshot:
-    """Normalized Jules provider status plus portable MoonMind mapping."""
+# Back-compat alias: historical snapshot name for the canonical classification.
+JulesStatusSnapshot = JulesStatusClassification
 
-    provider_status: str
-    provider_status_token: str
-    normalized_status: JulesNormalizedStatus
-    terminal: bool
-    succeeded: bool
-    failed: bool
-    canceled: bool
 
-def normalize_jules_status(raw_status: str | None) -> JulesStatusSnapshot:
-    """Normalize one Jules status into provider and MoonMind status fields."""
+def normalize_jules_status(raw_status: Any) -> JulesStatusClassification:
+    """Classify one Jules status (display-safe; unknown-tolerant, never raises)."""
+    return classify_jules_status(raw_status)
 
-    provider_status = str(raw_status or "").strip() or JULES_DEFAULT_PROVIDER_STATUS
-    provider_status_token = provider_status.lower()
-
-    if provider_status_token in JULES_SUCCESS_PROVIDER_STATUSES:
-        normalized_status: JulesNormalizedStatus = "completed"
-    elif provider_status_token in JULES_CANCELED_PROVIDER_STATUSES:
-        normalized_status = "canceled"
-    elif provider_status_token in JULES_FAILED_PROVIDER_STATUSES:
-        normalized_status = "failed"
-    elif provider_status_token in _JULES_QUEUED_PROVIDER_STATUSES:
-        normalized_status = "queued"
-    elif provider_status_token in _JULES_RUNNING_PROVIDER_STATUSES:
-        normalized_status = "running"
-    elif provider_status_token in _JULES_AWAITING_FEEDBACK_PROVIDER_STATUSES:
-        normalized_status = "awaiting_feedback"
-    else:
-        normalized_status = "unknown"
-
-    return JulesStatusSnapshot(
-        provider_status=provider_status,
-        provider_status_token=provider_status_token,
-        normalized_status=normalized_status,
-        terminal=normalized_status in {"completed", "failed", "canceled"},
-        succeeded=normalized_status == "completed",
-        failed=normalized_status == "failed",
-        canceled=normalized_status == "canceled",
-    )
 
 __all__ = [
     "JULES_CANCELED_PROVIDER_STATUSES",
@@ -88,7 +59,13 @@ __all__ = [
     "JULES_SUCCESS_PROVIDER_STATUSES",
     "JULES_TERMINAL_FAILURE_PROVIDER_STATUSES",
     "JULES_TERMINAL_SUCCESS_PROVIDER_STATUSES",
+    "JULES_WIRE_STATUS_MAP",
     "JulesNormalizedStatus",
+    "JulesStatusClassification",
     "JulesStatusSnapshot",
+    "JulesUnknownStatusError",
+    "classify_jules_status",
+    "is_jules_terminal_status",
     "normalize_jules_status",
+    "require_known_jules_status",
 ]
