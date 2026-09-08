@@ -1620,6 +1620,11 @@ export function ProviderProfilesManager({
     const nextForm = defaultFormState(selectedRuntimeId);
     setForm(nextForm);
     setFormBaseline(nextForm);
+    const initialTier = runtimeDefaultTierDraft();
+    setTierDrafts([initialTier]);
+    setDefaultTierClientId(initialTier.clientId);
+    setTierBaseline(cloneTierDrafts([initialTier]));
+    setTierBaselineDefaultId(initialTier.clientId);
   }, [editingProfileId, form.runtimeId, selectedRuntimeId]);
 
   useEffect(() => {
@@ -2294,26 +2299,25 @@ export function ProviderProfilesManager({
       setForm(nextForm);
       setFormBaseline(nextForm);
       {
-        const normalized = normalizeProviderProfileTiers(savedProfile.model_tiers, savedProfile.default_model_tier);
-        if (normalized.isRepair) {
-          const repair = runtimeDefaultTierDraft();
-          setTierDrafts([repair]);
-          setDefaultTierClientId(repair.clientId);
-          setIsTierRepair(false);
-          setInvalidSavedDefaultIndex(null);
-        } else {
-          setTierDrafts(normalized.tiers);
-          setDefaultTierClientId(normalized.defaultTierClientId);
-          setIsTierRepair(false);
-          setInvalidSavedDefaultIndex(normalized.invalidSavedDefaultIndex);
-        }
-        setTierBaseline(null);
-        setTierBaselineDefaultId(null);
+        // The editor closes after a successful save, so the tier draft must
+        // return to the clean create-form default. Keeping the saved profile's
+        // tiers with a null baseline would read as a dirty draft and keep
+        // warning about unsaved changes on navigation.
+        const initialTier = runtimeDefaultTierDraft();
+        setTierDrafts([initialTier]);
+        setDefaultTierClientId(initialTier.clientId);
+        setIsTierRepair(false);
+        setInvalidSavedDefaultIndex(null);
+        setTierBaseline(cloneTierDrafts([initialTier]));
+        setTierBaselineDefaultId(initialTier.clientId);
         setTierFieldErrors({});
         setTierUndo(null);
         setTierRemoveDialog(null);
       }
       setShowAdvanced(false);
+      setShowImportedVolume(false);
+      setImportedVolumeRef('');
+      setImportedVolumeValidated(false);
       queryClient.setQueryData<ProviderProfile[]>(
         PROVIDER_PROFILE_QUERY_KEY,
         (currentProfiles = []) => {
@@ -2434,6 +2438,11 @@ export function ProviderProfilesManager({
         const nextForm = defaultFormState(createFormRuntimeSeed);
         setForm(nextForm);
         setFormBaseline(nextForm);
+        const initialTier = runtimeDefaultTierDraft();
+        setTierDrafts([initialTier]);
+        setDefaultTierClientId(initialTier.clientId);
+        setTierBaseline(cloneTierDrafts([initialTier]));
+        setTierBaselineDefaultId(initialTier.clientId);
       }
       queryClient.invalidateQueries({ queryKey: PROVIDER_PROFILE_QUERY_KEY });
     },
