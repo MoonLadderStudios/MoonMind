@@ -42,7 +42,7 @@ def recommended_next_action_for_verdict(
     *,
     recoverable_in_current_runtime: bool = False,
 ) -> str | None:
-    """Return the runtime-owned next action for a canonical gate verdict."""
+    """Return the default next action for a canonical gate verdict."""
 
     normalized = str(verdict or "").strip().upper()
     normalized = _VERDICT_SYNONYMS.get(normalized, normalized)
@@ -671,6 +671,7 @@ def review_gate_retry_allowed(
     max_review_attempts: int,
     consecutive_no_progress_attempts: int,
     max_consecutive_no_progress_attempts: int,
+    honor_explicit_stop: bool = True,
 ) -> bool:
     normalized = str(getattr(verdict, "verdict", "") or "").strip().upper()
     if review_retry_count >= max_review_attempts:
@@ -680,6 +681,8 @@ def review_gate_retry_allowed(
     recommended_next_action = (
         str(getattr(verdict, "recommended_next_action", "") or "").strip().lower()
     )
+    if honor_explicit_stop and recommended_next_action in {"needs_human", "blocked"}:
+        return False
     if normalized == "ADDITIONAL_WORK_NEEDED":
         return recommended_next_action == "reattempt_current_step"
     return normalized == "NO_DETERMINATION" and bool(

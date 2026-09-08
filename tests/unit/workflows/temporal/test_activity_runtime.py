@@ -3361,23 +3361,36 @@ async def test_agent_runtime_publish_artifacts_links_remediation_verification_at
             )
 
 
+@pytest.mark.parametrize(
+    ("verdict", "action", "expected_action"),
+    [
+        ("FULLY_IMPLEMENTED", "create_pull_request", "advance"),
+        ("ADDITIONAL_WORK_NEEDED", "needs_human", "needs_human"),
+        ("ADDITIONAL_WORK_NEEDED", "blocked", "blocked"),
+        ("ADDITIONAL_WORK_NEEDED", "reattempt_current_step", "reattempt_current_step"),
+        ("ADDITIONAL_WORK_NEEDED", None, "reattempt_current_step"),
+        ("NO_DETERMINATION", "needs_human", "needs_human"),
+        ("NO_DETERMINATION", "blocked", "blocked"),
+    ],
+)
 async def test_agent_runtime_publish_artifacts_canonicalizes_moonspec_next_action(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
+    verdict: str,
+    action: str | None,
+    expected_action: str,
 ) -> None:
     async with temporal_db(tmp_path) as session_maker:
         async with session_maker() as session:
             workspace = tmp_path / "workspace"
             verify_path = workspace / "var/artifacts/moonspec-verify/final.json"
             verify_path.parent.mkdir(parents=True)
-            # Regression fixture mirroring the observed drift: an approving
-            # verdict paired with a non-canonical recommendedNextAction.
             verify_path.write_text(
                 json.dumps(
                     {
                         "schemaVersion": "moonspec-verify.issue_brief.v1",
-                        "verdict": "FULLY_IMPLEMENTED",
-                        "recommendedNextAction": "create_pull_request",
+                        "verdict": verdict,
+                        "recommendedNextAction": action,
                         "recoverableInCurrentRuntime": True,
                         "remainingWork": [],
                     }
@@ -3435,11 +3448,11 @@ async def test_agent_runtime_publish_artifacts_canonicalizes_moonspec_next_actio
             )
 
             verify_payload = result.metadata["moonSpecVerify"]
-            assert verify_payload["recommendedNextAction"] == "advance"
-            assert (
-                verify_payload["rawRecommendedNextAction"]
-                == "create_pull_request"
-            )
+            assert verify_payload["recommendedNextAction"] == expected_action
+            if action is not None and action != expected_action:
+                assert verify_payload["rawRecommendedNextAction"] == action
+            else:
+                assert "rawRecommendedNextAction" not in verify_payload
             assert "contractViolations" not in verify_payload
             AgentRunResult(**result.model_dump(mode="json", by_alias=True))
 

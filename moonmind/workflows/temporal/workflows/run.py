@@ -854,6 +854,11 @@ RUN_PLAN_ROUTED_MOONSPEC_REMEDIATION_PATCH = "run-plan-routed-moonspec-remediati
 RUN_DYNAMIC_REMEDIATION_LOOP_CONTROLLER_PATCH = (
     "run-dynamic-remediation-loop-controller-v1"
 )
+# Preserve recorded continuation decisions while admitting new gates using the
+# resolved verifier's explicit stop action.
+RUN_VERIFIER_REMEDIATION_STOP_AUTHORITY_PATCH = (
+    "run-verifier-remediation-stop-authority-v1"
+)
 # The dynamic controller replaces its durable decision while processing the
 # current verifier result. Re-read the blocking projection after that update so
 # a passing verdict cannot inherit the prior attempt's blocking reason. Keep
@@ -4482,6 +4487,7 @@ class MoonMindRunWorkflow:
         current_index: int | None = None,
         logical_step_id: str | None = None,
         recoverable_evidence: bool = False,
+        recommended_next_action: str | None = None,
         workspace_head: Mapping[str, Any] | None = None,
         headless_workspace_spec: Mapping[str, Any] | None = None,
     ) -> bool:
@@ -4595,6 +4601,11 @@ class MoonMindRunWorkflow:
             remaining_work_ref=remaining_work_ref,
             progress_ref=remaining_work_ref,
             recoverable_evidence=recoverable_evidence,
+            recommended_next_action=(
+                recommended_next_action
+                if workflow.patched(RUN_VERIFIER_REMEDIATION_STOP_AUTHORITY_PATCH)
+                else None
+            ),
         )
         decision_ref = await self._write_json_artifact(
             name=(
@@ -8168,7 +8179,7 @@ class MoonMindRunWorkflow:
         ordered_nodes: Sequence[Mapping[str, Any]],
         current_index: int,
     ) -> GateTransitionDecision:
-        """Keep verifier semantics advisory and make plan routing authoritative."""
+        """Route valid verifier evidence without overriding an explicit stop."""
         normalized = str(getattr(verdict, "verdict", "") or "").strip().upper()
         explicit_chain = False
         if 0 <= current_index < len(ordered_nodes):
@@ -8201,6 +8212,17 @@ class MoonMindRunWorkflow:
         if normalized == "FULLY_IMPLEMENTED":
             return GateTransitionDecision(
                 "accept", "exit_remediation_loop", "verification_passed"
+            )
+        next_action = getattr(verdict, "recommended_next_action", None)
+        if (
+            self._patched_or_false_outside_workflow(
+                RUN_VERIFIER_REMEDIATION_STOP_AUTHORITY_PATCH
+            )
+            and normalized in {"ADDITIONAL_WORK_NEEDED", "NO_DETERMINATION"}
+            and next_action in {"needs_human", "blocked"}
+        ):
+            return GateTransitionDecision(
+                "accept", "stop_at_control_gate", f"verification_requested_{next_action}"
             )
         if normalized == "ADDITIONAL_WORK_NEEDED":
             successor, reason = self._resolve_next_moonspec_remediation_step(
@@ -9038,6 +9060,13 @@ class MoonMindRunWorkflow:
             budget=budget,
             checkpoint_available=True,
             policy_allowed=True,
+            recommended_next_action=(
+                gate_result.recommended_next_action
+                if self._patched_or_false_outside_workflow(
+                    RUN_VERIFIER_REMEDIATION_STOP_AUTHORITY_PATCH
+                )
+                else None
+            ),
         )
         if (
             gate.verdict == "ADDITIONAL_WORK_NEEDED"
@@ -9304,6 +9333,18 @@ class MoonMindRunWorkflow:
                 "the bounded remediation budget was exhausted with remaining "
                 "implementation work"
             )
+            if (
+                self._patched_or_false_outside_workflow(
+                    RUN_VERIFIER_REMEDIATION_STOP_AUTHORITY_PATCH
+                )
+                and isinstance(gate_context, Mapping)
+                and gate_context.get("recommendedNextAction")
+                in {"needs_human", "blocked"}
+            ):
+                explanation = (
+                    "the verifier requested a stop before further automatic "
+                    "remediation with remaining implementation work"
+                )
         else:
             explanation = (
                 "the operator policy "
@@ -13215,6 +13256,9 @@ class MoonMindRunWorkflow:
                         max_consecutive_no_progress_attempts=(
                             max_consecutive_no_progress_attempts
                         ),
+                        honor_explicit_stop=workflow.patched(
+                            RUN_VERIFIER_REMEDIATION_STOP_AUTHORITY_PATCH
+                        ),
                     ):
                         review_retry_count += 1
                         previous_review_feedback = (
@@ -13637,6 +13681,9 @@ class MoonMindRunWorkflow:
                             recoverable_evidence=(
                                 step_gate_result.recoverable_in_current_runtime
                             ),
+                            recommended_next_action=(
+                                step_gate_result.recommended_next_action
+                            ),
                             workspace_head=(
                                 outputs_for_gate.get("remediationWorkspaceHead")
                                 if isinstance(
@@ -13708,7 +13755,18 @@ class MoonMindRunWorkflow:
                             if isinstance(budget_payload, Mapping)
                             else None
                         )
-                        if isinstance(consumed_payload, Mapping) and int(
+                        if (
+                            workflow.patched(
+                                RUN_VERIFIER_REMEDIATION_STOP_AUTHORITY_PATCH
+                            )
+                            and continuation_decision.get("reason")
+                            in {
+                                "verification_requested_needs_human",
+                                "verification_requested_blocked",
+                            }
+                        ):
+                            transition_reason = continuation_decision["reason"]
+                        elif isinstance(consumed_payload, Mapping) and int(
                             consumed_payload.get("consecutiveNoProgressAttempts", 0)
                             or 0
                         ) >= int(
@@ -13839,6 +13897,13 @@ class MoonMindRunWorkflow:
                             ),
                         }
                         control_stop_summary = {
+                            "verification_requested_needs_human": (
+                                "Skipped because the verifier requires human input "
+                                "before further remediation."
+                            ),
+                            "verification_requested_blocked": (
+                                "Skipped because the verifier blocked further remediation."
+                            ),
                             "remediation_budget_exhausted": (
                                 "Skipped because remediation budget was exhausted "
                                 "after verification attempt "

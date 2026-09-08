@@ -7664,7 +7664,7 @@ class TemporalAgentRuntimeActivities:
         def _canonicalize_moonspec_verify_gate_payload(
             gate_payload: Mapping[str, Any],
         ) -> dict[str, Any]:
-            """Derive MoonSpec gate action from verdict, preserving model output."""
+            """Preserve the Skill's canonical action; repair missing/invalid values."""
 
             canonical_payload = dict(gate_payload)
             recoverable_raw = (
@@ -7688,6 +7688,10 @@ class TemporalAgentRuntimeActivities:
             raw_action_text = (
                 raw_action.strip() if isinstance(raw_action, str) else None
             )
+            if raw_action_text in recommended_next_actions():
+                canonical_payload["recommendedNextAction"] = raw_action_text
+                canonical_payload.pop("recommended_next_action", None)
+                return canonical_payload
             if raw_action is not None and raw_action_text != canonical_action:
                 canonical_payload.setdefault(
                     "rawRecommendedNextAction",
