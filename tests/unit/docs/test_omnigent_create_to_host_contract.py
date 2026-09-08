@@ -93,13 +93,24 @@ def test_explicit_selection_is_fail_closed_without_substitution() -> None:
         assert code in text
 
 
-def test_example_heading_can_be_reworded_without_changing_request() -> None:
+@pytest.mark.parametrize(
+    "heading",
+    [
+        "### 4.3 AgentExecutionRequest",
+        "### 4.3 Request sent to the selected agent\n",
+        "###\t4.3   Request example   \n\n",
+    ],
+    ids=["original-title", "reworded-title", "changed-spacing"],
+)
+def test_example_heading_can_be_reworded_without_changing_request(heading: str) -> None:
     text = CONTRACT.read_text(encoding="utf-8")
-    rewritten = text.replace(
-        "### 4.3 AgentExecutionRequest", "### 4.3 Request sent to the selected agent\n"
+    rewritten, count = re.subn(
+        r"^###[ \t]+4\.3[ \t]+[^\n]*$", heading, text, flags=re.MULTILINE
     )
-    assert rewritten != text
-    request = AgentExecutionRequest.model_validate(_json_example(rewritten, "4.3"))
+    assert count == 1, "the request example must have one section-4.3 heading"
+    payload = _json_example(rewritten, "4.3")
+    assert payload == _json_example(text, "4.3")
+    request = AgentExecutionRequest.model_validate(payload)
     assert request.agent_id == "omnigent"
 
 

@@ -7,7 +7,13 @@ and the incremental adoption policy to ``docs/DocumentationArchitecture.md``.
 
 from pathlib import Path
 
-from tools.check_documentation_architecture import CANONICAL_CLAIM_PREFIXES
+import pytest
+
+from tools.check_documentation_architecture import (
+    CANONICAL_CLAIM_PREFIXES,
+    DocFile,
+    run_checks,
+)
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
 STANDARD_DOC = REPO_ROOT / "docs" / "DocumentationArchitecture.md"
@@ -106,16 +112,48 @@ def test_source_traceability_preserved() -> None:
     assert "MM-904" in text
 
 
-def test_explanatory_rewording_preserves_structured_examples(monkeypatch) -> None:
-    text = _read()
-    rewritten = text.replace(
-        "durable system or capability description", "long-lived capability overview"
-    ).replace(
-        "no retroactive metadata-only churn PR is mandated",
-        "existing documents need no metadata-only update",
-    )
-    assert rewritten != text
-    monkeypatch.setattr(f"{__name__}._read", lambda: rewritten)
-    test_system_and_design_filename_examples_present()
-    test_canonical_metadata_header_fields_present()
-    test_stable_canonical_claim_id_families_present()
+@pytest.mark.parametrize(
+    ("description", "adoption"),
+    [
+        (
+            "A durable system or capability description.",
+            "No retroactive metadata-only churn PR is mandated.",
+        ),
+        (
+            "A long-lived capability overview.",
+            "Existing documents need no metadata-only update.",
+        ),
+    ],
+    ids=["original-prose", "both-sentences-reworded"],
+)
+def test_explanatory_rewording_preserves_structured_examples(
+    description: str, adoption: str
+) -> None:
+    # Keep the replay input fixed: editing the live standard must not turn a
+    # literal prose replacement into a failing no-op assertion.
+    text = f"""# Example system
+
+**Document Class:** Canonical declarative
+
+| Filename suffix | Use for |
+|---|---|
+| `<SystemName>System.md` | {description} |
+
+{adoption}
+
+### DOC-REQ-001 Stable requirement
+The example keeps its metadata and claim identity through prose edits.
+"""
+    path = "docs/ExampleSystem.md"
+    assert run_checks([DocFile(path=path, text=text)]) == []
+
+    # Independent invalid inputs keep both semantic guards observable for
+    # every prose variant, using the same checker as the operator CLI.
+    missing_metadata = text.replace("**Document Class:** Canonical declarative", "")
+    assert {f.rule for f in run_checks([DocFile(path=path, text=missing_metadata)])} == {
+        "missing-document-class"
+    }
+    malformed_claim = text.replace("DOC-REQ-001", "DOC-REQ-1")
+    assert {f.rule for f in run_checks([DocFile(path=path, text=malformed_claim)])} == {
+        "malformed-claim-id"
+    }
