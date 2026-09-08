@@ -572,6 +572,7 @@ def decide_remediation_continuation(
     budget_ref: str | None = None,
     progress_ref: str | None = None,
     recoverable_evidence: bool = False,
+    recommended_next_action: str | None = None,
 ) -> RemediationContinuationDecision:
     """Return the one deterministic routing decision for verifier evidence."""
 
@@ -607,6 +608,17 @@ def decide_remediation_continuation(
                 "continueLoop": False,
                 "reason": "environment_contaminated_by_skill_projection",
                 "nextPhase": "blocked",
+            }
+        )
+    if normalized in {"ADDITIONAL_WORK_NEEDED", "NO_DETERMINATION"} and (
+        recommended_next_action in {"needs_human", "blocked"}
+    ):
+        return RemediationContinuationDecision.model_validate(
+            {
+                **common,
+                "continueLoop": False,
+                "reason": f"verification_requested_{recommended_next_action}",
+                "nextPhase": recommended_next_action,
             }
         )
     if normalized == "NO_DETERMINATION":
