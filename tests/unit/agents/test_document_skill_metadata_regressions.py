@@ -8,6 +8,7 @@ import re
 
 import pytest
 
+from moonmind.services.skill_resolution import _load_skill_frontmatter
 from tests.unit.agents import (
     test_document_author_skill as author,
     test_document_health_remediate_skill as remediate,
@@ -34,15 +35,33 @@ def contract(request, tmp_path, monkeypatch):
     return path, original, check
 
 
-def test_description_rewording_and_yaml_quoting_preserve_contract(contract):
+@pytest.mark.parametrize("source_quote", ["", "'", '"'])
+@pytest.mark.parametrize("target_quote", ["", "'", '"'])
+def test_description_rewording_and_yaml_quoting_preserve_contract(
+    contract, source_quote, target_quote
+):
     path, original, check = contract
+    name = _load_skill_frontmatter(path.parent)["name"]
+    source = re.sub(
+        r"(?m)^name:.*$",
+        lambda _: f"name: {source_quote}{name}{source_quote}",
+        original,
+    )
+    path.write_text(source, encoding="utf-8")
+    check()
+
+    # Decode the source scalar before rendering it, including already-quoted names.
+    name = _load_skill_frontmatter(path.parent)["name"]
     rewritten = re.sub(
         r"(?m)^description:.*$",
         "description: Help maintain repository documents.",
-        original,
+        source,
     )
-    rewritten = re.sub(r"(?m)^name: (.+)$", r'name: "\1"', rewritten)
-    assert rewritten != original
+    rewritten = re.sub(
+        r"(?m)^name:.*$",
+        lambda _: f"name: {target_quote}{name}{target_quote}",
+        rewritten,
+    )
     path.write_text(rewritten, encoding="utf-8")
     check()
 
