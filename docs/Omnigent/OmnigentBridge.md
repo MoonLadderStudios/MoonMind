@@ -132,8 +132,6 @@ MoonMind should embed or proxy the native Omnigent web application instead of re
 
 All native application requests still cross a binding-scoped MoonMind boundary. Client-side hiding or disabling is an affordance only. The bridge independently authenticates, authorizes, capability-checks, scans, audits, rewrites, and forwards every request.
 
-User-versus-machine credential boundaries on this surface (MoonMind login vs. worker/container-job, provider, and Omnigent runtime credentials) are owned by [AuthenticationSystem.md](../Security/AuthenticationSystem.md) §5; this document does not define a parallel credential contract.
-
 ---
 
 ## 3. Topologies

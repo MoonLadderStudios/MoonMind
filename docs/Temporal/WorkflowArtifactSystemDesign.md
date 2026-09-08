@@ -465,9 +465,7 @@ Artifact API auth behavior must follow the app-level auth mode.
 | App auth setting | Artifact API behavior | Intended environment |
 | ------------------------ | -------------------------------------------------------------------- | ----------------------- |
 | `AUTH_PROVIDER=disabled` | no end-user auth required for user-facing metadata/presign endpoints | one-click local/dev |
-| `AUTH_PROVIDER=keycloak` (legacy opt-in) | require authenticated identity and execution-linked authorization | shared deployments pending cutover |
-
-The proposed `accounts` / `oidc` / `header` modes are not shipped. The canonical owner of these contracts is [AuthenticationSystem.md](../Security/AuthenticationSystem.md).
+| authenticated modes | require authenticated identity and execution-linked authorization | shared dev/staging/prod |
 
 This is an API-layer auth choice. It does **not** require public object-storage buckets.
 

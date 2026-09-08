@@ -62,7 +62,7 @@ For a normal combined-stack startup, run:
 docker compose up -d
 ```
 
-This is the default path for local and self-hosted operators. It starts MoonMind, Omnigent, and required local dependencies using the repository `docker-compose.yaml`. The Omnigent runtime server uses built-in accounts mode unless an operator has deliberately supplied OIDC configuration; MoonMind's control-plane `AUTH_PROVIDER` defaults to `disabled` (see [AuthenticationSystem.md](../Security/AuthenticationSystem.md)).
+This is the default path for local and self-hosted operators. It starts MoonMind, Omnigent, and required local dependencies using the repository `docker-compose.yaml` and built-in accounts mode unless an operator has deliberately supplied OIDC configuration.
 
 Optional services are selected through `COMPOSE_PROFILES` or an explicit `--profile` flag. Do not set `COMPOSE_FILE` to retired OAuth-host overlays; the canonical single Compose file owns supported static host definitions.
 
@@ -292,7 +292,7 @@ For a dedicated or on-demand OAuth host, also verify that the selected Provider 
 
 ### Built-In Accounts and OIDC
 
-Built-in accounts mode is the documented default for the Omnigent runtime server (`OMNIGENT_AUTH_*`) in the combined local stack — not for MoonMind's control-plane `AUTH_PROVIDER`, which ships `disabled` by default with `keycloak` as the legacy opt-in. Operators should create the first admin account in the Omnigent web UI unless they have deliberately configured an external OIDC provider. MoonMind control-plane user authentication is owned by [AuthenticationSystem.md](../Security/AuthenticationSystem.md).
+Built-in accounts mode is the documented default for the combined local stack. Operators should create the first admin account in the Omnigent web UI unless they have deliberately configured an external OIDC provider.
 
 OIDC is a future or operator-provided configuration path for this combined stack documentation. If sign-in behavior looks inconsistent, confirm whether the running environment is using built-in accounts or explicit OIDC configuration before resetting credentials or deleting volumes.
 

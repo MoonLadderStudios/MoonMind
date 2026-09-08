@@ -37,18 +37,7 @@ See the [Omnigent module entrypoint](docs/Omnigent/README.md), the canonical [Om
     - Configure any other secrets or settings needed for the first workflow
 8. Click Create, select Runtime and one Profile, and submit a workflow. The Profile resolves its execution configuration; readiness and rollout policy validate the resulting plan.
 
-`.env` is optional for normal local startup. Use `.env-template` only when you want to override defaults or preconfigure advanced settings before launch. MoonMind control-plane user authentication (`AUTH_PROVIDER`, `disabled` by default) is separate from Omnigent runtime-server auth (`OMNIGENT_AUTH_*`); see [AuthenticationSystem.md](docs/Security/AuthenticationSystem.md).
-
-### Control-plane authentication (shipped modes)
-
-The canonical owner of user-login behavior is [AuthenticationSystem.md](docs/Security/AuthenticationSystem.md). The summary below records only what ships in this checkout; the proposed `accounts` / `oidc` / `header` modes are not shipped and must not be configured.
-
-- **Fresh install (supported path):** `docker compose up -d` with no mandatory `.env` boots `AUTH_PROVIDER=disabled` (default local single-user). No browser login is required: open [http://localhost:7000](http://localhost:7000), then complete protected operator setup in the dashboard (Settings → provider secrets and profiles) before submitting work.
-- **Auth-mode selection:** shipped values are `disabled` (default) or `keycloak` (legacy opt-in with `COMPOSE_PROFILES="keycloak"`, pending removal). Selector help lives in `moonmind/config/settings.py` (`OIDCSettings`) and commented guidance in `.env-template` (`AUTH_PROVIDER`, `JWT_SECRET_KEY`, `OMNIGENT_AUTH_*` separation) and `docker-compose.yaml` (`AUTH_PROVIDER=${AUTH_PROVIDER:-disabled}`, legacy `OIDC_ISSUER_URL` Keycloak realm default).
-- **Existing databases with omitted settings:** omitting `AUTH_PROVIDER` keeps the shipped `disabled` default. There is no silent promotion to a new mode and no automatic owner creation on populated databases; first-owner claim on existing data requires an explicit, controlled migration operation when the replacement ships.
-- **Unsupported selectors:** `accounts` / `oidc` / `header` are not accepted by this checkout; `default` and `google` are unsupported internal code branches, not selectors. Do not configure them. Unknown or retired selectors carry no shipped transport, cookie, or error contract.
-- **Secrets and recovery:** production deployments must replace the `JWT_SECRET_KEY` placeholder with a strong value; signing keys are never shared with users and provider tokens are never user-login credentials. Recovery never disables authentication and never deletes shared volumes (`docker compose down -v` is not an auth-recovery step).
-- **Rendered configuration (statically verified):** `docker-compose.yaml` interpolates `AUTH_PROVIDER=${AUTH_PROVIDER:-disabled}`, `OIDCSettings.AUTH_PROVIDER` defaults to `"disabled"` (`moonmind/config/settings.py`), and `.env-template` leaves `# AUTH_PROVIDER="disabled"` commented out, so omitting the variable keeps the `disabled` default on fresh and existing databases. Live `docker compose config` output and a no-login dashboard capture at `http://localhost:7000` remain outstanding and belong to #4128 product evidence; they are not invented here.
+`.env` is optional for normal local startup. Use `.env-template` only when you want to override defaults or preconfigure advanced settings before launch.
 
 ### OAuth Workflow
 
