@@ -371,3 +371,179 @@ async def test_control_resumes_legacy_persisted_batch_without_generation(adapter
     assert handle.start_update.await_args.kwargs["args"] == []
     assert handle.start_update.await_args.kwargs["id"] == "old-update"
     adapter._client.get_workflow_handle.assert_called_once_with("legacy-workflow", run_id="old-run")
+
+
+async def test_control_empty_enumeration_reports_empty_not_succeeded(adapter):
+    """An enumerated empty target list means no eligible runs, not quiescence."""
+
+    async def _fake_list(query):
+        return
+        yield  # pragma: no cover - empty Visibility selection
+
+    adapter._client.list_workflows = _fake_list
+
+    batch = await adapter.send_batch_pause_update(request_id="empty-scope")
+
+    assert batch.enumerated is True
+    assert batch.targets == []
+    assert batch.status == "empty"
+    assert batch.selection_policy is not None
+    assert "not an atomic snapshot" in batch.selection_policy
+
+
+async def test_control_enumeration_dedupes_checkpoint_and_bounds_pages(adapter, monkeypatch):
+    """Paged enumeration dedupes runs, checkpoints pages, and honors budgets."""
+    from moonmind.schemas.workflow_control_models import WorkflowControlBatch
+    from moonmind.workflows.temporal import client as temporal_client_module
+
+    monkeypatch.setattr(temporal_client_module, "_WORKFLOW_CONTROL_ENUMERATION_PAGE_SIZE", 2)
+    monkeypatch.setattr(temporal_client_module, "_WORKFLOW_CONTROL_ENUMERATION_BUDGET", 3)
+
+    executions = [
+        _FakeWorkflowExecution("wf-a"),
+        _FakeWorkflowExecution("wf-a"),  # duplicate Visibility entry
+        _FakeWorkflowExecution("wf-b"),
+        _FakeWorkflowExecution("wf-c"),
+        _FakeWorkflowExecution("wf-d"),  # beyond budget
+    ]
+
+    async def _fake_list(query):
+        for ex in executions:
+            yield ex
+
+    adapter._client.list_workflows = _fake_list
+    handle = AsyncMock()
+    handle.get_update_handle = Mock(return_value=SimpleNamespace(result=AsyncMock(side_effect=TimeoutError)))
+    adapter._client.get_workflow_handle = Mock(return_value=handle)
+
+    checkpoints = []
+
+    async def progress(observed):
+        checkpoints.append(observed.model_copy(deep=True))
+
+    batch = await adapter.send_batch_pause_update(request_id="paged", on_progress=progress)
+
+    assert batch.enumerated is True
+    assert batch.enumeration_error == "control_enumeration_budget_exceeded"
+    assert [target.workflow_id for target in batch.targets] == ["wf-a", "wf-b", "wf-c"]
+    # Incomplete enumeration cannot produce a fully confirmed result.
+    assert batch.status != "succeeded"
+    # At least one page checkpoint persisted before the budget error.
+    assert any(snapshot.enumerated is False for snapshot in checkpoints)
+    assert batch.enumeration_cursor is not None
+
+
+async def test_control_enumeration_failure_checkpoints_partial_targets(adapter):
+    """A later-page Visibility failure keeps partial targets and the cursor."""
+    from moonmind.schemas.workflow_control_models import WorkflowControlBatch
+
+    async def _fake_list(query):
+        yield _FakeWorkflowExecution("wf-ok")
+        raise RuntimeError("visibility page failed")
+
+    adapter._client.list_workflows = _fake_list
+
+    batch = await adapter.send_batch_pause_update(request_id="partial-page")
+
+    assert batch.enumerated is False
+    assert batch.enumeration_error == "control_visibility_unavailable"
+    assert [target.workflow_id for target in batch.targets] == ["wf-ok"]
+    assert batch.enumeration_cursor is not None
+    assert batch.status == "unknown"
+
+    # A retry resumes from the checkpointed partial targets.
+    retried = await adapter.send_batch_pause_update(
+        batch=batch.model_copy(deep=True),
+    )
+    assert ("wf-ok", "run-wf-ok") in {
+        (target.workflow_id, target.run_id) for target in retried.targets
+    }
+
+
+async def test_control_generation_mismatch_is_superseded_not_unknown(adapter):
+    """A newer command's generation must not report the old request confirmed."""
+
+    async def _fake_list(query):
+        yield _FakeWorkflowExecution("wf-1")
+
+    handle = AsyncMock()
+    handle.get_update_handle = Mock(return_value=SimpleNamespace(result=AsyncMock(return_value=None)))
+    handle.query.return_value = {"runId": "run-wf-1", "controlGeneration": 9, "safePoint": True}
+    adapter._client.list_workflows = _fake_list
+    adapter._client.get_workflow_handle = Mock(return_value=handle)
+
+    from moonmind.schemas.workflow_control_models import WorkflowControlBatch
+
+    batch = await adapter.send_batch_pause_update(
+        request_id="old-generation",
+        batch=WorkflowControlBatch(requestId="old-generation", action="Pause", generation=4),
+    )
+
+    assert batch.targets[0].state == "superseded"
+    assert batch.targets[0].reason == "control_generation_superseded"
+    assert batch.status == "failed"
+
+
+async def test_control_run_mismatch_is_superseded_successor_policy(adapter):
+    """Continue-As-New/reset runs never inherit the pinned control request."""
+
+    async def _fake_list(query):
+        yield _FakeWorkflowExecution("wf-1")
+
+    handle = AsyncMock()
+    handle.get_update_handle = Mock(return_value=SimpleNamespace(result=AsyncMock(return_value=None)))
+    # The server now runs a successor execution under the same workflow ID.
+    handle.query.return_value = {"runId": "run-successor", "controlGeneration": 0, "safePoint": True}
+    adapter._client.list_workflows = _fake_list
+    adapter._client.get_workflow_handle = Mock(return_value=handle)
+
+    batch = await adapter.send_batch_pause_update(request_id="successor-run")
+
+    assert batch.targets[0].state == "superseded"
+    assert batch.targets[0].reason == "control_run_superseded"
+
+
+async def test_control_unsupported_query_protocol_is_explicit(adapter):
+    """Workflows without the control query are unsupported, not unknown."""
+
+    async def _fake_list(query):
+        yield _FakeWorkflowExecution("wf-legacy")
+
+    handle = AsyncMock()
+    handle.get_update_handle = Mock(return_value=SimpleNamespace(result=AsyncMock(return_value=None)))
+
+    async def _query(*args, **kwargs):
+        raise RuntimeError("unknown query control_state for workflow")
+
+    handle.query = _query
+    adapter._client.list_workflows = _fake_list
+    adapter._client.get_workflow_handle = Mock(return_value=handle)
+
+    batch = await adapter.send_batch_pause_update(request_id="unsupported-protocol")
+
+    assert batch.targets[0].state == "unsupported"
+    assert batch.targets[0].reason == "control_query_unsupported"
+
+
+async def test_control_already_terminal_satisfies_pause_scope(adapter):
+    """A run that closed before observation satisfies the scope without claiming host cleanup."""
+
+    async def _fake_list(query):
+        yield _FakeWorkflowExecution("wf-gone")
+
+    handle = AsyncMock()
+
+    async def _start_update(*args, **kwargs):
+        raise RuntimeError("workflow execution already completed")
+
+    handle.start_update = _start_update
+    describe = SimpleNamespace(status=SimpleNamespace(name="COMPLETED"))
+    handle.describe = AsyncMock(return_value=describe)
+    adapter._client.list_workflows = _fake_list
+    adapter._client.get_workflow_handle = Mock(return_value=handle)
+
+    batch = await adapter.send_batch_pause_update(request_id="terminal-run")
+
+    assert batch.targets[0].state == "already_terminal"
+    assert batch.targets[0].reason == "control_target_terminal"
+    assert batch.status == "succeeded"

@@ -8,6 +8,8 @@ const WorkerSnapshotSchema = z.object({
   signalStatus: z.string().nullable().optional(),
   control: z.object({
     enumerated: z.boolean(),
+    enumerationError: z.string().nullable().optional(),
+    selectionPolicy: z.string().nullable().optional(),
     targets: z.array(z.object({ workflowId: z.string(), runId: z.string(), state: z.string(), reason: z.string().nullable().optional() })),
   }).nullable().optional(),
   system: z
@@ -431,16 +433,23 @@ export function OperationsSettingsSection({
       return WorkerSnapshotSchema.parse(await response.json());
     },
     onSuccess: (data, variables) => {
-      const confirmed = data.control?.enumerated && data.control.targets.every(
-        (target) => target.state === (variables.action === 'pause' ? 'safe_point' : 'resumed'),
+      const desired = variables.action === 'pause' ? ['safe_point', 'already_terminal'] : ['resumed', 'already_terminal'];
+      const targets = data.control?.targets ?? [];
+      const confirmed = Boolean(data.control?.enumerated) && targets.length > 0 && targets.every(
+        (target) => desired.includes(target.state),
       );
+      const emptyScope = Boolean(data.control?.enumerated) && targets.length === 0 && !data.control?.enumerationError;
       setNotice({
         level: ['partial', 'unknown', 'failed'].includes(data.signalStatus || '') ? 'error' : 'ok',
         text: variables.action === 'pause' && variables.mode === 'drain'
           ? 'New work admission paused.'
           : confirmed
             ? variables.action === 'pause' ? 'Workflow pause confirmed.' : 'Workflow resume confirmed.'
-            : `${variables.action === 'pause' ? 'Pause' : 'Resume'} request recorded. Check the workflow confirmations below.`,
+            : emptyScope
+              ? 'No eligible running workflows found. Admission state changed; this does not prove every worker or host is quiescent.'
+              : data.control?.enumerationError
+                ? 'Enumeration did not complete. Admission state changed; some running workflows may not have been contacted.'
+                : `${variables.action === 'pause' ? 'Pause' : 'Resume'} request recorded. Check the workflow confirmations below.`,
       });
       if (variables.action === 'pause') {
         setPauseReason('');
@@ -795,9 +804,13 @@ export function OperationsSettingsSection({
   const isPaused = Boolean(system.workersPaused);
   const stateLabel = isPaused
     ? system.mode === 'quiesce'
-      ? snapshot?.control?.enumerated && snapshot.control.targets.every((target) => target.state === 'safe_point')
+      ? snapshot?.control?.enumerated && (snapshot.control.targets?.length ?? 0) > 0 && snapshot.control.targets.every((target) => target.state === 'safe_point' || target.state === 'already_terminal')
         ? 'Workers quiesced'
-        : snapshot?.signalStatus === 'failed'
+        : snapshot?.control?.enumerated && (snapshot.control.targets?.length ?? 0) === 0 && !snapshot?.control?.enumerationError
+          ? 'Admission paused; no eligible running workflows found'
+          : snapshot?.control?.enumerationError
+            ? 'Admission paused; enumeration incomplete'
+            : snapshot?.signalStatus === 'failed'
           ? 'Pause failed'
           : snapshot?.signalStatus === 'partial' || snapshot?.signalStatus === 'unknown'
           ? 'Pause partially confirmed'
@@ -1127,6 +1140,16 @@ export function OperationsSettingsSection({
             {snapshot?.control && snapshot.control.targets.length > 0 ? (
               <details>
                 <summary>Control confirmations</summary>
+                <p className="text-xs text-slate-500 dark:text-slate-400">
+                  Scope: guarded API admission pause plus confirmed safe points on enumerated running UserWorkflow runs only.
+                  Shared-queue operator and manifest workflows are excluded. A bounded snapshot is not proof that every
+                  machine process or external agent has stopped.
+                </p>
+                {snapshot.control.enumerationError ? (
+                  <p className="text-xs text-amber-700 dark:text-amber-300">
+                    Enumeration incomplete ({snapshot.control.enumerationError}). Some running workflows may not have been contacted.
+                  </p>
+                ) : null}
                 <ul>
                   {snapshot.control.targets.map((target) => (
                     <li key={`${target.workflowId}:${target.runId}`}>
@@ -1136,6 +1159,12 @@ export function OperationsSettingsSection({
                   ))}
                 </ul>
               </details>
+            ) : snapshot?.control?.enumerated ? (
+              <p className="text-xs text-slate-500 dark:text-slate-400">
+                {snapshot.control.enumerationError
+                  ? `Enumeration did not complete (${snapshot.control.enumerationError}). Admission state changed; coverage is bounded.`
+                  : 'No eligible running workflows found. Admission state changed; this does not prove every worker or host is quiescent.'}
+              </p>
             ) : null}
 
             <div className="grid gap-4 md:grid-cols-4">

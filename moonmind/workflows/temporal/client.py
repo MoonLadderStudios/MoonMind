@@ -69,6 +69,11 @@ OMNIGENT_OAUTH_HOST_JANITOR_WORKFLOW_ID_BASE = "omnigent-oauth-host-janitor-run"
 ALLOW_LIVE_TEMPORAL_IN_TESTS_ENV = "MOONMIND_ALLOW_LIVE_TEMPORAL_IN_TESTS"
 _WORKFLOW_UPDATE_ACCEPTED_TIMEOUT = timedelta(seconds=10)
 _WORKFLOW_CONTROL_CONCURRENCY = 10
+# Bounded paged enumeration: per-pass Visibility budgets under the current
+# operation owner. Enumeration checkpoints partial targets so a later-page
+# failure resumes after safe progress instead of repeating the full scan.
+_WORKFLOW_CONTROL_ENUMERATION_PAGE_SIZE = 100
+_WORKFLOW_CONTROL_ENUMERATION_BUDGET = 1000
 _SINGLE_VALUE_KEYWORD_LIST_SEARCH_ATTRIBUTES = frozenset(
     {
         "mm_target_runtime",
@@ -93,6 +98,41 @@ def _is_rpc_status(exc: BaseException, status_name: str) -> bool:
         pass  # gRPC/Temporal SDK not available; fall through to string match
     # Fallback: string match on the exception message.
     return status_name.lower().replace("_", " ") in str(exc).lower()
+
+
+def _classify_control_dispatch_failure(exc: BaseException) -> tuple[bool, bool]:
+    """Classify an Update-admission failure as terminal or unsupported.
+
+    Returns ``(is_terminal, is_unsupported)``. A failed or absent lookup
+    remains unknown unless positive evidence establishes the disposition, so
+    only explicit completed-workflow / unimplemented-protocol signals map to
+    ``already_terminal`` / ``unsupported``.
+    """
+    message = str(exc).lower()
+    if _is_rpc_status(exc, "NOT_FOUND") or "not found" in message:
+        return True, False
+    if "completed workflow" in message or "workflow execution already completed" in message:
+        return True, False
+    if (
+        _is_rpc_status(exc, "UNIMPLEMENTED")
+        or _is_rpc_status(exc, "INVALID_ARGUMENT")
+        or "unknown update" in message
+        or "unimplemented" in message
+    ):
+        return False, True
+    return False, False
+
+
+async def _describe_reports_terminal(client: Any, target: Any) -> bool:
+    """Return True only with positive evidence that the pinned run is terminal."""
+    try:
+        handle = client.get_workflow_handle(target.workflow_id, run_id=target.run_id)
+        description = await handle.describe()
+    except Exception:
+        return False
+    status = str(getattr(getattr(description, "status", None), "name", "") or "").upper()
+    return status in {"COMPLETED", "FAILED", "CANCELLED", "TERMINATED", "TIMED_OUT"}
+
 
 def _build_typed_search_attributes(
     search_attributes: Mapping[str, Any] | None,
@@ -552,6 +592,12 @@ class TemporalClientAdapter:
         A durable caller supplies on_progress and retries the same batch after a
         restart. IDs are pinned to runs; ACCEPTED never means quiesced. Query
         failure retains unknown evidence and never destroys successful targets.
+        Enumeration is paged and checkpointed: each page of Visibility results
+        is deduplicated, budget-bounded, and persisted before the next page is
+        consumed. A later-page failure keeps the partial target list and cursor
+        so a retry resumes after safe progress. The observed set is a paged
+        selection, never an atomic system snapshot. Incomplete enumeration
+        cannot produce a fully confirmed result.
         """
         import hashlib
         from uuid import uuid4
@@ -581,22 +627,66 @@ class TemporalClientAdapter:
             )
             if queues:
                 query += ' AND TaskQueue IN (' + ', '.join(f'"{queue}"' for queue in queues) + ')'
-            targets = []
+            result.selection_policy = (
+                f"{query} | page_size={result.enumeration_page_size or _WORKFLOW_CONTROL_ENUMERATION_PAGE_SIZE}"
+                " | paged Visibility selection, not an atomic snapshot"
+            )
+            page_size = max(1, min(
+                int(result.enumeration_page_size or _WORKFLOW_CONTROL_ENUMERATION_PAGE_SIZE),
+                _WORKFLOW_CONTROL_ENUMERATION_PAGE_SIZE,
+            ))
+            # Resume after previously checkpointed targets instead of repeating
+            # the full scan. Deduplicate by pinned (workflow_id, run_id). The
+            # cursor records the checkpointed target count: monotonic safe
+            # progress across retries (the Visibility stream itself is re-read
+            # and deduplicated, never claimed as a resumable server cursor).
+            seen: set[tuple[str, str]] = {
+                (target.workflow_id, target.run_id) for target in result.targets
+            }
+            targets: list[WorkflowControlTarget] = list(result.targets)
+            result.enumeration_cursor = str(len(targets))
+            page: list[WorkflowControlTarget] = []
             try:
                 async for execution in client.list_workflows(query=query):
+                    workflow_id = str(execution.id or "")
                     run_id = str(execution.run_id or "")
-                    update_id = hashlib.sha256(f"{result.request_id}:{update_name}:{execution.id}:{run_id}".encode()).hexdigest()
-                    targets.append(WorkflowControlTarget(workflowId=execution.id, runId=run_id, updateId=update_id))
+                    if not workflow_id or (workflow_id, run_id) in seen:
+                        continue
+                    seen.add((workflow_id, run_id))
+                    if len(targets) + len(page) >= _WORKFLOW_CONTROL_ENUMERATION_BUDGET:
+                        result.enumeration_error = "control_enumeration_budget_exceeded"
+                        break
+                    update_id = hashlib.sha256(f"{result.request_id}:{update_name}:{workflow_id}:{run_id}".encode()).hexdigest()
+                    page.append(WorkflowControlTarget(workflowId=workflow_id, runId=run_id, updateId=update_id))
+                    if len(page) >= page_size:
+                        targets.extend(page)
+                        page = []
+                        result.targets = targets
+                        result.enumeration_cursor = str(len(targets))
+                        await persist()
+                targets.extend(page)
+                result.targets = targets
+                result.enumeration_cursor = str(len(targets))
             except Exception:
-                result.enumeration_error = "control_visibility_unavailable"
+                # Checkpoint partial progress. Restart/retry resumes from these
+                # targets instead of losing the page; the partial set still
+                # dispatches below while the error blocks full confirmation.
+                result.targets = targets
+                result.enumeration_cursor = str(len(targets))
+                result.enumeration_error = result.enumeration_error or "control_visibility_unavailable"
                 await persist()
-                return result
-            result.enumeration_error = None
-            result.targets = targets
-            result.enumerated = True
-            await persist()
+            if result.enumeration_error is None:
+                result.enumeration_error = None
+                result.targets = targets
+                result.enumerated = True
+                await persist()
+            else:
+                # Blocked enumeration: keep the partial target set so those
+                # targets still make progress, but never report full confirmation.
+                result.targets = targets
+                await persist()
         async def reconcile(target):
-            if target.state in {"safe_point", "resumed", "failed"}:
+            if target.state in {"safe_point", "resumed", "failed", "already_terminal", "unsupported", "superseded"}:
                 return
             if not target.run_id:
                 await persist(target, "unknown", "run_identity_unavailable")
@@ -611,8 +701,19 @@ class TemporalClientAdapter:
                         wait_for_stage=WorkflowUpdateStage.ACCEPTED,
                         rpc_timeout=_WORKFLOW_UPDATE_ACCEPTED_TIMEOUT,
                     )
-                except Exception:
-                    await persist(target, "unknown", "update_acceptance_unavailable")
+                except Exception as exc:
+                    terminal, unsupported = _classify_control_dispatch_failure(exc)
+                    if terminal:
+                        # A failed lookup remains unknown unless positive
+                        # evidence establishes closure of the pinned run.
+                        if await _describe_reports_terminal(client, target):
+                            await persist(target, "already_terminal", "control_target_terminal")
+                        else:
+                            await persist(target, "unknown", "update_acceptance_unavailable")
+                    elif unsupported:
+                        await persist(target, "unsupported", "control_protocol_unsupported")
+                    else:
+                        await persist(target, "unknown", "update_acceptance_unavailable")
                     return
                 await persist(target, "accepted", None)
             from temporalio.client import WorkflowUpdateFailedError
@@ -627,17 +728,30 @@ class TemporalClientAdapter:
             try:
                 observed = await handle.query("control_state", rpc_timeout=_WORKFLOW_UPDATE_ACCEPTED_TIMEOUT)
                 if not isinstance(observed, dict) or observed.get("runId") != target.run_id:
-                    state, reason = "unknown", "control_evidence_unavailable"
+                    # Continue-As-New, reset, or a later execution sharing the
+                    # workflow ID must not inherit the old control request.
+                    state, reason = "superseded", "control_run_superseded"
                 elif result.generation and observed.get("controlGeneration") != result.generation:
-                    state, reason = "unknown", "control_generation_superseded"
+                    # A newer command replaced this request; the old observation
+                    # must not report the new generation confirmed.
+                    state, reason = "superseded", "control_generation_superseded"
                 elif update_name == "Pause" and observed.get("safePoint") is True:
                     state, reason = "safe_point", None
                 elif update_name == "Resume" and observed.get("resumed") is True:
                     state, reason = "resumed", None
                 else:
                     state, reason = "pending", "safe_point_pending"
-            except Exception:
-                state, reason = "unknown", "control_query_unavailable"
+            except Exception as exc:
+                if _is_rpc_status(exc, "NOT_FOUND") or "not found" in str(exc).lower():
+                    terminal = await _describe_reports_terminal(client, target)
+                    if terminal:
+                        state, reason = "already_terminal", "control_target_terminal"
+                    else:
+                        state, reason = "unknown", "control_query_unavailable"
+                elif _is_rpc_status(exc, "UNIMPLEMENTED") or "unknown query" in str(exc).lower():
+                    state, reason = "unsupported", "control_query_unsupported"
+                else:
+                    state, reason = "unknown", "control_query_unavailable"
             await persist(target, state, reason)
 
         targets = iter(result.targets)
