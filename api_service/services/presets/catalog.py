@@ -48,6 +48,7 @@ from moonmind.runtime_intent import (
     RuntimeIntentValidationError,
     validate_runtime_tier_intent,
 )
+from moonmind.workflows.executions.preset_readiness import SavedPresetCapabilitiesInput
 from moonmind.workflows.temporal.remediation_loop import (
     RemediationLoopSpec,
     validate_remediation_loop_agent_instructions,
@@ -1891,6 +1892,59 @@ class PresetCatalogService:
             autoescape=False,
             undefined=StrictUndefined,
         )
+
+    async def check_saved_capabilities(
+        self, request: SavedPresetCapabilitiesInput
+    ) -> dict[str, Any]:
+        """Check saved requirements without granting capabilities or editing steps."""
+        admitted = set(_normalize_capabilities(request.required_capabilities))
+        gaps: list[dict[str, Any]] = []
+        for saved in request.presets:
+            slug = saved["slug"]
+            scope = _normalize_scope(saved.get("scope", "global"))
+            scope_ref = saved.get("scopeRef")
+            if scope is PresetScopeType.PERSONAL:
+                scope_ref = scope_ref or request.principal
+                if scope_ref != request.principal:
+                    raise PresetValidationError(
+                        "Saved personal preset owner does not match the execution owner."
+                    )
+            scope_ref = _normalize_scope_ref(scope, scope_ref)
+            try:
+                template = await self._get_template_for_scope(
+                    slug=_normalize_slug(slug), scope=scope, scope_ref=scope_ref
+                )
+            except PresetNotFoundError:
+                gaps.append(
+                    {"slug": slug, "scope": scope.value, "reason": "preset_unavailable"}
+                )
+                continue
+            required = _normalize_capabilities(template.required_capabilities or [])
+            missing = sorted(set(required) - admitted)
+            if missing:
+                gaps.append(
+                    {"slug": slug, "scope": scope.value, "missingCapabilities": missing}
+                )
+        if not gaps:
+            return {"status": "ready"}
+        missing = sorted(
+            {cap for gap in gaps for cap in gap.get("missingCapabilities", [])}
+        )
+        detail = ", ".join(missing) if missing else "an available preset definition"
+        return {
+            "status": "refresh_required",
+            "code": "saved_preset_capabilities_stale",
+            "definitionId": request.definition_id,
+            "missingCapabilities": missing,
+            "presets": gaps,
+            "message": (
+                f"Saved schedule requires a plan refresh: missing {detail}. "
+                "In Workflow Create, reapply the listed presets and save a replacement "
+                "schedule with the same repository, runtime, model, effort, and cadence; "
+                "then retire the old schedule. Review the newly required capabilities "
+                "before admission. Restarting workers does not refresh saved requirements."
+            ),
+        }
 
     async def _get_template_for_scope(
         self,
