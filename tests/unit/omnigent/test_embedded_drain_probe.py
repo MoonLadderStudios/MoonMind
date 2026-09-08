@@ -52,7 +52,9 @@ class _FakeBridgeSessionStore:
     async def active_host_protocol_modes(self) -> object:
         if isinstance(self._modes, BaseException):
             raise self._modes
-        return dict(self._modes)  # type: ignore[arg-type]
+        # Return the raw value so the probe's own mapping validation owns
+        # the error contract (non-mappings must raise EmbeddedDrainError).
+        return self._modes
 
     async def list_embedded_host_readiness(self) -> list[dict[str, object]]:
         if isinstance(self._leases, BaseException):

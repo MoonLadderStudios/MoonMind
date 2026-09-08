@@ -50,8 +50,12 @@ _REGISTER_PATH = f"{OMNIGENT_BRIDGE_MOUNT_PATH}/v1/hosts/register"
 
 
 def _embedded_config() -> Any:
+    # Disabled embedded still parses (retained rows must drain and decode);
+    # the tests override the enablement gate and exercise the retired
+    # admission boundary. Enabled embedded fails fast at parse by design.
     return parse_bridge_config(
         {
+            "enabled": False,
             "compatibility": {"hostProtocolMode": HOST_PROTOCOL_MODE_EMBEDDED},
             "hostConnection": {
                 "embedded": {
