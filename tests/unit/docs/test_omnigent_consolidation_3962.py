@@ -11,7 +11,12 @@ valid internal links/anchors.
 from __future__ import annotations
 
 import re
+import sys
 from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+
+from _semantic_docs_3964 import assert_semantic_present
 
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
@@ -48,10 +53,22 @@ def test_entrypoint_exists_with_startup_path_and_limitations() -> None:
         "selected-by-default",
     ):
         assert term in text, term
-    # A shared image never authorizes every installed harness.
-    assert "never authorizes every installed runtime" in text
-    # Credential ownership distinction is summarized, not merged.
-    assert "detached but preserved" in text
+    # A shared image never authorizes every installed harness (#3964: exact
+    # "never authorizes every installed runtime" wording loosened to
+    # stem-level authorization-contract terms so every->all or
+    # authorizes->grant-authorization rewording does not break the guard).
+    assert_semantic_present(
+        text,
+        ("never", "authoriz", "installed", "runtime"),
+        context="entrypoint shared-image authorization limit",
+    )
+    # Credential ownership distinction is summarized, not merged (#3964:
+    # exact "detached but preserved" loosened to the ownership contract).
+    assert_semantic_present(
+        text,
+        ("detached", "preserved"),
+        context="entrypoint credential ownership distinction",
+    )
     # ManagedAgents boundary is cross-linked, not copied.
     assert "ManagedAgents/DockerBackendService.md" in text
 
@@ -65,8 +82,14 @@ def test_ownership_map_covers_every_omnigent_file() -> None:
 
 def test_credential_ownership_contract_survives() -> None:
     shared = _read(OMNIGENT / "SharedHostImage.md")
-    assert "destroyed on cleanup" in shared
-    assert "detached but preserved on cleanup" in shared
+    assert_semantic_present(
+        shared, ("destroyed on cleanup",), context="shared host cleanup"
+    )
+    assert_semantic_present(
+        shared,
+        ("detached", "preserved on cleanup"),
+        context="shared host credential ownership",
+    )
     assert "generation-marker fenced" in shared or "generation" in shared
     oauth = _read(OMNIGENT / "OmnigentHostOAuth.md")
     assert "no Claude/OpenCode" in oauth or "credential attachments" in oauth
@@ -74,8 +97,14 @@ def test_credential_ownership_contract_survives() -> None:
 
 def test_exact_support_contract_survives() -> None:
     strategy = _read(OMNIGENT / "PrimaryRuntimeProviderStrategy.md")
-    assert "evidence-gated" in strategy
-    assert "never silently" in strategy or "No silent fallback" in strategy
+    assert_semantic_present(
+        strategy, ("evidence-gated",), context="primary strategy evidence gate"
+    )
+    assert_semantic_present(
+        strategy,
+        ("no silent fallback",),
+        context="primary strategy fallback prohibition",
+    )
     cutover = _read(OMNIGENT / "CodexSupportAndCutover.md")
     assert "## Support and conformance matrix v1" in cutover
     assert "REQUIRED_ROW_CATALOG" in cutover
