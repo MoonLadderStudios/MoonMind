@@ -677,12 +677,16 @@ async def _initialize_oidc_provider(app: FastAPI):
     # Mode interpretation lives in moonmind.security.auth_modes_4120 (#4120).
     from moonmind.security.auth_modes_4120 import (
         MIGRATION_DECISION_ENV_VAR,
+        MIGRATION_DECISION_TABLE,
+        AuthMigrationDecision,
         MigrationRequiredError,
         auth_readiness_summary,
         classify_deployment,
+        ensure_migration_decision_table_sql,
         is_auth_provider_explicit,
         parse_migration_decision,
         redacted_diagnostics,
+        resolve_moonmind_auth_config,
         resolve_session_secret,
         default_session_key_path,
         validate_public_base_url,
@@ -690,14 +694,20 @@ async def _initialize_oidc_provider(app: FastAPI):
         validate_trusted_proxy_config,
     )
 
-    settings.oidc.validate_auth_provider()
-    raw = (settings.oidc.AUTH_PROVIDER or "").strip()
+    # Blank/omitted must reach classification (#4120 req 3): validate the
+    # explicit selector only. Omitted never silently selects `disabled`.
     explicit = is_auth_provider_explicit()
+    if explicit:
+        settings.oidc.validate_auth_provider()
+        raw = (settings.oidc.AUTH_PROVIDER or "").strip()
+    else:
+        raw = ""
     decision = parse_migration_decision(os.environ.get(MIGRATION_DECISION_ENV_VAR))
     has_users: bool | None = None
     if not explicit and not raw:
         # Omitted selector: distinguish fresh vs. pre-cutover via a bounded
-        # users probe. Fresh (no users) takes the accounts production path;
+        # users probe plus the versioned persisted migration decision (#4119
+        # contract). Fresh (no users) takes the accounts production path;
         # populated without a decision stops actionably below.
         try:
             from api_service.db.base import get_async_session_context
@@ -706,6 +716,54 @@ async def _initialize_oidc_provider(app: FastAPI):
                 result = await session.execute(text("SELECT COUNT(*) FROM users"))
                 count = int(result.scalar() or 0)
                 has_users = count > 0
+                # The persisted decision survives outside process env: ensure
+                # the table idempotently, then read the single recorded row.
+                # An explicit env decision takes precedence when present.
+                try:
+                    await session.execute(
+                        text(ensure_migration_decision_table_sql())
+                    )
+                    await session.commit()
+                except Exception:
+                    await session.rollback()
+                    logger.warning(
+                        "Auth-mode startup could not ensure the persisted "
+                        "migration-decision table; continuing with the "
+                        "operator-held env decision only."
+                    )
+                else:
+                    if decision is None:
+                        try:
+                            row = (
+                                await session.execute(
+                                    text(
+                                        f"SELECT mode, version FROM {MIGRATION_DECISION_TABLE} "
+                                        "WHERE id = 1"
+                                    )
+                                )
+                            ).first()
+                        except Exception:
+                            logger.warning(
+                                "Auth-mode startup could not read the persisted "
+                                "migration decision; continuing with the "
+                                "operator-held env decision only."
+                            )
+                        else:
+                            if row is not None:
+                                try:
+                                    decision = AuthMigrationDecision(
+                                        mode=str(row[0]),
+                                        version=int(row[1]),
+                                    )
+                                except Exception as exc:
+                                    raise RuntimeError(
+                                        "Invalid persisted auth migration decision "
+                                        f"(mode={row[0]!r}, version={row[1]!r}): "
+                                        f"{exc}. Re-run migration preflight to record "
+                                        "a current decision."
+                                    ) from exc
+        except RuntimeError:
+            raise
         except Exception:
             # Database unreachable at startup: fail closed later via healthz;
             # do not guess fresh vs. upgrade here.
@@ -728,7 +786,7 @@ async def _initialize_oidc_provider(app: FastAPI):
     public_base = os.environ.get("MOONMIND_PUBLIC_BASE_URL", "").strip()
     is_remote = bool(public_base) and "localhost" not in public_base and "127.0.0.1" not in public_base
     try:
-        resolve_session_secret(
+        session_secret = resolve_session_secret(
             explicit_secret=os.environ.get("MOONMIND_SESSION_SECRET")
             or os.environ.get("JWT_SECRET"),
             key_path=default_session_key_path(),
@@ -737,6 +795,23 @@ async def _initialize_oidc_provider(app: FastAPI):
         )
     except Exception as exc:
         raise RuntimeError(f"Invalid MoonMind session secret: {exc}") from exc
+    # Control-plane settings are resolved explicitly from MoonMind-owned
+    # inputs and passed into the #4118 contract (#4120 req 2).
+    # OMNIGENT_AUTH_*/OMNIGENT_ACCOUNTS_*/OMNIGENT_OIDC_* ambient values --
+    # even contradictory ones -- cannot select MoonMind behavior; simultaneous
+    # same-origin use stays isolated through distinct cookies/keys/purposes.
+    try:
+        resolve_moonmind_auth_config(
+            mode=production_mode,
+            cookie_secret=session_secret,
+            require_secure_cookies=os.environ.get(
+                "MOONMIND_REQUIRE_SECURE_COOKIES", "1"
+            )
+            != "0",
+            environ=dict(os.environ),
+        )
+    except Exception as exc:
+        raise RuntimeError(f"Invalid MoonMind control-plane auth config: {exc}") from exc
     # Disabled-mode exposure at the deployment boundary.
     try:
         validate_publish_binding(
@@ -859,6 +934,8 @@ _api_start_time = time.monotonic()
 async def health_check():
     """Health endpoint with database probe and distinguishable auth readiness."""
     from moonmind.security.auth_modes_4120 import (
+        MIGRATION_DECISION_TABLE,
+        AuthMigrationDecision,
         auth_readiness_summary,
         classify_deployment,
         is_auth_provider_explicit,
@@ -894,6 +971,28 @@ async def health_check():
                 async with _ctx() as session:
                     result = await session.execute(text("SELECT COUNT(*) FROM users"))
                     fresh_probe = int(result.scalar() or 0) == 0
+                    # Best-effort persisted decision so pre-startup readiness
+                    # agrees with the startup classifier (#4119 contract).
+                    if decision is None and not fresh_probe:
+                        try:
+                            row = (
+                                await session.execute(
+                                    text(
+                                        f"SELECT mode, version FROM {MIGRATION_DECISION_TABLE} "
+                                        "WHERE id = 1"
+                                    )
+                                )
+                            ).first()
+                        except Exception:
+                            row = None
+                        if row is not None:
+                            try:
+                                decision = AuthMigrationDecision(
+                                    mode=str(row[0]),
+                                    version=int(row[1]),
+                                )
+                            except Exception:
+                                decision = None
             classification = classify_deployment(
                 raw_selector=raw if (explicit or raw) else None,
                 explicit=explicit,

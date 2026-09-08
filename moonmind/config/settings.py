@@ -1817,8 +1817,18 @@ class OIDCSettings(BaseSettings):
         approved; noncanonical spellings such as `DISABLED` or padded values
         therefore select the intended mode instead of falling through to an
         authenticated bearer dependency.
+
+        A blank/omitted selector returns ``""`` (undecided) without raising:
+        the omitted-fresh vs. omitted-populated decision is owned by
+        ``moonmind.security.auth_modes_4120.classify_deployment`` (#4120 req 3),
+        which selects ``accounts`` on a genuinely fresh database and raises a
+        protected ``MigrationRequiredError`` on a populated one. Callers that
+        need the production decision must classify; they must not treat blank
+        as ``disabled``.
         """
         provider = (self.AUTH_PROVIDER or "").strip().lower()
+        if not provider:
+            return ""
         if provider in self.RETIRED_AUTH_PROVIDERS:
             raise RuntimeError(
                 f"Unsupported AUTH_PROVIDER '{self.AUTH_PROVIDER}': the bundled "
