@@ -83,7 +83,7 @@ def test_disabled_mode_attributes_to_default_local_principal(
 def test_authenticated_mode_requires_identity(_restore_auth_provider) -> None:
     """Authenticated mode should reject unauthenticated artifact route calls."""
 
-    settings.oidc.AUTH_PROVIDER = "local"
+    settings.oidc.AUTH_PROVIDER = "oidc"
 
     app = FastAPI()
     app.include_router(router)

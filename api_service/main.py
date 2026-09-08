@@ -24,7 +24,6 @@ from typing import Any
 # Now proceed with other imports
 from uuid import uuid4
 
-import httpx
 from fastapi import APIRouter, FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, RedirectResponse
@@ -110,15 +109,6 @@ from api_service.api.schemas import UserProfileUpdate
 from api_service.db.base import get_async_session_context
 from api_service.services.presets.catalog import PresetCatalogService
 from api_service.ui_assets import resolve_dashboard_dist_root
-
-# Auth imports
-from api_service.auth import (
-    UserCreate,
-    UserRead,
-    UserUpdate,
-    auth_backend,
-    fastapi_users,
-)
 from moonmind.config.settings import settings
 from moonmind.provider_profiles.oauth_policy import is_codex_oauth_profile
 from moonmind.utils.logging import SecretRedactor
@@ -679,43 +669,12 @@ async def _maintain_omnigent_bootstrap_reconciliation() -> None:
 
 
 async def _initialize_oidc_provider(app: FastAPI):
-    """Initializes the OIDC provider by fetching discovery documents if needed."""
-    provider = settings.oidc.AUTH_PROVIDER
-    if provider == "google":
-        logger.info("Initializing Google OIDC provider...")
-        try:
-            discovery_url = (
-                f"{settings.oidc.OIDC_ISSUER_URL}/.well-known/openid-configuration"
-            )
-            async with httpx.AsyncClient() as client:
-                response = await client.get(discovery_url, follow_redirects=True)
-            response.raise_for_status()
-            discovery_doc = response.json()
-            jwks_uri = discovery_doc.get("jwks_uri")
-            if not jwks_uri:
-                logger.error("JWKS URI not found in Google OIDC discovery document.")
-                raise RuntimeError(
-                    "JWKS URI not found in Google OIDC discovery document."
-                )
-            app.state.jwks_uri = jwks_uri
-            logger.info("Successfully fetched and stored Google JWKS URI.")
-        except httpx.HTTPStatusError as e:
-            logger.error(
-                "Failed to fetch Google OIDC discovery document, status code %s: %s",
-                e.response.status_code,
-                e,
-            )
-            raise RuntimeError(
-                f"Failed to fetch Google OIDC discovery document: {e}"
-            ) from e
-        except httpx.RequestError as e:
-            logger.error("Failed to fetch Google OIDC discovery document: %s", e)
-            raise RuntimeError(
-                f"Failed to fetch Google OIDC discovery document: {e}"
-            ) from e
-        except Exception as e:
-            logger.error(f"Error processing Google OIDC discovery document: {e}")
-            raise RuntimeError(f"Error processing Google OIDC discovery document: {e}")
+    """Validate the authentication selector; generic OIDC discovery lives in #4124."""
+    # The bundled Keycloak integration was removed (#4129): retired selectors
+    # fail startup with migration guidance instead of attempting provider-specific
+    # discovery against a retired issuer. Generic external OIDC discovery is owned
+    # by the #4124 contract; this step performs no outbound DNS/connect attempt.
+    settings.oidc.validate_auth_provider()
 
 
 @asynccontextmanager
@@ -865,40 +824,11 @@ app.include_router(websockets_router, prefix="/ws/v1", tags=["WebSockets"])
 if _ENABLE_TEST_UI_ROUTE:
     app.include_router(test_ui_router)
 
-# Auth routers
-API_AUTH_PREFIX = "/api/v1/auth"  # Defined a constant for clarity
-
-if settings.oidc.AUTH_PROVIDER != "keycloak":
-    logger.info(
-        f"AUTH_PROVIDER is '{settings.oidc.AUTH_PROVIDER}'. Including fastapi-users auth routers."
-    )
-    app.include_router(
-        fastapi_users.get_auth_router(auth_backend),
-        prefix=API_AUTH_PREFIX,
-        tags=["auth"],
-    )
-    app.include_router(
-        fastapi_users.get_register_router(UserRead, UserCreate),
-        prefix=API_AUTH_PREFIX,
-        tags=["auth"],
-    )
-    app.include_router(
-        fastapi_users.get_reset_password_router(),
-        prefix=API_AUTH_PREFIX,
-        tags=["auth"],
-    )
-    app.include_router(
-        fastapi_users.get_verify_router(UserRead),
-        prefix=API_AUTH_PREFIX,
-        tags=["auth"],
-    )
-    app.include_router(
-        fastapi_users.get_users_router(UserRead, UserUpdate),
-        prefix=f"{API_AUTH_PREFIX}/users",
-        tags=["users"],
-    )
-else:
-    logger.info("AUTH_PROVIDER is 'keycloak'. Skipping fastapi-users auth routers.")
+# Legacy fastapi-users login/register/reset/verify/users routes were removed with
+# the bundled Keycloak integration (#4129). No /api/v1/auth/* application-login
+# route is mounted; supported modes authenticate through the #4124-era contracts
+# (docs/Security/AuthenticationContracts.md), and `disabled` mode resolves the
+# persisted default user via get_current_user().
 
 app.add_middleware(
     CORSMiddleware,
@@ -2477,7 +2407,7 @@ async def startup_event():
         app.state = State()
 
     _assert_omnigent_configuration_is_current()
-    await _initialize_oidc_provider(app)  # OIDC provider init like Keycloak discovery
+    await _initialize_oidc_provider(app)  # Fail fast on retired selectors; no discovery fetch
     _register_settings_change_subscribers()
     try:
         from moonmind.rag.service import ContextRetrievalService
