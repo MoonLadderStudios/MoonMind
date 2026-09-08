@@ -639,9 +639,9 @@ async def test_prepare_managed_codex_turn_adds_moonspec_verify_artifact_hint() -
     assert "canonical value that contradicts its verdict fails contract validation" in prepared
     assert "advisory semantic metadata" not in prepared
     assert "raw diagnostic" in prepared
-    assert "map-entry" in prepared
-    assert "missing map assets" in prepared
-    assert "non-blocking limitations" in prepared
+    assert "Follow the resolved Skill's evidence policy" in prepared
+    assert "mandatory acceptance prerequisites" in prepared
+    assert "resume check" in prepared
 
 
 async def test_prepare_managed_codex_turn_appends_vocab_when_path_already_present() -> None:
@@ -659,7 +659,7 @@ async def test_prepare_managed_codex_turn_appends_vocab_when_path_already_presen
     assert '"FULLY_IMPLEMENTED"' in prepared
     assert '"advance"' in prepared
     assert "workflow-specific destination" in prepared
-    assert "external-service checks as advisory" in prepared
+    assert "Follow the resolved Skill's evidence policy" in prepared
 
 
 async def test_codex_skill_payload_rejects_auto_publish_mode() -> None:
