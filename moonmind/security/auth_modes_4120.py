@@ -33,9 +33,10 @@ Design notes:
   ``MOONMIND_AUTH_MIGRATION_DECISION``), never through a heuristic such as
   "no account has a password". Populated databases without a decision stop
   actionably before any owner is created or modified.
-- Signing/session secrets are durable across restarts and replicas via the
-  existing deployment-owned persistence (the ``moonmind_secrets`` volume,
-  default ``/app/var/secrets/moonmind_session_key``). Fresh local startup
+- Signing/session secrets are durable across restarts and replicas via
+  deployment-owned persistence isolated to the API/session owner (the
+  ``moonmind_session_keys`` volume,
+  default ``/app/var/session-keys/moonmind_session_key``). Fresh local startup
   generates exactly one key with atomic create semantics; placeholders and
   incomplete explicit remote settings are rejected; rotation goes through
   the session/revocation owner, never regeneration on each boot; keys are
@@ -84,6 +85,9 @@ __all__ = [
     "MIGRATION_DECISION_TABLE",
     "MIGRATION_DECISION_ENV_VAR",
     "get_effective_auth_provider",
+    "get_request_production_mode",
+    "get_active_production_mode",
+    "set_active_production_mode",
     "is_disabled_local_mode",
     "is_auth_provider_explicit",
     "resolve_production_mode",
@@ -215,8 +219,9 @@ def get_effective_auth_provider() -> str:
 
     This is the only approved reader for the raw selector. Omitted/blank
     storage reads back as ``""`` (undecided at this layer); callers that
-    need the production decision must use :func:`resolve_production_mode`
-    or :func:`classify_deployment`.
+    need the production decision must use :func:`resolve_production_mode`,
+    :func:`classify_deployment`, or the startup-classified
+    :func:`get_active_production_mode`.
     """
     from moonmind.config.settings import settings
 
@@ -227,9 +232,42 @@ def get_effective_auth_provider() -> str:
     return validate_mode_selector(text)
 
 
+_ACTIVE_PRODUCTION_MODE: str | None = None
+
+
+def set_active_production_mode(mode: str) -> str:
+    """Record the startup-classified production mode for request code.
+
+    The startup classifier owns the fresh-vs-upgrade decision (including
+    omitted-selector and migration-decision branches); request-time helpers
+    must resolve through this value once set so the classified mode is the
+    single authority for every request and artifact check.
+    """
+    global _ACTIVE_PRODUCTION_MODE
+    _ACTIVE_PRODUCTION_MODE = validate_mode_selector(str(mode).strip().lower())
+    return _ACTIVE_PRODUCTION_MODE
+
+
+def get_active_production_mode() -> str | None:
+    """Return the startup-classified production mode when recorded."""
+    return _ACTIVE_PRODUCTION_MODE
+
+
+def get_request_production_mode() -> str:
+    """Return the production mode request authorization must enforce.
+
+    Prefers the startup classification when available; otherwise falls back
+    to the stored selector. Blank callers fail closed upstream.
+    """
+    active = get_active_production_mode()
+    if active:
+        return active
+    return get_effective_auth_provider()
+
+
 def is_disabled_local_mode() -> bool:
-    """Whether the effective selector is explicit restricted local mode."""
-    return get_effective_auth_provider() == "disabled"
+    """Whether the classified production mode is restricted local mode."""
+    return get_request_production_mode() == "disabled"
 
 
 def resolve_production_mode(
@@ -511,11 +549,15 @@ def _secret_to_bytes(value: str) -> bytes:
 
 
 def default_session_key_path() -> Path:
-    """Deployment-owned durable path for the MoonMind session signing key."""
+    """Deployment-owned durable path for the MoonMind session signing key.
+
+    The key lives in the API/session-owner-only ``moonmind_session_keys``
+    volume, never in the shared worker ``moonmind_secrets`` volume.
+    """
     override = os.environ.get("MOONMIND_SESSION_KEY_PATH", "").strip()
     if override:
         return Path(override)
-    return Path("/app/var/secrets/moonmind_session_key")
+    return Path("/app/var/session-keys/moonmind_session_key")
 
 
 def resolve_session_secret(

@@ -17,7 +17,7 @@ from api_service.services.profile_service import ProfileService
 from moonmind.auth import AuthProviderManager, EnvAuthProvider, ProfileAuthProvider
 from moonmind.config.settings import settings
 from moonmind.security.auth_modes_4120 import (
-    get_effective_auth_provider,
+    get_request_production_mode,
     is_disabled_local_mode,
     resolve_moonmind_auth_config,
 )
@@ -49,8 +49,9 @@ def build_moonmind_control_plane_config(environ=None, mode=None):
     ``mode`` accepts the startup-classified production mode so the
     omitted-fresh path (blank storage, classified ``accounts``) resolves
     through the same production code as explicit ``accounts``. When omitted,
-    the stored selector is read via the auth-modes owner and blank storage
-    fails closed with 503 (startup owns the fresh-vs-upgrade decision).
+    the startup-classified mode is read via the auth-modes owner and blank
+    storage fails closed with 503 (startup owns the fresh-vs-upgrade
+    decision).
 
     Production wiring: ``api_service.main._initialize_oidc_provider`` calls
     :func:`resolve_moonmind_auth_config` directly with the classified
@@ -66,7 +67,7 @@ def build_moonmind_control_plane_config(environ=None, mode=None):
 
         effective = validate_mode_selector(str(mode).strip().lower())
     else:
-        effective = get_effective_auth_provider()
+        effective = get_request_production_mode()
     if not effective:
         # Omitted selector at request time: the startup classifier owns the
         # fresh-vs-upgrade decision. Request code fails closed rather than
@@ -132,7 +133,9 @@ def get_current_user():
     """
 
     global _cached_current_user_dependency
-    if get_effective_auth_provider() != "disabled":
+    from moonmind.security.auth_modes_4120 import get_request_production_mode
+
+    if get_request_production_mode() != "disabled":
         # Authenticated modes share the current bearer validation until the
         # #4124-era session contracts replace it; retired selectors fail at
         # startup via the auth-modes owner, never here.
