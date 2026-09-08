@@ -16,7 +16,7 @@ method — ``MoonMindCheckpointBranchTurnWorkflow._persistence_route_options``
 
 Full success/failure/cancellation/retry journeys against a live
 artifacts worker (database, sandbox, child workflows) remain integration
-scope; the drain gate in ``checkpoint_compat_drain`` owns that sequencing.
+scope; the drain gate in ``moonmind.gates.checkpoint_compat_drain`` owns that sequencing.
 """
 
 from __future__ import annotations

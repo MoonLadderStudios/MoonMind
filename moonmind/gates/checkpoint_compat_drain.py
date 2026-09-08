@@ -16,14 +16,22 @@ the decision predicate mirrors
 ``moonmind.workflows.executions.checkpoint_promotion.evaluate_worker_drain``
 (``outstanding == 0`` → safe to remove, otherwise retain). The deployment
 feeds the counts from the existing mechanisms — ``get_drain_metrics``
-scoped to the workflow task queue, pending-activity inspection for old-queue
-tasks, and the supported reset ledger — rather than from fixture replay or
-failed probes. Missing visibility or failed probes are not a clean drain:
-unobservable dimensions must be reported as outstanding.
+scoped to the workflow task queue (see
+``TemporalExecutionService.get_drain_metrics`` ``task_queues`` passthrough),
+pending-activity inspection for old-queue tasks, and the supported reset
+ledger — rather than from fixture replay or failed probes. Missing
+visibility or failed probes are not a clean drain: unobservable dimensions
+must be reported as outstanding. Use
+:func:`render_checkpoint_compat_drain_report` for the exact operator
+procedure (visibility queries, history-marker inspection, and the removal
+checklist) that turns live deployment evidence into a removal decision.
 
-This module depends on the standard library only so the gate stays
-importable from workflow-adjacent and tooling contexts without pulling
-Temporal, database, or settings dependencies.
+This module depends on the standard library only and lives in the
+lightweight ``moonmind.gates`` namespace (whose ``__init__`` chain imports
+nothing) so the gate stays importable from workflow-adjacent and tooling
+contexts without pulling Temporal, database, or settings dependencies.
+Do not add heavy imports here and do not re-export this module through a
+heavy package ``__init__``.
 """
 
 from __future__ import annotations
@@ -219,3 +227,107 @@ def retention_reason(decision: CheckpointCompatDrainDecision) -> str:
         f"(outstanding={decision.outstanding}; blocking: {blocking}); "
         "fixture replay is history compatibility, not deployed drainage"
     )
+
+
+def collect_checkpoint_compat_drain_observations(
+    *,
+    open_pre_cutover_histories: int | None,
+    pending_old_queue_tasks: int | None,
+    supported_resets_pending: int | None,
+) -> CheckpointCompatDrainObservations:
+    """Build drain-gate observations from live deployment probe outputs.
+
+    This is the production entrypoint that binds the gate to authoritative
+    probes instead of fixture replay:
+
+    - ``open_pre_cutover_histories``: running workflows on the workflow task
+      queue whose history lacks the ``COMPAT_PATCH_ID`` marker (``None``
+      when visibility is unavailable or the marker scan failed).
+    - ``pending_old_queue_tasks``: pending activities of type
+      ``checkpoint_branch.turn.*`` still addressed to the workflow task
+      queue (``None`` when activity inspection is unavailable).
+    - ``supported_resets_pending``: retained histories with an undispatched
+      supported reset obligation (``None`` when the reset ledger is
+      unsupported or unreadable).
+
+    ``None`` is fail-closed downstream: unobservable dimensions retain the
+    compat registration. Negative or non-integer counts raise ``ValueError``
+    so a malformed probe can never authorize removal.
+    """
+
+    return CheckpointCompatDrainObservations(
+        open_pre_cutover_histories=open_pre_cutover_histories,
+        pending_old_queue_tasks=pending_old_queue_tasks,
+        supported_resets_pending=supported_resets_pending,
+    )
+
+
+def render_checkpoint_compat_drain_report(
+    decision: CheckpointCompatDrainDecision,
+    *,
+    observations: CheckpointCompatDrainObservations | None = None,
+    workflow_task_queue: str = "mm.workflow",
+) -> str:
+    """Render the operator procedure that produced (or must produce) a verdict.
+
+    The report names the exact live-deployment probes behind each dimension
+    and, when the gate is open, the removal checklist that retires the
+    workflow-queue registration. It is the executable counterpart to the
+    decision predicate: operators (or deployment tooling importing only this
+    stdlib module) collect the three probe outputs, feed them through
+    :func:`collect_checkpoint_compat_drain_observations` and
+    :func:`evaluate_checkpoint_compat_drain_observations`, and follow the
+    checklist below once ``may_remove_workflow_queue_handlers`` is true.
+    """
+
+    blocking = ", ".join(decision.blocking_dimensions) or "none"
+    lines = [
+        f"{COMPAT_DRAIN_CONTRACT}: {decision.required_action}",
+        f"outstanding={decision.outstanding}; blocking: {blocking}",
+        "",
+        "Probes (live deployment evidence; None = unobservable = retain):",
+        "1. open_pre_cutover_histories: list running workflows with",
+        f'   ExecutionStatus="Running" AND TaskQueue="{workflow_task_queue}",',
+        f"   then keep those whose history lacks the '{COMPAT_PATCH_ID}'",
+        "   patch marker. Scoped visibility counts alone are not enough:",
+        "   the workflow queue also hosts post-cutover lanes.",
+        "2. pending_old_queue_tasks: describe each running workflow on the",
+        "   workflow queue and count pendingActivities with activityType",
+        "   'checkpoint_branch.turn.*' still addressed to the workflow queue.",
+        "3. supported_resets_pending: count retained histories with a",
+        "   supported reset obligation that has not been discharged; report",
+        "   None when the reset ledger is unsupported or unreadable.",
+        "",
+    ]
+    if observations is not None:
+        lines.extend(
+            [
+                "Observed inputs:",
+                f"  open_pre_cutover_histories={observations.open_pre_cutover_histories}",
+                f"  pending_old_queue_tasks={observations.pending_old_queue_tasks}",
+                f"  supported_resets_pending={observations.supported_resets_pending}",
+                "",
+            ]
+        )
+    if decision.may_remove_workflow_queue_handlers:
+        lines.extend(
+            [
+                "Removal checklist (all dimensions observed at zero):",
+                "- delete the checkpoint-branch handlers from the workflow",
+                "  fleet registration together with their dead DI bindings",
+                "  and permissions in the same change;",
+                "- keep fixture replay tests as history-compatibility",
+                "  evidence; they never gate removal;",
+                "- re-run this gate after removal to confirm the decision",
+                "  stays drained.",
+            ]
+        )
+    else:
+        lines.extend(
+            [
+                "Retain the workflow-queue checkpoint handlers; re-probe on",
+                "the next maintenance window. Fixture replay is history",
+                "compatibility, not deployed drainage.",
+            ]
+        )
+    return "\n".join(lines)
