@@ -173,3 +173,23 @@ def test_generated_openapi_and_cli_carry_no_keycloak_setup_claims() -> None:
     assert "keycloak" not in job_cli_text.lower()
     # Container-job CLI sends only the worker bearer machine credential.
     assert "Bearer" in job_cli_text
+
+
+def test_rendered_config_equivalence_for_disabled_default() -> None:
+    """Pin the statically verifiable half of req-3 rendered-config evidence.
+
+    Live `docker compose config` output and dashboard browser capture remain
+    outstanding (#4128); this test pins the checked-in sources that rendered
+    output must agree with: compose interpolation default, settings default,
+    and the commented-out .env-template default.
+    """
+    compose_text = _read(COMPOSE)
+    assert "AUTH_PROVIDER=${AUTH_PROVIDER:-disabled}" in compose_text
+    settings_text = _read(SETTINGS)
+    assert 'AUTH_PROVIDER: str = Field(\n        "disabled",' in settings_text
+    env_text = _read(ENV_TEMPLATE)
+    assert '# AUTH_PROVIDER="disabled"' in env_text
+    doc_text = _read(DOC)
+    assert "AUTH_PROVIDER=${AUTH_PROVIDER:-disabled}" in doc_text
+    readme_text = _read(README)
+    assert "AUTH_PROVIDER=${AUTH_PROVIDER:-disabled}" in readme_text
