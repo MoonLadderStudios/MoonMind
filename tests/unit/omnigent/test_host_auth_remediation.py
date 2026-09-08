@@ -261,20 +261,29 @@ async def test_retired_tunnels_close_without_host_auth_admission(
 @pytest.mark.parametrize(
     ("failure", "code"),
     [
-        (HostAuthProfileError("revoked", code="host_auth_revoked"), "host_auth_revoked"),
         (
-            HostAuthProfileError("disabled", code="host_auth_disabled"),
+            HostAuthProfileError(
+                "sensitive revoked detail", code="host_auth_revoked"
+            ),
+            "host_auth_revoked",
+        ),
+        (
+            HostAuthProfileError(
+                "sensitive disabled detail", code="host_auth_disabled"
+            ),
             "host_auth_disabled",
         ),
         (
             HostAuthProfileError(
-                "incompatible", code="host_auth_profile_incompatible"
+                "sensitive incompatible detail",
+                code="host_auth_profile_incompatible",
             ),
             "host_auth_profile_incompatible",
         ),
         (
             HostAuthProfileError(
-                "unavailable", code="host_auth_secret_unavailable"
+                "sensitive unavailable detail",
+                code="host_auth_secret_unavailable",
             ),
             "host_auth_secret_unavailable",
         ),
