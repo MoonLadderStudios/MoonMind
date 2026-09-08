@@ -43,9 +43,6 @@ JULES_FAILED_PROVIDER_STATUSES = _FAILED
 JULES_TERMINAL_SUCCESS_PROVIDER_STATUSES = _TERMINAL_SUCCESS
 JULES_TERMINAL_FAILURE_PROVIDER_STATUSES = _TERMINAL_FAILURE
 
-# Back-compat alias: historical snapshot name for the canonical classification.
-JulesStatusSnapshot = JulesStatusClassification
-
 
 def normalize_jules_status(raw_status: Any) -> JulesStatusClassification:
     """Classify one Jules status (display-safe; unknown-tolerant, never raises)."""
@@ -62,7 +59,6 @@ __all__ = [
     "JULES_WIRE_STATUS_MAP",
     "JulesNormalizedStatus",
     "JulesStatusClassification",
-    "JulesStatusSnapshot",
     "JulesUnknownStatusError",
     "classify_jules_status",
     "is_jules_terminal_status",

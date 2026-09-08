@@ -22,7 +22,7 @@ def normalize_jules_status(raw_status: str | None) -> JulesNormalizedStatus:
 
     Execution-critical boundary: blank/None maps to ``unknown`` (display-safe
     for missing provider data); unmapped tokens raise
-    :class:`JulesUnknownStatusError`, which is the same class object as
+    :class:`JulesUnknownStatusError`, which subclasses
     ``moonmind.schemas.agent_runtime_models.UnsupportedStatusError`` so
     existing ``pytest.raises(UnsupportedStatusError)`` guards keep working.
     Callers that only need a display projection should use

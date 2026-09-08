@@ -1,11 +1,11 @@
-"""Unit tests for JulesStatusSnapshot and normalize_jules_status in moonmind.jules.status."""
+"""Unit tests for JulesStatusClassification and normalize_jules_status in moonmind.jules.status."""
 
 from __future__ import annotations
 
 import pytest
 
 from moonmind.jules.status import (
-    JulesStatusSnapshot,
+    JulesStatusClassification,
     normalize_jules_status,
 )
 
@@ -78,7 +78,7 @@ class TestNormalizeJulesStatus:
 
     def test_snapshot_has_all_expected_fields(self) -> None:
         snapshot = normalize_jules_status("completed")
-        assert isinstance(snapshot, JulesStatusSnapshot)
+        assert isinstance(snapshot, JulesStatusClassification)
         assert snapshot.provider_status == "completed"
         assert snapshot.provider_status_token == "completed"
         assert snapshot.normalized_status == "completed"
