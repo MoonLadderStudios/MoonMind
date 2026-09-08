@@ -184,7 +184,9 @@ Conditional GitHub Actions jobs are not suitable as individual branch-protection
 - `preflight-policy` runs the static repository policy checks in parallel with test selection.
 - `moonspec-projection` verifies the vendored MoonSpec projection.
 - `unit-fast`, `unit-slow`, `api-component`, `temporal-boundary`, `integration-ci`, `reliability-journey-checkpoint-resume`, `omnigent-exact-artifact`, and `omnigent-deterministic-conformance` run only when selected.
-- `ci-required` always runs and fails if any always-required or selected backend job did not complete successfully.
+- `test-frontend` and `check-generated-contracts` always run as result aggregators for the selected frontend and generated-contract jobs.
+- `verify-test-shard-ownership` always runs because exclusive shard ownership is a static repository invariant.
+- `ci-required` always runs and fails if any always-required or selected backend job, the `test-frontend` aggregator, the `check-generated-contracts` aggregator, or the shard-ownership verifier did not complete successfully.
 
 `ci-required` is a pure result aggregator: it performs no repository operations (no checkout, no submodules, no Python/Node setup, no repository command) and has a short timeout. It evaluates every dependency and emits one annotation per failed, cancelled, timed-out, or unexpectedly skipped selected job before exiting, rather than stopping at the first failure. This keeps repository, submodule, and policy work off the serial tail of required CI.
 
@@ -192,7 +194,7 @@ Conditional GitHub Actions jobs are not suitable as individual branch-protection
 
 Backend jobs use shallow, submodule-free checkouts. Only `moonspec-projection` initializes a submodule, and it initializes just `moonspec` via `git submodule update --init --depth 1 -- moonspec`. Open WebUI and Omnigent are never initialized in required backend CI.
 
-Branch protection must require `ci-required` for backend selection, plus any separately required frontend, generated-contract, CodeQL, or repository policy checks. It must also require the standalone `migration-gate` check so migration-graph and clean-database upgrade failures block merges independently of impact selection.
+Branch protection must require `ci-required` as the single required context for backend, frontend, and generated-contract gates. `test-frontend` and `check-generated-contracts` report into `ci-required`, so they must not be listed as separate required contexts; a separately required aggregator can leave merges blocked after a check rename or removal. CodeQL and other repository policy checks that run outside this workflow remain separately required. Branch protection must also require the standalone `migration-gate` check so migration-graph and clean-database upgrade failures block merges independently of impact selection.
 
 Required checks must run against the current merge candidate. Prefer GitHub Merge Queue, which exercises the checked-in `merge_group` triggers before each queued merge. If Merge Queue is unavailable, require branches to be up to date with `main` before merging. A successful check from an older base revision is not authoritative: two concurrent pull requests can each have a valid migration graph while their combined result creates multiple Alembic heads.
 
