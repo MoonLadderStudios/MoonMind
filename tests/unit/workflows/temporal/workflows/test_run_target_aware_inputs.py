@@ -28,6 +28,56 @@ def _workflow_info() -> SimpleNamespace:
     )
 
 
+@pytest.mark.parametrize("patched", [False, True])
+def test_issue_brief_authority_preserves_source_with_history_compatibility(patched):
+    from moonmind.workflows.temporal.workflows.run import (
+        RUN_TRUSTED_ISSUE_BRIEF_AUTHORITY_PATCH,
+    )
+
+    wf = MoonMindRunWorkflow()
+    with patch(
+        "moonmind.workflows.temporal.workflows.run.workflow.patched",
+        side_effect=lambda name: (
+            patched if name == RUN_TRUSTED_ISSUE_BRIEF_AUTHORITY_PATCH else True
+        ),
+    ):
+        wf._record_assessment_context(
+            {
+                "trustedSource": "moonmind.github.get_issue",
+                "briefArtifactRef": "art_full",
+            }
+        )
+        wf._record_assessment_context({"briefArtifactRef": "art_agent_copy"})
+        assert wf._assessment_context["briefArtifactRef"] == (
+            "art_full" if patched else "art_agent_copy"
+        )
+        refs = wf._append_durable_handoff_attachment_refs([], agent_kind="managed")
+        assert refs == (["artifact://art_full"] if patched else [])
+        result = wf._merge_assessment_context_into_result(
+            {"outputs": {"briefArtifactRef": "art_agent_copy"}}
+        )
+        assert result["outputs"]["briefArtifactRef"] == (
+            "art_full" if patched else "art_agent_copy"
+        )
+        assert wf._merge_trusted_issue_context({"briefArtifactRef": "art_agent_copy"})[
+            "briefArtifactRef"
+        ] == ("art_full" if patched else "art_agent_copy")
+        next_load = {
+            "outputs": {
+                "trustedSource": "moonmind.github.get_issue",
+                "briefArtifactRef": "art_next_issue",
+            }
+        }
+        assert (
+            wf._merge_assessment_context_into_result(next_load)["outputs"][
+                "briefArtifactRef"
+            ]
+            == "art_next_issue"
+        )
+        wf._record_assessment_context(next_load["outputs"])
+        assert wf._assessment_context["briefArtifactRef"] == "art_next_issue"
+
+
 def _task_payload() -> dict[str, object]:
     return {
         "inputAttachments": [

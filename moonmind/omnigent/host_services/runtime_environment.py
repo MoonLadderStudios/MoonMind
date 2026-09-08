@@ -17,13 +17,18 @@ from moonmind.omnigent.workspace_intent import (
     authored_connection_ref,
     authored_required_capabilities,
 )
+from moonmind.schemas.agent_runtime_models import AgentExecutionRequest
+from moonmind.schemas.container_job_models import OwnerIdentity
+from moonmind.schemas.workspace_locator_models import SandboxWorkspaceLocator
+from moonmind.security.container_job_capabilities import (
+    mint_container_job_session_capability,
+)
 from moonmind.security.execution_fanout_capabilities import (
     EXECUTION_FANOUT_REQUIRED_CAPABILITY,
     ExecutionFanoutCapabilityError,
     mint_execution_fanout_capability,
     require_execution_fanout_authorization,
 )
-from moonmind.schemas.agent_runtime_models import AgentExecutionRequest
 
 
 class OmnigentRuntimeEnvironmentService:
@@ -60,7 +65,9 @@ class OmnigentRuntimeEnvironmentService:
         launch_policy: LaunchPolicy,
     ) -> Mapping[str, str]:
         required_capabilities = authored_required_capabilities(request)
-        if EXECUTION_FANOUT_REQUIRED_CAPABILITY not in required_capabilities:
+        needs_fanout = EXECUTION_FANOUT_REQUIRED_CAPABILITY in required_capabilities
+        needs_containers = "docker" in required_capabilities
+        if not needs_fanout and not needs_containers:
             return {}
         try:
             require_execution_fanout_authorization(
@@ -88,7 +95,7 @@ class OmnigentRuntimeEnvironmentService:
             or not self._moonmind_url
         ):
             raise HarnessPlatformError(
-                "execution fan-out runtime identity is incomplete",
+                "runtime capability identity is incomplete",
                 code=HarnessPlatformFailure.OMNIGENT_HOST_LAUNCH_FAILED,
             )
         environment = {
@@ -97,7 +104,46 @@ class OmnigentRuntimeEnvironmentService:
             "MOONMIND_TASK_WORKFLOW_ID": workflow_id,
             "MOONMIND_STEP_ID": step_execution_id,
             "MOONMIND_RUNTIME_ID": runtime_id,
-            "MOONMIND_EXECUTION_FANOUT_BEARER_TOKEN": (
+        }
+        if needs_containers:
+            try:
+                locator = SandboxWorkspaceLocator.model_validate(
+                    (request.workspace_spec or {}).get("workspaceLocator")
+                )
+            except ValueError as exc:
+                raise HarnessPlatformError(
+                    "container jobs require an authoritative sandbox workspace locator",
+                    code=HarnessPlatformFailure.OMNIGENT_HOST_LAUNCH_FAILED,
+                ) from exc
+            environment.update(
+                {
+                    "MOONMIND_CONTAINER_JOBS_MCP_URL": self._moonmind_url.rstrip("/")
+                    + "/mcp/container",
+                    "MOONMIND_CONTAINER_JOBS_BEARER_TOKEN": mint_container_job_session_capability(
+                        secret=self._signing_secret,
+                        owner=OwnerIdentity(
+                            principalId=step_execution_id, principalType="service"
+                        ),
+                        agent_run_id=step_execution_id,
+                        workflow_id=workflow_id,
+                        step_id=step_execution_id,
+                        session_id=host_lease_ref,
+                        runtime_id=runtime_id,
+                        source_kind="omnigent",
+                        workspace_kind="sandbox",
+                        workspace_id=locator.workspace_id,
+                        workspace_relative_path=locator.relative_path,
+                        lifetime_seconds=int(launch_policy.limits["timeoutSeconds"]),
+                    ),
+                    "MOONMIND_CONTAINER_JOBS_SOURCE_KIND": "omnigent",
+                    "MOONMIND_CONTAINER_JOBS_SESSION_ID": host_lease_ref,
+                    "MOONMIND_CONTAINER_JOBS_WORKSPACE_KIND": "sandbox",
+                    "MOONMIND_CONTAINER_JOBS_WORKSPACE_ID": locator.workspace_id,
+                    "MOONMIND_CONTAINER_JOBS_WORKSPACE_RELATIVE_PATH": locator.relative_path,
+                }
+            )
+        if needs_fanout:
+            environment["MOONMIND_EXECUTION_FANOUT_BEARER_TOKEN"] = (
                 mint_execution_fanout_capability(
                     secret=self._signing_secret,
                     parent_workflow_id=workflow_id,
@@ -108,8 +154,7 @@ class OmnigentRuntimeEnvironmentService:
                     source_kind="omnigent",
                     lifetime_seconds=int(launch_policy.limits["timeoutSeconds"]),
                 )
-            ),
-        }
+            )
         repository_connection_ref = authored_connection_ref(request)
         if repository_connection_ref:
             environment["MOONMIND_REPOSITORY_CONNECTION_REF"] = (

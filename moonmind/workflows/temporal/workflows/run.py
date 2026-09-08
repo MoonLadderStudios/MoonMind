@@ -617,6 +617,7 @@ RUN_ASSESSMENT_PARAMETER_INJECTION_PATCH = "run-assessment-parameter-injection-v
 RUN_ASSESSMENT_CONSUMER_HANDOFF_PATCH = "run-assessment-consumer-handoff-v1"
 RUN_ASSESSMENT_ATTACHMENT_HANDOFF_PATCH = "run-assessment-attachment-handoff-v1"
 RUN_ISSUE_BRIEF_ATTACHMENT_HANDOFF_PATCH = "run-issue-brief-attachment-handoff-v1"
+RUN_TRUSTED_ISSUE_BRIEF_AUTHORITY_PATCH = "run-trusted-issue-brief-authority-v1"
 RUN_MOONSPEC_VERIFY_ATTACHMENT_HANDOFF_PATCH = (
     "run-moonspec-verify-attachment-handoff-v1"
 )
@@ -9687,7 +9688,9 @@ class MoonMindRunWorkflow:
         """Declare durable prior-step artifacts as fresh-workspace attachments."""
 
         merged = [str(ref).strip() for ref in input_refs if str(ref).strip()]
-        if agent_kind == "managed":
+        if agent_kind == "managed" and not self._patched_or_false_outside_workflow(
+            RUN_TRUSTED_ISSUE_BRIEF_AUTHORITY_PATCH
+        ):
             return list(dict.fromkeys(merged))
         artifact_refs = [
             self._assessment_context.get("assessmentArtifactRef")
@@ -9795,6 +9798,17 @@ class MoonMindRunWorkflow:
             ("assessmentVerdict", "assessment_verdict"),
             ("briefArtifactRef", "brief_artifact_ref"),
         ):
+            if (
+                aliases[0] == "briefArtifactRef"
+                and self._patched_or_false_outside_workflow(
+                    RUN_TRUSTED_ISSUE_BRIEF_AUTHORITY_PATCH
+                )
+                and self._assessment_context.get("briefArtifactRef")
+                and outputs.get("trustedSource")
+                not in {"moonmind.github.get_issue", "moonmind.jira.get_issue"}
+            ):
+                # Agent-produced copies cannot replace the loader's source.
+                continue
             for key in aliases:
                 value = outputs.get(key)
                 if value in (None, "", {}, []):
@@ -9838,6 +9852,25 @@ class MoonMindRunWorkflow:
             ("assessmentVerdict", "assessment_verdict"),
             ("briefArtifactRef", "brief_artifact_ref"),
         ):
+            if (
+                aliases[0] == "briefArtifactRef"
+                and self._patched_or_false_outside_workflow(
+                    RUN_TRUSTED_ISSUE_BRIEF_AUTHORITY_PATCH
+                )
+                and self._assessment_context.get("briefArtifactRef")
+            ):
+                if outputs.get("trustedSource") in {
+                    "moonmind.github.get_issue",
+                    "moonmind.jira.get_issue",
+                }:
+                    # A new trusted load may select a different issue.
+                    continue
+                for alias in aliases:
+                    if alias == aliases[0] or alias in merged_outputs:
+                        value = self._assessment_context["briefArtifactRef"]
+                        changed = changed or merged_outputs.get(alias) != value
+                        merged_outputs[alias] = value
+                continue
             if any(
                 merged_outputs.get(alias) not in (None, "", {}, []) for alias in aliases
             ):
@@ -9880,7 +9913,14 @@ class MoonMindRunWorkflow:
         ):
             value = self._assessment_context.get(key)
             if value not in (None, "", {}, []):
-                merged.setdefault(key, value)
+                if key in {"briefArtifactRef", "brief_artifact_ref"} and (
+                    self._patched_or_false_outside_workflow(
+                        RUN_TRUSTED_ISSUE_BRIEF_AUTHORITY_PATCH
+                    )
+                ):
+                    merged[key] = value
+                else:
+                    merged.setdefault(key, value)
         if self._patched_or_false_outside_workflow(
             RUN_MOONSPEC_GATE_PREVIOUS_OUTPUTS_HANDOFF_PATCH
         ):

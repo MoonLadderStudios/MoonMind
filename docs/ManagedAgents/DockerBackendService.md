@@ -40,6 +40,13 @@ The requesting runtime never receives the Docker socket, a Docker API endpoint,
 The per-session Docker-in-Docker topology is not a supported desired state or
 compatibility path.
 
+Generic Omnigent hosts receive container-job authority only when the admitted
+execution requires `docker`. The host environment binds the existing sandbox
+workspace locator, workflow, Step Execution, runtime, and host lease to the
+session capability. Its bearer is transported on stdin into a read-only capability
+file; only the file selector crosses the host, runner, and harness environment
+boundaries. Missing or unsupported workspace authority fails before launch.
+
 The selected daemon owns a persistent image store. Pulled and locally provisioned
 images remain reusable by later jobs and workflows until deployment-level image
 retention removes them. Image lifetime is independent of workflow and session

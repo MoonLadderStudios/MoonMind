@@ -95,12 +95,16 @@ class DockerOmnigentHostLauncher:
             else ""
         )
         supplied_runtime_environment = dict(runtime_environment or {})
-        fanout_bearer = str(
-            supplied_runtime_environment.pop(
-                "MOONMIND_EXECUTION_FANOUT_BEARER_TOKEN", ""
+        capability_bearers = {
+            key: (
+                filename,
+                str(supplied_runtime_environment.pop(key, "") or "").strip(),
             )
-            or ""
-        ).strip()
+            for key, filename in {
+                "MOONMIND_EXECUTION_FANOUT_BEARER_TOKEN": "execution-fanout",
+                "MOONMIND_CONTAINER_JOBS_BEARER_TOKEN": "container-jobs",
+            }.items()
+        }
         allowed_runtime_environment = {
             "MOONMIND_URL",
             "MOONMIND_AGENT_RUN_ID",
@@ -108,15 +112,24 @@ class DockerOmnigentHostLauncher:
             "MOONMIND_STEP_ID",
             "MOONMIND_RUNTIME_ID",
             "MOONMIND_REPOSITORY_CONNECTION_REF",
+            "MOONMIND_CONTAINER_JOBS_MCP_URL",
+            "MOONMIND_CONTAINER_JOBS_SOURCE_KIND",
+            "MOONMIND_CONTAINER_JOBS_SESSION_ID",
+            "MOONMIND_CONTAINER_JOBS_WORKSPACE_KIND",
+            "MOONMIND_CONTAINER_JOBS_WORKSPACE_ID",
+            "MOONMIND_CONTAINER_JOBS_WORKSPACE_RELATIVE_PATH",
         }
         if set(supplied_runtime_environment) - allowed_runtime_environment:
             raise HarnessPlatformError(
                 "generic host received unsupported runtime environment names",
                 code=HarnessPlatformFailure.OMNIGENT_HOST_LAUNCH_FAILED,
             )
-        if fanout_bearer and not control_volume:
+        if (
+            any(bearer for _, bearer in capability_bearers.values())
+            and not control_volume
+        ):
             raise HarnessPlatformError(
-                "execution fan-out requires a lease-owned capability mount",
+                "runtime capabilities require a lease-owned capability mount",
                 code=HarnessPlatformFailure.OMNIGENT_HOST_LAUNCH_FAILED,
             )
         await self._backend.run(
@@ -170,7 +183,9 @@ class DockerOmnigentHostLauncher:
                         ],
                         input_bytes=self._host_api_token.encode("utf-8"),
                     )
-                if fanout_bearer:
+                for _key, (filename, bearer) in capability_bearers.items():
+                    if not bearer:
+                        continue
                     await self._backend.run(
                         [
                             "docker",
@@ -187,9 +202,9 @@ class DockerOmnigentHostLauncher:
                             "/bin/sh",
                             host_class.imageRef,
                             "-ceu",
-                            "umask 077; cat > /control/execution-fanout; chown 1000:1000 /control/execution-fanout; chmod 0400 /control/execution-fanout",
+                            f"umask 077; cat > /control/{filename}; chown 1000:1000 /control/{filename}; chmod 0400 /control/{filename}",
                         ],
-                        input_bytes=fanout_bearer.encode("utf-8"),
+                        input_bytes=bearer.encode("utf-8"),
                     )
             # Initialize the writable host-state volume before a read-only-root launch.
             await self._backend.run(
@@ -219,10 +234,11 @@ class DockerOmnigentHostLauncher:
                 ["docker", "volume", "rm", state_volume], check=False
             )
             raise
-        if fanout_bearer:
-            supplied_runtime_environment[
-                "MOONMIND_EXECUTION_FANOUT_BEARER_TOKEN_FILE"
-            ] = "/run/moonmind-host-auth/execution-fanout"
+        for key, (filename, bearer) in capability_bearers.items():
+            if bearer:
+                supplied_runtime_environment[key + "_FILE"] = (
+                    f"/run/moonmind-host-auth/{filename}"
+                )
         script, runtime_environment = self._scripts.build_entrypoint(
             credential_handles=credential_handles,
             skill_attachment=spec.skillAttachment,

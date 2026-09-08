@@ -1,5 +1,7 @@
 import subprocess
 
+import pytest
+
 from moonmind.omnigent.host_services.runtime_scripts import (
     OmnigentRuntimeScriptService,
 )
@@ -149,20 +151,32 @@ def test_github_projection_exposes_only_non_secret_cli_environment():
     assert "GIT_CONFIG_VALUE_0" in _script
 
 
-def test_opencode_projection_restores_scoped_fanout_file_selector() -> None:
+@pytest.mark.parametrize("capability", ["EXECUTION_FANOUT", "CONTAINER_JOBS"])
+def test_opencode_projection_restores_scoped_capability_file_selector(
+    capability,
+) -> None:
     runtime_environment = {
         "MOONMIND_URL": "http://api:8000",
         "MOONMIND_AGENT_RUN_ID": "agent-run-1",
         "MOONMIND_TASK_WORKFLOW_ID": "workflow-1",
         "MOONMIND_STEP_ID": "step-1",
         "MOONMIND_RUNTIME_ID": "opencode-native",
-        "MOONMIND_REPOSITORY_CONNECTION_REF": (
-            "repository-connection:git-default"
-        ),
-        "MOONMIND_EXECUTION_FANOUT_BEARER_TOKEN_FILE": (
-            "/run/moonmind-host-auth/execution-fanout"
+        "MOONMIND_REPOSITORY_CONNECTION_REF": ("repository-connection:git-default"),
+        f"MOONMIND_{capability}_BEARER_TOKEN_FILE": (
+            "/run/moonmind-host-auth/" + capability.lower().replace("_", "-")
         ),
     }
+    if capability == "CONTAINER_JOBS":
+        runtime_environment.update(
+            {
+                "MOONMIND_CONTAINER_JOBS_MCP_URL": "http://api:8000/mcp/container",
+                "MOONMIND_CONTAINER_JOBS_SOURCE_KIND": "omnigent",
+                "MOONMIND_CONTAINER_JOBS_SESSION_ID": "lease-1",
+                "MOONMIND_CONTAINER_JOBS_WORKSPACE_KIND": "sandbox",
+                "MOONMIND_CONTAINER_JOBS_WORKSPACE_ID": "sandbox-1",
+                "MOONMIND_CONTAINER_JOBS_WORKSPACE_RELATIVE_PATH": "repo",
+            }
+        )
     script, environment = _build(
         target_path="",
         enable_opencode_runtime=True,
@@ -171,12 +185,10 @@ def test_opencode_projection_restores_scoped_fanout_file_selector() -> None:
 
     passthrough = set(environment["OMNIGENT_RUNNER_ENV_PASSTHROUGH"].split(","))
     assert set(runtime_environment) <= passthrough
-    assert {
-        key: environment[key] for key in runtime_environment
-    } == runtime_environment
+    assert {key: environment[key] for key in runtime_environment} == runtime_environment
     for key in runtime_environment:
         assert f"export {key}=$(cat " in script
-    assert "MOONMIND_EXECUTION_FANOUT_BEARER_TOKEN=" not in script
+    assert f"MOONMIND_{capability}_BEARER_TOKEN=" not in script
     syntax = subprocess.run(
         ["/bin/sh", "-n"],
         input=script,

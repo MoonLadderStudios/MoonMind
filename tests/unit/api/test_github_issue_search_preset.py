@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import json
+import os
 import shutil
 from pathlib import Path
 from types import SimpleNamespace
@@ -92,7 +94,17 @@ def activity_boundary(monkeypatch):
         ),
     )
     artifact_service = SimpleNamespace(
-        read=AsyncMock(return_value=(None, {"verdict": "NOT_IMPLEMENTED"}))
+        read=AsyncMock(return_value=(None, {"verdict": "NOT_IMPLEMENTED"})),
+        create=AsyncMock(return_value=(SimpleNamespace(artifact_id="art_brief"), None)),
+        write_complete=AsyncMock(
+            return_value=SimpleNamespace(
+                artifact_id="art_brief",
+                sha256="a" * 64,
+                size_bytes=100,
+                content_type="application/json",
+                encryption=SimpleNamespace(value="none"),
+            )
+        ),
     )
     activities = TemporalSkillActivities(
         dispatcher=dispatcher, artifact_service=artifact_service
@@ -117,9 +129,109 @@ def activity_boundary(monkeypatch):
         )
 
     return SimpleNamespace(
-        execute=execute, pages=pages, requests=requests, detail=detail,
+        execute=execute,
+        pages=pages,
+        requests=requests,
+        detail=detail,
         dependency_details=dependency_details,
+        activities=activities,
+        artifact_service=artifact_service,
     )
+
+
+@pytest.mark.asyncio
+async def test_full_issue_brief_reaches_fresh_assessment_workspace(
+    activity_boundary,
+    tmp_path,
+    monkeypatch,
+):
+    """Replay mm:6901d5c7 04:20: full provider body must survive prompt compaction."""
+    from moonmind.omnigent.workspace_artifacts import WorkspaceArtifactProjector
+    from moonmind.workflows.temporal.artifacts import (
+        LocalTemporalArtifactStore,
+        TemporalArtifactRepository,
+        TemporalArtifactService,
+    )
+    from moonmind.workflows.temporal.workflows import run as run_module
+    from tests.unit.workflows.temporal.test_activity_runtime import temporal_db
+
+    replay = json.loads(
+        (
+            Path(__file__).resolve().parents[2]
+            / "integration/reliability/replays/issue-brief-verification-handoff/manifest.json"
+        ).read_text()
+    )
+    body = replay["bodyPrefix"] * replay["repeatCount"] + replay["acceptanceTail"]
+    candidate = issue(number=3950, body=body)
+    activity_boundary.pages[:] = [[candidate]]
+    activity_boundary.detail.update(candidate)
+    info = SimpleNamespace(
+        namespace="default",
+        workflow_id="workflow-1",
+        workflow_run_id="run-1",
+        run_id="run-1",
+    )
+    monkeypatch.setattr("temporalio.activity.info", lambda: info)
+    monkeypatch.setattr(run_module.workflow, "info", lambda: info)
+    monkeypatch.setattr(run_module.workflow, "patched", lambda _patch: True)
+
+    async with temporal_db(tmp_path) as sessions:
+        async with sessions() as session:
+            service = TemporalArtifactService(
+                TemporalArtifactRepository(session),
+                store=LocalTemporalArtifactStore(tmp_path / "artifacts"),
+            )
+            activity_boundary.activities._artifact_service = service
+            result = await activity_boundary.execute(
+                "github.load_issue_preset_brief",
+                {"repository": REPOSITORY, "issueSearch": ""},
+            )
+            assert result.status == "COMPLETED"
+            wf = MoonMindRunWorkflow()
+            wf._record_assessment_context(result.outputs)
+            wf._record_trusted_issue_context(result.outputs)
+            request = wf._build_agent_execution_request(
+                node_inputs={
+                    "targetRuntime": "omnigent",
+                    "repository": REPOSITORY,
+                    "instructions": "Assess the full issue.",
+                    "previousOutputs": result.outputs,
+                },
+                node_id="assessment",
+                tool_name="omnigent",
+            )
+            assert "contextTruncation" in request.instruction_ref
+            assert "...[truncated]" in request.instruction_ref
+            assert request.input_refs
+            workspace = tmp_path / "fresh-workspace"
+            workspace.mkdir()
+            await WorkspaceArtifactProjector(service).project(
+                workspace,
+                attachment_refs=tuple(request.input_refs),
+                workflow_id="workflow-1",
+                runtime_uid=os.getuid(),
+                runtime_gid=os.getgid(),
+            )
+            attachments = list((workspace / ".moonmind/attachments").iterdir())
+            assert len(attachments) == 1
+            restored = json.loads(attachments[0].read_text())
+            assert restored["issue"]["body"] == body
+            assert restored["issue"]["body"].endswith(replay["acceptanceTail"])
+            assert "contextTruncation" not in restored
+
+
+@pytest.mark.asyncio
+async def test_issue_loader_fails_before_handoff_when_brief_cannot_be_persisted(
+    activity_boundary,
+):
+    activity_boundary.artifact_service.write_complete.side_effect = RuntimeError(
+        "storage unavailable"
+    )
+    with pytest.raises(RuntimeError, match="storage unavailable"):
+        await activity_boundary.execute(
+            "github.load_issue_preset_brief",
+            {"repository": REPOSITORY, "issueSearch": ""},
+        )
 
 
 @pytest.mark.parametrize(
@@ -397,6 +509,7 @@ async def test_default_preset_resolves_and_preserves_issue_across_agent_steps(
     finally:
         await engine.dispose()
     steps = expanded["steps"]
+    assert "docker" in expanded["capabilities"]
     assert steps[0]["type"] == "tool"
     tool = steps[0]["tool"]
     result = await activity_boundary.execute(tool["id"], tool["inputs"])
