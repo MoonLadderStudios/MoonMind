@@ -115,6 +115,12 @@ def test_plan_matrix_every_row_has_owner():
         "Removal",
     ]
     here = globals()
+    cross_file_candidates = [
+        REPO_ROOT / "tests" / "unit" / "security" / "test_identity_mapping_4119.py",
+        REPO_ROOT / "tests" / "integration" / "security"
+        / "test_identity_migration_postgres_4119.py",
+    ]
+    cross_file_sources: list[str] = []
     for entry in PLAN_MATRIX:
         assert entry["owner"], entry["row"]
         assert entry["evidence"], entry["row"]
@@ -125,13 +131,18 @@ def test_plan_matrix_every_row_has_owner():
             name = name.strip()
             if name in here:
                 continue
-            # Cross-file owners must exist on disk.
-            candidates = [
-                REPO_ROOT / "tests" / "unit" / "security" / "test_identity_mapping_4119.py",
-                REPO_ROOT / "tests" / "integration" / "security"
-                / "test_identity_migration_postgres_4119.py",
-            ]
-            assert any(p.is_file() for p in candidates), name
+            # Cross-file evidence must name an exact test defined in an
+            # owned suite file, never a stale reference masked by file
+            # existence. Load sources once and match the exact def.
+            if not cross_file_sources:
+                for candidate in cross_file_candidates:
+                    assert candidate.is_file(), candidate
+                    cross_file_sources.append(
+                        candidate.read_text(encoding="utf-8")
+                    )
+            assert any(
+                f"def {name}(" in source for source in cross_file_sources
+            ), name
 
 
 # ---------------------------------------------------------------------------
@@ -250,6 +261,25 @@ async def test_session_issuance_through_production_boundary():
     assert minted_id == user_id
     account = await qual.validate_moonmind_session(token, store, revocation, config)
     assert account.user_id == user_id
+    # Exercise the current-user dependency boundary with the minted token:
+    # the same credential must resolve to the same principal through the
+    # production cookie/bearer resolver, never a swapped mock user.
+    resolved_cookie = await qual.resolve_current_user(
+        cookie_token=token,
+        bearer_token=None,
+        account_store=store,
+        revocation=revocation,
+        config=config,
+    )
+    assert resolved_cookie.user_id == user_id
+    resolved_bearer = await qual.resolve_current_user(
+        cookie_token=None,
+        bearer_token=token,
+        account_store=store,
+        revocation=revocation,
+        config=config,
+    )
+    assert resolved_bearer.user_id == user_id
     # Purpose/issuer/audience binding is structural, not prose.
     payload = jwt.decode(token, options={"verify_signature": False})
     assert payload["iss"] == qual.MOONMIND_TOKEN_ISSUER
@@ -722,7 +752,7 @@ def test_browser_security_validators_reject_forgery_and_bypass():
 
 @pytest.mark.asyncio
 async def test_account_lifecycle_operator_claim_and_bootstrap_race(tmp_path):
-    with pytest.raises(PermissionError):
+    with pytest.raises(auth_module.DefaultAdminClaimAuthorizationError):
         await auth_module.claim_default_admin(None, None, operator_authorized=False)
 
     key_path = tmp_path / "race-key"
@@ -750,6 +780,38 @@ async def test_account_lifecycle_operator_claim_and_bootstrap_race(tmp_path):
     assert (
         await qual.validate_moonmind_session(token, store, revocation, config)
     ).is_superuser is False
+
+
+def test_session_secret_concurrent_bootstrap_single_winner(tmp_path):
+    """Absent-key race: concurrent resolvers share one key without errors."""
+    import threading
+
+    key_path = tmp_path / "concurrent-race-key"
+    assert not key_path.exists()
+    results: list[bytes] = []
+    errors: list[BaseException] = []
+    barrier = threading.Barrier(8)
+
+    def _resolve() -> None:
+        try:
+            barrier.wait(timeout=10)
+            results.append(
+                modes.resolve_session_secret(
+                    explicit_secret=None, key_path=key_path
+                )
+            )
+        except BaseException as exc:  # pragma: no cover - fail-closed signal
+            errors.append(exc)
+
+    threads = [threading.Thread(target=_resolve) for _ in range(8)]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join(timeout=30)
+    assert not errors
+    assert len(results) == 8
+    assert all(len(secret) >= 32 for secret in results)
+    assert all(secret == results[0] for secret in results)
 
 
 # ---------------------------------------------------------------------------
