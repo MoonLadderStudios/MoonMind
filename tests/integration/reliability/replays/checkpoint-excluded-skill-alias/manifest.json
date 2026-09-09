@@ -1,0 +1,14 @@
+{
+  "incidentWorkflowId": "mm:5c182f75-c005-4edc-aa1b-eca086a515c1-2026-09-09T07:34:56Z",
+  "runtime": "external/omnigent",
+  "harness": "opencode",
+  "failedActivityType": "workspace.capture_checkpoint",
+  "failureCode": "unsafe_checkpoint",
+  "failureShape": "An excluded repository-local .gemini/skills symlink was rejected after every successful agent step; the parent failed despite a merged PR.",
+  "workspace": {
+    "files": {"result.txt": "verified implementation\n", ".agents/skills/skills/example/SKILL.md": "repository skill\n"},
+    "symlinks": {".gemini/skills": "../.agents/skills/skills"}
+  },
+  "eventScript": ["capture through worker binding", "inspect durable archive", "delete source workspace", "restore archive"],
+  "expected": {"captureStatus": "captured", "excludedPrefixes": [".agents/skills", ".gemini/skills"], "includedEscapeStatus": "unsafe"}
+}
