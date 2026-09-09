@@ -185,6 +185,26 @@ def _read_auth_provider_default(settings_text: str) -> str | None:
     return m.group(1) if m else None
 
 
+def _parse_assigned_modes(settings_text: str, name: str) -> set[str] | None:
+    """Extract the quoted literals assigned to a tuple/list declaration.
+
+    Parses only the value assigned to ``name`` (e.g.
+    ``SUPPORTED_AUTH_PROVIDERS = ("accounts", ...)``), so mentions of mode
+    strings in comments, error text, or unrelated constants cannot satisfy
+    the probe. Returns the lowercased literal set, or None when the
+    declaration cannot be found.
+    """
+    m = re.search(
+        rf"{re.escape(name)}\s*(?::[^=]+)?=\s*[\(\[]([^\)\]]*)[\)\]]",
+        settings_text,
+    )
+    if not m:
+        return None
+    return {
+        part.lower() for part in re.findall(r"""['"]([^'"]+)['"]""", m.group(1))
+    }
+
+
 def _has_landed_mode_key_setup(repo_root: Path = REPO_ROOT) -> bool:
     """Whether the #4120 persisted mode/key setup is observable in the checkout.
 
@@ -197,13 +217,22 @@ def _has_landed_mode_key_setup(repo_root: Path = REPO_ROOT) -> bool:
     probe.
     """
     settings_text = _read_text(repo_root / "moonmind/config/settings.py") or ""
-    supported = "SUPPORTED_AUTH_PROVIDERS" in settings_text and all(
-        f'"{mode}"' in settings_text or f"'{mode}'" in settings_text
-        for mode in ("accounts", "oidc", "header", "disabled")
-    )
-    retired = "RETIRED_AUTH_PROVIDERS" in settings_text and "keycloak" in settings_text.lower()
+    supported = _parse_assigned_modes(settings_text, "SUPPORTED_AUTH_PROVIDERS")
+    retired = _parse_assigned_modes(settings_text, "RETIRED_AUTH_PROVIDERS")
+    supported_ok = supported is not None and {
+        "accounts",
+        "oidc",
+        "header",
+        "disabled",
+    } <= supported
+    retired_ok = retired is not None and {
+        "keycloak",
+        "default",
+        "google",
+        "local",
+    } <= retired
     owner_module = (repo_root / "moonmind/security/auth_modes_4120.py").exists()
-    return bool(supported and retired and owner_module)
+    return bool(supported_ok and retired_ok and owner_module)
 
 
 def _capability_present(pid: str, repo_root: Path = REPO_ROOT) -> bool:
@@ -255,6 +284,37 @@ RESIDUAL_LINE_PATTERN = re.compile(
 )
 
 
+def _split_code_and_comment(line: str) -> tuple[str, str]:
+    """Split a single line into (code_part, comment_part).
+
+    Finds the earliest comment delimiter (``#``, ``--``, ``//``, ``/*``,
+    ``<!--``) that appears outside single/double-quoted string literals.
+    When no delimiter is present the whole line is code.
+    """
+    in_single = False
+    in_double = False
+    i = 0
+    while i < len(line):
+        ch = line[i]
+        if ch == "'" and not in_double:
+            # Ignore escaped quotes.
+            if i == 0 or line[i - 1] != "\\":
+                in_single = not in_single
+            i += 1
+            continue
+        if ch == '"' and not in_single:
+            if i == 0 or line[i - 1] != "\\":
+                in_double = not in_double
+            i += 1
+            continue
+        if not in_single and not in_double:
+            for marker in ("<!--", "/*", "--", "//", "#"):
+                if line.startswith(marker, i):
+                    return line[:i], line[i:]
+        i += 1
+    return line, ""
+
+
 def _is_live_keycloak_line(line: str) -> bool:
     """Whether a single line is a live Keycloak surface.
 
@@ -263,10 +323,21 @@ def _is_live_keycloak_line(line: str) -> bool:
     docs/tmp/KeycloakRemovalResidual-4129.md and are ignored so the
     integrated-removal probe does not fail forever on a correctly removed
     checkout.
+
+    The residual exemption applies only when the keycloak literal appears
+    solely in the comment portion of the line. Executable code that names
+    keycloak stays live even when the same line carries a retirement marker
+    (e.g. ``CREATE DATABASE keycloak; -- legacy`` or
+    ``if provider == "keycloak":  # legacy``).
     """
     if not re.search(r"[Kk]eycloak|KEYCLOAK", line):
         return False
-    if RESIDUAL_LINE_PATTERN.search(line):
+    code_part, comment_part = _split_code_and_comment(line)
+    if re.search(r"[Kk]eycloak|KEYCLOAK", code_part):
+        return True
+    # Keycloak appears only in the comment portion: a justified residual
+    # only when that comment documents the retirement.
+    if RESIDUAL_LINE_PATTERN.search(comment_part):
         return False
     return True
 
