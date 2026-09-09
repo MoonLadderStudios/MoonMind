@@ -39,6 +39,36 @@ See the [Omnigent module entrypoint](docs/Omnigent/README.md), the canonical [Om
 
 `.env` is optional for normal local startup. Use `.env-template` only when you want to override defaults or preconfigure advanced settings before launch.
 
+### Access through a host name, LAN, or VPN
+
+Fresh Compose installations publish the dashboard on `127.0.0.1:7000`.
+`http://localhost:7000` works on that host; a machine name that resolves to its
+LAN or VPN address needs an explicit publish binding.
+
+For an operator-approved private network with restricted ingress, persist the
+following in the deployment's existing `.env`, replacing the example address
+with the host's approved LAN or VPN interface address:
+
+```dotenv
+MOONMIND_API_PUBLISH_HOST=192.0.2.10
+MOONMIND_API_HOST_PORT=7000
+MOONMIND_TRUSTED_INGRESS=1
+```
+
+`MOONMIND_TRUSTED_INGRESS=1` declares that the ingress boundary is already trusted;
+it does not configure a firewall or add authentication. The `disabled` auth mode
+relies on that boundary. An explicit interface binding serves that interface;
+it does not also publish on localhost or other interfaces. Use an authenticated,
+restricted ingress for access outside the approved network. See
+[Authentication Contracts](docs/Security/AuthenticationContracts.md).
+
+Apply a binding change with `docker compose up -d --no-deps api`, then check
+`http://<operator-host>:7000/healthz`, the dashboard, and
+`python tools/verify_deployed_ui_assets.py --base-url http://<operator-host>:7000`.
+Use the actual operator URL when verifying an update. Preserve these `.env`
+settings across upgrades; changing a fresh-install default must not remove an
+existing installation's access.
+
 ### OAuth Workflow
 
 When you already have a subscription with a model provider:

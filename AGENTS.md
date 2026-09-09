@@ -116,6 +116,15 @@ When writing code that interacts with skills:
 
 - Create non-draft pull requests by default. Use a draft PR only when the user or task explicitly requests a draft, or when the workflow publish policy explicitly allows draft publication for a readiness/publish gate that cannot complete validation in the current environment but can still publish a bounded, reviewable handoff with clear missing evidence and next steps.
 
+## Deployment Access Is a Release Contract
+
+- Preserve the operator's working dashboard/API URLs across updates. Hostnames, published interfaces and ports, authentication mode, and trusted ingress are deployment contracts. A security or default change must not silently replace established LAN, VPN, or proxy access with localhost-only access.
+- Before recreating the API, record the existing published bindings and operator URLs, then compare them with the rendered candidate Compose configuration. Preserve authorized settings in the deployment-owned `.env` or existing override file; never replace that file from `.env-template`. Do not infer an installed deployment's intended exposure from fresh-install defaults.
+- When a new security requirement conflicts with existing access, prepare and verify an explicit ingress/configuration migration before switching traffic. Preserve the working deployment until the replacement path is ready. Do not silently disable authentication, assert trusted ingress, or widen exposure to satisfy a health check; an existing user authorization for the specific restoration remains authoritative.
+- After any deployment, auth, port, proxy, or network change, verify `/healthz`, the dashboard and its assets, and a read-only API request through the actual operator hostname and port. Run `python tools/verify_deployed_ui_assets.py --base-url <operator-url>`. Container health and requests to container-local or host-local `localhost` are not proof that a LAN/VPN/proxy URL works. Verify each supported client access path and report any path that cannot be tested.
+- Required regression coverage must include fresh omitted/default inputs, their explicit equivalents, authorized non-loopback configuration through real Compose rendering and API startup, and preservation of deployment-owned settings across updates. Turn an escaped healthy-container/unreachable-dashboard failure into a minimized replay fixture; do not merely pin a new default in a source-string assertion.
+- Check required capabilities at their owning service boundary. In particular, a Docker requirement uses the deployment-owned Docker Backend configuration and its worker's readiness; the LLM/planning worker and managed agents intentionally do not own a daemon socket. Do not "fix" admission by mounting sockets, exporting daemon credentials to those workers, dropping required capabilities, or treating local CLI presence as authorization. Cover the real planning Activity request shape and historical payloads when changing these gates.
+
 ## Testing Instructions
 
 ### Test Taxonomy

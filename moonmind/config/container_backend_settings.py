@@ -78,7 +78,7 @@ class ContainerBackendReadinessError(RuntimeError):
     """Raised when a configured backend endpoint is missing or unreachable."""
 
 
-def _coerce_bool(value: object, *, default: bool) -> bool:
+def _coerce_bool(value: object, *, default: bool, field_name: str) -> bool:
     if value is None:
         return default
     text = str(value).strip().lower()
@@ -87,30 +87,26 @@ def _coerce_bool(value: object, *, default: bool) -> bool:
     if text in _FALSEY:
         return default if text == "" else False
     raise ContainerBackendConfigError(
-        f"container backend boolean flag must be truthy/falsey, got {value!r}"
+        f"{field_name} must be a truthy/falsey boolean flag"
     )
 
 
-def _coerce_int(value: object, *, default: int, minimum: int) -> int:
+def _coerce_int(value: object, *, default: int, minimum: int, field_name: str) -> int:
     if value is None or str(value).strip() == "":
         return default
     try:
         parsed = int(str(value).strip())
     except ValueError as exc:
-        raise ContainerBackendConfigError(
-            f"container backend integer ceiling must be an integer, got {value!r}"
-        ) from exc
+        raise ContainerBackendConfigError(f"{field_name} must be an integer") from exc
     if parsed < minimum:
-        raise ContainerBackendConfigError(
-            f"container backend integer ceiling must be >= {minimum}, got {parsed}"
-        )
+        raise ContainerBackendConfigError(f"{field_name} must be >= {minimum}")
     return parsed
 
 
-def _coerce_optional_int(value: object, *, minimum: int) -> int | None:
+def _coerce_optional_int(value: object, *, minimum: int, field_name: str) -> int | None:
     if value is None or str(value).strip() == "":
         return None
-    return _coerce_int(value, default=minimum, minimum=minimum)
+    return _coerce_int(value, default=minimum, minimum=minimum, field_name=field_name)
 
 
 @dataclass(frozen=True)
@@ -229,11 +225,11 @@ def _named_volume(value: object, *, field_name: str) -> str:
     return normalized
 
 
-def _registry_pull_policy(value: object, *, default: str) -> str:
+def _registry_pull_policy(value: object, *, default: str, field_name: str) -> str:
     normalized = str(value or default).strip().lower()
     if normalized not in {"if-missing", "always", "never"}:
         raise ContainerBackendConfigError(
-            "container registry image pull policy must be one of "
+            f"{field_name} registry image pull policy must be one of "
             "if-missing, always, never"
         )
     return normalized
@@ -297,7 +293,7 @@ def _reject_unknown_keys(
     unknown = sorted(str(key) for key in item if str(key) not in allowed)
     if unknown:
         raise ContainerBackendConfigError(
-            f"{field_name} declares unknown key(s) {', '.join(unknown)}; "
+            f"{field_name} declares unknown key(s); "
             f"allowed keys: {', '.join(sorted(allowed))}"
         )
 
@@ -327,12 +323,10 @@ def _declared_image_sources(
             )
         if source_ref in reserved_refs:
             raise ContainerBackendConfigError(
-                f"{field} sourceRef {source_ref!r} is reserved by MoonMind"
+                f"{field}.sourceRef is reserved by MoonMind"
             )
         if source_ref in seen:
-            raise ContainerBackendConfigError(
-                f"{field} declares duplicate sourceRef {source_ref!r}"
-            )
+            raise ContainerBackendConfigError(f"{field} declares duplicate sourceRef")
         seen.add(source_ref)
         # Reuse the public credential-reference validator; secret values never
         # belong in deployment image declarations either. Empty interpolation
@@ -361,7 +355,9 @@ def _declared_image_sources(
                 # the normal credential-aware pull contract when authorization
                 # is unavailable; deployments may explicitly select ``never``.
                 pull_policy=_registry_pull_policy(
-                    item.get("pullPolicy"), default="if-missing"
+                    item.get("pullPolicy"),
+                    default="if-missing",
+                    field_name=f"{field}.pullPolicy",
                 ),
             )
         )
@@ -380,13 +376,9 @@ def _declared_cache_sources(raw: object) -> tuple[CacheSource, ...]:
         _reject_unknown_keys(item, allowed=_CACHE_SOURCE_KEYS, field_name=field)
         cache_ref = str(item.get("cacheRef") or "").strip()
         if not cache_ref:
-            raise ContainerBackendConfigError(
-                f"{field} requires a non-empty cacheRef"
-            )
+            raise ContainerBackendConfigError(f"{field} requires a non-empty cacheRef")
         if cache_ref in seen:
-            raise ContainerBackendConfigError(
-                f"{field} declares duplicate cacheRef {cache_ref!r}"
-            )
+            raise ContainerBackendConfigError(f"{field} declares duplicate cacheRef")
         seen.add(cache_ref)
         sources.append(
             CacheSource(
@@ -394,10 +386,10 @@ def _declared_cache_sources(raw: object) -> tuple[CacheSource, ...]:
                 volume_name=_named_volume(
                     item.get("volumeName"), field_name=f"{field}.volumeName"
                 ),
-                target=_mount_target(
-                    item.get("target"), field_name=f"{field}.target"
+                target=_mount_target(item.get("target"), field_name=f"{field}.target"),
+                read_only=_coerce_bool(
+                    item.get("readOnly"), default=False, field_name=f"{field}.readOnly"
                 ),
-                read_only=_coerce_bool(item.get("readOnly"), default=False),
             )
         )
     return tuple(sources)
@@ -411,7 +403,9 @@ def resolve_container_backend_settings(
     The endpoint is sourced from ``SYSTEM_DOCKER_HOST`` first (the deployment
     authority handoff preserved by ``docker-compose.yaml``), then ``DOCKER_HOST``,
     then the ``docker-proxy`` default. A caller can never provide or override it.
-    An unsupported ``kind`` fails fast.
+    An unsupported ``kind`` fails fast. Validation errors identify fixed setting
+    names and declaration indices without reflecting authored values; these
+    diagnostics may be projected into workflow readiness blockers.
     """
 
     source = os.environ if env is None else env
@@ -420,7 +414,7 @@ def resolve_container_backend_settings(
     if kind not in SUPPORTED_CONTAINER_BACKEND_KINDS:
         allowed = ", ".join(sorted(SUPPORTED_CONTAINER_BACKEND_KINDS))
         raise ContainerBackendConfigError(
-            f"unsupported container backend kind {kind!r}; supported kinds: {allowed}"
+            f"MOONMIND_CONTAINER_BACKEND_KIND is unsupported; supported kinds: {allowed}"
         )
 
     default_backend_ref = (
@@ -428,7 +422,7 @@ def resolve_container_backend_settings(
     ).strip()
     if not default_backend_ref:
         raise ContainerBackendConfigError(
-            "container backend defaultBackendRef must not be empty"
+            "MOONMIND_CONTAINER_BACKEND_DEFAULT_REF must not be empty"
         )
 
     endpoint = (
@@ -466,6 +460,7 @@ def resolve_container_backend_settings(
             recipe_version=PYTHON_TEST_RECIPE_VERSION,
             max_age_seconds=_coerce_optional_int(
                 source.get("MOONMIND_PYTHON_TEST_IMAGE_MAX_AGE_SECONDS"),
+                field_name="MOONMIND_PYTHON_TEST_IMAGE_MAX_AGE_SECONDS",
                 minimum=1,
             ),
             validation_command=("python", "-c", "import pytest"),
@@ -486,12 +481,14 @@ def resolve_container_backend_settings(
 
     max_memory_mib = _coerce_int(
         source.get("MOONMIND_CONTAINER_BACKEND_MAX_MEMORY_MIB"),
+        field_name="MOONMIND_CONTAINER_BACKEND_MAX_MEMORY_MIB",
         default=16384,
         minimum=16,
     )
 
     shm_size_mib = _coerce_int(
         source.get("MOONMIND_CONTAINER_BACKEND_SHM_SIZE_MIB"),
+        field_name="MOONMIND_CONTAINER_BACKEND_SHM_SIZE_MIB",
         default=64,
         minimum=1,
     )
@@ -500,6 +497,7 @@ def resolve_container_backend_settings(
     # and never publishes a shared-memory allowance larger than that.
     max_shm_size_mib = _coerce_int(
         source.get("MOONMIND_CONTAINER_BACKEND_MAX_SHM_SIZE_MIB"),
+        field_name="MOONMIND_CONTAINER_BACKEND_MAX_SHM_SIZE_MIB",
         default=max_memory_mib,
         minimum=1,
     )
@@ -516,42 +514,52 @@ def resolve_container_backend_settings(
 
     return ContainerBackendSettings(
         enabled=_coerce_bool(
-            source.get("MOONMIND_CONTAINER_BACKEND_ENABLED"), default=True
+            source.get("MOONMIND_CONTAINER_BACKEND_ENABLED"),
+            default=True,
+            field_name="MOONMIND_CONTAINER_BACKEND_ENABLED",
         ),
         kind=kind,
         default_backend_ref=default_backend_ref,
         endpoint=endpoint,
         raw_cli_enabled=_coerce_bool(
-            source.get("MOONMIND_CONTAINER_BACKEND_RAW_CLI_ENABLED"), default=False
+            source.get("MOONMIND_CONTAINER_BACKEND_RAW_CLI_ENABLED"),
+            default=False,
+            field_name="MOONMIND_CONTAINER_BACKEND_RAW_CLI_ENABLED",
         ),
         max_cpu_millis=_coerce_int(
             source.get("MOONMIND_CONTAINER_BACKEND_MAX_CPU_MILLIS"),
+            field_name="MOONMIND_CONTAINER_BACKEND_MAX_CPU_MILLIS",
             default=8000,
             minimum=1,
         ),
         max_memory_mib=max_memory_mib,
         max_active_memory_mib=_coerce_optional_int(
             source.get("MOONMIND_CONTAINER_BACKEND_MAX_ACTIVE_MEMORY_MIB"),
+            field_name="MOONMIND_CONTAINER_BACKEND_MAX_ACTIVE_MEMORY_MIB",
             minimum=16,
         ),
         max_pids=_coerce_int(
             source.get("MOONMIND_CONTAINER_BACKEND_MAX_PIDS"),
+            field_name="MOONMIND_CONTAINER_BACKEND_MAX_PIDS",
             default=2048,
             minimum=16,
         ),
         max_gpu_count=_coerce_optional_int(
             source.get("MOONMIND_CONTAINER_BACKEND_MAX_GPU_COUNT"),
+            field_name="MOONMIND_CONTAINER_BACKEND_MAX_GPU_COUNT",
             minimum=0,
         ),
         shm_size_mib=shm_size_mib,
         max_shm_size_mib=max_shm_size_mib,
         max_timeout_seconds=_coerce_int(
             source.get("MOONMIND_CONTAINER_BACKEND_MAX_TIMEOUT_SECONDS"),
+            field_name="MOONMIND_CONTAINER_BACKEND_MAX_TIMEOUT_SECONDS",
             default=14400,
             minimum=1,
         ),
         max_output_bytes=_coerce_int(
             source.get("MOONMIND_CONTAINER_BACKEND_MAX_OUTPUT_BYTES"),
+            field_name="MOONMIND_CONTAINER_BACKEND_MAX_OUTPUT_BYTES",
             default=64_000,
             minimum=1024,
         ),
@@ -560,11 +568,13 @@ def resolve_container_backend_settings(
         # size rather than silently truncating collected evidence.
         max_output_files=_coerce_int(
             source.get("MOONMIND_CONTAINER_BACKEND_MAX_OUTPUT_FILES"),
+            field_name="MOONMIND_CONTAINER_BACKEND_MAX_OUTPUT_FILES",
             default=1024,
             minimum=1,
         ),
         max_output_total_bytes=_coerce_int(
             source.get("MOONMIND_CONTAINER_BACKEND_MAX_OUTPUT_TOTAL_BYTES"),
+            field_name="MOONMIND_CONTAINER_BACKEND_MAX_OUTPUT_TOTAL_BYTES",
             default=256 * 1024 * 1024,
             minimum=1024,
         ),

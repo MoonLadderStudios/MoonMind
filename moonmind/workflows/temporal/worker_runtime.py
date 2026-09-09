@@ -43,10 +43,12 @@ from api_service.db.models import (
 )
 from moonmind.capabilities.input_contracts import validate_capability_inputs
 from moonmind.config.container_backend_settings import (
+    ContainerBackendConfigError,
     resolve_container_backend_settings,
 )
 from moonmind.config.logging import configure_logging, default_log_fields_from_env
 from moonmind.config.settings import settings
+from moonmind.utils.logging import redact_sensitive_text
 from moonmind.omnigent.legacy_retirement import (
     enforce_obsolete_configuration_at_startup,
 )
@@ -1069,15 +1071,46 @@ def _required_capability_blockers(
             )
 
     if "docker" in capabilities:
-        docker_host = os.getenv("DOCKER_HOST")
-        default_socket = Path("/var/run/docker.sock")
-        if not docker_host and not default_socket.exists():
+        # Planning runs on the LLM fleet, which intentionally has no daemon
+        # authority. Validate the deployment-owned service configuration here;
+        # the agent-runtime worker owns live backend/egress readiness and the
+        # container-job launch boundary owns per-job policy and authorization.
+        if not settings.feature_flags.container_jobs_enabled:
             add(
                 "docker",
-                check="docker_runtime",
-                reason="Docker capability is required but no Docker endpoint is visible to this worker.",
-                remediation="Run on a Docker-capable worker fleet or disable Docker-required execution.",
+                check="container_job_service",
+                reason="The container-job HTTP/MCP service is disabled by deployment configuration.",
+                remediation=(
+                    "Enable MOONMIND_CONTAINER_JOBS_ENABLED consistently on the API "
+                    "and worker fleet before launching Docker-required workflows."
+                ),
             )
+        try:
+            container_backend = resolve_container_backend_settings()
+        except ContainerBackendConfigError as exc:
+            add(
+                "docker",
+                check="container_backend",
+                reason=(
+                    "Docker Backend Service configuration is invalid: "
+                    + redact_sensitive_text(str(exc))[:512]
+                ),
+                remediation=(
+                    "Correct the deployment-owned MOONMIND_CONTAINER_BACKEND_* "
+                    "settings and verify the agent-runtime worker's readiness."
+                ),
+            )
+        else:
+            if not container_backend.enabled:
+                add(
+                    "docker",
+                    check="container_backend",
+                    reason="Docker Backend Service is disabled by deployment configuration.",
+                    remediation=(
+                        "Enable MOONMIND_CONTAINER_BACKEND_ENABLED on the deployment "
+                        "and verify the agent-runtime worker's containerBackend readiness."
+                    ),
+                )
 
     return blockers
 

@@ -328,6 +328,32 @@ def test_update_persists_revision_without_clobbering_operator_env(
     ]
 
 
+def test_update_preserves_operator_network_access(tmp_path: Path) -> None:
+    manifest = json.loads(
+        (
+            ROOT
+            / "tests/integration/reliability/replays"
+            / "api-publish-binding-cutover/manifest.json"
+        ).read_text(encoding="utf-8")
+    )
+    operator_settings = manifest["operatorEnvironment"]
+    _run_update_scenario(
+        tmp_path,
+        changed_file="api_service/main.py",
+        initial_env_contents="".join(
+            f"{name}={value}\n" for name, value in operator_settings.items()
+        ),
+        no_compose_pull=True,
+    )
+    persisted = dict(
+        line.split("=", 1)
+        for line in (tmp_path / "checkout/.env")
+        .read_text(encoding="utf-8")
+        .splitlines()
+    )
+    assert {name: persisted[name] for name in operator_settings} == operator_settings
+
+
 def test_skill_source_update_quiesces_resolver_before_checkout_mutation(
     tmp_path: Path,
 ) -> None:
