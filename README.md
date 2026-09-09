@@ -154,13 +154,13 @@ MoonMind runs as a set of decoupled containers from a single `docker-compose.yam
 | **Docker Backend Service** | Authenticated MCP and HTTP container-job surface that resolves workspaces, applies policy, dispatches bounded jobs through Temporal, and uses one deployment-selected Docker daemon whose image cache is reusable across workflows. |
 | **Dashboard** | Operational dashboard for managing workflows, reviewing per-step progress, and inspecting logs, diagnostics, artifacts, runtime provenance, and recovery state. |
 | **MinIO** | S3-compatible storage for immutable artifacts and large evidence. |
+| **Docker Proxy** | Restricted system-Docker access for trusted MoonMind backend execution. It is not exposed to managed sessions or Omnigent runners. |
 
 MoonMind is vector-free by design: ordinary workflows and chat need no vector
 database, embedding credentials, or retrieval-index configuration. PostgreSQL
 persists relational records, Temporal persists durable execution state, and
 MinIO persists artifacts. There is no MoonMind-managed vector service, profile,
 extension, or index, and no implicit external replacement.
-| **Docker Proxy** | Restricted system-Docker access for trusted MoonMind backend execution. It is not exposed to managed sessions or Omnigent runners. |
 
 ## Contributing
 

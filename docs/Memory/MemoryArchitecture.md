@@ -194,9 +194,10 @@ MoonMind implements this architecture with small adapters/services:
   - `search(query, scope, filters) -> memories`
   - `add_or_update(memory, review_state, provenance)`
 
-- `ContextAssembly`
-  - `assemble_context_bundle(query, run_ref?, planning_ref?, budgets) -> context_bundle`
-  - used by chat and workflow workers.
+- `RetrievalGateway` (`moonmind/memory/services.py`)
+  - `retrieve_context_pack(query, *, namespace_id, repo, planning_ref?, budget?) -> ContextPack`
+  - used by chat and workflow workers to assemble planning, history, curated
+    knowledge, and explicitly referenced attachments into a budgeted pack.
 
 ## 8) Runtime Controls (Feature Flags)
 
