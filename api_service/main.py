@@ -1153,9 +1153,47 @@ if _ENABLE_TEST_UI_ROUTE:
 # (docs/Security/AuthenticationContracts.md), and `disabled` mode resolves the
 # persisted default user via get_current_user().
 
+def _resolve_cors_allowed_origins() -> list[str]:
+    """Resolve explicit credentialed CORS origins (#4121 req 5).
+
+    Credentialed browsers must enumerate trusted origins explicitly via
+    ``MOONMIND_CORS_ALLOWED_ORIGINS`` (comma separated) and/or
+    ``MOONMIND_PUBLIC_BASE_URL`` (its scheme://host[:port] origin). A
+    configured ``"*"`` with credentials fails closed at startup rather
+    than silently allowing any site to issue credentialed mutations.
+    """
+    from moonmind.security.session_authority_4121 import (
+        resolve_credentialed_cors_origins,
+    )
+    from urllib.parse import urlsplit
+
+    raw = os.environ.get("MOONMIND_CORS_ALLOWED_ORIGINS", "")
+    explicit = [part.strip() for part in raw.split(",") if part.strip()]
+    public_base = os.environ.get("MOONMIND_PUBLIC_BASE_URL", "").strip()
+    if public_base:
+        try:
+            parts = urlsplit(public_base)
+            if parts.scheme and parts.hostname:
+                port = f":{parts.port}" if parts.port else ""
+                explicit.append(f"{parts.scheme}://{parts.hostname}{port}")
+        except ValueError:
+            pass
+    if any(origin == "*" for origin in explicit):
+        raise RuntimeError(
+            "MOONMIND_CORS_ALLOWED_ORIGINS cannot be '*' with credentialed "
+            "requests: enumerate explicit trusted origins for "
+            "cookie-authenticated browsers (#4121)."
+        )
+    return resolve_credentialed_cors_origins(explicit, allow_credentials=True)
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    # #4121: credentialed wildcard CORS ("*" + allow_credentials) would let
+    # any site issue credentialed cross-origin cookie mutations. Resolve
+    # explicit trusted origins from MOONMIND_CORS_ALLOWED_ORIGINS (comma
+    # separated) plus MOONMIND_PUBLIC_BASE_URL; wildcard is only honored
+    # for non-credentialed deployments.
+    allow_origins=_resolve_cors_allowed_origins(),
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
