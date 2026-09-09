@@ -297,6 +297,45 @@ def test_prior_schema_probe_materializes_a_real_prior_revision(monkeypatch) -> N
     assert not any("stamp" in inv for inv in invocations)
 
 
+def test_prior_schema_probe_upgrades_from_a_merge_point_parent(monkeypatch) -> None:
+    """A merge revision lists its parents under ``Merges:``; the probe
+    materializes the first declared branch and upgrades through the sibling
+    branch and the merge revision, as a deployment on that branch does."""
+    from tools import _exact_artifact_runtime_probes as probes
+
+    invocations: list[tuple[str, ...]] = []
+
+    class _Completed:
+        returncode = 0
+        stdout = (
+            "Rev: 376_merge_heads (head) (mergepoint)\n"
+            "Merges: 375_branch_a, 375_branch_b\n"
+            "Path: /app/api_service/migrations/versions/376_merge_heads.py\n"
+        )
+        stderr = ""
+
+    def fake_run(args, *, timeout=120):
+        invocations.append(tuple(args[args.index("-c") + 2 :]))
+        return _Completed()
+
+    monkeypatch.setattr(probes, "_run", fake_run)
+
+    ok, detail = probes._probe_migrations(
+        "sha256:" + "f" * 64,
+        "postgresql://u:p@127.0.0.1:5432/probe_prior",
+        prior_schema=True,
+    )
+
+    assert ok, detail
+    assert invocations == [
+        ("show", "head"),
+        ("upgrade", "375_branch_a"),
+        ("upgrade", "head"),
+    ]
+    assert "merge-point parent" in detail
+    assert "375_branch_b" in detail
+
+
 def test_prior_schema_probe_fails_closed_without_a_parent_revision(monkeypatch) -> None:
     from tools import _exact_artifact_runtime_probes as probes
 
