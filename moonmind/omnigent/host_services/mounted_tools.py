@@ -102,6 +102,17 @@ class OmnigentMountedToolService:
                 f"resolved tools are absent from the deployment bundle: {unknown}",
                 code=HarnessPlatformFailure.OMNIGENT_HOST_LAUNCH_FAILED,
             )
+        for name in names:
+            probe = manifest[name].get("versionProbe")
+            if (
+                not isinstance(probe, list)
+                or not probe
+                or any(not isinstance(arg, str) or not arg for arg in probe)
+            ):
+                raise HarnessPlatformError(
+                    f"deployment mounted-tool probe is malformed for {name}",
+                    code=HarnessPlatformFailure.OMNIGENT_HOST_LAUNCH_FAILED,
+                )
         if not _SAFE_VOLUME.fullmatch(self._volume_ref):
             raise HarnessPlatformError(
                 "deployment mounted-tool volume identity is unsafe",
@@ -124,6 +135,7 @@ class OmnigentMountedToolService:
                         "name": name,
                         "version": str(manifest[name].get("version") or ""),
                         "path": str(manifest[name].get("path") or ""),
+                        "versionProbe": list(manifest[name]["versionProbe"]),
                         "executableDigests": sorted(
                             {
                                 str(platform.get("executableSha256") or "")

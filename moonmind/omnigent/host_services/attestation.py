@@ -465,7 +465,7 @@ class DockerOmnigentHostAttestor:
                     (
                         'test -x "$1"; actual=$(sha256sum "$1" | awk \'{print $1}\'); ',
                         'case ",$2," in *,"$actual",*) :;; *) exit 1;; esac; ',
-                        '"$1" --version >/dev/null',
+                        'executable="$1"; shift 2; "$executable" "$@" >/dev/null',
                     )
                 )
                 _code, observed, _err = await self._backend.run(
@@ -479,7 +479,9 @@ class DockerOmnigentHostAttestor:
                         "--",
                         executable,
                         digests,
+                        *tool["versionProbe"],
                     ],
+                    timeout_seconds=10.0,
                     failure_code=HarnessPlatformFailure.OMNIGENT_HARNESS_BUILD_MISMATCH,
                 )
                 tool_mount_evidence.append(
@@ -489,6 +491,7 @@ class DockerOmnigentHostAttestor:
                         "path": executable,
                         "accessMode": "read-only",
                         "digestVerified": bool(digests),
+                        "versionProbe": list(tool["versionProbe"]),
                         "probe": observed.strip()[:128],
                     }
                 )
