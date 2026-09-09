@@ -13,10 +13,12 @@ Matrix-to-evidence mapping (issue required-coverage rows):
   ``test_dependency_removal_pending_sibling_ownership`` records the
   ``qdrant-client`` residual owned by #4106-#4113. Flip it to assert absence
   when removal lands; do not claim this row qualified before then.
-- Topology: ``test_compose_*`` guards the rendered default Compose file plus
-  fixture negative controls for renamed services, optional profiles,
-  embedded vector startup, and pgvector init SQL. All-profiles sanitized-env
-  rendering and live startup remain protected deployment checks (see
+- Topology: ``test_compose_*`` guards the rendered default Compose file, the
+  test Compose file, every declared profile, and every documented
+  ``--profile``/``COMPOSE_PROFILES`` combination (hermetic YAML render under
+  sanitized env), plus fixture negative controls for renamed services,
+  optional profiles, embedded vector startup, and pgvector init SQL. Live
+  startup remains a protected deployment check (see
   ``test_topology_matrix_gaps_are_explicit``).
 - Real startup: hermetic sentinel logic only
   (``test_startup_sentinel_*``). Fresh Compose startup, init-db/Alembic,
@@ -32,7 +34,10 @@ Matrix-to-evidence mapping (issue required-coverage rows):
   framework and replaces no production path with a fake service.
 - Docs/operations: ``test_env_template_*`` and
   ``test_update_script_*`` prove the shipped examples/scripts do not
-  demand or recreate a vector backend.
+  demand or recreate a vector backend. The active-docs/help residual is
+  explicitly pinned by
+  ``test_docs_operations_residual_pending_sibling_ownership`` (owned by
+  #4106-#4113), not claimed qualified here.
 
 Negative controls (issue requirement 5): every guard below is proven with a
 fixture that reintroduces the retired capability (transitive requirement,
@@ -204,6 +209,69 @@ def check_tool_manifest_vector_free(descriptors: list[str]) -> list[str]:
 def test_compose_has_no_live_vector_service() -> None:
     compose = yaml.safe_load((REPO_ROOT / "docker-compose.yaml").read_text())
     assert check_compose_vector_free(compose) == []
+
+
+def _declared_profiles(compose: dict) -> set[str]:
+    profiles: set[str] = set()
+    for service in ((compose.get("services", {})) or {}).values():
+        for profile in (service or {}).get("profiles", []) or []:
+            profiles.add(str(profile))
+    return profiles
+
+
+def test_compose_test_file_has_no_live_vector_service() -> None:
+    compose = yaml.safe_load(
+        (REPO_ROOT / "docker-compose.test.yaml").read_text()
+    )
+    assert check_compose_vector_free(compose) == []
+
+
+def test_compose_all_profiles_are_vector_free() -> None:
+    """Every declared profile renders without a vector backend.
+
+    Hermetic YAML render under sanitized env: the full file (all profiles
+    enabled) carries no vector wiring, and no declared profile name itself
+    selects a vector backend. A renamed vector profile must fail here via
+    the optional-profile guard, not hide behind ``COMPOSE_PROFILES``.
+    """
+    compose = yaml.safe_load((REPO_ROOT / "docker-compose.yaml").read_text())
+    assert check_compose_vector_free(compose) == []
+    profiles = _declared_profiles(compose)
+    # The test only means something when profiles exist to enumerate.
+    assert profiles, "expected declared Compose profiles to enumerate"
+    for profile in sorted(profiles):
+        assert not _VECTOR_PROFILE_RE.search(profile), (
+            f"profile {profile!r} selects a vector backend"
+        )
+
+
+def test_compose_documented_combinations_reference_no_vector_profile() -> None:
+    """Documented ``--profile``/``COMPOSE_PROFILES`` combos stay vector-free.
+
+    Every profile named by the supported-stack runbook must exist in the
+    canonical Compose file and must not select a vector backend. Adding a
+    documented vector combination must fail here.
+    """
+    compose = yaml.safe_load((REPO_ROOT / "docker-compose.yaml").read_text())
+    declared = _declared_profiles(compose)
+    runbook = (
+        REPO_ROOT / "docs/Omnigent/CombinedStackValidationAndRollback.md"
+    ).read_text(encoding="utf-8")
+    referenced: set[str] = set(
+        re.findall(r"--profile\s+([A-Za-z0-9_.\-]+)", runbook)
+    )
+    for combo in re.findall(r"COMPOSE_PROFILES=\"([^\"]*)\"", runbook):
+        referenced.update(
+            part.strip() for part in combo.split(",") if part.strip()
+        )
+    assert referenced, "expected documented Compose profiles to enumerate"
+    for profile in sorted(referenced):
+        assert profile in declared, (
+            f"documented profile {profile!r} is not a declared Compose profile"
+        )
+        assert not _VECTOR_PROFILE_RE.search(profile), (
+            f"documented profile {profile!r} selects a vector backend"
+        )
 
 
 def test_compose_rejects_renamed_vector_service() -> None:
@@ -420,6 +488,28 @@ def test_update_script_does_not_recreate_vector_backend() -> None:
     ]
     code = "\n".join(code_lines)
     assert not re.search(r"\bqdrant\b", code, re.IGNORECASE)
+
+
+def test_docs_operations_residual_pending_sibling_ownership() -> None:
+    """Record the active-docs/help residual owned by #4106-#4113.
+
+    The shipped examples/scripts above are vector-free, but active docs and
+    generated CLI help still describe the not-yet-removed Qdrant capability
+    (e.g. ``README.md``, ``docs/ManagedAgents/WorkerVectorEmbedding.md``,
+    ``moonmind/cli.py`` rag help). This test pins that fact so the
+    docs/operations row cannot be misreported as qualified. When the sibling
+    removal lands, replace these assertions with absence checks and update
+    the matrix mapping accordingly; do not edit shipped docs here to claim
+    removal while the code still ships it.
+    """
+    readme = (REPO_ROOT / "README.md").read_text(encoding="utf-8")
+    assert re.search(r"qdrant", readme, re.IGNORECASE)
+    worker_doc = (
+        REPO_ROOT / "docs/ManagedAgents/WorkerVectorEmbedding.md"
+    ).read_text(encoding="utf-8")
+    assert re.search(r"qdrant", worker_doc, re.IGNORECASE)
+    cli = (REPO_ROOT / "moonmind/cli.py").read_text(encoding="utf-8")
+    assert re.search(r"qdrant", cli, re.IGNORECASE)
 
 
 def test_topology_matrix_gaps_are_explicit() -> None:
