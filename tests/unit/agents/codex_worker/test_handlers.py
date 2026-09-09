@@ -1925,6 +1925,9 @@ async def test_handler_appends_retrieval_capability_note_when_rag_available(
     handler._run_command = fake_run_command  # type: ignore[method-assign]
     monkeypatch.setenv("MOONMIND_RAG_AUTO_CONTEXT", "1")
     monkeypatch.setenv("RAG_ENABLED", "1")
+    # Vector-free defaults (#4115): this RAG-available path under test opts
+    # in explicitly.
+    monkeypatch.setenv("QDRANT_ENABLED", "1")
     monkeypatch.setenv("GOOGLE_API_KEY", "test-key")
     monkeypatch.delenv("MOONMIND_RETRIEVAL_URL", raising=False)
     monkeypatch.setattr(
