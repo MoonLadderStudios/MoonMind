@@ -3504,7 +3504,7 @@ class TemporalArtifactActivities:
           (relational execution store), already persisted before this step.
         - Artifact-persistence owner: ``TemporalArtifactService`` (create +
           write_complete), used here with the generic ``output.summary`` link
-          type and STANDARD retention.
+          type and LONG retention (digests are small, high-value history).
         - Cleanup owner: the artifact lifecycle sweep activities; this step
           never triggers cleanup and never releases workspace/credential
           authority.
@@ -3516,7 +3516,11 @@ class TemporalArtifactActivities:
         and swallowed so auxiliary summary persistence can never fail terminal
         recording, delay required artifact capture, or rerun completed
         agent/publication work. Writes are idempotent per
-        (workflow_id, run_id): a COMPLETE digest artifact is reused on retry.
+        (workflow_id, run_id): a COMPLETE digest artifact created by this
+        finalization principal with the exact digest contract
+        (recordKind/schemaVersion/idempotencyKey) is reused on retry, and a
+        leftover PENDING_UPLOAD row from an interrupted attempt is completed
+        with the deterministic payload instead of accumulating a duplicate.
 
         Returns the digest artifact_id, or None when persistence is skipped
         or fails open.
@@ -3545,23 +3549,57 @@ class TemporalArtifactActivities:
                     principal=_RUN_DIGEST_PERSIST_PRINCIPAL,
                     link_type=_RUN_DIGEST_ARTIFACT_LINK_TYPE,
                 )
+                pending_match = None
                 for artifact in existing:
                     metadata = dict(artifact.metadata_json or {})
                     if (
                         metadata.get("name") == _RUN_DIGEST_ARTIFACT_NAME
                         and metadata.get("workflowId") == workflow_id
                         and metadata.get("runId") == run_id
-                        and artifact.status
-                        is db_models.TemporalArtifactStatus.COMPLETE
+                        and metadata.get("recordKind")
+                        == RUN_DIGEST_RECORD_KIND
+                        and metadata.get("schemaVersion")
+                        == RUN_DIGEST_ARTIFACT_SCHEMA_VERSION
+                        and metadata.get("idempotencyKey") == idempotency_key
+                        and (
+                            getattr(
+                                artifact, "created_by_principal", ""
+                            )
+                            or ""
+                        ).strip()
+                        == _RUN_DIGEST_PERSIST_PRINCIPAL
                     ):
-                        return artifact.artifact_id
+                        if (
+                            artifact.status
+                            is db_models.TemporalArtifactStatus.COMPLETE
+                        ):
+                            return artifact.artifact_id
+                        if (
+                            pending_match is None
+                            and artifact.status
+                            is db_models.TemporalArtifactStatus.PENDING_UPLOAD
+                        ):
+                            pending_match = artifact
                 encoded = (json.dumps(payload, sort_keys=True, indent=2) + "\n").encode(
                     "utf-8"
                 )
+                if pending_match is not None:
+                    # A prior attempt created the artifact row but died
+                    # before completing it: finish that row with the
+                    # deterministic payload instead of accumulating a
+                    # duplicate digest artifact on retry.
+                    completed = await self._service.write_complete(
+                        artifact_id=pending_match.artifact_id,
+                        principal=_RUN_DIGEST_PERSIST_PRINCIPAL,
+                        payload=encoded,
+                        content_type="application/json",
+                    )
+                    return completed.artifact_id
                 created, _upload = await self._service.create(
                     principal=_RUN_DIGEST_PERSIST_PRINCIPAL,
                     content_type="application/json",
                     size_bytes=len(encoded),
+                    retention_class=db_models.TemporalArtifactRetentionClass.LONG,
                     link=ExecutionRef(
                         namespace=namespace,
                         workflow_id=workflow_id,
