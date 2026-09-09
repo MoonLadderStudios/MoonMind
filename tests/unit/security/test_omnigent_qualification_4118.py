@@ -92,7 +92,7 @@ def test_supported_upstream_entrypoints_importable_without_whole_app():
     import sys
 
     for mod in ("omnigent.server.app", "omnigent.stores.permission_store"):
-        assert mod not in sys.modules or True  # documented exclusion, not an import
+        assert mod not in sys.modules
     assert "omnigent.server.routes.accounts_auth" not in sys.modules
     assert "omnigent.server.routes.auth" not in sys.modules
 
@@ -283,7 +283,7 @@ async def test_durable_revocation_survives_cache_hit():
     import jwt as pyjwt
 
     payload = pyjwt.decode(token, options={"verify_signature": False})
-    store.revoke(payload["jti"])
+    await store.revoke(payload["jti"])
     third = await auth.validate_session(token)
     assert third.code == "auth_invalid" and third.user_id is None
 
@@ -292,21 +292,38 @@ async def test_durable_revocation_survives_cache_hit():
 async def test_sync_store_work_offloaded_without_blocking_loop():
     # The async protocol never blocks the event loop with sync remote DB work:
     # password verification runs in a worker thread via asyncio.to_thread.
+    # The heartbeat must tick *while* verification is still running; awaiting
+    # verification first and then the heartbeat would pass even for a
+    # synchronous blocking implementation.
     fixtures = build_conformance_fixtures()
     auth: MoonmindQualifiedAuth = fixtures["auth"]
     prims = load_upstream_primitives()
     password_hash = prims["passwords"].hash_password("offload-4118")
-    loop_blocked = False
+    ticks: list[float] = []
+    stop = asyncio.Event()
 
     async def heartbeat():
-        nonlocal loop_blocked
-        await asyncio.sleep(0.01)
-        loop_blocked = True
+        import time as _time
+
+        while not stop.is_set():
+            ticks.append(_time.monotonic())
+            await asyncio.sleep(0.01)
+
+    async def verify():
+        await auth.verify_password_hash("offload-4118", password_hash)
+        stop.set()
 
     beat = asyncio.ensure_future(heartbeat())
-    await auth.verify_password_hash("offload-4118", password_hash)
-    await beat
-    assert loop_blocked is True
+    try:
+        await asyncio.gather(verify(), beat)
+    finally:
+        stop.set()
+        if not beat.done():
+            beat.cancel()
+    # Verification overlaps at least two heartbeat ticks only when it yields
+    # the event loop via to_thread; a synchronous inline check would block
+    # every tick until it completes.
+    assert len(ticks) >= 2
 
 
 @pytest.mark.asyncio
@@ -437,13 +454,23 @@ def test_invalid_config_fails_closed():
 
 
 def test_hostile_ambient_omnigent_env_does_not_select_behavior(monkeypatch):
+    import sys
+
     monkeypatch.setenv("OMNIGENT_AUTH_PROVIDER", "oidc")
     monkeypatch.setenv("OMNIGENT_AUTH_ENABLED", "1")
     monkeypatch.setenv("OMNIGENT_OIDC_ISSUER", "https://evil.example.invalid")
     monkeypatch.setenv("OMNIGENT_ACCOUNTS_COOKIE_SECRET", "00" * 32)
     monkeypatch.setenv("OMNIGENT_LOCAL_SINGLE_USER", "1")
     monkeypatch.setenv("OMNIGENT_AUTH_HEADER", "X-Evil")
-    fixtures = build_conformance_fixtures()
+    # Earlier tests in this file already imported the pinned upstream modules,
+    # so the hostile variables must be proven ineffective on a fresh import,
+    # not against the cached modules.
+    cleared = [mod for mod in list(sys.modules) if mod.startswith("omnigent.server.")]
+    saved = {mod: sys.modules.pop(mod) for mod in cleared}
+    try:
+        fixtures = build_conformance_fixtures()
+    finally:
+        sys.modules.update(saved)
     auth: MoonmindQualifiedAuth = fixtures["auth"]
     assert auth.config.mode == "accounts"
     assert auth.config.cookie_name == "mm_session_4118"
@@ -468,6 +495,154 @@ async def test_control_plane_runtime_cookie_key_purpose_isolation():
     token = control.mint_session(identity, record)
     assert (await runtime.validate_session(token)).code == "auth_invalid"
     assert (await control.validate_session(token)).code == "ok"
+
+
+@pytest.mark.asyncio
+async def test_oidc_and_header_modes_construct_and_validate():
+    for mode in ("oidc", "header"):
+        store = InMemoryAsyncAccountStore()
+        config = build_test_config(mode=mode)
+        auth = MoonmindQualifiedAuth(config, store)
+        assert auth.config.mode == mode
+        identity = resolve_validated_identity(
+            ISSUER_A, f"{mode}-user-4118", provider=mode
+        )
+        record = AccountRecord(user_id=uuid.uuid4())
+        store.enroll(identity, record)
+        token = auth.mint_session(identity, record)
+        result = await auth.validate_session(token)
+        assert result.code == "ok", mode
+        assert result.user_id == record.user_id, mode
+
+
+@pytest.mark.asyncio
+async def test_password_verification_bound_to_resolved_account():
+    fixtures = build_conformance_fixtures()
+    auth: MoonmindQualifiedAuth = fixtures["auth"]
+    store: InMemoryAsyncAccountStore = fixtures["store"]
+    prims = load_upstream_primitives()
+    password_hash = prims["passwords"].hash_password("owner-secret-4118")
+    owner_identity = resolve_validated_identity(ISSUER_A, "owner-4118")
+    owner_record = AccountRecord(user_id=uuid.uuid4())
+    store.enroll(owner_identity, owner_record)
+    other_identity = resolve_validated_identity(ISSUER_A, "other-4118")
+    other_record = AccountRecord(user_id=uuid.uuid4())
+    store.enroll(
+        other_identity, other_record, password_hash=password_hash, login="other-4118"
+    )
+    # The owner's password must not authenticate as the other account.
+    with pytest.raises(AuthConfigError):
+        await auth.authenticate_account(
+            login="other-4118",
+            password="owner-secret-4118",
+            issuer=ISSUER_A,
+            subject="owner-4118",
+        )
+
+
+@pytest.mark.asyncio
+async def test_session_without_expiry_rejected():
+    import jwt as pyjwt
+    import time as _time
+
+    fixtures = build_conformance_fixtures()
+    auth: MoonmindQualifiedAuth = fixtures["auth"]
+    config = auth.config
+    payload = {
+        "sub": str(uuid.uuid4()),
+        "iss": config.issuer,
+        "aud": config.audience,
+        "provider": "accounts",
+        "token_use": "moonmind-session",
+        "jti": "no-exp-4118",
+        "iat": int(_time.time()),
+    }
+    token = pyjwt.encode(payload, config.cookie_secret, algorithm="HS256")
+    assert (await auth.validate_session(token)).code == "auth_invalid"
+
+
+@pytest.mark.asyncio
+async def test_disabled_account_rechecked_on_full_validation():
+    fixtures = build_conformance_fixtures()
+    auth: MoonmindQualifiedAuth = fixtures["auth"]
+    store: InMemoryAsyncAccountStore = fixtures["store"]
+    identity, record = _enrolled(auth, store)
+    token = auth.mint_session(identity, record)
+    assert (await auth.validate_session(token)).code == "ok"
+    # Disable without revoking the JTI: full validation must still refuse.
+    auth._cache.clear()
+    stored = await store.get_account_by_id(record.user_id)
+    assert stored is not None
+    object.__setattr__(stored, "is_active", False)
+    assert (await auth.validate_session(token)).code == "auth_invalid"
+
+
+@pytest.mark.asyncio
+async def test_store_outage_maps_to_unavailable():
+    fixtures = build_conformance_fixtures()
+    auth: MoonmindQualifiedAuth = fixtures["auth"]
+    store: InMemoryAsyncAccountStore = fixtures["store"]
+    identity, record = _enrolled(auth, store)
+    token = auth.mint_session(identity, record)
+
+    async def _boom(_token_id: str) -> bool:
+        raise ConnectionError("durable store unavailable")
+
+    store.is_revoked = _boom  # type: ignore[method-assign]
+    assert (await auth.validate_session(token)).code == "unavailable"
+    assert (
+        await auth.validate_request(cookie_token=token)
+    ).code == "unavailable"
+
+
+def test_session_cache_evicts_expired_entries():
+    fixtures = build_conformance_fixtures()
+    auth: MoonmindQualifiedAuth = fixtures["auth"]
+    import time as _time
+
+    auth._cache["stale-4118"] = ("user", _time.monotonic() - 1.0, "jti-stale")
+    auth._cache["fresh-4118"] = ("user", _time.monotonic() + 60.0, "jti-fresh")
+    auth._evict_expired_cache()
+    assert "stale-4118" not in auth._cache
+    assert "fresh-4118" in auth._cache
+
+
+def test_configured_cookie_name_reaches_upstream_provider():
+    store = InMemoryAsyncAccountStore()
+    config = build_test_config(cookie_name="mm_custom_4118")
+    auth = MoonmindQualifiedAuth(config, store)
+    provider = auth.upstream_provider
+    names = set()
+    for attr in ("session_cookie_name", "cookie_name", "session_cookie"):
+        value = getattr(provider, attr, None)
+        if isinstance(value, str):
+            names.add(value)
+    oidc_cfg = getattr(provider, "oidc_config", None)
+    accounts_cfg = getattr(provider, "accounts_config", None)
+    for cfg in (oidc_cfg, accounts_cfg):
+        if cfg is not None:
+            for attr in ("session_cookie_name", "cookie_name"):
+                value = getattr(cfg, attr, None)
+                if isinstance(value, str):
+                    names.add(value)
+    assert "mm_custom_4118" in names
+    assert "__Host-ap_session" not in names
+    assert "ap_session" not in names
+
+
+@pytest.mark.asyncio
+async def test_revocation_through_store_protocol():
+    fixtures = build_conformance_fixtures()
+    auth: MoonmindQualifiedAuth = fixtures["auth"]
+    store: InMemoryAsyncAccountStore = fixtures["store"]
+    identity, record = _enrolled(auth, store)
+    token = auth.mint_session(identity, record)
+    assert (await auth.validate_session(token)).code == "ok"
+    import jwt as pyjwt
+
+    payload = pyjwt.decode(token, options={"verify_signature": False})
+    await store.revoke(payload["jti"])
+    assert (await auth.validate_session(token)).code == "auth_invalid"
 
 
 def test_conformance_fixture_factory_shape_for_later_issues():
