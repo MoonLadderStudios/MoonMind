@@ -22,7 +22,22 @@ pytestmark = [pytest.mark.asyncio, pytest.mark.integration, pytest.mark.reliabil
 @pytest.mark.parametrize(
     "harness_id", ["opencode-native", "codex-native", "claude-native"]
 )
-@pytest.mark.parametrize("fault", [None, "digest", "probe", "writable_mount"])
+@pytest.mark.parametrize(
+    "fault",
+    [
+        None,
+        "digest",
+        "probe",
+        "writable_mount",
+        "missing_probe",
+        "null_probe",
+        "empty_probe",
+        "string_probe",
+        "null_argument",
+        "empty_argument",
+        "nul_argument",
+    ],
+)
 async def test_declared_tool_probe_reaches_exact_host(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -32,7 +47,7 @@ async def test_declared_tool_probe_reaches_exact_host(
     manifest = load_replay("omnigent-mounted-tool-probe", "manifest.json")
     expected = load_replay("omnigent-mounted-tool-probe", "expected-outcome.json")
     repo_root = Path(__file__).resolve().parents[3]
-    bundle = tmp_path / "tools"
+    bundle = tmp_path / "mounted tools"
     (bundle / "bin").mkdir(parents=True)
     executable = bundle / "bin/moonmind"
     shutil.copyfile(
@@ -125,6 +140,25 @@ async def test_declared_tool_probe_reaches_exact_host(
             check=False,
         )
         assert code == expected["probeFailureExitCode"]
+    elif fault == "missing_probe":
+        # Historical launch attachments can predate manifest probe projection.
+        tool.pop("versionProbe")
+    elif fault in {
+        "null_probe",
+        "empty_probe",
+        "string_probe",
+        "null_argument",
+        "empty_argument",
+        "nul_argument",
+    }:
+        tool["versionProbe"] = {
+            "null_probe": None,
+            "empty_probe": [],
+            "string_probe": "--help",
+            "null_argument": [None],
+            "empty_argument": [""],
+            "nul_argument": ["--help\x00"],
+        }[fault]
 
     # Other attestation services are independent of mounted tools. Preserve the
     # full attestor ordering and evidence publication while isolating those seams.
@@ -214,7 +248,7 @@ async def test_declared_tool_probe_reaches_exact_host(
         evidence = artifacts.write_json.await_args_list[0].kwargs["payload"]
         assert evidence["toolMounts"][0]["digestVerified"] is True
         assert evidence["toolMounts"][0]["versionProbe"] == expected["versionProbe"]
-    if fault == "writable_mount":
+    if fault not in {None, "digest", "probe"}:
         assert probes == []
     else:
         assert len(probes) == 1
