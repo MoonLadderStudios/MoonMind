@@ -124,6 +124,7 @@ class OmnigentMountedToolService:
                         "name": name,
                         "version": str(manifest[name].get("version") or ""),
                         "path": str(manifest[name].get("path") or ""),
+                        "versionProbe": manifest[name].get("versionProbe"),
                         "executableDigests": sorted(
                             {
                                 str(platform.get("executableSha256") or "")
