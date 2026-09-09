@@ -58,6 +58,14 @@ OMNIGENT_SHARED_HOST_IMAGE_TAG="1.18.11"
 
 Mutable tags never become launch authority. Startup resolution (`moonmind/omnigent/bootstrap/image_resolution.py`) resolves the tag to its immutable digest once, persists it in the resolved deployment state (`sharedHostImageRef`), exports it to `OMNIGENT_SHARED_HOST_IMAGE_REF`, and every selector (`get_shared_host_image_ref()`) reads that digest. A missing, mutable, or placeholder digest fails closed.
 
+The publish workflow tracks `omnigent-server:latest`, so a republished tag may
+carry a host built for a newer server than a deployment is running. When the
+shared coordinates resolve to the same image the OpenCode path judged against
+the running server, the shared ref follows the admitted OpenCode digest and the
+newer image waits as `pendingHost` until the operator updates the `omnigent`
+Compose service (see [`OpenCodeHost.md`](./OpenCodeHost.md) §13). An explicit
+`OMNIGENT_SHARED_HOST_IMAGE_REF` pin is never replaced.
+
 ## 2. Runtime packs (`moonmind.omnigent-harness-runtime-pack.v1`)
 
 A runtime pack is trusted deployment data, never workflow-authored. The registry is pure data: it carries no secret, image digest, or endpoint. One pack owns one harness family:

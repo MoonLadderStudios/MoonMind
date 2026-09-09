@@ -61,6 +61,26 @@ def _persisted_image_ref(key: str) -> str:
     return str(getattr(state, attribute, "") or "").strip()
 
 
+def _short_digest(value: object) -> str:
+    text = str(value or "").strip()
+    if text.startswith("sha256:") and len(text) > 19:
+        return text[:19]
+    return text or "unknown"
+
+
+def _compatibility_pair_detail(compatibility: Mapping[str, Any]) -> str:
+    """Describe the judged server/host pair so the quarantine is actionable."""
+
+    return (
+        "server omnigent "
+        f"{compatibility.get('serverVersion') or 'unknown'} build "
+        f"{_short_digest(compatibility.get('serverBuildDigest'))} vs host omnigent "
+        f"{compatibility.get('hostVersion') or 'unknown'} built for "
+        f"{_short_digest(compatibility.get('hostBuildDigest'))}; update the "
+        "omnigent server image or pin a host built for the running server"
+    )
+
+
 def _require_image_ref(environment: Mapping[str, str], key: str) -> str:
     state = None
     if key == OMNIGENT_OPENCODE_HOST_IMAGE_ENV:
@@ -119,7 +139,7 @@ def _require_image_ref(environment: Mapping[str, str], key: str) -> str:
             raise HarnessPlatformError(
                 "OpenCode Host Class is quarantined because the resolved "
                 "Omnigent server and host images are incompatible "
-                f"({failure_code})",
+                f"({failure_code}): {_compatibility_pair_detail(compatibility)}",
                 code=HarnessPlatformFailure.OMNIGENT_HARNESS_BUILD_MISMATCH,
             )
         if compatibility.get("status") != "ready":
