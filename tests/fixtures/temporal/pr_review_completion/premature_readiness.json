@@ -1,0 +1,62 @@
+{
+  "sourceWorkflow": "mm:f2d05574-3c5b-47c2-bb6d-33dc12341378",
+  "description": "Minimized recorded readiness results that launched repair children while a Codex request was pending.",
+  "observations": [
+    {
+      "sourceEventId": "1155",
+      "observedAt": "2026-09-09T00:42:10.412099670Z",
+      "result": {
+        "headSha": "3a6588c828d713f6919ed37e0e3c2ea2a8a327f1",
+        "baseSha": "36bd384b4c7498d70df80575b4b6ef8beaede734",
+        "ready": false,
+        "pullRequestOpen": true,
+        "pullRequestMerged": false,
+        "checksComplete": true,
+        "checksPassing": false,
+        "automatedReviewComplete": null,
+        "automatedReviewCompletionKind": null,
+        "automatedReviewCompletionId": null,
+        "automatedReviewCompletedAt": null,
+        "automatedReviewRequestStale": null,
+        "policyAllowed": true,
+        "blockers": [
+          {
+            "kind": "checks_failed",
+            "summary": "One or more required checks failed.",
+            "retryable": false,
+            "source": "github"
+          }
+        ],
+        "jiraStatusAllowed": true
+      }
+    },
+    {
+      "sourceEventId": "2331",
+      "observedAt": "2026-09-09T02:22:58.367633262Z",
+      "result": {
+        "headSha": "3a6f80f5b6f6d21acd27888d26a042315d8b92d5",
+        "baseSha": "36bd384b4c7498d70df80575b4b6ef8beaede734",
+        "ready": true,
+        "pullRequestOpen": true,
+        "pullRequestMerged": false,
+        "checksComplete": null,
+        "checksPassing": null,
+        "automatedReviewComplete": null,
+        "automatedReviewCompletionKind": null,
+        "automatedReviewCompletionId": null,
+        "automatedReviewCompletedAt": null,
+        "automatedReviewRequestStale": null,
+        "policyAllowed": true,
+        "blockers": [
+          {
+            "kind": "merge_conflict",
+            "summary": "Pull request has merge conflicts.",
+            "retryable": false,
+            "source": "github"
+          }
+        ],
+        "jiraStatusAllowed": true
+      }
+    }
+  ]
+}

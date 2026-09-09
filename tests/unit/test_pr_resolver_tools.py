@@ -1913,7 +1913,7 @@ def test_finalize_merge_request_waits_for_authoritative_merged_state(
     monkeypatch.setitem(
         globals_dict,
         "_merge_pr",
-        lambda selector, method: merge_calls.append((selector, method)),
+        lambda selector, method, head: merge_calls.append((selector, method)),
     )
     monkeypatch.setitem(globals_dict, "_check_pr_merged", lambda _selector: False)
 
@@ -2102,7 +2102,6 @@ def test_load_addressed_ids_reads_disposition_field(
     tmp_path: Path,
 ) -> None:
     """Ledger with 'disposition' field should be read correctly."""
-    import json
 
     extract = pr_resolve_snapshot_module["_extract_ids_from_entries"]
     entries = [
