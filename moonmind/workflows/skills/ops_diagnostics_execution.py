@@ -63,7 +63,6 @@ DEFAULT_MOONMIND_SERVICES = frozenset(
         "temporal-worker-llm",
         "temporal-worker-sandbox",
         "temporal-worker-workflow",
-        "qdrant",
         "minio",
         "docker-proxy",
     }
