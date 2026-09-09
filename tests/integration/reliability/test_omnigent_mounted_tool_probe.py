@@ -16,7 +16,7 @@ from moonmind.omnigent.host_services.mounted_tools import OmnigentMountedToolSer
 from moonmind.omnigent.harness_platform.failures import HarnessPlatformError
 from tests.integration.reliability.helpers import load_replay
 
-pytestmark = [pytest.mark.asyncio, pytest.mark.integration, pytest.mark.integration_ci]
+pytestmark = [pytest.mark.asyncio, pytest.mark.integration, pytest.mark.reliability_journey]
 
 
 @pytest.mark.parametrize(
