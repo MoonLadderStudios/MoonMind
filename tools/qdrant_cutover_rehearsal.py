@@ -808,6 +808,8 @@ def create_preservation_envelope(
         try:
             target.chmod(0o600)
         except OSError:
+            # Best-effort permission hardening; envelope content is already
+            # written, so a chmod failure must not fail the rehearsal.
             pass
     return envelope
 
