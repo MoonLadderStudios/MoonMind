@@ -6719,6 +6719,9 @@ async def test_agent_runtime_prepare_turn_instructions_adds_retrieval_capability
     # explicitly-enabled retrieval-hint branch, so opt in directly.
     monkeypatch.setenv("QDRANT_ENABLED", "1")
     monkeypatch.delenv("MOONMIND_RETRIEVAL_URL", raising=False)
+    # Vector-free defaults (#4115): the direct-transport case under test
+    # opts in explicitly; the gateway case ignores this flag.
+    monkeypatch.setenv("QDRANT_ENABLED", "true")
 
     activities = TemporalAgentRuntimeActivities()
 
