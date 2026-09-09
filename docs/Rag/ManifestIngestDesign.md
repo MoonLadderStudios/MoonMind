@@ -4,7 +4,7 @@
 
 **Status:** Draft (2026-03-20)
 **Scope:** How MoonMind ingests a “manifest” artifact and reliably turns it into one or more **Temporal Workflow Executions**, with strong observability, editability, and scalability. Includes architecture, design decisions, and implementation-level detail.
-**See also:** [LlamaIndexManifestSystem.md](LlamaIndexManifestSystem.md) (v0 manifest schema & operator guide), [WorkflowRag.md](WorkflowRag.md) (how agents retrieve data from Qdrant at runtime)
+**See also:** [LlamaIndexManifestSystem.md](LlamaIndexManifestSystem.md) (v0 manifest schema & operator guide), [WorkflowRag.md](WorkflowRag.md) (exact context assembly for managed sessions)
 
 ---
 
@@ -689,7 +689,7 @@ The manifest contract (`manifest_contract.py`) enforces this at validation time 
 
 **Delivered baseline:** `MoonMind.ManifestIngest` workflow and tests, `/api/manifests` registry, manifest contract validation and normalization, compiled plan model and node materialization, Temporal Updates for interactive control, and projection/snapshot plumbing for API queries.
 
-**Remaining work:** data-fetch and embedding pipeline activities, incremental checkpoint semantics, Qdrant integration, and dashboard list/detail/launch and node-level controls. Phased sequencing and verification are tracked under `docs/tmp/` or in local-only planning notes when needed.
+**Remaining work:** data-fetch pipeline activities, incremental checkpoint semantics, and dashboard list/detail/launch and node-level controls. Phased sequencing and verification are tracked under `docs/tmp/` or in local-only planning notes when needed.
 
 ---
 

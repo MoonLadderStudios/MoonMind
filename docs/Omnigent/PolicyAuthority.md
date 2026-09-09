@@ -21,7 +21,7 @@ and enforced egress; locator/mutation/mount/UID/GID/cache/artifact/Skill/tool/
 OAuth/state boundaries; Provider Profile compatibility and capacity; the full
 session lifecycle; capture classes, bounded logs, redaction and completeness;
 checkpoint/resume/branch/publication/promotion; remediation allowlists, risks,
-locks, limits and autonomy; retrieval scopes, collections, budgets, fallback and
+locks, limits and autonomy; retrieval scope, budgets, fallback and
 credential refs; reviewer requirements; retention, rollout, diagnostics and
 deprecation.
 

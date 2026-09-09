@@ -211,29 +211,33 @@ def derive_required_capabilities(manifest: Mapping[str, Any]) -> list[str]:
         _add(base_capability)
 
     embeddings_node = manifest.get("embeddings")
-    if not isinstance(embeddings_node, Mapping):
-        raise ManifestContractError("embeddings block is required in manifest YAML")
-    provider_label = _clean_str(embeddings_node.get("provider")).lower()
-    if not provider_label:
-        raise ManifestContractError("embeddings.provider must be set")
-    provider_capability = EMBEDDING_PROVIDER_CAPABILITIES.get(provider_label)
-    if provider_capability is None:
-        raise ManifestContractError(
-            f"unsupported embeddings provider '{provider_label}' in manifest"
-        )
-    _add("embeddings")
-    _add(provider_capability)
+    if embeddings_node is not None:
+        if not isinstance(embeddings_node, Mapping):
+            raise ManifestContractError("embeddings block must be an object")
+        provider_label = _clean_str(embeddings_node.get("provider")).lower()
+        if not provider_label:
+            raise ManifestContractError("embeddings.provider must be set")
+        provider_capability = EMBEDDING_PROVIDER_CAPABILITIES.get(provider_label)
+        if provider_capability is None:
+            raise ManifestContractError(
+                f"unsupported embeddings provider '{provider_label}' in manifest"
+            )
+        _add("embeddings")
+        _add(provider_capability)
 
     vector_store_node = manifest.get("vectorStore")
-    if not isinstance(vector_store_node, Mapping):
-        raise ManifestContractError("vectorStore block is required in manifest YAML")
-    vector_store_type = _clean_str(vector_store_node.get("type")).lower()
-    capability = VECTOR_STORE_CAPABILITIES.get(vector_store_type)
-    if capability is None:
-        raise ManifestContractError(
-            f"unsupported vectorStore.type '{vector_store_type}' in manifest"
-        )
-    _add(capability)
+    if vector_store_node is not None:
+        if not isinstance(vector_store_node, Mapping):
+            raise ManifestContractError("vectorStore block must be an object")
+        vector_store_type = _clean_str(vector_store_node.get("type")).lower()
+        if not vector_store_type:
+            raise ManifestContractError("vectorStore.type must be set")
+        capability = VECTOR_STORE_CAPABILITIES.get(vector_store_type)
+        if capability is None:
+            raise ManifestContractError(
+                f"unsupported vectorStore.type '{vector_store_type}' in manifest"
+            )
+        _add(capability)
 
     data_sources = manifest.get("dataSources")
     if not isinstance(data_sources, list) or not data_sources:

@@ -113,18 +113,24 @@ class ManifestPipeline:
             self.log.debug("Built-in adapters module not available")
 
     def _index_name(self) -> str:
-        if self.manifest.vectorStore.indexName:
-            return self.manifest.vectorStore.indexName
-        return self.manifest.indices[0].id
+        vector_store = self.manifest.vectorStore
+        if vector_store is not None and vector_store.indexName:
+            return vector_store.indexName
+        indices = self.manifest.indices or []
+        if indices:
+            return indices[0].id
+        return self.manifest.metadata.name
 
     def _resolve_state_path(self) -> Path:
         if self._state_path is not None:
             return self._state_path
-        connection = self.manifest.vectorStore.connection
-        raw = getattr(connection, "incrementalStatePath", None)
-        if isinstance(raw, str) and raw.strip():
-            return Path(raw)
-        for index in self.manifest.indices:
+        vector_store = self.manifest.vectorStore
+        if vector_store is not None:
+            connection = vector_store.connection
+            raw = getattr(connection, "incrementalStatePath", None)
+            if isinstance(raw, str) and raw.strip():
+                return Path(raw)
+        for index in self.manifest.indices or []:
             if index.persist and index.persist.path:
                 return Path(index.persist.path).with_suffix(".incremental_state.json")
         return default_state_path(
