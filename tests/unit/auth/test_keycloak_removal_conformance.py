@@ -796,6 +796,199 @@ class TestNoReintroduction:
 
 
 # ---------------------------------------------------------------------------
+# Local OIDC/JWKS-equivalent + trusted-ingress slice (impl-1/impl-3, rw-5)
+# ---------------------------------------------------------------------------
+
+
+class TestLocalOidcJwksAndTrustedIngress:
+    def test_session_jwt_carries_supported_alg_and_moonmind_claims(self):
+        """Local token/JWKS-equivalent contract: HS256 only + MoonMind claims."""
+
+        async def _run() -> None:
+            config = _config()
+            store = q.InMemoryAsyncAccountStore()
+            identity = _identity("heidi-4128", email="heidi@example.invalid")
+            _enrolled(store, identity, is_active=True)
+            token, _ = await q.mint_moonmind_session(identity, store, config)
+            header = jwt.get_unverified_header(token)
+            assert header["alg"] == "HS256"
+            claims = jwt.decode(token, options={"verify_signature": False})
+            assert claims["iss"] == config.token_issuer
+            assert claims["aud"] == config.token_audience
+            assert claims["purpose"] == q.MOONMIND_SESSION_PURPOSE
+            assert claims["jti"]
+            assert claims["id_issuer"] == "moonmind-accounts"
+
+        import asyncio
+
+        asyncio.run(_run())
+
+    def test_key_rotation_rejects_old_secret_without_shared_cache(self):
+        """Rotating the session secret invalidates previously minted tokens."""
+
+        async def _run() -> None:
+            config = _config()
+            rotated = _config(cookie_secret=secrets.token_bytes(32))
+            store = q.InMemoryAsyncAccountStore()
+            revocation = q.InMemoryRevocationStore()
+            identity = _identity("ivan-4128")
+            _enrolled(store, identity)
+            token, _ = await q.mint_moonmind_session(identity, store, config)
+            await q.validate_moonmind_session(token, store, revocation, config)
+            with pytest.raises(q.AuthInvalidError):
+                await q.validate_moonmind_session(
+                    token, store, revocation, rotated
+                )
+
+        import asyncio
+
+        asyncio.run(_run())
+
+    def test_trusted_ingress_fixtures_allowlist_and_deny(self):
+        """Trusted-ingress contract: loopback+trusted allowed, bypass denied."""
+        allowed = m.evaluate_ingress_fixture(
+            {
+                "name": "loopback-trusted",
+                "mode": "accounts",
+                "publish_host": "127.0.0.1",
+                "trusted_ingress": True,
+                "proxy_bypass_possible": False,
+            }
+        )
+        assert allowed.allowed is True
+        denied_bypass = m.evaluate_ingress_fixture(
+            {
+                "name": "proxy-bypass-untrusted",
+                "mode": "accounts",
+                "publish_host": "127.0.0.1",
+                "trusted_ingress": False,
+                "proxy_bypass_possible": True,
+            }
+        )
+        assert denied_bypass.allowed is False
+        denied_internal = m.evaluate_ingress_fixture(
+            {
+                "name": "internal-public",
+                "mode": "accounts",
+                "publish_host": "127.0.0.1",
+                "trusted_ingress": True,
+                "internal_control_plane_public": True,
+            }
+        )
+        assert denied_internal.allowed is False
+
+
+# ---------------------------------------------------------------------------
+# Two-user journey slice at the session boundary (impl-5, rw-3 hermetic part)
+# ---------------------------------------------------------------------------
+
+
+class TestTwoUserJourneySlice:
+    def test_setup_login_submit_stream_logout_denied_journey(self):
+        """Hermetic journey: setup, login, reuse, logout, denial, isolation."""
+
+        async def _run() -> None:
+            config = _config()
+            store = q.InMemoryAsyncAccountStore()
+            revocation = q.InMemoryRevocationStore()
+            # Setup: enroll two distinct users.
+            alice = _enrolled(store, _identity("alice-4128-journey"))
+            bob = _enrolled(store, _identity("bob-4128-journey"))
+            assert alice.user_id != bob.user_id
+            # Login: mint one session per user.
+            tok_a, _ = await q.mint_moonmind_session(
+                _identity("alice-4128-journey"), store, config
+            )
+            tok_b, _ = await q.mint_moonmind_session(
+                _identity("bob-4128-journey"), store, config
+            )
+            # Submit + stream/reconnect: repeated validation stays valid.
+            for _ in range(2):
+                resolved_a = await q.validate_moonmind_session(
+                    tok_a, store, revocation, config
+                )
+                resolved_b = await q.validate_moonmind_session(
+                    tok_b, store, revocation, config
+                )
+                assert resolved_a.user_id == alice.user_id
+                assert resolved_b.user_id == bob.user_id
+            # Logout: revoke Alice's session; she is denied afterwards.
+            jti_a = jwt.decode(tok_a, options={"verify_signature": False})["jti"]
+            await revocation.revoke_session(jti_a)
+            with pytest.raises(q.AuthInvalidError):
+                await q.validate_moonmind_session(tok_a, store, revocation, config)
+            # Bob's admitted work continues after Alice's logout.
+            still_bob = await q.validate_moonmind_session(
+                tok_b, store, revocation, config
+            )
+            assert still_bob.user_id == bob.user_id
+            # A cannot present B's token as her own: conflicting
+            # cookie/bearer identities are rejected, never merged.
+            with pytest.raises(q.AuthConflictError):
+                await q.resolve_current_user(
+                    cookie_token=tok_b,
+                    bearer_token=tok_a,
+                    account_store=store,
+                    revocation=revocation,
+                    config=config,
+                )
+
+        import asyncio
+
+        asyncio.run(_run())
+
+
+# ---------------------------------------------------------------------------
+# Built-artifact-adjacent static gate (impl-6/impl-9, rw-4 static slice)
+# ---------------------------------------------------------------------------
+
+
+class TestBuiltArtifactStaticGate:
+    def test_no_keycloak_dns_or_network_references(self):
+        """No Keycloak DNS/host/image reference survives outside classified rows."""
+        text_files = [
+            REPO_ROOT / "docker-compose.yaml",
+            REPO_ROOT / ".env-template",
+            REPO_ROOT / "api_service" / "main.py",
+        ]
+        dns_markers = (
+            "keycloak:8080",
+            "kc.hostname",
+            "kc_hostname",
+            "keycloak.local",
+            "auth.local/realms",
+            "/realms/master",
+        )
+        for path in text_files:
+            if not path.is_file():
+                continue
+            text = path.read_text(encoding="utf-8")
+            for marker in dns_markers:
+                assert marker.lower() not in text.lower(), (
+                    f"{path.relative_to(REPO_ROOT)} carries Keycloak DNS marker "
+                    f"{marker!r}"
+                )
+        compose = yaml.safe_load(
+            (REPO_ROOT / "docker-compose.yaml").read_text(encoding="utf-8")
+        )
+        images = " ".join(
+            str((spec or {}).get("image", ""))
+            for spec in compose.get("services", {}).values()
+        )
+        assert "keycloak" not in images.lower()
+
+    def test_clean_env_omission_carries_safe_defaults(self):
+        """Fresh installs omit secrets/topology and still render safe defaults."""
+        template = (REPO_ROOT / ".env-template").read_text(encoding="utf-8")
+        assert "KEYCLOAK" not in template.replace("Retired keycloak", "")
+        assert 'AUTH_PROVIDER=""' in template
+        assert 'MOONMIND_API_PUBLISH_HOST="127.0.0.1"' in template
+        compose = (REPO_ROOT / "docker-compose.yaml").read_text(encoding="utf-8")
+        assert "${MOONMIND_API_PUBLISH_HOST:-127.0.0.1}:" in compose
+        assert "MOONMIND_SESSION_SECRET=${MOONMIND_SESSION_SECRET:-}" in compose
+
+
+# ---------------------------------------------------------------------------
 # Sanitized evidence bundle (acc-6, impl-9 record)
 # ---------------------------------------------------------------------------
 
