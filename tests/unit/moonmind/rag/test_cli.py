@@ -49,7 +49,11 @@ def test_worker_doctor_is_vector_free():
         if not line.lstrip().startswith("#")
     ]
     code = "\n".join(code_lines)
-    assert "ensure_rag_ready" not in code
-    assert "RagRuntimeSettings" not in code
+    # MoonLadderStudios/MoonMind#4112: the doctor delegates to the vector-free
+    # guardrail (optional RetrievalGateway probe only) so gateway failures
+    # surface instead of a false healthy result.
+    assert "ensure_rag_ready" in code
     assert "RagQdrantClient" not in code
     assert "qdrant_client" not in code.lower()
+    assert "ensure_collection_ready" not in code
+    assert "sync_collection_dimensions" not in code

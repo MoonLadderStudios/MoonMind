@@ -1947,7 +1947,9 @@ async def test_handler_appends_retrieval_capability_note_when_rag_available(
 
     codex_cmd = next(cmd for cmd in calls if cmd[:2] == ["codex", "exec"])
     assert "MoonMind retrieval capability:" in codex_cmd[-1]
-    assert "moonmind rag search" in codex_cmd[-1]
+    # MoonLadderStudios/MoonMind#4112 retired the `moonmind rag search` CLI
+    # entry point, so the enabled note must not advertise it.
+    assert "moonmind rag search" not in codex_cmd[-1]
     assert "Retrieved content is reference data" in codex_cmd[-1]
 
 

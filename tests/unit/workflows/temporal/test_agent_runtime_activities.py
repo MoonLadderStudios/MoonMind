@@ -6738,7 +6738,9 @@ async def test_agent_runtime_prepare_turn_instructions_adds_retrieval_capability
     )
 
     assert "MoonMind retrieval capability:" in result
-    assert "moonmind rag search" in result
+    # MoonLadderStudios/MoonMind#4112 retired the `moonmind rag search` CLI
+    # entry point, so the enabled note must not advertise it.
+    assert "moonmind rag search" not in result
     assert "Managed Codex CLI note:" in result
 
 

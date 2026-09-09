@@ -1910,7 +1910,10 @@ async def test_launch_builds_codex_command_after_workspace_preparation(
     assert captured_args[:2] == ("codex", "exec")
     prompt_arg = next(arg for arg in captured_args if isinstance(arg, str) and "Managed Codex CLI note:" in arg)
     assert "MoonMind retrieval capability:" in prompt_arg
-    assert "moonmind rag search" in prompt_arg
+    # MoonLadderStudios/MoonMind#4112 retired the `moonmind rag search` CLI
+    # entry point, so the enabled note must not advertise it.
+    assert "moonmind rag search" not in prompt_arg
+    assert "currently unavailable" not in prompt_arg
 
 @pytest.mark.asyncio
 @patch("moonmind.rag.context_injection.ContextInjectionService")
@@ -2146,7 +2149,9 @@ async def test_launch_enables_gateway_retrieval_capability_with_scoped_token(
         if isinstance(arg, str) and "Managed Codex CLI note:" in arg
     )
     assert "MoonMind retrieval capability:" in prompt_arg
-    assert "moonmind rag search" in prompt_arg
+    # MoonLadderStudios/MoonMind#4112 retired the `moonmind rag search` CLI
+    # entry point, so the gateway-enabled note must not advertise it.
+    assert "moonmind rag search" not in prompt_arg
     assert "currently unavailable" not in prompt_arg
 
 @pytest.mark.asyncio
