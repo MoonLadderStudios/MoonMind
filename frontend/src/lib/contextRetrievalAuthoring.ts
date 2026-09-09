@@ -1,9 +1,11 @@
 // Shared authoring model for MoonMind context retrieval (RAG) controls.
 //
-// Covers GitHub issue MoonLadderStudios/MoonMind#3514 required work item 6:
-// coherent, policy-bounded RAG controls reused across every authoring surface
-// (workflow create/edit/rerun, recurring schedules, Omnigent agent profiles,
-// checkpoint branch turn creation, and remediation authoring).
+// Built-in vector retrieval is RETIRED (MoonLadderStudios/MoonMind#4105):
+// new workflows must not advertise or accept a built-in vector
+// retrieval/indexing capability. `parseContextRetrievalParameters` remains
+// for reading historical payloads; `compileContextRetrievalParameters`
+// returns no fields and `hasAuthoredContextRetrieval` is always false so no
+// new plan, draft, or schedule can reintroduce retired authority.
 //
 // The authored values are compiled into the run's `initial_parameters` as:
 //   - `rag`               → initial ContextPack injection overrides (#3513)
@@ -268,16 +270,11 @@ export function explainRetrievalDenials(
   return denials;
 }
 
-/** True when the authored config carries anything worth persisting. */
+/** Always false: retired authoring must never persist into new writes (#4105). */
 export function hasAuthoredContextRetrieval(
-  value: ContextRetrievalAuthoring,
+  _value: ContextRetrievalAuthoring,
 ): boolean {
-  return (
-    value.followUp.enabled ||
-    value.initial.collections.length > 0 ||
-    value.initial.allowStale ||
-    value.initial.required
-  );
+  return false;
 }
 
 export interface CompiledContextRetrievalParameters {
@@ -287,45 +284,62 @@ export interface CompiledContextRetrievalParameters {
 
 /**
  * Compile authored controls into the `initial_parameters` fragment consumed by
- * the run. Numeric values are clamped to the policy ceilings so the persisted
- * request never broadens policy; the server re-clamps regardless.
+ * the run.
+ *
+ * Built-in vector retrieval is retired (MoonLadderStudios/MoonMind#4105):
+ * new writes must not advertise or accept a built-in vector capability.
+ * This always returns an empty fragment so normal authoring needs no vector
+ * or embedding settings and no `rag` / `followUpRetrieval` fields reach new
+ * plans. Use `hasRetiredRetrievalParameters` to surface actionable guidance
+ * when a historical rerun/schedule payload still carries retired requirements.
  */
 export function compileContextRetrievalParameters(
-  value: ContextRetrievalAuthoring,
-  ceilings: RetrievalCeilings = DEFAULT_RETRIEVAL_CEILINGS,
+  _value: ContextRetrievalAuthoring,
+  _ceilings: RetrievalCeilings = DEFAULT_RETRIEVAL_CEILINGS,
 ): CompiledContextRetrievalParameters {
-  const compiled: CompiledContextRetrievalParameters = {};
-  const allowed = new Set(ceilings.collections);
+  return {};
+}
 
-  const initialCollections = uniqueStrings(value.initial.collections).filter((c) =>
-    allowed.has(c),
+/**
+ * True when a persisted `initial_parameters` payload carries explicit retired
+ * vector requirements (`rag` with content or `followUpRetrieval` with enabled
+ * / retired configuration). Historical details remain readable via
+ * `parseContextRetrievalParameters`; a true result here means a new execution
+ * must be resubmitted without the retired fields before it is accepted.
+ */
+export function hasRetiredRetrievalParameters(
+  parameters: Record<string, unknown> | null | undefined,
+): boolean {
+  if (!parameters || typeof parameters !== 'object') {
+    return false;
+  }
+  const rag = asRecord(parameters.rag);
+  if (rag && Object.values(rag).some((item) => !isAbsentVectorValue(item))) {
+    return true;
+  }
+  const followUp = asRecord(parameters.followUpRetrieval);
+  if (!followUp) {
+    return false;
+  }
+  if (followUp.enabled === true) {
+    return true;
+  }
+  return Object.entries(followUp).some(
+    ([key, item]) => key !== 'enabled' && !isAbsentVectorValue(item),
   );
-  if (initialCollections.length > 0 || value.initial.allowStale || value.initial.required) {
-    compiled.rag = {
-      ...(initialCollections.length > 0 ? { collections: initialCollections } : {}),
-      ...(value.initial.allowStale ? { allowStale: true } : {}),
-      ...(value.initial.required ? { required: true } : {}),
-    };
-  }
+}
 
-  if (value.followUp.enabled) {
-    const followUp = clampFollowUpRetrieval(value.followUp, ceilings);
-    compiled.followUpRetrieval = {
-      enabled: true,
-      required: followUp.required,
-      collections: followUp.collections,
-      topK: followUp.topK,
-      maxContextTokens: followUp.maxContextTokens,
-      maxQueries: followUp.maxQueries,
-      latencyMs: followUp.latencyMs,
-      maxLifetimeSeconds: followUp.maxLifetimeSeconds,
-      overlayPolicy: followUp.overlayPolicy,
-      staleOverlayAllowed: followUp.staleOverlayAllowed,
-      fallbackAllowed: followUp.fallbackAllowed,
-    };
+function isAbsentVectorValue(value: unknown): boolean {
+  if (value === null || value === undefined || value === false || value === '') {
+    return true;
   }
-
-  return compiled;
+  if (Array.isArray(value)) {
+    return value.length === 0;
+  }
+  if (typeof value === 'object') {
+    return Object.keys(value as Record<string, unknown>).length === 0;
+  }
+  return false;
 }
 
 /** Hydrate authoring state from a previously compiled `initial_parameters`. */

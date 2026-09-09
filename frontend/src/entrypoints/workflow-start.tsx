@@ -1801,16 +1801,14 @@ export function buildEditParametersPatch({
   if (!("mergeAutomation" in submittedPayload)) {
     delete parametersPatch.mergeAutomation;
   }
-  // Context retrieval authority (#3514) is an operator-cleared control. When the
-  // submission does not carry `rag` / `followUpRetrieval` the operator disabled
-  // that authoring, so the inherited base value must be explicitly removed
-  // rather than silently preserved (mirrors the `mergeAutomation` clear above).
-  if (!("rag" in submittedPayload)) {
-    delete parametersPatch.rag;
-  }
-  if (!("followUpRetrieval" in submittedPayload)) {
-    delete parametersPatch.followUpRetrieval;
-  }
+  // Built-in vector retrieval is retired (#4105): `rag` /
+  // `followUpRetrieval` must never reach a new edit or rerun submission,
+  // whether inherited from the base parameters or carried by the submitted
+  // payload. Strip unconditionally so stale authority cannot persist; the
+  // shared admission boundary rejects explicit retired requirements with an
+  // actionable error if they arrive through any other path.
+  delete parametersPatch.rag;
+  delete parametersPatch.followUpRetrieval;
   delete parametersPatch.startingBranch;
   delete parametersPatch.targetBranch;
   return parametersPatch;
