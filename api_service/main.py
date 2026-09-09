@@ -957,7 +957,22 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(
     title="MoonMind API",
-    description="API for MoonMind - LLM-powered documentation search and chat interface",
+    description=(
+        "API for MoonMind - LLM-powered documentation search and chat interface. "
+        "Application authentication is selected by AUTH_PROVIDER (accounts, "
+        "oidc, header, disabled; retired keycloak/default/google selectors "
+        "are rejected at startup). Documented error contract "
+        "(docs/Security/AuthenticationContracts.md §8): 401 auth_required "
+        "(missing credential at a strict boundary), 401 auth_invalid "
+        "(invalid/expired credential), 401 auth_conflict (cookie/bearer "
+        "mismatch), 410 worker_token_deprecated (removed legacy "
+        "worker-token path), 503 unavailable/setup_required (identity/store "
+        "outage or protected setup pending). Machine callers "
+        "(workers, MCP/container-job) use scoped service credentials on "
+        "authorized routes only — runtime, session, and worker tokens never "
+        "become browser credentials. The accounts/oidc/header journeys are "
+        "Draft contract text pending #4128 qualification."
+    ),
     version="0.1.0",
     docs_url="/openapi",
     openapi_url="/openapi.json",

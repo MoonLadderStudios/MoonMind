@@ -137,15 +137,53 @@ def test_examples_contain_no_active_keycloak_setup():
 
 def test_cli_help_and_migration_example_are_classified():
     # moonmind/cli.py (user-facing CLI help source) must not advertise
-    # retired Keycloak paths or realm URLs.
+    # retired Keycloak paths or realm URLs. A classified rejection mention
+    # (retired/retired-selector language pointing at the canonical
+    # contract, as in .env-template) is allowed — not a forced
+    # zero-string policy — but unclassified live claims are not.
     cli = _read(MAIN_CLI)
-    assert "keycloak" not in cli.lower()
     assert "realms/" not in cli
+    if "keycloak" in cli.lower():
+        assert "rejected" in cli.lower() or "retired" in cli.lower()
+        assert "AuthenticationContracts" in cli
     # The K3 migration command keeps a historical source-provider key; it
     # must be classified as migration input, not an active selector.
     migrate = _read(MIGRATE_CLI)
     assert "not an active" in migrate
     assert "AUTH_PROVIDER" in migrate
+
+
+def test_cli_help_documents_auth_provider_modes():
+    # Positive help-vs-implementation match (#4130 req-5 residual): the
+    # user-facing CLI help source must name the AUTH_PROVIDER modes and the
+    # machine-vs-browser credential distinction, not merely avoid stale
+    # Keycloak claims.
+    cli = _read(MAIN_CLI)
+    assert "AUTH_PROVIDER" in cli
+    for mode in ("accounts", "oidc", "header", "disabled"):
+        assert mode in cli
+    assert "AuthenticationContracts" in cli
+    assert "MOONMIND_CONTAINER_JOBS_BEARER_TOKEN" in cli
+    assert "worker_token_deprecated" in cli
+
+
+def test_openapi_help_documents_auth_provider_modes_and_errors():
+    # Positive help-vs-implementation match (#4130 req-5 residual): the
+    # generated OpenAPI help source (FastAPI info description exported by
+    # tools/export_openapi.py) must name the AUTH_PROVIDER modes, the
+    # documented error contract, and the canonical contract owner — with
+    # the Draft/#4128 qualification disclaimer, never a shipped claim.
+    text = _read(API_MAIN)
+    assert "AUTH_PROVIDER" in text
+    for mode in ("accounts", "oidc", "header", "disabled"):
+        assert mode in text
+    assert "auth_required" in text
+    assert "auth_invalid" in text
+    assert "auth_conflict" in text
+    assert "worker_token_deprecated" in text
+    assert "AuthenticationContracts" in text
+    assert "keycloak/default/google" in text
+    assert "#4128" in text
 
 
 def test_api_composition_mounts_no_legacy_login_routes():
