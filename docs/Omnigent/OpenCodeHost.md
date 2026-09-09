@@ -534,6 +534,8 @@ selected model is available to the exact credential
 
 The selected-model probe uses Omnigent's portable OpenCode catalog helper inside the exact host when the normal host tunnel does not expose pre-launch OpenCode model options.
 
+The runner-environment, OpenCode shell-environment, and model-catalog probes execute Omnigent's own portable helpers inside the exact host: the `omnigent.host.connect` runner environment builder and the `omnigent.harnesses.opencode_native.app_server` server-environment filter and CLI model catalog (the upstream >=0.13.0 layout). MoonMind never reimplements those filters. If the admitted host build does not expose a helper, or its signature drifted, attestation fails with `OMNIGENT_HARNESS_BUILD_MISMATCH` (`align_host_build`) naming the missing helper; helper drift is never reported as a Skill snapshot, credential, or model failure.
+
 ## 13. Deployment configuration
 
 The default OpenCode and shared host coordinates use the same repository:

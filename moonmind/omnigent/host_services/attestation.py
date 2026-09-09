@@ -23,6 +23,67 @@ from moonmind.security.egress import (
     attest_docker_workload_egress,
 )
 
+# Exact-host probes execute Omnigent's own portable helpers inside the admitted
+# host. Upstream >=0.13.0 ships the OpenCode app-server helpers under this
+# module; the admission ladder judges the host build, so the probe pins the
+# current upstream layout instead of branching on version.
+_OPENCODE_APP_SERVER_MODULE = "omnigent.harnesses.opencode_native.app_server"
+# Reserved exit status meaning "the attestation helper itself is unavailable in
+# the host image". The wrapper pairs it with the marker line below; only that
+# pair is remapped, so a probed command that happens to exit 97 keeps its own
+# authoritative contract status.
+_PROBE_SUBSTRATE_UNAVAILABLE_EXIT_CODE = 97
+_PROBE_SUBSTRATE_UNAVAILABLE_MARKER = "moonmind-attestation-substrate-unavailable"
+
+
+def _substrate_guarded_probe(body: str) -> str:
+    """Wrap one line of in-host probe statements so helper drift fails typed.
+
+    A missing module, renamed helper, or changed helper signature exits with
+    the reserved status and a marker line naming the exception. The probed
+    command's own exit status still propagates unchanged.
+    """
+
+    return (
+        "import sys\n"
+        "try:\n"
+        f"    {body}\n"
+        "except (ImportError, AttributeError, TypeError) as exc:\n"
+        f"    sys.stderr.write({_PROBE_SUBSTRATE_UNAVAILABLE_MARKER!r} + ': ' "
+        "+ type(exc).__name__ + ': ' + str(exc) + '\\n')\n"
+        f"    raise SystemExit({_PROBE_SUBSTRATE_UNAVAILABLE_EXIT_CODE})\n"
+    )
+
+
+def _raise_if_probe_substrate_unavailable(
+    code: int, stderr: str, *, boundary: str
+) -> None:
+    """Translate the reserved probe status into an actionable build mismatch."""
+
+    if code != _PROBE_SUBSTRATE_UNAVAILABLE_EXIT_CODE:
+        return
+    marker_line = next(
+        (
+            line
+            for line in stderr.splitlines()
+            if line.startswith(_PROBE_SUBSTRATE_UNAVAILABLE_MARKER)
+        ),
+        None,
+    )
+    if marker_line is None:
+        # The reserved status without the wrapper's marker is the probed
+        # command's own exit status: authoritative contract evidence, not a
+        # substrate fault.
+        return
+    detail = marker_line[len(_PROBE_SUBSTRATE_UNAVAILABLE_MARKER) :].lstrip(": ")
+    detail = detail.strip()[:200]
+    message = f"{boundary} attestation helper is unavailable in the exact host image"
+    if detail:
+        message = f"{message}: {detail}"
+    raise HarnessPlatformError(
+        message, code=HarnessPlatformFailure.OMNIGENT_HARNESS_BUILD_MISMATCH
+    )
+
 
 def _model_ids(value: Any) -> set[str]:
     found: set[str] = set()
@@ -66,13 +127,13 @@ async def _read_exact_host_model_options(
             "omnigent-host-tunnel",
         )
 
-    probe = (
+    probe = _substrate_guarded_probe(
         "import json; "
-        "from omnigent.opencode_native_app_server import "
+        f"from {_OPENCODE_APP_SERVER_MODULE} import "
         "list_opencode_cli_model_options; "
         "print(json.dumps({'models': list_opencode_cli_model_options()}))"
     )
-    code, stdout, _stderr = await backend.run(
+    code, stdout, stderr = await backend.run(
         [
             "docker",
             "exec",
@@ -83,6 +144,9 @@ async def _read_exact_host_model_options(
         ],
         timeout_seconds=45.0,
         check=False,
+    )
+    _raise_if_probe_substrate_unavailable(
+        code, stderr, boundary="OpenCode model catalog"
     )
     if code != 0:
         # Provider CLI diagnostics can include credential-sensitive context.
@@ -115,7 +179,7 @@ async def _run_exact_host_runner_command(
 ) -> tuple[int, str, str]:
     """Execute a probe through the stock host's runner environment builder."""
 
-    runner_probe = (
+    runner_probe = _substrate_guarded_probe(
         "import os, subprocess, sys; "
         "from omnigent.host.connect import _build_runner_env; "
         "env = _build_runner_env(os.environ, "
@@ -128,7 +192,7 @@ async def _run_exact_host_runner_command(
         "sys.stdout.write(result.stdout); sys.stderr.write(result.stderr); "
         "raise SystemExit(result.returncode)"
     )
-    return await backend.run(
+    code, stdout, stderr = await backend.run(
         [
             "docker",
             "exec",
@@ -141,6 +205,8 @@ async def _run_exact_host_runner_command(
         timeout_seconds=timeout_seconds,
         check=False,
     )
+    _raise_if_probe_substrate_unavailable(code, stderr, boundary="runner environment")
+    return code, stdout, stderr
 
 
 async def _run_exact_host_opencode_command(
@@ -152,9 +218,9 @@ async def _run_exact_host_opencode_command(
 ) -> tuple[int, str, str]:
     """Execute through the runner, OpenCode filter, and MoonMind context shim."""
 
-    filtered_child_probe = (
+    filtered_child_probe = _substrate_guarded_probe(
         "import subprocess, sys; from pathlib import Path; "
-        "from omnigent.opencode_native_app_server import filtered_server_env; "
+        f"from {_OPENCODE_APP_SERVER_MODULE} import filtered_server_env; "
         "env = filtered_server_env("
         "bridge_dir=Path('/tmp/moonmind-opencode-attestation'), "
         "auth_secret='moonmind-attestation'); "
@@ -165,7 +231,7 @@ async def _run_exact_host_opencode_command(
         "sys.stdout.write(result.stdout); sys.stderr.write(result.stderr); "
         "raise SystemExit(result.returncode)"
     )
-    opencode_probe = (
+    opencode_probe = _substrate_guarded_probe(
         "import os, subprocess, sys; "
         "from omnigent.host.connect import _build_runner_env; "
         "runner_env = _build_runner_env(os.environ, "
@@ -179,7 +245,7 @@ async def _run_exact_host_opencode_command(
         "capture_output=True); sys.stdout.write(result.stdout); "
         "sys.stderr.write(result.stderr); raise SystemExit(result.returncode)"
     )
-    return await backend.run(
+    code, stdout, stderr = await backend.run(
         [
             "docker",
             "exec",
@@ -192,6 +258,10 @@ async def _run_exact_host_opencode_command(
         timeout_seconds=timeout_seconds,
         check=False,
     )
+    _raise_if_probe_substrate_unavailable(
+        code, stderr, boundary="OpenCode shell environment"
+    )
+    return code, stdout, stderr
 
 
 def _assert_exact_omnigent_build(
@@ -456,9 +526,13 @@ class DockerOmnigentHostAttestor:
                 )
             for tool in attachment.get("tools", []):
                 probe = tool.get("versionProbe")
-                if not isinstance(probe, list) or not probe or not all(
-                    isinstance(arg, str) and arg and "\x00" not in arg
-                    for arg in probe
+                if (
+                    not isinstance(probe, list)
+                    or not probe
+                    or not all(
+                        isinstance(arg, str) and arg and "\x00" not in arg
+                        for arg in probe
+                    )
                 ):
                     raise HarnessPlatformError(
                         "mounted tool has no valid manifest-declared version probe",
@@ -622,9 +696,7 @@ class DockerOmnigentHostAttestor:
                             HarnessPlatformFailure.OMNIGENT_CREDENTIAL_MATERIALIZATION_FAILED
                         ),
                     )
-            expected_helper = (
-                "!/home/app/.omnigent/moonmind/bin/gh auth git-credential"
-            )
+            expected_helper = "!/home/app/.omnigent/moonmind/bin/gh auth git-credential"
             code, observed, _err = await self._backend.run(
                 [
                     "docker",
@@ -783,9 +855,9 @@ class DockerOmnigentHostAttestor:
                     {
                         "credentialRuntimeRef": handle["credentialRuntimeRef"],
                         "targetPath": target,
-                        "accessMode": "read-write"
-                        if expected_writable
-                        else "read-only",
+                        "accessMode": (
+                            "read-write" if expected_writable else "read-only"
+                        ),
                         "owner": "1000:1000",
                         "directoryMode": "0700",
                         "fileMode": "0600",

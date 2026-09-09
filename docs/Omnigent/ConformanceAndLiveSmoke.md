@@ -230,7 +230,9 @@ where the protected tier is required.
     freshly created database, invoked with the repository's explicit
     `api_service/migrations/alembic.ini`; the prior-schema case materializes the
     revision preceding head and then upgrades, which is what a deployment onto
-    an existing database does;
+    an existing database does (for a merge-point head it materializes the first
+    declared parent branch and upgrades through the sibling branch and the
+    merge revision, naming both in the signal detail);
   - a restart of the deployable process against the schema it just migrated;
   - worker task-queue and readiness advertisement against a real Temporal
     server, which the worker must connect to before it can report ready; and
