@@ -8761,3 +8761,36 @@ async def test_cached_operator_execution_cannot_enter_product_detail(tmp_path, m
         service = TemporalExecutionService(session, client_adapter=mock_client_adapter)
         with pytest.raises(WorkflowProjectionExcluded, match="operator_only"):
             await service.describe_execution(workflow_id)
+
+
+@pytest.mark.asyncio
+async def test_get_drain_metrics_forwards_workflow_queue_scope(
+    tmp_path, mock_client_adapter
+):
+    """Compat-drain probes (MoonMind#3949) scope visibility to one queue."""
+
+    mock_client_adapter.get_drain_metrics = AsyncMock(
+        return_value={"running": 2, "queued": 0, "stale_running": 0}
+    )
+    async with temporal_db(tmp_path) as session:
+        service = TemporalExecutionService(session, client_adapter=mock_client_adapter)
+        result = await service.get_drain_metrics(task_queues=["mm.workflow"])
+    assert result["running"] == 2
+    mock_client_adapter.get_drain_metrics.assert_awaited_once_with(
+        task_queues=["mm.workflow"]
+    )
+
+
+@pytest.mark.asyncio
+async def test_get_drain_metrics_defaults_to_fleet_scope(
+    tmp_path, mock_client_adapter
+):
+    """Omitting queues preserves the fleet-wide worker-pause behavior."""
+
+    mock_client_adapter.get_drain_metrics = AsyncMock(
+        return_value={"running": 0, "queued": 0, "stale_running": 0}
+    )
+    async with temporal_db(tmp_path) as session:
+        service = TemporalExecutionService(session, client_adapter=mock_client_adapter)
+        await service.get_drain_metrics()
+    mock_client_adapter.get_drain_metrics.assert_awaited_once_with()

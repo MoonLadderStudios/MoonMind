@@ -13,7 +13,7 @@ import base64
 import binascii
 import hashlib
 import json
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from typing import Any
@@ -609,9 +609,19 @@ class TemporalExecutionService:
     async def send_quiesce_resume_signal(self, **kwargs):
         return await self._client_adapter.send_batch_resume_update(**kwargs)
 
-    async def get_drain_metrics(self) -> dict[str, int]:
-        """Return Temporal Visibility counts for worker-pause drain status."""
-        return await self._client_adapter.get_drain_metrics()
+    async def get_drain_metrics(
+        self, *, task_queues: Sequence[str] | None = None
+    ) -> dict[str, int]:
+        """Return Temporal Visibility counts for worker-pause drain status.
+
+        ``task_queues`` scopes the visibility query; callers proving
+        workflow-queue checkpoint-compat drain (MoonMind#3949) pass the
+        workflow task queue explicitly instead of relying on the default
+        fleet-wide scope.
+        """
+        if task_queues is None:
+            return await self._client_adapter.get_drain_metrics()
+        return await self._client_adapter.get_drain_metrics(task_queues=task_queues)
 
     async def _validate_dependencies(
         self,
