@@ -29,9 +29,9 @@ from moonmind.security.egress import (
 # current upstream layout instead of branching on version.
 _OPENCODE_APP_SERVER_MODULE = "omnigent.harnesses.opencode_native.app_server"
 # Reserved exit status meaning "the attestation helper itself is unavailable in
-# the host image". Probed commands exit 0/1/2 and Docker uses 125-127, so a
-# substrate fault is never reported as the probed Skill, credential, or model
-# contract.
+# the host image". The wrapper pairs it with the marker line below; only that
+# pair is remapped, so a probed command that happens to exit 97 keeps its own
+# authoritative contract status.
 _PROBE_SUBSTRATE_UNAVAILABLE_EXIT_CODE = 97
 _PROBE_SUBSTRATE_UNAVAILABLE_MARKER = "moonmind-attestation-substrate-unavailable"
 
@@ -62,12 +62,21 @@ def _raise_if_probe_substrate_unavailable(
 
     if code != _PROBE_SUBSTRATE_UNAVAILABLE_EXIT_CODE:
         return
-    detail = ""
-    for line in stderr.splitlines():
-        if line.startswith(_PROBE_SUBSTRATE_UNAVAILABLE_MARKER):
-            detail = line[len(_PROBE_SUBSTRATE_UNAVAILABLE_MARKER) :].lstrip(": ")
-            detail = detail.strip()[:200]
-            break
+    marker_line = next(
+        (
+            line
+            for line in stderr.splitlines()
+            if line.startswith(_PROBE_SUBSTRATE_UNAVAILABLE_MARKER)
+        ),
+        None,
+    )
+    if marker_line is None:
+        # The reserved status without the wrapper's marker is the probed
+        # command's own exit status: authoritative contract evidence, not a
+        # substrate fault.
+        return
+    detail = marker_line[len(_PROBE_SUBSTRATE_UNAVAILABLE_MARKER) :].lstrip(": ")
+    detail = detail.strip()[:200]
     message = f"{boundary} attestation helper is unavailable in the exact host image"
     if detail:
         message = f"{message}: {detail}"
