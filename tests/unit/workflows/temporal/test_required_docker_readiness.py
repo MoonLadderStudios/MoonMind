@@ -7,6 +7,7 @@ import pytest
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 from api_service.db.models import Base
+from moonmind.config.settings import FeatureFlagsSettings
 from moonmind.schemas.temporal_activity_models import PlanGenerateInput
 from moonmind.workflows.temporal import worker_runtime
 from moonmind.workflows.temporal.activity_runtime import TemporalPlanActivities
@@ -27,12 +28,17 @@ REPLAY = json.loads(
 
 @pytest.fixture
 def isolated_planner(monkeypatch):
+    monkeypatch.setattr(
+        worker_runtime.settings.feature_flags, "container_jobs_enabled", True
+    )
     for name in (
         "DOCKER_HOST",
         "SYSTEM_DOCKER_HOST",
         "MOONMIND_CONTAINER_BACKEND_ENABLED",
         "MOONMIND_CONTAINER_BACKEND_KIND",
         "MOONMIND_CONTAINER_BACKEND_RAW_CLI_ENABLED",
+        "MOONMIND_CONTAINER_BACKEND_IMAGE_SOURCES",
+        "MOONMIND_CONTAINER_BACKEND_MAX_CPU_MILLIS",
     ):
         monkeypatch.delenv(name, raising=False)
     original_exists = Path.exists
@@ -146,3 +152,126 @@ async def test_plan_generate_replays_without_planner_docker_authority(
             assert planned_runtime["profileId"] == parameters["profileId"]
     finally:
         await engine.dispose()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("typed_request", [False, True])
+@pytest.mark.parametrize(
+    "configuration,expected_field",
+    [
+        ({"service": None}, "MOONMIND_CONTAINER_JOBS_ENABLED"),
+        ({"service": "false"}, "MOONMIND_CONTAINER_JOBS_ENABLED"),
+        (
+            {"MOONMIND_CONTAINER_BACKEND_KIND": "unsupported"},
+            "MOONMIND_CONTAINER_BACKEND_KIND",
+        ),
+        (
+            {"MOONMIND_CONTAINER_BACKEND_IMAGE_SOURCES": "invalid"},
+            "MOONMIND_CONTAINER_BACKEND_IMAGE_SOURCES",
+        ),
+        (
+            {"MOONMIND_CONTAINER_BACKEND_MAX_CPU_MILLIS": "0"},
+            "MOONMIND_CONTAINER_BACKEND_MAX_CPU_MILLIS",
+        ),
+    ],
+)
+async def test_plan_generate_blocks_unavailable_service_with_actionable_cause(
+    isolated_planner,
+    monkeypatch,
+    tmp_path,
+    typed_request,
+    configuration,
+    expected_field,
+):
+    if "service" in configuration:
+        monkeypatch.setenv("DOCKER_HOST", "tcp://unrelated-daemon:2375")
+        for key in (
+            "MOONMIND_CONTAINER_JOBS_ENABLED",
+            "FEATURE_FLAGS__CONTAINER_JOBS_ENABLED",
+            "CONTAINER_JOBS_ENABLED",
+        ):
+            monkeypatch.delenv(key, raising=False)
+        if configuration["service"] is not None:
+            monkeypatch.setenv(
+                "MOONMIND_CONTAINER_JOBS_ENABLED", configuration["service"]
+            )
+        monkeypatch.setattr(
+            worker_runtime.settings,
+            "feature_flags",
+            FeatureFlagsSettings(_env_file=None),
+        )
+    else:
+        for key, value in configuration.items():
+            monkeypatch.setenv(key, value)
+
+    request = json.loads(json.dumps(REPLAY["request"]))
+    engine = create_async_engine(f"sqlite+aiosqlite:///{tmp_path}/artifacts.db")
+    try:
+        async with engine.begin() as connection:
+            await connection.run_sync(Base.metadata.create_all)
+        async with async_sessionmaker(engine, expire_on_commit=False)() as session:
+            service = TemporalArtifactService(
+                TemporalArtifactRepository(session),
+                store=LocalTemporalArtifactStore(tmp_path / "artifacts"),
+            )
+            activities = TemporalPlanActivities(
+                artifact_service=service,
+                planner=worker_runtime._build_runtime_planner(),
+            )
+            with pytest.raises(
+                RuntimeError, match="readiness blocked launch"
+            ) as failure:
+                await activities.plan_generate(
+                    PlanGenerateInput.model_validate(request)
+                    if typed_request
+                    else request
+                )
+            assert expected_field in str(failure.value)
+    finally:
+        await engine.dispose()
+
+
+@pytest.mark.parametrize(
+    "field,value",
+    [
+        ("MOONMIND_CONTAINER_BACKEND_KIND", "sensitive-operator-value"),
+        ("MOONMIND_CONTAINER_BACKEND_ENABLED", "sensitive-operator-value"),
+        ("MOONMIND_CONTAINER_BACKEND_MAX_CPU_MILLIS", "sensitive-operator-value"),
+        (
+            "MOONMIND_CONTAINER_BACKEND_IMAGE_SOURCES",
+            '[{"sensitive-operator-value": "x"}]',
+        ),
+    ],
+)
+def test_configuration_blocker_omits_authored_values(
+    isolated_planner, monkeypatch, field, value
+):
+    monkeypatch.setenv(field, value)
+    blockers = worker_runtime._required_capability_blockers(
+        parameters={"requiredCapabilities": ["docker"]}, task_payload={}
+    )
+    assert len(blockers) == 1
+    assert field in blockers[0]["reason"]
+    assert "sensitive-operator-value" not in json.dumps(blockers)
+
+
+def test_configuration_blocker_redacts_and_bounds_unexpected_diagnostics(
+    isolated_planner, monkeypatch
+):
+    diagnostic_secret = "gh" + "p_" + "a" * 24
+
+    def invalid_configuration():
+        raise worker_runtime.ContainerBackendConfigError(
+            f"Invalid configuration: {diagnostic_secret} " + "x" * 1000
+        )
+
+    monkeypatch.setattr(
+        worker_runtime, "resolve_container_backend_settings", invalid_configuration
+    )
+    blockers = worker_runtime._required_capability_blockers(
+        parameters={"requiredCapabilities": ["docker"]}, task_payload={}
+    )
+    reason = blockers[0]["reason"]
+    assert diagnostic_secret not in reason
+    assert "[REDACTED]" in reason
+    assert len(reason) <= 565

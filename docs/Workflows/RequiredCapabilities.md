@@ -130,8 +130,13 @@ Jira requires trusted issue/project operations or qualifying prefetched trusted 
 
 Docker requires an enabled qualified container path, allowed deployment/workflow policy, enforced resource/network limits, and correct ownership of workspace side effects. Availability of a daemon is not permission to mount arbitrary paths or acquire repository credentials.
 
-The planning Activity validates the deployment-owned configuration through the
-shared Docker Backend settings resolver. It does not require a local socket,
+The planning Activity requires the container-job HTTP/MCP service feature flag
+(`MOONMIND_CONTAINER_JOBS_ENABLED`) and validates deployment-owned configuration
+through the shared Docker Backend settings resolver. Compose passes the same
+enabled default and explicit override to the API, planning, and agent-runtime
+workers; outside Compose an omitted service flag remains disabled. Blockers
+identify the offending setting and constraint without exposing authored values.
+Planning does not require a local socket,
 `DOCKER_HOST`, or raw Docker CLI access on the LLM/planning worker. These are not
 readiness evidence for the selected execution owner, and their presence cannot
 override a disabled or invalid backend.
