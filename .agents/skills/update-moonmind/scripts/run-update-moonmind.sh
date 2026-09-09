@@ -259,7 +259,7 @@ mark_not_running_services_for_restart() {
     mapfile -t container_ids < <("${COMPOSE_CMD[@]}" ps -a -q "$service" 2>/dev/null || true)
     if [[ ${#container_ids[@]} -eq 0 ]]; then
       case "$service" in
-        api | api-db | codex-worker | docker-proxy | qdrant | scheduler)
+        api | api-db | codex-worker | docker-proxy | scheduler)
           say "Marking service '$service' for restart: no container found for baseline service."
           add_target "$service"
           ;;
