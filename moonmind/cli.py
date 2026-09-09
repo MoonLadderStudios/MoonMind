@@ -19,7 +19,18 @@ from moonmind.rag.guardrails import GuardrailError, ensure_rag_ready
 from moonmind.rag.settings import RagRuntimeSettings
 from moonmind.utils.logging import redact_sensitive_text
 
-app = typer.Typer(help="MoonMind developer utilities.")
+app = typer.Typer(
+    help=(
+        "MoonMind developer utilities (worker, manifest, container). "
+        "Application authentication is selected by AUTH_PROVIDER "
+        "(accounts, oidc, header, disabled; retired keycloak/default/google/local "
+        "selectors are rejected) — see "
+        "docs/Security/AuthenticationContracts.md. Container commands run as "
+        "machine callers with the MOONMIND_CONTAINER_JOBS_BEARER_TOKEN "
+        "family, never as browser login; the removed legacy worker-token "
+        "path is rejected (410 worker_token_deprecated)."
+    )
+)
 worker_app = typer.Typer(help="Worker runtime diagnostics.")
 manifest_app = typer.Typer(help="Manifest schema validation and pipeline commands.")
 container_app = typer.Typer(help="Run work through MoonMind's Docker backend.")

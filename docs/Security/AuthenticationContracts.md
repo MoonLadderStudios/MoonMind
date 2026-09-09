@@ -7,7 +7,8 @@
 **Audience:** API, dashboard, runtime, security contributors and operators  
 **Authority:** Application authentication modes, identity mapping, session/revocation, CSRF/origin, error semantics, and background-work policy for MoonMind user authentication. Freezes the target contract inventoried in `[KeycloakRemovalInventory-4117.md](../tmp/KeycloakRemovalInventory-4117.md)` (MoonLadderStudios/MoonMind#4117, parent epic #4116).  
 **Owning Surface:** `api_service/auth.py`, `api_service/auth_providers.py`, `api_service/main.py`, `moonmind/config/settings.py` (`OIDCSettings` storage), `moonmind/security/auth_modes_4120.py` (selector owner, #4120), `api_service/db/models.py` (`User`)  
-**Related Docs:** [SecretsSystem.md](./SecretsSystem.md), [ProviderProfiles.md](./ProviderProfiles.md), [SettingsSystem.md](./SettingsSystem.md), [KeycloakRemovalPlan.md](../tmp/KeycloakRemovalPlan.md) (predecessor proposal from #4102; starting evidence only, not the deliverable)
+**Related Docs:** [SecretsSystem.md](./SecretsSystem.md), [ProviderProfiles.md](./ProviderProfiles.md), [SettingsSystem.md](./SettingsSystem.md), [KeycloakRemovalPlan.md](../tmp/KeycloakRemovalPlan.md) (predecessor proposal from #4102; starting evidence only, not the deliverable), [KeycloakRemovalResidual-4129.md](../tmp/KeycloakRemovalResidual-4129.md) (reviewed removal manifest for #4129)
+**Related Tooling:** [`tools/keycloak_cutover_rehearsal.py`](../../tools/keycloak_cutover_rehearsal.py) (hermetic K6 preflight/rehearsal gate for #4131; never mutates a live deployment)
 
 > [!NOTE]
 > This document defines desired-state MoonMind application-authentication contracts.
@@ -22,7 +23,7 @@
 MoonMind has exactly one application authentication selector, `AUTH_PROVIDER`, and
 exactly one canonical principal, `User.id` (a stable MoonMind UUID). The supported
 target modes are `accounts`, `oidc`, `header`, and an explicitly restricted local
-mode `disabled`. Retired selectors (`keycloak`, `default`, `google`) are rejected
+mode `disabled`. Retired selectors (`keycloak`, `default`, `google`, `local`) are rejected
 at startup with migration guidance; they are never silently translated.
 
 Authentication establishes who presented a request. Authorization — whether that
@@ -225,3 +226,90 @@ optional surfaces, and configuration isolation. That contract is the
 authoritative adapter reference for K3/K4; this document remains the
 authority for modes, identity, session, error, and background-work
 semantics.
+
+## 12. Support matrix and operator evidence
+
+This document is the single owner of target behavior. It is still
+**Draft**: the `accounts`, `oidc`, and `header` session and lifecycle
+semantics in §§5–8 describe the accepted contract, not a shipped and
+browser-verified implementation on this checkout. Do not read them as
+proof that the journeys in §12.1 pass. Until the pending implementation
+slices land, §7 (enrollment and administration) is contract text, not
+verified operator procedure.
+
+Point-in-time execution status — the landed-ticket list, pending backlog
+IDs, checkout-specific qualification results, and temporary plan lifecycle —
+lives in [KeycloakRemovalStatus-4130.md](../tmp/KeycloakRemovalStatus-4130.md)
+so this canonical section cannot go stale as issues land. This section keeps
+only the durable support, cutover, and compatibility contracts.
+
+### 12.1 Supported and tested versus blocked and unqualified
+
+| Combination | Status | Evidence owner |
+| --- | --- | --- |
+| `disabled` clean boot and seeding, no Keycloak DNS/connect attempt, retired selectors/tokens/routes rejected, rendered Compose without the bundled service | Supported and tested (hermetic unit tests plus the residual manifest §5 open gates) | #4120 tests, #4129 manifest |
+| `accounts` / `oidc` / `header` end-to-end browser journeys (two-user login, admin/worker negative matrix, stream expiry and revocation, restart and replica consistency) | Blocked: contract only, pending K3/K4 implementation and #4128 qualification | #4128 (product evidence) |
+| Live external IdP and MFA qualification, deployment-owner protected inventory, coordinated release, retirement execution, retention disposition | Blocked by design: operator-gated steps requiring named-owner approval and separately authorized live checks | Deployment-cutover issue, #4131 rehearsal gate prerequisites |
+| `keycloak`, `default`, `google`, `local`, or unknown selectors; dual old/new credential issuance; whole shared PostgreSQL/Temporal restore as auth rollback; silent `disabled` fallback | Rejected, never a supported path | This contract §§2–4 plus §12.2 |
+
+#4128 consumes the documented journey: qualification runs the real
+fresh-install, migrated-data, remote OIDC/proxy, and restricted-local
+paths against the coordinated implementation and records the result.
+Documentation must not invent a successful result ahead of that evidence.
+
+### 12.2 Cutover, backup, and rollback tooling
+
+The deployment owner's actual tooling is the hermetic rehearsal gate
+[`tools/keycloak_cutover_rehearsal.py`](../../tools/keycloak_cutover_rehearsal.py)
+(#4131, plan coverage K6). It verifies preflight, rehearsal,
+rollback-check, and retirement-check fixtures from repo files only: exact
+build pins and topology, sanitized inventory survey, UUID and ownership
+retention across the real-shaped cutover sequence, failure containment at
+each step, backup-envelope restore verification, mutation freeze, drain
+that preserves admitted Temporal work, dual-issuance refusal, and textual
+retirement-plan safety. It never contacts a live IdP, mints or invalidates
+real sessions, or deletes services, volumes, roles, or databases; no new
+commands are invented here — run its `--help` for the exact invocation.
+
+Operator-gated steps stay `blocked` with the missing evidence named until
+the deployment owner supplies them. The durable rules the gate enforces
+are:
+
+- Encrypted, restore-tested backups of identity, configuration, and key
+  material with recorded matching code and image versions. Hermetic
+  envelopes prove structure and integrity; live encryption-at-rest is an
+  operator-KMS deployment property.
+- Version matching between the application, configuration, and session-key
+  set before and after the change; freeze of account creation and
+  identity, mapping, privilege, and session mutations during the bounded
+  mapping and cutover window; drain or accounting of old authentication
+  requests so old and new API replicas never issue incompatible
+  credentials concurrently.
+- Account and MFA enrollment through the qualified replacement before
+  cutover; exact service retirement (precisely identified obsolete
+  services only — never `down -v`, broad pruning, or shared-role and
+  app/Temporal volume deletion); session invalidation on cutover; and
+  encrypted recovery-snapshot retention for an explicitly bounded period.
+- Rollback restores a matching application, configuration, and session-key
+  set with reconciliation or forward repair and intentional invalidation
+  of incompatible sessions. Restoring the entire shared PostgreSQL or
+  Temporal database is not an auth rollback; falling back to `disabled`
+  authentication is never a rollback. If identity data changed after
+  cutover, reconcile before restoring or repair forward.
+
+### 12.3 Upstream pin compatibility and plan lifecycle
+
+The reusable upstream boundary follows the pin recorded in
+[OmnigentAuthAdapterContract.md](./OmnigentAuthAdapterContract.md) §1
+(upstream commit `f04b0354fb5344c1ea8b92795ceb6760a9ad7595`,
+`omnigent==0.12.0`). A pin change re-runs the conformance fixtures
+before any behavior is relied upon; qualification results name the exact
+pin they ran against.
+
+[KeycloakRemovalPlan.md](../tmp/KeycloakRemovalPlan.md) stays at
+`Status: Proposed` until execution is complete (see the point-in-time
+ledger in [KeycloakRemovalStatus-4130.md](../tmp/KeycloakRemovalStatus-4130.md)).
+Clean it up only then: retain the accepted contracts in this document and
+its adapter companion, resolve backlinks, and archive or remove the
+temporary plan. Do not erase necessary operator upgrade guidance
+prematurely.

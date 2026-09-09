@@ -93,7 +93,11 @@ to prewarm it.
    they do not control a Docker daemon.
 2. **The service is API-owned.** The API authenticates callers, authorizes the
    request, resolves logical workspaces, creates durable job identity, and
-   exposes status and control surfaces.
+   exposes status and control surfaces. User authentication follows the one
+   `AUTH_PROVIDER` selector (`accounts` | `oidc` | `header` | explicitly
+   restricted local `disabled`) in
+   [AuthenticationContracts.md](../Security/AuthenticationContracts.md);
+   machine credentials below never become browser credentials.
 3. **Temporal owns long-running execution.** Submission returns a stable job
    identifier. Pulls and builds never hold an MCP or HTTP request open.
 4. **One configured daemon is the current backend.** The required implementation
@@ -1055,15 +1059,25 @@ Managed agents run targeted Python verification with:
 moonmind container python-tests tests/unit/path/test_file.py
 ```
 
-When `AUTH_PROVIDER` requires authentication, the managed-session credential
+In `accounts`, `oidc`, and `header` modes, the managed-session credential
 boundary supplies a scoped Bearer credential as
 `MOONMIND_CONTAINER_JOBS_BEARER_TOKEN`; the CLI sends it on every MCP request.
+In explicitly restricted local `disabled` mode the same bearer shape is issued
+for the stable persisted user behind loopback-only bind or documented trusted
+ingress. Retired selectors (`keycloak`, `default`, `google`, `local`) fail at startup
+with migration guidance.
 An authenticated deployment must not expose a shared or deployment-wide token
 to managed sessions. The token is signed by the trusted session launcher,
 expires with the bounded session lifetime, and is accepted only by
 `/mcp/container/tools/call`. Its claims bind the owner, runtime, agent run, and
 session; submissions whose logical workspace or correlation differs from those
-claims fail before job creation.
+claims fail before job creation. It is transported over the API's TLS/loopback
+transport, never placed in URLs, and never accepted as a MoonMind browser
+session. On this endpoint a missing capability is
+`401 container_capability_required` and an invalid or expired capability is
+`401 invalid_container_capability` (not the generic `auth_required` /
+`auth_invalid` user-auth codes); classify and remediate capability failures
+by these endpoint-specific codes.
 
 The command derives the canonical locator from the active authority: a
 `managed_runtime` locator for a managed session or the exact `sandbox` locator

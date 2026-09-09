@@ -466,14 +466,37 @@ Log at minimum:
 
 ## 9.5 App auth mode integration
 
-Artifact API auth behavior must follow the app-level auth mode.
+Artifact API auth behavior follows the one app-level selector `AUTH_PROVIDER`
+(`accounts` | `oidc` | `header` | explicitly restricted local `disabled`).
+Retired selectors (`keycloak`, `default`, `google`, `local`) fail at startup with
+migration guidance. Authoritative mode, identity, session, and error semantics
+live in [AuthenticationContracts.md](../Security/AuthenticationContracts.md);
+this section only binds them to artifact routes.
 
-| App auth setting | Artifact API behavior | Intended environment |
-| ------------------------ | -------------------------------------------------------------------- | ----------------------- |
-| `AUTH_PROVIDER=disabled` | no end-user auth required for user-facing metadata/presign endpoints | one-click local/dev |
-| authenticated modes | require authenticated identity and execution-linked authorization | shared dev/staging/prod |
+| `AUTH_PROVIDER` | Artifact API behavior | Intended environment |
+| --- | --- | --- |
+| `accounts` | Require the MoonMind session for the resolved `User.id`, then execution-linked authorization | fresh installs and shared deployments |
+| `oidc` | Require the MoonMind session minted from the verified `(issuer, subject)` pair, then execution-linked authorization | shared dev/staging/prod behind an external IdP |
+| `header` | Require the MoonMind session minted from the proxy-asserted identity (ingress strips and replaces identity headers; direct bypass blocked), then execution-linked authorization | authenticated ingress only |
+| `disabled` | No end-user credential required at user-facing metadata/presign endpoints, but only behind loopback-only bind or documented trusted ingress (`MOONMIND_TRUSTED_INGRESS=1`); execution-linked authorization still applies | one-click local/dev |
+
+User versus machine credentials at artifact routes:
+
+| Caller | Accepted credential | Notes |
+| --- | --- | --- |
+| Browser / API user | MoonMind session cookie (`__Host-mm_session` on HTTPS; `mm_session_dev` only for explicitly permitted loopback HTTP), short-lived and purpose-bound | Cookie mutations require CSRF protection and origin validation; conflicting cookie/bearer identities are `401 auth_conflict` |
+| Machine (artifact/worker paths) | Scoped service identity with least privilege (§9.3); container-job bearer on its authorized routes | Succeeds only on authorized routes and resources; the removed legacy worker-token path is `410 worker_token_deprecated` |
+
+Error behavior: missing credential at a strict boundary is `401 auth_required`;
+invalid, expired, wrong-key/issuer/purpose, or reserved-identity credential is
+`401 auth_invalid`; authenticated but inactive or unauthorized is `403`;
+identity-store unavailability is `503` and fails closed. SSE and artifact
+downloads work without placing broad tokens in URLs; blob access is issued only
+after metadata-level authorization succeeds.
 
 This is an API-layer auth choice. It does **not** require public object-storage buckets.
+Native chat and upstream runtime access stay behind the qualified same-origin
+binding facade, not an unrestricted upstream proxy.
 
 ---
 
