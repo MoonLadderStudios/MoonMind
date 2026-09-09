@@ -261,28 +261,38 @@ def _probe_migrations(
             else f"migrations clean apply failed: {_stderr(result)}",
         )
 
-    parent = _resolve_head_parent(image, env)
-    if parent is None:
+    parents = _resolve_head_parents(image, env)
+    if not parents:
         return False, "could not resolve the revision preceding the repository head"
+    parent = parents[0]
     if parent == "base":
         return (
             False,
             "repository head has no parent revision, so no prior schema exists to "
             "upgrade from",
         )
+    # A merge-point head has one parent per merged branch. A deployment sits on
+    # one of those branches, so materializing the first declared parent and
+    # upgrading applies the sibling branch and the merge revision in the order a
+    # deployment on that branch actually runs them.
+    origin = parent[:12]
+    if len(parents) > 1:
+        siblings = ", ".join(item[:12] for item in parents[1:])
+        origin = f"{origin} (merge-point parent; sibling branch {siblings})"
     materialize = _run(_alembic(image, env, "upgrade", parent), timeout=300)
     if materialize.returncode != 0:
         return (
             False,
-            f"could not materialize prior revision {parent[:12]}: "
-            f"{_stderr(materialize)}",
+            f"could not materialize prior revision {origin}: {_stderr(materialize)}",
         )
     result = _run(_alembic(image, env, "upgrade", "head"), timeout=300)
     return (
         result.returncode == 0,
-        f"prior-schema upgrade from {parent[:12]} succeeded"
-        if result.returncode == 0
-        else f"prior-schema upgrade from {parent[:12]} failed: {_stderr(result)}",
+        (
+            f"prior-schema upgrade from {origin} succeeded"
+            if result.returncode == 0
+            else f"prior-schema upgrade from {origin} failed: {_stderr(result)}"
+        ),
     )
 
 
@@ -298,18 +308,22 @@ def _stderr(result: subprocess.CompletedProcess[str]) -> str:
     return (result.stderr or result.stdout or "").strip()[:200]
 
 
-def _resolve_head_parent(image: str, env: dict[str, str]) -> str | None:
-    """Return the revision immediately preceding the repository head."""
+def _resolve_head_parents(image: str, env: dict[str, str]) -> list[str]:
+    """Return the revisions immediately preceding the repository head.
+
+    ``alembic show head`` prints ``Parent:`` for a linear head and ``Merges:``
+    (a comma-separated list, in ``down_revision`` order) for a merge-point head.
+    An empty list means no parent could be resolved.
+    """
 
     shown = _run(_alembic(image, env, "show", "head"), timeout=120)
     if shown.returncode != 0:
-        return None
+        return []
     for line in shown.stdout.splitlines():
         label, _, value = line.partition(":")
-        if label.strip().lower() == "parent":
-            parent = value.strip()
-            return parent or None
-    return None
+        if label.strip().lower() in {"parent", "merges"}:
+            return [item.strip() for item in value.split(",") if item.strip()]
+    return []
 
 
 def _probe_websocket(url: str) -> tuple[bool, str]:
