@@ -205,11 +205,20 @@ async def test_postgres_mixed_dataset_preserves_uuids_and_owners(pg_maker) -> No
             target={}, policy={}, owner_user_id=admin.id,
         ))
         await session.commit()
+        # Capture ids while attributes are loaded: preflight/apply end with
+        # rollback, which expires every instance in this session, so any
+        # later ORM attribute touch would raise MissingGreenlet.
+        fresh_id, legacy_id, default_id, admin_id = (
+            fresh.id,
+            legacy.id,
+            default.id,
+            admin.id,
+        )
         before = await ownership_snapshot(session)
         enrollment = {
-            str(legacy.id): {"issuer": ISSUER, "subject": "pg-legacy-sub",
+            str(legacy_id): {"issuer": ISSUER, "subject": "pg-legacy-sub",
                              "source_provider": "keycloak"},
-            str(fresh.id): {"issuer": ISSUER, "subject": "pg-fresh-sub",
+            str(fresh_id): {"issuer": ISSUER, "subject": "pg-fresh-sub",
                             "source_provider": "keycloak"},
         }
         checked = await preflight(
@@ -221,7 +230,7 @@ async def test_postgres_mixed_dataset_preserves_uuids_and_owners(pg_maker) -> No
             provider_to_issuer={"keycloak": ISSUER}, enrollment_evidence=enrollment,
         )
         assert outcome.blocked == []
-        assert sorted(outcome.migrated) == sorted([str(legacy.id), str(fresh.id)])
+        assert sorted(outcome.migrated) == sorted([str(legacy_id), str(fresh_id)])
 
         rerun_check = await preflight(
             session, provider_to_issuer={"keycloak": ISSUER},
@@ -233,14 +242,14 @@ async def test_postgres_mixed_dataset_preserves_uuids_and_owners(pg_maker) -> No
         )
         assert rerun.migrated == [] and len(rerun.skipped) == 2
 
-        for uid in (fresh.id, legacy.id, default.id, admin.id):
+        for uid in (fresh_id, legacy_id, default_id, admin_id):
             assert await session.get(User, uid) is not None
         owners = {
             s.name: s.owner_user_id
             for s in (await session.execute(select(RecurringWorkflowDefinition))).scalars().all()
         }
-        assert owners == {"pg-schedule": legacy.id, "pg-admin-schedule": admin.id}
-        assert (await session.get(User, admin.id)).is_superuser is True
+        assert owners == {"pg-schedule": legacy_id, "pg-admin-schedule": admin_id}
+        assert (await session.get(User, admin_id)).is_superuser is True
         assert (await session.get(User, legacy.id)).oidc_provider == "keycloak"
         after = await ownership_snapshot(session)
         assert after["user_ids"] == before["user_ids"]
