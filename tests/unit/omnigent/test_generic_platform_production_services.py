@@ -3011,6 +3011,7 @@ async def test_tool_delivery_uses_plan_names_and_deployment_owned_volume(
                         "version": "2.76.2",
                         "path": "bin/gh",
                         "platforms": {"linux/amd64": {"executableSha256": "a" * 64}},
+                        "versionProbe": ["--version"],
                     }
                 ]
             }
@@ -3037,6 +3038,7 @@ async def test_tool_delivery_uses_plan_names_and_deployment_owned_volume(
     assert result[0]["sourceRef"] == "deployment-tools"
     assert result[0]["accessMode"] == "read-only"
     assert result[0]["tools"][0]["executableDigests"] == ["a" * 64]
+    assert result[0]["tools"][0]["versionProbe"] == ["--version"]
 
 
 def test_deployment_mounted_tool_names_come_from_locked_manifest(

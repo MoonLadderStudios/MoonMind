@@ -72,6 +72,14 @@ retention removes them. Image lifetime is independent of workflow and session
 lifetime.
 
 **MoonMind service readiness and optional workload-image readiness are separate.**
+Planning admits the `docker` capability from the deployment's enabled, valid
+container-job backend configuration. The planning worker does not require a
+local socket or `DOCKER_HOST`. Endpoint reachability and daemon compatibility
+are checked by the trusted container-job worker before it serves execution.
+Host attestation verifies each mounted tool's pinned digest and executes its
+manifest-declared `versionProbe` arguments. The container CLI declares `--help`;
+host adapters preserve that portable probe when materializing tool attachments.
+
 Starting MoonMind must not build, pull, or validate an image merely because a
 future workflow might use it. Image work begins when an admitted job actually
 requires that image, or when an operator explicitly invokes the same provisioner

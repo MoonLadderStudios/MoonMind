@@ -455,6 +455,15 @@ class DockerOmnigentHostAttestor:
                     code=HarnessPlatformFailure.OMNIGENT_HARNESS_BUILD_MISMATCH,
                 )
             for tool in attachment.get("tools", []):
+                probe = tool.get("versionProbe")
+                if not isinstance(probe, list) or not probe or not all(
+                    isinstance(arg, str) and arg and "\x00" not in arg
+                    for arg in probe
+                ):
+                    raise HarnessPlatformError(
+                        "mounted tool has no valid manifest-declared version probe",
+                        code=HarnessPlatformFailure.OMNIGENT_HARNESS_BUILD_MISMATCH,
+                    )
                 executable = (
                     str(attachment["targetPath"]).rstrip("/")
                     + "/"
@@ -465,7 +474,7 @@ class DockerOmnigentHostAttestor:
                     (
                         'test -x "$1"; actual=$(sha256sum "$1" | awk \'{print $1}\'); ',
                         'case ",$2," in *,"$actual",*) :;; *) exit 1;; esac; ',
-                        '"$1" --version >/dev/null',
+                        'executable=$1; shift 2; "$executable" "$@"',
                     )
                 )
                 _code, observed, _err = await self._backend.run(
@@ -479,6 +488,7 @@ class DockerOmnigentHostAttestor:
                         "--",
                         executable,
                         digests,
+                        *probe,
                     ],
                     failure_code=HarnessPlatformFailure.OMNIGENT_HARNESS_BUILD_MISMATCH,
                 )
