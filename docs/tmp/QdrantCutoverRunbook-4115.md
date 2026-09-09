@@ -1,148 +1,181 @@
-# Qdrant-Removal Cutover Runbook — #4115
+# Qdrant Cutover Runbook — #4115
 
-Status: Proposed
+Parent: MoonLadderStudios/MoonMind#4103. This runbook owns the replay-safe
+cutover, data preservation, and rollback procedure for the bounded upgrade
+from a Qdrant-bearing deployment to the vector-free release. Design and
+sanitized fixtures in this runbook are not blocked on the final integrated
+verification issue; exact rehearsal evidence is published to #4103/#4114.
 
-Parent: MoonLadderStudios/MoonMind#4103. This issue (#4115) owns the
-**replay-safe cutover, data-preservation, and rollback procedure**.
-Admission + authoring retirement belongs to #4105 (landed as `c234b452e`;
-inventory in `docs/tmp/QdrantRemovalInventory-4105.md`). Handler/field
-deletion belongs to #4106–#4109. Capability/audit-state classification for
-`moonmind_retrieval_state` belongs to #4107. Final integrated rehearsal
-uses #4110, #4111, #4112, #4113; its evidence goes to #4114.
+Status: Proposed (pre-cutover). Correctly unarchived until every documented
+consumer drains and the archive/delete triggers below fire.
+
+Sibling ownership (do not duplicate here):
+- #4105 (merged): retired vector admission/authoring/plan compilation.
+  Inventory: `docs/tmp/QdrantRemovalInventory-4105.md`.
+- #4106–#4109: vector-only handler/field deletion in execution code.
+- #4107: `moonmind_retrieval_state` capability/audit-state classification.
+  Preserve that evidence independently from old vector storage.
+- #4110–#4113: integrated rehearsal pieces. #4114 consumes final evidence.
+- #3948/#3944: ManifestIngest public compile/execute semantics and old
+  Activity/command fixtures. The two historical generic ManifestIngest
+  entries (`manifest_ref` compile, `manifestArtifactRef` orchestrate) are
+  preserved verbatim and stay replayable.
 
 Source baseline: `9424899410a1df1b359fb1b803b9d21912e0b50a`. That Compose
-declares both `qdrant-storage` and `moonmind_retrieval_state`; they are
-**distinct data** and must never be treated as interchangeable. #3948
-documents distinct historical ManifestIngest entry/Activity contracts;
-both historical generic entries stay readable (see §4). Repository
-inspection alone cannot establish an operator's active work or whether
-Qdrant holds unique content — the operator preflight (§1) is authoritative.
+revision declares both `qdrant-storage` and `moonmind_retrieval_state`;
+they are distinct data and must never be treated as interchangeable.
+Repository inspection alone cannot establish an operator's active work or
+whether Qdrant holds unique content — the live Preflight below does.
 
-Hermetic rehearsal: `tools/qdrant_cutover_rehearsal.py` (`--mode preflight |
-rehearsal | rollback-check | retirement-check | all`). The gate never
-contacts live Qdrant/Temporal/Docker, never deletes anything, and reports
-operator-gated steps as `blocked` with the missing evidence named. Fixture
-passes never mark deployment qualification complete.
+Hermetic gate: `tools/qdrant_cutover_rehearsal.py` (`--mode preflight |
+rehearsal | upgrade-check | preservation-check | rollback-check |
+retirement-check | all`). It performs no live mutation and never contacts
+a deployment host. `REHEARSAL_PASS_DEPLOYMENT_BLOCKED` is the honest
+terminal state for a repo checkout: fixtures pass while owner-held and
+live-deployment prerequisites stay blocked.
 
-Archive/delete triggers: archive this runbook when #4114 records the final
-integrated rehearsal evidence AND the finite retirement condition (§2) is
-operator-verified for the selected deployment; delete the temporary
-inventory excerpts when the obsolete scaffolding they describe has drained
-per §2. Never archive before both hold.
+## 1. Preflight (bounded, read-only, redacted)
 
-## 1. Bounded read-only preflight (operator, per deployment)
+Use existing deployment/Temporal/state owners (deployment worker,
+Temporal visibility, artifact/MinIO readers, capability registry). Inventory:
 
-Use existing deployment/Temporal/state owners. Inventory, redacted:
+- affected active workflows and pending/retryable Activities,
+- recurring schedules with retired vector producers,
+- stored vector manifests and profile defaults,
+- issued capabilities,
+- relevant schema/readers,
+- exact Compose project/service/container IDs and actual mounts.
 
-1. Affected active workflows, pending/retryable Activities, recurring schedules.
-2. Stored vector manifests / profile defaults, issued capabilities.
-3. Relevant schema/readers, exact Compose project/service/container IDs, actual mounts.
-4. Collection/payload provenance and potentially Qdrant-only documents, metadata, or text.
+Produce a redacted report (counts and refs only — no collections,
+payloads, documents, metadata, text, or secrets) with one actionable
+verdict:
 
-Produce a redacted report with one actionable verdict — `proceed`, `drain`,
-or `blocked` — not a guess from service names. Hermetic default is
-`blocked` (live facts unknown from a checkout); `drain` when §2 consumers
-exist; `proceed` only with positive live evidence plus a verified snapshot
-(§5). No live production inventory is inferred from repository code.
+- `proceed`: no active vector work, no unpreserved unique data, ownership exact.
+- `drain`: active/pending/scheduled vector work exists. Choose drainage on
+  the old release or the existing versioned worker/cutover mechanism, record
+  the pending-consumer evidence and the finite retirement condition. No
+  schedule may retry forever against a deleted backend.
+- `blocked`: ambiguous ownership or unpreserved potentially-unique data.
+  Refuse retirement until resolved.
 
-## 2. Drainage decision and finite retirement condition
+Never guess from service names. Hermetic rehearsal:
+`python tools/qdrant_cutover_rehearsal.py --mode preflight`.
 
-Decision: **drainage on the old release** is the default for affected
-histories. The existing versioned worker/cutover mechanism is the explicit
-alternative when the deployment declares a supported versioned worker.
-Never reinterpret historical payloads, never delete an Activity handler as
-the drainage mechanism, never retain an indefinite compatibility backend.
+## 2. Admission retirement and cutover choice (#4105 + this runbook)
 
-Record the pending-consumer evidence (schedule IDs, pending Activity IDs,
-capability IDs — redacted) with this runbook. Retirement executes only when
-all three hold (finite retirement condition):
+New native vector admissions are already stopped at #4105 (explicit
+`rag`/`followUpRetrieval` rejected before Temporal start/host launch;
+schedules/drafts/patches strip retired fields; plan compilation carries no
+vector descriptors). This runbook adds:
 
-- no active schedule produces vector work;
-- no pending/retryable vector Activity remains;
-- snapshot/export recoverability is operator-verified (§5).
+- explicit retirement of retired schedule producers (no indefinite
+  compatibility backend in the new release),
+- the documented drainage-vs-version-routing choice per affected history,
+- pending-consumer evidence and the finite retirement condition.
 
-New native vector admissions are already stopped by #4105 (explicit
-`rag`/`followUpRetrieval` fail closed before Temporal start/launch; schedule
-producers retired). This runbook coordinates the drain; it does not re-admit.
+Do not reinterpret historical payloads, do not merely delete an Activity
+handler, and do not retain an indefinite compatibility backend. A history
+that cannot safely run on the new release gets explicit old-release drain
+ownership, never a silent fallback.
 
 ## 3. Replay safety
 
-Representative replay covers the changed initial-context,
-launch/capability, manifest, digest/finalization, and cleanup boundaries.
-Both historical generic ManifestIngest entries stay readable per #3948 and
-existing old Activity/command fixtures per #3944 are preserved. Each
-affected persisted handoff is exercised for restart/retry/cancel. A history
-that cannot safely run on the new release gets explicit old-release drain
-ownership, never a silent fallback. Immutable inputs/evidence are never
-rewritten to change semantics.
+Representative old/new histories replay, or they carry tested bounded
+old-release drainage. The gate checks both historical generic ManifestIngest
+entries plus restart/retry/cancel containment across the real-shaped
+sequence (preflight → preserve → upgrade → retire → verify) with
+failure injection at each step. Immutable inputs and evidence are never
+rewritten to change semantics. Old Activity/command fixtures (#3948/#3944)
+are preserved.
 
-## 4. Historical ManifestIngest entries (preserved)
+## 4. Preservation (before stopping the old service)
 
-- `manifest-ingest-generic-entry/v1`
-- `manifest-ingest-generic-entry/v2`
+1. Identify collection/payload provenance and potentially Qdrant-only
+   documents, metadata, or text.
+2. Record the previous image/version (`qdrant/qdrant:v1.17.1`),
+   exact mounts (`qdrant-storage:/qdrant/storage`), and recovery config.
+3. Preserve a recoverable snapshot plus a logical export where needed.
+4. Verify recoverability; classify data as reproducible or unique before
+   declaring anything disposable. Never assume payloads reconstructible
+   merely because vectors are derived.
+5. Keep originals in operator-controlled authorized storage with redaction
+   and retention — never public issues or source control. Preserve #4107
+   retrieval-state evidence independently.
 
-Both must remain readable across the cutover. The rehearsal gate fails a
-changed boundary that does not carry both entries.
+Hermetic rehearsal: `--mode preservation-check --preservation-description
+"...provenance...snapshot...export...verif..."`. A description claiming
+derived-vectors-are-disposable or public-issue storage is refused.
 
-## 5. Snapshot, logical export, recoverability (before stopping the old service)
-
-1. Record the previous image/version (`qdrant/qdrant:v1.17.1` at baseline),
-   exact mounts (`qdrant-storage:/qdrant/storage`), and recovery configuration.
-2. Preserve a recoverable snapshot plus a logical export where needed.
-3. Verify recoverability (restore-verification; live scratch-restore is
-   operator-verified) and classify each payload as **reproducible** (derived
-   from a deterministic source) or **unique** (Qdrant-only or unknown —
-   preserved). Never assume reconstructibility from vectors alone.
-4. No disposal decision before verification completes.
-
-Custody: originals live in **operator-controlled authorized storage** with
-redaction and a recorded retention window — never public issues or source
-control. `moonmind_retrieval_state` capability/audit evidence is preserved
-independently per #4107, never mixed with old vector storage.
-
-## 6. Matched upgrade
+## 5. Upgrade (matching revision set)
 
 Deploy matching application, schema/caller changes, dependency images, and
-Compose together. Rehearse the supported upgrade under sanitized fixtures:
-an old `.env` (with `QDRANT_*` keys), stored retired requirements, and
-representative historical artifacts. Failures must explain actionably. No
-new mandatory disable flag, no fake embedding credential, no substitute
-search service.
+Compose together. Rehearse under sanitized fixtures: an old `.env`
+(`QDRANT_URL`, `QDRANT_ENABLED=true`, `VECTOR_STORE_PROVIDER=qdrant`),
+stored retired requirements (rejected at admission with actionable
+guidance), and representative historical artifacts (stay readable).
+Explain failures actionably. There is no new mandatory disable flag, no
+fake embedding credential, and no substitute search service. Old-release
+test infrastructure is isolated upgrade-fixture infrastructure, not
+supported new-release topology.
 
-## 7. Exact-container retirement (operator, idempotent)
+Hermetic rehearsal: `--mode upgrade-check` (also covered by
+`tests/unit/tools/test_qdrant_cutover_rehearsal.py`).
 
-Identify and stop/remove **only** the exact obsolete Qdrant container owned
-by the selected deployment (exact Compose project, e.g. `moonmind`, plus
-exact service/container IDs from §1). Then verify absence. Removing the YAML
-definition does not stop a running orphan. Refuse wrong/ambiguous project
-ownership. Repeated checks are safe (idempotent). Forbidden: broad orphan
-cleanup, `docker compose down -v`, indiscriminate volume prune, broad
-filesystem deletion. Unrelated services/volumes stay intact.
+## 6. Retirement (exact container only)
 
-## 8. Retention window (no automatic deletion)
+1. Identify the exact obsolete Qdrant container owned by the selected
+   deployment (Compose project name, service `qdrant`, container ID).
+2. Refuse ambiguous or wrong-project ownership — never broaden to orphan
+   cleanup, `docker compose down -v`, volume prune, or filesystem deletion.
+3. Stop/remove only that container; verify absence afterward.
+4. Repeated retirement checks are safe (idempotent: absence re-verifies).
 
-Retain the old Qdrant volume and exports through an explicit
-recovery/retention window (record the window with §5 custody). Permanent
-deletion is a **separate exact-resource operator action** after
-export/restore verification — never an automatic normal-upgrade step.
-Preserve PostgreSQL, MinIO, secrets, workspaces, unrelated containers, and
-Omnigent state. Creating these issues authorizes no real production deletion.
+Removing the YAML definition does not stop a running orphan. Creating
+these issues does not authorize any real production deletion.
 
-## 9. Rollback (rehearsed against fixtures)
+Hermetic rehearsal: `--mode retirement-check --retire-action "stop/remove
+exact qdrant container (identified from inventory)" --retire-project
+<project> --retire-service qdrant --retire-container-id <container>`.
+Without an explicit operator-supplied action the check stays blocked;
+without exact structured ownership it also stays blocked (ambiguous
+ownership must never complete retirement); destructive actions fail.
 
-Rollback uses the **previous matching application/Compose/image revision**
-with preserved data, after a schema-compatibility check, with
-reconciliation recorded. Never add an optional Qdrant profile or adapter
-back to the new release as a rollback feature. Old-release test
-infrastructure is isolated upgrade-fixture infrastructure, never supported
-new-release deployment topology.
+## 7. Retention
 
-## 10. Evidence and handoff
+Retain the old Qdrant volume (`qdrant-storage`) and exports through an
+explicit recovery/retention window. Permanent deletion is a separate
+exact-resource operator action after export/restore verification — never an
+automatic normal-upgrade step. Preserve PostgreSQL, MinIO, secrets,
+workspaces, unrelated containers, and Omnigent state.
 
-Publish exact rehearsal evidence (gate `--mode all` JSON, redacted
-preflight report, pending-consumer record, snapshot/export verification
-refs) plus remaining operator-only steps to #4103/#4114, distinguishing
-automated fixture verification from protected deployment checks and real
-operator actions not performed. Never claim every real installation was
-upgraded. Remove obsolete new-release compatibility scaffolding once its
-documented consumers drain per §2.
+## 8. Rollback
+
+Rollback uses the previous matching application/Compose/image revision with
+preserved data after a schema-compatibility check, rehearsed against
+fixtures. Never add an optional Qdrant profile or adapter back to the new
+release as a rollback feature.
+
+Hermetic rehearsal: `--mode rollback-check` (default scope rehearses the
+matching-revision path; Qdrant-profile scopes are refused).
+
+## 9. Evidence for #4103/#4114 (no over-claiming)
+
+Publish the exact rehearsal evidence (gate JSON, sanitized preflight
+report, preservation verification record, retirement absence verification,
+rollback rehearsal log) plus the remaining operator-only steps, to
+#4103/#4114. Distinguish automated fixture verification from protected
+deployment checks and real operator actions not performed. Never claim
+every real installation was upgraded. #4114 consumes this report without
+circular dependencies: this runbook's fixtures do not require #4114.
+
+## 10. Archive/delete triggers (temporary inventory)
+
+This file and any temporary inventory it references live under `docs/tmp/`
+or the issues. Archive or delete when ALL hold:
+
+- the integrated rehearsal evidence is published to #4103/#4114,
+- every documented consumer drained (finite retirement conditions met),
+- obsolete new-release compatibility scaffolding removed,
+- the retention window closed with an explicit exact-resource disposition.
+
+Until then this runbook stays Proposed and unarchived.
