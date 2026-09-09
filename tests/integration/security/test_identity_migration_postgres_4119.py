@@ -143,7 +143,11 @@ async def test_postgres_concurrent_first_login_yields_one_mapping(pg_maker) -> N
         for attempt in range(10):
             async with pg_maker() as session:
                 try:
-                    await barrier.wait()
+                    if attempt == 0:
+                        # Collide all racers on the first attempt only;
+                        # retries proceed independently so an early winner
+                        # cannot strand the barrier and hang the test.
+                        await barrier.wait()
                     user, _ = await get_or_create_user_for_identity(
                         session, ISSUER, "pg-race-sub", email=f"pg-race-{n}@example.invalid"
                     )
