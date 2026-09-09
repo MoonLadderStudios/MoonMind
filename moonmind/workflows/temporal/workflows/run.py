@@ -71,6 +71,10 @@ with workflow.unsafe.imports_passed_through():
         is_jules_agent_runtime_node,
     )
     from moonmind.workflows.executions.routing import _coerce_bool
+    from moonmind.workflows.executions.preset_readiness import (
+        SAVED_PRESET_CAPABILITY_READINESS_PATCH,
+        saved_preset_capability_check,
+    )
     from moonmind.workflows.executions.prepared_context import (
         ExecutionContextBundle,
         branch_turn_step_execution_manifest_projection,
@@ -595,6 +599,8 @@ RUN_CANONICAL_GIT_REPOSITORY_PROJECTION_PATCH = (
 )
 RUN_MEMO_RUNTIME_INHERITANCE_PATCH = "run-memo-runtime-inheritance-v1"
 DEPENDENCY_GATE_PATCH = "dependency-gate-v1"
+# Older canonical-payload histories skipped the gate; preserve their commands.
+RUN_CANONICAL_DEPENDENCY_PARAMETERS_PATCH = "run-canonical-dependency-parameters-v1"
 # Replay-stable patch id for unified wait-through-rerun dependency behavior.
 # Under this patch, a non-success prerequisite terminal outcome (failed,
 # canceled, terminated, timed_out, unresolvable) keeps the dependent run
@@ -10152,25 +10158,32 @@ class MoonMindRunWorkflow:
     def _dependency_ids_from_parameters(
         self, parameters: Mapping[str, Any]
     ) -> list[str]:
-        task_payload = parameters.get("task")
+        parameter_key = "task"
+        if "workflow" in parameters and workflow.patched(
+            RUN_CANONICAL_DEPENDENCY_PARAMETERS_PATCH
+        ):
+            parameter_key = "workflow"
+        task_payload = parameters.get(parameter_key)
         if task_payload is None:
             return []
         if not isinstance(task_payload, Mapping):
-            raise ValueError("initialParameters.task must be an object when provided")
+            raise ValueError(
+                f"initialParameters.{parameter_key} must be an object when provided"
+            )
 
         depends_on = task_payload.get("dependsOn")
         if depends_on is None:
             return []
         if not isinstance(depends_on, list):
             raise ValueError(
-                "initialParameters.task.dependsOn must be a list when provided"
+                f"initialParameters.{parameter_key}.dependsOn must be a list when provided"
             )
 
         normalized: list[str] = []
         for dep_id in depends_on:
             if not isinstance(dep_id, str):
                 raise ValueError(
-                    "initialParameters.task.dependsOn entries must be strings"
+                    f"initialParameters.{parameter_key}.dependsOn entries must be strings"
                 )
             candidate = dep_id.strip()
             if candidate and candidate not in normalized:
@@ -11516,6 +11529,55 @@ class MoonMindRunWorkflow:
         input_ref: Optional[str],
         plan_ref: Optional[str],
     ) -> Optional[str]:
+        # A new scheduled execution must validate its saved requirements even
+        # when it supplies a plan. Recorded histories and durable continuations
+        # keep their admitted inputs and already validated progress.
+        if (
+            workflow.patched(SAVED_PRESET_CAPABILITY_READINESS_PATCH)
+            and not getattr(workflow.info(), "continued_run_id", None)
+        ):
+            try:
+                check = saved_preset_capability_check(
+                    parameters, principal=self._owner_id or ""
+                )
+            except (ValueError, TypeError, AttributeError):
+                raise exceptions.ApplicationError(
+                    "Saved schedule preset provenance is invalid; review and "
+                    "reapply its presets before retrying.",
+                    type="saved_preset_capabilities_unavailable",
+                    non_retryable=True,
+                ) from None
+            if check is not None:
+                route = DEFAULT_ACTIVITY_CATALOG.resolve_activity(
+                    "plan.check_preset_capabilities"
+                )
+                readiness = await workflow.execute_activity(
+                    "plan.check_preset_capabilities",
+                    check.model_dump(),
+                    **self._execute_kwargs_for_route(route),
+                )
+                if (
+                    not isinstance(readiness, Mapping)
+                    or readiness.get("status") != "ready"
+                ):
+                    if (
+                        isinstance(readiness, Mapping)
+                        and readiness.get("status") == "refresh_required"
+                        and isinstance(readiness.get("message"), str)
+                        and readiness["message"].strip()
+                    ):
+                        raise exceptions.ApplicationError(
+                            str(readiness["message"]),
+                            dict(readiness),
+                            type="saved_preset_capabilities_stale",
+                            non_retryable=True,
+                        )
+                    raise exceptions.ApplicationError(
+                        "Saved schedule capability readiness is unavailable; inspect "
+                        "the schedule's preset definitions before retrying.",
+                        type="saved_preset_capabilities_unavailable",
+                        non_retryable=True,
+                    )
         if plan_ref:
             return plan_ref
 
@@ -19831,11 +19893,13 @@ class MoonMindRunWorkflow:
             "story_breakdown_path",
             "storyBreakdownMarkdownPath",
             "story_breakdown_markdown_path",
-            # Context retrieval (RAG) authoring surfaces (#3514): initial
-            # ContextPack overrides and in-session follow-up retrieval policy,
-            # plus the repository/tenant scope the retrieval budget binds to.
-            "rag",
-            "followUpRetrieval",
+            # Built-in vector retrieval is retired (#4105): `rag` /
+            # `followUpRetrieval` are never forwarded into new agent requests.
+            # Admission rejects explicit retired requirements for new work, so
+            # stripping here is a no-op for post-retirement workflows; for
+            # pre-retirement in-flight histories it keeps replay deterministic
+            # (in-flight decoding/schedule retirement is coordinated with the
+            # cutover child) instead of failing workflow tasks on construction.
             "repository",
             "tenant",
             "tenantId",

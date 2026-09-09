@@ -13,7 +13,7 @@ export interface paths {
         };
         /**
          * Health Check
-         * @description Health endpoint with database connectivity probe.
+         * @description Health endpoint with database probe and distinguishable auth readiness.
          */
         get: operations["health_check_healthz_get"];
         put?: never;

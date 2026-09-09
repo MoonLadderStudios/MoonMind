@@ -1759,14 +1759,13 @@ class MemorySettings(BaseSettings):
     )
 
 class OIDCSettings(BaseSettings):
-    """MoonMind user-auth settings (selector owned by ``moonmind.security.auth_modes``).
+    """OIDC settings.
 
-    The canonical ``AUTH_PROVIDER`` contract (supported modes, retired
-    selectors, fail-fast migration guidance, no alias layer or implicit
-    fallback) lives in :mod:`moonmind.security.auth_modes`. This settings
-    class remains the process configuration holder for backwards-compatible
-    attribute access (``settings.oidc.AUTH_PROVIDER``), but validation
-    delegates to the canonical owner so every consumer observes one contract.
+    Storage for the raw ``AUTH_PROVIDER`` selector. Interpretation of the
+    selector (validation, fresh-vs-upgrade classification, migration
+    decisions, and deployment policy) is owned by
+    ``moonmind.security.auth_modes_4120`` (#4120); production consumers
+    must use that owner instead of comparing this field directly.
     """
 
     # Canonical application-authentication selector
@@ -1810,9 +1809,6 @@ class OIDCSettings(BaseSettings):
     def validate_auth_provider(self) -> str:
         """Return the normalized selector, failing fast on retired/unknown values.
 
-        Delegates to the canonical owner
-        (:func:`moonmind.security.auth_modes.validate_auth_provider`) so the
-        OIDC-scoped settings holder never defines a competing contract.
         Retired bundled-Keycloak selectors are rejected with migration guidance
         (MoonLadderStudios/MoonMind#4129); they are never silently translated to
         another mode. Unknown selectors fail closed the same way. The normalized
@@ -1821,10 +1817,33 @@ class OIDCSettings(BaseSettings):
         approved; noncanonical spellings such as `DISABLED` or padded values
         therefore select the intended mode instead of falling through to an
         authenticated bearer dependency.
-        """
-        from moonmind.security.auth_modes import validate_auth_provider as _canonical
 
-        provider = _canonical(self.AUTH_PROVIDER)
+        A blank/omitted selector returns ``""`` (undecided) without raising:
+        the omitted-fresh vs. omitted-populated decision is owned by
+        ``moonmind.security.auth_modes_4120.classify_deployment`` (#4120 req 3),
+        which selects ``accounts`` on a genuinely fresh database and raises a
+        protected ``MigrationRequiredError`` on a populated one. Callers that
+        need the production decision must classify; they must not treat blank
+        as ``disabled``.
+        """
+        provider = (self.AUTH_PROVIDER or "").strip().lower()
+        if not provider:
+            return ""
+        if provider in self.RETIRED_AUTH_PROVIDERS:
+            raise RuntimeError(
+                f"Unsupported AUTH_PROVIDER '{self.AUTH_PROVIDER}': the bundled "
+                "Keycloak integration was removed (#4129). Use 'accounts' for "
+                "built-in accounts, 'oidc' with OIDC_ISSUER_URL/OIDC_CLIENT_ID/"
+                "OIDC_CLIENT_SECRET for generic external OIDC, 'header' behind a "
+                "trusted proxy, or explicitly restricted local 'disabled'. "
+                "See docs/Security/AuthenticationContracts.md."
+            )
+        if provider not in self.SUPPORTED_AUTH_PROVIDERS:
+            raise RuntimeError(
+                f"Unknown AUTH_PROVIDER '{self.AUTH_PROVIDER}': supported modes are "
+                "'accounts', 'oidc', 'header', and explicitly restricted local "
+                "'disabled'. See docs/Security/AuthenticationContracts.md."
+            )
         self.AUTH_PROVIDER = provider
         return provider
 

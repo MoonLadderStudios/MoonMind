@@ -1,0 +1,23 @@
+{
+  "workflow_type": "MoonMind.UserWorkflow",
+  "initial_parameters": {
+    "requestType": "task",
+    "workflow": {
+      "dependsOn": ["prerequisite"],
+      "instructions": "Resolve the target pull request before the fix and review loop.",
+      "publish": {
+        "mode": "none",
+        "mergeAutomation": {"enabled": true, "finishMode": "fix_only"}
+      },
+      "appliedStepTemplates": [{"slug": "pr-review-resolve"}],
+      "steps": [{
+        "id": "resolve-target",
+        "type": "tool",
+        "tool": {
+          "id": "github.resolve_pull_request_target",
+          "inputs": {"repository": "example/repository", "pullRequest": "feature/example"}
+        }
+      }]
+    }
+  }
+}

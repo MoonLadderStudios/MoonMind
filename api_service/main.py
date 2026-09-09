@@ -674,224 +674,250 @@ async def _initialize_oidc_provider(app: FastAPI):
     # fail startup with migration guidance instead of attempting provider-specific
     # discovery against a retired issuer. Generic external OIDC discovery is owned
     # by the #4124 contract; this step performs no outbound DNS/connect attempt.
-    settings.oidc.validate_auth_provider()
-    # K3 (#4120 R2): resolve the explicit MoonMind control-plane configuration
-    # from MoonMind-owned inputs only and cross the K2 qualification boundary
-    # here: the constructed MoonmindAuthConfig is stored on app.state for
-    # readiness/diagnostics. Runtime-server OMNIGENT_AUTH_* ambient values
-    # never select MoonMind behavior. Secret failures (insecure placeholder,
-    # incomplete explicit values, unreadable deployment-owned files) fail
-    # closed at startup instead of deferring with a warning; redacted in logs.
-    from api_service.auth_providers import build_control_plane_auth_config
-    from moonmind.security.auth_modes import build_auth_diagnostics
-
-    try:
-        control_plane = build_control_plane_auth_config()
-    except Exception as exc:
-        from moonmind.utils.logging import SecretRedactor as _Redactor
-
-        redacted = _Redactor.from_environ().scrub(str(exc))
-        logger.error("MoonMind control-plane auth preflight failed: %s", redacted)
-        app.state.moonmind_control_plane_auth = None
-        app.state.moonmind_auth_diagnostics = None
-        raise
-    app.state.moonmind_control_plane_auth = control_plane
-    app.state.moonmind_auth_diagnostics = build_auth_diagnostics(
-        mode=settings.oidc.AUTH_PROVIDER,
-        db_reachable=True,
-        secret_configured=True,
-    )
-
-
-async def _resolve_auth_bootstrap_decision(app: FastAPI) -> None:
-    """Resolve the K3 fresh-vs-pre-cutover bootstrap decision (best effort).
-
-    Uses the versioned, persisted migration decision (#4119 contract via
-    ``moonmind.security.auth_modes``), never a heuristic such as "no account
-    has a password". A populated database with omitted, legacy, or
-    contradictory configuration is reported actionably as
-    ``require-operator-choice`` in readiness/diagnostics and the startup log
-    without modifying owners; the API listener still starts so the operator
-    can record the protected decision. Fresh databases proceed through the
-    normal production path.
-    """
-    from moonmind.security.auth_modes import (
+    # Mode interpretation lives in moonmind.security.auth_modes_4120 (#4120).
+    from moonmind.security.auth_modes_4120 import (
+        MIGRATION_DECISION_ENV_VAR,
+        MIGRATION_DECISION_TABLE,
         AuthMigrationDecision,
-        decide_auth_bootstrap,
-        load_migration_decision,
-    )
-
-    def _mode_explicitly_set() -> bool:
-        return "AUTH_PROVIDER" in os.environ and str(os.environ["AUTH_PROVIDER"]).strip() != ""
-
-    try:
-        mode = settings.oidc.AUTH_PROVIDER
-    except Exception:
-        mode = "disabled"
-    decision_path = os.environ.get("MOONMIND_AUTH_MIGRATION_DECISION_FILE", "")
-    try:
-        migration: AuthMigrationDecision | None = load_migration_decision(decision_path or None)
-    except Exception as exc:
-        logger.error(
-            "Auth migration decision unreadable; operator choice required: %s",
-            SecretRedactor.from_environ().scrub(str(exc)),
-        )
-        app.state.moonmind_auth_bootstrap = None
-        return
-    try:
-        async with get_async_session_context() as session:
-            result = await session.execute(text('SELECT COUNT(*) FROM "user"'))
-            user_count = int(result.scalar() or 0)
-    except Exception:
-        # Database unreachable: readiness reports degraded; do not block the
-        # listener on an authority we cannot observe.
-        app.state.moonmind_auth_bootstrap = None
-        return
-    try:
-        bootstrap = decide_auth_bootstrap(
-            mode=mode,
-            mode_explicitly_set=_mode_explicitly_set(),
-            db_has_users=user_count > 0,
-            migration_decision=migration,
-        )
-    except Exception as exc:
-        logger.error(
-            "Auth bootstrap decision failed: %s",
-            SecretRedactor.from_environ().scrub(str(exc)),
-        )
-        app.state.moonmind_auth_bootstrap = None
-        return
-    app.state.moonmind_auth_bootstrap = bootstrap
-    if bootstrap.action == "require-operator-choice":
-        logger.error(
-            "Authentication requires an explicit protected operator choice: %s",
-            bootstrap.reason,
-        )
-    else:
-        logger.info(
-            "Auth bootstrap: action=%s mode=%s fresh=%s",
-            bootstrap.action,
-            bootstrap.mode,
-            bootstrap.fresh_install,
-        )
-
-
-async def _validate_auth_deployment_boundary(app: FastAPI) -> None:
-    """Enforce the R5/R6 deployment boundary at startup (fail closed).
-
-    Reads explicit MoonMind-owned deployment inputs (published binding,
-    alternate listeners, proxy-bypass state, trusted-ingress evidence,
-    public base URL, trusted proxies) and validates them through the
-    canonical ``moonmind.security.auth_modes`` owner:
-
-    - explicit local (``disabled``) mode publishes only on supported
-      loopback/trusted-ingress paths;
-    - a configured public base URL must validate (production HTTPS except
-      on explicit loopback);
-    - the trusted-proxy/cookie inputs for the session/redirect request path
-      are stored on ``app.state`` for K4 wiring.
-
-    When the bootstrap decision is known (the database was observable) and
-    no operator choice is pending, violations fail fast with an actionable
-    error. When the database was unreachable, the decision unreadable
-    (bootstrap unknown), or a populated database awaits a protected operator
-    choice, exposure enforcement defers with a warning and a blocked marker
-    while pure configuration validation (public base URL) still fails fast;
-    the listener still starts, and every auth path already fails closed on
-    the unreachable identity store or the pending choice. Diagnostics are
-    redacted (no secret values).
-    """
-    from api_service.auth_providers import set_startup_auth_state
-    from moonmind.security.auth_modes import (
-        build_auth_diagnostics,
-        deployment_auth_config_from_env,
-        effective_auth_mode,
-        validate_deployment_auth_config,
+        MigrationRequiredError,
+        auth_readiness_summary,
+        classify_deployment,
+        ensure_migration_decision_table_sql,
+        is_auth_provider_explicit,
+        is_missing_schema_error,
+        parse_migration_decision,
+        public_base_url_is_loopback,
+        redacted_diagnostics,
+        resolve_moonmind_auth_config,
+        resolve_session_secret,
+        default_session_key_path,
         validate_public_base_url,
+        validate_publish_binding,
+        validate_trusted_proxy_config,
     )
 
+    # Blank/omitted must reach classification (#4120 req 3): validate the
+    # explicit selector only. Omitted never silently selects `disabled`.
+    explicit = is_auth_provider_explicit()
+    if explicit:
+        settings.oidc.validate_auth_provider()
+        raw = (settings.oidc.AUTH_PROVIDER or "").strip()
+    else:
+        raw = ""
+    decision = parse_migration_decision(os.environ.get(MIGRATION_DECISION_ENV_VAR))
+    # A malformed local principal ID is a deterministic configuration error:
+    # fail startup actionably instead of masking it as transient 503s on the
+    # request path.
     try:
-        settings_mode = settings.oidc.AUTH_PROVIDER
-    except Exception:
-        settings_mode = "disabled"
-    bootstrap = getattr(app.state, "moonmind_auth_bootstrap", None)
-    try:
-        effective = effective_auth_mode(
-            settings_mode=settings_mode, bootstrap=bootstrap
-        )
-    except Exception:
-        effective = settings_mode
-    blocked = (
-        bootstrap is not None
-        and getattr(bootstrap, "action", "proceed") == "require-operator-choice"
-    )
-    set_startup_auth_state(effective_mode=effective, blocked=blocked)
+        from uuid import UUID as _UUID
 
-    deployment = deployment_auth_config_from_env()
-    app.state.moonmind_auth_deployment = deployment
-    app.state.moonmind_auth_proxy_config = deployment.proxy_config()
-    app.state.moonmind_auth_dev_loopback_http_allowed = (
-        deployment.dev_loopback_http_allowed
+        from api_service.auth import _DEFAULT_USER_ID as _fallback_user_id
+
+        _UUID(settings.oidc.DEFAULT_USER_ID or _fallback_user_id)
+    except Exception as exc:
+        raise RuntimeError(
+            "Invalid DEFAULT_USER_ID for disabled local mode: must parse "
+            f"as a UUID: {exc}"
+        ) from exc
+    has_users: bool | None = None
+    # Probe whenever the fresh/setup decision needs account state: omitted
+    # selectors (fresh vs. pre-cutover) and explicit `accounts` (fresh setup
+    # vs. established). Other explicit modes never derive setup from it.
+    if (not explicit and not raw) or (explicit and raw.lower() == "accounts"):
+        # Omitted selector: distinguish fresh vs. pre-cutover via a bounded
+        # users probe plus the versioned persisted migration decision (#4119
+        # contract). Fresh (no users) takes the accounts production path;
+        # populated without a decision stops actionably below.
+        try:
+            from api_service.db.base import get_async_session_context
+
+            async with get_async_session_context() as session:
+                result = await session.execute(text("SELECT COUNT(*) FROM users"))
+                count = int(result.scalar() or 0)
+                has_users = count > 0
+                # The persisted decision survives outside process env: ensure
+                # the table idempotently, then read the single recorded row.
+                # An explicit env decision takes precedence when present.
+                try:
+                    await session.execute(
+                        text(ensure_migration_decision_table_sql())
+                    )
+                    await session.commit()
+                except Exception:
+                    await session.rollback()
+                    logger.warning(
+                        "Auth-mode startup could not ensure the persisted "
+                        "migration-decision table; continuing with the "
+                        "operator-held env decision only."
+                    )
+                else:
+                    if decision is not None:
+                        # Persist an accepted operator-held decision so a later
+                        # deployment without the env var keeps working instead
+                        # of regressing to migration_required (#4119 contract).
+                        # Best-effort: the env decision stays authoritative.
+                        try:
+                            from datetime import datetime, timezone
+
+                            await session.execute(
+                                text(
+                                    f"INSERT INTO {MIGRATION_DECISION_TABLE} "
+                                    "(id, mode, version, decided_at) VALUES "
+                                    "(1, :mode, :version, :decided_at) "
+                                    "ON CONFLICT (id) DO UPDATE SET mode = "
+                                    "EXCLUDED.mode, version = EXCLUDED.version, "
+                                    "decided_at = EXCLUDED.decided_at"
+                                ),
+                                {
+                                    "mode": decision.mode,
+                                    "version": decision.version,
+                                    "decided_at": datetime.now(timezone.utc),
+                                },
+                            )
+                            await session.commit()
+                        except Exception:
+                            await session.rollback()
+                            logger.warning(
+                                "Auth-mode startup could not persist the accepted "
+                                "migration decision; continuing with the "
+                                "operator-held env decision only."
+                            )
+                    if decision is None:
+                        try:
+                            row = (
+                                await session.execute(
+                                    text(
+                                        f"SELECT mode, version FROM {MIGRATION_DECISION_TABLE} "
+                                        "WHERE id = 1"
+                                    )
+                                )
+                            ).first()
+                        except Exception:
+                            logger.warning(
+                                "Auth-mode startup could not read the persisted "
+                                "migration decision; continuing with the "
+                                "operator-held env decision only."
+                            )
+                        else:
+                            if row is not None:
+                                try:
+                                    decision = AuthMigrationDecision(
+                                        mode=str(row[0]),
+                                        version=int(row[1]),
+                                    )
+                                except Exception as exc:
+                                    raise RuntimeError(
+                                        "Invalid persisted auth migration decision "
+                                        f"(mode={row[0]!r}, version={row[1]!r}): "
+                                        f"{exc}. Re-run migration preflight to record "
+                                        "a current decision."
+                                    ) from exc
+        except RuntimeError:
+            raise
+        except Exception as exc:
+            if is_missing_schema_error(exc):
+                # Fresh database whose schema is not migrated yet: a missing
+                # users table (or database) means no users can exist.
+                has_users = False
+            else:
+                # Database unreachable or misconfigured: never guess fresh vs.
+                # upgrade. Abort so the orchestrator retries once the store is
+                # reachable; a failed probe must not cache a fresh-accounts
+                # classification that later masks a populated database.
+                raise RuntimeError(
+                    "Auth-mode startup could not probe user count; refusing to "
+                    f"guess fresh vs. upgrade: {exc}"
+                ) from exc
+    classification = classify_deployment(
+        raw_selector=raw if (explicit or raw) else None,
+        explicit=explicit,
+        has_users=bool(has_users),
+        migration_decision=decision,
     )
-    # Pure-configuration validation has no database dependence: a configured
-    # public base URL must validate even when the bootstrap is unknown.
+    if classification.migration_required:
+        raise RuntimeError(str(classification.detail))
+    production_mode = classification.production_mode or raw.lower() or "accounts"
+    # Durable signing secret: fresh local startup generates once; remote
+    # production requires explicit material; placeholders always rejected.
+    public_base = os.environ.get("MOONMIND_PUBLIC_BASE_URL", "").strip()
+    # Hostname-parsed, never substring-matched: `https://localhost.example.com`
+    # is remote while `http://[::1]:7000` is local. Blank stays local-only.
+    is_remote = bool(public_base) and not public_base_url_is_loopback(public_base)
     try:
-        validated_base_url = (
-            validate_public_base_url(deployment.public_base_url)
-            if deployment.public_base_url.strip()
-            else ""
+        session_secret = resolve_session_secret(
+            # Compose renders omitted secret settings as empty strings.
+            # Preserve omission so the durable key owner can load or generate.
+            explicit_secret=os.environ.get("MOONMIND_SESSION_SECRET")
+            or os.environ.get("JWT_SECRET")
+            or None,
+            key_path=default_session_key_path(),
+            allow_generate=not is_remote,
+            for_remote_production=is_remote,
         )
     except Exception as exc:
-        redacted = SecretRedactor.from_environ().scrub(str(exc))
-        logger.error("Auth deployment boundary rejected startup: %s", redacted)
-        app.state.moonmind_auth_exposure_blocked = True
-        raise
-    app.state.moonmind_auth_public_base_url = validated_base_url
-    if bootstrap is None:
-        logger.warning(
-            "Auth deployment-boundary exposure enforcement deferred "
-            "(bootstrap unknown): disabled-mode publish bindings will be "
-            "rejected until the database is observable and the migration "
-            "decision resolves."
-        )
-        app.state.moonmind_auth_exposure_blocked = True
-        return
-    if blocked:
-        # Populated database awaiting a protected operator choice: the API
-        # listener still starts so the operator can record the versioned
-        # decision, and the disabled request path already fails closed
-        # (503, no owner served). Exposure enforcement applies once the
-        # operator unblocks startup with an explicit matching decision.
-        logger.warning(
-            "Auth deployment-boundary exposure enforcement deferred "
-            "(operator choice pending): record the versioned migration "
-            "decision, then restart with an explicit loopback publish or "
-            "documented trusted-ingress evidence for disabled mode."
-        )
-        app.state.moonmind_auth_exposure_blocked = True
-        return
+        raise RuntimeError(f"Invalid MoonMind session secret: {exc}") from exc
+    # Control-plane settings are resolved explicitly from MoonMind-owned
+    # inputs and passed into the #4118 contract (#4120 req 2).
+    # OMNIGENT_AUTH_*/OMNIGENT_ACCOUNTS_*/OMNIGENT_OIDC_* ambient values --
+    # even contradictory ones -- cannot select MoonMind behavior; simultaneous
+    # same-origin use stays isolated through distinct cookies/keys/purposes.
     try:
-        validate_deployment_auth_config(deployment, effective_mode=effective)
+        resolve_moonmind_auth_config(
+            mode=production_mode,
+            cookie_secret=session_secret,
+            require_secure_cookies=os.environ.get(
+                "MOONMIND_REQUIRE_SECURE_COOKIES", "1"
+            )
+            != "0",
+            environ=dict(os.environ),
+        )
     except Exception as exc:
-        redacted = SecretRedactor.from_environ().scrub(str(exc))
-        logger.error("Auth deployment boundary rejected startup: %s", redacted)
-        app.state.moonmind_auth_exposure_blocked = True
-        raise
-    app.state.moonmind_auth_exposure_blocked = False
-    diagnostics = build_auth_diagnostics(
-        mode=effective,
-        db_reachable=True,
-        bootstrap=bootstrap,
-        secret_configured=True,
-        bindings=[deployment.published_binding()],
-        extra={
-            "publish_host": deployment.publish_host or "<wildcard>",
-            "trusted_ingress_evidence": deployment.trusted_ingress_evidence,
-            "public_base_url": validated_base_url or "<unset>",
-        },
+        raise RuntimeError(f"Invalid MoonMind control-plane auth config: {exc}") from exc
+    # Disabled-mode exposure at the deployment boundary.
+    try:
+        validate_publish_binding(
+            mode=production_mode,
+            publish_host=os.environ.get("MOONMIND_API_PUBLISH_HOST")
+            or os.environ.get("MOONMIND_API_HOST"),
+            trusted_ingress=os.environ.get("MOONMIND_TRUSTED_INGRESS", "").lower()
+            in ("1", "true", "yes"),
+        )
+    except Exception as exc:
+        raise RuntimeError(str(exc)) from exc
+    # Base-URL / trusted-proxy validation when configured.
+    if public_base:
+        try:
+            proxies = validate_trusted_proxy_config(
+                os.environ.get("MOONMIND_TRUSTED_PROXIES", "")
+            )
+            validate_public_base_url(
+                public_base,
+                trusted_proxies=proxies,
+                forwarded_host=os.environ.get("MOONMIND_FORWARDED_HOST_HINT"),
+                forwarded_proto=os.environ.get("MOONMIND_FORWARDED_PROTO_HINT"),
+            )
+        except Exception as exc:
+            raise RuntimeError(str(exc)) from exc
+    app.state.auth_production_mode = production_mode
+    app.state.auth_classification = classification
+    from moonmind.security.auth_modes_4120 import set_active_production_mode as _set_active_mode
+
+    _set_active_mode(production_mode)
+    logger.info(
+        "Auth modes initialized: %s",
+        redacted_diagnostics(
+            {
+                "auth_mode": production_mode,
+                "explicit": explicit,
+                "fresh_install": classification.fresh_install,
+                "setup_required": classification.setup_required,
+                "auth_readiness": auth_readiness_summary(
+                    production_mode=production_mode,
+                    setup_required=classification.setup_required,
+                )["auth_readiness"],
+            }
+        ),
     )
-    app.state.moonmind_auth_diagnostics = diagnostics
-    logger.info("Auth deployment boundary validated: %s", diagnostics)
 
 
 @asynccontextmanager
@@ -970,69 +996,101 @@ _api_start_time = time.monotonic()
 
 @health_router.get("/healthz")
 async def health_check():
-    """Health endpoint with database connectivity probe.
-
-    Keeps the historical ``{status, db, uptime_seconds}`` shape and adds
-    distinguishable authentication readiness (``auth_mode``,
-    ``auth_readiness``, ``setup_required``) without secret values (#4120 R7).
-    Infrastructure readiness (``status``/``db``), authentication readiness,
-    and required operator setup stay distinct fields.
-    """
-    from moonmind.security.auth_modes import build_auth_readiness
+    """Health endpoint with database probe and distinguishable auth readiness."""
+    from moonmind.security.auth_modes_4120 import (
+        MIGRATION_DECISION_TABLE,
+        AuthMigrationDecision,
+        auth_readiness_summary,
+        classify_deployment,
+        is_auth_provider_explicit,
+        parse_migration_decision,
+        MIGRATION_DECISION_ENV_VAR,
+    )
 
     uptime = int(time.monotonic() - _api_start_time)
     try:
         async with get_async_session_context() as session:
             await session.execute(text("SELECT 1"))
-        db_ok = True
+        db_status = "connected"
+        db_reachable = True
     except Exception:
-        db_ok = False
-    try:
-        mode = settings.oidc.AUTH_PROVIDER
-    except Exception:
-        mode = "disabled"
-    bootstrap = getattr(app.state, "moonmind_auth_bootstrap", None)
-    # Prefer the startup-resolved effective mode (fresh installs select
-    # accounts through the normal production path) while keeping
-    # infrastructure/authentication/setup-required distinguishable.
-    if bootstrap is not None and getattr(bootstrap, "action", "") == "proceed":
+        db_status = "unreachable"
+        db_reachable = False
+    # Auth readiness stays distinguishable from infrastructure readiness.
+    stored_mode = (getattr(app.state, "auth_production_mode", None) or "").strip()
+    classification = getattr(app.state, "auth_classification", None)
+    if classification is not None:
+        production_mode = stored_mode or classification.production_mode
+        setup_required = classification.setup_required
+        migration_required = classification.migration_required
+    else:
+        raw = (settings.oidc.AUTH_PROVIDER or "").strip()
+        explicit = is_auth_provider_explicit()
+        decision = parse_migration_decision(os.environ.get(MIGRATION_DECISION_ENV_VAR))
         try:
-            from moonmind.security.auth_modes import effective_auth_mode
+            fresh_probe = False
+            if not explicit and not raw and db_reachable:
+                from api_service.db.base import get_async_session_context as _ctx
 
-            mode = effective_auth_mode(settings_mode=mode, bootstrap=bootstrap)
-        except Exception:
-            pass
-    try:
-        readiness = build_auth_readiness(
-            db_reachable=db_ok, mode=mode, bootstrap=bootstrap
-        )
-    except Exception:
-        readiness = None
-    base = {"status": "ok", "db": "connected", "uptime_seconds": uptime}
-    if readiness is not None:
-        base.update(
-            {
-                "auth_mode": readiness.mode,
-                "auth_readiness": readiness.authentication,
-                "setup_required": readiness.setup_required,
-            }
-        )
-    if not db_ok:
-        content = {
-            "status": "degraded",
-            "db": "unreachable",
-            "uptime_seconds": uptime,
-        }
-        if readiness is not None:
-            content.update(
-                {
-                    "auth_mode": readiness.mode,
-                    "auth_readiness": readiness.authentication,
-                    "setup_required": readiness.setup_required,
-                }
+                async with _ctx() as session:
+                    result = await session.execute(text("SELECT COUNT(*) FROM users"))
+                    fresh_probe = int(result.scalar() or 0) == 0
+                    # Best-effort persisted decision so pre-startup readiness
+                    # agrees with the startup classifier (#4119 contract).
+                    if decision is None and not fresh_probe:
+                        try:
+                            row = (
+                                await session.execute(
+                                    text(
+                                        f"SELECT mode, version FROM {MIGRATION_DECISION_TABLE} "
+                                        "WHERE id = 1"
+                                    )
+                                )
+                            ).first()
+                        except Exception:
+                            row = None
+                        if row is not None:
+                            try:
+                                decision = AuthMigrationDecision(
+                                    mode=str(row[0]),
+                                    version=int(row[1]),
+                                )
+                            except Exception:
+                                decision = None
+            classification = classify_deployment(
+                raw_selector=raw if (explicit or raw) else None,
+                explicit=explicit,
+                has_users=not fresh_probe if (not explicit and not raw) else False,
+                migration_decision=decision,
             )
-        return JSONResponse(status_code=503, content=content)
-    return base
+        except Exception:
+            classification = None
+        if classification is None:
+            production_mode, setup_required, migration_required = (
+                raw.lower() or "undecided",
+                False,
+                False,
+            )
+        else:
+            production_mode = classification.production_mode
+            setup_required = classification.setup_required
+            migration_required = classification.migration_required
+    readiness = auth_readiness_summary(
+        production_mode=production_mode,
+        migration_required=migration_required,
+        setup_required=setup_required,
+        db_reachable=db_reachable,
+        secret_ready=True,
+    )
+    body = {
+        "status": "ok" if db_reachable and not migration_required else "degraded",
+        "db": db_status,
+        "uptime_seconds": uptime,
+        **readiness,
+    }
+    if not db_reachable or migration_required:
+        return JSONResponse(status_code=503, content=body)
+    return body
 
 
 @app.get("/", include_in_schema=False)
@@ -2673,8 +2731,6 @@ async def startup_event():
 
     _assert_omnigent_configuration_is_current()
     await _initialize_oidc_provider(app)  # Fail fast on retired selectors; no discovery fetch
-    await _resolve_auth_bootstrap_decision(app)  # K3 (#4120 R3): fresh vs pre-cutover
-    await _validate_auth_deployment_boundary(app)  # K3 (#4120 R5/R6): fail closed
     _register_settings_change_subscribers()
     try:
         from moonmind.rag.service import ContextRetrievalService
@@ -2704,19 +2760,10 @@ async def startup_event():
     # embedded sessions drain through the janitor-owned terminal-cleanup
     # probes after startup instead of blocking it.
 
-    # Ensure default user and profile exist only for explicit local mode.
-    # K3 (#4120 R3): creation is gated on the versioned bootstrap decision —
-    # populated databases awaiting a protected operator choice never mutate
-    # owners here, and genuinely fresh installs run the accounts production
-    # flow instead of the disabled default-user flow.
-    from moonmind.security.auth_modes import should_ensure_default_user
+    # Ensure default user and profile exist if auth is disabled
+    from moonmind.security.auth_modes_4120 import is_disabled_local_mode as _is_disabled
 
-    try:
-        _settings_mode = settings.oidc.AUTH_PROVIDER
-    except Exception:
-        _settings_mode = "disabled"
-    _bootstrap = getattr(app.state, "moonmind_auth_bootstrap", None)
-    if should_ensure_default_user(settings_mode=_settings_mode, bootstrap=_bootstrap):
+    if getattr(app.state, "auth_production_mode", "") == "disabled" or _is_disabled():
         logger.info(
             "Auth provider is 'disabled'. Ensuring default user and profile exist on startup."
         )
@@ -2784,18 +2831,8 @@ async def startup_event():
                         redacted_error,
                     )
     else:
-        _skip_reason = "not the startup-resolved disabled production flow"
-        if _bootstrap is not None and getattr(
-            _bootstrap, "action", ""
-        ) == "require-operator-choice":
-            _skip_reason = (
-                "populated database requires an explicit protected operator "
-                "migration choice; owners left unmodified"
-            )
         logger.info(
-            "Auth provider is '%s'. Skipping default user creation on startup (%s).",
-            _settings_mode,
-            _skip_reason,
+            f"Auth provider is '{getattr(app.state, 'auth_production_mode', settings.oidc.AUTH_PROVIDER)}'. Skipping default user creation on startup."
         )
 
     # Wait for the Temporal client to be available and initialize provider profile managers

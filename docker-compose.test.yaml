@@ -34,6 +34,11 @@ services:
       - PYTHONPATH=/app
       - TEST_TYPE=unit
       - MOONMIND_FORCE_LOCAL_TESTS=1
+      # The hermetic suite exercises non-auth behavior; declare the explicit
+      # local auth posture (#4120) so a blank AUTH_PROVIDER from .env can
+      # never flip the harness into an authenticated mode. Host operators
+      # may still override to exercise other modes.
+      - AUTH_PROVIDER=${AUTH_PROVIDER:-disabled}
       # Test processes use isolated temp roots; never let an inherited host
       # setting turn the generic pytest service into a destructive janitor.
       - MOONMIND_MANAGED_RUNTIME_JANITOR_ENABLED=false

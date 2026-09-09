@@ -126,9 +126,16 @@ steps:
     met, partially_met, not_met, or unverifiable). Use status unverifiable, with a
     short reason in the description, only for requirements that can be proven solely
     by manual testing, external deployment, provider credentials, or tooling that
-    is not available in this runtime. Unverifiable entries are disclosed scope exclusions
-    for later verification, not implementation gaps, and they must describe visible
-    issue content, never hidden truncated content.
+    is not available in this runtime. Distinguish optional diagnostics from mandatory
+    acceptance conditions: unavailable deployment access does not waive an explicitly
+    required deployment drain or permission check. For each mandatory unavailable
+    prerequisite, name its required owner, missing evidence, and the check that resumes
+    verification in the requirement description. These are handoff prerequisites,
+    not code changes. When independent repository fixes remain, report the appropriate
+    partial/not-implemented verdict and preserve the prerequisites. When only mandatory
+    unavailable prerequisites remain, report BLOCKED instead of starting another
+    implementation pass. Unverifiable entries must describe visible issue content,
+    never hidden truncated content.
 
 
     The verdict written here is the controlling input for every later step in this

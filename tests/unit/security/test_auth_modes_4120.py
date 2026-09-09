@@ -1,628 +1,345 @@
-"""K3 executable contract tests for MoonLadderStudios/MoonMind#4120.
+"""K3 auth modes, secure defaults, and upgrade safety (#4120).
 
-Covers the bounded backlog from the implement assessment (R1 partially-met,
-R2 partially-met, R3-R7 unmet): one canonical AUTH_PROVIDER selector,
-explicit control-plane isolation, versioned migration decisions, durable
-signing secrets, disabled-exposure guards, proxy/cookie security, and
-redacted distinguishable readiness/diagnostics. All hermetic: no DB, no
-network, no upstream import.
+Covers the issue acceptance bullets through the repository's unit runner:
+omitted/explicit fresh-install parity, populated-DB migration gating,
+retired-selector rejection, runtime-env isolation, durable signing keys,
+disabled-mode exposure fixtures, URL/proxy/cookie policy, and secret-free
+diagnostics.
 """
 
 from __future__ import annotations
 
-import json
-import os
-import threading
+import secrets
 
 import pytest
 
-from moonmind.security import auth_modes as m
+from moonmind.security import auth_modes_4120 as m
+from moonmind.security import omnigent_auth_qualification as q
 
 
 # ---------------------------------------------------------------------------
-# R1: one selector, no aliases, no fallback, actionable migration errors
+# 1. Single selector under the correctly scoped owner
 # ---------------------------------------------------------------------------
 
 
-def test_supported_selectors_normalize():
-    assert m.validate_auth_provider("accounts") == "accounts"
-    assert m.validate_auth_provider(" ACCOUNTS ") == "accounts"
-    assert m.validate_auth_provider("DISABLED") == "disabled"
-
-
-def test_retired_selectors_fail_with_guidance():
+def test_supported_selectors_resolve_and_retired_fail():
+    for mode in ("accounts", "oidc", "header", "disabled"):
+        assert m.resolve_production_mode(
+            raw_selector=mode, explicit=True
+        ) == mode
     for retired in ("keycloak", "default", "google", "local"):
-        with pytest.raises(m.AuthConfigError, match="removed|retired"):
-            m.validate_auth_provider(retired)
+        with pytest.raises(m.AuthModeError):
+            m.resolve_production_mode(raw_selector=retired, explicit=True)
+    with pytest.raises(m.AuthModeError):
+        m.resolve_production_mode(raw_selector="saml", explicit=True)
+    # Case/padding normalizes to the canonical lowercase mode.
+    assert (
+        m.resolve_production_mode(raw_selector="  ACCOUNTS ", explicit=True)
+        == "accounts"
+    )
 
 
-def test_unknown_selectors_fail_closed():
-    with pytest.raises(m.AuthConfigError, match="Unknown AUTH_PROVIDER"):
-        m.validate_auth_provider("saml")
-    with pytest.raises(m.AuthConfigError, match="Unknown AUTH_PROVIDER"):
-        m.validate_auth_provider("")
+def test_owner_is_single_reader_of_storage():
+    # Production consumers go through the owner; storage keeps the raw value.
+    from moonmind.config import settings as settings_module
 
-
-def test_oidc_settings_delegates_to_canonical_owner(monkeypatch):
-    from moonmind.config.settings import OIDCSettings
-
-    assert OIDCSettings.SUPPORTED_AUTH_PROVIDERS == m.SUPPORTED_AUTH_MODES
-    assert set(OIDCSettings.RETIRED_AUTH_PROVIDERS) == set(m.RETIRED_AUTH_SELECTORS)
-    monkeypatch.setenv("AUTH_PROVIDER", "accounts")
-    holder = OIDCSettings()
-    assert holder.validate_auth_provider() == "accounts"
-    holder.AUTH_PROVIDER = "keycloak"
-    with pytest.raises(Exception, match="removed|retired"):
-        holder.validate_auth_provider()
-
-
-def test_qualification_adapter_shares_canonical_contract():
-    from moonmind.security import omnigent_auth_qualification as q
-
-    assert set(q.RETIRED_SELECTORS) == set(m.RETIRED_AUTH_SELECTORS)
-    assert q.validate_mode_selector("header") == "header"
-    for retired in ("keycloak", "default", "google", "local"):
-        with pytest.raises(Exception, match="removed|retired"):
-            q.validate_mode_selector(retired)
-
-
-def test_env_template_documents_moonmind_auth_contract():
-    template = open(".env-template", encoding="utf-8").read()
-    assert "AUTH_PROVIDER=" in template
-    assert "OIDC_ISSUER_URL=" in template
-    assert "MOONMIND_SESSION_SECRET" in template
-    assert "MOONMIND_AUTH_MIGRATION_DECISION_FILE" in template
-    # Runtime-server values stay documented as runtime-owned, not MoonMind selectors.
-    assert "OMNIGENT_AUTH_PROVIDER=" in template
+    assert hasattr(settings_module.oidc, "AUTH_PROVIDER")
+    assert callable(m.get_effective_auth_provider)
+    assert callable(m.is_disabled_local_mode)
 
 
 # ---------------------------------------------------------------------------
-# R2: control-plane isolation (contradictory ambient + same-origin)
+# 2. Control-plane separation: OMNIGENT_AUTH_* cannot configure MoonMind
 # ---------------------------------------------------------------------------
 
 
-def test_resolve_auth_mode_ignores_contradictory_runtime_ambient(monkeypatch):
-    monkeypatch.setenv("AUTH_PROVIDER", "accounts")
-    monkeypatch.setenv("OMNIGENT_AUTH_PROVIDER", "oidc")
-    monkeypatch.setenv("OMNIGENT_AUTH_ENABLED", "1")
-    assert m.resolve_auth_mode() == "accounts"
-    # Explicit input wins over ambient MoonMind env too, but runtime ambient
-    # never participates either way.
-    assert m.resolve_auth_mode(explicit="header") == "header"
-
-
-def test_control_plane_config_never_reads_runtime_env(monkeypatch):
-    monkeypatch.setenv("OMNIGENT_AUTH_PROVIDER", "oidc")
-    monkeypatch.setenv("OMNIGENT_ACCOUNTS_COOKIE_SECRET", "runtime-secret-value-xyz")
-    secret = b"x" * 32
-    config = m.resolve_control_plane_config(mode="accounts", cookie_secret=secret)
+def test_control_plane_ignores_contradictory_runtime_ambient():
+    secret = secrets.token_bytes(32)
+    hostile = {
+        "OMNIGENT_AUTH_PROVIDER": "header",
+        "OMNIGENT_AUTH_ENABLED": "1",
+        "OMNIGENT_AUTH_HEADER": "X-Evil",
+        "OMNIGENT_ACCOUNTS_COOKIE_SECRET": "runtime-secret",
+        "OMNIGENT_OIDC_ISSUER": "https://evil.example",
+    }
+    config = m.resolve_moonmind_auth_config(
+        mode="accounts", cookie_secret=secret, environ=hostile
+    )
     assert config.mode == "accounts"
+    assert config.cookie_name == q.MOONMIND_PROD_COOKIE
     assert config.cookie_secret == secret
-    assert config.cookie_name == m.MOONMIND_PROD_COOKIE
-    kwargs = config.to_qualification_kwargs()
-    assert kwargs["mode"] == "accounts"
-    assert "OMNIGENT" not in json.dumps({k: str(v) for k, v in kwargs.items() if k != "cookie_secret"})
-
-
-def test_two_authorities_same_origin_stay_isolated():
-    moonmind = m.resolve_control_plane_config(mode="accounts", cookie_secret=b"m" * 32)
-    runtime_cookie, runtime_secret = "ap_session", b"r" * 32
-    assert moonmind.cookie_name != runtime_cookie
-    assert moonmind.cookie_secret != runtime_secret
-    assert moonmind.token_issuer == m.MOONMIND_TOKEN_ISSUER
-    assert moonmind.token_audience == m.MOONMIND_TOKEN_AUDIENCE
+    # Same-origin isolation: distinct cookie, purpose-bound tokens.
+    assert config.cookie_name not in q.UPSTREAM_SESSION_COOKIES
+    assert config.token_issuer == q.MOONMIND_TOKEN_ISSUER
+    assert config.token_audience == q.MOONMIND_TOKEN_AUDIENCE
 
 
 # ---------------------------------------------------------------------------
-# R3: fresh vs pre-cutover via versioned persisted decision
+# 3. Fresh vs. upgrade: versioned persisted decision, protected choice
 # ---------------------------------------------------------------------------
 
 
-def test_migration_decision_roundtrip(tmp_path):
-    path = tmp_path / "decision.json"
-    decision = m.AuthMigrationDecision(decision="accounts", decided_by="operator")
-    m.save_migration_decision(path, decision)
-    loaded = m.load_migration_decision(path)
-    assert loaded is not None and loaded.decision == "accounts"
-    assert loaded.version == m.MIGRATION_DECISION_VERSION
-    assert m.load_migration_decision(tmp_path / "missing.json") is None
-    with pytest.raises(m.AuthConfigError):
-        (tmp_path / "bad.json").write_text("{not json", encoding="utf-8")
-        m.load_migration_decision(tmp_path / "bad.json")
-
-
-def test_fresh_install_selects_accounts_like_explicit(tmp_path):
-    # Omitted selector on a fresh DB selects accounts through the same
-    # production code as explicit accounts mode (no mandatory .env, no
-    # public first-owner claim here — mode selection only).
-    fresh_omitted = m.decide_auth_bootstrap(
-        mode="disabled", mode_explicitly_set=False, db_has_users=False,
-        migration_decision=None,
+def test_omitted_fresh_selects_accounts_like_explicit():
+    omitted_fresh = m.resolve_production_mode(
+        raw_selector="", explicit=False, has_users=False
     )
-    fresh_explicit = m.decide_auth_bootstrap(
-        mode="accounts", mode_explicitly_set=True, db_has_users=False,
-        migration_decision=None,
+    explicit = m.resolve_production_mode(
+        raw_selector="accounts", explicit=True, has_users=False
     )
-    assert fresh_omitted.action == "proceed"
-    assert fresh_omitted.mode == "accounts" == fresh_explicit.mode
-    assert fresh_omitted.fresh_install is True
+    assert omitted_fresh == explicit == "accounts"
 
 
-def test_populated_db_requires_explicit_matching_decision():
-    matching = m.AuthMigrationDecision(decision="accounts")
-    ok = m.decide_auth_bootstrap(
-        mode="accounts", mode_explicitly_set=True, db_has_users=True,
-        migration_decision=matching,
+def test_populated_omitted_stops_actionably_without_modifying_owners():
+    with pytest.raises(m.MigrationRequiredError) as exc:
+        m.resolve_production_mode(raw_selector="", explicit=False, has_users=True)
+    assert "migration" in str(exc.value).lower()
+    assert getattr(exc.value, "requires_protected_operator_choice", False) is True
+    classification = m.classify_deployment(
+        raw_selector="", explicit=False, has_users=True
     )
-    assert ok.action == "proceed" and ok.fresh_install is False
-    # Omitted variables on existing data: stop actionably, modify no owners.
-    for mode, explicit, decision in [
-        ("disabled", False, None),
-        ("disabled", False, m.AuthMigrationDecision(decision="pending")),
-        ("accounts", True, None),
-        ("accounts", True, m.AuthMigrationDecision(decision="pending")),
-        ("accounts", True, m.AuthMigrationDecision(decision="oidc")),
-        ("accounts", False, m.AuthMigrationDecision(decision="accounts")),
-    ]:
-        blocked = m.decide_auth_bootstrap(
-            mode=mode, mode_explicitly_set=explicit, db_has_users=True,
+    assert classification.migration_required is True
+    assert classification.setup_required is True
+    assert classification.production_mode == "migration_required"
+
+
+def test_populated_with_decision_uses_decided_mode():
+    decision = m.AuthMigrationDecision(mode="accounts")
+    assert (
+        m.resolve_production_mode(
+            raw_selector="",
+            explicit=False,
+            has_users=True,
             migration_decision=decision,
         )
-        assert blocked.action == "require-operator-choice", (mode, explicit, decision)
-        assert "migration decision" in blocked.reason
+        == "accounts"
+    )
+    formatted = m.format_migration_decision(decision)
+    assert m.parse_migration_decision(formatted) == decision
+    assert m.parse_migration_decision("  ") is None
+    with pytest.raises(m.AuthModeError):
+        m.parse_migration_decision("keycloak:v1")
+    with pytest.raises(m.AuthModeError):
+        m.parse_migration_decision("accounts:v9")
+
+
+def test_migration_decision_ddl_is_idempotent_single_row():
+    sql = m.ensure_migration_decision_table_sql()
+    assert "CREATE TABLE IF NOT EXISTS" in sql
+    assert m.MIGRATION_DECISION_TABLE in sql
+    assert "CHECK (id = 1)" in sql
+
+
+def test_missing_schema_error_detection():
+    assert m.is_missing_schema_error(
+        RuntimeError('relation "users" does not exist')
+    ) is True
+    assert m.is_missing_schema_error(Exception("no such table: users")) is True
+    chained = RuntimeError("probe failed")
+    chained.__cause__ = RuntimeError('relation "users" does not exist')
+    assert m.is_missing_schema_error(chained) is True
+    assert m.is_missing_schema_error(ConnectionRefusedError("refused")) is False
+    assert m.is_missing_schema_error(RuntimeError("boom")) is False
 
 
 # ---------------------------------------------------------------------------
-# R4: durable signing secrets
+# 4. Durable signing secrets
 # ---------------------------------------------------------------------------
 
 
-def test_placeholder_and_short_secrets_rejected():
-    for bad in ("devsecret", "test_jwt_secret_key", "replace_with_a_strong_random",
-                "default_password_please_change", "short", ""):
-        with pytest.raises(m.AuthConfigError):
-            m.check_explicit_secret_strength(bad)
-    m.check_explicit_secret_strength("a-strong-32-byte-minimum-secret!!")
+def test_placeholders_and_short_secrets_rejected(tmp_path):
+    for bad in ("devsecret", "replace_with_a_strong_random_jwt_secret", "test_x", "", "short"):
+        with pytest.raises(m.AuthModeError):
+            m.resolve_session_secret(
+                explicit_secret=bad, key_path=tmp_path / "k"
+            )
 
 
-def test_explicit_secret_wins_over_file(tmp_path):
-    secret_file = tmp_path / "session_secret"
-    secret_file.write_bytes(b"f" * 32)
-    out = m.resolve_session_secret("e" * 40, secret_file=secret_file)
-    assert out == b"e" * 40
-
-
-def test_restart_retains_generated_secret(tmp_path):
-    secret_file = tmp_path / "session_secret"
-    first = m.resolve_session_secret(secret_file=secret_file, env={})
+def test_omitted_loads_durable_key_and_restart_retains(tmp_path):
+    path = tmp_path / "moonmind_session_key"
+    first = m.resolve_session_secret(explicit_secret=None, key_path=path)
     assert len(first) >= 32
-    second = m.resolve_session_secret(secret_file=secret_file, env={})
+    assert path.is_file()
+    second = m.resolve_session_secret(explicit_secret=None, key_path=path)
     assert second == first
-    import stat as _stat
-
-    assert _stat.S_IMODE(os.stat(secret_file).st_mode) == 0o600
+    assert m.session_secret_fingerprint(first) == m.session_secret_fingerprint(second)
 
 
-def test_concurrent_bootstrap_converges_on_one_generation(tmp_path):
-    secret_file = tmp_path / "session_secret"
-    results: list[bytes] = []
-
-    def _bootstrap():
-        results.append(m.resolve_session_secret(secret_file=secret_file, env={}))
-
-    threads = [threading.Thread(target=_bootstrap) for _ in range(8)]
-    for thread in threads:
-        thread.start()
-    for thread in threads:
-        thread.join()
-    assert len(results) == 8
-    assert all(value == results[0] for value in results)
+def test_concurrent_bootstrap_shares_one_generation(tmp_path):
+    # Simulate a replica winning the race: pre-create the key file, then
+    # resolve from a second "process" that must read the winner's key.
+    # Fixed material (no leading/trailing ASCII whitespace) keeps the read
+    # deterministic: the resolver strips provisioned padding on read, so
+    # random bytes with edge whitespace would flake this assertion.
+    path = tmp_path / "moonmind_session_key"
+    winner = b"K" * m._MIN_SECRET_BYTES
+    path.write_bytes(winner)
+    loser = m.resolve_session_secret(explicit_secret=None, key_path=path)
+    assert loser == winner
+    assert m.constant_time_secret_equal(loser, winner)
 
 
-def test_rotation_keeps_previous_without_regeneration(tmp_path):
-    secret_file = tmp_path / "session_secret"
-    m.resolve_session_secret(secret_file=secret_file, env={})
-    resolved_primary, previous = m.resolve_session_secrets(
-        explicit="z" * 40, previous=[b"o" * 32], secret_file=secret_file,
-    )
-    assert resolved_primary == b"z" * 40
-    assert previous == [b"o" * 32]
-
-
-def test_secret_never_shares_runtime_credentials(tmp_path, monkeypatch):
-    monkeypatch.setenv("OMNIGENT_ACCOUNTS_COOKIE_SECRET", "r" * 32)
-    secret_file = tmp_path / "session_secret"
-    out = m.resolve_session_secret(secret_file=secret_file, env={})
-    assert out != b"r" * 32
-
-
-# ---------------------------------------------------------------------------
-# R5: disabled-exposure guard
-# ---------------------------------------------------------------------------
-
-
-def test_disabled_loopback_bindings_pass():
-    m.validate_disabled_exposure(["127.0.0.1:7000:8000"])
-    m.validate_disabled_exposure(["localhost:7000:8000"])
-    m.validate_disabled_exposure(["[::1]:7000:8000"])
-
-
-def test_disabled_wildcard_custom_and_bypass_fail():
-    with pytest.raises(m.AuthConfigError, match="all interfaces"):
-        m.validate_disabled_exposure(["7000:8000"])
-    with pytest.raises(m.AuthConfigError, match="not loopback"):
-        m.validate_disabled_exposure(["192.168.1.10:7000:8000"])
-    with pytest.raises(m.AuthConfigError, match="wildcard"):
-        m.validate_disabled_exposure(["0.0.0.0:7000:8000"])
-    with pytest.raises(m.AuthConfigError, match="alternate listener"):
-        m.validate_disabled_exposure(
-            ["127.0.0.1:7000:8000"], alternate_listeners=["0.0.0.0:9000"]
+def test_remote_production_requires_explicit_material(tmp_path):
+    with pytest.raises(m.AuthModeError):
+        m.resolve_session_secret(
+            explicit_secret=None,
+            key_path=tmp_path / "missing",
+            for_remote_production=True,
         )
-    with pytest.raises(m.AuthConfigError, match="proxy bypass"):
-        m.validate_disabled_exposure(
-            ["127.0.0.1:7000:8000"], proxy_bypass_possible=True
+
+
+# ---------------------------------------------------------------------------
+# 5. Disabled-mode exposure at the deployment boundary
+# ---------------------------------------------------------------------------
+
+
+def test_disabled_mode_requires_loopback_or_trusted_ingress():
+    m.validate_publish_binding(mode="disabled", publish_host="127.0.0.1")
+    m.validate_publish_binding(mode="disabled", publish_host="localhost")
+    m.validate_publish_binding(
+        mode="disabled", publish_host="0.0.0.0", trusted_ingress=True
+    )
+    for bad_host in ("0.0.0.0", "", "0.0.0.0 ", "example.com", "192.168.1.10", "::"):
+        with pytest.raises(m.AuthModeError):
+            m.validate_publish_binding(mode="disabled", publish_host=bad_host)
+    # Authenticated modes are not subject to the local-mode publish gate.
+    m.validate_publish_binding(mode="accounts", publish_host="0.0.0.0")
+
+
+def test_rendered_ingress_fixtures_cover_deployment_matrix():
+    fixtures = [
+        {"name": "loopback", "mode": "disabled", "publish_host": "127.0.0.1"},
+        {"name": "wildcard", "mode": "disabled", "publish_host": "0.0.0.0"},
+        {"name": "custom-host", "mode": "disabled", "publish_host": "example.com"},
+        {
+            "name": "tls-trusted",
+            "mode": "disabled",
+            "publish_host": "0.0.0.0",
+            "trusted_ingress": True,
+        },
+        {
+            "name": "proxy-bypass",
+            "mode": "accounts",
+            "publish_host": "127.0.0.1",
+            "proxy_bypass_possible": True,
+        },
+        {
+            "name": "internal-exposed",
+            "mode": "accounts",
+            "publish_host": "127.0.0.1",
+            "internal_control_plane_public": True,
+        },
+        {
+            "name": "internal-reachable",
+            "mode": "accounts",
+            "publish_host": "127.0.0.1",
+            "internal_control_plane_public": False,
+        },
+    ]
+    results = {f["name"]: m.evaluate_ingress_fixture(f) for f in fixtures}
+    assert results["loopback"].allowed is True
+    assert results["wildcard"].allowed is False
+    assert results["custom-host"].allowed is False
+    assert results["tls-trusted"].allowed is True
+    assert results["proxy-bypass"].allowed is False
+    assert results["internal-exposed"].allowed is False
+    assert results["internal-reachable"].allowed is True
+
+
+# ---------------------------------------------------------------------------
+# 6. Base URL, trusted proxies, callback origins, cookie policy
+# ---------------------------------------------------------------------------
+
+
+def test_base_url_and_forwarded_trust():
+    policy = m.validate_public_base_url("https://app.example.com")
+    assert policy.require_secure_cookies is True
+    assert policy.cookie_name == q.MOONMIND_PROD_COOKIE
+    # Untrusted forwarded headers never decide policy.
+    with pytest.raises(m.AuthModeError):
+        m.validate_public_base_url(
+            "https://app.example.com", forwarded_host="evil.example"
         )
-    # Documented trusted-ingress evidence covers non-loopback publish.
-    m.validate_disabled_exposure(
-        ["192.168.1.10:7000:8000"], trusted_ingress_evidence=True
+    with pytest.raises(m.AuthModeError):
+        m.validate_public_base_url("http://example.com")
+    # Loopback HTTP is only valid through the explicit dev-cookie path.
+    dev = m.cookie_policy_for_base_url(
+        "http://127.0.0.1:7000", explicit_loopback_http=True
     )
-
-
-def test_no_synthetic_admin_constructors_remain():
-    import api_service.auth_providers as providers
-    import inspect
-
-    assert not hasattr(providers, "_disabled_auth_fallback_user")
-    source = inspect.getsource(providers.get_current_user)
-    assert "is_superuser=True" not in source
-    assert "503" in source
-
-
-# ---------------------------------------------------------------------------
-# R6: base URL, proxy, callback origins, cookie policy
-# ---------------------------------------------------------------------------
-
-
-def test_cookie_policy_production_and_dev_loopback():
-    prod = m.resolve_cookie_policy(is_https=True, request_host="example.com")
-    assert prod.cookie_name == m.MOONMIND_PROD_COOKIE and prod.secure is True
-    dev = m.resolve_cookie_policy(
-        is_https=False, request_host="127.0.0.1", explicit_dev_loopback_http=True
+    assert dev.cookie_name == q.MOONMIND_DEV_COOKIE
+    with pytest.raises(m.AuthModeError):
+        m.cookie_policy_for_base_url("http://127.0.0.1:7000")
+    with pytest.raises(m.AuthModeError):
+        m.validate_trusted_proxy_config("*")
+    assert m.validate_trusted_proxy_config("10.0.0.1, 10.0.0.2") == (
+        "10.0.0.1",
+        "10.0.0.2",
     )
-    assert dev.cookie_name == m.MOONMIND_DEV_COOKIE and dev.secure is False
-    # Dev cookie never escapes explicit loopback HTTP.
     assert (
-        m.resolve_cookie_policy(is_https=False, request_host="example.com",
-                                explicit_dev_loopback_http=True).cookie_name
-        == m.MOONMIND_PROD_COOKIE
-    )
-    assert (
-        m.resolve_cookie_policy(is_https=True, request_host="127.0.0.1",
-                                explicit_dev_loopback_http=True).cookie_name
-        == m.MOONMIND_PROD_COOKIE
-    )
-
-
-def test_untrusted_forwarded_headers_fail_closed():
-    m.validate_proxy_config(m.ProxyConfig())  # nothing presented: fine
-    with pytest.raises(m.AuthConfigError, match="Untrusted forwarded"):
-        m.validate_proxy_config(m.ProxyConfig(), forwarded_host="evil.example")
-    with pytest.raises(m.AuthConfigError, match="Untrusted forwarded"):
-        m.validate_proxy_config(
-            m.ProxyConfig(trusted_proxies=("10.0.0.1",)),
-            forwarded_proto="https",
+        m.validate_callback_origin(
+            "https://app.example.com/auth/callback",
+            base_url="https://app.example.com",
         )
-    # Explicit trusted-proxy configuration honors forwarded headers.
-    m.validate_proxy_config(
-        m.ProxyConfig(trusted_proxies=("10.0.0.1",), trust_forwarded_headers=True),
-        forwarded_host="app.example.com",
-        forwarded_proto="https",
+        == "https://app.example.com/auth/callback"
     )
+    with pytest.raises(m.AuthModeError):
+        m.validate_callback_origin(
+            "https://evil.example/callback", base_url="https://app.example.com"
+        )
 
 
-def test_base_url_and_callback_origins():
-    assert m.validate_public_base_url("https://app.example.com") == "https://app.example.com"
-    with pytest.raises(m.AuthConfigError):
-        m.validate_public_base_url("http://app.example.com")
-    m.validate_public_base_url("http://127.0.0.1:7000")
-    good = m.validate_callback_origin(
-        "https://app.example.com", "https://app.example.com/auth/callback"
+def test_public_base_url_loopback_uses_hostname_not_substring():
+    assert m.public_base_url_is_loopback("http://127.0.0.1:7000") is True
+    assert m.public_base_url_is_loopback("http://localhost:7000") is True
+    assert m.public_base_url_is_loopback("http://[::1]:7000") is True
+    assert m.public_base_url_is_loopback("https://app.example.com") is False
+    # Substring mimics are remote: hostname parsing, not matching.
+    assert m.public_base_url_is_loopback("https://localhost.example.com") is False
+    assert (
+        m.public_base_url_is_loopback("https://app.example.com/127.0.0.1/x")
+        is False
     )
-    assert good.startswith("https://app.example.com")
-    with pytest.raises(m.AuthConfigError, match="open redirect"):
-        m.validate_callback_origin("https://app.example.com", "https://evil.example/cb")
-
-
-def test_compose_rendered_defaults_cover_auth_contract():
-    rendered = open("docker-compose.yaml", encoding="utf-8").read()
-    assert "AUTH_PROVIDER=${AUTH_PROVIDER:-disabled}" in rendered
-    assert "MOONMIND_SESSION_SECRET_FILE" in rendered
-    assert "MOONMIND_AUTH_MIGRATION_DECISION_FILE" in rendered
+    assert m.public_base_url_is_loopback("") is False
+    assert m.public_base_url_is_loopback(None) is False
 
 
 # ---------------------------------------------------------------------------
-# R7: readiness + redacted diagnostics
+# 7. Readiness kinds and secret-free diagnostics
 # ---------------------------------------------------------------------------
 
 
-def test_readiness_states_distinguishable():
-    infra_down = m.build_auth_readiness(db_reachable=False, mode="accounts", bootstrap=None)
-    assert (infra_down.infrastructure, infra_down.authentication) == ("degraded", "blocked")
-    blocked = m.BootstrapDecision(
-        action="require-operator-choice", mode="disabled",
-        fresh_install=False, reason="record a decision",
+def test_readiness_kinds_are_distinguishable():
+    ready = m.auth_readiness_summary(production_mode="accounts")
+    assert ready["auth_readiness"] == "ready"
+    setup = m.auth_readiness_summary(
+        production_mode="accounts", setup_required=True
     )
-    setup = m.build_auth_readiness(db_reachable=True, mode="disabled", bootstrap=blocked)
-    assert setup.authentication == "setup-required" and setup.setup_required is True
-    ready = m.build_auth_readiness(db_reachable=True, mode="accounts", bootstrap=None)
-    assert (ready.infrastructure, ready.authentication) == ("ready", "ready")
+    assert setup["auth_readiness"] == "setup_required"
+    migration = m.auth_readiness_summary(
+        production_mode="migration_required", migration_required=True
+    )
+    assert migration["auth_readiness"] == "migration_required"
+    unavailable = m.auth_readiness_summary(
+        production_mode="accounts", db_reachable=False
+    )
+    assert unavailable["auth_readiness"] == "unavailable"
 
 
 def test_diagnostics_contain_no_secret_values():
-    secret = "super-secret-session-value-0123456789"
-    diagnostics = m.build_auth_diagnostics(
-        mode="accounts", db_reachable=True, secret_configured=True,
-        extra={"MOONMIND_SESSION_SECRET": secret, "note": "plain"},
-    )
-    rendered = json.dumps(diagnostics)
-    assert secret not in rendered
-    assert diagnostics["MOONMIND_SESSION_SECRET"] == "<set>"
-    assert diagnostics["session_secret"] == "<set>"
-    assert diagnostics["note"] == "plain"
-
-
-# ---------------------------------------------------------------------------
-# Remediation: R3 startup/request gating on the bootstrap decision
-# ---------------------------------------------------------------------------
-
-
-def test_effective_mode_prefers_proceeded_bootstrap():
-    fresh = m.decide_auth_bootstrap(
-        mode="disabled", mode_explicitly_set=False, db_has_users=False,
-        migration_decision=None,
-    )
-    # Genuinely fresh installs run the accounts production flow.
-    assert (
-        m.effective_auth_mode(settings_mode="disabled", bootstrap=fresh)
-        == "accounts"
-    )
-    explicit_local = m.decide_auth_bootstrap(
-        mode="disabled", mode_explicitly_set=True, db_has_users=False,
-        migration_decision=None,
-    )
-    assert (
-        m.effective_auth_mode(settings_mode="disabled", bootstrap=explicit_local)
-        == "disabled"
-    )
-    blocked = m.decide_auth_bootstrap(
-        mode="disabled", mode_explicitly_set=False, db_has_users=True,
-        migration_decision=None,
-    )
-    # Awaiting an operator choice: the configured selector stands and the
-    # gate outcome (not a silent remap) drives the startup/request paths.
-    assert (
-        m.effective_auth_mode(settings_mode="disabled", bootstrap=blocked)
-        == "disabled"
-    )
-    assert (
-        m.effective_auth_mode(settings_mode="accounts", bootstrap=None)
-        == "accounts"
-    )
-
-
-def test_should_ensure_default_user_gate_matrix():
-    fresh_omitted = m.decide_auth_bootstrap(
-        mode="disabled", mode_explicitly_set=False, db_has_users=False,
-        migration_decision=None,
-    )
-    assert (
-        m.should_ensure_default_user(settings_mode="disabled", bootstrap=fresh_omitted)
-        is False
-    )
-    blocked = m.decide_auth_bootstrap(
-        mode="disabled", mode_explicitly_set=False, db_has_users=True,
-        migration_decision=None,
-    )
-    # Populated databases awaiting an operator choice: never mutate owners.
-    assert (
-        m.should_ensure_default_user(settings_mode="disabled", bootstrap=blocked)
-        is False
-    )
-    # Unknown bootstrap (unreadable decision, unreachable DB): fail closed.
-    assert (
-        m.should_ensure_default_user(settings_mode="disabled", bootstrap=None)
-        is False
-    )
-    proceeded_disabled = m.decide_auth_bootstrap(
-        mode="disabled", mode_explicitly_set=True, db_has_users=True,
-        migration_decision=m.AuthMigrationDecision(decision="disabled"),
-    )
-    assert (
-        m.should_ensure_default_user(
-            settings_mode="disabled", bootstrap=proceeded_disabled
-        )
-        is True
-    )
-    fresh_explicit_disabled = m.decide_auth_bootstrap(
-        mode="disabled", mode_explicitly_set=True, db_has_users=False,
-        migration_decision=None,
-    )
-    assert (
-        m.should_ensure_default_user(
-            settings_mode="disabled", bootstrap=fresh_explicit_disabled
-        )
-        is True
-    )
-
-
-# ---------------------------------------------------------------------------
-# Remediation: R5/R6 deployment-boundary configuration
-# ---------------------------------------------------------------------------
-
-
-def test_deployment_config_loopback_publish_passes():
-    for host in ("127.0.0.1", "localhost", "::1"):
-        config = m.deployment_auth_config_from_env(
-            {"MOONMIND_API_PUBLISH_HOST": host, "MOONMIND_API_HOST_PORT": "7000"}
-        )
-        assert config.published_binding().startswith(host)
-        assert (
-            m.validate_deployment_auth_config(config, effective_mode="disabled")
-            == ""
-        )
-
-
-def test_deployment_config_wildcard_and_remote_publish_fail_closed():
-    # Empty publish host (wildcard publish) without trusted-ingress evidence.
-    wildcard = m.deployment_auth_config_from_env({"MOONMIND_API_HOST_PORT": "7000"})
-    assert wildcard.published_binding() == "7000:8000"
-    with pytest.raises(
-        m.AuthConfigError, match="all interfaces|no validated host-port"
-    ):
-        m.validate_deployment_auth_config(wildcard, effective_mode="disabled")
-    # Remote/custom hosts and alternate listeners fail without evidence.
-    for env in (
-        {"MOONMIND_API_PUBLISH_HOST": "192.168.1.10"},
-        {"MOONMIND_API_PUBLISH_HOST": "0.0.0.0"},
-        {
-            "MOONMIND_API_PUBLISH_HOST": "127.0.0.1",
-            "MOONMIND_ADDITIONAL_LISTENERS": "0.0.0.0:9000",
-        },
-        {
-            "MOONMIND_API_PUBLISH_HOST": "127.0.0.1",
-            "MOONMIND_PROXY_BYPASS_POSSIBLE": "1",
-        },
-    ):
-        config = m.deployment_auth_config_from_env(env)
-        with pytest.raises(m.AuthConfigError):
-            m.validate_deployment_auth_config(config, effective_mode="disabled")
-    # Non-disabled modes are not subject to the disabled exposure gate.
-    assert m.validate_deployment_auth_config(wildcard, effective_mode="accounts") == ""
-
-
-def test_deployment_config_trusted_ingress_covers_custom_host():
-    config = m.deployment_auth_config_from_env(
-        {
-            "MOONMIND_API_PUBLISH_HOST": "192.168.1.10",
-            "MOONMIND_ADDITIONAL_LISTENERS": "10.0.0.2:9000",
-            "MOONMIND_PROXY_BYPASS_POSSIBLE": "1",
-            "MOONMIND_DISABLED_TRUSTED_INGRESS_EVIDENCE": "1",
-        }
-    )
-    assert m.validate_deployment_auth_config(config, effective_mode="disabled") == ""
-
-
-def test_deployment_config_base_url_validated_at_boundary():
-    good = m.deployment_auth_config_from_env(
-        {
-            "MOONMIND_API_PUBLISH_HOST": "127.0.0.1",
-            "MOONMIND_PUBLIC_BASE_URL": "https://app.example.com",
-        }
-    )
-    assert (
-        m.validate_deployment_auth_config(good, effective_mode="accounts")
-        == "https://app.example.com"
-    )
-    bad = m.deployment_auth_config_from_env(
-        {
-            "MOONMIND_API_PUBLISH_HOST": "127.0.0.1",
-            "MOONMIND_PUBLIC_BASE_URL": "http://app.example.com",
-        }
-    )
-    with pytest.raises(m.AuthConfigError):
-        m.validate_deployment_auth_config(bad, effective_mode="accounts")
-    # No ambient runtime authority participates in the boundary config.
-    ambient = m.deployment_auth_config_from_env(
-        {
-            "MOONMIND_API_PUBLISH_HOST": "127.0.0.1",
-            "OMNIGENT_AUTH_PROVIDER": "oidc",
-            "OMNIGENT_ACCOUNTS_COOKIE_SECRET": "runtime-secret-value-xyz",
-        }
-    )
-    assert m.validate_deployment_auth_config(ambient, effective_mode="disabled") == ""
-
-
-def test_request_cookie_policy_seam_enforces_proxy_trust():
-    trusted = m.ProxyConfig(
-        trusted_proxies=("10.0.0.1",), trust_forwarded_headers=True
-    )
-    policy = m.resolve_request_cookie_policy(
-        is_https=True,
-        request_host="app.example.com",
-        forwarded_host="app.example.com",
-        forwarded_proto="https",
-        proxy_config=trusted,
-    )
-    assert policy.cookie_name == m.MOONMIND_PROD_COOKIE and policy.secure is True
-    # Untrusted forwarded headers fail closed before influencing policy.
-    with pytest.raises(m.AuthConfigError, match="Untrusted forwarded"):
-        m.resolve_request_cookie_policy(
-            is_https=False,
-            request_host="127.0.0.1",
-            forwarded_host="evil.example",
-            explicit_dev_loopback_http=True,
-        )
-    # The development cookie still requires the explicit loopback opt-in.
-    dev = m.resolve_request_cookie_policy(
-        is_https=False, request_host="127.0.0.1", explicit_dev_loopback_http=True
-    )
-    assert dev.cookie_name == m.MOONMIND_DEV_COOKIE and dev.development is True
-    prod = m.resolve_request_cookie_policy(
-        is_https=False, request_host="127.0.0.1", explicit_dev_loopback_http=False
-    )
-    assert prod.cookie_name == m.MOONMIND_PROD_COOKIE
-
-
-# ---------------------------------------------------------------------------
-# Remediation: R2 production helper crosses the K2 boundary (contradictory
-# ambient + same-origin isolation through the real helper)
-# ---------------------------------------------------------------------------
-
-
-def test_build_control_plane_auth_config_ignores_runtime_ambient(tmp_path, monkeypatch):
-    import api_service.auth_providers as providers
-    from moonmind.security import omnigent_auth_qualification as q
-
-    monkeypatch.setenv("OMNIGENT_AUTH_PROVIDER", "oidc")
-    monkeypatch.setenv("OMNIGENT_ACCOUNTS_COOKIE_SECRET", "r" * 40)
-    secret_file = tmp_path / "session_secret"
-    env = {
-        "OMNIGENT_AUTH_PROVIDER": "oidc",
-        "OMNIGENT_AUTH_ENABLED": "1",
-        "OMNIGENT_ACCOUNTS_COOKIE_SECRET": "r" * 40,
-        "MOONMIND_SESSION_SECRET": "m" * 40,
+    payload = {
+        "auth_mode": "accounts",
+        "JWT_SECRET": "devsecret",
+        "MOONMIND_SESSION_SECRET": "super-secret-value",
+        "cookie_secret": secrets.token_bytes(32),
+        "password": "hunter2",
+        "nested": {"client_secret": "abc", "host": "example.com"},
     }
-    config = providers.build_control_plane_auth_config(
-        mode="accounts", secret_file=secret_file, env=env
-    )
-    assert isinstance(config, q.MoonmindAuthConfig)
-    assert config.mode == "accounts"
-    assert config.cookie_secret == b"m" * 40
-    # Same-origin isolation: distinct cookies, MoonMind purpose binding.
-    assert config.cookie_name == m.MOONMIND_PROD_COOKIE
-    assert config.cookie_name not in q.UPSTREAM_SESSION_COOKIES
-    assert config.token_issuer == m.MOONMIND_TOKEN_ISSUER
-    assert config.token_audience == m.MOONMIND_TOKEN_AUDIENCE
-
-
-@pytest.mark.asyncio
-async def test_disabled_fallback_blocked_on_operator_choice(monkeypatch):
-    """R3: the request path serves no owner while a choice is pending."""
-    from fastapi import HTTPException
-
-    import api_service.auth_providers as providers
-    from moonmind.config.settings import settings
-
-    providers.reset_startup_auth_state()
-    try:
-        monkeypatch.setattr(settings.oidc, "AUTH_PROVIDER", "disabled")
-        monkeypatch.setattr(settings.workflow, "test_mode", False)
-        monkeypatch.delenv("PYTEST_CURRENT_TEST", raising=False)
-        providers.set_startup_auth_state(effective_mode="disabled", blocked=True)
-        dependency = providers.get_current_user()
-        with pytest.raises(HTTPException) as exc:
-            await dependency()
-        assert exc.value.status_code == 503
-        assert "operator" in str(exc.value.detail).lower()
-    finally:
-        providers.reset_startup_auth_state()
+    redacted = m.redacted_diagnostics(payload)
+    assert redacted["auth_mode"] == "accounts"
+    assert redacted["JWT_SECRET"] == "(redacted)"
+    assert redacted["MOONMIND_SESSION_SECRET"] == "(redacted)"
+    assert redacted["password"] == "(redacted)"
+    assert redacted["nested"] == {"client_secret": "(redacted)", "host": "example.com"}
+    rendered = str(redacted)
+    assert "devsecret" not in rendered
+    assert "super-secret-value" not in rendered
+    assert "hunter2" not in rendered

@@ -54,7 +54,7 @@ The GitHub unit-test workflow uses impact-aware backend suite selection for pull
 - `reliability_journey`
 - `full_backend`
 
-Branch protection should require the always-running `ci-required` summary job instead of the conditional backend suite jobs, plus the standalone `migration-gate` check. `ci-required` is a pure result aggregator with no checkout, submodule, setup, or repository command; it evaluates every dependency and reports each failed, cancelled, timed-out, or unexpectedly skipped selected job before exiting. `migration-gate` independently blocks migration-graph and clean-database upgrade failures.
+Branch protection should require the always-running `ci-required` summary job as the single required context for the backend suite jobs, the `test-frontend` aggregator, and the `check-generated-contracts` aggregator, plus the standalone `migration-gate` check. Do not list `test-frontend` or `check-generated-contracts` as separate required contexts; both report into `ci-required`. `ci-required` is a pure result aggregator with no checkout, submodule, setup, or repository command; it evaluates every dependency and reports each failed, cancelled, timed-out, or unexpectedly skipped selected job before exiting. `migration-gate` independently blocks migration-graph and clean-database upgrade failures.
 
 Static repository policy checks run in a parallel `preflight-policy` job that starts immediately alongside `select-test-suites`, rather than on the serial tail of `ci-required`. It owns docs and workflow terminology guardrails, removed-capability semantics, status-token domain and audit checks, the GitHub workflow display-name guard, and AgentSession deployment validation, so those checks are no longer duplicated in `unit-fast`. Backend jobs use shallow, submodule-free checkouts; only `moonspec-projection` initializes a submodule, and it initializes only `moonspec`. The selector, deployment validation, and the generated-contract detector share `tools/ci/compute_changed_files.sh` to compute the exact changed-file list from the event's base and head commits.
 
@@ -62,7 +62,7 @@ Routine backend pull requests run the cheap unit regression suite first. API/rou
 
 The selector fails open. Empty changed-file input, unknown paths, CI workflow changes, dependency file changes, test-runner changes, pytest configuration changes, selector changes, pushes to `main`, scheduled runs, and manual dispatches all force `full_backend=true`. That path selects every exclusive backend shard, including `unit_slow`; it does not replace `unit-fast` with the broad unit wrapper.
 
-The ownership verifier runs on full-backend paths and checks that every eligible provider-free pytest node has exactly one CI owner. The precedence is `slow > temporal_boundary > component > unit_fast`.
+The ownership verifier always runs, because exclusive shard ownership is a static repository invariant, and checks that every eligible provider-free pytest node has exactly one CI owner. The precedence is `slow > temporal_boundary > component > unit_fast`.
 
 The invariant fast-unit command is:
 
@@ -77,7 +77,7 @@ python -m pytest tests/unit \
 
 `./tools/test_unit.sh` reports the slowest Python tests with `--durations`; set `MOONMIND_PYTEST_DURATIONS` to tune the count. In CI it also writes JUnit XML unless `MOONMIND_PYTEST_JUNITXML` points at a different output path.
 
-The workflow selects `frontend-static` and the Chromium/Firefox browser matrix independently by changed-file impact. They run in parallel, while the always-running `test-frontend` result job preserves the stable required-check context and explicitly passes known non-frontend changes. The generated-contract check remains separate and still runs only when `tools/check_openapi_affecting_changes.sh` reports an OpenAPI-affecting path.
+The workflow selects `frontend-static` and the Chromium/Firefox browser matrix independently by changed-file impact. They run in parallel, while the always-running `test-frontend` result job aggregates their results, explicitly passes known non-frontend changes, and reports into `ci-required`. The generated-contract check still runs only when `tools/check_openapi_affecting_changes.sh` reports an OpenAPI-affecting path, and its always-running `check-generated-contracts` aggregator also reports into `ci-required`.
 
 See [Backend Test Selection Strategy](BackendTestSelection.md) for the detailed selector contract, category definitions, full-backend fail-open rules, and maintenance guidance.
 
