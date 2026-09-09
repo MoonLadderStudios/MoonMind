@@ -200,13 +200,14 @@ async def test_same_email_across_issuers_refuses_merge(tmp_path):
             session, ISSUER_A, "sub-1", email="shared@example.invalid"
         )
         await session.commit()
+        first_id = first.id
         with pytest.raises(ControlledEnrollmentRequiredError):
             await get_or_create_user_for_identity(
                 session, ISSUER_B, "sub-2", email="shared@example.invalid"
             )
         await session.rollback()
         assert await resolve_user_id_for_identity(session, ISSUER_B, "sub-2") is None
-        assert (await session.get(User, first.id)) is not None
+        assert (await session.get(User, first_id)) is not None
 
 
 @pytest.mark.asyncio
@@ -217,12 +218,13 @@ async def test_recycled_email_never_transfers_ownership(tmp_path):
             session, ISSUER_A, "owner-sub", email="recycled@example.invalid"
         )
         await session.commit()
+        owner_id = owner.id
         with pytest.raises(ControlledEnrollmentRequiredError):
             await get_or_create_user_for_identity(
                 session, ISSUER_A, "new-sub", email="recycled@example.invalid"
             )
         await session.rollback()
-        assert (await session.get(User, owner.id)) is not None
+        assert (await session.get(User, owner_id)) is not None
 
 
 @pytest.mark.asyncio
@@ -235,14 +237,15 @@ async def test_returning_user_email_taken_by_other_user_requires_enrollment(tmp_
         await session.commit()
         other = await _make_user(session, email="taken@example.invalid")
         await session.commit()
+        user_id, other_id = user.id, other.id
         with pytest.raises(ControlledEnrollmentRequiredError) as exc:
             await get_or_create_user_for_identity(
                 session, ISSUER_A, "stable-sub", email="taken@example.invalid"
             )
         assert exc.value.code == "email_taken"
         await session.rollback()
-        assert (await session.get(User, user.id)).email == "mine@example.invalid"
-        assert (await session.get(User, other.id)) is not None
+        assert (await session.get(User, user_id)).email == "mine@example.invalid"
+        assert (await session.get(User, other_id)) is not None
 
 
 @pytest.mark.asyncio
@@ -258,7 +261,11 @@ async def test_concurrent_first_login_creates_one_mapping_and_profile(tmp_path):
         for attempt in range(6):
             async with maker() as session:
                 try:
-                    await barrier.wait()
+                    if attempt == 0:
+                        # Collide all racers on the first attempt only;
+                        # retries proceed independently so an early winner
+                        # cannot strand the barrier and hang the test.
+                        await barrier.wait()
                     user, _ = await get_or_create_user_for_identity(
                         session, ISSUER_A, "race-sub", email=f"race-{n}@example.invalid"
                     )

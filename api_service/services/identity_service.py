@@ -52,7 +52,7 @@ from typing import Any
 from uuid import UUID
 
 from sqlalchemy import func, select
-from sqlalchemy.exc import IntegrityError
+from sqlalchemy.exc import IntegrityError, OperationalError, ProgrammingError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from api_service.db.models import (
@@ -531,6 +531,10 @@ async def ownership_snapshot(session: AsyncSession) -> dict[str, Any]:
     Records every retained ``User.id`` plus the foreign-key owners that must
     survive migration unchanged. UUIDs are preserved verbatim here (they are
     the reconciliation keys, not secrets); no hashes, tokens, or exports.
+    Surfaces absent from the registry or the database (minimal or hermetic
+    schemas) record the ``-1`` drift sentinel instead of failing the whole
+    snapshot; before/after comparison still detects any change on surfaces
+    that are present.
     """
     users = (await session.execute(select(User.id))).scalars().all()
     snapshot: dict[str, Any] = {"user_ids": sorted(str(u) for u in users)}
@@ -541,11 +545,20 @@ async def ownership_snapshot(session: AsyncSession) -> dict[str, Any]:
             fk_counts[f"{table_name}.{column}"] = -1
             continue
         col = table.c[column]
-        count = (
-            await session.execute(
-                select(func.count()).select_from(table).where(col.is_not(None))
-            )
-        ).scalar() or 0
+        probe = await session.begin_nested()
+        try:
+            count = (
+                await session.execute(
+                    select(func.count()).select_from(table).where(col.is_not(None))
+                )
+            ).scalar() or 0
+            await probe.commit()
+        except (OperationalError, ProgrammingError):
+            # Table not created in this database (minimal/hermetic schema):
+            # roll back only the probe savepoint, never the caller's work.
+            await probe.rollback()
+            fk_counts[f"{table_name}.{column}"] = -1
+            continue
         fk_counts[f"{table_name}.{column}"] = int(count)
     snapshot["fk_owner_counts"] = fk_counts
     return snapshot
