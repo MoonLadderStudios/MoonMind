@@ -1,0 +1,21 @@
+{
+  "jobId": "container-job:f206a8711885471b82ba0adaf3b11bf9",
+  "ownershipToken": "container-job:f206a8711885471b82ba0adaf3b11bf9:v1",
+  "owner": {
+    "principalType": "service",
+    "principalId": "mm:1d72e336-30cc-434e-9443-c3f833c151bb-2026-09-09T16:00:00Z:01a086e5-c443-7d83-8c56-852591b2f984:mm:1d72e336-30cc-434e-9443-c3f833c151bb-2026-09-09T16:00:00Z:01a086e5-c443-7d83-8c56-852591b2f984:issue-implementation-remediation:verification:2:execution:1"
+  },
+  "request": {
+    "idempotencyKey": "long-owner-replay",
+    "source": {"source": "omnigent", "workflowId": "mm:1d72e336-30cc-434e-9443-c3f833c151bb-2026-09-09T16:00:00Z"},
+    "spec": {
+      "imageSourceRef": "moonmind-python-tests",
+      "workspaceRef": {"kind": "sandbox", "workspaceId": "6f7948633a37515797fa3610", "relativePath": "repo"},
+      "command": ["bash", "-lc", "./tools/test_unit.sh --python-only -- \"$@\"", "moonmind-python-tests", "tests/unit/security/test_auth_docs_4130.py"],
+      "networkMode": "bridge",
+      "resources": {"cpuMillis": 4000, "memoryMiB": 4096, "pids": 512},
+      "timeoutSeconds": 3600,
+      "outputs": [{"name": "pytest-junit", "relativePath": "pytest-unit.xml"}]
+    }
+  }
+}

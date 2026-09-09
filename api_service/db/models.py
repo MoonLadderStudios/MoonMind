@@ -2915,7 +2915,7 @@ class TemporalArtifact(Base):
         server_default=func.now(),
     )
     created_by_principal: Mapped[Optional[str]] = mapped_column(
-        String(255),
+        Text,
         nullable=True,
     )
     content_type: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
@@ -3101,7 +3101,7 @@ class TemporalArtifactPin(Base):
         ForeignKey("temporal_artifacts.artifact_id", ondelete="CASCADE"),
         nullable=False,
     )
-    pinned_by_principal: Mapped[str] = mapped_column(String(255), nullable=False)
+    pinned_by_principal: Mapped[str] = mapped_column(Text, nullable=False)
     pinned_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         nullable=False,
