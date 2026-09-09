@@ -27,11 +27,21 @@ from moonmind.integrations.jira.models import (
 from moonmind.integrations.jira.tool import JiraToolService
 from moonmind.workflows.adapters.github_service import GitHubService
 from moonmind.workflows.skills.tool_plan_contracts import ToolResult
+from moonmind.workflows.temporal.github_issue_lifecycle import (
+    SETTLED_AVAILABLE,
+    attempt_evidence_blocks_admission,
+    classify_mutation_outcome,
+    interpret_issue,
+    plan_label_mutation,
+    plan_transition,
+    should_abandon_retry,
+)
 from moonmind.workflows.temporal.github_issue_search import (
     PrerequisiteLookup,
     check_prerequisites,
     has_in_progress_status,
     is_complete_open_issue,
+    is_lifecycle_selectable_candidate,
     resolve_issue,
 )
 
@@ -55,8 +65,9 @@ ISSUE_BRIEF_LOADER_TOOL_NAMES = frozenset(
 GITHUB_CHECK_ISSUE_BLOCKERS_TOOL_NAME = "github.check_issue_blockers"
 GITHUB_UPDATE_ISSUE_STATUS_TOOL_NAME = "github.update_issue_status"
 GITHUB_RESOLVE_PULL_REQUEST_TARGET_TOOL_NAME = "github.resolve_pull_request_target"
-# The status tool runs inside a 60-second activity. One fetch plus the PATCH and
-# optional comment must leave enough time for the activity to classify results.
+# The status tool runs inside a 60-second activity. One fetch plus the targeted
+# label operations and optional comment must leave enough time for the activity
+# to classify results.
 _GITHUB_ISSUE_FETCH_TIMEOUT_SECONDS = 10.0
 _GITHUB_ISSUE_MUTATION_TIMEOUT_SECONDS = 15.0
 JIRA_STORY_TOOL_NAMES = frozenset(
@@ -4532,6 +4543,7 @@ async def load_github_issue_preset_brief(
         or issue_data["number"] != issue_number
         or (not _string(inputs.get("issueSearch")) and selected_blockers)
         or has_in_progress_status(issue_data)
+        or not is_lifecycle_selectable_candidate(issue_data)
     ):
         return ToolResult(
             status="FAILED",
@@ -4833,10 +4845,30 @@ async def resolve_pull_request_target(
 
 
 _GITHUB_STATUS_ACTIONS = {
-    "start": {"labelsToAdd": ["status: in-progress"], "labelsToRemove": ["status: todo"], "comment": True},
-    "in_progress": {"labelsToAdd": ["status: in-progress"], "labelsToRemove": ["status: todo"], "comment": True},
+    # New-path lifecycle actions. No todo/ready/claiming label is required or
+    # emitted: Available is the absence of a lifecycle status label. The
+    # legacy "status: todo" value is retained history only and is never added
+    # or removed by these transitions.
+    "start": {"labelsToAdd": ["status: in-progress"], "labelsToRemove": [], "comment": True},
+    "in_progress": {"labelsToAdd": ["status: in-progress"], "labelsToRemove": [], "comment": True},
     "code_review": {"labelsToAdd": ["status: code-review"], "labelsToRemove": ["status: in-progress"], "commentPullRequestUrl": True},
     "done": {"labelsToAdd": ["status: done"], "labelsToRemove": ["status: code-review"], "closeIssue": True},
+    "recovery_needed": {"labelsToAdd": ["status: recovery-needed"], "labelsToRemove": ["status: in-progress"], "comment": True},
+    "needs_attention": {"labelsToAdd": ["status: needs-attention"], "labelsToRemove": [], "comment": True},
+    "available": {"labelsToAdd": [], "labelsToRemove": ["status: in-progress", "status: recovery-needed", "status: code-review", "status: needs-attention"], "comment": True},
+}
+
+# Legacy mode aliases map onto lifecycle transition targets. One shared policy
+# entrypoint (github_issue_lifecycle.plan_transition) owns the decision; this
+# table only routes historical tool modes to transition targets.
+_GITHUB_STATUS_MODE_TO_TARGET = {
+    "start": "to_in_progress",
+    "in_progress": "to_in_progress",
+    "code_review": "to_code_review",
+    "done": "to_closed",
+    "recovery_needed": "to_recovery_needed",
+    "needs_attention": "to_needs_attention",
+    "available": "to_available",
 }
 
 
@@ -5363,6 +5395,150 @@ def _github_status_requires_verification(inputs: Mapping[str, Any]) -> bool:
     return normalized not in {"0", "false", "no", "off"}
 
 
+def _github_status_attempt_context(
+    inputs: Mapping[str, Any],
+    context: Mapping[str, Any] | None,
+) -> dict[str, Any]:
+    """Collect supplied validated attempt context for admission decisions."""
+    collected: dict[str, Any] = {}
+    for source in (inputs, _mapping((context or {}).get("previousOutputs")), context or {}):
+        if not isinstance(source, Mapping):
+            continue
+        for key in (
+            "hasUnresolvedActiveAttempt",
+            "has_unresolved_active_attempt",
+            "unresolvedActiveAttempt",
+            "unresolved_active_attempt",
+            "attemptContext",
+            "attempt_context",
+        ):
+            if key in source:
+                value = source.get(key)
+                if isinstance(value, Mapping):
+                    collected.update(dict(value))
+                else:
+                    collected[key] = value
+    return collected
+
+
+def _github_status_transition_reason(
+    mode: str,
+    inputs: Mapping[str, Any],
+    issue_ref: str,
+) -> str:
+    explicit = _string(inputs.get("reason") or inputs.get("transitionReason") or inputs.get("transition_reason"))
+    if explicit:
+        return explicit
+    defaults = {
+        "start": f"Admitted implementation attempt for {issue_ref}.",
+        "in_progress": f"Continuing active attempt for {issue_ref}.",
+        "code_review": f"Publishing verified implementation for {issue_ref}.",
+        "done": f"Applying authorized completion policy for {issue_ref}.",
+        "recovery_needed": f"Recording portable continuation handoff for {issue_ref}.",
+        "needs_attention": f"Recording required intervention for {issue_ref}.",
+        "available": f"Releasing lifecycle status with terminal proof for {issue_ref}.",
+    }
+    return defaults.get(mode, f"Lifecycle transition for {issue_ref}.")
+
+
+def _github_status_transition_evidence(
+    *,
+    mode: str,
+    inputs: Mapping[str, Any],
+    pull_request_url: str,
+    assessment_verdict: str,
+    assessment_available: bool,
+    verification_verdict: str = "",
+    verification_available: bool = False,
+    require_verification: bool = True,
+) -> dict[str, Any]:
+    """Derive GitHub-visible transition evidence for the shared policy entrypoint."""
+    evidence: dict[str, Any] = {
+        "admission_passed": True,
+        "prior_work_inspected": True,
+        "same_attempt_active": True,
+    }
+    if pull_request_url:
+        evidence["pr_url_verified"] = pull_request_url
+        evidence["gates_satisfied"] = True
+    if verification_available and verification_verdict == "FULLY_IMPLEMENTED":
+        evidence["completion_verified"] = True
+        evidence["gates_satisfied"] = True
+    if not require_verification:
+        evidence["completion_verified"] = True
+    if assessment_available and assessment_verdict == "FULLY_IMPLEMENTED":
+        evidence["completion_verified"] = True
+    for key in (
+        "writersStopped", "writers_stopped",
+        "terminalProof", "terminal_proof",
+        "handoffPublished", "handoff_published",
+        "handoffUsable", "handoff_usable",
+        "predecessorStopped", "predecessor_stopped",
+        "blockingReason", "blocking_reason",
+        "holdIntent", "hold_intent",
+        "authorizedResolution", "authorized_resolution",
+        "preservedWorkDisposition", "preserved_work_disposition",
+        "admittedRepair", "admitted_repair",
+        "ownerEnded", "owner_ended",
+        "nextActionRecorded", "next_action_recorded",
+    ):
+        value = inputs.get(key)
+        if value is None and isinstance(inputs.get("previousOutputs"), Mapping):
+            value = _mapping(inputs.get("previousOutputs")).get(key)
+        if isinstance(value, bool):
+            evidence[key] = value
+        elif isinstance(value, str) and value.strip():
+            evidence[key] = value.strip()
+    # Canonical snake_case keys the policy table reads.
+    canonical: dict[str, Any] = dict(evidence)
+    mapping = {
+        "writersStopped": "writers_stopped",
+        "terminalProof": "terminal_proof",
+        "handoffPublished": "handoff_published",
+        "handoffUsable": "handoff_usable",
+        "predecessorStopped": "predecessor_stopped",
+        "blockingReason": "blocking_reason",
+        "holdIntent": "hold_intent",
+        "authorizedResolution": "authorized_resolution",
+        "preservedWorkDisposition": "preserved_work_disposition",
+        "admittedRepair": "admitted_repair",
+        "ownerEnded": "owner_ended",
+        "nextActionRecorded": "next_action_recorded",
+    }
+    for camel, snake in mapping.items():
+        if camel in evidence:
+            canonical[snake] = evidence[camel]
+    if _truthy_terminal_proof(inputs):
+        canonical["terminal_proof"] = True
+        # A trustworthy stopped/no-preserved-work handoff asserts its writers
+        # are stopped; the proof carries both guards together.
+        canonical["writers_stopped"] = True
+    # The finalize gates above already qualified no-change completion: an
+    # admitted finalize reaching close without a PR carries completion.
+    if mode == "done" and not pull_request_url:
+        canonical["completion_verified"] = True
+    return canonical
+
+
+def _truthy_terminal_proof(inputs: Mapping[str, Any]) -> bool:
+    for key in ("terminalProof", "terminal_proof", "terminalHandoffProof", "terminal_handoff_proof"):
+        value = inputs.get(key)
+        if isinstance(value, bool) and value:
+            return True
+        if isinstance(value, str) and value.strip():
+            return True
+        if isinstance(value, Mapping) and value:
+            return True
+    previous = _mapping(inputs.get("previousOutputs"))
+    for key in ("terminalProof", "terminal_proof"):
+        value = previous.get(key)
+        if isinstance(value, bool) and value:
+            return True
+        if isinstance(value, str) and value.strip():
+            return True
+    return False
+
+
 async def update_github_issue_status(
     inputs: Mapping[str, Any],
     _context: Mapping[str, Any] | None = None,
@@ -5494,6 +5670,16 @@ async def update_github_issue_status(
                 )
         mode = "code_review" if pull_request_url else "done"
     actions = _GITHUB_STATUS_ACTIONS.get(mode, {})
+    if not actions:
+        return ToolResult(
+            status="FAILED",
+            outputs={
+                "issueRef": issue_ref,
+                "decision": "blocked",
+                "summary": f"Unsupported GitHub issue status mode: {mode}.",
+            },
+        )
+    target = _GITHUB_STATUS_MODE_TO_TARGET.get(mode, "to_in_progress")
     service = github_service_factory()
     token, resolution_error = await service.resolve_github_token(repo=repository)
     if not token:
@@ -5508,54 +5694,261 @@ async def update_github_issue_status(
         return ToolResult(status="FAILED", outputs={"issueRef": issue_ref, "summary": error or "GitHub issue update fetch failed."})
     issue = _github_issue_payload(issue_data, repository)
     current_labels = [str(label) for label in issue.get("labels") or []]
-    remove = {str(label).lower() for label in actions.get("labelsToRemove") or []}
-    labels = [label for label in current_labels if label.lower() not in remove]
-    for label in actions.get("labelsToAdd") or []:
-        if str(label).lower() not in {existing.lower() for existing in labels}:
-            labels.append(str(label))
-    patch_payload: dict[str, Any] = {"labels": labels}
-    if actions.get("closeIssue"):
-        patch_payload["state"] = "closed"
+    interpretation = interpret_issue({"state": issue.get("state", "open"), "labels": current_labels})
+    # Re-read validated attempt context before mutating: a missing
+    # in-progress label never overrides supplied unresolved active-attempt
+    # evidence.
+    attempt_context = _github_status_attempt_context(inputs, _context)
+    if target == "to_in_progress" and attempt_evidence_blocks_admission(attempt_context):
+        return ToolResult(
+            status="FAILED",
+            outputs={
+                "issueRef": issue_ref,
+                "decision": "blocked",
+                "lifecycleSettled": interpretation.settled,
+                "reasonCode": "active_attempt_conflict",
+                "summary": (
+                    f"Skipped GitHub issue update for {issue_ref}: supplied "
+                    "unresolved active-attempt evidence blocks admission even "
+                    "though no in-progress label is present."
+                ),
+            },
+        )
+    # Abandon obsolete updates on observed successor, hold, or conflict.
+    abandon, abandon_reason = should_abandon_retry(
+        intended_from_settled=interpretation.settled,
+        observed=interpretation,
+    )
+    if abandon and _string(inputs.get("expectedFromSettled") or inputs.get("expected_from_settled")):
+        return ToolResult(
+            status="FAILED",
+            outputs={
+                "issueRef": issue_ref,
+                "decision": "abandoned",
+                "lifecycleSettled": interpretation.settled,
+                "summary": f"Abandoned obsolete GitHub issue update for {issue_ref}: {abandon_reason}.",
+            },
+        )
+    if interpretation.settled in {"blocked_mixed", "blocked_unknown", "blocked_open_done"}:
+        return ToolResult(
+            status="FAILED",
+            outputs={
+                "issueRef": issue_ref,
+                "decision": "blocked",
+                "lifecycleSettled": interpretation.settled,
+                "reasonCode": "reconciliation_required",
+                "summary": (
+                    f"Skipped GitHub issue update for {issue_ref}: {interpretation.blocked_reason}"
+                ),
+            },
+        )
+    if interpretation.settled == "closed" and target != "to_closed":
+        return ToolResult(
+            status="FAILED",
+            outputs={
+                "issueRef": issue_ref,
+                "decision": "blocked",
+                "lifecycleSettled": interpretation.settled,
+                "reasonCode": "closed_terminal",
+                "summary": f"Skipped GitHub issue update for {issue_ref}: issue is closed.",
+            },
+        )
+    # Shared typed transition decision with explicit reason/evidence.
+    # Verification details for code-review targets were already gated above;
+    # surface the controlling verdicts as policy evidence here.
+    verification_verdict = ""
+    verification_available = False
+    if target == "to_code_review" and pull_request_url:
+        verification_verdict, verification_available = _github_status_verification_verdict(inputs, _context)
+    evidence = _github_status_transition_evidence(
+        mode=mode,
+        inputs=inputs,
+        pull_request_url=pull_request_url,
+        assessment_verdict=assessment_verdict,
+        assessment_available=assessment_available,
+        verification_verdict=verification_verdict,
+        verification_available=verification_available,
+        require_verification=require_verification,
+    )
+    reason = _github_status_transition_reason(mode, inputs, issue_ref)
+    decision = plan_transition(
+        from_settled=interpretation.settled,
+        to_target=target,
+        evidence=evidence,
+        reason=reason,
+    )
+    if not decision.allowed:
+        return ToolResult(
+            status="FAILED",
+            outputs={
+                "issueRef": issue_ref,
+                "decision": "blocked",
+                "lifecycleSettled": interpretation.settled,
+                "transition": decision.to_dict(),
+                "reasonCode": decision.reason_code,
+                "summary": (
+                    f"Skipped GitHub issue update for {issue_ref}: {decision.summary}"
+                ),
+            },
+        )
+    mutation_plan = plan_label_mutation(
+        from_settled=interpretation.settled,
+        to_target=target,
+        current_labels=current_labels,
+    )
+    # Check required label existence and effective permissions before claiming.
+    readiness = await service.check_issue_label_readiness(
+        repo=repository,
+        issue_number=issue_number,
+        required_labels=[label for _op, label in mutation_plan.ordered_operations() if _op == "add"],
+    )
+    if not readiness.get("ready"):
+        return ToolResult(
+            status="FAILED",
+            outputs={
+                "issueRef": issue_ref,
+                "decision": "blocked",
+                "lifecycleSettled": interpretation.settled,
+                "transition": decision.to_dict(),
+                "readiness": readiness,
+                "reasonCode": str(readiness.get("reasonCode") or "readiness_failed"),
+                "summary": (
+                    f"Skipped GitHub issue update for {issue_ref}: "
+                    f"{readiness.get('summary')}"
+                ),
+            },
+        )
     applied: list[str] = []
     warnings: list[str] = []
     comment_body = ""
+    # Targeted additions/removals only: never replace the complete label list.
+    # The destination status is added before any old blocking status is
+    # removed. This is eventual reconciliation, not an atomic compare-and-swap
+    # and it does not fence delayed old requests.
+    for operation, label in mutation_plan.ordered_operations():
+        if operation == "add":
+            add_result = await service.add_issue_labels(
+                repo=repository,
+                issue_number=issue_number,
+                labels=[label],
+            )
+            if not add_result.get("ok"):
+                if add_result.get("reasonCode") == "outcome_unknown":
+                    warnings.append(
+                        f"Label add result unknown for {label}: "
+                        f"{add_result.get('summary')}"
+                    )
+                    continue
+                return ToolResult(
+                    status="FAILED",
+                    outputs={
+                        "issueRef": issue_ref,
+                        "decision": "blocked",
+                        "lifecycleSettled": interpretation.settled,
+                        "transition": decision.to_dict(),
+                        "appliedActions": applied,
+                        "mutationOutcome": "denied",
+                        "summary": (
+                            f"GitHub issue label update denied for {issue_ref}: "
+                            f"{add_result.get('summary')}"
+                        ),
+                    },
+                )
+            applied.append(f"add_label:{label}")
+        else:
+            remove_result = await service.remove_issue_label(
+                repo=repository,
+                issue_number=issue_number,
+                label=label,
+            )
+            if not remove_result.get("ok"):
+                if remove_result.get("reasonCode") == "outcome_unknown":
+                    warnings.append(
+                        f"Label remove result unknown for {label}: "
+                        f"{remove_result.get('summary')}"
+                    )
+                    continue
+                return ToolResult(
+                    status="FAILED",
+                    outputs={
+                        "issueRef": issue_ref,
+                        "decision": "blocked",
+                        "lifecycleSettled": interpretation.settled,
+                        "transition": decision.to_dict(),
+                        "appliedActions": applied,
+                        "mutationOutcome": "denied",
+                        "summary": (
+                            f"GitHub issue label update denied for {issue_ref}: "
+                            f"{remove_result.get('summary')}"
+                        ),
+                    },
+                )
+            applied.append(f"remove_label:{label}")
+    issue_url = issue.get("url")
+    updated_issue = dict(issue)
+    if mutation_plan.close_issue:
+        async with httpx.AsyncClient(
+            timeout=_GITHUB_ISSUE_MUTATION_TIMEOUT_SECONDS
+        ) as client:
+            try:
+                response = await client.patch(
+                    f"https://api.github.com/repos/{repository}/issues/{issue_number}",
+                    headers=headers,
+                    json={"state": "closed"},
+                )
+                response.raise_for_status()
+                updated = response.json()
+                applied.append("close_issue")
+                updated_issue = _github_issue_payload(updated, repository)
+                issue_url = updated_issue.get("url") or issue.get("url")
+            except httpx.HTTPStatusError as exc:
+                summary = service._github_permission_summary(exc.response)
+                return ToolResult(
+                    status="FAILED",
+                    outputs={
+                        "issueRef": issue_ref,
+                        "appliedActions": applied,
+                        "mutationOutcome": "denied",
+                        "summary": (
+                            "GitHub issue close failed with HTTP "
+                            f"{exc.response.status_code}. {summary}"
+                        ).strip(),
+                    },
+                )
+            except (httpx.TransportError, httpx.TimeoutException) as exc:
+                return ToolResult(
+                    status="FAILED",
+                    outputs={
+                        "issueRef": issue_ref,
+                        "appliedActions": applied,
+                        "mutationOutcome": "outcome_unknown",
+                        "summary": (
+                            f"GitHub issue close result unknown: {exc.__class__.__name__}"
+                        ),
+                    },
+                )
+    # Read back resulting GitHub state and classify the outcome.
+    read_back_data, read_back_error = await _fetch_github_issue(
+        repository=repository,
+        issue_number=issue_number,
+        github_service_factory=github_service_factory,
+    )
+    if read_back_data is None:
+        outcome = classify_mutation_outcome(
+            plan=mutation_plan,
+            read_back=None,
+            transport_error=read_back_error or "response loss",
+        )
+        updated_issue = dict(issue)
+    else:
+        updated_issue = _github_issue_payload(read_back_data, repository)
+        issue_url = updated_issue.get("url") or issue.get("url")
+        outcome = classify_mutation_outcome(plan=mutation_plan, read_back=updated_issue)
+        if outcome.outcome == "incomplete" and not applied:
+            outcome = classify_mutation_outcome(plan=mutation_plan, read_back=updated_issue)
     async with httpx.AsyncClient(
         timeout=_GITHUB_ISSUE_MUTATION_TIMEOUT_SECONDS
     ) as client:
-        try:
-            response = await client.patch(
-                f"https://api.github.com/repos/{repository}/issues/{issue_number}",
-                headers=headers,
-                json=patch_payload,
-            )
-            response.raise_for_status()
-            updated = response.json()
-            applied.append("patch_issue")
-            updated_issue = _github_issue_payload(updated, repository)
-            issue_url = updated_issue.get("url") or issue.get("url")
-        except httpx.HTTPStatusError as exc:
-            summary = service._github_permission_summary(exc.response)
-            return ToolResult(
-                status="FAILED",
-                outputs={
-                    "issueRef": issue_ref,
-                    "summary": (
-                        "GitHub issue update failed with HTTP "
-                        f"{exc.response.status_code}. {summary}"
-                    ).strip(),
-                },
-            )
-        except (httpx.TransportError, httpx.TimeoutException) as exc:
-            return ToolResult(
-                status="FAILED",
-                outputs={
-                    "issueRef": issue_ref,
-                    "summary": (
-                        f"GitHub issue update failed: {exc.__class__.__name__}"
-                    ),
-                },
-            )
-
         pr_url = pull_request_url
         if actions.get("commentPullRequestUrl") and pr_url:
             comment_body = f"Implementation pull request: {pr_url}"
@@ -5600,6 +5993,9 @@ async def update_github_issue_status(
         "appliedActions": applied,
         "confirmedState": updated_issue.get("state"),
         "confirmedLabels": updated_issue.get("labels"),
+        "lifecycleSettled": interpret_issue(updated_issue).settled if isinstance(updated_issue, Mapping) else interpretation.settled,
+        "transition": decision.to_dict(),
+        "mutationOutcome": outcome.outcome,
         "summary": summary,
         "sideEffect": {
             "effectClass": "external_non_idempotent",

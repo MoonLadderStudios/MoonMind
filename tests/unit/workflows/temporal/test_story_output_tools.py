@@ -135,10 +135,57 @@ class _RecordingDispatcher:
         self.skills[skill_name] = handler
 
 
+import re as _re_for_fake_urls
+
+
+# Shared fake GitHub issue state so targeted label mutations performed through
+# the fake service are visible to HTTP read-back, while unrelated labels are
+# preserved. Keyed by (repository, issue number).
+_FAKE_ISSUE_STATE: dict[tuple[str, int], dict[str, Any]] = {}
+
+
+def _fake_issue_entry(repository: str, issue_number: int) -> dict[str, Any]:
+    key = (repository, issue_number)
+    entry = _FAKE_ISSUE_STATE.get(key)
+    if entry is None:
+        entry = {"labels": ["moonspec"], "state": "open"}
+        _FAKE_ISSUE_STATE[key] = entry
+    return entry
+
+
+def _fake_issue_payload_for(repository: str, issue_number: int) -> dict[str, Any]:
+    entry = _fake_issue_entry(repository, issue_number)
+    return {
+        "number": issue_number,
+        "title": "Add GitHub Issue Orchestrate preset",
+        "body": "Build the preset.",
+        "html_url": f"https://github.com/{repository}/issues/{issue_number}",
+        "state": entry["state"],
+        "labels": [{"name": label} for label in entry["labels"]],
+    }
+
+
+def _fake_repo_number_from_url(url: str) -> tuple[str, int]:
+    match = _re_for_fake_urls.search(r"/repos/([^/]+/[^/]+)/issues/(\d+)", url)
+    if not match:
+        return "MoonLadderStudios/MoonMind", 1067
+    return match.group(1), int(match.group(2))
+
+
 class _FakeGitHubService:
     def __init__(self) -> None:
         self.token_requests: list[str] = []
         self.create_issue_requests: list[dict[str, Any]] = []
+        self.readiness_requests: list[dict[str, Any]] = []
+        self.added_labels: list[dict[str, Any]] = []
+        self.removed_labels: list[dict[str, Any]] = []
+        self.readiness_result: dict[str, Any] | None = None
+        self.fail_add_mode: str | None = None
+        self.fail_remove_mode: str | None = None
+        # Fresh service per test: reset shared fake GitHub issue state so
+        # targeted label mutations observed through HTTP read-back stay
+        # isolated between tests.
+        _FAKE_ISSUE_STATE.clear()
 
     async def resolve_github_token(self, *, repo: str):
         self.token_requests.append(repo)
@@ -176,6 +223,61 @@ class _FakeGitHubService:
     def _github_permission_summary(self, response) -> str:
         return f"github status {response.status_code}"
 
+    async def check_issue_label_readiness(
+        self,
+        *,
+        repo: str,
+        issue_number: int,
+        required_labels: list[str],
+        github_token: str | None = None,
+    ) -> dict[str, Any]:
+        self.readiness_requests.append(
+            {"repo": repo, "issue_number": issue_number, "labels": list(required_labels)}
+        )
+        if self.readiness_result is not None:
+            return dict(self.readiness_result)
+        return {"ready": True, "reasonCode": "ready", "summary": "ready"}
+
+    async def add_issue_labels(
+        self,
+        *,
+        repo: str,
+        issue_number: int,
+        labels: list[str],
+        github_token: str | None = None,
+    ) -> dict[str, Any]:
+        self.added_labels.append(
+            {"repo": repo, "issue_number": issue_number, "labels": list(labels)}
+        )
+        if self.fail_add_mode == "denied":
+            return {"ok": False, "reasonCode": "denied", "summary": "Label add failed with HTTP 403."}
+        if self.fail_add_mode == "unknown":
+            return {"ok": False, "reasonCode": "outcome_unknown", "summary": "Label add result unknown: ReadTimeout."}
+        state = _fake_issue_entry(repo, issue_number)
+        for label in labels:
+            if label.lower() not in {existing.lower() for existing in state["labels"]}:
+                state["labels"].append(label)
+        return {"ok": True, "reasonCode": "added", "summary": f"Added {', '.join(labels)}."}
+
+    async def remove_issue_label(
+        self,
+        *,
+        repo: str,
+        issue_number: int,
+        label: str,
+        github_token: str | None = None,
+    ) -> dict[str, Any]:
+        self.removed_labels.append(
+            {"repo": repo, "issue_number": issue_number, "label": label}
+        )
+        if self.fail_remove_mode == "denied":
+            return {"ok": False, "reasonCode": "denied", "summary": "Label remove failed with HTTP 403."}
+        if self.fail_remove_mode == "unknown":
+            return {"ok": False, "reasonCode": "outcome_unknown", "summary": "Label remove result unknown: ReadTimeout."}
+        state = _fake_issue_entry(repo, issue_number)
+        state["labels"] = [existing for existing in state["labels"] if existing.lower() != label.lower()]
+        return {"ok": True, "reasonCode": "removed", "summary": f"Removed {label}."}
+
 
 class _FakeHttpResponse:
     def __init__(self, payload: dict[str, Any], status_code: int = 200) -> None:
@@ -201,29 +303,19 @@ class _FakeHttpClient:
 
     async def get(self, url: str, **kwargs):
         self.requests.append(("GET", url, kwargs))
-        return _FakeHttpResponse(
-            {
-                "number": 1067,
-                "title": "Add GitHub Issue Orchestrate preset",
-                "body": "Build the preset.",
-                "html_url": "https://github.com/MoonLadderStudios/MoonMind/issues/1067",
-                "state": "open",
-                "labels": [{"name": "moonspec"}],
-            }
-        )
+        repository, issue_number = _fake_repo_number_from_url(url)
+        return _FakeHttpResponse(_fake_issue_payload_for(repository, issue_number))
 
     async def patch(self, url: str, **kwargs):
         self.requests.append(("PATCH", url, kwargs))
-        return _FakeHttpResponse(
-            {
-                "number": 1067,
-                "title": "Add GitHub Issue Orchestrate preset",
-                "body": "Build the preset.",
-                "html_url": "https://github.com/MoonLadderStudios/MoonMind/issues/1067",
-                "state": "open",
-                "labels": [{"name": "status: in-progress"}],
-            }
-        )
+        repository, issue_number = _fake_repo_number_from_url(url)
+        payload = kwargs.get("json") or {}
+        entry = _fake_issue_entry(repository, issue_number)
+        # Targeted close only: the lifecycle boundary never replaces the
+        # complete label list through PATCH.
+        if payload.get("state") == "closed":
+            entry["state"] = "closed"
+        return _FakeHttpResponse(_fake_issue_payload_for(repository, issue_number))
 
     async def post(self, url: str, **kwargs):
         self.requests.append(("POST", url, kwargs))
@@ -409,9 +501,10 @@ async def test_update_github_issue_status_allows_code_review_without_verificatio
     )
 
     assert result.status == "COMPLETED"
-    assert result.outputs["appliedActions"] == ["patch_issue", "comment"]
+    assert result.outputs["appliedActions"] == ["add_label:status: code-review", "comment"]
     assert "mode code_review" in result.outputs["summary"]
     assert service.token_requests == [
+        "MoonLadderStudios/MoonMind",
         "MoonLadderStudios/MoonMind",
         "MoonLadderStudios/MoonMind",
     ]
@@ -467,15 +560,16 @@ async def test_update_github_issue_status_preserves_patch_when_comment_times_out
     )
 
     assert result.status == "COMPLETED"
-    assert result.outputs["appliedActions"] == ["patch_issue"]
+    assert result.outputs["appliedActions"] == ["add_label:status: in-progress"]
     assert result.outputs["commentStatus"] == "unconfirmed"
-    assert result.outputs["confirmedLabels"] == ["status: in-progress"]
+    assert "status: in-progress" in result.outputs["confirmedLabels"]
+    assert "moonspec" in result.outputs["confirmedLabels"]
     assert result.outputs["warnings"] == [
         "GitHub issue status was updated, but the automation comment result "
         "could not be confirmed after ReadTimeout; the comment was not retried "
         "to avoid a duplicate."
     ]
-    assert _CommentReadTimeoutHttpClient.timeouts == [10.0, 15.0]
+    assert _CommentReadTimeoutHttpClient.timeouts == [10.0, 10.0, 15.0]
     assert (
         _CommentReadTimeoutHttpClient.timeouts[0]
         + (2 * _CommentReadTimeoutHttpClient.timeouts[1])
@@ -504,9 +598,10 @@ async def test_update_github_issue_status_retries_confirmed_comment_rejection(
     )
 
     assert result.status == "FAILED"
-    assert result.outputs["appliedActions"] == ["patch_issue"]
+    assert result.outputs["appliedActions"] == ["add_label:status: in-progress"]
     assert result.outputs["commentStatus"] == "rejected"
-    assert result.outputs["confirmedLabels"] == ["status: in-progress"]
+    assert "status: in-progress" in result.outputs["confirmedLabels"]
+    assert "moonspec" in result.outputs["confirmedLabels"]
     assert result.outputs["summary"] == (
         "GitHub issue status was updated, but the automation comment failed "
         "with HTTP 403. github status 403"
@@ -609,9 +704,10 @@ async def test_update_github_issue_status_uses_pr_url_from_publish_context(
     )
 
     assert result.status == "COMPLETED"
-    assert result.outputs["appliedActions"] == ["patch_issue", "comment"]
+    assert result.outputs["appliedActions"] == ["add_label:status: code-review", "comment"]
     assert result.outputs["sideEffect"]["operation"] == "github.issue.update"
     assert service.token_requests == [
+        "MoonLadderStudios/Tactics",
         "MoonLadderStudios/Tactics",
         "MoonLadderStudios/Tactics",
     ]
@@ -683,9 +779,10 @@ async def test_update_github_issue_status_uses_previous_verification_payload(
     )
 
     assert result.status == "COMPLETED"
-    assert result.outputs["appliedActions"] == ["patch_issue", "comment"]
+    assert result.outputs["appliedActions"] == ["add_label:status: code-review", "comment"]
     assert "mode code_review" in result.outputs["summary"]
     assert service.token_requests == [
+        "MoonLadderStudios/MoonMind",
         "MoonLadderStudios/MoonMind",
         "MoonLadderStudios/MoonMind",
     ]
@@ -717,7 +814,7 @@ async def test_update_github_issue_status_uses_previous_pull_request_output(
     )
 
     assert result.status == "COMPLETED"
-    assert result.outputs["appliedActions"] == ["patch_issue", "comment"]
+    assert result.outputs["appliedActions"] == ["add_label:status: code-review", "comment"]
     assert "mode code_review" in result.outputs["summary"]
     assert result.outputs["sideEffect"]["operation"] == "github.issue.update"
 
