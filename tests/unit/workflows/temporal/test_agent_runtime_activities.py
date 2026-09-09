@@ -6714,6 +6714,10 @@ async def test_agent_runtime_prepare_turn_instructions_adds_retrieval_capability
 ) -> None:
     monkeypatch.setenv("RAG_ENABLED", "1")
     monkeypatch.setenv("GOOGLE_API_KEY", "test-key")
+    # MoonLadderStudios/MoonMind#4115 retired the native Qdrant backend:
+    # omitted QDRANT_ENABLED now defaults to disabled. This test covers the
+    # explicitly-enabled retrieval-hint branch, so opt in directly.
+    monkeypatch.setenv("QDRANT_ENABLED", "1")
     monkeypatch.delenv("MOONMIND_RETRIEVAL_URL", raising=False)
 
     activities = TemporalAgentRuntimeActivities()
