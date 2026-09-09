@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
+import json
+from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
 
@@ -68,6 +70,7 @@ def _ready(head_sha: str, **overrides: Any) -> dict[str, Any]:
         "policyAllowed": True,
         "checksComplete": True,
         "checksPassing": True,
+        "automatedReviewComplete": True,
         "jiraStatusAllowed": True,
     }
     payload.update(overrides)
@@ -252,6 +255,204 @@ def _posted(head_sha: str, comment_id: int = 98765) -> dict[str, Any]:
         "retryable": False,
         "summary": "Requested an automated codex review.",
     }
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("observation", [0, 1])
+@pytest.mark.parametrize("barrier_enabled", [True, False])
+async def test_recorded_pending_review_cannot_release_a_repair(
+    monkeypatch, observation, barrier_enabled
+):
+    fixture = (
+        Path(__file__).resolve().parents[4]
+        / "fixtures/temporal/pr_review_completion/premature_readiness.json"
+    )
+    recorded = json.loads(fixture.read_text())["observations"][observation]["result"]
+    head = recorded["headSha"]
+    payload = _payload()
+    payload["pullRequest"]["headSha"] = head
+    payload["mergeAutomationConfig"]["finishMode"] = "fix_only"
+    payload["activeReviewRequest"] = {
+        "provider": "codex",
+        "headSha": head,
+        "requestKey": "recorded-request",
+        "requestCommentId": 98765,
+        "requestedAt": "2026-08-24T22:15:00Z",
+    }
+    harness = _Harness(
+        monkeypatch,
+        readiness=[recorded, _ready(head, automatedReviewComplete=True)],
+        child_results=[
+            {"status": "success", "mergeAutomationDisposition": "review_clean"}
+        ],
+    )
+    monkeypatch.setattr(
+        merge_automation_module.workflow,
+        "patched",
+        lambda name: (
+            barrier_enabled
+            if name == "merge-automation-active-review-barrier-v1"
+            else True
+        ),
+    )
+    result = await MoonMindMergeAutomationWorkflow().run(payload)
+    assert result["status"] == "review_clean"
+    assert len(harness.child_payloads) == 1
+    assert harness.wait_calls == int(barrier_enabled)
+    assert not harness.request_payloads
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("kind", ["comment", "reaction"])
+async def test_clean_response_crosses_activity_skill_and_workflow_without_another_cycle(
+    monkeypatch, tmp_path, kind
+):
+    import httpx
+    import runpy
+    from moonmind.workflows.temporal.activity_runtime import (
+        TemporalIntegrationActivities,
+    )
+
+    root = Path(__file__).resolve().parents[5]
+    snapshot_module = runpy.run_path(
+        str(root / ".agents/skills/pr-resolver/bin/pr_resolve_snapshot.py")
+    )
+    finalize_module = runpy.run_path(
+        str(root / ".agents/skills/pr-resolver/bin/pr_resolve_finalize.py")
+    )
+    head = "a" * 40
+    request = {
+        "id": 98765,
+        "type": "issue_comment",
+        "user": "owner",
+        "body": "@codex review",
+        "created_at": "2026-08-24T22:15:00Z",
+    }
+    clean = {
+        "id": 56,
+        "type": "issue_comment",
+        "body": "**Codex Review:** Didn't find any major issues. 🚀",
+        "created_at": "2026-08-24T22:20:00Z",
+        "user": {"login": "chatgpt-codex-connector[bot]"},
+    }
+    reaction = {
+        "id": 57,
+        "content": "+1",
+        "created_at": clean["created_at"],
+        "user": clean["user"],
+    }
+    polls = []
+
+    def github_response(req):
+        path = req.url.path
+        if path.endswith("/pulls/350"):
+            data = {"state": "open", "head": {"sha": head}, "mergeable": True}
+        elif path.endswith("/status"):
+            data = {"state": "success", "statuses": []}
+        elif path.endswith("/check-runs"):
+            data = {"check_runs": [{"status": "completed", "conclusion": "success"}]}
+        elif path.endswith("/reviews"):
+            data = []
+        elif path.endswith("/issues/350/reactions"):
+            data = [reaction] if kind == "reaction" and len(polls) > 1 else []
+        elif path.endswith("/reactions"):
+            data = []
+        elif path.endswith("/comments"):
+            data = [clean] if kind == "comment" and len(polls) > 1 else []
+        else:
+            raise AssertionError(path)
+        return httpx.Response(200, json=data)
+
+    transport = httpx.MockTransport(github_response)
+    client_type = httpx.AsyncClient
+    monkeypatch.setattr(
+        "moonmind.workflows.adapters.github_service.httpx.AsyncClient",
+        lambda **kwargs: client_type(transport=transport, **kwargs),
+    )
+    monkeypatch.setenv("GITHUB_TOKEN", "github-token-fixture")
+
+    def finish(child_id, attempt):
+        assert len(polls) == 2  # No runtime is started during the pending poll.
+        comments = [request]
+        if kind == "comment":
+            comments.append({**clean, "user": clean["user"]["login"]})
+        evidence = snapshot_module["build_automated_review_evidence"](
+            provider="codex",
+            require_fresh_review=True,
+            pr_repo="owner/repo",
+            pr_number=350,
+            head_sha=head,
+            comments=comments,
+            reviews=[],
+            head_committed_at=datetime(2026, 8, 24, 22, 10, tzinfo=timezone.utc),
+            reactions_for_request=[],
+            reactions_for_pr=[reaction] if kind == "reaction" else [],
+        )
+        snapshot = {
+            "pr": {
+                "number": 350,
+                "state": "OPEN",
+                "headRefOid": head,
+                "mergeable": True,
+            },
+            "ci": {"isRunning": False, "hasFailures": False, "signalQuality": "ok"},
+            "commentsFetch": {"succeeded": True},
+            "commentsSummary": snapshot_module["summarize_comments"](comments),
+            "automatedReview": evidence,
+        }
+        snapshot_path = tmp_path / "snapshot.json"
+        result_path = tmp_path / "result.json"
+        snapshot_path.write_text(json.dumps(snapshot))
+        monkeypatch.setattr(
+            "sys.argv",
+            [
+                "pr_resolve_finalize.py",
+                "--skip-refresh",
+                "--finish-mode",
+                "fix_only",
+                "--snapshot-path",
+                str(snapshot_path),
+                "--result-path",
+                str(result_path),
+            ],
+        )
+        with pytest.raises(SystemExit) as exit_info:
+            finalize_module["main"]()
+        assert exit_info.value.code == finalize_module["EXIT_CODE_REVIEW_CLEAN"]
+        terminal = json.loads(result_path.read_text())
+        assert terminal["status"] == "review_clean"
+        # UserWorkflow wraps the Skill's terminal status in its execution status.
+        return {
+            "status": "success",
+            "mergeAutomationDisposition": terminal["mergeAutomationDisposition"],
+        }
+
+    harness = _Harness(monkeypatch, readiness=[], child_results=finish)
+    fake_activity = merge_automation_module.workflow.execute_activity
+    activities = TemporalIntegrationActivities()
+
+    async def activity(name, payload, **kwargs):
+        if name == "merge_automation.evaluate_readiness":
+            polls.append(payload)
+            return await activities.merge_automation_evaluate_readiness(payload)
+        return await fake_activity(name, payload, **kwargs)
+
+    monkeypatch.setattr(merge_automation_module.workflow, "execute_activity", activity)
+    payload = _payload()
+    payload["pullRequest"]["headSha"] = head
+    payload["mergeAutomationConfig"]["finishMode"] = "fix_only"
+    payload["activeReviewRequest"] = {
+        "provider": "codex",
+        "headSha": head,
+        "requestKey": "key",
+        "requestCommentId": request["id"],
+        "requestedAt": request["created_at"],
+    }
+    result = await MoonMindMergeAutomationWorkflow().run(payload)
+    assert result["status"] == "review_clean"
+    assert len(harness.child_payloads) == 1
+    assert harness.wait_calls == 1
+    assert harness.request_payloads == []
 
 
 @pytest.mark.asyncio

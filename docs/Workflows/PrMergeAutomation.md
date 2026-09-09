@@ -226,6 +226,23 @@ Without an active request, the automated-review gate may allow the first resolve
 
 A changed head invalidates the pending request and requires the governed head-update/re-entry path. Record per-cycle provider/head, request key/comment/time, completion identity/kind/time, and outcome. Never reuse another cycle's evidence merely because it is recent.
 
+An active request owns the unchanged head until review completion. CI failures,
+merge conflicts, and older actionable comments do not bypass that wait. Review
+evidence is collected independently of these repairable conditions; missing or
+unknown completion evidence keeps the gate closed. The portable Skill gives
+the same wait precedence over remediation. A head changed externally invalidates
+the request and re-enters the gate for the new revision.
+
+Completion includes the provider's submitted review, its request-bound clean
+comment (for Codex, `Codex Review: Didn't find any major issues. 🚀`), or its
+qualified clean-review reaction. Ordinary clean comments and PR-level reactions
+must be newer than the request on its unchanged head. Pending, unknown, blank,
+or dismissed review states, eyes reactions, quoted clean messages, and stale
+responses are not completion. The Skill reads every page of review/reaction
+evidence and refreshes the full comment inventory after observing completion.
+Once that head has a completed review and no remaining blockers, it finishes
+according to finishMode without requesting another review for the same head.
+
 ### 11.3.5 No-progress and termination rules
 
 The Skill emits a signature of head plus sorted outstanding actionable/deferred comment IDs. Repeated signatures, unchanged actionable comments, deferred/unfixable comments, exhausted cycle budget, unprovable review request, ownership/expected-head conflict, and expiry stop through explicit reasons such as review_loop_no_progress, deferred_comments, review_cycle_budget_exhausted, automated_review_request_failed, or expired.

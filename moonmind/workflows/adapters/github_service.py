@@ -18,6 +18,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from pr_resolver_core.review_providers import (
     automated_review_provider_or_raise,
+    is_clean_review_comment,
     normalize_reviewer_login,
 )
 
@@ -115,8 +116,6 @@ class PullRequestSelectorResult(BaseModel):
     selector_type: str = Field(..., alias="selectorType")
     reason_code: str = Field(..., alias="reasonCode")
     summary: str
-
-
 
 
 @dataclass(frozen=True, slots=True)
@@ -1467,7 +1466,13 @@ class GitHubService:
                     }
                 )
 
-            if pr_open is True and pr_merged is not True and merge_conflicted:
+            active_review = bool(review_loop_enabled and review_request)
+            if (
+                pr_open is True
+                and pr_merged is not True
+                and merge_conflicted
+                and not active_review
+            ):
                 return PullRequestReadinessResult(
                     headSha=observed_head_sha,
                     baseSha=observed_base_sha,
@@ -1488,6 +1493,16 @@ class GitHubService:
                     ],
                 )
 
+            if pr_open is True and pr_merged is not True and merge_conflicted:
+                blockers.append(
+                    {
+                        "kind": "merge_conflict",
+                        "summary": "Pull request has merge conflicts.",
+                        "retryable": False,
+                        "source": "github",
+                    }
+                )
+
             if checks_required and pr_merged is not True and not blockers:
                 check_evidence = await self._evaluate_github_checks(
                     client=client,
@@ -1499,7 +1514,10 @@ class GitHubService:
                 checks_passing = check_evidence["passing"]
                 blockers.extend(check_evidence["blockers"])
 
-            if review_required and pr_merged is not True and not blockers:
+            if pr_merged is not True and (
+                (review_required and not blockers)
+                or (active_review and pr_open is True)
+            ):
                 if review_loop_enabled:
                     # The review loop makes every review request explicit and
                     # head-bound: with no active request the gate must open so
@@ -1829,6 +1847,14 @@ class GitHubService:
             ):
                 continue
             submitted_at = _parse_github_timestamp(review.get("submitted_at"))
+            if str(review.get("state") or "").upper() not in {
+                "APPROVED",
+                "COMMENTED",
+                "CHANGES_REQUESTED",
+            }:
+                continue
+            if submitted_at is None:
+                continue
             if requested_at is not None and (
                 submitted_at is None or submitted_at <= requested_at
             ):
@@ -1868,14 +1894,25 @@ class GitHubService:
                 "blockers": [],
             }
 
-        provider_failure = await self._find_request_provider_failure(
+        comment_result = await self._find_request_review_comment(
             client=client,
             repo=repo,
             pr_number=pr_number,
             headers=headers,
             provider=record,
             requested_at=requested_at,
+            head_sha=requested_head_sha,
         )
+        if isinstance(comment_result, dict):
+            return {
+                "complete": True,
+                "completionKind": "issue_comment",
+                "completionId": comment_result.get("id"),
+                "completedAt": comment_result.get("created_at"),
+                "stale": False,
+                "blockers": [],
+            }
+        provider_failure = comment_result
         if provider_failure is not None:
             summary = "Automated review provider failed to process the request."
             if (
@@ -1902,7 +1939,7 @@ class GitHubService:
             }
         return pending
 
-    async def _find_request_provider_failure(
+    async def _find_request_review_comment(
         self,
         *,
         client: httpx.AsyncClient,
@@ -1911,8 +1948,9 @@ class GitHubService:
         headers: dict[str, str],
         provider: Any,
         requested_at: datetime | None,
-    ) -> ProviderFailureEvent | None:
-        """Return a sanitized provider failure posted after this request."""
+        head_sha: str,
+    ) -> dict[str, Any] | ProviderFailureEvent | None:
+        """Read a request's clean response or sanitized provider failure."""
 
         comments_url: str | None = (
             f"https://api.github.com/repos/{repo}/issues/{pr_number}/comments"
@@ -1943,6 +1981,10 @@ class GitHubService:
                         created_at is None or created_at <= requested_at
                     ):
                         continue
+                    if is_clean_review_comment(
+                        provider, comment, requested_at=requested_at, head_sha=head_sha
+                    ):
+                        return comment
                     failure = build_provider_failure_event(
                         reason=comment.get("body")
                     )

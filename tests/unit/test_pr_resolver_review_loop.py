@@ -63,6 +63,7 @@ def _evidence(snapshot_module, **kwargs: Any) -> dict[str, Any]:
         "reviews": [],
         "head_committed_at": HEAD_COMMITTED_AT,
         "reactions_for_request": [],
+        "reactions_for_pr": [],
     }
     params.update(kwargs)
     return build(**params)
@@ -280,6 +281,256 @@ def test_pending_request_waits_instead_of_requesting_again() -> None:
     assert decision.reason_code == "automated_review_wait"
 
 
+@pytest.mark.parametrize("blocker", ["comments", "ci", "conflict"])
+def test_pending_review_precedes_every_remediation(blocker) -> None:
+    snapshot = _snapshot()
+    snapshot["automatedReview"]["requestPending"] = True
+    if blocker == "comments":
+        snapshot["commentsSummary"]["hasActionableComments"] = True
+    elif blocker == "ci":
+        snapshot["ci"]["hasFailures"] = True
+    else:
+        snapshot["pr"]["mergeable"] = False
+    decision = classify_snapshot(normalize_portable_snapshot(snapshot))
+    assert decision.action is ResolverAction.WAIT
+    assert decision.reason_code == "automated_review_wait"
+
+
+@pytest.mark.parametrize("kind", ["issue_comment", "pr_reaction"])
+def test_clean_response_finishes_without_requesting_another_review(
+    snapshot_module, kind
+) -> None:
+    comment = {
+        "id": 56,
+        "type": "issue_comment",
+        "user": "chatgpt-codex-connector[bot]",
+        "body": "**Codex Review:** Didn't find any major issues. 🚀",
+        "created_at": "2026-08-24T22:20:00Z",
+    }
+    params = (
+        {"comments": [_request_comment(), comment]}
+        if kind == "issue_comment"
+        else {
+            "comments": [_request_comment()],
+            "reactions_for_pr": [
+                {
+                    "id": 57,
+                    "content": "+1",
+                    "created_at": "2026-08-24T22:20:00Z",
+                    "user": {"login": "chatgpt-codex-connector[bot]"},
+                }
+            ],
+        }
+    )
+    evidence = _evidence(snapshot_module, **params)
+    assert evidence["freshReviewForHead"] is True
+    assert evidence["requestPending"] is False
+    snapshot = _snapshot(automatedReview=evidence)
+    assert (
+        classify_snapshot(normalize_portable_snapshot(snapshot)).action
+        is ResolverAction.ATTEMPT_MERGE
+    )
+
+
+@pytest.mark.parametrize(
+    "change", ["old", "human", "quoted", "findings", "no_request", "old_head"]
+)
+def test_clean_comment_cannot_complete_an_unrelated_review(
+    snapshot_module, change
+) -> None:
+    comment = {
+        "id": 56,
+        "type": "issue_comment",
+        "user": "chatgpt-codex-connector[bot]",
+        "body": "Codex Review: Didn't find any major issues. 🚀",
+        "created_at": "2026-08-24T22:20:00Z",
+    }
+    request = _request_comment()
+    if change == "old":
+        comment["created_at"] = "2026-08-24T22:14:00Z"
+    elif change == "human":
+        comment["user"] = "human"
+    elif change == "quoted":
+        comment["body"] = "> " + comment["body"]
+    elif change == "findings":
+        comment["body"] += "\n\n[P1] Fix the authorization bug."
+    elif change == "old_head":
+        comment["commit_id"] = OLD_HEAD
+    comments = [comment] if change == "no_request" else [request, comment]
+    assert _evidence(snapshot_module, comments=comments)["freshReviewForHead"] is False
+
+
+@pytest.mark.parametrize("state", ["PENDING", "DISMISSED", "", "FUTURE_STATE"])
+def test_unsubmitted_or_unknown_review_is_not_completion(snapshot_module, state):
+    evidence = _evidence(
+        snapshot_module,
+        comments=[_request_comment()],
+        reviews=[
+            {
+                "id": 1,
+                "state": state,
+                "commit_id": HEAD,
+                "submitted_at": "2026-08-24T22:19:00Z",
+                "user": {"login": "chatgpt-codex-connector"},
+            }
+        ],
+    )
+    assert evidence["freshReviewForHead"] is False
+    assert evidence["requestPending"] is True
+
+
+@pytest.mark.parametrize(
+    "reaction",
+    [
+        {
+            "content": "eyes",
+            "created_at": "2026-08-24T22:20:00Z",
+            "user": {"login": "chatgpt-codex-connector"},
+        },
+        {
+            "content": "+1",
+            "created_at": "2026-08-24T22:14:00Z",
+            "user": {"login": "chatgpt-codex-connector"},
+        },
+        {
+            "content": "+1",
+            "created_at": "2026-08-24T22:20:00Z",
+            "user": {"login": "human"},
+        },
+    ],
+)
+def test_pr_reaction_requires_provider_clean_completion_after_request(
+    snapshot_module, reaction
+):
+    evidence = _evidence(
+        snapshot_module, comments=[_request_comment()], reactions_for_pr=[reaction]
+    )
+    assert evidence["freshReviewForHead"] is False
+
+
+@pytest.mark.parametrize(
+    "fetcher,kwargs",
+    [
+        ("_fetch_pull_request_reviews", {"pr_number": 350}),
+        ("_fetch_comment_reactions", {"comment_id": 98765}),
+        ("_fetch_pr_reactions", {"pr_number": 350}),
+    ],
+)
+def test_portable_review_fetch_reads_all_pages(
+    snapshot_module, monkeypatch, fetcher, kwargs
+):
+    fn = snapshot_module[fetcher]
+    calls = []
+
+    def gh(cmd):
+        calls.append(cmd)
+        return [[{"id": n} for n in range(100)], [{"id": 101}]]
+
+    monkeypatch.setitem(fn.__globals__, "run_command_optional", gh)
+    records = fn(pr_repo="owner/repo", **kwargs)
+    assert records[-1] == {"id": 101}
+    assert len(records) == 101
+    assert "--paginate" in calls[0] and "--slurp" in calls[0]
+
+
+def test_historical_resolver_keeps_recorded_remediation_order():
+    from moonmind.workflows.temporal.workflows.pr_resolver import (
+        classify_pr_resolver_snapshot,
+    )
+
+    result = classify_pr_resolver_snapshot(
+        {
+            "headSha": HEAD,
+            "checksComplete": True,
+            "checksPassing": False,
+            "blockers": [{"kind": "checks_failed"}, {"kind": "automated_review_wait"}],
+        }
+    )
+    assert result["classification"] == "ci_failures"
+
+
+@pytest.mark.parametrize("inventory_available", [True, False])
+def test_snapshot_collects_findings_after_review_completion(
+    snapshot_module, monkeypatch, tmp_path, inventory_available
+):
+    main = snapshot_module["main"]
+    scope = main.__globals__
+    snapshot = _snapshot()
+    checks = [{"name": "unit", "status": "COMPLETED", "conclusion": "SUCCESS"}]
+    pr = {
+        **snapshot["pr"],
+        "url": "https://github.com/owner/repo/pull/350",
+        "statusCheckRollup": checks,
+    }
+    monkeypatch.setitem(scope, "fetch_pr_data", lambda _selector: (pr, "350", []))
+    monkeypatch.setitem(scope, "_fetch_required_status_checks", lambda **_kwargs: [])
+    monkeypatch.setitem(scope, "_fetch_commit_check_runs", lambda **_kwargs: checks)
+    monkeypatch.setitem(scope, "_fetch_previous_commit_sha", lambda **_kwargs: None)
+    monkeypatch.setitem(
+        scope, "_fetch_head_commit_timestamp", lambda **_kwargs: HEAD_COMMITTED_AT
+    )
+    monkeypatch.setitem(
+        scope,
+        "_fetch_pull_request_reviews",
+        lambda **_kwargs: [
+            {
+                "id": 50,
+                "state": "COMMENTED",
+                "commit_id": HEAD,
+                "submitted_at": "2026-08-24T22:19:00Z",
+                "user": {"login": "chatgpt-codex-connector"},
+            }
+        ],
+    )
+    reads = []
+
+    def read_comments(*_args):
+        reads.append(True)
+        if len(reads) == 1:
+            return {"comments": [_request_comment()]}
+        if not inventory_available:
+            return {}
+        return {
+            "comments": [
+                _request_comment(),
+                {
+                    "id": 51,
+                    "type": "review_comment",
+                    "user": "chatgpt-codex-connector[bot]",
+                    "body": "[P1] Fix the authorization check",
+                    "created_at": "2026-08-24T22:19:01Z",
+                },
+            ]
+        }
+
+    monkeypatch.setitem(scope, "run_command", read_comments)
+    path = tmp_path / "snapshot.json"
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(
+        "sys.argv",
+        [
+            "pr_resolve_snapshot.py",
+            "--pr",
+            "350",
+            "--review-provider",
+            "codex",
+            "--require-fresh-review",
+            "--snapshot-path",
+            str(path),
+        ],
+    )
+    main()
+    captured = json.loads(path.read_text())
+    assert len(reads) == 2
+    assert captured["automatedReview"]["freshReviewForHead"] is True
+    decision = classify_snapshot(normalize_portable_snapshot(captured))
+    if inventory_available:
+        assert captured["commentsSummary"]["actionableCommentIds"] == [51]
+        assert decision.remediation_skill == "fix-comments"
+    else:
+        assert decision.reason_code == "comments_unavailable"
+
+
 def test_fresh_review_and_clean_state_merges() -> None:
     snapshot = _snapshot()
     snapshot["automatedReview"]["freshReviewForHead"] = True
@@ -436,4 +687,3 @@ def test_finalize_writes_a_request_review_result(tmp_path, monkeypatch) -> None:
     assert payload["mergeAutomationDisposition"] == "request_review"
     assert payload["gatedContinuation"]["action"] == "request_review"
     assert payload["gatedContinuation"]["provider"] == "codex"
-
