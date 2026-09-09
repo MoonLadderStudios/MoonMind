@@ -60,6 +60,7 @@ import ipaddress
 import os
 import re
 import secrets
+import time
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Mapping
@@ -641,13 +642,22 @@ def resolve_session_secret(
         fd = os.open(str(path), os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
     except FileExistsError:
         # A concurrent replica won the race; use its durable generation.
-        try:
-            stored = path.read_bytes()
-        except OSError as exc:
-            raise AuthModeError(
-                f"Concurrent session-key bootstrap lost the creation race and "
-                f"could not read the winner's key at {path}: {exc}."
-            ) from exc
+        # The winner creates the file with O_EXCL before writing its
+        # contents, so a loser may briefly observe an empty file. Poll
+        # briefly for the winner's complete key, then fail closed.
+        stored: bytes | None = None
+        for _ in range(50):
+            try:
+                stored = path.read_bytes()
+            except OSError as exc:
+                raise AuthModeError(
+                    f"Concurrent session-key bootstrap lost the creation race and "
+                    f"could not read the winner's key at {path}: {exc}."
+                ) from exc
+            if _durable_key_bytes(stored) is not None:
+                break
+            time.sleep(0.005)
+        assert stored is not None
         candidate = _durable_key_bytes(stored)
         if candidate is None:
             raise AuthModeError(
