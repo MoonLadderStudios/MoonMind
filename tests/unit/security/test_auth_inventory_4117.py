@@ -158,13 +158,18 @@ def test_enabled_mode_service_principal_passes_owner_checks(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_worker_auth_rejects_legacy_token_with_gone(monkeypatch):
+    # #4126 replaced the bare 410 placeholder with scoped verification: a
+    # legacy unstructured token is rejected as 401 auth_invalid through the
+    # preservation owner (no indefinite old-JWT acceptance, no broadened
+    # delegated authority). Pre-release removal in the same cohesive change.
     monkeypatch.setattr(settings.oidc, "AUTH_PROVIDER", "oidc")
+    monkeypatch.setenv("MOONMIND_WORKER_TOKEN_SECRET", "0" * 64)
     with pytest.raises(HTTPException) as exc_info:
         await worker_auth_module._require_worker_auth(
             worker_token="legacy-token", user=_user(OWNER_PRINCIPAL)
         )
-    assert exc_info.value.status_code == 410
-    assert exc_info.value.detail["code"] == "worker_token_deprecated"
+    assert exc_info.value.status_code == 401
+    assert exc_info.value.detail["code"] == "auth_invalid"
 
 
 @pytest.mark.asyncio
