@@ -1,6 +1,9 @@
 # Manifest System Removal Plan
 
-Status: Proposed implementation plan. This document does not implement removal, change existing issues, authorize a deployment, or authorize deletion of operator data.
+**Document Class:** Imperative working document
+**Status:** Active
+**Canonical Target:** [Workflow Type Catalog and Lifecycle](../Temporal/WorkflowTypeCatalogAndLifecycle.md), [LlamaIndex Manifest System](../Rag/LlamaIndexManifestSystem.md), [Manifest Ingest Design](../Rag/ManifestIngestDesign.md), [Manifests Page](../UI/ManifestsPage.md), and the owning system architecture/product/visibility docs that still describe Manifest as supported (see §1). This plan is not actionable until those canonical targets authorize retirement; per the canonical-vs-canonical precedence ladder this working document never governs desired state itself.
+**Delete/Archive Trigger:** Delete or archive when the Manifest removal implementation and bounded cutover are complete and the canonical targets above record the retired state.
 
 Reviewed: September 9, 2026. Source baseline: `7bd159dafb44770278e8c5563d47667de6e7c491` on `main`. Repository searches used the immediately preceding indexed revision and targeted source reads were pinned to the baseline. Re-audit callers and overlapping PRs at the implementation revision.
 
@@ -9,6 +12,8 @@ This is temporary execution scaffolding under `docs/tmp/`, as required by [AGENT
 ## 1. Decision and target state
 
 Remove the complete native **Manifest product**, including its vector-free successor. MoonMind no longer owns a declarative source-ingestion, transformation, evaluation, or Manifest-to-workflow subsystem. This is feature retirement, not a rename, optional integration, external endpoint for the same backend, or another generic pipeline framework.
+
+This removal decision is proposed here and is authorized only by the canonical targets named in the header. Active canonical documents such as `docs/Temporal/WorkflowTypeCatalogAndLifecycle.md` (§11.2 `MoonMind.ManifestIngest` lifecycle), `docs/Rag/LlamaIndexManifestSystem.md`, `docs/Rag/ManifestIngestDesign.md`, and `docs/UI/ManifestsPage.md` still define Manifest as supported; the implementation must update those owning canonical desired-state documents first, and this plan must not be treated as actionable until they do. This document does not implement removal, change existing issues, authorize a deployment, or authorize deletion of operator data.
 
 The September 7 Qdrant removal epic deliberately preserved generic ManifestIngest. This decision supersedes that preservation requirement. It does not supersede the epic's requirements to preserve ordinary orchestration, authorized context, durable evidence, or operator-controlled data. [S1]
 
@@ -56,7 +61,7 @@ Paths below are source-backed starting points, not a claim that search returned 
 | Registry/API | `api_service/api/routers/manifests.py`, `api_service/services/manifests_service.py`, `manifest_sync_service.py`, Manifest models in `api_service/api/schemas.py`, and router imports | Generic execution and artifact APIs. Remove only Manifest branches from shared routers |
 | Temporal implementation | `moonmind/workflows/temporal/workflows/manifest_ingest.py`, Manifest-only helpers in `temporal/manifest_ingest.py`, `TemporalManifestActivities` and Manifest bindings in `activity_runtime.py` | Normal UserWorkflow execution, child workflow primitives, artifact Activities, and runtime workers |
 | Shared orchestration | Manifest entries/imports in `workflow_registry.py`, `worker_runtime.py`, `activity_catalog.py`, `temporal/__init__.py`, and Manifest branches in `service.py` and shared execution schemas | Supported product/operator workflows, existing status taxonomy, authorization, retry/cancel, and generic historical metadata |
-| Dashboard | `frontend/src/entrypoints/manifests.tsx`; registrations in `dashboard-app.tsx`, `frontend/src/lib/dashboardRoutes.ts`, and `api_service/api/routers/workflow_console.py`; related boot payloads, capabilities, filters, controls, styles, and tests | General workflow list/detail and artifact viewing. Keep unrelated dashboard pages and shared UI components |
+| Dashboard | `frontend/src/entrypoints/manifests.tsx`; registrations in `dashboard-app.tsx`, `frontend/src/lib/dashboardRoutes.ts`, and `api_service/api/routers/workflow_console.py` including the legacy `/manifests/new` redirect handler (`task_manifest_submit_route`), plus `/manifests` and `/manifests/{name}`; related boot payloads, capabilities, filters, controls, styles, and tests | General workflow list/detail and artifact viewing. Keep unrelated dashboard pages and shared UI components |
 | CLI/configuration | Manifest commands and imports in `moonmind/cli.py`; `TEMPORAL_MANIFEST_CONTINUE_AS_NEW_PHASE_THRESHOLD` in settings and constructor callers | Non-Manifest CLI groups and UserWorkflow continuation controls |
 | Scheduling | Manifest target support, saved targets, and the `manifest_run` conversion in `scripts/migrate_to_temporal_schedules.py` | Scheduling of supported ordinary workflows. Do not silently convert retired schedules into ordinary runs |
 | Persistence | `ManifestRecord` and its `manifest` table after preservation and migration gates; Manifest-only fields in shared execution records only after a separate historical-read decision | Shared execution records, immutable payloads, ownership, workflow/run IDs, lineage, timestamps, artifact links, and recovery evidence |
@@ -76,7 +81,7 @@ Inventory and change every entry that can create Manifest work: the dedicated AP
 
 Use the existing unsupported-workflow/capability validation boundary. During cutover, reject explicit new Manifest intent before registry mutation, manifest processing, reader/network access, artifact creation, Temporal start, host launch, or child work. Do not strip the requested feature and report success as an ordinary workflow. Keep generic artifact upload usable for arbitrary user files.
 
-Remove `/manifests` and `/manifests/{name}` from both server and client route registries, navigation, lazy page imports, and page/boot types. Remove Manifest-specific controls from shared workflow detail and creation surfaces. Retire `/api/manifests` and its state callback in the coordinated release. Ordinary unsupported-route behavior is sufficient in the final application. A temporary retirement response is justified only by an identified cutover consumer, not permanent compatibility policy.
+Remove `/manifests`, `/manifests/new` (the legacy `task_manifest_submit_route` 307 redirect to `/manifests` in `api_service/api/routers/workflow_console.py`), and `/manifests/{name}` from both server and client route registries, navigation, lazy page imports, and page/boot types. Remove Manifest-specific controls from shared workflow detail and creation surfaces. Retire `/api/manifests` and its state callback in the coordinated release. Ordinary unsupported-route behavior is sufficient in the final application. A temporary retirement response is justified only by an identified cutover consumer, not permanent compatibility policy. Leaving `/manifests/new` registered while `/manifests` is removed would keep a Manifest UI route in OpenAPI that redirects users to a removed page, contradicting the final unsupported-route behavior and the no-Manifest-UI-route acceptance criteria.
 
 Inspect saved drafts and schedules for both workflow-type and legacy target representations. Preserve a private export before changing persisted definitions. Disable retired producers with a clear reason and no automatic reactivation. Old browser state and explicit API payloads must fail visibly rather than discard required semantics. Do not silently rewrite a Manifest schedule as UserWorkflow.
 
@@ -86,7 +91,7 @@ Acceptance: every new-write/trigger path rejects retired work without side effec
 
 Start this work alongside MR1, before deleting handlers or enum values. Reuse existing Temporal, artifact, deployment, and Qdrant-cutover owners. Do not create a new migration service, coordinator, or permanent retirement framework.
 
-Inventory each deployment separately. Include all three independently operated MoonMind deployments and every affected namespace/task queue actually found. Do not infer shared state or successful drainage from another device. Repository review cannot establish these live counts.
+Inventory each deployment separately. Include all three independently operated MoonMind deployments and every affected namespace/task queue actually found. Do not infer shared state or successful drainage from another device. Repository review cannot establish these live counts. Before recreating the API on any deployment, record that deployment's existing published bindings and operator URLs so the post-cutover operator-URL verification gate (MR6) can check the same paths.
 
 The private inventory must cover active parents, sleeping/scheduled executions, pending and retryable Activities, children, outstanding controls, recurring producers, stored definitions, registry rows, and evidence references. Identify both persisted Manifest input contracts and any older stored job payloads actually present. Missing inventory is unknown, not zero.
 
@@ -96,7 +101,7 @@ If live counts are zero, skip temporary drain machinery and ship the cohesive re
 
 Preserve the existing compilation/node history fixtures for the cutover rehearsal. Test either safe compatibility at the transition or explicit old-release drain. Once the workflow is removed, do not claim the new release replays it; retain the pinned old release and fixtures for the agreed recovery window instead of shipping the class indefinitely.
 
-For closed executions, retain authorized generic list/detail and artifact reads from stored immutable identity/evidence. Make these reads independent of launchability. Remove rerun, retry-node, update, resume, and reset affordances that would recreate the retired feature. A historical response decoder must not grant system ownership or make arbitrary unknown workflow types executable.
+For closed executions, retain authorized generic list/detail and artifact reads from stored immutable identity/evidence. Make these reads independent of launchability. Historical reads must tolerate degraded status values (blank, unknown, or newly introduced `mm_state`/lifecycle values) with a safe read-only generic response. Remove rerun, retry-node, update, resume, and reset affordances that would recreate the retired feature. A historical response decoder must not grant system ownership or make arbitrary unknown workflow types executable.
 
 Acceptance: no unowned outstanding Manifest work, no silently altered history, old evidence remains readable, and no new-release execution path exists for a retired type.
 
@@ -156,17 +161,18 @@ Existing tests such as `tests/unit/api/routers/test_manifests.py`, `tests/unit/a
 | Admission | Dedicated and shared submissions, CLI, stale drafts, schedules/triggers, rerun/reset/resume, and integration inputs cannot start retired work or silently become normal workflows |
 | No effects on rejection | No reader/network call, registry write, compile, host launch, paid execution, or child workflow occurs because of a rejected Manifest request |
 | Fleet removal | Actual production worker composition and catalogs contain no Manifest workflow or current/legacy Manifest Activity after the cutover gate |
-| Historical safety | Both old entry contracts are covered by the selected replay/drain rehearsal; old execution identity and authorized artifacts survive the database upgrade and remain read-only |
+| Historical safety | Both old entry contracts are covered by the selected replay/drain rehearsal; old execution identity and authorized artifacts survive the database upgrade and remain read-only. Add a workflow-boundary regression for degraded status values: an old execution carrying a blank, unknown, or newly introduced `mm_state`/lifecycle value through the changed projection and status-normalization path (after deleting Manifest registration and `build_manifest_status_snapshot`) must still produce a safe read-only generic response rather than fail serialization or disappear. Cover this alongside the historical decoder tests |
 | Ordinary workflow regression | Real UI/API submission through UserWorkflow, supported runtime launch, explicit input/context, chat, artifacts, terminal evidence, retry/cancel, and supported recovery continue to work |
 | Shared primitives | Ordinary recurring schedules, dependency/child execution, Skill snapshots, saved-work/recovery manifests, and artifact retention continue without Manifest imports |
 | Isolation | Old records, exported YAML, artifact refs, and failed access never acquire broader owner/system authority or weaken existing access controls |
 | Defaults and packaging | Fresh default startup and upgraded startup require no Manifest/vector settings; test both omitted/default and explicit equivalent supported inputs; clean dependencies and images pass |
 | UI and generated contracts | Removed routes/chunks/controls are absent, generic history still renders, and regenerated OpenAPI/TypeScript/catalog outputs agree with production behavior |
+| Deployed operator-URL verification | For every one of the three deployments, record the existing published API bindings and operator URLs before recreating the API, then verify `/healthz`, the dashboard and its assets, and a read-only API request through the actual operator hostname and port afterward, including `python tools/verify_deployed_ui_assets.py --base-url <operator-url>` for each deployment. Container health and container-local or host-local `localhost` checks are not proof that a LAN/VPN/proxy operator path works; a stale image or broken operator path fails this gate even when source and container-level gates pass |
 | No reintroduction | Targeted ownership/import/registration checks reject the retired product, while legitimate recovery/Skill/Vite manifests and arbitrary user files remain allowed |
 
 Test every runtime/harness configuration currently supported by the changed path, including the applicable Codex, Claude Code, and OpenCode modes. Preserve truthful support status; this project does not promise new support for combinations that are not yet qualified.
 
-Publish exact test commands/results and clearly separate hermetic evidence from live deployment verification. A repository test fixture cannot certify drainage on any of the three deployments.
+Publish exact test commands/results and clearly separate hermetic evidence from live deployment verification. A repository test fixture cannot certify drainage on any of the three deployments. The cutover gate requires the per-deployment operator-URL verification above; hermetic source, container-level, and `localhost` evidence alone do not satisfy it.
 
 ## 5. Sequence and release boundaries
 
