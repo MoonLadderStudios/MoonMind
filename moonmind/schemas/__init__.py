@@ -250,16 +250,12 @@ from .manifest_models import (
 )
 from .manifest_v0_models import (
     DataSourceConfig,
-    EmbeddingsConfig,
     EvaluationConfig,
-    IndexConfig,
     ManifestMetadata,
     ManifestV0,
-    RetrieverConfig,
     RunConfig,
     SecurityConfig,
     TransformsConfig,
-    VectorStoreConfig,
     export_v0_schema,
 )
 from .temporal_models import (
@@ -371,12 +367,8 @@ __all__ = [
     "export_schema",
     "ManifestV0",
     "ManifestMetadata",
-    "EmbeddingsConfig",
-    "VectorStoreConfig",
     "DataSourceConfig",
     "TransformsConfig",
-    "IndexConfig",
-    "RetrieverConfig",
     "EvaluationConfig",
     "RunConfig",
     "SecurityConfig",

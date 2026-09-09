@@ -52,7 +52,6 @@ class ContextRetrievalService:
         self._telemetry = VectorTelemetry(
             run_id=settings.run_id, job_id=settings.job_id
         )
-        self._verified_collections: set[str] = set()
         self._embedding = embedding_client
         self._qdrant = qdrant_client or RagQdrantClient(
             host=settings.qdrant_host,
@@ -60,11 +59,6 @@ class ContextRetrievalService:
             url=settings.qdrant_url,
             api_key=self._env.get("QDRANT_API_KEY"),
             collection=settings.vector_collection,
-            overlay_mode=settings.overlay_mode,
-            overlay_ttl_hours=settings.overlay_ttl_hours,
-            overlay_chunk_chars=settings.overlay_chunk_chars,
-            overlay_chunk_overlap=settings.overlay_chunk_overlap,
-            embedding_dimensions=settings.embedding_dimensions,
         )
         self._planning_adapter = planning_adapter
 
@@ -95,9 +89,9 @@ class ContextRetrievalService:
         query: str,
         filters: Mapping[str, Any],
         top_k: int,
-        overlay_policy: str,
-        budgets: Mapping[str, Any],
-        transport: str,
+        overlay_policy: str = "skip",
+        budgets: Mapping[str, Any] | None = None,
+        transport: str = "direct",
         collections: Sequence[str] | None = None,
         initiation_mode: str = "automatic",
         planning_ref: str | None = None,
@@ -107,7 +101,25 @@ class ContextRetrievalService:
         embedding_timeout_ms: int | None = None,
         search_timeout_ms: int | None = None,
     ) -> ContextPack:
-        normalized_budgets = self._normalize_budgets(budgets)
+        # MoonLadderStudios/MoonMind#4108: run overlays retired. Requests
+        # for overlay retrieval fail fast instead of silently downgrading
+        # to canonical-only retrieval: callers asking for workspace context
+        # must not succeed with that context omitted.
+        if overlay_policy != "skip":
+            raise ValueError(
+                "overlay_policy='include' was retired in "
+                "MoonLadderStudios/MoonMind#4108: MoonMind ships no run "
+                "overlay collection. Remove the overlay request or pass "
+                "overlay_policy='skip' for canonical-only retrieval."
+            )
+        if overlay_max_age_seconds is not None or stale_overlay_allowed:
+            raise ValueError(
+                "overlay freshness options were retired in "
+                "MoonLadderStudios/MoonMind#4108: there is no overlay "
+                "collection to bound. Remove overlay_max_age_seconds / "
+                "stale_overlay_allowed from the retrieval request."
+            )
+        normalized_budgets = self._normalize_budgets(budgets or {})
         self._enforce_token_budget(query=query, top_k=top_k, budgets=normalized_budgets)
         started = time.perf_counter()
         target_collections = self._settings.resolve_collections(collections)
@@ -122,10 +134,6 @@ class ContextRetrievalService:
                 initiation_mode=initiation_mode,
                 planning_ref=planning_ref,
             )
-        for collection_name in target_collections:
-            if collection_name not in self._verified_collections:
-                self._qdrant.ensure_collection_ready(collection_name)
-                self._verified_collections.add(collection_name)
         embedding_started = time.perf_counter()
         with self._telemetry.timer("embedding"):
             vector = self.embedding_client.embed(query)
@@ -134,25 +142,6 @@ class ContextRetrievalService:
             started=embedding_started,
             timeout_ms=embedding_timeout_ms,
         )
-        # The caller's immutable run identity wins over the environment-derived
-        # one: the API process has no RUN_ID, so a session capability would
-        # otherwise silently omit its run overlay.
-        effective_run_id = run_id or self._settings.run_id
-        overlay_collection = None
-        if (
-            overlay_policy == "include"
-            and effective_run_id
-            and self._settings.overlay_mode == "collection"
-        ):
-            overlay_collection = self._settings.overlay_collection_name(
-                effective_run_id
-            )
-            if not self._overlay_is_fresh(
-                overlay_collection,
-                max_age_seconds=overlay_max_age_seconds,
-                stale_overlay_allowed=stale_overlay_allowed,
-            ):
-                overlay_collection = None
         search_started = time.perf_counter()
         with self._telemetry.timer("search"):
             result = self._qdrant.search(
@@ -160,8 +149,6 @@ class ContextRetrievalService:
                 filters=filters,
                 top_k=top_k,
                 collections=target_collections,
-                overlay_policy=overlay_policy,
-                overlay_collection=overlay_collection,
                 trust_overrides=None,
             )
         self._enforce_stage_deadline(
@@ -342,9 +329,7 @@ class ContextRetrievalService:
         token_budget = budgets.get("tokens")
         if not token_budget:
             return
-        estimated = _estimate_tokens(query) + (
-            top_k * max(1, self._settings.overlay_chunk_chars // 4)
-        )
+        estimated = _estimate_tokens(query) + top_k * 300
         if estimated > token_budget:
             raise RetrievalBudgetExceededError(
                 "Token budget exceeded before retrieval "
@@ -367,34 +352,6 @@ class ContextRetrievalService:
                 f"({round(elapsed_ms, 2)}ms>{timeout_ms}ms).",
                 budget_type=f"{stage}_timeout_ms",
             )
-
-    def _overlay_is_fresh(
-        self,
-        overlay_collection: str,
-        *,
-        max_age_seconds: int | None,
-        stale_overlay_allowed: bool,
-    ) -> bool:
-        """Apply the caller's overlay freshness policy before including it.
-
-        A missing or unreadable overlay is treated as stale so an ``include``
-        request degrades to canonical collections instead of failing.
-        """
-        if stale_overlay_allowed or not max_age_seconds:
-            return True
-        try:
-            freshness_at = self._qdrant.collection_freshness_at(overlay_collection)
-        except Exception:  # pragma: no cover - defensive runtime probe
-            logger.warning(
-                "Overlay freshness probe failed for %s; excluding overlay.",
-                overlay_collection,
-            )
-            return False
-        if freshness_at is None:
-            return False
-        return (
-            datetime.now(timezone.utc) - freshness_at
-        ).total_seconds() <= max_age_seconds
 
     @staticmethod
     def _enforce_latency_budget(

@@ -826,11 +826,15 @@ class CodexExecHandler:
 
     @staticmethod
     def _resolve_rag_overlay_policy() -> str:
+        # MoonLadderStudios/MoonMind#4108: run overlays retired. The only
+        # supported policy is canonical-only retrieval; an explicit
+        # "include" request fails fast in ContextRetrievalService.retrieve
+        # instead of succeeding with workspace context silently omitted.
         policy = (
             str(
                 os.environ.get(
                     "MOONMIND_RAG_OVERLAY_POLICY",
-                    os.environ.get("RAG_OVERLAY_POLICY", "include"),
+                    os.environ.get("RAG_OVERLAY_POLICY", "skip"),
                 )
             )
             .strip()
@@ -838,7 +842,7 @@ class CodexExecHandler:
         )
         if policy in {"include", "skip"}:
             return policy
-        return "include"
+        return "skip"
 
     @staticmethod
     def _resolve_rag_budgets() -> dict[str, int]:

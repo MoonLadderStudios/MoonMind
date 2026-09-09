@@ -42,37 +42,17 @@ MINIMAL_MANIFEST = textwrap.dedent("""\
     version: "v0"
     metadata:
       name: "adapter-test"
-    embeddings:
-      provider: "openai"
-      model: "text-embedding-3-large"
-    vectorStore:
-      type: "qdrant"
-      indexName: "test"
     dataSources:
       - id: "local"
         type: "SimpleDirectoryReader"
         params:
           inputDir: "{input_dir}"
-    indices:
-      - id: "idx1"
-        type: "VectorStoreIndex"
-        sources: ["local"]
-    retrievers:
-      - id: "ret1"
-        type: "Vector"
-        indices: ["idx1"]
 """)
 
 SPLITTER_MANIFEST = textwrap.dedent("""\
     version: "v0"
     metadata:
       name: "adapter-test"
-    embeddings:
-      provider: "openai"
-      model: "text-embedding-3-large"
-    vectorStore:
-      type: "qdrant"
-      indexName: "test"
     dataSources:
       - id: "local"
         type: "SimpleDirectoryReader"
@@ -83,14 +63,6 @@ SPLITTER_MANIFEST = textwrap.dedent("""\
         type: TokenTextSplitter
         chunkSize: {chunk_size}
         chunkOverlap: 0
-    indices:
-      - id: "idx1"
-        type: "VectorStoreIndex"
-        sources: ["local"]
-    retrievers:
-      - id: "ret1"
-        type: "Vector"
-        indices: ["idx1"]
 """)
 
 @pytest.fixture(autouse=True)
@@ -345,18 +317,6 @@ class CustomTestAdapter:
     def state(self) -> Dict[str, Any]:
         return {"custom_cursor": "v1"}
 
-
-class RecordingIndexWriter:
-    def __init__(self) -> None:
-        self.deleted_batches: list[list[str]] = []
-        self.upsert_batches: list[list[object]] = []
-
-    def delete_points(self, point_ids):
-        self.deleted_batches.append(list(point_ids))
-
-    def upsert_chunks(self, chunks):
-        self.upsert_batches.append(list(chunks))
-
 class TestExtensibility:
     def test_register_custom_adapter(self):
         register_adapter("CustomReader", CustomTestAdapter)
@@ -370,24 +330,11 @@ class TestExtensibility:
             version: "v0"
             metadata:
               name: "custom-test"
-            embeddings:
-              provider: "openai"
-              model: "text-embedding-3-large"
-            vectorStore:
-              type: "qdrant"
-              indexName: "test"
             dataSources:
               - id: "custom1"
                 type: "CustomReader"
                 params:
                   foo: "bar"
-            indices:
-              - id: "idx1"
-                sources: ["custom1"]
-            retrievers:
-              - id: "ret1"
-                type: "Vector"
-                indices: ["idx1"]
         """)
         result = validate_manifest_string(manifest_yaml)
         assert result.valid
@@ -404,24 +351,11 @@ class TestExtensibility:
             version: "v0"
             metadata:
               name: "custom-run"
-            embeddings:
-              provider: "openai"
-              model: "text-embedding-3-large"
-            vectorStore:
-              type: "qdrant"
-              indexName: "test"
             dataSources:
               - id: "c1"
                 type: "CustomReader"
-            indices:
-              - id: "idx1"
-                sources: ["c1"]
-            retrievers:
-              - id: "ret1"
-                type: "Vector"
-                indices: ["idx1"]
         """))
-        pipeline = ManifestPipeline(manifest, state_path=tmp_path / "state.json")
+        pipeline = ManifestPipeline(manifest)
         result = pipeline.run()
         assert result.total_docs == 1
         assert result.sources[0].doc_count == 1
@@ -436,22 +370,9 @@ class TestPiiRedaction:
             version: "v0"
             metadata:
               name: "pii-test"
-            embeddings:
-              provider: "openai"
-              model: "text-embedding-3-large"
-            vectorStore:
-              type: "qdrant"
-              indexName: "test"
             dataSources:
               - id: "ds1"
                 type: "SimpleDirectoryReader"
-            indices:
-              - id: "idx1"
-                sources: ["ds1"]
-            retrievers:
-              - id: "ret1"
-                type: "Vector"
-                indices: ["idx1"]
             security:
               piiRedaction: true
               allowlistMetadata: ["source", "title"]
@@ -467,22 +388,9 @@ class TestPiiRedaction:
             version: "v0"
             metadata:
               name: "no-security"
-            embeddings:
-              provider: "openai"
-              model: "text-embedding-3-large"
-            vectorStore:
-              type: "qdrant"
-              indexName: "test"
             dataSources:
               - id: "ds1"
                 type: "SimpleDirectoryReader"
-            indices:
-              - id: "idx1"
-                sources: ["ds1"]
-            retrievers:
-              - id: "ret1"
-                type: "Vector"
-                indices: ["idx1"]
         """)
         result = validate_manifest_string(yaml_str)
         assert result.valid
@@ -511,32 +419,91 @@ class TestPipelineLocalAdapter:
         manifest = ManifestV0.from_yaml_string(
             MINIMAL_MANIFEST.format(input_dir=str(data_dir))
         )
-        pipeline = ManifestPipeline(manifest, state_path=tmp_path / "state.json")
+        pipeline = ManifestPipeline(manifest)
         result = pipeline.run()
         assert not result.dry_run
         assert result.total_docs == 2
         assert result.sources[0].doc_count == 2
-        assert result.sources[0].indexed_doc_count == 2
+        assert result.sources[0].doc_count == 2
+        # No declared transforms: fetch-only result carries no transform claims.
+        assert result.sources[0].transform_applied is False
+        assert result.sources[0].output_chunks == 0
+        assert "transforms applied" not in result.to_dict()["outcome"]
 
-    def test_run_skips_unchanged_local_source(self, tmp_path):
+    def test_run_executes_declared_splitter_transform(self, tmp_path):
+        # MoonLadderStudios/MoonMind#4108 follow-up: declared transforms
+        # execute in the fetch pipeline instead of being silently ignored.
+        data_dir = tmp_path / "docs"
+        data_dir.mkdir()
+        (data_dir / "a.txt").write_text("alpha beta gamma")
+        manifest = ManifestV0.from_yaml_string(
+            SPLITTER_MANIFEST.format(input_dir=str(data_dir), chunk_size=8)
+        )
+        result = ManifestPipeline(manifest).run()
+        src = result.sources[0]
+        assert src.doc_count == 1
+        assert src.transform_applied is True
+        # "alpha beta gamma" (16 chars) in windows of 8 with no overlap.
+        assert src.output_chunks == 2
+        payload = result.to_dict()
+        assert payload["sources"][0]["transform_applied"] is True
+        assert payload["sources"][0]["output_chunks"] == 2
+        assert "transforms applied" in payload["outcome"]
+        # Retired index-count keys stay absent.
+        assert "total_chunks" not in payload
+        assert "indexed_docs" not in payload["sources"][0]
+
+    def test_run_executes_html_and_metadata_transforms(self, tmp_path):
+        from moonmind.manifest.pipeline import apply_declared_transforms
+        from moonmind.schemas.manifest_v0_models import TransformsConfig
+
+        transforms = TransformsConfig.model_validate(
+            {
+                "htmlToText": True,
+                "enrichMetadata": [{"lang": "en"}],
+            }
+        )
+        docs, applied, chunks = apply_declared_transforms(
+            [("<p>hello</p>", {"src": "a"})], transforms
+        )
+        assert applied is True
+        assert chunks == 1
+        assert docs == [("hello", {"src": "a", "lang": "en"})]
+
+    def test_run_rejects_normalized_retired_spellings(self, tmp_path):
+        from moonmind.manifest.pipeline import ManifestRetiredError
+
+        manifest = ManifestV0.model_validate(
+            {
+                "version": "v0",
+                "metadata": {"name": "retired-variant"},
+                "dataSources": [{"id": "local", "type": "SimpleDirectoryReader"}],
+                "vectorstore": {"type": "qdrant"},
+            }
+        )
+        with pytest.raises(ManifestRetiredError, match="4108"):
+            ManifestPipeline(manifest).run()
+
+    def test_run_fetches_without_incremental_skip_persistence(self, tmp_path):
+        # MoonLadderStudios/MoonMind#4108: incremental index-state persistence
+        # retired. Fetch-only runs report fetched docs on every run.
         data_dir = tmp_path / "docs"
         data_dir.mkdir()
         (data_dir / "a.txt").write_text("alpha")
         manifest = ManifestV0.from_yaml_string(
             MINIMAL_MANIFEST.format(input_dir=str(data_dir))
         )
-        state_path = tmp_path / "incremental-state.json"
 
-        first = ManifestPipeline(manifest, state_path=state_path).run()
-        second = ManifestPipeline(manifest, state_path=state_path).run()
+        first = ManifestPipeline(manifest).run()
+        second = ManifestPipeline(manifest).run()
 
         assert first.sources[0].doc_count == 1
         assert first.sources[0].skipped is False
-        assert second.sources[0].doc_count == 0
-        assert second.sources[0].indexed_doc_count == 0
-        assert second.sources[0].skipped is True
+        assert second.sources[0].doc_count == 1
+        assert second.sources[0].skipped is False
 
-    def test_run_updates_changed_documents_and_deletes_stale_chunks(self, tmp_path):
+    def test_run_refetches_changed_documents_without_index_counts(self, tmp_path):
+        # Vector-free: no indexed/deleted counts or index progress persistence.
         data_dir = tmp_path / "docs"
         data_dir.mkdir()
         a_path = data_dir / "a.txt"
@@ -546,36 +513,22 @@ class TestPipelineLocalAdapter:
         manifest = ManifestV0.from_yaml_string(
             MINIMAL_MANIFEST.format(input_dir=str(data_dir))
         )
-        state_path = tmp_path / "incremental-state.json"
-        writer = RecordingIndexWriter()
 
-        first = ManifestPipeline(
-            manifest,
-            state_path=state_path,
-            index_writer=writer,
-        ).run()
+        first = ManifestPipeline(manifest).run()
         b_path.unlink()
         a_path.write_text("alpha changed")
-        second = ManifestPipeline(
-            manifest,
-            state_path=state_path,
-            index_writer=writer,
-        ).run()
+        second = ManifestPipeline(manifest).run()
 
-        assert first.sources[0].indexed_doc_count == 2
+        assert first.sources[0].doc_count == 2
         assert second.sources[0].doc_count == 1
-        assert second.sources[0].indexed_doc_count == 1
-        assert second.sources[0].deleted_doc_count == 1
-        assert len(writer.upsert_batches[0]) == 2
-        assert len(writer.upsert_batches[1]) == 1
-        assert writer.deleted_batches[1]
+        assert not hasattr(second.sources[0], "deleted_doc_count")
 
-    def test_run_reindexes_when_splitter_changes(self, tmp_path):
+    def test_run_fetches_without_splitter_index_state(self, tmp_path):
+        # Vector-free: splitter changes do not drive index invalidation;
+        # fetch-only runs report docs truthfully.
         data_dir = tmp_path / "docs"
         data_dir.mkdir()
         (data_dir / "a.txt").write_text("alpha beta gamma")
-        state_path = tmp_path / "incremental-state.json"
-        writer = RecordingIndexWriter()
 
         first_manifest = ManifestV0.from_yaml_string(
             SPLITTER_MANIFEST.format(input_dir=str(data_dir), chunk_size=8)
@@ -584,46 +537,24 @@ class TestPipelineLocalAdapter:
             SPLITTER_MANIFEST.format(input_dir=str(data_dir), chunk_size=5)
         )
 
-        first = ManifestPipeline(
-            first_manifest,
-            state_path=state_path,
-            index_writer=writer,
-        ).run()
-        second = ManifestPipeline(
-            second_manifest,
-            state_path=state_path,
-            index_writer=writer,
-        ).run()
+        first = ManifestPipeline(first_manifest).run()
+        second = ManifestPipeline(second_manifest).run()
 
-        assert first.sources[0].indexed_doc_count == 1
+        assert first.sources[0].doc_count == 1
         assert second.sources[0].skipped is False
-        assert second.sources[0].indexed_doc_count == 1
-        assert writer.deleted_batches[1]
+        assert second.sources[0].doc_count == 1
 
     def test_run_unknown_adapter_continues(self, tmp_path):
         yaml_str = textwrap.dedent("""\
             version: "v0"
             metadata:
               name: "unknown-test"
-            embeddings:
-              provider: "openai"
-              model: "text-embedding-3-large"
-            vectorStore:
-              type: "qdrant"
-              indexName: "test"
             dataSources:
               - id: "bad"
                 type: "NonExistentReader"
-            indices:
-              - id: "idx1"
-                sources: ["bad"]
-            retrievers:
-              - id: "ret1"
-                type: "Vector"
-                indices: ["idx1"]
         """)
         manifest = ManifestV0.from_yaml_string(yaml_str)
-        pipeline = ManifestPipeline(manifest, state_path=tmp_path / "state.json")
+        pipeline = ManifestPipeline(manifest)
         result = pipeline.run()
         assert result.sources[0].error is not None
         assert "No adapter" in result.sources[0].error
@@ -633,12 +564,6 @@ class TestPipelineLocalAdapter:
             version: "v0"
             metadata:
               name: "stop-test"
-            embeddings:
-              provider: "openai"
-              model: "text-embedding-3-large"
-            vectorStore:
-              type: "qdrant"
-              indexName: "test"
             dataSources:
               - id: "bad"
                 type: "NonExistentReader"
@@ -646,19 +571,71 @@ class TestPipelineLocalAdapter:
                 type: "SimpleDirectoryReader"
                 params:
                   inputDir: "{input_dir}"
-            indices:
-              - id: "idx1"
-                sources: ["bad", "good"]
-            retrievers:
-              - id: "ret1"
-                type: "Vector"
-                indices: ["idx1"]
             run:
               errorPolicy: "stopOnFirstError"
         """.format(input_dir=str(tmp_path)))
         manifest = ManifestV0.from_yaml_string(yaml_str)
-        pipeline = ManifestPipeline(manifest, state_path=tmp_path / "state.json")
+        pipeline = ManifestPipeline(manifest)
         result = pipeline.run()
         # Should stop after first error, not process "good"
         assert len(result.sources) == 1
         assert result.sources[0].error is not None
+
+
+# ---------------------------------------------------------------------------
+# #4108: retired vector-ingest rejection + truthful fetch-only results
+# ---------------------------------------------------------------------------
+
+class TestRetiredVectorRejection:
+    def test_plan_rejects_retired_vector_manifest(self):
+        from moonmind.manifest.pipeline import ManifestPipeline, ManifestRetiredError
+
+        manifest = ManifestV0.model_validate(
+            {
+                "version": "v0",
+                "metadata": {"name": "retired"},
+                "dataSources": [{"id": "ds1", "type": "SimpleDirectoryReader"}],
+                "vectorStore": {"type": "qdrant", "indexName": "old"},
+            }
+        )
+        pipeline = ManifestPipeline(manifest)
+        try:
+            pipeline.plan()
+        except ManifestRetiredError as exc:
+            assert "4108" in str(exc)
+        else:
+            raise AssertionError("retired vector manifest must be rejected before fetch")
+
+    def test_run_rejects_retired_vector_manifest(self):
+        from moonmind.manifest.pipeline import ManifestPipeline, ManifestRetiredError
+
+        manifest = ManifestV0.model_validate(
+            {
+                "version": "v0",
+                "metadata": {"name": "retired"},
+                "dataSources": [{"id": "ds1", "type": "SimpleDirectoryReader"}],
+                "embeddings": {"provider": "openai", "model": "x"},
+            }
+        )
+        pipeline = ManifestPipeline(manifest)
+        try:
+            pipeline.run()
+        except ManifestRetiredError as exc:
+            assert "4108" in str(exc)
+        else:
+            raise AssertionError("retired vector manifest must be rejected before fetch")
+
+    def test_run_result_has_no_index_counts_and_truthful_outcome(self, tmp_path):
+        (tmp_path / "a.txt").write_text("alpha")
+        manifest = ManifestV0.from_yaml_string(
+            MINIMAL_MANIFEST.format(input_dir=str(tmp_path))
+        )
+        result = ManifestPipeline(manifest).run()
+        payload = result.to_dict()
+        assert "outcome" in payload
+        assert "no embedding" in payload["outcome"].lower() or "no indexing" in payload["outcome"].lower()
+        assert "total_chunks" not in payload
+        for src in payload["sources"]:
+            assert "indexed_docs" not in src
+            assert "deleted_docs" not in src
+            assert "chunks" not in src

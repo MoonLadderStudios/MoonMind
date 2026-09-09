@@ -1,4 +1,4 @@
-"""Unit tests for manifest v0 Pydantic models."""
+"""Unit tests for manifest v0 Pydantic models (vector-free, #4108)."""
 
 from __future__ import annotations
 
@@ -9,14 +9,10 @@ import pytest
 
 from moonmind.schemas.manifest_v0_models import (
     DataSourceConfig,
-    EmbeddingsConfig,
-    IndexConfig,
     ManifestMetadata,
     ManifestV0,
-    RetrieverConfig,
     RunConfig,
     SecurityConfig,
-    VectorStoreConfig,
     export_v0_schema,
 )
 
@@ -25,15 +21,11 @@ from moonmind.schemas.manifest_v0_models import (
 # ---------------------------------------------------------------------------
 
 def _make_manifest(**overrides) -> ManifestV0:
-    """Create a minimal valid ManifestV0 with optional overrides."""
+    """Create a minimal valid vector-free ManifestV0 with optional overrides."""
     defaults = dict(
         version="v0",
         metadata=ManifestMetadata(name="test"),
-        embeddings=EmbeddingsConfig(provider="openai", model="text-embedding-3-large"),
-        vectorStore=VectorStoreConfig(type="qdrant", indexName="test_idx"),
         dataSources=[DataSourceConfig(id="ds1", type="SimpleDirectoryReader")],
-        indices=[IndexConfig(id="idx1", sources=["ds1"])],
-        retrievers=[RetrieverConfig(id="ret1", type="Vector", indices=["idx1"])],
     )
     defaults.update(overrides)
     return ManifestV0(**defaults)
@@ -68,6 +60,27 @@ class TestManifestV0Construction:
         assert sc.piiRedaction is False
         assert sc.allowlistMetadata == []
 
+    def test_vector_fields_absent_from_model(self):
+        m = _make_manifest()
+        for retired in ("embeddings", "vectorStore", "indices", "retrievers"):
+            assert not hasattr(m, retired), f"retired field {retired} must be removed"
+
+    def test_historical_vector_keys_ignored_not_advertised(self):
+        # Historical manifests remain readable via extra="allow" without Qdrant.
+        m = ManifestV0.model_validate(
+            {
+                "version": "v0",
+                "metadata": {"name": "hist"},
+                "dataSources": [{"id": "ds1", "type": "SimpleDirectoryReader"}],
+                "embeddings": {"provider": "openai", "model": "x"},
+                "vectorStore": {"type": "qdrant", "indexName": "old"},
+                "indices": [{"id": "idx1", "sources": ["ds1"]}],
+                "retrievers": [{"id": "ret1", "type": "Vector", "indices": ["idx1"]}],
+            }
+        )
+        assert m.metadata.name == "hist"
+        assert len(m.dataSources) == 1
+
 # ---------------------------------------------------------------------------
 # Serialization
 # ---------------------------------------------------------------------------
@@ -85,28 +98,14 @@ class TestSerialization:
         assert "properties" in schema
         assert "ManifestMetadata" in json.dumps(schema)
 
-# ---------------------------------------------------------------------------
-# Cross-field validation
-# ---------------------------------------------------------------------------
-
-class TestCrossFieldValidation:
-    def test_index_references_valid_datasource(self):
-        # Should not raise
-        _make_manifest()
-
-    def test_index_references_unknown_datasource_raises(self):
-        with pytest.raises(ValueError, match="unknown dataSource"):
-            _make_manifest(
-                indices=[IndexConfig(id="idx1", sources=["nonexistent"])],
-            )
-
-    def test_retriever_references_unknown_index_raises(self):
-        with pytest.raises(ValueError, match="unknown index"):
-            _make_manifest(
-                retrievers=[
-                    RetrieverConfig(id="ret1", type="Vector", indices=["missing"])
-                ],
-            )
+    def test_json_schema_has_no_vector_contract(self):
+        schema = ManifestV0.model_json_schema()
+        props = schema.get("properties", {})
+        for retired in ("embeddings", "vectorStore", "indices", "retrievers"):
+            assert retired not in props, f"schema must not advertise {retired}"
+        blob = json.dumps(schema)
+        assert "VectorStoreIndex" not in blob
+        assert "qdrant" not in blob.lower()
 
 # ---------------------------------------------------------------------------
 # YAML loading
@@ -118,22 +117,9 @@ class TestYamlLoading:
             version: "v0"
             metadata:
               name: "yaml-test"
-            embeddings:
-              provider: "openai"
-              model: "text-embedding-3-large"
-            vectorStore:
-              type: "qdrant"
-              indexName: "test"
             dataSources:
               - id: "ds1"
                 type: "SimpleDirectoryReader"
-            indices:
-              - id: "idx1"
-                sources: ["ds1"]
-            retrievers:
-              - id: "ret1"
-                type: "Vector"
-                indices: ["idx1"]
         """)
         m = ManifestV0.from_yaml_string(yaml_str)
         assert m.metadata.name == "yaml-test"
@@ -144,22 +130,9 @@ class TestYamlLoading:
             version: "v0"
             metadata:
               name: "file-test"
-            embeddings:
-              provider: "openai"
-              model: "text-embedding-3-large"
-            vectorStore:
-              type: "qdrant"
-              indexName: "test"
             dataSources:
               - id: "ds1"
                 type: "SimpleDirectoryReader"
-            indices:
-              - id: "idx1"
-                sources: ["ds1"]
-            retrievers:
-              - id: "ret1"
-                type: "Vector"
-                indices: ["idx1"]
         """))
         m = ManifestV0.from_yaml_file(str(f))
         assert m.metadata.name == "file-test"

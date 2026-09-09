@@ -146,7 +146,6 @@ export function ManifestsPage({ payload }: { payload: BootPayload }) {
   const [manifestContent, setManifestContent] = useState('');
   const [registryName, setRegistryName] = useState(routedManifestName);
   const [dryRun, setDryRun] = useState(false);
-  const [forceFull, setForceFull] = useState(false);
   const [maxDocs, setMaxDocs] = useState('');
   const [notice, setNotice] = useState<Notice | null>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
@@ -242,9 +241,6 @@ export function ManifestsPage({ payload }: { payload: BootPayload }) {
     const options: Record<string, boolean | number> = {};
     if (dryRun) {
       options.dryRun = true;
-    }
-    if (forceFull) {
-      options.forceFull = true;
     }
     if (parsedMaxDocs !== undefined) {
       options.maxDocs = parsedMaxDocs;
@@ -385,14 +381,6 @@ export function ManifestsPage({ payload }: { payload: BootPayload }) {
                   onChange={(event) => setDryRun(event.target.checked)}
                 />
                 Dry Run
-              </label>
-              <label className="checkbox">
-                <input
-                  type="checkbox"
-                  checked={forceFull}
-                  onChange={(event) => setForceFull(event.target.checked)}
-                />
-                Force Full
               </label>
               <label>
                 Max Docs
