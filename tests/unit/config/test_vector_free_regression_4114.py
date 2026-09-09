@@ -72,9 +72,11 @@ REPO_ROOT = Path(__file__).resolve().parents[3]
 # reason.
 # ---------------------------------------------------------------------------
 
-_VECTOR_IMAGE_RE = re.compile(r"qdrant|pgvector|vector-embed", re.IGNORECASE)
+_VECTOR_IMAGE_RE = re.compile(
+    r"qdrant|pgvector|milvus|vector-embed", re.IGNORECASE
+)
 _VECTOR_SERVICE_NAME_RE = re.compile(
-    r"qdrant|vector[-_ ]?(db|store|service|index)|embeddings?|pgvector",
+    r"qdrant|milvus|vector[-_ ]?(db|store|service|index)|embeddings?|pgvector",
     re.IGNORECASE,
 )
 _VECTOR_PROFILE_RE = re.compile(r"qdrant|vector|embedding|pgvector", re.IGNORECASE)
@@ -136,7 +138,7 @@ def check_compose_vector_free(compose: dict) -> list[str]:
                     f"service {name!r} depends on vector service {dep!r}"
                 )
         for item in _env_items(service):
-            if _VECTOR_ENV_RE.search(item) and "QDRANT_URL" in item:
+            if _VECTOR_ENV_RE.search(item):
                 problems.append(
                     f"service {name!r} wires retired vector env {item!r}"
                 )
@@ -334,6 +336,67 @@ def test_compose_rejects_vector_port_and_env_wiring() -> None:
     assert any("vector port" in problem for problem in problems)
 
 
+def test_compose_rejects_every_retired_vector_env_key() -> None:
+    """Every retired vector env key fails even without ``QDRANT_URL``.
+
+    Regression for Codex review 3971751049: the env guard must accept any
+    ``_VECTOR_ENV_RE`` match, so ``QDRANT_ENABLED=true`` (and friends) cannot
+    hide behind the absence of ``QDRANT_URL``.
+    """
+    for env_item in (
+        "QDRANT_ENABLED=true",
+        "QDRANT_HOST=qdrant",
+        "QDRANT_PORT=6333",
+        "VECTOR_STORE_PROVIDER=qdrant",
+    ):
+        fixture = {
+            "services": {
+                "api": {"image": "moonmind:latest", "environment": [env_item]},
+            },
+            "volumes": {},
+        }
+        problems = check_compose_vector_free(fixture)
+        assert any("retired vector env" in problem for problem in problems), (
+            f"retired vector env {env_item!r} was not flagged"
+        )
+    # Mapping-form environment carries the same wiring and must also fail.
+    mapping_fixture = {
+        "services": {
+            "api": {
+                "image": "moonmind:latest",
+                "environment": {"QDRANT_ENABLED": "true"},
+            },
+        },
+        "volumes": {},
+    }
+    assert any(
+        "retired vector env" in problem
+        for problem in check_compose_vector_free(mapping_fixture)
+    )
+
+
+def test_compose_rejects_canonical_vector_store_images() -> None:
+    """Every canonical store backend image fails the topology guard.
+
+    Regression for Codex review 3971751070: ``VECTOR_STORE_CAPABILITIES``
+    names ``qdrant``, ``pgvector``, and ``milvus``; the image guard must flag
+    each of them instead of maintaining an incomplete test-only list.
+    """
+    for image in (
+        "qdrant/qdrant:v1.17.1",
+        "pgvector/pgvector:pg16",
+        "milvusdb/milvus:v2.4.0",
+    ):
+        fixture = {
+            "services": {"search": {"image": image}},
+            "volumes": {},
+        }
+        problems = check_compose_vector_free(fixture)
+        assert any("vector image" in problem for problem in problems), (
+            f"canonical vector image {image!r} was not flagged"
+        )
+
+
 def test_compose_allows_retained_recovery_volume() -> None:
     compose = yaml.safe_load((REPO_ROOT / "docker-compose.yaml").read_text())
     assert "qdrant-storage" in (compose.get("volumes", {}) or {})
@@ -344,6 +407,22 @@ def test_compose_allows_retained_recovery_volume() -> None:
     )
 
 
+def _init_artifact_paths() -> list[Path]:
+    """Enumerate every database initialization artifact under review.
+
+    Regression for Codex review 3971751061: a fixed two-path list stays
+    green when a new artifact (for example
+    ``init_db_scripts/02-enable-vector.sql``) installs ``CREATE EXTENSION
+    vector``. Enumerating the initialization directories keeps the guard
+    closed as artifacts are added.
+    """
+    paths: list[Path] = []
+    for directory in (REPO_ROOT / "init_db_scripts", REPO_ROOT / "init_db"):
+        if directory.is_dir():
+            paths.extend(sorted(p for p in directory.iterdir() if p.is_file()))
+    return paths
+
+
 def test_init_scripts_reject_vector_sql() -> None:
     assert check_init_sql_vector_free("CREATE EXTENSION vector;") != []
     assert (
@@ -352,11 +431,13 @@ def test_init_scripts_reject_vector_sql() -> None:
         )
         != []
     )
-    for path in (
-        REPO_ROOT / "init_db_scripts/01-create-dbs.sh",
-        REPO_ROOT / "init_db/init_db_entrypoint.sh",
-    ):
-        assert check_init_sql_vector_free(path.read_text(encoding="utf-8")) == []
+    paths = _init_artifact_paths()
+    # The test only means something when init artifacts exist to enumerate.
+    assert paths, "expected database initialization artifacts to enumerate"
+    for path in paths:
+        assert check_init_sql_vector_free(path.read_text(encoding="utf-8")) == [], (
+            f"init artifact {path} installs vector extension/index"
+        )
 
 
 # ---------------------------------------------------------------------------
