@@ -789,7 +789,7 @@ def test_session_secret_concurrent_bootstrap_single_winner(tmp_path):
     key_path = tmp_path / "concurrent-race-key"
     assert not key_path.exists()
     results: list[bytes] = []
-    errors: list[BaseException] = []
+    errors: list[Exception] = []
     barrier = threading.Barrier(8)
 
     def _resolve() -> None:
@@ -800,7 +800,7 @@ def test_session_secret_concurrent_bootstrap_single_winner(tmp_path):
                     explicit_secret=None, key_path=key_path
                 )
             )
-        except BaseException as exc:  # pragma: no cover - fail-closed signal
+        except Exception as exc:  # pragma: no cover - fail-closed signal
             errors.append(exc)
 
     threads = [threading.Thread(target=_resolve) for _ in range(8)]
