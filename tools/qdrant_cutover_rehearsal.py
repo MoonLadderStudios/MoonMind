@@ -1433,6 +1433,8 @@ def _atomic_write_text(path: Path, text: str) -> None:
         try:
             os.unlink(tmp_name)
         except OSError:
+            # Best-effort temp cleanup; the original exception below is the
+            # failure that matters, and a leftover .tmp file is never read.
             pass
         raise
 
@@ -1456,12 +1458,15 @@ def _state_locked(state_dir: Path):
         try:
             fcntl.flock(fd, fcntl.LOCK_EX)
         except OSError:
+            # Best-effort mutual exclusion; the atomic temp-file replace in
+            # _atomic_write_text still guards against truncation without it.
             pass
         yield
     finally:
         try:
             fcntl.flock(fd, fcntl.LOCK_UN)
         except OSError:
+            # Best-effort unlock; the fd close below releases the lock anyway.
             pass
         os.close(fd)
 
