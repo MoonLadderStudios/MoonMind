@@ -1,0 +1,7 @@
+{
+  "invariant": "Exact-host attestation executes the deployment manifest's probe as literal arguments after verifying the read-only mount and executable digest, before publishing readiness.",
+  "versionProbe": ["--help"],
+  "probeTimeoutSeconds": 10,
+  "probeFailureExitCode": 2,
+  "failureCode": "OMNIGENT_HARNESS_BUILD_MISMATCH"
+}
