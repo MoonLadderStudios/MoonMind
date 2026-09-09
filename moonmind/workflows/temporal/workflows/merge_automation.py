@@ -1149,6 +1149,17 @@ class MoonMindMergeAutomationWorkflow:
             cancellation_type=ActivityCancellationType.TRY_CANCEL,
         )
         if self._review_loop_active():
+            if (
+                self._active_review_request
+                and workflow.patched("merge-automation-active-review-barrier-v1")
+                and isinstance(evaluation, Mapping)
+                and evaluation.get("automatedReviewComplete") is not True
+                and evaluation.get("automatedReviewRequestStale") is not True
+            ):
+                # Older/in-flight activity results can omit review evidence
+                # when CI fails or conflicts are actionable. Unknown cannot
+                # release a resolver while this request still owns the head.
+                evaluation = {**evaluation, "automatedReviewComplete": False}
             self._settle_active_review_request(
                 evaluation if isinstance(evaluation, Mapping) else {}
             )

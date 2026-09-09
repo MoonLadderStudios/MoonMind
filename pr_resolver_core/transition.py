@@ -20,10 +20,12 @@ def reduce_resolver_state(
     policy: ResolverPolicy,
     event: ResolverEvent,
     known_ci_failures_precede_degraded: bool = True,
+    pending_review_precedes_remediation: bool = True,
 ) -> ResolverTransition:
     decision = classify_snapshot(
         snapshot,
         known_ci_failures_precede_degraded=known_ci_failures_precede_degraded,
+        pending_review_precedes_remediation=pending_review_precedes_remediation,
     )
     state = previous_state
     metadata: dict[str, str | int | bool | None] = {}

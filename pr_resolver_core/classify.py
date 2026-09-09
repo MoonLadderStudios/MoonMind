@@ -32,6 +32,7 @@ def classify_snapshot(
     snapshot: CanonicalPullRequestSnapshot,
     *,
     known_ci_failures_precede_degraded: bool = True,
+    pending_review_precedes_remediation: bool = True,
 ) -> ResolverDecision:
     if snapshot.merged:
         return _decision(
@@ -53,7 +54,13 @@ def classify_snapshot(
         return _decision(
             "manual_review", "publish_unavailable", ResolverAction.STOP_MANUAL_REVIEW
         )
-    if snapshot.merge_conflict:
+    review_pending = (
+        pending_review_precedes_remediation
+        and snapshot.review_loop_enabled
+        and snapshot.automated_review_requested
+        and not snapshot.fresh_automated_review
+    )
+    if snapshot.merge_conflict and not review_pending:
         return _decision(
             "merge_conflicts", "merge_conflicts", ResolverAction.RUN_REMEDIATION
         )
@@ -88,6 +95,12 @@ def classify_snapshot(
         return _decision(
             "manual_review", "deferred_comments", ResolverAction.STOP_MANUAL_REVIEW
         )
+    if review_pending:
+        # Preserve the reviewed head until the outstanding request completes,
+        # including when CI, conflicts, or older comments need remediation.
+        return _decision(
+            "automated_review_wait", "automated_review_wait", ResolverAction.WAIT
+        )
     if snapshot.actionable_comments:
         return _decision(
             "actionable_comments", "actionable_comments", ResolverAction.RUN_REMEDIATION
@@ -100,9 +113,7 @@ def classify_snapshot(
         # the external request and the wait for its result.
         if snapshot.automated_review_requested:
             return _decision(
-                "automated_review_wait",
-                "automated_review_wait",
-                ResolverAction.WAIT,
+                "automated_review_wait", "automated_review_wait", ResolverAction.WAIT
             )
         return _decision(
             "review_request_required",
