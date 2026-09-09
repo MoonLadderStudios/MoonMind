@@ -299,9 +299,11 @@ def evaluate_manifest(
             )
             for metric_cfg in eval_config.metrics:
                 # Fail closed: an absent execution is not a measured zero
-                # that passes when no threshold is set.
+                # that passes when no threshold is set. A zero/negative
+                # threshold would also pass a 0.0 score, so unavailable
+                # datasets always require a positive bar they cannot meet.
                 threshold = metric_cfg.threshold
-                if threshold is None:
+                if threshold is None or threshold <= 0:
                     threshold = 1.0
                 ds_eval.metrics.append(
                     MetricScore(

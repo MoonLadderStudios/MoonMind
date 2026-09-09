@@ -18,7 +18,7 @@ from typing import List, Optional
 import yaml
 from pydantic import ValidationError
 
-from moonmind.schemas.manifest_v0_models import ManifestV0
+from moonmind.schemas.manifest_v0_models import ManifestV0, is_retired_vector_key
 
 # ---------------------------------------------------------------------------
 # Secret detection patterns (from DOC-REQ-007)
@@ -35,11 +35,11 @@ _SECRET_PATTERNS = [
 ]
 
 # MoonLadderStudios/MoonMind#4108: managed-vector pipeline retired. New
-# manifests must omit these keys; historical manifests remain readable via
-# ManifestV0 (extra="allow") but are rejected here before fetch/dispatch.
-RETIRED_VECTOR_FIELDS = frozenset(
-    {"embeddings", "vectorStore", "indices", "retrievers"}
-)
+# manifests must omit the retired blocks; historical manifests remain
+# readable via ManifestV0 (extra="allow") but are rejected here before
+# fetch/dispatch. Detection is the one normalized check shared with
+# pipeline/queue (is_retired_vector_key): 'vectorstore', 'VectorStore'
+# and padded variants reject like the canonical spellings.
 
 @dataclass
 class ValidationIssue:
@@ -265,18 +265,21 @@ def _check_retired_vector_fields(
     actionably here; historical artifacts remain readable via
     ``ManifestV0`` (``extra="allow"``) without importing/connecting to Qdrant.
     """
-    for field in sorted(RETIRED_VECTOR_FIELDS):
-        if field in parsed and parsed[field] not in (None, [], {}):
-            issues.append(
-                ValidationIssue(
-                    "ERROR",
-                    field,
-                    f"'{field}' was retired in MoonLadderStudios/MoonMind#4108: "
-                    "MoonMind ships no managed vector indexing, embedding, "
-                    "collection or retrieval pipeline. Remove this block; "
-                    "new vector-ingest manifests are not ingested.",
-                )
+    for field in sorted(parsed):
+        if not is_retired_vector_key(field):
+            continue
+        if parsed[field] in (None, [], {}):
+            continue
+        issues.append(
+            ValidationIssue(
+                "ERROR",
+                field,
+                f"'{field}' was retired in MoonLadderStudios/MoonMind#4108: "
+                "MoonMind ships no managed vector indexing, embedding, "
+                "collection or retrieval pipeline. Remove this block; "
+                "new vector-ingest manifests are not ingested.",
             )
+        )
 
 def _check_data_source_ids_unique(
     manifest: ManifestV0, issues: List[ValidationIssue]

@@ -17,6 +17,30 @@ import yaml
 from pydantic import BaseModel, Field
 
 # ---------------------------------------------------------------------------
+# Retired managed-vector contract (MoonLadderStudios/MoonMind#4108)
+# ---------------------------------------------------------------------------
+
+#: Canonical retired top-level manifest blocks (exact historical spellings).
+RETIRED_VECTOR_FIELDS: tuple[str, ...] = (
+    "embeddings",
+    "vectorStore",
+    "indices",
+    "retrievers",
+)
+
+_RETIRED_VECTOR_KEYS = frozenset(field.lower() for field in RETIRED_VECTOR_FIELDS)
+
+
+def is_retired_vector_key(key: object) -> bool:
+    """One normalized retired-key check for every submission boundary.
+
+    Matches case-insensitively with surrounding whitespace ignored, so
+    ``vectorstore``, ``VectorStore`` and padded variants are rejected
+    wherever the canonical spellings are.
+    """
+    return isinstance(key, str) and key.strip().lower() in _RETIRED_VECTOR_KEYS
+
+# ---------------------------------------------------------------------------
 # Sub-models
 # ---------------------------------------------------------------------------
 

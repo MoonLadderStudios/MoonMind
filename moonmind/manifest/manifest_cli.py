@@ -94,4 +94,12 @@ def run_evaluate(
     # Import evaluation module
     from moonmind.manifest.evaluation import evaluate_manifest
 
-    return evaluate_manifest(manifest=manifest, dataset_filter=dataset)
+    try:
+        return evaluate_manifest(manifest=manifest, dataset_filter=dataset)
+    except ManifestCliError:
+        raise
+    except RuntimeError as exc:
+        # Retired live-retrieval evaluation raises actionably inside the
+        # domain layer; surface it as a CLI usage error (exit 1) instead of
+        # an unhandled traceback.
+        raise ManifestCliError(str(exc)) from exc

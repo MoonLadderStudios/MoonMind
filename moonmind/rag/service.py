@@ -101,11 +101,24 @@ class ContextRetrievalService:
         embedding_timeout_ms: int | None = None,
         search_timeout_ms: int | None = None,
     ) -> ContextPack:
-        # MoonLadderStudios/MoonMind#4108: run overlays retired. Overlay
-        # arguments are accepted for call-site compatibility but ignored;
-        # no overlay collection is created, refreshed, or searched.
-        if overlay_policy not in ("skip", "include"):
-            logger.debug("Ignoring retired overlay_policy=%r", overlay_policy)
+        # MoonLadderStudios/MoonMind#4108: run overlays retired. Requests
+        # for overlay retrieval fail fast instead of silently downgrading
+        # to canonical-only retrieval: callers asking for workspace context
+        # must not succeed with that context omitted.
+        if overlay_policy != "skip":
+            raise ValueError(
+                "overlay_policy='include' was retired in "
+                "MoonLadderStudios/MoonMind#4108: MoonMind ships no run "
+                "overlay collection. Remove the overlay request or pass "
+                "overlay_policy='skip' for canonical-only retrieval."
+            )
+        if overlay_max_age_seconds is not None or stale_overlay_allowed:
+            raise ValueError(
+                "overlay freshness options were retired in "
+                "MoonLadderStudios/MoonMind#4108: there is no overlay "
+                "collection to bound. Remove overlay_max_age_seconds / "
+                "stale_overlay_allowed from the retrieval request."
+            )
         normalized_budgets = self._normalize_budgets(budgets or {})
         self._enforce_token_budget(query=query, top_k=top_k, budgets=normalized_budgets)
         started = time.perf_counter()
@@ -115,7 +128,7 @@ class ContextRetrievalService:
                 query=query,
                 filters=filters,
                 top_k=top_k,
-                overlay_policy="skip",
+                overlay_policy=overlay_policy,
                 budgets=normalized_budgets,
                 collections=target_collections,
                 initiation_mode=initiation_mode,

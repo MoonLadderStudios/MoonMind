@@ -10,6 +10,7 @@ from urllib.parse import urlsplit
 import yaml
 
 from moonmind.config.settings import settings
+from moonmind.schemas.manifest_v0_models import is_retired_vector_key
 
 _BASE_ALLOWED_SOURCE_KINDS = frozenset({"inline", "registry"})
 _PROFILE_PROVIDER_RE = re.compile(r"^[A-Za-z0-9._-]+$")
@@ -19,14 +20,17 @@ _VAULT_MOUNT_RE = re.compile(r"^[A-Za-z0-9._-]+$")
 _VAULT_PATH_RE = re.compile(r"^[A-Za-z0-9._/-]+$")
 _VAULT_FIELD_RE = re.compile(r"^[A-Za-z0-9._-]+$")
 ALLOWED_ACTIONS = frozenset({"plan", "run"})
-ALLOWED_OPTION_KEYS = frozenset({"dryRun", "forceFull", "maxDocs"})
+# MoonLadderStudios/MoonMind#4108: every run refetches all sources (the
+# incremental index path is retired), so the former "forceFull" override no
+# longer exists. Submissions carrying it fail actionably in
+# _normalize_options instead of being silently accepted.
+ALLOWED_OPTION_KEYS = frozenset({"dryRun", "maxDocs"})
 # MoonLadderStudios/MoonMind#4108: managed-vector pipeline retired. No
 # embedding provider or vector-store capability is advertised; manifests
 # carrying those blocks are rejected before fetch/dispatch (see
 # _reject_retired_vector_blocks). No pgvector/Milvus/embedded replacement.
-RETIRED_VECTOR_MANIFEST_KEYS = frozenset(
-    {"embeddings", "vectorstore", "indices", "retrievers"}
-)
+# Detection is the one normalized check shared with validator/pipeline
+# (is_retired_vector_key): case/whitespace variants reject identically.
 DATA_SOURCE_CAPABILITIES = {
     "githubrepositoryreader": "github",
     "googledrivereader": "gdrive",
@@ -239,20 +243,18 @@ def _reject_retired_vector_blocks(manifest: Mapping[str, Any]) -> None:
     """
 
     for key in manifest.keys():
-        if not isinstance(key, str):
+        if not is_retired_vector_key(key):
             continue
-        lowered = key.strip().lower()
-        if lowered in RETIRED_VECTOR_MANIFEST_KEYS:
-            raw = manifest.get(key)
-            if raw in (None, [], {}):
-                continue
-            raise ManifestContractError(
-                f"manifest block '{key}' was retired in "
-                "MoonLadderStudios/MoonMind#4108: MoonMind ships no managed "
-                "vector indexing, embedding, collection or retrieval "
-                "pipeline. Remove this block; new vector-ingest manifests "
-                "are not dispatched."
-            )
+        raw = manifest.get(key)
+        if raw in (None, [], {}):
+            continue
+        raise ManifestContractError(
+            f"manifest block '{key}' was retired in "
+            "MoonLadderStudios/MoonMind#4108: MoonMind ships no managed "
+            "vector indexing, embedding, collection or retrieval "
+            "pipeline. Remove this block; new vector-ingest manifests "
+            "are not dispatched."
+        )
 
 def _normalize_source(
     source_node: Any,
@@ -309,10 +311,16 @@ def _normalize_options(options_node: Any) -> dict[str, Any]:
 
     normalized: dict[str, Any] = {}
     for key, value in options_node.items():
+        if key == "forceFull":
+            raise ManifestContractError(
+                "manifest.options.forceFull was retired in "
+                "MoonLadderStudios/MoonMind#4108: every run already "
+                "refetches all sources. Remove this option and resubmit."
+            )
         if key not in ALLOWED_OPTION_KEYS:
             allowed = ", ".join(sorted(ALLOWED_OPTION_KEYS))
             raise ManifestContractError(f"manifest.options only supports: {allowed}")
-        if key in {"dryRun", "forceFull"}:
+        if key == "dryRun":
             normalized[key] = _parse_manifest_bool_option(key, value)
         elif key == "maxDocs":
             if value is None:

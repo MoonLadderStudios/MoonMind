@@ -560,11 +560,15 @@ class ContextInjectionService:
         return value.strip("/")
 
     def _resolve_rag_overlay_policy(self) -> str:
+        # MoonLadderStudios/MoonMind#4108: run overlays retired. The only
+        # supported policy is canonical-only retrieval; an explicit
+        # "include" request fails fast in ContextRetrievalService.retrieve
+        # instead of succeeding with workspace context silently omitted.
         policy = (
             str(
                 self._env.get(
                     "MOONMIND_RAG_OVERLAY_POLICY",
-                    self._env.get("RAG_OVERLAY_POLICY", "include"),
+                    self._env.get("RAG_OVERLAY_POLICY", "skip"),
                 )
             )
             .strip()
@@ -572,7 +576,7 @@ class ContextInjectionService:
         )
         if policy in {"include", "skip"}:
             return policy
-        return "include"
+        return "skip"
 
     def _resolve_rag_budgets(self) -> dict[str, int]:
         budgets: dict[str, int] = {}

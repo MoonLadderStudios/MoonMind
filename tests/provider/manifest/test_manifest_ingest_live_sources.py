@@ -26,6 +26,9 @@ pytestmark = [
 
 
 def _manifest(source: dict[str, Any]) -> ManifestV0:
+    # MoonLadderStudios/MoonMind#4108: vector-free fixture. Retired
+    # ``embeddings``/``vectorStore``/``indices``/``retrievers`` blocks are
+    # rejected before fetch, so live-source verification runs fetch-only.
     return ManifestV0.model_validate(
         {
             "version": "v0",
@@ -33,29 +36,7 @@ def _manifest(source: dict[str, Any]) -> ManifestV0:
                 "name": "mm-755-live-manifest-ingest",
                 "description": "MM-755 live data source verification",
             },
-            "embeddings": {
-                "provider": "openai",
-                "model": "text-embedding-3-large",
-            },
-            "vectorStore": {
-                "type": "qdrant",
-                "indexName": "mm-755-provider-verification",
-            },
             "dataSources": [source],
-            "indices": [
-                {
-                    "id": "idx1",
-                    "type": "VectorStoreIndex",
-                    "sources": ["live-source"],
-                }
-            ],
-            "retrievers": [
-                {
-                    "id": "ret1",
-                    "type": "Vector",
-                    "indices": ["idx1"],
-                }
-            ],
             "run": {
                 "dryRun": False,
                 "errorPolicy": "stopOnFirstError",
