@@ -50,7 +50,12 @@ services:
     init: true
     restart: unless-stopped
     ports:
-      - "${MOONMIND_API_HOST_PORT:-7000}:8000"
+      # Explicit local-mode exposure (#4120 req 5): the operator-facing
+      # publish host is validated at startup by validate_publish_binding.
+      # Loopback by default; wildcard/custom hosts require
+      # MOONMIND_TRUSTED_INGRESS=1 with an audited ingress path. The
+      # in-container listen address is not proof of safe loopback.
+      - "${MOONMIND_API_PUBLISH_HOST:-127.0.0.1}:${MOONMIND_API_HOST_PORT:-7000}:8000"
     environment:
       - PYTHONPATH=/app
       - LOG_LEVEL=${LOG_LEVEL:-DEBUG}
@@ -81,7 +86,7 @@ services:
       # values identical to `temporal-worker-agent-runtime`: a ref declared only
       # on the worker is rejected as unconfigured before the request ever
       # reaches Temporal.
-      - MOONMIND_CONTAINER_BACKEND_IMAGE_SOURCES=${MOONMIND_CONTAINER_BACKEND_IMAGE_SOURCES:-[{"sourceRef":"tactics-unreal","image":"${MOONMIND_UNREAL_ENGINE_IMAGE:-ghcr.io/moonladderstudios/tactics-ue-base:5.8}","pullPolicy":"${MOONMIND_UNREAL_ENGINE_IMAGE_PULL_POLICY:-if-missing}"}]}
+      - MOONMIND_CONTAINER_BACKEND_IMAGE_SOURCES=${MOONMIND_CONTAINER_BACKEND_IMAGE_SOURCES:-[{"sourceRef":"tactics-unreal","image":"${MOONMIND_UNREAL_ENGINE_IMAGE:-ghcr.io/moonladderstudios/tactics-ue-base:5.8}","pullPolicy":"${MOONMIND_UNREAL_ENGINE_IMAGE_PULL_POLICY:-if-missing}","registryCredentialRef":"${MOONMIND_UNREAL_ENGINE_REGISTRY_CREDENTIAL_REF:-}"}]}
       - MOONMIND_CONTAINER_BACKEND_CACHE_SOURCES=${MOONMIND_CONTAINER_BACKEND_CACHE_SOURCES:-[{"cacheRef":"unreal-ccache","volumeName":"${MOONMIND_UNREAL_CCACHE_VOLUME_NAME:-unreal_ccache_volume}","target":"/home/ue4/.ccache"},{"cacheRef":"unreal-ubt","volumeName":"${MOONMIND_UNREAL_UBT_VOLUME_NAME:-unreal_ubt_volume}","target":"/home/ue4/.config/Epic/UnrealBuildTool"}]}
       # Omnigent is a normal local runtime. Operators can still disable or
       # redirect it explicitly, but the canonical Compose path needs no hidden
@@ -185,15 +190,42 @@ services:
       - MOONMIND_MANAGED_RUNTIME_JANITOR_MAX_DELETE_PATHS=${MOONMIND_MANAGED_RUNTIME_JANITOR_MAX_DELETE_PATHS:-100}
       - MOONMIND_MANAGED_RUNTIME_JANITOR_MAX_DELETE_BYTES=${MOONMIND_MANAGED_RUNTIME_JANITOR_MAX_DELETE_BYTES:-}
       - MOONMIND_MANAGED_RUNTIME_JANITOR_LOCK_PATH=${MOONMIND_MANAGED_RUNTIME_JANITOR_LOCK_PATH:-/work/agent_jobs/.janitor.lock}
-      # Generic external OIDC (MoonLadderStudios/MoonMind#4124). No bundled
-      # identity provider remains; leave the issuer unset unless an external
-      # IdP is configured. Retired `keycloak`/`default`/`google` selectors are
-      # rejected at API startup with migration guidance (#4129).
-      - AUTH_PROVIDER=${AUTH_PROVIDER:-disabled} # accounts, oidc, header, or disabled
+      # MoonMind application authentication (MoonLadderStudios/MoonMind#4120).
+      # One selector, AUTH_PROVIDER: accounts, oidc, header, or explicitly
+      # restricted local disabled. The Compose default is explicit `disabled`
+      # so a zero-config `docker compose up` stays usable: omitted/blank
+      # selects accounts through the production path (protected first-owner
+      # setup), but the accounts onboarding routes do not exist yet, so an
+      # empty default would 401 the fresh dashboard with no recourse. Opt in
+      # to accounts/oidc/header explicitly; a populated database with an
+      # omitted selector stops actionably pending
+      # MOONMIND_AUTH_MIGRATION_DECISION (no silent disable, no new owner).
+      # Retired `keycloak`/`default`/`google` selectors are rejected at API
+      # startup with migration guidance (#4129). OMNIGENT_AUTH_* never
+      # selects MoonMind auth.
+      - AUTH_PROVIDER=${AUTH_PROVIDER:-disabled} # explicit local default; set accounts/oidc/header to opt in
+      - MOONMIND_AUTH_MIGRATION_DECISION=${MOONMIND_AUTH_MIGRATION_DECISION:-}
       - OIDC_ISSUER_URL=${OIDC_ISSUER_URL:-} # Generic external issuer URL for 'oidc'
       - OIDC_CLIENT_ID=${OIDC_CLIENT_ID:-} # Generic external client ID for 'oidc'
       - OIDC_CLIENT_SECRET=${OIDC_CLIENT_SECRET:-} # Generic external client secret for 'oidc'
-      - JWT_SECRET=${JWT_SECRET:-devsecret} # For 'disabled' auth provider (legacy JWT)
+      # Durable MoonMind session signing key (deployment-owned
+      # API/session-owner-only moonmind_session_keys volume, never the
+      # shared worker moonmind_secrets volume). Leave MOONMIND_SESSION_SECRET
+      # empty on
+      # loopback fresh installs: exactly one key is generated and shared by
+      # restarts/replicas. Placeholders are rejected; remote production
+      # requires explicit material. JWT_SECRET remains a legacy alias read
+      # only when MOONMIND_SESSION_SECRET is unset; its insecure default is
+      # never accepted as key material by the auth-modes owner.
+      - MOONMIND_SESSION_SECRET=${MOONMIND_SESSION_SECRET:-}
+      - MOONMIND_SESSION_KEY_PATH=${MOONMIND_SESSION_KEY_PATH:-/app/var/session-keys/moonmind_session_key}
+      - JWT_SECRET=${JWT_SECRET:-} # Legacy alias for 'disabled' JWT; empty by default
+      # Explicit local-mode exposure: disabled publishes only on loopback
+      # unless MOONMIND_TRUSTED_INGRESS documents an audited ingress path.
+      - MOONMIND_API_PUBLISH_HOST=${MOONMIND_API_PUBLISH_HOST:-127.0.0.1}
+      - MOONMIND_TRUSTED_INGRESS=${MOONMIND_TRUSTED_INGRESS:-}
+      - MOONMIND_PUBLIC_BASE_URL=${MOONMIND_PUBLIC_BASE_URL:-}
+      - MOONMIND_TRUSTED_PROXIES=${MOONMIND_TRUSTED_PROXIES:-}
     env_file:
       - path: .env
         required: false
@@ -210,6 +242,11 @@ services:
       - ${MOONMIND_OMNIGENT_EVIDENCE_DIR:-./var/omnigent-evidence}:/workspace/omnigent-evidence:rw
       - ./var/omnigent-runtime-state:/app/var/omnigent-runtime-state:rw
       - moonmind_secrets:/app/var/secrets
+      # Browser-session signing key isolated to the API/session owner: worker
+      # trust domains (workflow, artifact, LLM, agent-runtime,
+      # deployment-control, integration, bootstrap, database-init) mount only
+      # moonmind_secrets and can neither read nor overwrite this credential.
+      - moonmind_session_keys:/app/var/session-keys
       # Live retrieval capability authority, accounting, and bounded evidence.
       # Must outlive container recreation or an update would invalidate
       # still-live capabilities and discard durable retrieval records.
@@ -821,7 +858,7 @@ services:
       - MOONMIND_UNREAL_ENGINE_IMAGE_PULL_POLICY=${MOONMIND_UNREAL_ENGINE_IMAGE_PULL_POLICY:-if-missing}
       - MOONMIND_UNREAL_CCACHE_VOLUME_NAME=${MOONMIND_UNREAL_CCACHE_VOLUME_NAME:-unreal_ccache_volume}
       - MOONMIND_UNREAL_UBT_VOLUME_NAME=${MOONMIND_UNREAL_UBT_VOLUME_NAME:-unreal_ubt_volume}
-      - MOONMIND_CONTAINER_BACKEND_IMAGE_SOURCES=${MOONMIND_CONTAINER_BACKEND_IMAGE_SOURCES:-[{"sourceRef":"tactics-unreal","image":"${MOONMIND_UNREAL_ENGINE_IMAGE:-ghcr.io/moonladderstudios/tactics-ue-base:5.8}","pullPolicy":"${MOONMIND_UNREAL_ENGINE_IMAGE_PULL_POLICY:-if-missing}"}]}
+      - MOONMIND_CONTAINER_BACKEND_IMAGE_SOURCES=${MOONMIND_CONTAINER_BACKEND_IMAGE_SOURCES:-[{"sourceRef":"tactics-unreal","image":"${MOONMIND_UNREAL_ENGINE_IMAGE:-ghcr.io/moonladderstudios/tactics-ue-base:5.8}","pullPolicy":"${MOONMIND_UNREAL_ENGINE_IMAGE_PULL_POLICY:-if-missing}","registryCredentialRef":"${MOONMIND_UNREAL_ENGINE_REGISTRY_CREDENTIAL_REF:-}"}]}
       - MOONMIND_CONTAINER_BACKEND_CACHE_SOURCES=${MOONMIND_CONTAINER_BACKEND_CACHE_SOURCES:-[{"cacheRef":"unreal-ccache","volumeName":"${MOONMIND_UNREAL_CCACHE_VOLUME_NAME:-unreal_ccache_volume}","target":"/home/ue4/.ccache"},{"cacheRef":"unreal-ubt","volumeName":"${MOONMIND_UNREAL_UBT_VOLUME_NAME:-unreal_ubt_volume}","target":"/home/ue4/.config/Epic/UnrealBuildTool"}]}
       # Non-secret deployment values portable Skills may read from a managed
       # session. Secret-looking names are refused; secrets use credentials.
@@ -1587,6 +1624,8 @@ volumes:
     name: ${MOONMIND_AGENT_WORKSPACES_VOLUME_NAME:-agent_workspaces}
   moonmind_secrets:
     name: ${MOONMIND_SECRETS_VOLUME_NAME:-moonmind_secrets}
+  moonmind_session_keys:
+    name: ${MOONMIND_SESSION_KEYS_VOLUME_NAME:-moonmind_session_keys}
   moonmind_retrieval_state:
     name: ${MOONMIND_RETRIEVAL_STATE_VOLUME_NAME:-moonmind_retrieval_state}
   unreal_ccache_volume:

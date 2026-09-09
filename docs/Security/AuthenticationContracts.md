@@ -6,7 +6,7 @@
 **Owners:** MoonMind Engineering  
 **Audience:** API, dashboard, runtime, security contributors and operators  
 **Authority:** Application authentication modes, identity mapping, session/revocation, CSRF/origin, error semantics, and background-work policy for MoonMind user authentication. Freezes the target contract inventoried in `[KeycloakRemovalInventory-4117.md](../tmp/KeycloakRemovalInventory-4117.md)` (MoonLadderStudios/MoonMind#4117, parent epic #4116).  
-**Owning Surface:** `api_service/auth.py`, `api_service/auth_providers.py`, `api_service/main.py`, `moonmind/config/settings.py` (`OIDCSettings`), `api_service/db/models.py` (`User`)  
+**Owning Surface:** `api_service/auth.py`, `api_service/auth_providers.py`, `api_service/main.py`, `moonmind/config/settings.py` (`OIDCSettings` storage), `moonmind/security/auth_modes_4120.py` (selector owner, #4120), `api_service/db/models.py` (`User`)  
 **Related Docs:** [SecretsSystem.md](./SecretsSystem.md), [ProviderProfiles.md](./ProviderProfiles.md), [SettingsSystem.md](./SettingsSystem.md), [KeycloakRemovalPlan.md](../tmp/KeycloakRemovalPlan.md) (predecessor proposal from #4102; starting evidence only, not the deliverable)
 
 > [!NOTE]
@@ -119,11 +119,6 @@ operator.
   (commit timestamp to final replica re-authorization check; clock starts at
   commit — see inventory §5.2). Clearing a cookie
   alone is not revocation.
-- Cache-hit recheck rule (K2 qualification): revocation is rechecked live on
-  every validation including session-cache hits; principal active status
-  (`is_active`) is enforced at authenticate/mint time and on full
-  (cache-miss) validation. Cache-hit status staleness is bounded by the 300s
-  session-cache cap, inside this 5-minute propagation bound.
 - Browser logout does not revoke independent worker credentials and does not
   cancel already-admitted workflows. Account disablement blocks new user actions
   immediately; already-admitted background work keeps its stored principal ID
@@ -195,44 +190,15 @@ bearer tokens, cookies, reset links, refresh material, or raw IdP token
 responses. No authentication material belongs in Temporal payloads, workflow
 artifacts, or runtime bridge evidence.
 
-## 11. Qualified upstream boundary (K2, MoonLadderStudios/MoonMind#4118)
+## 11. Qualified upstream boundary (K2)
 
-The portable Omnigent authentication capability qualified for MoonMind's API
-process is pinned to Omnigent commit
-`f04b0354fb5344c1ea8b92795ceb6760a9ad7595` (pinned submodule, no PyPI
-indirection, no mutable-main pin). The only supported upstream entrypoints
-are `omnigent.server.auth.UnifiedAuthProvider` (explicitly constructed;
-`create_auth_provider()` / `resolve_auth_source()` are never MoonMind
-selectors), `omnigent.server.oidc.mint_session_token` / `hmac_digest`, and
-`omnigent.server.passwords.verify_password` / `hash_password`. The whole
-upstream application, permission store, route factories, runtime server,
-device-grant store, synchronous concrete account store, and embedded host
-transport are excluded and never become MoonMind browser authority.
-
-MoonMind composes that capability through `moonmind/omnigent_qualification.py`:
-explicit fail-closed `QualifiedAuthConfig` (distinct control-plane cookie,
-key, issuer/audience purpose; no ambient `OMNIGENT_AUTH_*` selection);
-verified `(issuer, subject)` identity resolution before session minting with
-case-sensitive subjects and no email-based linking; async-safe
-`AsyncAccountStore` resolution of a validated identity to an existing
-`User.id`; MoonMind-purpose sessions with algorithm/expiry validation, live
-revocation checks on every validation including cache hits, conflicting
-cookie/bearer rejection, and explicit rejection of
-refresh/delegated/runner surfaces without broadening the upstream delegated
-allowlist. Principal status (`is_active`) is enforced at authenticate/mint
-time and on full validation; cache-hit status staleness is bounded by the
-300s session-cache cap, inside the §5 5-minute propagation bound. A missing
-or incompatible password hash is a controlled enrollment/reset requirement.
-Upstream admin-roster semantics are never promoted into MoonMind superuser
-authority.
-
-Conformance is proven by
-`tests/unit/security/test_omnigent_qualification_4118.py` (21 tests: real
-upstream slice, explicit-config flow, password/enrollment, hook ordering,
-cross-issuer and case-sensitive identity separation, revocation survival,
-cache/grant/malformed rejection, unsupported-surface rejection, isolation
-under hostile ambient environment). Pin, file identities, and image
-provenance are recorded in
-`docs/tmp/KeycloakRemovalQualification-4118.md`; `build_conformance_fixtures()`
-supplies real session issuance, account-store calls, hook ordering, and
-optional-surface rejection for the K3/K4 children.
+The reusable upstream authentication boundary qualified in
+MoonLadderStudios/MoonMind#4118 is declared in
+[OmnigentAuthAdapterContract.md](./OmnigentAuthAdapterContract.md): the
+pinned upstream entrypoints MoonMind composes, the validated-identity
+hook ordering before session minting, the MoonMind session-purpose
+binding and durable revocation interface, the explicitly rejected
+optional surfaces, and configuration isolation. That contract is the
+authoritative adapter reference for K3/K4; this document remains the
+authority for modes, identity, session, error, and background-work
+semantics.

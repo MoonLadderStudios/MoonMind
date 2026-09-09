@@ -1,0 +1,10 @@
+{
+  "failureShapeId": "terminal-projection-metadata-skew",
+  "incidentWorkflowId": "mm:2c280690-b10b-4a4c-a17d-1fc42662dec5",
+  "startedAt": "2026-09-08T16:57:55.413543+00:00",
+  "terminalUpdatedAt": "2026-09-08T17:14:26.020500+00:00",
+  "metadataUpdatedAt": "2026-09-08T17:14:26.303185+00:00",
+  "closedAt": "2026-09-08T17:14:26.823404+00:00",
+  "observedFailure": "Temporal list reports failed while the persisted detail rejects terminal evidence as stale and reports executing",
+  "invariant": "Temporal closure advances an open projection of the same run regardless of metadata write timestamps; stale running snapshots cannot reopen it"
+}

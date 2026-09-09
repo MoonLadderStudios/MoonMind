@@ -472,7 +472,7 @@ A narrow helper-activity exception is allowed only when all of the following are
 Current repo-aligned registration (`workflow_registry.py::workflow_fleet_activity_handlers` — seven handlers, not one):
 
 - adapter/metadata helpers from `workflows/agent_run.py`: `integration.resolve_adapter_metadata`, `integration.get_activity_route`, `integration.resolve_external_adapter`, `integration.external_adapter_execution_style`
-- checkpoint-persistence handlers from `workflows/checkpoint_branch_turn.py` (via `checkpoint_branch_activity_handlers()`): `checkpoint_branch.turn.mark_running`, `checkpoint_branch.turn.persist_terminal`, `checkpoint_branch.turn.persist_terminal_rejection` — retained for replay/in-flight compatibility of pre-cutover histories; no new calls route there.
+- checkpoint-persistence handlers from `workflows/checkpoint_branch_turn.py` (via `checkpoint_branch_activity_handlers()`): `checkpoint_branch.turn.mark_running`, `checkpoint_branch.turn.persist_terminal`, `checkpoint_branch.turn.persist_terminal_rejection` — retained for replay/in-flight compatibility of pre-cutover histories; no new calls route there. New writes schedule these types on the artifacts fleet behind the `checkpoint-branch-artifact-fleet-v1` patch marker; queue separation is not privilege separation until the workflow-queue registration is removed after its consumers drain.
 
 The list above is the current state, not the intended end state. The
 intended least-privilege boundary keeps the workflow fleet Temporal-only;

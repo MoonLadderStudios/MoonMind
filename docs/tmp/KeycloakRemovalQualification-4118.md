@@ -1,113 +1,109 @@
 # Keycloak Removal Qualification — #4118 (K2)
 
-Status: Qualification evidence for MoonLadderStudios/MoonMind#4118 (parent epic
-#4116, depends on #4117). Temporary execution scaffolding under `docs/tmp/`
-per AGENTS.md. Durable desired-state contracts live in
-`docs/Security/AuthenticationContracts.md` §11. This document records evidence;
-it changes no behavior.
+Status: Qualification slice for MoonLadderStudios/MoonMind#4118
+(parent epic #4116, depends on #4117). Temporary execution scaffolding
+under `docs/tmp/` per AGENTS.md. Durable adapter semantics live in
+`docs/Security/OmnigentAuthAdapterContract.md`. This document changes no
+runtime behavior, removes no services, and authorizes no production
+account changes.
 
-## 1. Upstream pin and packaged artifact identities
+## 1. Provenance
 
-- Upstream repository: `https://github.com/omnigent-ai/omnigent` (submodule `omnigent/`).
-- Pinned commit: `f04b0354fb5344c1ea8b92795ceb6760a9ad7595` (verified:
-  `git -C omnigent rev-parse HEAD` matches `UPSTREAM_PIN` in
-  `moonmind/omnigent_qualification.py`; `upstream_provenance()["pin_match"]`
-  is asserted in `tests/unit/security/test_omnigent_qualification_4118.py`).
-- Packaging: pinned submodule, no PyPI indirection, no mutable-main pin, no
-  private monkey-patch. Production packaging includes only the reusable
-  modules below; the whole upstream application, permission store, route
-  factories, runtime server, device-grant store, synchronous concrete account
-  store, and embedded host transport are never imported by the adapter.
-- Relevant image provenance: no new auth microservice or auth container. Only
-  the existing Omnigent host/runtime images remain pinned in
-  `docker-compose.yaml` (`omnigent-host`, `omnigent-host-moonmind`); ordinary
-  authenticated API requests require no network call to Omnigent Server.
-- File identities (sha256 at the pinned commit):
+- Upstream repository: `https://github.com/omnigent-ai/omnigent`
+  (git submodule `omnigent`).
+- Pinned commit: `f04b0354fb5344c1ea8b92795ceb6760a9ad7595` (verified via
+  `git -C omnigent rev-parse HEAD` in the working tree).
+- Packaged artifact: `omnigent==0.12.0` (`omnigent/pyproject.toml`
+  `[project].version`, mirrored in `omnigent/omnigent/version.py`).
+- No mutable-main pin and no private monkey-patch: qualification imports
+  only the reusable modules
+  (`omnigent.server.{auth,oidc,passwords,accounts_config}`) and never
+  the whole application, permission store, runtime server, device-grant
+  store, or CLI/magic-link routes. No `sys.modules` entry for
+  `omnigent.server.app`, `omnigent.server.permissions`, or
+  `omnigent.stores.permission_store` is created (asserted in
+  `test_production_packaging_excludes_irrelevant_runtime_modules`).
+- Image provenance: no new always-on auth container is introduced by
+  this slice; deployment image changes (if any) are owned by the K4/K6
+  cutover, not by qualification.
 
-| File | sha256 |
-| --- | --- |
-| `omnigent/server/auth.py` | `64b7aa4a1f759e3fa75da23787c0e53fdfab2ac7d71f1bcc13a9f78c0d2a1045` |
-| `omnigent/server/oidc.py` | `f139995b464c208b210a9abf5c28b9320691cbc3cfdc0afe3b69df6feb2cd70d` |
-| `omnigent/server/passwords.py` | `f0a6e41a86bfa9e1731ec9853e1cdc32c5a6511e318abeb0f4dedb3fb03233bb` |
-| `omnigent/server/accounts_config.py` | `72be98ae6650d0af40566275b3da4592e8e3338b0876b0edafe512883ed732fb` |
+## 2. What was built
 
-MoonMind baseline at qualification: `70e90df4a` (post-#4129 removal; `main`
-after #4138 inventory and #4140 removal).
+- Adapter: `moonmind/security/omnigent_auth_qualification.py` — explicit
+  `MoonmindAuthConfig` (no ambient `OMNIGENT_*` reads), `ValidatedIdentity`
+  hook resolved before minting, async `AsyncAccountStore` /
+  `SessionRevocationStore` protocols with hermetic in-memory fixtures,
+  MoonMind purpose-bound sessions (`moonmind-control-plane` /
+  `moonmind-browser-session`, distinct cookies/keys), a TTL cache that
+  re-validates every hit, and fail-closed rejection of refresh,
+  delegated, runner, CLI-ticket, magic-link, and upstream-admin-roster
+  surfaces.
+- Conformance fixtures:
+  `tests/unit/security/test_omnigent_auth_qualification_4118.py` (27
+  tests covering all six acceptance criteria; hermetic — no DB, no
+  network, no credentials).
+- Canonical contract: `docs/Security/OmnigentAuthAdapterContract.md`,
+  referenced from `docs/Security/AuthenticationContracts.md` §11.
+  The K1 inventory (`docs/tmp/KeycloakRemovalInventory-4117.md`) and
+  its fixtures are untouched.
 
-## 2. Supported interface contract
+## 3. Reuse evidence (real upstream entrypoints, pinned revision)
 
-Reusable upstream entrypoints (the only upstream surface the adapter touches):
+`collect_upstream_probe_evidence()` (exercised by
+`test_upstream_probes_pass_on_pinned_revision`) confirms against the
+pinned commit:
 
-- `omnigent.server.auth.UnifiedAuthProvider` — constructed explicitly with an
-  explicit `source`, explicit `header_name`, `local_single_user=False`, and an
-  explicit cookie-config shape. `create_auth_provider()` and
-  `resolve_auth_source()` are never used for MoonMind decisions.
-- `omnigent.server.oidc.mint_session_token` / `hmac_digest` — real session
-  issuance and cache-key derivation for the qualification slice.
-- `omnigent.server.passwords.verify_password` / `hash_password` — qualified
-  password handling; a missing or incompatible hash yields a controlled
-  enrollment/reset requirement (`EnrollmentRequiredError`).
+- `mint_session_token` + `hmac_digest` + `UnifiedAuthProvider`
+  cookie round-trip, including `None` for missing/malformed tokens.
+- Argon2 password hash/verify round-trip through
+  `omnigent.server.passwords`.
+- `AccountsConfig.from_env` and `OIDCConfig.from_env` fail loud on
+  missing configuration.
+- Upstream defaults intact (`local` reserved identity, default header
+  name, header-mode fail-closed without the single-user marker), so
+  existing standalone upstream consumers remain supported.
 
-MoonMind-owned seams (`moonmind/omnigent_qualification.py`):
+## 4. Test results
 
-- `QualifiedAuthConfig`: explicit mode/cookie/key/TTL/issuer/audience, no env
-  reads, fail-closed validation (32-byte minimum secret, distinct cookie name,
-  non-blank issuer/audience, positive TTL, closed mode vocabulary).
-- `resolve_validated_identity()`: verified `(issuer, subject)` resolution
-  before minting; case-sensitive subject, full issuer URI, reserved identities
-  rejected, email carried as an opaque attribute only.
-- `AsyncAccountStore`: async protocol resolving a `ValidatedIdentity` to an
-  existing MoonMind UUID; sync verification offloaded with
-  `asyncio.to_thread`; no parallel account/admin tables.
-- `MoonmindQualifiedAuth`: MoonMind-purpose sessions (`iss`/`aud` bound,
-  HS256 only, distinct cookie/key, `token_use="moonmind-session"`, `jti`
-  revocation handle); live revocation checks on every validation including
-  cache hits (principal status enforced at authenticate/mint time and on
-  full validation; cache-hit status staleness bounded by the 300s cache
-  cap, inside the §5 5-minute propagation bound); conflicting cookie/bearer identities
-  rejected; refresh/delegated/runner surfaces explicitly rejected
-  (`UnsupportedSurfaceError` / `False`), never accepted by broadening the
-  upstream delegated allowlist.
-- Standalone upstream consumers remain supported: the submodule files are
-  unmodified; the adapter adds no MoonMind-only prerequisites to the portable
-  package and keeps upstream's independent default behavior intact.
+pytest is unavailable in the execution sandbox (no `pytest` module, no
+network for installs, and the MoonMind managed container backend
+requires a workflow runtime ID), so the conformance suite could not be
+executed via the canonical `./tools/test_unit.sh` runner here.
+Instead, every behavior the suite asserts was executed directly with
+the system interpreter against the real pinned upstream sources:
 
-Explicitly excluded (never imported, never mounted for MoonMind browser
-authority): `omnigent.server.app`, `omnigent.stores.permission_store`,
-`omnigent.server.routes.*`, `omnigent.server.device_grant_store`,
-`omnigent.server.accounts_store.SqlAlchemyAccountStore`, runtime server and
-retired embedded host transport.
+- All five `UpstreamProbeEvidence` probes pass on the pinned revision
+  (see §3).
+- All adapter flows pass: minimal accounts/OIDC issuance, email-only
+  rejection, cross-issuer distinction, case-sensitive subjects,
+  reserved-identity rejection, argon2 round-trip, enrollment-required
+  path, admin-advisory non-promotion, inactive blocking, cross-replica
+  revocation, generation invalidation, cache-bypass resistance,
+  grant/delegated/malformed/wrong-key rejection,
+  missing/invalid/conflict semantics, unsupported-surface rejection,
+  selector fail-closed behavior, hostile ambient `OMNIGENT_*`
+  isolation, control-plane/runtime cookie/key/purpose separation, and
+  upstream-token rejection at the MoonMind boundary.
+- K1 regression risk: `docs/Security/AuthenticationContracts.md` keeps
+  all frozen structured mode rows and retired-selector coverage and
+  gains only an additive §11 pointer; `api_service/auth.py`,
+  `api_service/auth_providers.py`, and `pyproject.toml` are unmodified
+  (cutover and packaging advances belong to K4/K5). Downstream
+  verification must rerun `./tools/test_unit.sh --python-only
+  tests/unit/security/` including `test_auth_inventory_4117.py`.
 
-## 3. Qualification results
+## 5. Known limits / handoff to K3/K4
 
-Conformance suite: `tests/unit/security/test_omnigent_qualification_4118.py`
-(21 tests). Verified by direct execution of the adapter paths in this
-environment (no pytest runner available offline): real upstream mint/validate
-slice, MoonMind minimal flow with explicit config + injected store, password
-verification + controlled enrollment, hook ordering
-(identity → store → password → status), cross-issuer/case-sensitive identity
-separation, reserved-identity rejection, inactive-account refusal, durable
-revocation surviving cache hits, event-loop offload, cache/grant/malformed
-rejection, unsupported-surface rejection, cookie/bearer conflict rejection,
-fail-closed config, hostile `OMNIGENT_AUTH_*` ambient isolation, and
-control-plane/runtime purpose isolation all pass. Re-verified 2026-09-08
-after the cache-hit status-rule clarification: 21/21 stdlib-asyncio mirrors
-of each test's assertions (real pinned upstream modules, no pytest runner
-offline) pass, including pin-match at `f04b0354` with the submodule
-initialized. Required CI runs the suite
-via `./tools/test_unit.sh tests/unit/security/test_omnigent_qualification_4118.py`.
-
-Existing standalone upstream consumers are unaffected: no submodule file was
-modified (`git -C omnigent status` clean at the pinned commit).
-
-## 4. Fixtures for later issues
-
-`build_conformance_fixtures()` in `moonmind/omnigent_qualification.py`
-returns `{config, store, auth, pin}`: real session issuance, account-store
-call recording (`store.calls`), identity-hook ordering (`auth.hook_order`),
-and optional-surface rejection — consumed by the K3/K4 children. Canonical
-contract: `docs/Security/AuthenticationContracts.md` §11.
-
-No new auth microservice, copied OIDC/password implementation, whole-server
-embedding, or promotion of upstream admin flags into MoonMind superuser
-authority was introduced.
+- Production persistence wiring (existing MoonMind transactions and
+  profile authority behind the new protocols) is defined but not
+  connected; K3/K4 own the concrete adapters and migration.
+- API/route cutover is explicitly out of scope: no FastAPI Users path
+  was changed or removed here.
+- No upstream code changes were required for this slice, so no upstream
+  PR is referenced. If K3/K4 need a natively supported
+  validated-claims hook inside the upstream OIDC callback (rather than
+  the MoonMind-side `ValidatedIdentity` contract defined here), that
+  upstream extension must land through the reviewed upstream process
+  before the cutover relies on it; this issue must not be read as
+  permission to substitute an insecure local copy or to call Omnigent
+  Server remotely.

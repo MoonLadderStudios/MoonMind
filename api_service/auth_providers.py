@@ -16,27 +16,88 @@ from api_service.db.models import User
 from api_service.services.profile_service import ProfileService
 from moonmind.auth import AuthProviderManager, EnvAuthProvider, ProfileAuthProvider
 from moonmind.config.settings import settings
+from moonmind.security.auth_modes_4120 import (
+    get_request_production_mode,
+    is_disabled_local_mode,
+    resolve_moonmind_auth_config,
+)
 
 logger = logging.getLogger(__name__)
 
 _cached_current_user_dependency = None
 
 
-def _disabled_auth_fallback_user():
-    from types import SimpleNamespace
-
-    user_id_str = settings.oidc.DEFAULT_USER_ID or _DEFAULT_USER_ID
-    return SimpleNamespace(
-        id=uuid.UUID(user_id_str),
-        email=settings.oidc.DEFAULT_USER_EMAIL or "stub@example.com",
-        is_superuser=True,
-    )
-
-
 def _disabled_auth_test_user():
+    # Test-only principal. Production never mints administrator stubs:
+    # missing identity/DB data fails closed with 503 (see _current_user_fallback).
+    # Tests must use explicit dependency overrides for authenticated paths.
     from types import SimpleNamespace
 
     return SimpleNamespace(id=None, email="stub@example.com", is_superuser=True)
+
+
+def build_moonmind_control_plane_config(environ=None, mode=None):
+    """Resolve the MoonMind control-plane auth config explicitly (#4120 req 2).
+
+    Only MoonMind-owned inputs (AUTH_PROVIDER mode, MOONMIND_* cookie/key
+    material) are consumed. ``OMNIGENT_AUTH_*`` ambient values -- even
+    contradictory ones -- cannot select MoonMind behavior; simultaneous
+    same-origin use stays isolated through distinct cookies/keys/purposes.
+    Callers must pass the durable session secret explicitly; this helper
+    never reads runtime-server secrets.
+
+    ``mode`` accepts the startup-classified production mode so the
+    omitted-fresh path (blank storage, classified ``accounts``) resolves
+    through the same production code as explicit ``accounts``. When omitted,
+    the startup-classified mode is read via the auth-modes owner and blank
+    storage fails closed with 503 (startup owns the fresh-vs-upgrade
+    decision).
+
+    Production wiring: ``api_service.main._initialize_oidc_provider`` calls
+    :func:`resolve_moonmind_auth_config` directly with the classified
+    production mode at startup, so this helper is the request-time
+    counterpart of the same production boundary, not dead code.
+    """
+    from moonmind.security.auth_modes_4120 import default_session_key_path
+
+    if mode is not None:
+        from moonmind.security.omnigent_auth_qualification import (
+            validate_mode_selector,
+        )
+
+        effective = validate_mode_selector(str(mode).strip().lower())
+    else:
+        effective = get_request_production_mode()
+    if not effective:
+        # Omitted selector at request time: the startup classifier owns the
+        # fresh-vs-upgrade decision. Request code fails closed rather than
+        # guessing a mode.
+        raise HTTPException(status_code=503, detail="auth_undecided")
+    mode = effective
+    secret_env = os.environ.get("MOONMIND_SESSION_SECRET", "").strip()
+    cookie_secret: bytes
+    if secret_env:
+        from moonmind.security.auth_modes_4120 import resolve_session_secret
+
+        cookie_secret = resolve_session_secret(explicit_secret=secret_env)
+    else:
+        # Durable deployment-owned key; never a per-process placeholder.
+        from moonmind.security.auth_modes_4120 import resolve_session_secret
+
+        cookie_secret = resolve_session_secret(
+            explicit_secret=None,
+            key_path=default_session_key_path(),
+            allow_generate=False,
+            for_remote_production=False,
+        )
+    runtime_environ = dict(environ) if environ is not None else dict(os.environ)
+    return resolve_moonmind_auth_config(
+        mode=mode,
+        cookie_secret=cookie_secret,
+        require_secure_cookies=os.environ.get("MOONMIND_REQUIRE_SECURE_COOKIES", "1")
+        != "0",
+        environ=runtime_environ,
+    )
 
 
 async def get_default_user_from_db(
@@ -72,19 +133,23 @@ def get_current_user():
     """
 
     global _cached_current_user_dependency
-    if settings.oidc.AUTH_PROVIDER != "disabled":
+    from moonmind.security.auth_modes_4120 import get_request_production_mode
+
+    if get_request_production_mode() != "disabled":
         # Authenticated modes share the current bearer validation until the
         # #4124-era session contracts replace it; retired selectors fail at
-        # startup via OIDCSettings.validate_auth_provider, never here.
+        # startup via the auth-modes owner, never here.
         return current_active_user
 
     if _cached_current_user_dependency is None:
 
-        async def _current_user_fallback():  # pragma: no cover – simple helper
+        async def _current_user_fallback():
+            # Explicit test double only: unit tests without a database opt in
+            # via test_mode/PYTEST_CURRENT_TEST. Production (and any
+            # non-test caller) fails closed below -- missing identity/DB data
+            # in local mode never mints a synthetic administrator.
             if settings.workflow.test_mode or os.getenv("PYTEST_CURRENT_TEST"):
                 return _disabled_auth_test_user()
-            if os.getenv("MOONMIND_DISABLE_DEFAULT_USER_DB_LOOKUP") == "1":
-                return _disabled_auth_fallback_user()
 
             async def _load_default_user() -> User | None:
                 from api_service.db.base import get_async_session_context
@@ -103,18 +168,20 @@ def get_current_user():
                     user_obj.is_superuser = True
                     return user_obj
             except (Exception, asyncio.TimeoutError):
-                # Preserve fallback behaviour while surfacing lookup failures.
                 logger.warning(
-                    "Failed to load default user in disabled auth mode; falling back to stub user.",
+                    "Identity store unavailable in disabled auth mode; failing closed.",
                     exc_info=True,
                 )
+                raise HTTPException(status_code=503, detail="unavailable")
 
-            # Fallback: lightweight stub with the minimal attributes used in code.
-            return _disabled_auth_fallback_user()
+            # No synthetic admin fallback: a missing default row in local mode
+            # is a protected-setup signal, not an implicit grant.
+            raise HTTPException(status_code=503, detail="setup_required")
 
         _cached_current_user_dependency = _current_user_fallback
 
     return _cached_current_user_dependency
+
 
 def get_current_user_optional():
     """Return an auth dependency that tolerates missing bearer credentials.
@@ -123,7 +190,7 @@ def get_current_user_optional():
     are not blocked by FastAPI resolving a strict bearer-auth dependency first.
     """
 
-    if settings.oidc.AUTH_PROVIDER != "disabled":
+    if not is_disabled_local_mode():
         return current_active_user_optional
     return get_current_user()
 

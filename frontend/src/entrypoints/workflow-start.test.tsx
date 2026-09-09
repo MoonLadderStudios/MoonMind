@@ -235,7 +235,7 @@ describe("buildEditParametersPatch", () => {
     expect("followUpRetrieval" in patch).toBe(false);
   });
 
-  it("keeps rag/followUpRetrieval when the submission carries them", () => {
+  it("strips retired rag/followUpRetrieval even when the submission carries them", () => {
     const patch = buildEditParametersPatch({
       execution: {
         workflowId: "mm:edit-retrieval-keep",
@@ -255,11 +255,10 @@ describe("buildEditParametersPatch", () => {
       },
     });
 
-    expect(patch.rag).toEqual({ collections: ["docs"] });
-    expect(patch.followUpRetrieval).toEqual({
-      enabled: true,
-      collections: ["docs"],
-    });
+    // Retired (#4105): neither inherited nor submitted retrieval authority may
+    // reach a new submission.
+    expect("rag" in patch).toBe(false);
+    expect("followUpRetrieval" in patch).toBe(false);
   });
 
   it("strips retired follow-up fields from a historical canonical workflow", () => {
@@ -1710,13 +1709,15 @@ describe("MoonLadderStudios/MoonMind#3451 Omnigent readiness", () => {
           providerProfileRef: "oauth-1",
           launchPolicyRef: "on-demand-v1",
         },
-        rag: { collections: ["docs"], required: true },
-        followUpRetrieval: { enabled: true, collections: ["docs"] },
         task: {
           remediation: draft.remediation,
         },
       },
     });
+    // Retired (#4105): the imported draft's retrieval authoring is not
+    // resubmitted.
+    expect("rag" in request.payload).toBe(false);
+    expect("followUpRetrieval" in request.payload).toBe(false);
   });
 
   it("adopts the active default policy version without requiring a host-policy choice", async () => {
@@ -16059,7 +16060,7 @@ describe("Task Create MM-641 authoring validation", () => {
     ).toBeNull();
   });
 
-  it("submits authored Context retrieval (RAG) values while Advanced mode is on", async () => {
+  it("shows the retired retrieval notice and submits no vector fields while Advanced mode is on", async () => {
     renderWithClient(<WorkflowStartPage payload={withAttachmentPolicy()} />);
 
     fireEvent.change(await screen.findByLabelText("Instructions"), {
@@ -16075,16 +16076,10 @@ describe("Task Create MM-641 authoring validation", () => {
     expect(controls).not.toBeNull();
 
     fireEvent.click(within(controls).getByLabelText("Advanced mode"));
-    fireEvent.click(
-      screen.getByLabelText(
-        "Require initial context (fail the step if unavailable)",
-      ),
-    );
-    fireEvent.click(
-      screen.getByLabelText(
-        "Allow the session to request additional context during the run",
-      ),
-    );
+    // Retired (#4105): no editable retrieval inputs remain, only the notice.
+    expect(
+      screen.getByText(/Built-in vector retrieval has been retired/i),
+    ).toBeTruthy();
 
     fireEvent.click(screen.getByRole("button", { name: "Start Workflow" }));
 
@@ -16096,8 +16091,8 @@ describe("Task Create MM-641 authoring validation", () => {
     });
 
     const payload = latestCreateRequest().payload as Record<string, unknown>;
-    expect(payload.rag).toEqual({ required: true });
-    expect(payload.followUpRetrieval).toMatchObject({ enabled: true });
+    expect("rag" in payload).toBe(false);
+    expect("followUpRetrieval" in payload).toBe(false);
   });
 
   it("ignores hidden Context retrieval (RAG) authoring when Advanced mode is off", async () => {
@@ -16115,19 +16110,18 @@ describe("Task Create MM-641 authoring validation", () => {
     ) as HTMLElement;
     expect(controls).not.toBeNull();
 
-    // Author retrieval in Advanced mode, then hide the controls again before
-    // submitting.
+    // Retired (#4105): no editable retrieval inputs remain. Opening Advanced
+    // mode shows the retired notice, then hiding the controls again before
+    // submitting still sends no vector fields.
     fireEvent.click(within(controls).getByLabelText("Advanced mode"));
-    fireEvent.click(
-      screen.getByLabelText(
+    expect(
+      screen.getByText(/Built-in vector retrieval has been retired/i),
+    ).toBeTruthy();
+    expect(
+      screen.queryByLabelText(
         "Require initial context (fail the step if unavailable)",
       ),
-    );
-    fireEvent.click(
-      screen.getByLabelText(
-        "Allow the session to request additional context during the run",
-      ),
-    );
+    ).toBeNull();
     fireEvent.click(within(controls).getByLabelText("Advanced mode"));
     expect(
       document.querySelector('[data-testid="context-retrieval-controls"]'),
@@ -16164,38 +16158,30 @@ describe("Task Create MM-641 authoring validation", () => {
     ) as HTMLElement;
     expect(controls).not.toBeNull();
 
-    // Author retrieval, turn Advanced mode off to clear it, then turn it back
-    // on to adjust an unrelated advanced control.
+    // Retired (#4105): toggling Advanced mode off and on never restores
+    // editable retrieval inputs; only the retired notice renders.
     fireEvent.click(within(controls).getByLabelText("Advanced mode"));
-    fireEvent.click(
-      screen.getByLabelText(
-        "Require initial context (fail the step if unavailable)",
-      ),
-    );
-    fireEvent.click(
-      screen.getByLabelText(
-        "Allow the session to request additional context during the run",
-      ),
-    );
+    expect(
+      screen.getByText(/Built-in vector retrieval has been retired/i),
+    ).toBeTruthy();
     fireEvent.click(within(controls).getByLabelText("Advanced mode"));
     fireEvent.click(within(controls).getByLabelText("Advanced mode"));
 
-    // The reopened controls are unauthored again instead of showing the values
-    // the operator already cleared.
+    // The reopened controls show the retired notice instead of editable
+    // retrieval authoring.
     expect(
-      (
-        screen.getByLabelText(
-          "Require initial context (fail the step if unavailable)",
-        ) as HTMLInputElement
-      ).checked,
-    ).toBe(false);
+      screen.getByText(/Built-in vector retrieval has been retired/i),
+    ).toBeTruthy();
     expect(
-      (
-        screen.getByLabelText(
-          "Allow the session to request additional context during the run",
-        ) as HTMLInputElement
-      ).checked,
-    ).toBe(false);
+      screen.queryByLabelText(
+        "Require initial context (fail the step if unavailable)",
+      ),
+    ).toBeNull();
+    expect(
+      screen.queryByLabelText(
+        "Allow the session to request additional context during the run",
+      ),
+    ).toBeNull();
 
     fireEvent.click(screen.getByRole("button", { name: "Start Workflow" }));
 
@@ -16211,7 +16197,7 @@ describe("Task Create MM-641 authoring validation", () => {
     expect("rag" in payload).toBe(false);
     expect("followUpRetrieval" in payload).toBe(false);
   });
-  it("reveals Advanced mode so an inherited rerun retrieval policy stays visible and resubmitted", async () => {
+  it("reveals Advanced mode and strips the inherited retired rerun retrieval policy", async () => {
     window.history.pushState(
       {},
       "Task Rerun",
@@ -16233,11 +16219,19 @@ describe("Task Create MM-641 authoring validation", () => {
       '[data-canonical-create-section="Execution controls"]',
     ) as HTMLElement;
     expect(controls).not.toBeNull();
-    expect(
-      (within(controls).getByLabelText("Advanced mode") as HTMLInputElement)
-        .checked,
-    ).toBe(true);
+    // Retired (#4105): an inherited rerun retrieval policy no longer forces
+    // Advanced mode open. Enable it explicitly to confirm the retired notice
+    // renders instead of editable controls.
+    const advancedToggle = within(controls).getByLabelText(
+      "Advanced mode",
+    ) as HTMLInputElement;
+    if (!advancedToggle.checked) {
+      fireEvent.click(advancedToggle);
+    }
     expect(within(controls).getByText("Context retrieval (RAG)")).toBeTruthy();
+    expect(
+      screen.getByText(/Built-in vector retrieval has been retired/i),
+    ).toBeTruthy();
 
     fireEvent.change(instructions, {
       target: { value: "Rerun with the inherited retrieval policy." },
@@ -16260,14 +16254,10 @@ describe("Task Create MM-641 authoring validation", () => {
     const request = JSON.parse(String(updateCall?.[1]?.body)) as {
       parametersPatch: Record<string, unknown>;
     };
-    expect(request.parametersPatch.rag).toEqual({
-      collections: ["docs"],
-      required: true,
-    });
-    expect(request.parametersPatch.followUpRetrieval).toMatchObject({
-      enabled: true,
-      collections: ["docs"],
-    });
+    // Retired (#4105): the inherited rerun retrieval policy is stripped, never
+    // resubmitted.
+    expect("rag" in request.parametersPatch).toBe(false);
+    expect("followUpRetrieval" in request.parametersPatch).toBe(false);
   });
 
   it("does not serialize the primary Skill onto blank added steps", async () => {

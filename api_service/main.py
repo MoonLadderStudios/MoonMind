@@ -674,7 +674,250 @@ async def _initialize_oidc_provider(app: FastAPI):
     # fail startup with migration guidance instead of attempting provider-specific
     # discovery against a retired issuer. Generic external OIDC discovery is owned
     # by the #4124 contract; this step performs no outbound DNS/connect attempt.
-    settings.oidc.validate_auth_provider()
+    # Mode interpretation lives in moonmind.security.auth_modes_4120 (#4120).
+    from moonmind.security.auth_modes_4120 import (
+        MIGRATION_DECISION_ENV_VAR,
+        MIGRATION_DECISION_TABLE,
+        AuthMigrationDecision,
+        MigrationRequiredError,
+        auth_readiness_summary,
+        classify_deployment,
+        ensure_migration_decision_table_sql,
+        is_auth_provider_explicit,
+        is_missing_schema_error,
+        parse_migration_decision,
+        public_base_url_is_loopback,
+        redacted_diagnostics,
+        resolve_moonmind_auth_config,
+        resolve_session_secret,
+        default_session_key_path,
+        validate_public_base_url,
+        validate_publish_binding,
+        validate_trusted_proxy_config,
+    )
+
+    # Blank/omitted must reach classification (#4120 req 3): validate the
+    # explicit selector only. Omitted never silently selects `disabled`.
+    explicit = is_auth_provider_explicit()
+    if explicit:
+        settings.oidc.validate_auth_provider()
+        raw = (settings.oidc.AUTH_PROVIDER or "").strip()
+    else:
+        raw = ""
+    decision = parse_migration_decision(os.environ.get(MIGRATION_DECISION_ENV_VAR))
+    # A malformed local principal ID is a deterministic configuration error:
+    # fail startup actionably instead of masking it as transient 503s on the
+    # request path.
+    try:
+        from uuid import UUID as _UUID
+
+        from api_service.auth import _DEFAULT_USER_ID as _fallback_user_id
+
+        _UUID(settings.oidc.DEFAULT_USER_ID or _fallback_user_id)
+    except Exception as exc:
+        raise RuntimeError(
+            "Invalid DEFAULT_USER_ID for disabled local mode: must parse "
+            f"as a UUID: {exc}"
+        ) from exc
+    has_users: bool | None = None
+    # Probe whenever the fresh/setup decision needs account state: omitted
+    # selectors (fresh vs. pre-cutover) and explicit `accounts` (fresh setup
+    # vs. established). Other explicit modes never derive setup from it.
+    if (not explicit and not raw) or (explicit and raw.lower() == "accounts"):
+        # Omitted selector: distinguish fresh vs. pre-cutover via a bounded
+        # users probe plus the versioned persisted migration decision (#4119
+        # contract). Fresh (no users) takes the accounts production path;
+        # populated without a decision stops actionably below.
+        try:
+            from api_service.db.base import get_async_session_context
+
+            async with get_async_session_context() as session:
+                result = await session.execute(text("SELECT COUNT(*) FROM users"))
+                count = int(result.scalar() or 0)
+                has_users = count > 0
+                # The persisted decision survives outside process env: ensure
+                # the table idempotently, then read the single recorded row.
+                # An explicit env decision takes precedence when present.
+                try:
+                    await session.execute(
+                        text(ensure_migration_decision_table_sql())
+                    )
+                    await session.commit()
+                except Exception:
+                    await session.rollback()
+                    logger.warning(
+                        "Auth-mode startup could not ensure the persisted "
+                        "migration-decision table; continuing with the "
+                        "operator-held env decision only."
+                    )
+                else:
+                    if decision is not None:
+                        # Persist an accepted operator-held decision so a later
+                        # deployment without the env var keeps working instead
+                        # of regressing to migration_required (#4119 contract).
+                        # Best-effort: the env decision stays authoritative.
+                        try:
+                            from datetime import datetime, timezone
+
+                            await session.execute(
+                                text(
+                                    f"INSERT INTO {MIGRATION_DECISION_TABLE} "
+                                    "(id, mode, version, decided_at) VALUES "
+                                    "(1, :mode, :version, :decided_at) "
+                                    "ON CONFLICT (id) DO UPDATE SET mode = "
+                                    "EXCLUDED.mode, version = EXCLUDED.version, "
+                                    "decided_at = EXCLUDED.decided_at"
+                                ),
+                                {
+                                    "mode": decision.mode,
+                                    "version": decision.version,
+                                    "decided_at": datetime.now(timezone.utc),
+                                },
+                            )
+                            await session.commit()
+                        except Exception:
+                            await session.rollback()
+                            logger.warning(
+                                "Auth-mode startup could not persist the accepted "
+                                "migration decision; continuing with the "
+                                "operator-held env decision only."
+                            )
+                    if decision is None:
+                        try:
+                            row = (
+                                await session.execute(
+                                    text(
+                                        f"SELECT mode, version FROM {MIGRATION_DECISION_TABLE} "
+                                        "WHERE id = 1"
+                                    )
+                                )
+                            ).first()
+                        except Exception:
+                            logger.warning(
+                                "Auth-mode startup could not read the persisted "
+                                "migration decision; continuing with the "
+                                "operator-held env decision only."
+                            )
+                        else:
+                            if row is not None:
+                                try:
+                                    decision = AuthMigrationDecision(
+                                        mode=str(row[0]),
+                                        version=int(row[1]),
+                                    )
+                                except Exception as exc:
+                                    raise RuntimeError(
+                                        "Invalid persisted auth migration decision "
+                                        f"(mode={row[0]!r}, version={row[1]!r}): "
+                                        f"{exc}. Re-run migration preflight to record "
+                                        "a current decision."
+                                    ) from exc
+        except RuntimeError:
+            raise
+        except Exception as exc:
+            if is_missing_schema_error(exc):
+                # Fresh database whose schema is not migrated yet: a missing
+                # users table (or database) means no users can exist.
+                has_users = False
+            else:
+                # Database unreachable or misconfigured: never guess fresh vs.
+                # upgrade. Abort so the orchestrator retries once the store is
+                # reachable; a failed probe must not cache a fresh-accounts
+                # classification that later masks a populated database.
+                raise RuntimeError(
+                    "Auth-mode startup could not probe user count; refusing to "
+                    f"guess fresh vs. upgrade: {exc}"
+                ) from exc
+    classification = classify_deployment(
+        raw_selector=raw if (explicit or raw) else None,
+        explicit=explicit,
+        has_users=bool(has_users),
+        migration_decision=decision,
+    )
+    if classification.migration_required:
+        raise RuntimeError(str(classification.detail))
+    production_mode = classification.production_mode or raw.lower() or "accounts"
+    # Durable signing secret: fresh local startup generates once; remote
+    # production requires explicit material; placeholders always rejected.
+    public_base = os.environ.get("MOONMIND_PUBLIC_BASE_URL", "").strip()
+    # Hostname-parsed, never substring-matched: `https://localhost.example.com`
+    # is remote while `http://[::1]:7000` is local. Blank stays local-only.
+    is_remote = bool(public_base) and not public_base_url_is_loopback(public_base)
+    try:
+        session_secret = resolve_session_secret(
+            # Compose renders omitted secret settings as empty strings.
+            # Preserve omission so the durable key owner can load or generate.
+            explicit_secret=os.environ.get("MOONMIND_SESSION_SECRET")
+            or os.environ.get("JWT_SECRET")
+            or None,
+            key_path=default_session_key_path(),
+            allow_generate=not is_remote,
+            for_remote_production=is_remote,
+        )
+    except Exception as exc:
+        raise RuntimeError(f"Invalid MoonMind session secret: {exc}") from exc
+    # Control-plane settings are resolved explicitly from MoonMind-owned
+    # inputs and passed into the #4118 contract (#4120 req 2).
+    # OMNIGENT_AUTH_*/OMNIGENT_ACCOUNTS_*/OMNIGENT_OIDC_* ambient values --
+    # even contradictory ones -- cannot select MoonMind behavior; simultaneous
+    # same-origin use stays isolated through distinct cookies/keys/purposes.
+    try:
+        resolve_moonmind_auth_config(
+            mode=production_mode,
+            cookie_secret=session_secret,
+            require_secure_cookies=os.environ.get(
+                "MOONMIND_REQUIRE_SECURE_COOKIES", "1"
+            )
+            != "0",
+            environ=dict(os.environ),
+        )
+    except Exception as exc:
+        raise RuntimeError(f"Invalid MoonMind control-plane auth config: {exc}") from exc
+    # Disabled-mode exposure at the deployment boundary.
+    try:
+        validate_publish_binding(
+            mode=production_mode,
+            publish_host=os.environ.get("MOONMIND_API_PUBLISH_HOST")
+            or os.environ.get("MOONMIND_API_HOST"),
+            trusted_ingress=os.environ.get("MOONMIND_TRUSTED_INGRESS", "").lower()
+            in ("1", "true", "yes"),
+        )
+    except Exception as exc:
+        raise RuntimeError(str(exc)) from exc
+    # Base-URL / trusted-proxy validation when configured.
+    if public_base:
+        try:
+            proxies = validate_trusted_proxy_config(
+                os.environ.get("MOONMIND_TRUSTED_PROXIES", "")
+            )
+            validate_public_base_url(
+                public_base,
+                trusted_proxies=proxies,
+                forwarded_host=os.environ.get("MOONMIND_FORWARDED_HOST_HINT"),
+                forwarded_proto=os.environ.get("MOONMIND_FORWARDED_PROTO_HINT"),
+            )
+        except Exception as exc:
+            raise RuntimeError(str(exc)) from exc
+    app.state.auth_production_mode = production_mode
+    app.state.auth_classification = classification
+    from moonmind.security.auth_modes_4120 import set_active_production_mode as _set_active_mode
+
+    _set_active_mode(production_mode)
+    logger.info(
+        "Auth modes initialized: %s",
+        redacted_diagnostics(
+            {
+                "auth_mode": production_mode,
+                "explicit": explicit,
+                "fresh_install": classification.fresh_install,
+                "setup_required": classification.setup_required,
+                "auth_readiness": auth_readiness_summary(
+                    production_mode=production_mode,
+                    setup_required=classification.setup_required,
+                )["auth_readiness"],
+            }
+        ),
+    )
 
 
 @asynccontextmanager
@@ -753,21 +996,101 @@ _api_start_time = time.monotonic()
 
 @health_router.get("/healthz")
 async def health_check():
-    """Health endpoint with database connectivity probe."""
+    """Health endpoint with database probe and distinguishable auth readiness."""
+    from moonmind.security.auth_modes_4120 import (
+        MIGRATION_DECISION_TABLE,
+        AuthMigrationDecision,
+        auth_readiness_summary,
+        classify_deployment,
+        is_auth_provider_explicit,
+        parse_migration_decision,
+        MIGRATION_DECISION_ENV_VAR,
+    )
+
     uptime = int(time.monotonic() - _api_start_time)
     try:
         async with get_async_session_context() as session:
             await session.execute(text("SELECT 1"))
-        return {"status": "ok", "db": "connected", "uptime_seconds": uptime}
+        db_status = "connected"
+        db_reachable = True
     except Exception:
-        return JSONResponse(
-            status_code=503,
-            content={
-                "status": "degraded",
-                "db": "unreachable",
-                "uptime_seconds": uptime,
-            },
-        )
+        db_status = "unreachable"
+        db_reachable = False
+    # Auth readiness stays distinguishable from infrastructure readiness.
+    stored_mode = (getattr(app.state, "auth_production_mode", None) or "").strip()
+    classification = getattr(app.state, "auth_classification", None)
+    if classification is not None:
+        production_mode = stored_mode or classification.production_mode
+        setup_required = classification.setup_required
+        migration_required = classification.migration_required
+    else:
+        raw = (settings.oidc.AUTH_PROVIDER or "").strip()
+        explicit = is_auth_provider_explicit()
+        decision = parse_migration_decision(os.environ.get(MIGRATION_DECISION_ENV_VAR))
+        try:
+            fresh_probe = False
+            if not explicit and not raw and db_reachable:
+                from api_service.db.base import get_async_session_context as _ctx
+
+                async with _ctx() as session:
+                    result = await session.execute(text("SELECT COUNT(*) FROM users"))
+                    fresh_probe = int(result.scalar() or 0) == 0
+                    # Best-effort persisted decision so pre-startup readiness
+                    # agrees with the startup classifier (#4119 contract).
+                    if decision is None and not fresh_probe:
+                        try:
+                            row = (
+                                await session.execute(
+                                    text(
+                                        f"SELECT mode, version FROM {MIGRATION_DECISION_TABLE} "
+                                        "WHERE id = 1"
+                                    )
+                                )
+                            ).first()
+                        except Exception:
+                            row = None
+                        if row is not None:
+                            try:
+                                decision = AuthMigrationDecision(
+                                    mode=str(row[0]),
+                                    version=int(row[1]),
+                                )
+                            except Exception:
+                                decision = None
+            classification = classify_deployment(
+                raw_selector=raw if (explicit or raw) else None,
+                explicit=explicit,
+                has_users=not fresh_probe if (not explicit and not raw) else False,
+                migration_decision=decision,
+            )
+        except Exception:
+            classification = None
+        if classification is None:
+            production_mode, setup_required, migration_required = (
+                raw.lower() or "undecided",
+                False,
+                False,
+            )
+        else:
+            production_mode = classification.production_mode
+            setup_required = classification.setup_required
+            migration_required = classification.migration_required
+    readiness = auth_readiness_summary(
+        production_mode=production_mode,
+        migration_required=migration_required,
+        setup_required=setup_required,
+        db_reachable=db_reachable,
+        secret_ready=True,
+    )
+    body = {
+        "status": "ok" if db_reachable and not migration_required else "degraded",
+        "db": db_status,
+        "uptime_seconds": uptime,
+        **readiness,
+    }
+    if not db_reachable or migration_required:
+        return JSONResponse(status_code=503, content=body)
+    return body
 
 
 @app.get("/", include_in_schema=False)
@@ -2438,7 +2761,9 @@ async def startup_event():
     # probes after startup instead of blocking it.
 
     # Ensure default user and profile exist if auth is disabled
-    if settings.oidc.AUTH_PROVIDER == "disabled":
+    from moonmind.security.auth_modes_4120 import is_disabled_local_mode as _is_disabled
+
+    if getattr(app.state, "auth_production_mode", "") == "disabled" or _is_disabled():
         logger.info(
             "Auth provider is 'disabled'. Ensuring default user and profile exist on startup."
         )
@@ -2507,7 +2832,7 @@ async def startup_event():
                     )
     else:
         logger.info(
-            f"Auth provider is '{settings.oidc.AUTH_PROVIDER}'. Skipping default user creation on startup."
+            f"Auth provider is '{getattr(app.state, 'auth_production_mode', settings.oidc.AUTH_PROVIDER)}'. Skipping default user creation on startup."
         )
 
     # Wait for the Temporal client to be available and initialize provider profile managers

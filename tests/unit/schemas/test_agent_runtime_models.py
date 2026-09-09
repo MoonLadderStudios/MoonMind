@@ -177,31 +177,32 @@ def test_agent_execution_request_rejects_sensitive_parameter_keys() -> None:
         )
 
 
-def test_agent_execution_request_allows_bounded_retrieval_token_budget() -> None:
-    request = AgentExecutionRequest(
-        agentKind="external",
-        agentId="omnigent",
-        executionProfileRef="profile:omnigent-default",
-        correlationId="corr-1",
-        idempotencyKey="idem-1",
-        parameters={
-            "followUpRetrieval": {
-                "maxContextTokens": 500,
-                "latencyMs": 250,
-            }
-        },
-    )
-
-    assert request.parameters["followUpRetrieval"]["maxContextTokens"] == 500
+def test_agent_execution_request_rejects_retired_retrieval_fields() -> None:
+    """Retired (#4105): vector retrieval fields fail before host launch."""
+    with pytest.raises(ValidationError, match="4105"):
+        AgentExecutionRequest(
+            agentKind="external",
+            agentId="omnigent",
+            executionProfileRef="profile:omnigent-default",
+            correlationId="corr-1",
+            idempotencyKey="idem-1",
+            parameters={
+                "followUpRetrieval": {
+                    "maxContextTokens": 500,
+                    "latencyMs": 250,
+                }
+            },
+        )
 
 
 @pytest.mark.parametrize("value", [0, -1, True, "500"])
 def test_agent_execution_request_rejects_invalid_retrieval_token_budget(
     value: object,
 ) -> None:
+    # Retired (#4105): the whole vector block is rejected before budget checks.
     with pytest.raises(
         ValidationError,
-        match="followUpRetrieval.maxContextTokens must be a positive integer",
+        match="4105",
     ):
         AgentExecutionRequest(
             agentKind="external",

@@ -39,4 +39,12 @@ Allowed row statuses:
 
 Produce `boundedBacklog` for every missing, partial, conflict, or required-unverified row. The backlog is the authoritative implementation backlog for downstream planning, tasks, implementation, and verification.
 
+Separate executable repository changes from required evidence or decisions owned
+outside the current runtime. Name the owner, missing evidence, and resume check
+for each unavailable prerequisite. A mixed backlog can proceed with independent
+repository work, but if only unavailable mandatory prerequisites remain, report
+`BLOCKED` with that handoff instead of starting another implementation pass.
+Optional deployment diagnostics are limitations, not blockers; explicitly required
+deployment acceptance cannot be silently excluded because access is unavailable.
+
 Do not choose `FULLY_IMPLEMENTED` unless every repo-verifiable source row is verified and every manual/provider-only row is explicitly scoped.
