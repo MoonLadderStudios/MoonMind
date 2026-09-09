@@ -757,6 +757,8 @@ def test_removal_no_legacy_routes_selectors_or_topology():
 @pytest.mark.asyncio
 async def test_no_old_token_acceptance():
     """Old-issuer tokens die at the boundary; no issuance route is advertised."""
+    from fastapi_users.authentication import BearerTransport
+
     config = _control_plane_config()
     store, revocation, _, identity = _enrolled_store()
     token, _ = await qual.mint_moonmind_session(
@@ -767,7 +769,23 @@ async def test_no_old_token_acceptance():
     old_token = jwt.encode(payload, config.cookie_secret, algorithm="HS256")
     with pytest.raises(qual.AuthInvalidError):
         await qual.validate_moonmind_session(old_token, store, revocation, config)
-    assert auth_module.bearer_transport.tokenUrl == ""
+    # BearerTransport is OpenAPI docs metadata only (it does not affect bearer
+    # validation). Attribute spelling differs across fastapi-users releases
+    # (tokenUrl vs token_url) and some releases expose neither, so assert the
+    # no-issuance property through supported evidence: transport type plus the
+    # mounted-route set carrying no token-issuance route.
+    transport = auth_module.bearer_transport
+    assert isinstance(transport, BearerTransport)
+    for attr in ("tokenUrl", "token_url"):
+        if hasattr(transport, attr):
+            assert getattr(transport, attr) == ""
+            break
+    from api_service.main import app
+
+    mounted = {route.path for route in app.routes if hasattr(route, "path")}
+    assert "/auth/jwt/login" not in mounted
+    assert "/auth/jwt/logout" not in mounted
+    assert not any(path.startswith("/api/v1/auth") for path in mounted)
 
 
 def test_secret_free_diagnostics():
