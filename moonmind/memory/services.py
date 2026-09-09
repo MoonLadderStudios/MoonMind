@@ -29,20 +29,6 @@ class PlanningAdapter(Protocol):
         raise NotImplementedError
 
 
-class LongTermMemoryAdapter(Protocol):
-    def search(
-        self,
-        query: str,
-        *,
-        namespace_id: str,
-        repo: str,
-    ) -> list[LongTermMemory]:
-        raise NotImplementedError
-
-    def add_or_update(self, memory: LongTermMemory) -> LongTermMemory:
-        raise NotImplementedError
-
-
 def evaluate_memory_proposals(
     *,
     proposal_refs: list[str],
@@ -293,7 +279,13 @@ class TaskHistoryService:
 
 @dataclass
 class InMemoryLongTermMemoryService:
-    """Mem0-compatible long-term memory adapter."""
+    """Approved-review-state long-term memory over explicit references.
+
+    MoonLadderStudios/MoonMind#4109: the hosted Mem0 adapter is retired. This
+    in-memory service remains for tests and local-only wiring; it performs
+    scoped exact-reference reads (namespace/repo/review-state filtered) with
+    no vector index, no embeddings, and no external calls.
+    """
 
     memories: list[LongTermMemory] = field(default_factory=list)
 
@@ -328,68 +320,17 @@ class InMemoryLongTermMemoryService:
 
 
 @dataclass
-class Mem0LongTermMemoryService:
-    """Adapter for an injected Mem0-compatible client.
-
-    The client is expected to expose ``search(query, metadata=...)`` and
-    ``add(text, metadata=...)`` methods. MoonMind keeps provenance and review
-    metadata in the payload so Mem0 is a long-term memory API layer, not the
-    source of truth for run evidence.
-    """
-
-    client: Any
-
-    def search(
-        self,
-        query: str,
-        *,
-        namespace_id: str,
-        repo: str,
-    ) -> list[LongTermMemory]:
-        results = self.client.search(
-            query,
-            metadata={
-                "namespace_id": namespace_id,
-                "repo": repo,
-                "review_state": "approved",
-            },
-        )
-        return [
-            _memory_from_mem0_result(result, namespace_id=namespace_id, repo=repo)
-            for result in results
-        ]
-
-    def add_or_update(self, memory: LongTermMemory) -> LongTermMemory:
-        metadata = _clean_mem0_metadata(
-            {
-                "namespace_id": memory.namespace_id,
-                "repo": memory.repo,
-                "scope": memory.scope,
-                "review_state": memory.review_state,
-                "workflow_id": memory.provenance.workflow_id,
-                "agent_run_id": memory.provenance.agent_run_id,
-                "commits": ",".join(memory.provenance.commits),
-                "pull_request_url": memory.provenance.pull_request_url,
-                "artifact_refs": ",".join(memory.provenance.artifact_refs),
-                "source_refs": ",".join(memory.provenance.source_refs),
-                **memory.metadata,
-            },
-        )
-        self.client.add(
-            memory.text,
-            metadata=metadata,
-        )
-        return memory
-
-
-@dataclass
 class RetrievalGateway:
-    """Assemble Plane A/B/C/document memory into a token-budgeted context pack."""
+    """Assemble Plane A/B/document memory into a token-budgeted context pack.
+
+    MoonLadderStudios/MoonMind#4109: hosted Mem0 Plane C memory is retired, so
+    only planning (Beads, explicit-reference), history (in-memory digest
+    store), and caller-supplied document candidates are assembled here.
+    """
 
     settings: MemorySettings = field(default_factory=MemorySettings)
     planning: PlanningAdapter | None = None
     history: InMemoryTaskHistoryStore | None = None
-    long_term: LongTermMemoryAdapter | None = None
     document_candidates: list[MemoryCandidate] = field(default_factory=list)
 
     def retrieve_context_pack(
@@ -429,20 +370,6 @@ class RetrievalGateway:
                 "history",
                 lambda: self.history.search(query, namespace_id=namespace_id, repo=repo)
                 if self.settings.history == "digest"
-                else [],
-                degraded,
-            )
-        )
-        candidates.extend(
-            memory.as_candidate()
-            for memory in self._collect(
-                "long_term",
-                lambda: self.long_term.search(
-                    query,
-                    namespace_id=namespace_id,
-                    repo=repo,
-                )
-                if self.settings.long_term == "mem0"
                 else [],
                 degraded,
             )
@@ -507,65 +434,3 @@ def _terms(value: str) -> set[str]:
 def _score(text: str, terms: set[str]) -> int:
     haystack = text.casefold()
     return sum(1 for term in terms if term in haystack)
-
-
-def _memory_from_mem0_result(
-    result: Any,
-    *,
-    namespace_id: str,
-    repo: str,
-) -> LongTermMemory:
-    if isinstance(result, dict):
-        text = str(result.get("memory") or result.get("text") or result.get("value") or "")
-        metadata = result.get("metadata") or {}
-    else:
-        text = str(getattr(result, "memory", None) or getattr(result, "text", None) or result)
-        metadata = getattr(result, "metadata", {}) or {}
-    if not isinstance(metadata, dict):
-        metadata = {}
-    raw_scope = str(metadata.get("scope") or "project").strip().lower()
-    scope = raw_scope if raw_scope in ("project", "team", "user") else "project"
-    raw_state = str(metadata.get("review_state") or "approved").strip().lower()
-    review_state = (
-        raw_state if raw_state in ("draft", "approved", "deprecated") else "approved"
-    )
-    provenance = MemoryProvenance(
-        workflow_id=_optional_str(metadata.get("workflow_id")),
-        agent_run_id=_optional_str(metadata.get("agent_run_id")),
-        commits=_split_csv(metadata.get("commits")),
-        pull_request_url=_optional_str(metadata.get("pull_request_url")),
-        artifact_refs=_split_csv(metadata.get("artifact_refs")),
-        source_refs=_split_csv(metadata.get("source_refs")) or ["mem0"],
-    )
-    return LongTermMemory(
-        namespace_id=str(metadata.get("namespace_id") or namespace_id),
-        repo=str(metadata.get("repo") or repo),
-        scope=scope,
-        text=text,
-        review_state=review_state,
-        provenance=provenance,
-        metadata={str(key): str(value) for key, value in metadata.items() if value is not None},
-    )
-
-
-def _clean_mem0_metadata(metadata: dict[str, Any]) -> dict[str, Any]:
-    return {
-        key: value
-        for key, value in metadata.items()
-        if value is not None and (not isinstance(value, str) or value.strip())
-    }
-
-
-def _optional_str(value: Any) -> str | None:
-    if value is None:
-        return None
-    text = str(value).strip()
-    return text or None
-
-
-def _split_csv(value: Any) -> list[str]:
-    if value is None:
-        return []
-    if isinstance(value, list):
-        return [str(item) for item in value if str(item).strip()]
-    return [item.strip() for item in str(value).split(",") if item.strip()]
