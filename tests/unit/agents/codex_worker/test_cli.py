@@ -13,9 +13,13 @@ from moonmind.utils.cli import CliVerificationError
 
 @pytest.fixture(autouse=True)
 def _disable_rag_preflight_checks(monkeypatch) -> None:
-    """Prevent preflight tests from performing slow external RAG readiness checks."""
+    """Neutralize any residual RAG readiness hook (retired in #4112)."""
 
-    monkeypatch.setattr(cli, "ensure_rag_ready", lambda _settings: None)
+    # MoonLadderStudios/MoonMind#4112: the vector guardrail probe was removed
+    # from preflight. Older tests patched cli.ensure_rag_ready; tolerate its
+    # absence so the suite stays green with the retired boundary.
+    if hasattr(cli, "ensure_rag_ready"):
+        monkeypatch.setattr(cli, "ensure_rag_ready", lambda _settings: None)
 
 
 @pytest.mark.parametrize(

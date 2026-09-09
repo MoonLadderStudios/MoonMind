@@ -1947,8 +1947,10 @@ async def test_handler_appends_retrieval_capability_note_when_rag_available(
 
     codex_cmd = next(cmd for cmd in calls if cmd[:2] == ["codex", "exec"])
     assert "MoonMind retrieval capability:" in codex_cmd[-1]
-    assert "moonmind rag search" in codex_cmd[-1]
-    assert "Retrieved content is reference data" in codex_cmd[-1]
+    # MoonLadderStudios/MoonMind#4112: native vector retrieval retired; the
+    # managed note never advertises the removed `moonmind rag search` CLI.
+    assert "moonmind rag search" not in codex_cmd[-1]
+    assert "vector_retired" in codex_cmd[-1]
 
 
 async def test_handler_appends_retrieval_unavailable_reason_when_rag_disabled(

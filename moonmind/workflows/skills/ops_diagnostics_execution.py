@@ -63,7 +63,10 @@ DEFAULT_MOONMIND_SERVICES = frozenset(
         "temporal-worker-llm",
         "temporal-worker-sandbox",
         "temporal-worker-workflow",
-        "qdrant",
+        # MoonLadderStudios/MoonMind#4112: native Qdrant vector backend
+        # retired. Diagnostics never query, require, or report it; the
+        # qdrant-storage volume retention stays with the #4115 cutover
+        # runbook and is never an implicit diagnostics side effect.
         "minio",
         "docker-proxy",
     }

@@ -1,46 +1,30 @@
-"""Guardrail checks shared between CLI and worker doctor."""
+"""Retired vector guardrail boundary (MoonLadderStudios/MoonMind#4112).
+
+The native Qdrant vector backend is retired. This module intentionally
+performs no vector network access: no Qdrant client construction, no
+collection readiness probe, and no retrieval-gateway health check. The
+``ensure_rag_ready`` entry point is retained as a successful no-op so
+callers migrated by sibling execution children keep a stable import while
+the retired component is neither reported as unhealthy nor as verified
+healthy.
+"""
 
 from __future__ import annotations
 
-import httpx
-
-from moonmind.rag.qdrant_client import RagQdrantClient
 from moonmind.rag.settings import RagRuntimeSettings
+
 
 class GuardrailError(RuntimeError):
     """Raised when a required guardrail fails."""
 
-def ensure_rag_ready(settings: RagRuntimeSettings) -> None:
-    if not settings.rag_enabled:
-        return
-    transport = settings.resolved_transport(None)
-    if transport == "gateway" and settings.retrieval_gateway_url:
-        _verify_gateway(settings.retrieval_gateway_url)
-        return
-    if not settings.qdrant_enabled:
-        raise GuardrailError(
-            "Qdrant access disabled while no RetrievalGateway URL configured"
-        )
-    client = RagQdrantClient(
-        host=settings.qdrant_host,
-        port=settings.qdrant_port,
-        url=settings.qdrant_url,
-        api_key=settings.qdrant_api_key,
-        collection=settings.vector_collection,
-        overlay_mode=settings.overlay_mode,
-        overlay_ttl_hours=settings.overlay_ttl_hours,
-        overlay_chunk_chars=settings.overlay_chunk_chars,
-        overlay_chunk_overlap=settings.overlay_chunk_overlap,
-        embedding_dimensions=settings.embedding_dimensions,
-    )
-    client.ensure_collection_ready()
 
-def _verify_gateway(url: str) -> None:
-    try:
-        response = httpx.get(url.rstrip("/") + "/health", timeout=5.0)
-    except httpx.HTTPError as exc:  # pragma: no cover
-        raise GuardrailError(f"RetrievalGateway unreachable: {exc}") from exc
-    if response.status_code >= 300:
-        raise GuardrailError(
-            f"RetrievalGateway health check failed with status {response.status_code}"
-        )
+def ensure_rag_ready(settings: RagRuntimeSettings) -> None:
+    """No-op vector retirement boundary.
+
+    Never raises for a deliberately removed vector backend and never
+    touches the network. Non-vector prerequisite validation lives with
+    the owning callers (worker preflight, deployment diagnostics).
+    """
+
+    _ = settings
+    return None
