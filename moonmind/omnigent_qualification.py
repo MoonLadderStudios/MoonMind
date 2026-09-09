@@ -429,6 +429,7 @@ class MoonmindQualifiedAuth:
         )
         oidc_cfg = cookie_shape if config.mode == "oidc" else None
         accounts_cfg = cookie_shape if config.mode != "oidc" else None
+        self._cookie_shape = cookie_shape
         self._upstream_provider = auth_mod.UnifiedAuthProvider(
             source=config.mode if config.mode in ("oidc", "accounts") else "header",
             oidc_config=oidc_cfg,
