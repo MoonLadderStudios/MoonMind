@@ -23,7 +23,7 @@ app = typer.Typer(
     help=(
         "MoonMind developer utilities (worker, manifest, container). "
         "Application authentication is selected by AUTH_PROVIDER "
-        "(accounts, oidc, header, disabled; retired keycloak/default/google "
+        "(accounts, oidc, header, disabled; retired keycloak/default/google/local "
         "selectors are rejected) — see "
         "docs/Security/AuthenticationContracts.md. Container commands run as "
         "machine callers with the MOONMIND_CONTAINER_JOBS_BEARER_TOKEN "

@@ -44,6 +44,12 @@ def test_mcp_doc_uses_selector_model_not_two_state():
     assert "same-origin" in text
     assert "AuthenticationContracts" in text
     assert "worker_token_deprecated" in text
+    # The unauthenticated Streamable HTTP GET probe must not be described
+    # as an authenticated route, and the cookie credential must be labeled
+    # as pending-session target behavior, not a currently accepted credential.
+    assert "handle_streamable_http_get" in text
+    assert "unauthenticated" in text.lower()
+    assert "#4124" in text
 
 
 def test_artifact_doc_binds_all_modes_with_machine_table():
@@ -64,6 +70,10 @@ def test_docker_backend_doc_distinguishes_user_and_machine_credentials():
     assert "MOONMIND_CONTAINER_JOBS_BEARER_TOKEN" in text
     assert "AuthenticationContracts" in text
     assert "never become browser credentials" in text or "never accepted as a MoonMind browser" in text
+    # The container-job endpoint returns capability-specific codes, not the
+    # generic user-auth codes.
+    assert "container_capability_required" in text
+    assert "invalid_container_capability" in text
 
 
 def test_combined_stack_doc_separates_app_login_from_host_credentials():
@@ -78,6 +88,7 @@ def test_readme_separates_operator_journeys():
     assert "protected operator setup" in text
     assert "MOONMIND_AUTH_MIGRATION_DECISION" in text
     assert "Retired selectors" in text
+    assert "`local`" in text
     assert "source credentials" in text
     assert "model eligibility" in text or "Model" in text
     assert "Authentication Contracts" in text
@@ -88,6 +99,7 @@ def test_env_template_points_at_canonical_contract():
     assert "AUTH_PROVIDER" in text
     assert "docs/Security/AuthenticationContracts.md" in text
     assert "keycloak/default/google" in text
+    assert "local" in text
 
 
 def test_canonical_doc_owns_matrix_tooling_and_evidence():
@@ -101,6 +113,21 @@ def test_canonical_doc_owns_matrix_tooling_and_evidence():
     assert "Status: Proposed" in text or "Status:` Proposed" in text or "Proposed" in text
     # Must not claim shipped end-to-end journeys ahead of qualification.
     assert "not verified operator procedure" in text or "contract text" in text
+
+
+def test_canonical_doc_defers_execution_status_to_tmp_ledger():
+    # Point-in-time execution status (landed tickets, pending backlog IDs)
+    # belongs in docs/tmp/, not in the canonical declarative contract.
+    ledger = REPO_ROOT / "docs/tmp/KeycloakRemovalStatus-4130.md"
+    assert ledger.exists()
+    ledger_text = ledger.read_text(encoding="utf-8")
+    assert "#4117" in ledger_text
+    assert "#4128" in ledger_text
+    assert "Status: Proposed" in ledger_text
+    canonical = _read(CANONICAL_DOC)
+    assert "KeycloakRemovalStatus-4130" in canonical
+    assert "What has landed" not in canonical
+    assert "What is still pending" not in canonical
 
 
 def test_removal_plan_retained_until_execution_complete():
@@ -165,6 +192,10 @@ def test_cli_help_documents_auth_provider_modes():
     assert "AuthenticationContracts" in cli
     assert "MOONMIND_CONTAINER_JOBS_BEARER_TOKEN" in cli
     assert "worker_token_deprecated" in cli
+    # `local` is a retired selector per OIDCSettings.RETIRED_AUTH_PROVIDERS,
+    # so the user-facing retired inventory must name it, not just
+    # keycloak/default/google.
+    assert "local" in cli
 
 
 def test_openapi_help_documents_auth_provider_modes_and_errors():
@@ -183,6 +214,7 @@ def test_openapi_help_documents_auth_provider_modes_and_errors():
     assert "worker_token_deprecated" in text
     assert "AuthenticationContracts" in text
     assert "keycloak/default/google" in text
+    assert "local" in text
     assert "#4128" in text
 
 

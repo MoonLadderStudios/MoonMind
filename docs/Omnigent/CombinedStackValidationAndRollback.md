@@ -27,7 +27,7 @@ phase stays available without rewriting those immutable per-run snapshots.
 > the host-class table below. Model Provider Profile OAuth, GitHub/runtime/worker
 > credentials, and Omnigent host-auth lifecycles are not application-login
 > cleanup targets and are never repurposed as user credentials. Retired
-> selectors (`keycloak`, `default`, `google`) fail at startup with migration
+> selectors (`keycloak`, `default`, `google`, `local`) fail at startup with migration
 > guidance.  
 **Related Implementation:** MM-972, source issue MM-968, coverage DESIGN-REQ-019 through DESIGN-REQ-022, DESIGN-REQ-010, DESIGN-REQ-018
 

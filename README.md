@@ -31,14 +31,19 @@ See the [Omnigent module entrypoint](docs/Omnigent/README.md), the canonical [Om
 4. `cd MoonMind && git submodule update --init --recursive`. This initializes submodules such as Omnigent.
 5. Run `docker compose up -d` to start the service (infrastructure startup; no mandatory `.env` on a fresh install)
 6. Open [http://localhost:7000](http://localhost:7000). For combined MoonMind plus Omnigent validation, see [Combined Stack Validation and Rollback](docs/Omnigent/CombinedStackValidationAndRollback.md).
-7. Complete protected operator setup: on a fresh install the production path
-   selects `accounts` with protected first-owner setup and invite-only
-   enrollment (no unauthenticated administrator is granted). On an existing
-   database with an omitted `AUTH_PROVIDER`, startup stops actionably pending
-   an explicit migration decision (`AUTH_PROVIDER` or
+7. Complete protected operator setup: a zero-config `docker compose up` ships
+   the explicit local default (`AUTH_PROVIDER=${AUTH_PROVIDER:-disabled}` in
+   `docker-compose.yaml`), which seeds the stable default user for the
+   restricted `disabled` quick-start journey (loopback-only bind or documented
+   trusted ingress) — it does not select `accounts`, so there is no protected
+   first-owner setup or login to complete on that path. Opt in to `accounts`
+   explicitly for the production journey with protected first-owner setup and
+   invite-only enrollment (no unauthenticated administrator is granted). On an
+   existing database with an omitted `AUTH_PROVIDER`, startup stops actionably
+   pending an explicit migration decision (`AUTH_PROVIDER` or
    `MOONMIND_AUTH_MIGRATION_DECISION='<mode>:v1'` after migration preflight)
    instead of silently changing owners. Retired selectors (`keycloak`,
-   `default`, `google`) fail at startup with migration guidance. See
+   `default`, `google`, `local`) fail at startup with migration guidance. See
    [Authentication Contracts](docs/Security/AuthenticationContracts.md).
 8. Authenticate to the application with the configured `AUTH_PROVIDER` mode
    (`accounts` | `oidc` | `header` | explicitly restricted local `disabled`).
