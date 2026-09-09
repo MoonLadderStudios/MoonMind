@@ -8,6 +8,8 @@ from uuid import uuid4
 import pytest
 
 from api_service.services import omnigent_execution_plan_service
+from api_service.db.models import OmnigentPolicyVersion
+from api_service.services.omnigent_policies import PolicyConflict
 from api_service.services.recurring_workflows_service import (
     RecurringWorkflowConflictError,
     RecurringWorkflowsService,
@@ -22,7 +24,7 @@ pytestmark = [pytest.mark.asyncio, pytest.mark.integration, pytest.mark.reliabil
 
 
 @pytest.mark.parametrize("update_policy", [None, "pinned"])
-@pytest.mark.parametrize("concurrent_update", [False, True])
+@pytest.mark.parametrize("concurrent_update", [None, "schedule", "profile", "policy", "server", "host"])
 async def test_scheduled_image_update_reaches_dispatch_with_matching_authority(
     deployment_session, monkeypatch, update_policy, concurrent_update,
 ):
@@ -30,6 +32,16 @@ async def test_scheduled_image_update_reaches_dispatch_with_matching_authority(
     session = deployment_session
     session.flush = AsyncMock()
     session.refresh = AsyncMock()
+    scalar = session.scalar
+
+    async def locked_scalar(statement):
+        if statement.column_descriptions[0].get("entity") is OmnigentPolicyVersion:
+            assert statement._for_update_arg is not None
+            assert statement.get_execution_options()["populate_existing"] is True
+            return SimpleNamespace(state=session.policy_states["omnigent-on-demand@2"])
+        return await scalar(statement)
+
+    session.scalar = locked_scalar
     parameters = session.parameters()
     binding = OmnigentExecutionPlanBinding(
         planRef="omnigent-execution-plan:sha256:" + "1" * 64,
@@ -52,6 +64,7 @@ async def test_scheduled_image_update_reaches_dispatch_with_matching_authority(
         name="Scheduled deployment replay", policy={},
     )
     observed_launches = []
+    plan_payloads = []
     current_digest = "sha256:" + "2" * 64
     current_host = "ghcr.io/example/host@" + current_digest
     monkeypatch.setattr(deployment_identity, "resolve_deployed_server_build_digest", lambda: current_digest)
@@ -71,6 +84,7 @@ async def test_scheduled_image_update_reaches_dispatch_with_matching_authority(
             ),
         )
         deployment_identity.assert_plan_matches_deployed_runtime(payload)
+        plan_payloads.append(payload)
         return launch
 
     with pytest.raises(deployment_identity.OmnigentDeploymentIdentityConflict):
@@ -82,7 +96,18 @@ async def test_scheduled_image_update_reaches_dispatch_with_matching_authority(
         observed_launches.append(dispatch_authority(kwargs["agent_profile_snapshot"]))
         assert kwargs["task_input_snapshot_ref"] == binding.task_input_snapshot_ref
         assert kwargs["initial_parameters"]["model"] == historical_input["initialParameters"]["model"]
+        # Reproduce a second deployment during artifact persistence, after
+        # compilation validated its inputs and released its initial locks.
+        if concurrent_update == "profile":
+            session.profile.active_version += 1
+        elif concurrent_update == "policy":
+            session.policy_states["omnigent-on-demand@2"] = "superseded"
+        elif concurrent_update == "server":
+            monkeypatch.setattr(deployment_identity, "resolve_deployed_server_build_digest", lambda: "sha256:" + "3" * 64)
+        elif concurrent_update == "host":
+            monkeypatch.setattr(deployment_identity, "_resolve_deployed_host_image_ref", lambda _: current_host.replace("2" * 64, "3" * 64))
         return SimpleNamespace(
+            envelope=SimpleNamespace(payload=plan_payloads[-1]),
             binding=binding.model_copy(update={
                 "plan_ref": "omnigent-execution-plan:" + current_digest,
                 "plan_digest": current_digest, "plan_artifact_ref": "art_new_plan",
@@ -99,12 +124,20 @@ async def test_scheduled_image_update_reaches_dispatch_with_matching_authority(
         update_schedule=AsyncMock(),
     )
     service = RecurringWorkflowsService(session, temporal_client_adapter=adapter, artifact_service=object())
-    if concurrent_update:
+    if concurrent_update == "schedule":
         async def changed_definition(*_args, **_kwargs):
             definition.version += 1
 
         session.refresh.side_effect = changed_definition
-        with pytest.raises(RecurringWorkflowConflictError, match="schedule changed"):
+    if concurrent_update:
+        expected_error = {
+            "schedule": RecurringWorkflowConflictError,
+            "profile": RecurringWorkflowConflictError,
+            "policy": PolicyConflict,
+            "server": deployment_identity.OmnigentDeploymentIdentityConflict,
+            "host": deployment_identity.OmnigentDeploymentIdentityConflict,
+        }[concurrent_update]
+        with pytest.raises(expected_error):
             await service._refresh_managed_bootstrap_target(definition)
         adapter.update_schedule.assert_not_awaited()
         assert session.usage.version == 1

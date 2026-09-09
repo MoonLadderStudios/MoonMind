@@ -19,6 +19,7 @@ from api_service.db.models import (
     OmnigentAgentProfileUsage,
     OmnigentAgentProfileVersion,
     OmnigentOAuthHostBindingRecord,
+    OmnigentPolicyVersion,
     RecurringWorkflowDefinition,
     RecurringWorkflowRun,
     RecurringWorkflowRunOutcome,
@@ -916,6 +917,49 @@ class RecurringWorkflowsService:
             raise RecurringWorkflowConflictError(
                 "schedule changed during deployment refresh; retry from its current revision"
             )
+        # Compilation persists artifacts with commits, so its profile and
+        # policy reads no longer fence a concurrent bootstrap cutover. Lock
+        # fresh authority rows until the schedule action has been published.
+        if snapshot.get("document", {}).get("schemaVersion") == "moonmind.omnigent-agent-profile.v2":
+            from api_service.services.omnigent_policies import OmnigentPolicyService
+
+            profile = await self._session.scalar(
+                select(OmnigentAgentProfile)
+                .where(OmnigentAgentProfile.profile_id == snapshot["profileId"])
+                .execution_options(populate_existing=True)
+                .with_for_update()
+            )
+            if (
+                profile is None
+                or profile.state != "active"
+                or profile.active_version != snapshot["version"]
+            ):
+                raise RecurringWorkflowConflictError(
+                    "Agent Profile changed during deployment refresh; retry from current authority"
+                )
+            policy_id, policy_version = snapshot["launchPolicyRef"].rsplit("@", 1)
+            policy = await self._session.scalar(
+                select(OmnigentPolicyVersion)
+                .where(
+                    OmnigentPolicyVersion.policy_id == policy_id,
+                    OmnigentPolicyVersion.version == int(policy_version),
+                )
+                .execution_options(populate_existing=True)
+                .with_for_update()
+            )
+            if policy is None:
+                raise RecurringWorkflowConflictError(
+                    "launch policy disappeared during deployment refresh"
+                )
+            await OmnigentPolicyService(self._session).resolve_runtime_snapshot(
+                snapshot["launchPolicyRef"]
+            )
+
+        from moonmind.omnigent.deployment_identity import (
+            assert_plan_matches_deployed_runtime,
+        )
+
+        assert_plan_matches_deployed_runtime(persisted_plan.envelope.payload)
         if snapshot != previous_target.get("agentProfileSnapshot"):
             usage = await self._session.scalar(
                 select(OmnigentAgentProfileUsage).where(

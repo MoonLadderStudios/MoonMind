@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import copy
+import re
 from typing import Any, Mapping
 
 from fastapi import HTTPException, status
@@ -856,14 +857,22 @@ async def refresh_schedule_deployment_snapshot(
         raise ValueError("scheduled launch policy identity is no longer available")
     new_ref = candidates[0]
     policies = OmnigentPolicyService(session)
-    old_policy = await policies.resolve_runtime_snapshot(old_ref)
+    # A predecessor may already be superseded. Its immutable document is
+    # comparison evidence; only the replacement grants new runtime authority.
+    old_policy = await policies.snapshot(policy_id, int(_version))
     new_policy = await policies.resolve_runtime_snapshot(new_ref)
     boundaries = []
     for policy in (old_policy, new_policy):
         boundary = copy.deepcopy(policy["boundaries"])
         host = boundary.get("host", {})
-        host.pop("serverImageRef", None)
-        host.pop("hostImageRef", None)
+        for field in ("serverImageRef", "hostImageRef"):
+            image_ref = host.get(field)
+            if isinstance(image_ref, str) and re.fullmatch(
+                r"[^\s@]+@sha256:[0-9a-f]{64}", image_ref
+            ):
+                # Only the immutable digest may advance. Registry, repository,
+                # and any authored tag remain part of executable source authority.
+                host[field] = (image_ref.rpartition("@")[0], "sha256")
         boundaries.append(boundary)
     if boundaries[0] != boundaries[1]:
         raise ValueError(
@@ -893,7 +902,17 @@ async def refresh_schedule_deployment_snapshot(
         user=user,
         persist_usage=False,
     )
-    return compile_agent_profile_snapshot_parameters(compiled, snapshot=refreshed)
+    if refreshed.get("upstreamSnapshot") != active.upstream_snapshot:
+        raise ValueError(
+            "resolved upstream agent metadata differs from the checked profile version"
+        )
+    result = compile_agent_profile_snapshot_parameters(compiled, snapshot=refreshed)
+    # Schedule authoring resolves these after profile compilation, so the
+    # persisted top-level selections take precedence over profile defaults.
+    for field in ("model", "effort"):
+        if field in compiled:
+            result[field] = compiled[field]
+    return result
 
 
 async def refresh_managed_bootstrap_snapshot(
