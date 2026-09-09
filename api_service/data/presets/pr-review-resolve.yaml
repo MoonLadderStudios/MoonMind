@@ -1,7 +1,8 @@
 slug: pr-review-resolve
 title: Fix and Review Loop
-description: Request an automated review for every new head, fix every actionable
-  comment, and repeat until the pull request is clean. Optionally finish with a
+description: Request an automated review for every new head, wait for its complete
+  result before fixing comments, CI, or conflicts, and repeat until the pull request
+  is clean. Optionally finish with a
   final pr-resolver pass that merges the pull request.
 scope: global
 tags:
