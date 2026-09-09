@@ -1,4 +1,5 @@
 import asyncio
+import logging
 import uuid
 from typing import AsyncGenerator, Optional
 
@@ -20,6 +21,8 @@ from api_service.db.models import User
 from api_service.services.identity_service import ControlledEnrollmentRequiredError
 from api_service.services.profile_service import ProfileService
 from moonmind.config.settings import settings
+
+logger = logging.getLogger(__name__)
 
 class UserRead(schemas.BaseUser[uuid.UUID]):
     pass
@@ -59,12 +62,21 @@ class UserManager(UUIDIDMixin, BaseUserManager[User, uuid.UUID]):
     async def on_after_forgot_password(
         self, user: User, token: str, request: Optional[Request] = None
     ):
-        print(f"User {user.id} has forgot their password. Reset token: {token}")
+        # #4121: password-reset tokens must never enter logs, traces,
+        # Temporal payloads, or artifacts. Emit a redacted event only.
+        logger.info(
+            "auth_event revocation mode=password_reset reason=reset_requested user_id=%s",
+            user.id,
+        )
 
     async def on_after_request_verify(
         self, user: User, token: str, request: Optional[Request] = None
     ):
-        print(f"Verification requested for user {user.id}. Verification token: {token}")
+        # #4121: verification tokens must never be printed or logged.
+        logger.info(
+            "auth_event revocation mode=verify reason=verification_requested user_id=%s",
+            user.id,
+        )
 
 async def get_user_db(session: get_async_session = Depends(get_async_session)):
     yield SQLAlchemyUserDatabase(session, User)
@@ -238,8 +250,7 @@ async def get_or_create_default_user(
         return user
     except Exception as e:
         await db_session.rollback()
-        # Log error details here
-        print(f"Error creating default user: {e}")
+        logger.error("Error creating default user: %s", type(e).__name__)
         raise HTTPException(
             status_code=500, detail=f"Could not create default user: {e}"
         )
