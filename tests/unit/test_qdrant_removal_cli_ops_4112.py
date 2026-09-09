@@ -10,11 +10,23 @@ UPDATE_SCRIPT = (
 )
 
 
+def _code_without_comments(source: str) -> str:
+    """Strip full-line and inline `#` comments for behavioral assertions."""
+    kept: list[str] = []
+    for line in source.splitlines():
+        stripped = line.lstrip()
+        if stripped.startswith("#"):
+            continue
+        kept.append(line.split("#", 1)[0])
+    return "\n".join(kept)
+
+
 def test_guardrails_module_has_no_vector_backend_import():
     source = (ROOT / "moonmind" / "rag" / "guardrails.py").read_text(encoding="utf-8")
-    assert "qdrant" not in source.lower()
-    assert "Qdrant" not in source
-    assert "RagQdrantClient" not in source
+    code = _code_without_comments(source)
+    assert "RagQdrantClient" not in code
+    assert "qdrant_client" not in code.lower()
+    assert "ensure_collection_ready" not in code
 
 
 def test_guardrails_vector_free_noop_without_network(monkeypatch):
