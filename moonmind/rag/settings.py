@@ -14,7 +14,6 @@ from moonmind.utils.env_bool import env_to_bool
 _SUPPORTED_EMBEDDING_PROVIDERS = frozenset({"google", "openai"})
 _SUPPORTED_MEMORY_PLANNING = frozenset({"off", "beads"})
 _SUPPORTED_MEMORY_HISTORY = frozenset({"off", "digest"})
-_SUPPORTED_MEMORY_LONG_TERM = frozenset({"off", "mem0"})
 
 def _get_env(
     source: Mapping[str, str] | None, key: str, default: str | None = None
@@ -65,14 +64,11 @@ class RagRuntimeSettings:
     memory_enabled: bool
     memory_planning: str
     memory_history: str
-    memory_long_term: str
     memory_fail_open: bool
     memory_context_budget_tokens: int
     planning_workspace_root: Optional[str]
     beads_command: str
     memory_namespace_id: str
-    mem0_api_key: Optional[str]
-    mem0_user_id: Optional[str]
 
     @classmethod
     def from_env(cls, source: Mapping[str, str] | None = None) -> "RagRuntimeSettings":
@@ -190,10 +186,30 @@ class RagRuntimeSettings:
             _get_env(env, "MEMORY_HISTORY", app_settings.memory.history)
             or app_settings.memory.history
         ).strip().lower()
-        memory_long_term = (
+        # MoonLadderStudios/MoonMind#4109: hosted Mem0 Plane C memory is
+        # retired. The resolved mem0ai SDK mandatorily depends on
+        # qdrant-client, so no Mem0 configuration can satisfy the Qdrant-free
+        # requirement. A stale opt-in fails fast with an actionable error
+        # instead of being silently ignored; "off"/unset remains normal.
+        retired_long_term = (
             _get_env(env, "MEMORY_LONG_TERM", app_settings.memory.long_term)
             or app_settings.memory.long_term
         ).strip().lower()
+        if retired_long_term not in {"off", ""}:
+            raise ValueError(
+                "MEMORY_LONG_TERM={!r} is retired (MoonLadderStudios/MoonMind#4109): "
+                "hosted Mem0 memory was removed because its SDK requires "
+                "Qdrant. Unset MEMORY_LONG_TERM or set it to 'off'.".format(
+                    retired_long_term
+                )
+            )
+        for retired_key in ("MEM0_API_KEY", "MEM0_USER_ID"):
+            if (_get_env(env, retired_key) or "").strip():
+                raise ValueError(
+                    f"{retired_key} is retired (MoonLadderStudios/MoonMind#4109): "
+                    "hosted Mem0 memory was removed because its SDK requires "
+                    f"Qdrant. Unset {retired_key}."
+                )
         memory_fail_open = env_to_bool(
             _get_env(env, "MEMORY_FAIL_OPEN", str(app_settings.memory.fail_open)),
             default=app_settings.memory.fail_open,
@@ -234,8 +250,6 @@ class RagRuntimeSettings:
             )
             or "default"
         ).strip() or "default"
-        mem0_api_key = _get_env(env, "MEM0_API_KEY") or None
-        mem0_user_id = _get_env(env, "MEM0_USER_ID") or None
 
         return cls(
             qdrant_url=qdrant_url,
@@ -263,14 +277,11 @@ class RagRuntimeSettings:
             memory_enabled=memory_enabled,
             memory_planning=memory_planning,
             memory_history=memory_history,
-            memory_long_term=memory_long_term,
             memory_fail_open=memory_fail_open,
             memory_context_budget_tokens=memory_context_budget_tokens,
             planning_workspace_root=planning_workspace_root,
             beads_command=beads_command,
             memory_namespace_id=memory_namespace_id,
-            mem0_api_key=mem0_api_key,
-            mem0_user_id=mem0_user_id,
         )
 
     def resolved_transport(self, preferred: Optional[str]) -> str:
@@ -348,12 +359,6 @@ class RagRuntimeSettings:
 
         return self.memory_enabled and self.memory_history != "off"
 
-    @property
-    def memory_long_term_enabled(self) -> bool:
-        """Return whether long-term memory should run."""
-
-        return self.memory_enabled and self.memory_long_term != "off"
-
     def embedding_provider_configured(
         self, source: Mapping[str, str] | None = None
     ) -> bool:
@@ -422,21 +427,3 @@ class RagRuntimeSettings:
     def resolved_planning_workspace_root(self) -> Path:
         root = self.planning_workspace_root or os.getcwd()
         return Path(root).resolve()
-
-    def long_term_memory_enabled(self) -> bool:
-        """Return whether Plane C Mem0 retrieval/writeback should run."""
-
-        return self.memory_enabled and self.memory_long_term == "mem0"
-
-    def long_term_memory_execution_reason(self) -> tuple[bool, str]:
-        """Return long-term memory execution status and a non-secret reason."""
-
-        if not self.memory_enabled:
-            return False, "memory_disabled"
-        if self.memory_long_term == "off":
-            return False, "long_term_memory_disabled"
-        if self.memory_long_term != "mem0":
-            return False, "long_term_memory_unsupported"
-        if not self.mem0_api_key:
-            return False, "mem0_api_key_missing"
-        return True, "ok"

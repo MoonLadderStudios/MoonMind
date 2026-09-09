@@ -150,7 +150,11 @@ class FixPattern(BaseModel):
 
 
 class LongTermMemory(BaseModel):
-    """Plane C curated memory entry, backed by a Mem0-compatible adapter."""
+    """Plane C curated memory entry over explicit references.
+
+    MoonLadderStudios/MoonMind#4109: the hosted Mem0 adapter is retired; this
+    model is served only by the scoped in-memory exact-reference store.
+    """
 
     namespace_id: str
     repo: str
