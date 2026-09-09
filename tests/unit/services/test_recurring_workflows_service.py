@@ -1709,6 +1709,7 @@ def _pinned_schedule_service(
     *,
     target: dict[str, object],
 ):
+    target["initialParameters"]["agentProfileSnapshot"] = target["agentProfileSnapshot"]
     session = AsyncMock(spec=AsyncSession)
     session.get = AsyncMock(
         return_value=SimpleNamespace(profile_id="codex_openai_oauth")
