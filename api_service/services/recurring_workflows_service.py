@@ -16,8 +16,10 @@ from sqlalchemy.orm import selectinload
 from api_service.db.models import (
     ManagedAgentProviderProfile,
     OmnigentAgentProfile,
+    OmnigentAgentProfileUsage,
     OmnigentAgentProfileVersion,
     OmnigentOAuthHostBindingRecord,
+    OmnigentPolicyVersion,
     RecurringWorkflowDefinition,
     RecurringWorkflowRun,
     RecurringWorkflowRunOutcome,
@@ -29,6 +31,7 @@ from api_service.db.models import (
 from api_service.services.omnigent_agent_profile_selection import (
     compile_agent_profile_snapshot_parameters,
     refresh_managed_bootstrap_snapshot,
+    refresh_schedule_deployment_snapshot,
     resolve_agent_profile_snapshot,
     resolve_default_agent_profile_snapshot,
 )
@@ -775,6 +778,9 @@ class RecurringWorkflowsService:
     ) -> bool:
         """Atomically advance time-limited admission evidence for a schedule."""
 
+        previous_version = definition.version
+        previous_target = definition.target
+
         from api_service.services.omnigent_execution_plan_service import (
             compile_and_persist_execution_plan,
         )
@@ -817,6 +823,17 @@ class RecurringWorkflowsService:
             else None
         )
         principal = str(getattr(actor, "id", "") or "system")
+        if initial_parameters.get("agentProfileSnapshot") != snapshot:
+            raise RecurringWorkflowValidationError(
+                "scheduled Agent Profile snapshot identities conflict"
+            )
+        initial_parameters = await refresh_schedule_deployment_snapshot(
+            self._session,
+            parameters=initial_parameters,
+            consumer_id=str(definition.id),
+            user=actor,
+        )
+        snapshot = initial_parameters["agentProfileSnapshot"]
         artifact_service = self._artifact_service or TemporalArtifactService(
             TemporalArtifactRepository(self._session)
         )
@@ -890,6 +907,76 @@ class RecurringWorkflowsService:
         ):
             return False
 
+        # Artifact persistence may commit its session. Reacquire the schedule
+        # fence before publishing usage and definition authority together.
+        await self._session.refresh(definition, with_for_update=True)
+        if (
+            definition.version != previous_version
+            or definition.target != previous_target
+        ):
+            raise RecurringWorkflowConflictError(
+                "schedule changed during deployment refresh; retry from its current revision"
+            )
+        # Compilation persists artifacts with commits, so its profile and
+        # policy reads no longer fence a concurrent bootstrap cutover. Lock
+        # fresh authority rows until the schedule action has been published.
+        if snapshot.get("document", {}).get("schemaVersion") == "moonmind.omnigent-agent-profile.v2":
+            from api_service.services.omnigent_policies import OmnigentPolicyService
+
+            profile = await self._session.scalar(
+                select(OmnigentAgentProfile)
+                .where(OmnigentAgentProfile.profile_id == snapshot["profileId"])
+                .execution_options(populate_existing=True)
+                .with_for_update()
+            )
+            if (
+                profile is None
+                or profile.state != "active"
+                or profile.active_version != snapshot["version"]
+            ):
+                raise RecurringWorkflowConflictError(
+                    "Agent Profile changed during deployment refresh; retry from current authority"
+                )
+            policy_id, policy_version = snapshot["launchPolicyRef"].rsplit("@", 1)
+            policy = await self._session.scalar(
+                select(OmnigentPolicyVersion)
+                .where(
+                    OmnigentPolicyVersion.policy_id == policy_id,
+                    OmnigentPolicyVersion.version == int(policy_version),
+                )
+                .execution_options(populate_existing=True)
+                .with_for_update()
+            )
+            if policy is None:
+                raise RecurringWorkflowConflictError(
+                    "launch policy disappeared during deployment refresh"
+                )
+            await OmnigentPolicyService(self._session).resolve_runtime_snapshot(
+                snapshot["launchPolicyRef"]
+            )
+
+        from moonmind.omnigent.deployment_identity import (
+            assert_plan_matches_deployed_runtime,
+        )
+
+        assert_plan_matches_deployed_runtime(persisted_plan.envelope.payload)
+        if snapshot != previous_target.get("agentProfileSnapshot"):
+            usage = await self._session.scalar(
+                select(OmnigentAgentProfileUsage).where(
+                    OmnigentAgentProfileUsage.consumer_type == "schedule",
+                    OmnigentAgentProfileUsage.consumer_id == str(definition.id),
+                )
+            )
+            if usage is None or usage.effective_snapshot != previous_target.get(
+                "agentProfileSnapshot"
+            ):
+                raise RecurringWorkflowValidationError(
+                    "scheduled Agent Profile usage changed during deployment refresh"
+                )
+            usage.version = snapshot["version"]
+            usage.digest = snapshot["digest"]
+            usage.effective_snapshot = dict(snapshot)
+
         if current_target_payload is not None:
             target["runtimeProviderTarget"] = current_target_payload
         target.setdefault("runtimeProviderTargetUpdatePolicy", update_policy)
@@ -902,6 +989,9 @@ class RecurringWorkflowsService:
             persisted_plan.resolved_skillset_ref
         )
         target["initialParameters"] = initial_parameters
+        target["agentProfileSnapshot"] = dict(snapshot)
+        if "agentProfile" in initial_parameters:
+            target["agentProfile"] = dict(initial_parameters["agentProfile"])
         target["omnigentAuthorityArtifactRefs"] = [
             current_binding.task_input_snapshot_ref,
             *persisted_plan.artifact_refs,
