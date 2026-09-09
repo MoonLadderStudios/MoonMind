@@ -20,7 +20,7 @@ and never treated as available.
 from __future__ import annotations
 
 import re
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Any, Mapping, Sequence
 
 STATUS_IN_PROGRESS = "status: in-progress"

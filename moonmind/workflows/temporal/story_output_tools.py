@@ -28,7 +28,6 @@ from moonmind.integrations.jira.tool import JiraToolService
 from moonmind.workflows.adapters.github_service import GitHubService
 from moonmind.workflows.skills.tool_plan_contracts import ToolResult
 from moonmind.workflows.temporal.github_issue_lifecycle import (
-    SETTLED_AVAILABLE,
     attempt_evidence_blocks_admission,
     classify_mutation_outcome,
     interpret_issue,
