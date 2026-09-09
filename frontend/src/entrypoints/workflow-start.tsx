@@ -8970,7 +8970,7 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
 
   function promptForCustomStepCapability(localId: string) {
     const value = window.prompt(
-      "Add a custom capability token (for example: unity, qdrant). Separate multiple tokens with commas.",
+      "Add a custom capability token (for example: unity, playtest). Separate multiple tokens with commas.",
     );
     if (value) {
       addStepCapabilities(localId, parseCapabilitiesCsv(value));
