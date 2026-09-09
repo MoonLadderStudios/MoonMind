@@ -223,6 +223,70 @@ class IdentityMigrationRun(Base):
     )
 
 
+class MoonmindSession(Base):
+    """One durable browser-session row per issued MoonMind session JWT (K4, #4121).
+
+    Single durable session/revocation mechanism behind the portable
+    ``SessionRevocationStore`` interface. ``jti`` is the JWT ``jti`` claim;
+    ``generation`` captures the user's revocation generation at mint time so
+    validation can reject tokens minted before a password reset, disable, or
+    administrative revocation even when the per-session row is unknown.
+    Logout sets ``revoked_at`` on the current row; clearing a cookie alone is
+    never revocation. Expiry is enforced from the JWT ``exp`` claim; the row
+    persists so restarts and replicas share one revocation truth.
+    """
+
+    __tablename__ = "moonmind_sessions"
+    __table_args__ = (
+        Index("ix_moonmind_sessions_user", "user_id"),
+        Index("ix_moonmind_sessions_expires", "expires_at"),
+    )
+
+    jti: Mapped[str] = mapped_column(String(64), primary_key=True)
+    user_id: Mapped[UUID] = mapped_column(
+        Uuid, ForeignKey("user.id", ondelete="CASCADE"), nullable=False
+    )
+    generation: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+    expires_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False
+    )
+    revoked_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    revoked_reason: Mapped[str | None] = mapped_column(String(32), nullable=True)
+
+
+class MoonmindUserSessionGeneration(Base):
+    """Per-user revocation generation for all-session invalidation (#4121).
+
+    Password reset, account disablement, administrative revocation, and key
+    rotation bump the generation; sessions minted at an older generation fail
+    closed at validation. Concurrent issuance versus disable/reset cannot
+    resurrect authority: the mint captures the live generation and the next
+    validation compares it, so a token minted before the bump never validates
+    after it.
+    """
+
+    __tablename__ = "moonmind_user_session_generations"
+    __table_args__ = ()
+
+    user_id: Mapped[UUID] = mapped_column(
+        Uuid, ForeignKey("user.id", ondelete="CASCADE"), primary_key=True
+    )
+    generation: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=0, server_default="0"
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=func.now(),
+        onupdate=func.now(),
+    )
+
+
 class UserProfile(Base):
     __tablename__ = "user_profile"
 
@@ -2915,7 +2979,7 @@ class TemporalArtifact(Base):
         server_default=func.now(),
     )
     created_by_principal: Mapped[Optional[str]] = mapped_column(
-        String(255),
+        Text,
         nullable=True,
     )
     content_type: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
@@ -3101,7 +3165,7 @@ class TemporalArtifactPin(Base):
         ForeignKey("temporal_artifacts.artifact_id", ondelete="CASCADE"),
         nullable=False,
     )
-    pinned_by_principal: Mapped[str] = mapped_column(String(255), nullable=False)
+    pinned_by_principal: Mapped[str] = mapped_column(Text, nullable=False)
     pinned_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         nullable=False,
