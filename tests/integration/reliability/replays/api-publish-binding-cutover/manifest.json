@@ -1,0 +1,12 @@
+{
+  "id": "api-publish-binding-cutover",
+  "failureShape": "An update changed an unpinned API publish host from wildcard to loopback. Container health remained green while the operator hostname resolved to a non-loopback interface and refused connections.",
+  "invariant": "Deployment-owned publish host, port and trusted ingress survive updates and reach both the real Compose port binding and the production API startup validator.",
+  "operatorEnvironment": {
+    "MOONMIND_API_PUBLISH_HOST": "192.0.2.10",
+    "MOONMIND_API_HOST_PORT": "17777",
+    "MOONMIND_TRUSTED_INGRESS": "1"
+  },
+  "defaultPublishHost": "127.0.0.1",
+  "defaultHostPort": "7000"
+}

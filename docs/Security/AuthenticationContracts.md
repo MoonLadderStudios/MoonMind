@@ -53,6 +53,29 @@ A new installation starts with `docker compose up -d` and no mandatory `.env`.
 Existing installations with omitted authentication settings receive a versioned
 migration decision, not an unannounced default change that creates a new owner.
 
+### Deployment exposure and existing access
+
+`MOONMIND_API_PUBLISH_HOST` controls the operator-facing Compose binding and the
+API startup exposure validator. `MOONMIND_API_HOST_PORT` controls the published
+port. Both sides must consume the same resolved publish host. Fresh Compose
+defaults publish on `127.0.0.1:7000`; a hostname resolving to a LAN or VPN address
+is a separate access path and requires an explicit approved binding.
+
+In `disabled` mode, a non-loopback binding requires
+`MOONMIND_TRUSTED_INGRESS=1` and an operator-approved restricted ingress boundary.
+This setting records trust; it does not create network restrictions or user
+authentication. A specific interface binding does not imply publication on
+other interfaces or localhost. Wildcard publication requires authorization for
+all of the interfaces it exposes.
+
+Existing dashboard/API URLs, publish bindings, authentication selection, and
+trusted-ingress settings are deployment-owned configuration. Updates preserve
+them, including when fresh-install defaults change. A security-driven cutover
+provides a verified replacement access path before retiring the old one; a
+healthy API reachable only inside its container does not satisfy this contract.
+The deployment update verification owner is
+[Docker Compose Update System](../Steps/DockerComposeUpdateSystem.md#12-verification-model).
+
 ## 3. Identity contract
 
 - `User.id` is the canonical principal and the identifier persisted in workflow
