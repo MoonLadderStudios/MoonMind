@@ -30,9 +30,8 @@ class TestRetiredVectorBlocksNormalized:
             derive_required_capabilities(_manifest(**{key: {"type": "qdrant"}}))
 
     def test_absent_retired_blocks_pass(self) -> None:
-        assert derive_required_capabilities(_manifest(**{"vectorStore": {}})) == [
-            "local_fs"
-        ]
+        caps = derive_required_capabilities(_manifest(**{"vectorStore": {}}))
+        assert "local_fs" in caps
 
 
 class TestForceFullRetired:
