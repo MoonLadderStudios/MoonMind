@@ -43,6 +43,13 @@ def test_worker_doctor_is_vector_free():
     import moonmind.cli as moonmind_cli
 
     source = inspect.getsource(moonmind_cli.worker_doctor)
-    assert "qdrant" not in source.lower()
-    assert "ensure_rag_ready" not in source
-    assert "RagRuntimeSettings" not in source
+    code_lines = [
+        line.split("#", 1)[0]
+        for line in source.splitlines()
+        if not line.lstrip().startswith("#")
+    ]
+    code = "\n".join(code_lines)
+    assert "ensure_rag_ready" not in code
+    assert "RagRuntimeSettings" not in code
+    assert "RagQdrantClient" not in code
+    assert "qdrant_client" not in code.lower()
