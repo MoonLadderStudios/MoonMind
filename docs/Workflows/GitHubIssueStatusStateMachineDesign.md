@@ -110,6 +110,8 @@ Comment creation and updates are serialized per attempt within the owning deploy
 
 A terminal handoff records a proposed disposition before removing blocking labels. It becomes released only after the writer is stopped, preservation is verified or explicitly absent, pending shared mutations are settled, and the intended label transition has been observed.
 
+Attempt comments are append-only. Deployments and operators do not delete attempt comments. When redaction is unavoidable, the redacting party first posts a GitHub-visible tombstone retaining the attempt ID, deployment ID, format version, retry/no-progress disposition, and successor lineage pointer, so admission can still detect prior history and request attention rather than infer a clean slate. Deletion without such a tombstone is detectable only through a lineage gap (a successor referencing a missing predecessor), a status label without its required handoff, or another observable marker; deletion of the sole history on an issue that has already returned to Available leaves no such marker and is indistinguishable from an issue that was never attempted (see §§5.3 and 10).
+
 An interrupted release is recoverable from the comment and GitHub evidence. Another deployment may finish that bookkeeping only when the recorded terminal stop and mutation outcomes are conclusive. Otherwise it requests attention.
 
 A released attempt performs no further issue-state or PR writes. A resumed old process rereads GitHub before effects and stops when its attempt is released, superseded, held, or in conflict. This rejects observable stale work, but it is not a fence against every delayed external request.
@@ -140,7 +142,7 @@ There is no `status: claiming` label or per-device status-label family. Extra la
 
 Fresh workflow IDs, device changes, and label removal do not reset the issue's automatic retry allowance. Admission evaluates linked attempt history and the applicable bounded policy. A continuation retains prior failures and no-progress evidence. Internal step retries are not separate issue attempts.
 
-An operator-authorized retry reset is recorded explicitly. Conflicting lineage or policy evidence fails to attention rather than inventing a fresh budget. Exact global retry-count enforcement is not claimed under simultaneous duplicate starts.
+An operator-authorized retry reset is recorded explicitly. Conflicting lineage or policy evidence fails to attention rather than inventing a fresh budget. Exact global retry-count enforcement is not claimed under simultaneous duplicate starts. It is likewise not claimed when attempt evidence was deleted without a tombstone: an Available issue with no observable attempt comments is indistinguishable from one that was never attempted, so admission treats it as no observable history and does not claim the shared retry/cooldown budget was verified. Strict-budget operators must rely on tombstones and explicit reset records, not on the absence of comments.
 
 ## 6. Failure handling and recovery
 
@@ -248,7 +250,7 @@ Tests exercise three isolated deployments with no shared database, Temporal serv
 | Private-only checkpoint | Cross-device continuation is not falsely offered as available |
 | Retry moves across devices | Prior failures, no-progress evidence, cooldown, and holds are retained |
 | Intentional cancellation | No automatic replacement is launched |
-| Deleted or contradictory attempt evidence | Admission requests attention rather than inferring a clean slate |
+| Deleted (detectable, for example lineage gap, label without handoff, or tombstone) or contradictory attempt evidence | Admission requests attention rather than inferring a clean slate. Sole-history deletion on an Available issue without a tombstone is indistinguishable from never-attempted and is an explicit limitation (§§4.2 and 5.3), not a needs-attention trigger |
 | GitHub outage, rate limit, or incomplete comment scan | No local-only claim or unsafe interpretation of missing evidence |
 | Manual in-progress label with no trusted attempt | Label is respected and not age-cleared |
 | Unsupported comment version or noncanonical workflow status | No silent admission or destructive normalization |
