@@ -3612,10 +3612,12 @@ class CodexWorker:
             }
         transport = settings.resolved_transport(None)
         mode = "direct-qdrant" if transport == "direct" else "retrieval-gateway"
+        # MoonLadderStudios/MoonMind#4112 retired the `moonmind rag search`
+        # CLI entry point, so no ragCommand is advertised. Consumers must use
+        # MoonMind-owned retrieval surfaces only.
         return {
             "ragAvailable": True,
             "ragMode": mode,
-            "ragCommand": "moonmind rag search --query '<query>' --output-file <path>",
         }
 
     @staticmethod

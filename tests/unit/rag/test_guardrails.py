@@ -53,11 +53,12 @@ def test_ensure_rag_ready_noop_when_disabled() -> None:
     settings = _settings(rag_enabled=False)
     ensure_rag_ready(settings)  # should not raise
 
-def test_ensure_rag_ready_raises_when_no_qdrant_and_no_gateway() -> None:
-    """Direct transport with Qdrant disabled and no gateway should fail."""
+def test_ensure_rag_ready_noop_without_gateway_vector_free() -> None:
+    """Vector-free: no gateway and no Qdrant probe must succeed without network."""
     settings = _settings(qdrant_enabled=False, retrieval_gateway_url=None)
-    with pytest.raises(GuardrailError, match="Qdrant access disabled"):
+    with patch("httpx.get") as mock_get:
         ensure_rag_ready(settings)
+        mock_get.assert_not_called()
 
 def test_ensure_rag_ready_uses_gateway_when_url_set() -> None:
     """Gateway transport should verify gateway health, not direct Qdrant."""

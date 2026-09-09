@@ -1,10 +1,6 @@
-from pathlib import Path
+"""Vector-free CLI assertions for MoonLadderStudios/MoonMind#4112."""
 
-import pytest
-
-from moonmind.rag import cli as rag_cli
-from moonmind.rag.context_pack import ContextItem, build_context_pack
-from moonmind.rag.embedding import EmbeddingError
+from __future__ import annotations
 
 
 def test_top_level_cli_imports_without_schema_cycle():
@@ -13,199 +9,51 @@ def test_top_level_cli_imports_without_schema_cycle():
     assert moonmind_cli.app is not None
 
 
-def test_run_search_returns_context_pack_and_writes_json(
-    monkeypatch,
-    tmp_path: Path,
-):
-    calls: list[dict[str, object]] = []
+def test_top_level_cli_has_no_vector_rag_subcommands():
+    from typer.main import get_command
 
-    class StubSettings:
-        similarity_top_k = 7
+    import moonmind.cli as moonmind_cli
 
-        def as_filter_metadata(self):
-            return {"job_id": "job-123"}
-
-        def resolved_transport(self, preferred):
-            return preferred or "direct"
-
-        def retrieval_execution_reason(self, source, *, preferred_transport=None):
-            _ = source, preferred_transport
-            return True, "ok"
-
-    pack = build_context_pack(
-        items=[ContextItem(score=0.91, source="src/app.py", text="retrieved text")],
-        filters={"repo": "moonmind"},
-        budgets={},
-        usage={"tokens": 42, "latency_ms": 8},
-        transport="direct",
-        telemetry_id="ctx-test",
-        max_chars=1000,
+    command = get_command(moonmind_cli.app)
+    assert "rag" not in (command.commands or {}), (
+        "retired vector `rag` command group must not be registered"
     )
 
-    class StubService:
-        def __init__(self, *, settings, env):
-            _ = settings, env
 
-        def retrieve(self, **kwargs):
-            calls.append(dict(kwargs))
-            return pack
+def test_rag_cli_helpers_expose_no_vector_entry_points():
+    from moonmind.rag import cli as rag_cli
 
-    monkeypatch.setattr(
-        rag_cli.RagRuntimeSettings,
-        "from_env",
-        classmethod(lambda _cls, _source=None: StubSettings()),
-    )
-    monkeypatch.setattr(rag_cli, "ContextRetrievalService", StubService)
-
-    output_path = tmp_path / "context-pack.json"
-    result = rag_cli.run_search(
-        query="How does worker retrieval work?",
-        filter_args=["repo=moonmind"],
-        budget_args=[],
-        top_k=None,
-        overlay_policy="include",
-        transport=None,
-        output_file=output_path,
-    )
-
-    assert result is pack
-    assert output_path.exists()
-    assert '"context_text"' in output_path.read_text(encoding="utf-8")
-    assert calls[0]["top_k"] == 7
-    assert calls[0]["filters"] == {"job_id": "job-123", "repo": "moonmind"}
-    assert calls[0]["transport"] == "direct"
-    assert calls[0]["collections"] is None
-
-
-def test_run_search_passes_collection_overrides(monkeypatch):
-    calls: list[dict[str, object]] = []
-
-    class StubSettings:
-        similarity_top_k = 7
-
-        def as_filter_metadata(self):
-            return {}
-
-        def resolved_transport(self, preferred):
-            return preferred or "direct"
-
-        def retrieval_execution_reason(self, source, *, preferred_transport=None):
-            _ = source, preferred_transport
-            return True, "ok"
-
-    pack = build_context_pack(
-        items=[],
-        filters={},
-        budgets={},
-        usage={},
-        transport="direct",
-        telemetry_id="ctx-test",
-        max_chars=1000,
-    )
-
-    class StubService:
-        def __init__(self, *, settings, env):
-            _ = settings, env
-
-        def retrieve(self, **kwargs):
-            calls.append(dict(kwargs))
-            return pack
-
-    monkeypatch.setattr(
-        rag_cli.RagRuntimeSettings,
-        "from_env",
-        classmethod(lambda _cls, _source=None: StubSettings()),
-    )
-    monkeypatch.setattr(rag_cli, "ContextRetrievalService", StubService)
-
-    rag_cli.run_search(
-        query="How does worker retrieval work?",
-        filter_args=[],
-        budget_args=[],
-        top_k=None,
-        overlay_policy="include",
-        transport=None,
-        output_file=None,
-        collection_args=["repo-main", "docs-main"],
-    )
-
-    assert calls[0]["collections"] == ["repo-main", "docs-main"]
-
-
-def test_run_search_wraps_embedding_errors_as_cli_errors(monkeypatch):
-    class StubSettings:
-        similarity_top_k = 7
-
-        def as_filter_metadata(self):
-            return {}
-
-        def resolved_transport(self, preferred):
-            return preferred or "direct"
-
-        def retrieval_execution_reason(self, source, *, preferred_transport=None):
-            _ = source, preferred_transport
-            return True, "ok"
-
-    class StubService:
-        def __init__(self, *, settings, env):
-            _ = settings, env
-
-        def retrieve(self, **kwargs):
-            _ = kwargs
-            raise EmbeddingError("GOOGLE_API_KEY is required for google embeddings")
-
-    monkeypatch.setattr(
-        rag_cli.RagRuntimeSettings,
-        "from_env",
-        classmethod(lambda _cls, _source=None: StubSettings()),
-    )
-    monkeypatch.setattr(rag_cli, "ContextRetrievalService", StubService)
-
-    with pytest.raises(rag_cli.CliError, match="GOOGLE_API_KEY"):
-        rag_cli.run_search(
-            query="How does worker retrieval work?",
-            filter_args=[],
-            budget_args=[],
-            top_k=None,
-            overlay_policy="include",
-            transport=None,
-            output_file=None,
+    for retired in (
+        "run_search",
+        "run_overlay_upsert",
+        "run_overlay_clean",
+        "run_sync_embedding",
+    ):
+        assert not hasattr(rag_cli, retired), (
+            f"retired vector helper {retired} must be removed"
         )
+    # Generic parsing helpers remain for non-vector surfaces.
+    assert callable(rag_cli.parse_filters)
+    assert callable(rag_cli.parse_budget_args)
 
 
-def test_run_search_fails_fast_when_retrieval_unavailable(monkeypatch):
-    class StubSettings:
-        similarity_top_k = 7
+def test_worker_doctor_is_vector_free():
+    import inspect
 
-        def as_filter_metadata(self):
-            return {}
+    import moonmind.cli as moonmind_cli
 
-        def resolved_transport(self, preferred):
-            return preferred or "direct"
-
-        def retrieval_execution_reason(self, source, *, preferred_transport=None):
-            _ = source, preferred_transport
-            return False, "rag_disabled"
-
-    class UnexpectedService:
-        def __init__(self, **kwargs):
-            _ = kwargs
-            pytest.fail("ContextRetrievalService should not be constructed")
-
-    monkeypatch.setattr(
-        rag_cli.RagRuntimeSettings,
-        "from_env",
-        classmethod(lambda _cls, _source=None: StubSettings()),
-    )
-    monkeypatch.setattr(rag_cli, "ContextRetrievalService", UnexpectedService)
-
-    with pytest.raises(rag_cli.CliError, match="rag_disabled"):
-        rag_cli.run_search(
-            query="How does worker retrieval work?",
-            filter_args=[],
-            budget_args=[],
-            top_k=None,
-            overlay_policy="include",
-            transport=None,
-            output_file=None,
-        )
+    source = inspect.getsource(moonmind_cli.worker_doctor)
+    code_lines = [
+        line.split("#", 1)[0]
+        for line in source.splitlines()
+        if not line.lstrip().startswith("#")
+    ]
+    code = "\n".join(code_lines)
+    # MoonLadderStudios/MoonMind#4112: the doctor delegates to the vector-free
+    # guardrail (optional RetrievalGateway probe only) so gateway failures
+    # surface instead of a false healthy result.
+    assert "ensure_rag_ready" in code
+    assert "RagQdrantClient" not in code
+    assert "qdrant_client" not in code.lower()
+    assert "ensure_collection_ready" not in code
+    assert "sync_collection_dimensions" not in code
