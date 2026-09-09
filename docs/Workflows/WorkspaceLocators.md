@@ -13,6 +13,14 @@ and restores it through `workspace.apply_checkpoint`, retaining normal containme
 digest, and symlink checks. Omnigent session restore never applies a local archive,
 and workspace restore does not require the original Omnigent host.
 
+Sandbox archive safety checks use the same membership rules as archive capture.
+Excluded Skill projection trees (`.agents/skills` and `.gemini/skills`) are neither
+archived nor grounds for rejecting a checkpoint because of their links or owner.
+Included links must still resolve within the authoritative workspace, including
+links that reach an external target through an excluded projection. Runtime Skill
+materialization owns projection validation; checkpoint capture never follows or
+repairs those excluded trees.
+
 The **Codex via Omnigent** product path (canonical identity `agentKind=external`, `agentId=omnigent`, nested harness `codex-native`) applies this authority contract as specified by [`docs/Omnigent/CodexCreateToHostContract.md`](../Omnigent/CodexCreateToHostContract.md) and reconciled end-to-end by [`docs/Omnigent/NormalCodexProductPathReconciliation.md`](../Omnigent/NormalCodexProductPathReconciliation.md). Workflow Create never authors absolute paths or daemon bind sources.
 
 Durable workflow payloads identify workspaces with the discriminated
