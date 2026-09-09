@@ -14,13 +14,17 @@ from __future__ import annotations
 
 from typing import Sequence, Union
 
+# Alembic discovers migration identity from these module attributes (it
+# reads ``branch_labels``/``depends_on`` via getattr with None defaults, so
+# only the non-null chain links are declared here); ``__all__`` keeps that
+# external contract explicit for static analysis.
+__all__ = ["revision", "down_revision", "upgrade", "downgrade"]
+
 revision: str = "376_merge_375_heads"
 down_revision: Union[str, Sequence[str], None] = (
     "375_artifact_principal_text",
     "375_session_authority_4121",
 )
-branch_labels: Union[str, Sequence[str], None] = None
-depends_on: Union[str, Sequence[str], None] = None
 
 
 def upgrade() -> None:
