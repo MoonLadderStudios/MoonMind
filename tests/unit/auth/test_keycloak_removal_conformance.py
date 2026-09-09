@@ -25,6 +25,7 @@ R7 is met and is pinned, not re-implemented, here.
 
 from __future__ import annotations
 
+import json
 import secrets
 import time
 import uuid
@@ -83,8 +84,8 @@ PLAN_MATRIX = (
     },
     {
         "row": "Durability",
-        "owner": "this module: shared-revocation two-replica checks plus restart-durable session key",
-        "evidence": "test_two_replica_shared_revocation_and_restart_durable_key",
+        "owner": "this module: independent-store two-replica checks over durable state plus restart-durable session key",
+        "evidence": "test_two_replica_shared_revocation_and_restart_durable_key,test_two_replica_independent_stores_observe_durable_revocation_and_restart",
     },
     {
         "row": "User journey",
@@ -521,6 +522,103 @@ async def test_two_replica_shared_revocation_and_restart_durable_key(tmp_path):
     assert modes.resolve_session_secret(explicit_secret=None, key_path=key_path) == first
 
 
+class _FileBackedRevocationStore:
+    """Hermetic durable-revocation fixture: independent objects, shared file.
+
+    Each instance keeps no cross-instance Python references; every mutation
+    is written through to ``path`` and every read reloads it. Two instances
+    over the same path therefore model two API replicas (or a pre/post
+    restart process) observing current revocation through durable state,
+    not through one shared in-memory object.
+    """
+
+    def __init__(self, path: Path) -> None:
+        self._path = path
+        if not path.exists():
+            path.write_text(json.dumps({"revoked": [], "generations": {}}), encoding="utf-8")
+
+    def _load(self) -> dict:
+        return json.loads(self._path.read_text(encoding="utf-8"))
+
+    def _save(self, state: dict) -> None:
+        self._path.write_text(json.dumps(state, sort_keys=True), encoding="utf-8")
+
+    async def revoke_session(self, jti: str) -> None:
+        state = self._load()
+        if jti not in state["revoked"]:
+            state["revoked"].append(jti)
+        self._save(state)
+
+    async def is_session_revoked(self, jti: str) -> bool:
+        return jti in self._load()["revoked"]
+
+    async def revoke_all_for_user(self, user_id: uuid.UUID) -> int:
+        state = self._load()
+        key = str(user_id)
+        state["generations"][key] = int(state["generations"].get(key, 0)) + 1
+        self._save(state)
+        return state["generations"][key]
+
+    async def generation_for_user(self, user_id: uuid.UUID) -> int:
+        return int(self._load()["generations"].get(str(user_id), 0))
+
+
+@pytest.mark.asyncio
+async def test_two_replica_independent_stores_observe_durable_revocation_and_restart(
+    tmp_path,
+):
+    """Durability proof without a shared in-memory object.
+
+    R1/R4 remainder slice: replica A and replica B (then a post-restart
+    process) are distinct objects over one durable file. Revocation issued
+    on A is observed as current on B and after restart; per-session logout
+    also propagates. Full PostgreSQL migration/race proof stays owned by
+    ``test_identity_migration_postgres_4119.py`` (see PLAN_MATRIX).
+    """
+    secret = secrets.token_bytes(32)
+    replica_a = modes.resolve_moonmind_auth_config(
+        mode="accounts", cookie_secret=secret, environ={}
+    )
+    replica_b = modes.resolve_moonmind_auth_config(
+        mode="accounts", cookie_secret=secret, environ={}
+    )
+    store, _, user_id, identity = _enrolled_store()
+    revocation_path = tmp_path / "durable-revocation.json"
+    revocation_a = _FileBackedRevocationStore(revocation_path)
+    revocation_b = _FileBackedRevocationStore(revocation_path)
+    assert revocation_a is not revocation_b
+
+    token, _ = await qual.mint_moonmind_session(
+        identity, store, replica_a, revocation=revocation_a
+    )
+    # Replica B validates through durable generation, not a stale cache.
+    assert (
+        await qual.validate_moonmind_session(token, store, revocation_b, replica_b)
+    ).user_id == user_id
+
+    # Generation bump on A is current on B: the pre-bump token dies there.
+    await revocation_a.revoke_all_for_user(user_id)
+    with pytest.raises(qual.AuthInvalidError):
+        await qual.validate_moonmind_session(token, store, revocation_b, replica_b)
+
+    # Restart: a fresh object over the same file still enforces the bump.
+    restarted = _FileBackedRevocationStore(revocation_path)
+    with pytest.raises(qual.AuthInvalidError):
+        await qual.validate_moonmind_session(token, store, restarted, replica_b)
+    fresh, _ = await qual.mint_moonmind_session(
+        identity, store, replica_a, revocation=revocation_a
+    )
+    assert (
+        await qual.validate_moonmind_session(fresh, store, restarted, replica_b)
+    ).user_id == user_id
+
+    # Per-session logout on A propagates to B through durable state.
+    fresh_payload = jwt.decode(fresh, options={"verify_signature": False})
+    await revocation_a.revoke_session(fresh_payload["jti"])
+    with pytest.raises(qual.AuthInvalidError):
+        await qual.validate_moonmind_session(fresh, store, revocation_b, replica_b)
+
+
 @pytest.mark.asyncio
 async def test_auth_store_outage_fails_closed():
     """Outage slice: unavailable stores fail closed, never mint admin stubs."""
@@ -835,3 +933,20 @@ def test_conformance_module_lists_no_live_qualification_claims():
     source = Path(__file__).read_text(encoding="utf-8")
     assert "EXTERNAL" in source
     assert "no public IdP" in source or "no live secrets" in source
+    # The browser journey and built-artifact/DNS/Compose qualification are
+    # explicitly external owners, never passing unit claims: the matrix must
+    # keep naming them EXTERNAL so a hermetic pass cannot be mistaken for
+    # deployment qualification.
+    by_row = {entry["row"]: entry for entry in PLAN_MATRIX}
+    assert by_row["User journey"]["evidence"] == "EXTERNAL"
+    assert by_row["User journey"]["owner"].startswith("EXTERNAL")
+    lowered = source.lower()
+    assert "blocked keycloak dns" not in lowered or "external" in lowered
+    # No test function name may imply it ran a browser, DNS-block, or
+    # compose-profile journey: those require harnesses absent here.
+    for name, obj in list(globals().items()):
+        if name.startswith("test_") and callable(obj):
+            slug = name.lower()
+            assert "browser_journey" not in slug, name
+            assert "dns_block" not in slug, name
+            assert "compose_profile" not in slug, name
