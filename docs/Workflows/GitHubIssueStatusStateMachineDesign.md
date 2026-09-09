@@ -200,7 +200,7 @@ Transitions add the destination status before removing an old blocking status. M
 
 Every retry reads current issue and attempt evidence. It abandons obsolete intended transitions when a newer attempt or operator decision is observable. A delayed old finalizer must not knowingly remove another attempt's active state. Reconciliation derives the next action from current evidence, not a stale local command queue.
 
-This is eventual reconciliation, not a transactional compare-and-swap. GitHub's documented label/comment operations do not provide conditional ownership acquisition, and conditional mutation requests are unsupported unless documented for the specific endpoint [1][2][3]. Two devices can both announce work. A delayed label mutation can still race a later read. Selectors therefore honor unresolved attempt evidence even when a label is missing.
+This is eventual reconciliation, not a transactional compare-and-swap. GitHub's documented label/comment operations do not provide conditional ownership acquisition, and conditional mutation requests are unsupported unless documented for the specific endpoint [1], [2], [3]. Two devices can both announce work. A delayed label mutation can still race a later read. Selectors therefore honor unresolved attempt evidence even when a label is missing.
 
 ### 8.2 PR and merge effects
 
