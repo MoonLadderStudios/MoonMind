@@ -105,7 +105,8 @@ def test_closed_disposition_never_reports_success() -> None:
         ("code_review", "to_closed", {"completion_verified": True}, "done", True, "allowed"),
         ("code_review", "to_in_progress", {"admitted_repair": True}, "repair", True, "allowed"),
         ("needs_attention", "to_available",
-         {"authorized_resolution": True, "preserved_work_disposition": "kept"}, "resolve", True, "allowed"),
+         {"authorized_resolution": True, "preserved_work_disposition": "kept",
+          "terminal_proof": "stopped, no preserved work, retry budget retained"}, "resolve", True, "allowed"),
         # Missing guards block admission rather than normalizing optimistically.
         ("available", "to_in_progress", {}, "admit", False, "missing_guard"),
         ("available", "to_in_progress",
@@ -114,6 +115,8 @@ def test_closed_disposition_never_reports_success() -> None:
         ("in_progress", "to_available", {"writers_stopped": True}, "release", False, "missing_guard"),
         ("in_progress", "to_available",
          {"writers_stopped": True, "terminal_proof": ""}, "release", False, "missing_guard"),
+        ("needs_attention", "to_available",
+         {"authorized_resolution": True, "preserved_work_disposition": "kept"}, "resolve", False, "missing_guard"),
         # Unsupported transitions require an explicit authority decision.
         ("available", "to_recovery_needed", {"admission_passed": True}, "x", False, "unsupported_transition"),
         ("code_review", "to_code_review", {"gates_satisfied": True}, "x", False, "unsupported_transition"),

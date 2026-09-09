@@ -357,7 +357,8 @@ _TARGET_FROM_CLOSED = {TO_CLOSED}
 # (from_settled, to_target) -> required evidence keys. Every transition also
 # requires an explicit non-empty reason. No timeout alone authorizes
 # in_progress -> available or recovery_needed: those require writers_stopped
-# plus terminal_proof / handoff_published evidence.
+# plus terminal_proof / handoff_published evidence. Every move to Available
+# (including needs_attention -> available) requires supplied terminal_proof.
 _TRANSITION_REQUIREMENTS: dict[tuple[str, str], tuple[str, ...]] = {
     (SETTLED_AVAILABLE, TO_IN_PROGRESS): ("admission_passed", "prior_work_inspected"),
     (SETTLED_AVAILABLE, TO_CODE_REVIEW): ("gates_satisfied", "pr_url_verified"),
@@ -382,6 +383,7 @@ _TRANSITION_REQUIREMENTS: dict[tuple[str, str], tuple[str, ...]] = {
     (SETTLED_NEEDS_ATTENTION, TO_AVAILABLE): (
         "authorized_resolution",
         "preserved_work_disposition",
+        "terminal_proof",
     ),
     (SETTLED_NEEDS_ATTENTION, TO_RECOVERY_NEEDED): (
         "authorized_resolution",
