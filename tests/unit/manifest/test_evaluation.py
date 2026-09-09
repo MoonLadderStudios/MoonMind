@@ -191,6 +191,9 @@ evaluation:
 
         monkeypatch.setenv("OPENAI_API_KEY", "test-key")
         monkeypatch.setenv("VECTOR_STORE_COLLECTION_NAME", "env-collection")
+        # Vector-free defaults (#4115): this manifest-declared qdrant path
+        # under test opts in explicitly.
+        monkeypatch.setenv("QDRANT_ENABLED", "true")
         monkeypatch.setattr(
             "moonmind.rag.service.ContextRetrievalService", FakeService
         )

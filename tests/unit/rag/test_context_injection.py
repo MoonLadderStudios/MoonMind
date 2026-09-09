@@ -544,6 +544,9 @@ def test_omnigent_retrieval_transport_scope_and_budgets_are_forwarded_without_se
         "MOONMIND_RETRIEVAL_URL": gateway_url,
         "MOONMIND_RETRIEVAL_TOKEN": "retrieval-token-secret",
         "QDRANT_API_KEY": "qdrant-secret",
+        # Vector-free defaults (#4115): the direct-transport case under test
+        # opts in explicitly; the gateway case ignores this flag.
+        "QDRANT_ENABLED": "true",
         "GOOGLE_API_KEY": "embedding-secret",
         "VECTOR_STORE_COLLECTION_NAME": "primary",
         "VECTOR_STORE_COLLECTION_NAMES": "primary,docs",
