@@ -68,7 +68,11 @@ services:
       - MODEL_CONTEXT_PROTOCOL_ENABLED=true
       - MODEL_CONTEXT_PROTOCOL_PORT=8000
       - MODEL_CONTEXT_PROTOCOL_HOST=0.0.0.0
-      - QDRANT_URL=${QDRANT_URL:-http://qdrant:6333}
+      # MoonLadderStudios/MoonMind#4115: the native Qdrant backend is retired.
+      # The vector-free release wires no QDRANT_URL; a stale QDRANT_URL in an
+      # old .env is ignored. Exact-container retirement of a pre-cutover
+      # orphan is an explicit operator action (see docs/tmp/QdrantCutoverRunbook-4115.md),
+      # never broad orphan cleanup or `down -v`.
       - TEMPORAL_ADDRESS=${TEMPORAL_ADDRESS:-temporal-internal:7233}
       - TEMPORAL_NAMESPACE=${TEMPORAL_NAMESPACE:-default}
       - TEMPORAL_ARTIFACT_BACKEND=${TEMPORAL_ARTIFACT_BACKEND:-s3}
@@ -1060,15 +1064,15 @@ services:
       - control-plane-network
     restart: unless-stopped
 
-  qdrant:
-    image: qdrant/qdrant:v1.17.1
-    ports:
-      - "6333:6333"
-      - "6334:6334"
-    volumes:
-      - qdrant-storage:/qdrant/storage
-    networks:
-      - control-plane-network
+  # MoonLadderStudios/MoonMind#4115: the native Qdrant service is retired and
+  # intentionally absent from the vector-free release (no live or optional
+  # native Qdrant backend, no compatibility profile). The previous image was
+  # qdrant/qdrant:v1.17.1 with qdrant-storage:/qdrant/storage. Removing this
+  # YAML definition does not stop a running pre-cutover orphan: exact-container
+  # retirement is an explicit operator action with ownership checks (see
+  # docs/tmp/QdrantCutoverRunbook-4115.md). The qdrant-storage volume below is
+  # retained through the recovery window; its eventual deletion is a separate
+  # exact-resource operator action, never automatic.
 
   omnigent-runtime-bootstrap:
     image: ${MOONMIND_IMAGE:-ghcr.io/moonladderstudios/moonmind:latest}
@@ -1386,7 +1390,7 @@ services:
       - PYTHONPATH=/app
       - LOG_LEVEL=INFO
       - PYTHONUNBUFFERED=1
-      - QDRANT_URL=${QDRANT_URL:-http://qdrant:6333}
+      # MoonLadderStudios/MoonMind#4115: vector-free release wires no QDRANT_URL.
       - MOONMIND_ALLOW_LOCAL_ENCRYPTION_KEY_GENERATION=${MOONMIND_ALLOW_LOCAL_ENCRYPTION_KEY_GENERATION:-1}
     env_file:
       - path: .env
@@ -1405,8 +1409,8 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
-      qdrant:
-        condition: service_started
+    # MoonLadderStudios/MoonMind#4115: no depends_on qdrant; the native Qdrant
+    # service is retired from this Compose file.
 
   omnigent-db-init:
     image: postgres:${POSTGRES_VERSION:-17}
@@ -1611,6 +1615,11 @@ services:
     restart: unless-stopped
 
 volumes:
+  # MoonLadderStudios/MoonMind#4115: retained through the explicit
+  # recovery/retention window after the Qdrant service removal above. Never
+  # deleted by a normal upgrade; eventual deletion is a separate
+  # exact-resource operator action after export/restore verification.
+  # Distinct from moonmind_retrieval_state (classified by #4107).
   qdrant-storage:
   omnigent-host-state:
   omnigent-host-claude-state:
