@@ -1,5 +1,15 @@
 # Memory Strategies for LLM Agents and Recommendations for MoonMind
 
+> **Historical research note (MoonLadderStudios/MoonMind#4113):** this is a
+> pre-removal industry survey from February 2026, preserved as research
+> background only. It is **not** an active product claim: MoonMind is
+> vector-free and ships no MoonMind-managed Qdrant, embedding pipeline, or
+> semantic-retrieval memory layer. Mentions of Qdrant, vector databases,
+> embeddings, and semantic recall below describe surveyed industry options
+> and the February-2026 codebase, not supported behavior. Normative
+> contracts live in [MemoryArchitecture.md](MemoryArchitecture.md) and
+> [../Rag/WorkflowRag.md](../Rag/WorkflowRag.md).
+
 **Implementation tracking:** Rollout and backlog notes live under `docs/tmp/` or in gitignored local-only handoffs (for example `artifacts/`), not as migration checklists in canonical `docs/`.
 
 Prioritized experiments, schema/API follow-ups, and effort estimates are listed in the tracker; this document stays **research and recommendations**, not a delivery backlog in prose.

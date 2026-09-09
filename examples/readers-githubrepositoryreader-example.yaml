@@ -1,19 +1,16 @@
+# Manifest — Minimal GitHub Reader Example (vector-free)
+# See: docs/Rag/LlamaIndexManifestSystem.md §4
+#
+# MoonMind is vector-free: manifests declare sources and transforms and
+# compile to an executable plan. No embedding credentials, vector store
+# connection, collection, or retrieval index configuration is required.
+
 version: "v0"
 metadata:
   name: "repo-docs"
-  description: "Index README + docs from MoonMind"
+  description: "Read README + docs from MoonMind"
   owner: "search-platform@moonladdr"
   tags: ["docs", "example", "minimal"]
-
-embeddings:
-  provider: "openai"
-  model: "text-embedding-3-large"
-
-vectorStore:
-  type: "pgvector"
-  indexName: "mm_repo_docs"
-  connection:
-    dsn: "${PG_DSN}"
 
 dataSources:
   - id: "mm-repo"
@@ -35,21 +32,6 @@ transforms:
     chunkOverlap: 100
   htmlToText: true
 
-indices:
-  - id: "mm_repo_vector"
-    type: "VectorStoreIndex"
-    sources: ["mm-repo"]
-
-retrievers:
-  - id: "mm_repo_vector_r"
-    type: "Vector"
-    indices: ["mm_repo_vector"]
-    params: { topK: 8 }
-
-postprocessors:
-  - type: "SimilarityCutoff"
-    threshold: 0.76
-
 run:
   concurrency: 6
   errorPolicy: "continue"
@@ -57,7 +39,3 @@ run:
 observability:
   tracing: "opentelemetry"
   logs: "stdout"
-
-security:
-  piiRedaction: false
-  allowlistMetadata: ["path", "repo", "branch", "owner", "docType"]

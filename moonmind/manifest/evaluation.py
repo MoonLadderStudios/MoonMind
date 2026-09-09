@@ -274,7 +274,8 @@ def _doc_id_from_item(item: Any) -> str:
 
 def _default_top_k(manifest: Any) -> int:
     try:
-        retriever = manifest.retrievers[0]
+        retrievers = manifest.retrievers or []
+        retriever = retrievers[0]
     except (AttributeError, IndexError):
         return 10
     params = getattr(retriever, "params", None)

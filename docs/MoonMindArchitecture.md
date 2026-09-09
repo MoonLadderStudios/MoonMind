@@ -115,7 +115,6 @@ flowchart LR
     PG[(Postgres)]
     TPG[(Temporal Persistence)]
     OBJ[(MinIO / Artifact Storage)]
-    QD[(Qdrant)]
   end
 
   UI --> API
@@ -129,7 +128,6 @@ flowchart LR
   API --> TS
   API --> PG
   API --> OBJ
-  CTX --> QD
 
   TS --> WFQ
   TS --> AFQ
@@ -499,15 +497,20 @@ contracts ad hoc.
 
 ## 11. Context, skills, and memory
 
-MoonMind assembles context from workflow intent, prior evidence, retrieval,
-attachments, long-term memory, and resolved skills.
+MoonMind is vector-free: it orchestrates agents and bounded authorized context. It assembles
+context from workflow intent, prior evidence, attachments, and resolved skills.
+Ordinary workflows and chat need no vector configuration: there is no
+MoonMind-managed vector database, embedding service, collection, or retrieval
+index, and explicit vector requirements are rejected before execution.
+Retained exact-context, artifact, and history reads are not equivalent to
+semantic recall.
 
 Resolved skill sets are immutable execution inputs. Compact references travel in
 workflow history; large skill bodies are materialized near the runtime through
 artifact-backed paths.
 
 Managed sessions may keep native local context, but recovery and audit must not
-depend on it. Session summaries, checkpoints, artifacts, and retrieval indexes
+depend on it. Session summaries, checkpoints, and artifacts
 provide durable reconstruction inputs.
 
 ---
@@ -540,7 +543,8 @@ excluded or redacted.
   operator-facing records. It does not replace Temporal history.
 - **Temporal persistence** is owned by the Temporal Service.
 - **MinIO or another artifact backend** stores immutable large evidence.
-- **Qdrant** stores retrieval indexes and vector-backed memory where enabled.
+- There is no MoonMind-managed vector service: no built-in vector database,
+  profile, extension, or index, and no implicit external replacement.
 - **Docker image storage** is deployment-owned cache state, not workflow truth.
 
 Retention policies are explicit and separate for workflow records, workspaces,
@@ -574,7 +578,7 @@ The default local and self-hosted topology is Docker Compose. It includes:
 - MoonMind API and dashboard;
 - Temporal and PostgreSQL;
 - specialized worker fleets;
-- artifact and retrieval services;
+- artifact services;
 - Omnigent server and optional host profiles;
 - a restricted Docker socket proxy for trusted MoonMind backend execution.
 

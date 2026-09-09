@@ -36,21 +36,31 @@ class LLMConfig(BaseModel):
     temperature: float = Field(default=0.0, ge=0.0, le=2.0)
 
 class EmbeddingsConfig(BaseModel):
-    """Mandatory embedding provider settings."""
+    """Retired embedding provider settings (MoonLadderStudios/MoonMind#4113).
+
+    The vector-free release ships no MoonMind-managed embedding pipeline.
+    This model remains only so historical manifests stay readable; new
+    manifests must omit ``embeddings``.
+    """
 
     provider: str
     model: str
     batchSize: int = Field(default=128, ge=1)
 
 class VectorStoreConnection(BaseModel):
-    """Flexible connection parameters for a vector store."""
+    """Retired connection parameters for a historical vector store (see #4113)."""
 
     model_config = {"extra": "allow"}
 
 class VectorStoreConfig(BaseModel):
-    """Vector store destination."""
+    """Retired vector store destination (MoonLadderStudios/MoonMind#4113).
 
-    type: str  # qdrant, pgvector, milvus
+    The vector-free release ships no MoonMind-managed vector service,
+    profile, extension, or index. This model remains only so historical
+    manifests stay readable; new manifests must omit ``vectorStore``.
+    """
+
+    type: str  # historical values: qdrant, pgvector, milvus (all retired)
     indexName: str
     connection: VectorStoreConnection = Field(default_factory=VectorStoreConnection)
 
@@ -88,7 +98,11 @@ class IndexPersist(BaseModel):
     path: Optional[str] = None
 
 class IndexConfig(BaseModel):
-    """A vector/summary/keyword index definition."""
+    """A retired vector/summary/keyword index definition.
+
+    Retained for historical manifest reads only; new manifests must omit
+    ``indices``.
+    """
 
     id: str
     type: str = "VectorStoreIndex"
@@ -108,10 +122,14 @@ class RetrieverParams(BaseModel):
     alpha: float = Field(default=0.5, ge=0.0, le=1.0)
 
 class RetrieverConfig(BaseModel):
-    """Named retriever (Vector or Hybrid)."""
+    """A retired named retriever (Vector or Hybrid).
+
+    Retained for historical manifest reads only; new manifests must omit
+    ``retrievers``.
+    """
 
     id: str
-    type: str  # Vector, Hybrid
+    type: str  # historical values: Vector, Hybrid (both retired)
     indices: List[str]
     params: Optional[RetrieverParams] = None
     reranker: Optional[RerankerConfig] = None
@@ -162,12 +180,15 @@ class ManifestV0(BaseModel):
     version: Literal["v0"] = "v0"
     metadata: ManifestMetadata
     llm: Optional[LLMConfig] = None
-    embeddings: EmbeddingsConfig
-    vectorStore: VectorStoreConfig
+    # Retired managed-vector pipeline fields (#4113). Optional so new
+    # vector-free manifests validate; still accepted on historical reads.
+    # Full ManifestIngest schema redesign is owned by #4108.
+    embeddings: Optional[EmbeddingsConfig] = None
+    vectorStore: Optional[VectorStoreConfig] = None
     dataSources: List[DataSourceConfig] = Field(min_length=1)
     transforms: Optional[TransformsConfig] = None
-    indices: List[IndexConfig] = Field(min_length=1)
-    retrievers: List[RetrieverConfig] = Field(min_length=1)
+    indices: Optional[List[IndexConfig]] = None
+    retrievers: Optional[List[RetrieverConfig]] = None
     postprocessors: List[Dict[str, Any]] = Field(default_factory=list)
     evaluation: Optional[EvaluationConfig] = None
     run: Optional[RunConfig] = None
@@ -183,9 +204,9 @@ class ManifestV0(BaseModel):
     def validate_references(self) -> "ManifestV0":
         """Ensure retriever → index and index → dataSource refs are valid."""
         ds_ids = {ds.id for ds in self.dataSources}
-        idx_ids = {idx.id for idx in self.indices}
+        idx_ids = {idx.id for idx in (self.indices or [])}
 
-        for idx in self.indices:
+        for idx in self.indices or []:
             for src in idx.sources:
                 if src not in ds_ids:
                     raise ValueError(
@@ -193,7 +214,7 @@ class ManifestV0(BaseModel):
                         f"Available: {sorted(ds_ids)}"
                     )
 
-        for ret in self.retrievers:
+        for ret in self.retrievers or []:
             for idx_ref in ret.indices:
                 if idx_ref not in idx_ids:
                     raise ValueError(

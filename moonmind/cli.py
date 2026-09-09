@@ -114,10 +114,10 @@ def container_python_tests(
 
 
 @rag_app.command(
-    "search", help="Embed a query, query Qdrant, and print a context block."
+    "search", help="Retired managed vector retrieval (MoonLadderStudios/MoonMind#4113): kept only until the execution track removes it. New workflows need no vector configuration."
 )
 def rag_search(
-    query: str = typer.Option(..., "--query", help="Query text to embed and search."),
+    query: str = typer.Option(..., "--query", help="Query text (retired command; see command help)."),
     filter_args: List[str] = typer.Option(
         [],
         "--filter",
@@ -131,7 +131,7 @@ def rag_search(
     collection_args: List[str] = typer.Option(
         [],
         "--collection",
-        help="Qdrant collection to include in federated retrieval (repeatable).",
+        help="Retired collection selector (MoonLadderStudios/MoonMind#4113); accepted only for historical reads.",
     ),
     top_k: Optional[int] = typer.Option(
         None, "--top-k", help="Override similarity top-k."
@@ -233,7 +233,7 @@ def manifest_validate(
     if not result.valid:
         raise typer.Exit(code=1)
 
-@manifest_app.command("plan", help="Dry-run: estimate scope without writing to vector store.")
+@manifest_app.command("plan", help="Dry-run: estimate scope without side effects.")
 def manifest_plan(
     file: Path = typer.Option(..., "-f", "--file", help="Path to manifest YAML."),
 ) -> None:

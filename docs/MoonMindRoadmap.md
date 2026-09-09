@@ -16,7 +16,7 @@
 
 **One sentence:** MoonMind should let people direct provider-maintained agents and specialized tools through one durable, policy-controlled platform that is simple for normal use and deeply inspectable when something goes wrong.
 
-**One paragraph:** Omnigent becomes the preferred runtime provider beneath MoonMind's authority. Codex, Claude Code, OpenCode, and future approved harnesses enter one generic execution, session, chat, evidence, recovery, and cleanup plane. MoonMind then builds on that foundation with guided cybersecurity workflows, progressively simpler product abstractions, portable output formats, and replaceable connectors, retrieval providers, and memory providers. Normal operation should remain local-first, useful with minimal configuration, and capable of producing durable work even when GitHub or another external publishing destination is not connected.
+**One paragraph:** Omnigent becomes the preferred runtime provider beneath MoonMind's authority. Codex, Claude Code, OpenCode, and future approved harnesses enter one generic execution, session, chat, evidence, recovery, and cleanup plane. MoonMind then builds on that foundation with guided cybersecurity workflows, progressively simpler product abstractions, portable output formats, and replaceable connectors. Normal operation should remain local-first, useful with minimal configuration, and capable of producing durable work even when GitHub or another external publishing destination is not connected.
 
 ---
 
@@ -592,9 +592,12 @@ MoonMind still owns:
 
 Discovery is not trust. Unsupported integrations may be visible without being launchable.
 
-## Replaceable RAG and memory providers
+## Exact context and memory providers
 
-MoonMind retains the **context authority contract**:
+MoonMind is vector-free: there is no MoonMind-managed vector database,
+embedding service, collection, or retrieval index, and ordinary workflows and
+chat need no vector configuration. MoonMind retains the **context authority
+contract**:
 
 - When context is requested
 - Which tenant, repository, workflow, user, and security scope applies
@@ -604,30 +607,20 @@ MoonMind retains the **context authority contract**:
 - Token and result budgets
 - Prompt-injection framing
 - Redaction, retention, revocation, and deletion
-- The exact ContextPack delivered to an agent
+- The exact context bundle delivered to an agent
 - Run-derived history and fix patterns tied to MoonMind evidence
 
-Replaceable providers may own:
+Explicit vector requirements (managed semantic retrieval, embedding-backed
+memory, collection/overlay administration) are retired and rejected before
+execution. Retained exact-context, artifact, and history reads are not
+equivalent to semantic recall.
 
-- Source connectors and ingestion
-- Parsing and transformation
-- Embeddings
-- Vector storage
-- Ranking and retrieval
-- Generic long-term memory services
-- Connector-managed synchronization
+Where Omnigent or another partner exposes maintained connectors or tools,
+MoonMind should prefer their declared capabilities instead of independently
+recreating every integration. Such integrations are explicitly scoped,
+actually retained capabilities — never an implicit replacement vector store.
 
-The architecture should support interfaces such as:
-
-```text
-ContextSourceProvider
-RetrievalProvider
-MemoryProvider
-```
-
-An Omnigent plugin can implement one or more of these interfaces. Qdrant, LlamaIndex, Mem0, or another local implementation can remain optional profiles rather than mandatory MoonMind-operated infrastructure.
-
-MoonMind should retain a local implementation only when it materially improves zero-configuration operation, offline use, security control, or evidence quality. Temporal, Postgres, artifacts, and source control remain authoritative records. Retrieval indexes and memory services remain derived, replaceable projections.
+MoonMind should retain a local implementation only when it materially improves zero-configuration operation, offline use, security control, or evidence quality. Temporal, Postgres, artifacts, and source control remain authoritative records.
 
 ## Partner-maintenance policy
 
@@ -645,7 +638,7 @@ MoonMind should fork or internalize an integration only when the upstream bounda
 
 ## Milestone 4 is complete when
 
-MoonMind has proven the extension architecture with at least one non-GitHub Git or code-host provider, one non-version-control connector, multiple connections for the same provider, several interchangeable output destinations, one externally maintained tool or plugin, and one replaceable retrieval or memory backend. These integrations evolve without changing the core workflow engine.
+MoonMind has proven the extension architecture with at least one non-GitHub Git or code-host provider, one non-version-control connector, multiple connections for the same provider, several interchangeable output destinations, and one externally maintained tool or plugin. These integrations evolve without changing the core workflow engine.
 
 ---
 
