@@ -124,7 +124,8 @@ INTEGRATION_CI_EXACT = {
     "api_service/core/sync.py",
     "docker-compose.test.yaml",
     # MoonLadderStudios/MoonMind#4128: deployment topology is an auth
-    # qualification boundary (Keycloak profile gating, startup/readiness).
+    # qualification boundary (AUTH_PROVIDER selector gating,
+    # startup/readiness; post-#4129 there is no Keycloak profile).
     # A Compose change must run the integration foundation, not only the
     # exact-artifact gate.
     "docker-compose.yaml",
