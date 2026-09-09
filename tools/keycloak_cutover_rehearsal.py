@@ -185,13 +185,34 @@ def _read_auth_provider_default(settings_text: str) -> str | None:
     return m.group(1) if m else None
 
 
+def _has_landed_mode_key_setup(repo_root: Path = REPO_ROOT) -> bool:
+    """Whether the #4120 persisted mode/key setup is observable in the checkout.
+
+    Landed means the settings module declares the final selector contract
+    (``accounts``/``oidc``/``header``/``disabled`` supported with retired
+    ``keycloak``/``default``/``google``/``local`` rejected) and the
+    dedicated ``auth_modes_4120`` owner module exists. The ``AUTH_PROVIDER``
+    default remaining ``'disabled'`` is a valid explicit local mode, not
+    evidence of absence, so the default literal alone never flips this
+    probe.
+    """
+    settings_text = _read_text(repo_root / "moonmind/config/settings.py") or ""
+    supported = "SUPPORTED_AUTH_PROVIDERS" in settings_text and all(
+        f'"{mode}"' in settings_text or f"'{mode}'" in settings_text
+        for mode in ("accounts", "oidc", "header", "disabled")
+    )
+    retired = "RETIRED_AUTH_PROVIDERS" in settings_text and "keycloak" in settings_text.lower()
+    owner_module = (repo_root / "moonmind/security/auth_modes_4120.py").exists()
+    return bool(supported and retired and owner_module)
+
+
 def _capability_present(pid: str, repo_root: Path = REPO_ROOT) -> bool:
     """Whether a prerequisite's owning capability is observable in the checkout.
 
     Only repo-observable capabilities may flip: a #4119 Keycloak migration or
-    dry-run/apply entrypoint outside this gate, a new AUTH_PROVIDER mode
-    beyond disabled/keycloak (#4120), a recovery tool outside this gate
-    (#4122), or the absence of all Keycloak surfaces after integrated
+    dry-run/apply entrypoint outside this gate, the #4120 persisted mode/key
+    setup contract (#4120), a recovery tool outside this gate
+    (#4122), or the absence of all live Keycloak surfaces after integrated
     removal (#4129). Owner-held and deployment-side items (4117 protected
     inventory, 4128 qualification, 4130 contracts, named-owner approval,
     live IdP/MFA) never flip hermetically and always return False.
@@ -209,9 +230,7 @@ def _capability_present(pid: str, repo_root: Path = REPO_ROOT) -> bool:
             for p in sorted(repo_root.glob(pat))
         )
     if pid == "4120-mode-key-setup":
-        settings_text = _read_text(repo_root / "moonmind/config/settings.py") or ""
-        default = _read_auth_provider_default(settings_text)
-        return default is not None and default not in {"disabled", "keycloak"}
+        return _has_landed_mode_key_setup(repo_root)
     if pid == "4122-protected-recovery":
         tools_dir = repo_root / "tools"
         if not tools_dir.exists():
@@ -223,6 +242,39 @@ def _capability_present(pid: str, repo_root: Path = REPO_ROOT) -> bool:
 
 
 # -- R1: protected inventory survey (sanitized, no identity exports) ---------
+
+# A keycloak-containing line is a justified post-#4129 residual, not a live
+# surface, when it only documents the retirement (removal manifest reference,
+# retired-selector guidance, legacy/historical marker). Live surfaces are
+# executable references: a compose `keycloak` service, a pinned keycloak
+# image, a present realm export, provider-conditional route mounting, keycloak
+# database/role provisioning, or a keycloak updater target.
+RESIDUAL_LINE_PATTERN = re.compile(
+    r"4129|retir|legacy|historic|tombstone|marker|was removed|has been removed",
+    re.IGNORECASE,
+)
+
+
+def _is_live_keycloak_line(line: str) -> bool:
+    """Whether a single line is a live Keycloak surface.
+
+    Lines without a keycloak literal are never surfaces. Lines that only
+    document the #4129 retirement are justified residuals per
+    docs/tmp/KeycloakRemovalResidual-4129.md and are ignored so the
+    integrated-removal probe does not fail forever on a correctly removed
+    checkout.
+    """
+    if not re.search(r"[Kk]eycloak|KEYCLOAK", line):
+        return False
+    if RESIDUAL_LINE_PATTERN.search(line):
+        return False
+    return True
+
+
+def count_live_keycloak_surfaces(text: str) -> int:
+    """Count live keycloak surface lines, ignoring retirement residuals."""
+    return sum(1 for line in text.splitlines() if _is_live_keycloak_line(line))
+
 
 # Files probed by the sanitized survey. Counts and file:line refs only; the
 # survey never exports users, roles, sessions, secrets, or identity mappings.
@@ -298,10 +350,17 @@ def collect_inventory_survey(repo_root: Path = REPO_ROOT) -> dict[str, Any]:
         if text is None:
             survey["sources"][rel] = "missing"
             continue
-        hits = len(re.findall(r"[Kk]eycloak|KEYCLOAK", text))
-        survey["sources"][rel] = f"read, {hits} keycloak mentions"
-        if hits:
-            survey["keycloak_surfaces"].append(f"{rel}: {hits} keycloak mentions")
+        total = len(re.findall(r"[Kk]eycloak|KEYCLOAK", text))
+        live = count_live_keycloak_surfaces(text)
+        if live:
+            survey["sources"][rel] = f"read, {live} live keycloak surfaces ({total} mentions)"
+            survey["keycloak_surfaces"].append(f"{rel}: {live} live keycloak surfaces")
+        elif total:
+            survey["sources"][rel] = (
+                f"read, {total} keycloak mentions (all justified post-#4129 residuals)"
+            )
+        else:
+            survey["sources"][rel] = "read, 0 keycloak mentions"
     survey["note"] = (
         "Structural survey only. Protected owner facts (users, issuer mappings, "
         "sessions, service accounts, realm consumers, MFA/SSO) require the #4117 "
@@ -323,9 +382,9 @@ def check_inventory_survey(repo_root: Path = REPO_ROOT) -> StepResult:
     return StepResult(
         "inventory-survey", "completed",
         f"Sanitized survey collected over {len(survey['sources'])} sources; "
-        f"{surfaces} keycloak surfaces named (counts/refs only, no identity "
-        "exports). Owner-protected facts still require #4117 and stay blocked "
-        "in prerequisites.",
+        f"{surfaces} live keycloak surfaces named (counts/refs only, no identity "
+        "exports; post-#4129 retirement mentions excluded). Owner-protected "
+        "facts still require #4117 and stay blocked in prerequisites.",
     )
 
 
@@ -362,15 +421,17 @@ def detect_capability_presence(repo_root: Path = REPO_ROOT) -> dict[str, str]:
     )
     settings_text = _read_text(repo_root / "moonmind/config/settings.py") or ""
     auth_default = _read_auth_provider_default(settings_text)
-    if auth_default is not None and auth_default not in {"disabled", "keycloak"}:
+    if _has_landed_mode_key_setup(repo_root):
         presence["4120-mode-key-setup"] = (
             f"AUTH_PROVIDER default is {auth_default!r} "
-            "(moonmind/config/settings.py); mode/key setup landed"
+            "(moonmind/config/settings.py) with SUPPORTED accounts/oidc/header/disabled "
+            "+ RETIRED keycloak/default/google/local + moonmind/security/auth_modes_4120.py; "
+            "mode/key setup landed (default 'disabled' remains valid explicit local mode)"
         )
     else:
         presence["4120-mode-key-setup"] = (
             f"AUTH_PROVIDER default is {auth_default!r} "
-            "(moonmind/config/settings.py); still 'disabled'/'keycloak' only"
+            "(moonmind/config/settings.py); #4120 selector/key contract not landed"
         )
     # #4122: protected recovery tooling outside this gate.
     recovery_hits = [
@@ -386,11 +447,12 @@ def detect_capability_presence(repo_root: Path = REPO_ROOT) -> dict[str, str]:
         "record; none present (deployment-side evidence)"
     )
     presence["4129-removal"] = (
-        "no keycloak surfaces in inventory-survey "
-        "(compose service, realm export, api_service branches all absent); "
+        "no live keycloak surfaces in inventory-survey "
+        "(compose service, realm export, live branches/provisioning absent; "
+        "remaining mentions are justified post-#4129 residuals); "
         "integrated removal appears landed"
         if not collect_inventory_survey(repo_root).get("keycloak_surfaces")
-        else "Keycloak service/branches still present in compose and api_service "
+        else "Live Keycloak surfaces still present "
         "(see inventory-survey); integrated removal not landed"
     )
     presence["4130-operator-contracts"] = (
