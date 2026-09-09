@@ -319,6 +319,12 @@ Artifacts are immutable after completion:
 
 Stored in Postgres or equivalent metadata storage.
 
+Artifact ownership and pin principals preserve the complete opaque identity as
+text, including an owner-type prefix such as `service:`. Storage must accept the
+full principal produced from a valid caller identity; it must not truncate or
+rewrite that identity. This also preserves authorization for retained artifacts
+and in-flight container-job histories.
+
 ## 8.1 Logical tables
 
 ### `artifacts`
