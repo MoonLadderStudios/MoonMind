@@ -98,12 +98,42 @@ def _load_upstream_module(name: str, relpath: str) -> Any:
     lazy imports (``from omnigent.server.oidc import ...`` inside
     ``auth.py``) resolve to the same pinned files. Only the narrow
     modules listed in ``UPSTREAM_FILES`` are ever imported here.
+
+    The resolved module is verified to originate from the pinned checkout:
+    its ``__file__`` must resolve under the pinned submodule root. A module
+    already loaded from another installation is rejected instead of being
+    labeled with ``UPSTREAM_PIN``.
     """
     import importlib
 
     _ensure_upstream_importable()
+    root = _upstream_root().resolve()
+    expected = (root / relpath).resolve()
+    if not expected.is_file():
+        raise RuntimeError(
+            f"Pinned upstream file missing: {relpath} (pin {UPSTREAM_PIN})"
+        )
     canonical = f"omnigent.server.{name}"
-    return importlib.import_module(canonical)
+    module = importlib.import_module(canonical)
+    module_file = getattr(module, "__file__", None)
+    if not module_file:
+        raise RuntimeError(
+            f"Upstream module {canonical} has no resolved file; "
+            f"refusing to label it with pin {UPSTREAM_PIN}"
+        )
+    try:
+        resolved = str(__import__("pathlib").Path(module_file).resolve())
+    except Exception as exc:
+        raise RuntimeError(
+            f"Upstream module {canonical} file cannot be resolved; "
+            f"refusing to label it with pin {UPSTREAM_PIN}"
+        ) from exc
+    if resolved != str(expected) and not resolved.startswith(str(root) + "/"):
+        raise RuntimeError(
+            f"Upstream module {canonical} resolved outside the pinned "
+            f"checkout ({resolved}); expected {expected} (pin {UPSTREAM_PIN})"
+        )
+    return module
 
 
 def load_upstream_primitives() -> dict[str, Any]:
@@ -259,13 +289,21 @@ class AsyncAccountStore(Protocol):
     """
 
     async def resolve_account(self, identity: ValidatedIdentity) -> AccountRecord | None:
-        ...
+        raise NotImplementedError
 
     async def get_password_hash(self, login: str) -> str | None:
-        ...
+        raise NotImplementedError
 
     async def is_revoked(self, token_id: str) -> bool:
-        ...
+        raise NotImplementedError
+
+    async def revoke(self, token_id: str) -> None:
+        """Durably record a session revocation (logout/reset/disable/admin)."""
+        raise NotImplementedError
+
+    async def get_account_by_id(self, user_id: uuid.UUID) -> AccountRecord | None:
+        """Reload a principal by UUID to recheck status on full validation."""
+        raise NotImplementedError
 
 
 class InMemoryAsyncAccountStore:
@@ -273,6 +311,7 @@ class InMemoryAsyncAccountStore:
 
     def __init__(self) -> None:
         self._by_identity: dict[tuple[str, str], AccountRecord] = {}
+        self._by_user_id: dict[uuid.UUID, AccountRecord] = {}
         self._password_hashes: dict[str, str] = {}
         self._revoked: set[str] = set()
         self.calls: list[str] = []
@@ -286,6 +325,7 @@ class InMemoryAsyncAccountStore:
         login: str | None = None,
     ) -> None:
         self._by_identity[(identity.issuer, identity.subject)] = record
+        self._by_user_id[record.user_id] = record
         if password_hash is not None and login is not None:
             self._password_hashes[login.strip().lower()] = password_hash
 
@@ -301,8 +341,13 @@ class InMemoryAsyncAccountStore:
         self.calls.append(f"is_revoked:{token_id}")
         return token_id in self._revoked
 
-    def revoke(self, token_id: str) -> None:
+    async def revoke(self, token_id: str) -> None:
+        self.calls.append(f"revoke:{token_id}")
         self._revoked.add(token_id)
+
+    async def get_account_by_id(self, user_id: uuid.UUID) -> AccountRecord | None:
+        self.calls.append(f"get_account_by_id:{user_id}")
+        return self._by_user_id.get(user_id)
 
 
 def resolve_validated_identity(
@@ -380,9 +425,7 @@ class MoonmindQualifiedAuth:
         auth_mod = prims["auth"]
         cookie_shape = SimpleNamespace(
             cookie_secret=config.cookie_secret,
-            session_cookie_name="__Host-ap_session"
-            if config.secure_cookies
-            else "ap_session",
+            session_cookie_name=config.cookie_name,
         )
         oidc_cfg = cookie_shape if config.mode == "oidc" else None
         accounts_cfg = cookie_shape if config.mode != "oidc" else None
@@ -396,6 +439,16 @@ class MoonmindQualifiedAuth:
         )
         self._cache: dict[str, tuple[str, float, str]] = {}
         self._hook_order: list[str] = []
+        self._max_cache_entries = 1024
+
+    def _evict_expired_cache(self) -> None:
+        """Remove expired session-cache entries to bound process memory."""
+        now = time.monotonic()
+        expired = [key for key, (_, deadline, _) in self._cache.items() if deadline <= now]
+        for key in expired:
+            self._cache.pop(key, None)
+        while len(self._cache) > self._max_cache_entries:
+            self._cache.pop(next(iter(self._cache)), None)
 
     @property
     def hook_order(self) -> list[str]:
@@ -428,9 +481,19 @@ class MoonmindQualifiedAuth:
     async def authenticate_account(
         self, *, login: str, password: str, issuer: str, subject: str
     ) -> tuple[ValidatedIdentity, AccountRecord]:
-        """Ordered hook pipeline: validated identity -> store -> password -> status."""
+        """Ordered hook pipeline: validated identity -> store -> password -> status.
+
+        Password verification is bound to the resolved account: the login
+        credential must identify the same subject that identity resolution
+        selected, otherwise a caller could authenticate with their own valid
+        password while receiving another account's UUID.
+        """
         self._hook_order.append("identity.resolve")
         identity = resolve_validated_identity(issuer, subject, provider="accounts")
+        if (login or "").strip().lower() != (subject or "").strip().lower():
+            raise AuthConfigError(
+                "login credential does not match the resolved account subject"
+            )
         self._hook_order.append("store.resolve_account")
         record = await self.store.resolve_account(identity)
         if record is None:
@@ -465,6 +528,7 @@ class MoonmindQualifiedAuth:
         """Validate one presented credential with live per-request checks."""
         if not token:
             return ValidationResult(None, "auth_required")
+        self._evict_expired_cache()
         cache_key = _token_cache_key(token, self.config.cookie_secret)
         cached = self._cache.get(cache_key)
         if cached is not None and cached[1] > time.monotonic():
@@ -473,7 +537,11 @@ class MoonmindQualifiedAuth:
             # (is_active) was enforced at authenticate/mint time and is
             # rechecked on full validation; cache-hit status staleness is
             # bounded by the 300s cache cap (inside the 5-minute bound).
-            if await self.store.is_revoked(cached_jti):
+            try:
+                revoked = await self.store.is_revoked(cached_jti)
+            except Exception:
+                return ValidationResult(None, "unavailable", cache_hit=True)
+            if revoked:
                 return ValidationResult(None, "auth_invalid", cache_hit=True)
             try:
                 parsed = uuid.UUID(cached_user_id)
@@ -487,8 +555,11 @@ class MoonmindQualifiedAuth:
                 algorithms=list(ALLOWED_ALGORITHMS),
                 issuer=self.config.issuer,
                 audience=self.config.audience,
+                options={"require": ["exp", "iss", "aud"]},
             )
         except Exception:
+            return ValidationResult(None, "auth_invalid")
+        if "exp" not in payload:
             return ValidationResult(None, "auth_invalid")
         if payload.get("token_use") != "moonmind-session":
             return ValidationResult(None, "auth_invalid")
@@ -511,10 +582,24 @@ class MoonmindQualifiedAuth:
         jti = payload.get("jti")
         if not isinstance(jti, str) or not jti:
             return ValidationResult(None, "auth_invalid")
-        if await self.store.is_revoked(jti):
+        try:
+            revoked = await self.store.is_revoked(jti)
+        except Exception:
+            return ValidationResult(None, "unavailable")
+        if revoked:
+            return ValidationResult(None, "auth_invalid")
+        # Recheck principal status on full validation so a disablement
+        # committed after minting is enforced within the propagation bound,
+        # even when the JTI was not separately revoked.
+        try:
+            current = await self.store.get_account_by_id(user_id)
+        except Exception:
+            return ValidationResult(None, "unavailable")
+        if current is None or not current.is_active:
             return ValidationResult(None, "auth_invalid")
         remaining = float(payload.get("exp", 0)) - time.time()
         if remaining > 0:
+            self._evict_expired_cache()
             self._cache[cache_key] = (sub, time.monotonic() + min(remaining, 300.0), jti)
         _ = path  # path retained for future scope checks; unsupported scopes reject above.
         return ValidationResult(user_id, "ok")
@@ -539,6 +624,12 @@ class MoonmindQualifiedAuth:
         )
         if cookie_result is None and bearer_result is None:
             return ValidationResult(None, "auth_required")
+        # A transient authority outage is distinct from bad credentials:
+        # surface it as unavailable instead of masking it as invalid.
+        if (cookie_result is not None and cookie_result.code == "unavailable") or (
+            bearer_result is not None and bearer_result.code == "unavailable"
+        ):
+            return ValidationResult(None, "unavailable")
         if cookie_result is not None and bearer_result is not None:
             if cookie_result.user_id is None or bearer_result.user_id is None:
                 return ValidationResult(None, "auth_invalid")
