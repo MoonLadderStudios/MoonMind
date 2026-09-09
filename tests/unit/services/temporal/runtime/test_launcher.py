@@ -1988,7 +1988,9 @@ async def test_launch_uses_run_scoped_env_for_retrieval_capability_note(
     prompt_arg = next(arg for arg in captured_args if isinstance(arg, str) and "Managed Codex CLI note:" in arg)
     assert "MoonMind retrieval capability:" in prompt_arg
     assert "currently unavailable" in prompt_arg
-    assert "rag_disabled" in prompt_arg
+    # MoonLadderStudios/MoonMind#4112: native vector retrieval retired; the
+    # managed note reports vector_retired regardless of legacy RAG_ENABLED.
+    assert "vector_retired" in prompt_arg
     assert "moonmind rag search" not in prompt_arg
 
 
@@ -2068,7 +2070,9 @@ async def test_launch_hides_retrieval_capability_when_gateway_auth_is_unavailabl
     prompt_arg = next(arg for arg in captured_args if isinstance(arg, str) and "Managed Codex CLI note:" in arg)
     assert "MoonMind retrieval capability:" in prompt_arg
     assert "currently unavailable" in prompt_arg
-    assert "retrieval_gateway_auth_missing" in prompt_arg
+    # MoonLadderStudios/MoonMind#4112: native vector retrieval retired; the
+    # managed note reports vector_retired regardless of legacy gateway auth.
+    assert "vector_retired" in prompt_arg
     assert "moonmind rag search" not in prompt_arg
 
 

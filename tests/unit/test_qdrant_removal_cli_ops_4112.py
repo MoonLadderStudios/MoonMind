@@ -18,7 +18,7 @@ from pathlib import Path
 from typer.main import get_command
 from typer.testing import CliRunner
 
-ROOT = Path(__file__).resolve().parents[3]
+ROOT = Path(__file__).resolve().parents[2]
 UPDATE_SCRIPT = (
     ROOT / ".agents" / "skills" / "update-moonmind" / "scripts"
     / "run-update-moonmind.sh"
