@@ -857,6 +857,8 @@ def create_snapshot_envelope(
         try:
             target.chmod(0o600)
         except OSError:
+            # Best-effort permission hardening; a chmod failure must not
+            # fail snapshot persistence (e.g. filesystems without POSIX modes).
             pass
     return envelope
 
