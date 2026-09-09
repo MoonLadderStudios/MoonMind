@@ -130,9 +130,27 @@ def test_workflow_history_authority_detects_owner_rewrite() -> None:
 
 
 def test_prerequisites_never_mark_unknown_facts_complete() -> None:
-    for step in rehearsal.check_prerequisites():
-        assert step.status == "blocked"
+    # Deployment/owner-held facts must never flip hermetically; repo-observable
+    # sibling capabilities that have landed (#4120 mode/key setup, #4129
+    # removal) correctly complete. Missing owner/deployment evidence stays
+    # blocked and never claims completion from fixtures alone (#4131).
+    by_name = {s.name: s for s in rehearsal.check_prerequisites()}
+    for pid in (
+        "4117-inventory",
+        "4119-mapping-revision",
+        "4122-protected-recovery",
+        "4128-qualification",
+        "4130-operator-contracts",
+        "named-owner-approval",
+        "live-idp-mfa-qualification",
+    ):
+        step = by_name[f"prerequisite-{pid}"]
+        assert step.status == "blocked", (pid, step.evidence)
         assert "Missing" in step.evidence or "missing" in step.evidence.lower()
+    # Landed sibling work is honestly reported as present without claiming
+    # live deployment qualification.
+    assert by_name["prerequisite-4120-mode-key-setup"].status == "completed"
+    assert by_name["prerequisite-4129-removal"].status == "completed"
 
 
 def test_run_gate_keeps_plan_unarchived_and_deployment_blocked(tmp_path: Path) -> None:
@@ -182,17 +200,24 @@ def test_prerequisites_cite_real_repo_probes() -> None:
     steps = rehearsal.check_prerequisites()
     assert len(steps) == len(rehearsal.PREREQUISITE_IDS)
     by_name = {s.name: s for s in steps}
-    assert by_name["prerequisite-4120-mode-key-setup"].status == "blocked"
+    # #4120 landed: selector contract + auth_modes_4120 owner module present
+    # (default 'disabled' remains a valid explicit local mode).
+    assert by_name["prerequisite-4120-mode-key-setup"].status == "completed"
     # Evidence must cite the real probe, not a static list.
     assert "settings.py" in by_name["prerequisite-4120-mode-key-setup"].evidence
+    assert "auth_modes_4120" in by_name["prerequisite-4120-mode-key-setup"].evidence
     assert "Repo probe" in by_name["prerequisite-4119-mapping-revision"].evidence
 
 
 def test_capability_presence_detects_absent_migration_and_modes() -> None:
     presence = rehearsal.detect_capability_presence()
     assert "none present" in presence["4119-mapping-revision"]
+    # #4120 landed in this checkout: selector contract + owner module.
+    assert "landed" in presence["4120-mode-key-setup"]
     assert "disabled" in presence["4120-mode-key-setup"]
     assert "none present" in presence["4122-protected-recovery"]
+    # #4129 landed: no live surfaces, only justified residuals.
+    assert "landed" in presence["4129-removal"]
 
 
 def test_build_pins_collect_exact_versions_and_topology() -> None:
@@ -389,11 +414,12 @@ def test_auth_boundary_replay_with_changed_boundary_and_exact_evidence() -> None
 
 
 def test_capability_probes_flip_when_sibling_capability_lands(tmp_path: Path) -> None:
-    # At HEAD the repo-observable prerequisites stay blocked (fail-closed).
+    # At HEAD #4119/#4122 stay blocked (fail-closed); #4120/#4129 have landed
+    # and correctly complete without claiming live deployment qualification.
     assert not rehearsal._capability_present("4119-mapping-revision")
-    assert not rehearsal._capability_present("4120-mode-key-setup")
+    assert rehearsal._capability_present("4120-mode-key-setup")
     assert not rehearsal._capability_present("4122-protected-recovery")
-    assert not rehearsal._capability_present("4129-removal")
+    assert rehearsal._capability_present("4129-removal")
     # #4119: a Keycloak migration outside this gate flips the probe.
     versions = tmp_path / "api_service/migrations/versions"
     versions.mkdir(parents=True)
@@ -401,12 +427,18 @@ def test_capability_probes_flip_when_sibling_capability_lands(tmp_path: Path) ->
     assert rehearsal._capability_present("4119-mapping-revision", tmp_path)
     by_name = {s.name: s for s in rehearsal.check_prerequisites(tmp_path)}
     assert by_name["prerequisite-4119-mapping-revision"].status == "completed"
-    # #4120: a new AUTH_PROVIDER default flips the probe.
+    # #4120: the selector contract + auth_modes_4120 owner module flip the probe.
+    # Default 'disabled' alone is a valid explicit local mode, never the signal.
     settings_dir = tmp_path / "moonmind/config"
     settings_dir.mkdir(parents=True)
+    security_dir = tmp_path / "moonmind/security"
+    security_dir.mkdir(parents=True)
     (settings_dir / "settings.py").write_text(
-        'AUTH_PROVIDER: str = Field("local", alias="AUTH_PROVIDER")\n'
+        'SUPPORTED_AUTH_PROVIDERS = ("accounts", "oidc", "header", "disabled")\n'
+        'RETIRED_AUTH_PROVIDERS = ("keycloak", "default", "google", "local")\n'
+        'AUTH_PROVIDER: str = Field("disabled", alias="AUTH_PROVIDER")\n'
     )
+    (security_dir / "auth_modes_4120.py").write_text("# sibling #4120 owner module\n")
     assert rehearsal._capability_present("4120-mode-key-setup", tmp_path)
     # An unrelated literal elsewhere in the module must not flip the probe.
     (settings_dir / "settings.py").write_text(
@@ -441,6 +473,27 @@ def test_owner_and_deployment_gates_never_flip_hermetically(tmp_path: Path) -> N
         assert by_name[f"prerequisite-{pid}"].status == "blocked"
 
 
+def test_live_keycloak_lines_ignored_when_only_retirement_residuals() -> None:
+    # Justified post-#4129 retirement guidance must not count as a live surface.
+    assert rehearsal.count_live_keycloak_surfaces(
+        "# The bundled Keycloak integration was removed (#4129): retired selectors\n"
+    ) == 0
+    assert rehearsal.count_live_keycloak_surfaces("# Legacy Keycloak-era mapping\n") == 0
+    assert rehearsal.count_live_keycloak_surfaces(
+        "-- Bundled Keycloak database/role provisioning retired (#4129).\n"
+    ) == 0
+    # Executable references stay live surfaces.
+    assert rehearsal.count_live_keycloak_surfaces("  keycloak:\n    image: x\n") == 1
+    assert rehearsal.count_live_keycloak_surfaces("image: quay.io/keycloak/keycloak:26\n") == 1
+    assert rehearsal.count_live_keycloak_surfaces("CREATE DATABASE keycloak;\n") == 1
+
+
+def test_survey_reports_no_live_surfaces_after_integrated_removal() -> None:
+    survey = rehearsal.collect_inventory_survey()
+    assert survey["keycloak_surfaces"] == []
+    assert rehearsal._capability_present("4129-removal")
+
+
 def test_run_gate_includes_new_hermetic_steps_and_stays_deployment_blocked() -> None:
     results = rehearsal.run_gate()
     by_name = {r.name: r for r in results}
@@ -450,5 +503,11 @@ def test_run_gate_includes_new_hermetic_steps_and_stays_deployment_blocked() -> 
         "rollback-scope", "retirement-plan",
     ):
         assert by_name[name].status == "completed", (name, by_name[name].evidence)
+    # Landed sibling capabilities complete hermetically; owner/deployment
+    # qualification stays blocked (a merged PR never retires Keycloak alone).
+    assert by_name["prerequisite-4120-mode-key-setup"].status == "completed"
+    assert by_name["prerequisite-4129-removal"].status == "completed"
+    assert by_name["prerequisite-named-owner-approval"].status == "blocked"
+    assert by_name["prerequisite-live-idp-mfa-qualification"].status == "blocked"
     assert any(r.status == "blocked" for r in results)
     assert not any(r.status == "failed" for r in results)
