@@ -463,9 +463,7 @@ class TestPipelineLocalAdapter:
 
         assert first.sources[0].doc_count == 2
         assert second.sources[0].doc_count == 1
-        assert not hasattr(second.sources[0], "deleted_doc_count") or True
-        result_dict = second.to_dict() if hasattr(second, "to_dict") else {}
-        # Truthful outcome: no indexing claimed.
+        assert not hasattr(second.sources[0], "deleted_doc_count")
 
     def test_run_fetches_without_splitter_index_state(self, tmp_path):
         # Vector-free: splitter changes do not drive index invalidation;
