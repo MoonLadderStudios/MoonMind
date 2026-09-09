@@ -1690,6 +1690,7 @@ def _stub_compiled_plan(
     from moonmind.schemas.agent_runtime_models import OmnigentExecutionPlanBinding
 
     compiled = SimpleNamespace(
+        envelope=SimpleNamespace(payload=SimpleNamespace()),
         binding=OmnigentExecutionPlanBinding.model_validate(binding),
         artifact_refs=("artifact:plan",),
         resolved_skillset_ref="artifact:skills",

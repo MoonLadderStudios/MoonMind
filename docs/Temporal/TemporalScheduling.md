@@ -104,12 +104,13 @@ For generic Omnigent schedules, deployment maintenance advances the Agent Profil
 snapshot, selected launch-policy version, and execution plan together. It verifies
 the previous durable profile usage and permits only deployment binding changes:
 catalog observation, upstream version metadata for the same source identity, and
-server/host image references within the same launch-policy identity. Profile
+server/host image digests within the same image repository and launch-policy identity. Profile
 semantics and all other policy boundaries must match. Provider selection, model,
 effort, authored overrides (including nulls), task inputs, and the pinned
 runtime-provider target remain authoritative. A semantic or boundary change
 requires an explicit schedule revision. The normal compiler qualifies the new
-image combination before the schedule action and definition revision advance;
+image combination, then rechecks the active profile, launch policy, and deployed
+images under the publication fence before the schedule action and definition revision advance;
 already-started occurrences retain their immutable inputs.
 
 #### Authored policy and Auto
