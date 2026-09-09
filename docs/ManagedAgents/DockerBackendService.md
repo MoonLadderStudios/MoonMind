@@ -1064,7 +1064,7 @@ boundary supplies a scoped Bearer credential as
 `MOONMIND_CONTAINER_JOBS_BEARER_TOKEN`; the CLI sends it on every MCP request.
 In explicitly restricted local `disabled` mode the same bearer shape is issued
 for the stable persisted user behind loopback-only bind or documented trusted
-ingress. Retired selectors (`keycloak`, `default`, `google`) fail at startup
+ingress. Retired selectors (`keycloak`, `default`, `google`, `local`) fail at startup
 with migration guidance.
 An authenticated deployment must not expose a shared or deployment-wide token
 to managed sessions. The token is signed by the trusted session launcher,
@@ -1073,8 +1073,11 @@ expires with the bounded session lifetime, and is accepted only by
 session; submissions whose logical workspace or correlation differs from those
 claims fail before job creation. It is transported over the API's TLS/loopback
 transport, never placed in URLs, and never accepted as a MoonMind browser
-session; missing credentials are `401 auth_required` and invalid or expired
-bearers are `401 auth_invalid`.
+session. On this endpoint a missing capability is
+`401 container_capability_required` and an invalid or expired capability is
+`401 invalid_container_capability` (not the generic `auth_required` /
+`auth_invalid` user-auth codes); classify and remediate capability failures
+by these endpoint-specific codes.
 
 The command derives the canonical locator from the active authority: a
 `managed_runtime` locator for a managed session or the exact `sandbox` locator

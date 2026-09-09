@@ -23,7 +23,7 @@
 MoonMind has exactly one application authentication selector, `AUTH_PROVIDER`, and
 exactly one canonical principal, `User.id` (a stable MoonMind UUID). The supported
 target modes are `accounts`, `oidc`, `header`, and an explicitly restricted local
-mode `disabled`. Retired selectors (`keycloak`, `default`, `google`) are rejected
+mode `disabled`. Retired selectors (`keycloak`, `default`, `google`, `local`) are rejected
 at startup with migration guidance; they are never silently translated.
 
 Authentication establishes who presented a request. Authorization — whether that
@@ -227,55 +227,37 @@ authoritative adapter reference for K3/K4; this document remains the
 authority for modes, identity, session, error, and background-work
 semantics.
 
-## 12. Implementation status, support matrix, and operator evidence
+## 12. Support matrix and operator evidence
 
 This document is the single owner of target behavior. It is still
 **Draft**: the `accounts`, `oidc`, and `header` session and lifecycle
 semantics in §§5–8 describe the accepted contract, not a shipped and
 browser-verified implementation on this checkout. Do not read them as
-proof that the journeys in §12.3 pass.
+proof that the journeys in §12.1 pass. Until the pending implementation
+slices land, §7 (enrollment and administration) is contract text, not
+verified operator procedure.
 
-### 12.1 What has landed
+Point-in-time execution status — the landed-ticket list, pending backlog
+IDs, checkout-specific qualification results, and temporary plan lifecycle —
+lives in [KeycloakRemovalStatus-4130.md](../tmp/KeycloakRemovalStatus-4130.md)
+so this canonical section cannot go stale as issues land. This section keeps
+only the durable support, cutover, and compatibility contracts.
 
-- #4117: owned-surface inventory and acceptance contract (baseline evidence).
-- #4118: qualified upstream adapter boundary (this document §11 and
-  [OmnigentAuthAdapterContract.md](./OmnigentAuthAdapterContract.md)).
-- #4120: one-selector configuration and deployment defaults
-  (`moonmind/security/auth_modes_4120.py`: validation, fresh-vs-upgrade
-  classification, persisted migration decision, durable signing-key
-  resolution, disabled-mode exposure, base-URL/proxy/cookie policy,
-  redacted diagnostics; covered by `tests/unit/security/test_auth_modes_4120.py`
-  and `test_auth_compose_rendered_4120.py`).
-- #4129: bundled Keycloak live behavior removed (Compose service, realm
-  assets, routers, helpers, fixtures); remaining `keycloak` strings are
-  classified retirement, negative-test, or migration residuals per
-  [KeycloakRemovalResidual-4129.md](../tmp/KeycloakRemovalResidual-4129.md).
-
-### 12.2 What is still pending
-
-Account lifecycle implementation and recovery (#4121/#4122-era), session
-contracts (#4124-era), remaining cutover slices (#4125/#4126/#4127), and
-product qualification evidence (#4128) have no merged implementation on
-this checkout. Until they land, §7 (enrollment and administration) is
-contract text: first-owner setup, expiring one-use invites,
-logout/revocation bounds, MFA-as-migration-problem, and credential
-separation are declared desired state, not verified operator procedure.
-
-### 12.3 Supported and tested versus blocked and unqualified
+### 12.1 Supported and tested versus blocked and unqualified
 
 | Combination | Status | Evidence owner |
 | --- | --- | --- |
 | `disabled` clean boot and seeding, no Keycloak DNS/connect attempt, retired selectors/tokens/routes rejected, rendered Compose without the bundled service | Supported and tested (hermetic unit tests plus the residual manifest §5 open gates) | #4120 tests, #4129 manifest |
 | `accounts` / `oidc` / `header` end-to-end browser journeys (two-user login, admin/worker negative matrix, stream expiry and revocation, restart and replica consistency) | Blocked: contract only, pending K3/K4 implementation and #4128 qualification | #4128 (product evidence) |
 | Live external IdP and MFA qualification, deployment-owner protected inventory, coordinated release, retirement execution, retention disposition | Blocked by design: operator-gated steps requiring named-owner approval and separately authorized live checks | Deployment-cutover issue, #4131 rehearsal gate prerequisites |
-| `keycloak`, `default`, `google`, or unknown selectors; dual old/new credential issuance; whole shared PostgreSQL/Temporal restore as auth rollback; silent `disabled` fallback | Rejected, never a supported path | This contract §§2–4 plus §12.4 |
+| `keycloak`, `default`, `google`, `local`, or unknown selectors; dual old/new credential issuance; whole shared PostgreSQL/Temporal restore as auth rollback; silent `disabled` fallback | Rejected, never a supported path | This contract §§2–4 plus §12.2 |
 
 #4128 consumes the documented journey: qualification runs the real
 fresh-install, migrated-data, remote OIDC/proxy, and restricted-local
 paths against the coordinated implementation and records the result.
 Documentation must not invent a successful result ahead of that evidence.
 
-### 12.4 Cutover, backup, and rollback tooling
+### 12.2 Cutover, backup, and rollback tooling
 
 The deployment owner's actual tooling is the hermetic rehearsal gate
 [`tools/keycloak_cutover_rehearsal.py`](../../tools/keycloak_cutover_rehearsal.py)
@@ -315,7 +297,7 @@ are:
   authentication is never a rollback. If identity data changed after
   cutover, reconcile before restoring or repair forward.
 
-### 12.5 Upstream pin compatibility and plan lifecycle
+### 12.3 Upstream pin compatibility and plan lifecycle
 
 The reusable upstream boundary follows the pin recorded in
 [OmnigentAuthAdapterContract.md](./OmnigentAuthAdapterContract.md) §1
@@ -325,7 +307,9 @@ before any behavior is relied upon; qualification results name the exact
 pin they ran against.
 
 [KeycloakRemovalPlan.md](../tmp/KeycloakRemovalPlan.md) stays at
-`Status: Proposed` until execution is complete. Clean it up only then:
-retain the accepted contracts in this document and its adapter companion,
-resolve backlinks, and archive or remove the temporary plan. Do not erase
-necessary operator upgrade guidance prematurely.
+`Status: Proposed` until execution is complete (see the point-in-time
+ledger in [KeycloakRemovalStatus-4130.md](../tmp/KeycloakRemovalStatus-4130.md)).
+Clean it up only then: retain the accepted contracts in this document and
+its adapter companion, resolve backlinks, and archive or remove the
+temporary plan. Do not erase necessary operator upgrade guidance
+prematurely.

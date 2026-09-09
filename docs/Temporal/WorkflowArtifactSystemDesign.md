@@ -462,7 +462,7 @@ Log at minimum:
 
 Artifact API auth behavior follows the one app-level selector `AUTH_PROVIDER`
 (`accounts` | `oidc` | `header` | explicitly restricted local `disabled`).
-Retired selectors (`keycloak`, `default`, `google`) fail at startup with
+Retired selectors (`keycloak`, `default`, `google`, `local`) fail at startup with
 migration guidance. Authoritative mode, identity, session, and error semantics
 live in [AuthenticationContracts.md](../Security/AuthenticationContracts.md);
 this section only binds them to artifact routes.

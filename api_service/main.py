@@ -960,7 +960,7 @@ app = FastAPI(
     description=(
         "API for MoonMind - LLM-powered documentation search and chat interface. "
         "Application authentication is selected by AUTH_PROVIDER (accounts, "
-        "oidc, header, disabled; retired keycloak/default/google selectors "
+        "oidc, header, disabled; retired keycloak/default/google/local selectors "
         "are rejected at startup). Documented error contract "
         "(docs/Security/AuthenticationContracts.md §8): 401 auth_required "
         "(missing credential at a strict boundary), 401 auth_invalid "
