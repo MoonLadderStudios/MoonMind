@@ -6715,6 +6715,9 @@ async def test_agent_runtime_prepare_turn_instructions_adds_retrieval_capability
     monkeypatch.setenv("RAG_ENABLED", "1")
     monkeypatch.setenv("GOOGLE_API_KEY", "test-key")
     monkeypatch.delenv("MOONMIND_RETRIEVAL_URL", raising=False)
+    # Vector-free defaults (#4115): the direct-transport case under test
+    # opts in explicitly; the gateway case ignores this flag.
+    monkeypatch.setenv("QDRANT_ENABLED", "true")
 
     activities = TemporalAgentRuntimeActivities()
 
