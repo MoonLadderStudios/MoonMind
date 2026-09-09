@@ -54,18 +54,13 @@ def classify_snapshot(
         return _decision(
             "manual_review", "publish_unavailable", ResolverAction.STOP_MANUAL_REVIEW
         )
-    if (
+    review_pending = (
         pending_review_precedes_remediation
         and snapshot.review_loop_enabled
         and snapshot.automated_review_requested
         and not snapshot.fresh_automated_review
-    ):
-        # Preserve the reviewed head until the outstanding request completes,
-        # including when CI, conflicts, or older comments need remediation.
-        return _decision(
-            "automated_review_wait", "automated_review_wait", ResolverAction.WAIT
-        )
-    if snapshot.merge_conflict:
+    )
+    if snapshot.merge_conflict and not review_pending:
         return _decision(
             "merge_conflicts", "merge_conflicts", ResolverAction.RUN_REMEDIATION
         )
@@ -99,6 +94,12 @@ def classify_snapshot(
         # instead of burning the review-cycle budget on a no-progress loop.
         return _decision(
             "manual_review", "deferred_comments", ResolverAction.STOP_MANUAL_REVIEW
+        )
+    if review_pending:
+        # Preserve the reviewed head until the outstanding request completes,
+        # including when CI, conflicts, or older comments need remediation.
+        return _decision(
+            "automated_review_wait", "automated_review_wait", ResolverAction.WAIT
         )
     if snapshot.actionable_comments:
         return _decision(

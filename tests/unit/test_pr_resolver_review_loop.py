@@ -450,8 +450,9 @@ def test_historical_resolver_keeps_recorded_remediation_order():
 
 
 @pytest.mark.parametrize("inventory_available", [True, False])
+@pytest.mark.parametrize("head_changed", [False, True])
 def test_snapshot_collects_findings_after_review_completion(
-    snapshot_module, monkeypatch, tmp_path, inventory_available
+    snapshot_module, monkeypatch, tmp_path, inventory_available, head_changed
 ):
     main = snapshot_module["main"]
     scope = main.__globals__
@@ -462,7 +463,16 @@ def test_snapshot_collects_findings_after_review_completion(
         "url": "https://github.com/owner/repo/pull/350",
         "statusCheckRollup": checks,
     }
-    monkeypatch.setitem(scope, "fetch_pr_data", lambda _selector: (pr, "350", []))
+    pr_reads = []
+
+    def fetch_pr(_selector):
+        pr_reads.append(True)
+        observed = (
+            {**pr, "headRefOid": OLD_HEAD} if head_changed and len(pr_reads) > 1 else pr
+        )
+        return observed, "350", []
+
+    monkeypatch.setitem(scope, "fetch_pr_data", fetch_pr)
     monkeypatch.setitem(scope, "_fetch_required_status_checks", lambda **_kwargs: [])
     monkeypatch.setitem(scope, "_fetch_commit_check_runs", lambda **_kwargs: checks)
     monkeypatch.setitem(scope, "_fetch_previous_commit_sha", lambda **_kwargs: None)
@@ -519,6 +529,12 @@ def test_snapshot_collects_findings_after_review_completion(
             str(path),
         ],
     )
+    if head_changed:
+        with pytest.raises(SystemExit) as exc:
+            main()
+        assert exc.value.code == 1
+        assert not path.exists()
+        return
     main()
     captured = json.loads(path.read_text())
     assert len(reads) == 2
@@ -687,3 +703,32 @@ def test_finalize_writes_a_request_review_result(tmp_path, monkeypatch) -> None:
     assert payload["mergeAutomationDisposition"] == "request_review"
     assert payload["gatedContinuation"]["action"] == "request_review"
     assert payload["gatedContinuation"]["provider"] == "codex"
+
+
+@pytest.mark.parametrize(
+    "field,reason",
+    [
+        ("comments_available", "comments_unavailable"),
+        ("comment_policy_enforced", "comment_policy_not_enforced"),
+        ("checks_degraded", "ci_signal_degraded"),
+        ("unknown_blocker", "unknown_blocker"),
+        ("malformed", "snapshot_malformed"),
+        ("deferred_comments", "deferred_comments"),
+    ],
+)
+@pytest.mark.parametrize("conflicted", [False, True])
+def test_terminal_evidence_precedes_pending_review(field, reason, conflicted):
+    from dataclasses import replace
+
+    snapshot = normalize_portable_snapshot(_snapshot())
+    snapshot = replace(
+        snapshot,
+        review_loop_enabled=True,
+        automated_review_requested=True,
+        fresh_automated_review=False,
+        merge_conflict=conflicted,
+        **{field: field not in {"comments_available", "comment_policy_enforced"}},
+    )
+    decision = classify_snapshot(snapshot)
+    assert decision.action == ResolverAction.STOP_MANUAL_REVIEW
+    assert decision.reason_code == reason

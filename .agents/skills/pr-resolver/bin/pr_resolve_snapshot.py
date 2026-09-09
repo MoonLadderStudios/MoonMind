@@ -1411,6 +1411,18 @@ def main():
         )
         if not isinstance(comments, list):
             comments = []
+        # Comments/reactions have no reviewed commit. Revalidate the remote
+        # head after completion and inventory collection before publishing them.
+        completed_pr, _, _ = fetch_pr_data(args.pr)
+        if (
+            not head_sha
+            or str(completed_pr.get("headRefOid") or "").strip() != head_sha
+        ):
+            print(
+                "PR head changed during review collection; refresh the snapshot.",
+                file=sys.stderr,
+            )
+            sys.exit(1)
     addressed_ids = _load_addressed_comment_ids()
     deferred_ids = _load_deferred_comment_ids()
     comments_summary = summarize_comments(

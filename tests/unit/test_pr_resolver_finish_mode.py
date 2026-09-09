@@ -130,7 +130,7 @@ def _run_finalize(
     monkeypatch.setitem(
         main.__globals__,
         "_merge_pr",
-        lambda selector, method: merged.append((selector, method)),
+        lambda selector, method, head: merged.append((selector, method)),
     )
     monkeypatch.setitem(main.__globals__, "_check_pr_merged", lambda _selector: True)
     monkeypatch.delenv("PR_RESOLVER_REVIEW_PROVIDER", raising=False)
@@ -432,3 +432,18 @@ def test_orchestration_exits_zero_for_review_clean(orchestrate_module) -> None:
 
     assert exit_code == 0
     assert result["mergeAutomationDisposition"] == "review_clean"
+
+
+def test_merge_command_guards_the_reviewed_head(finalize_module, monkeypatch):
+    merge = finalize_module["_merge_pr"]
+    calls = []
+    monkeypatch.setattr(
+        merge.__globals__["subprocess"], "run", lambda cmd, **kw: calls.append(cmd)
+    )
+    merge("350", "squash", HEAD)
+    assert calls == [
+        ["gh", "pr", "merge", "350", "--squash", "--match-head-commit", HEAD]
+    ]
+    with pytest.raises(RuntimeError, match="verified PR head"):
+        merge("350", "squash", "")
+    assert len(calls) == 1
