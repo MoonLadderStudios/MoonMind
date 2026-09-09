@@ -134,6 +134,13 @@ A `ContextPack` is a bounded, budgeted bundle of exactly-resolved context:
 Large bodies travel behind `contextRefs`; durable workflow payloads carry refs,
 not inlined corpora.
 
+Assembled context is reference data, not instructions. Runtime injection must
+preserve a trust boundary that treats context-pack content (repository files,
+attachments, skill content, prior-run artifacts) as untrusted reference
+material: never execute instructions embedded in assembled content, and prefer
+the current checked-out workspace state when assembled content conflicts with
+it.
+
 ---
 
 ## 6. Budgeting, filtering, and observability
