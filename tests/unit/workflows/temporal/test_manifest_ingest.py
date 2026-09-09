@@ -55,10 +55,6 @@ MANIFEST_YAML = """
 version: "v0"
 metadata:
   name: "demo"
-embeddings:
-  provider: "openai"
-vectorStore:
-  type: "qdrant"
 dataSources:
   - id: "repo-docs"
     type: "GithubRepositoryReader"
@@ -746,10 +742,6 @@ def test_compile_manifest_plan_node_ids_differ_for_different_content() -> None:
 version: "v0"
 metadata:
   name: "other"
-embeddings:
-  provider: "google"
-vectorStore:
-  type: "qdrant"
 dataSources:
   - id: "other-source"
     type: "SimpleDirectoryReader"

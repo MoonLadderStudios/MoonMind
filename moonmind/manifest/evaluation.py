@@ -1,7 +1,11 @@
-"""Retrieval evaluation metrics for manifest pipelines.
+"""Retrieval evaluation over recorded results (vector-free).
 
-Implements hitRate@k and ndcg@k as specified in
-``docs/RAG/LlamaIndexManifestSystem.md`` §7.
+MoonLadderStudios/MoonMind#4108 retired native live-vector retrieval
+evaluation wiring. Evaluation runs only over committed ``retrieved_ids``
+baselines (provenance ``recorded``) or an explicitly injected retriever
+(provenance ``injected``) for tests. Absent execution never passes a quality
+gate: missing/unloadable datasets and requests without recorded or injected
+results fail closed.
 """
 
 from __future__ import annotations
@@ -9,7 +13,6 @@ from __future__ import annotations
 import json
 import logging
 import math
-import os
 import re
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -40,6 +43,7 @@ class DatasetEvaluation:
 
     dataset_name: str
     metrics: List[MetricScore] = field(default_factory=list)
+    provenance: str = "recorded"
 
     @property
     def passed(self) -> bool:
@@ -64,6 +68,7 @@ class EvaluationResult:
                 {
                     "name": d.dataset_name,
                     "passed": d.passed,
+                    "provenance": d.provenance,
                     "metrics": [
                         {
                             "name": m.name,
@@ -259,122 +264,50 @@ def _score_metric(
     logger.warning("Unsupported evaluation metric '%s'; reporting 0.0", metric_name)
     return 0.0
 
-def _doc_id_from_item(item: Any) -> str:
-    payload = getattr(item, "payload", None)
-    if isinstance(payload, dict):
-        for key in ("id", "doc_id", "document_id", "source", "path", "file_path"):
-            value = payload.get(key)
-            if isinstance(value, str) and value.strip():
-                return value.strip()
-    for attr in ("source", "chunk_hash"):
-        value = getattr(item, attr, None)
-        if isinstance(value, str) and value.strip():
-            return value.strip()
-    return str(item)
-
-def _default_top_k(manifest: Any) -> int:
-    try:
-        retrievers = manifest.retrievers or []
-        retriever = retrievers[0]
-    except (AttributeError, IndexError):
-        return 10
-    params = getattr(retriever, "params", None)
-    top_k = getattr(params, "topK", None)
-    return int(top_k or 10)
-
-def _settings_overrides_from_manifest(manifest: Any) -> Dict[str, str]:
-    overrides: Dict[str, str] = {}
-
-    vector_store = getattr(manifest, "vectorStore", None)
-    index_name = getattr(vector_store, "indexName", None)
-    if isinstance(index_name, str) and index_name.strip():
-        overrides["VECTOR_STORE_COLLECTION_NAME"] = index_name.strip()
-        overrides["VECTOR_STORE_COLLECTION_NAMES"] = index_name.strip()
-
-    embeddings = getattr(manifest, "embeddings", None)
-    provider = getattr(embeddings, "provider", None)
-    if isinstance(provider, str) and provider.strip():
-        normalized_provider = provider.strip().lower()
-        overrides["DEFAULT_EMBEDDING_PROVIDER"] = normalized_provider
-        model = getattr(embeddings, "model", None)
-        if isinstance(model, str) and model.strip():
-            if normalized_provider == "google":
-                overrides["GOOGLE_EMBEDDING_MODEL"] = model.strip()
-            elif normalized_provider == "openai":
-                overrides["OPENAI_EMBEDDING_MODEL"] = model.strip()
-
-    return overrides
-
-def _build_service_retriever(manifest: Any) -> RetrieverFn:
-    from moonmind.rag.service import ContextRetrievalService
-    from moonmind.rag.settings import RagRuntimeSettings
-
-    settings_source = dict(os.environ)
-    settings_source.update(_settings_overrides_from_manifest(manifest))
-    settings = RagRuntimeSettings.from_env(settings_source)
-    executable, reason = settings.retrieval_execution_reason(None)
-    if not executable:
-        raise RuntimeError(
-            "Retrieval evaluation requires executable RAG settings "
-            f"(reason: {reason})."
-        )
-    service = ContextRetrievalService(settings=settings)
-    filters = settings.as_filter_metadata()
-
-    def retrieve(query: str, top_k: int) -> List[str]:
-        pack = service.retrieve(
-            query=query,
-            filters=filters,
-            top_k=top_k,
-            overlay_policy="skip",
-            budgets={},
-            transport=settings.resolved_transport(None),
-            initiation_mode="evaluation",
-        )
-        return [_doc_id_from_item(item) for item in pack.items]
-
-    return retrieve
-
 def evaluate_manifest(
     manifest: Any,  # ManifestV0 — Any to avoid circular imports
     dataset_filter: Optional[str] = None,
     retriever: RetrieverFn | None = None,
 ) -> dict:
-    """Run evaluation for a manifest's configured datasets and metrics.
+    """Run evaluation over recorded/injected results only (no live retrieval).
 
-    The retriever returns ordered document ids for one query. Tests and local
-    smoke checks can inject a deterministic retriever; CLI callers use the
-    configured RAG retrieval service.
-
-    Returns:
-        Dict representation of :class:`EvaluationResult`.
+    Provenance is explicit: ``recorded`` for committed ``retrieved_ids``
+    baselines, ``injected`` for a caller-supplied retriever (tests), and
+    ``unavailable`` for missing/unloadable datasets (always fails). Requests
+    without recorded or injected results raise actionably instead of scoring
+    a measured zero that could pass a gate.
     """
     eval_config = manifest.evaluation
     if eval_config is None:
         return {"manifest": manifest.metadata.name, "passed": True, "datasets": []}
 
     result = EvaluationResult(manifest_name=manifest.metadata.name)
-    active_retriever = retriever
-    default_top_k = _default_top_k(manifest)
+    default_top_k = 10
 
     for ds_cfg in eval_config.datasets:
         if dataset_filter and ds_cfg.name != dataset_filter:
             continue
 
-        ds_eval = DatasetEvaluation(dataset_name=ds_cfg.name)
-
-        # Try loading dataset (non-fatal if not found for now)
+        # Try loading dataset; missing/unloadable never passes a gate.
         try:
             entries = _load_dataset(ds_cfg.path)
             retrieved = _baseline_retrieved_ids(entries)
         except (FileNotFoundError, ValueError) as exc:
             logger.warning("Could not load dataset '%s': %s", ds_cfg.name, exc)
+            ds_eval = DatasetEvaluation(
+                dataset_name=ds_cfg.name, provenance="unavailable"
+            )
             for metric_cfg in eval_config.metrics:
+                # Fail closed: an absent execution is not a measured zero
+                # that passes when no threshold is set.
+                threshold = metric_cfg.threshold
+                if threshold is None:
+                    threshold = 1.0
                 ds_eval.metrics.append(
                     MetricScore(
                         name=metric_cfg.name,
                         score=0.0,
-                        threshold=metric_cfg.threshold,
+                        threshold=threshold,
                     )
                 )
             result.datasets.append(ds_eval)
@@ -386,17 +319,24 @@ def evaluate_manifest(
         ]
         max_top_k = max(metric_cutoffs, default=default_top_k)
         if retrieved is None:
-            logger.info(
-                "Dataset '%s' does not contain committed 'retrieved_ids'. "
-                "Using live retriever-backed evaluation.",
-                ds_cfg.name,
-            )
-            if active_retriever is None:
-                active_retriever = _build_service_retriever(manifest)
+            if retriever is None:
+                raise RuntimeError(
+                    f"Dataset '{ds_cfg.name}' has no committed 'retrieved_ids' "
+                    "and no injected retriever was provided "
+                    "(MoonLadderStudios/MoonMind#4108): live-vector retrieval "
+                    "evaluation is retired. Commit 'retrieved_ids' baselines "
+                    "or inject an explicit retriever; absent execution never "
+                    "passes a quality gate."
+                )
             retrieved = [
-                active_retriever(str(entry["query"]), max_top_k)
-                for entry in entries
+                retriever(str(entry["query"]), max_top_k) for entry in entries
             ]
+            provenance = "injected"
+        else:
+            provenance = "recorded"
+        ds_eval = DatasetEvaluation(
+            dataset_name=ds_cfg.name, provenance=provenance
+        )
         for metric_cfg in eval_config.metrics:
             score = _score_metric(
                 metric_cfg.name,
