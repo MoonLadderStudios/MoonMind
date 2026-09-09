@@ -466,13 +466,45 @@ def test_production_packaging_excludes_irrelevant_runtime_modules():
 
 
 def test_no_ambient_auth_state_at_import():
-    for var in (
-        "OMNIGENT_AUTH_PROVIDER",
-        "OMNIGENT_AUTH_ENABLED",
-        "OMNIGENT_LOCAL_SINGLE_USER",
-    ):
-        os.environ.pop(var, None)
-    import importlib
+    # NOTE: this check must not reload the qualification module in-process.
+    # Re-executing it rebinds AuthConfigError/validators in the live module
+    # namespace while consumers (e.g. moonmind.security.auth_modes_4120)
+    # keep early-bound references, so retired-selector errors raised after
+    # the reload escape `pytest.raises(m.AuthModeError)` for the rest of
+    # the worker process. Verify import purity in an isolated subprocess.
+    import subprocess
+    import sys
+    from pathlib import Path
 
-    importlib.reload(q)
+    scrubbed = {
+        var: os.environ.pop(var, None)
+        for var in (
+            "OMNIGENT_AUTH_PROVIDER",
+            "OMNIGENT_AUTH_ENABLED",
+            "OMNIGENT_LOCAL_SINGLE_USER",
+        )
+    }
+    try:
+        child_env = dict(os.environ)
+        for var in scrubbed:
+            child_env.pop(var, None)
+        repo_root = Path(__file__).resolve().parents[3]
+        check_code = (
+            "from moonmind.security import omnigent_auth_qualification as q; "
+            "assert q.SUPPORTED_MODES == "
+            '("accounts", "oidc", "header", "disabled"), q.SUPPORTED_MODES'
+        )
+        subprocess.run(
+            [sys.executable, "-c", check_code],
+            check=True,
+            cwd=repo_root,
+            env=child_env,
+            capture_output=True,
+            text=True,
+            timeout=120,
+        )
+    finally:
+        for var, value in scrubbed.items():
+            if value is not None:
+                os.environ[var] = value
     assert q.SUPPORTED_MODES == ("accounts", "oidc", "header", "disabled")

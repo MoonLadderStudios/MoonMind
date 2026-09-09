@@ -1,7 +1,4 @@
-import {
-  type ContextRetrievalAuthoring,
-  parseContextRetrievalParameters,
-} from './contextRetrievalAuthoring';
+import type { ContextRetrievalAuthoring } from './contextRetrievalAuthoring';
 import {
   buildRemediationRuntimeRequestFields,
   DEFAULT_REMEDIATION_ACTION_POLICY,
@@ -292,7 +289,9 @@ export function buildRemediationCreateDraft(
   const launchPolicyRef = cleanText(
     omnigentParameters.launchPolicyRef || storedSnapshot.launchPolicyRef,
   );
-  const contextRetrieval = parseContextRetrievalParameters(inputParameters);
+  // Built-in vector retrieval retired (#4105): remediation drafts carry no
+  // retrieval authoring. Historical payloads remain readable in detail views;
+  // new remediation work uses explicit evidence refs, never rag/followUp.
   return {
     source: 'remediation',
     schemaVersion: 1,
@@ -310,7 +309,6 @@ export function buildRemediationCreateDraft(
     publishMode: 'pr',
     ...(executionProfileRef ? { executionProfileRef } : {}),
     ...(launchPolicyRef ? { launchPolicyRef } : {}),
-    ...(contextRetrieval ? { contextRetrieval } : {}),
     runtime: {
       ...(cleanText(runtime.mode) ? { mode: cleanText(runtime.mode) } : {}),
       ...(cleanText(runtime.model) ? { model: cleanText(runtime.model) } : {}),

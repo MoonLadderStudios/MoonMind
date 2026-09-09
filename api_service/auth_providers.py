@@ -2,8 +2,6 @@ import asyncio
 import logging
 import os
 import uuid
-from pathlib import Path
-from typing import Mapping
 
 from fastapi import Depends, HTTPException
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -18,96 +16,88 @@ from api_service.db.models import User
 from api_service.services.profile_service import ProfileService
 from moonmind.auth import AuthProviderManager, EnvAuthProvider, ProfileAuthProvider
 from moonmind.config.settings import settings
+from moonmind.security.auth_modes_4120 import (
+    get_request_production_mode,
+    is_disabled_local_mode,
+    resolve_moonmind_auth_config,
+)
 
 logger = logging.getLogger(__name__)
 
 _cached_current_user_dependency = None
 
-# Startup-resolved authentication state (MoonLadderStudios/MoonMind#4120 R3).
-# ``None`` means startup has not resolved the bootstrap decision yet (or the
-# process is running under tests that bind dependencies directly from
-# ``settings.oidc.AUTH_PROVIDER``); callers then fall back to the settings
-# value. Once ``startup_event`` resolves the versioned migration bootstrap,
-# the effective mode selects the request path and ``blocked`` fails the
-# disabled local path closed while a populated database awaits a protected
-# operator choice.
-_EFFECTIVE_AUTH_MODE: str | None = None
-_AUTH_BOOTSTRAP_BLOCKED = False
-
-
-def set_startup_auth_state(
-    *, effective_mode: str | None, blocked: bool = False
-) -> None:
-    """Record the startup-resolved auth mode and bootstrap gate outcome."""
-    global _EFFECTIVE_AUTH_MODE, _AUTH_BOOTSTRAP_BLOCKED
-    _EFFECTIVE_AUTH_MODE = effective_mode
-    _AUTH_BOOTSTRAP_BLOCKED = blocked
-
-
-def reset_startup_auth_state() -> None:
-    """Clear startup-resolved auth state (tests only)."""
-    global _EFFECTIVE_AUTH_MODE
-    global _AUTH_BOOTSTRAP_BLOCKED
-    global _cached_current_user_dependency
-    _EFFECTIVE_AUTH_MODE = None
-    _AUTH_BOOTSTRAP_BLOCKED = False
-    _cached_current_user_dependency = None
-
-
-def _current_auth_mode() -> str:
-    """Return the effective request-path auth mode (startup over settings)."""
-    if _EFFECTIVE_AUTH_MODE is not None:
-        return _EFFECTIVE_AUTH_MODE
-    return settings.oidc.AUTH_PROVIDER
-
-
-def is_auth_bootstrap_blocked() -> bool:
-    """Return whether startup gated authentication on an operator choice."""
-    return _AUTH_BOOTSTRAP_BLOCKED
-
-
-def build_control_plane_auth_config(
-    *,
-    mode: str | None = None,
-    explicit_secret: str | None = None,
-    secret_file: str | Path | None = None,
-    env: Mapping[str, str] | None = None,
-):
-    """Build the K2 control-plane auth object from explicit MoonMind inputs.
-
-    Production entrypoint crossing the #4118 qualification boundary: the
-    resolved :class:`ControlPlaneAuthConfig` is constructed into a real
-    ``MoonmindAuthConfig`` here instead of storing raw kwargs on app state.
-    Only MoonMind-owned inputs participate (selector, durable secret);
-    contradictory ambient ``OMNIGENT_AUTH_*`` values can never leak in
-    because neither this helper nor the canonical resolver reads them.
-    """
-    from moonmind.security import auth_modes as _modes
-    from moonmind.security import omnigent_auth_qualification as _qual
-
-    source = os.environ if env is None else env
-    resolved_mode = _modes.validate_auth_provider(
-        mode if mode is not None else settings.oidc.AUTH_PROVIDER
-    )
-    secret = _modes.resolve_session_secret(
-        explicit_secret, secret_file=secret_file, env=source
-    )
-    control_plane = _modes.resolve_control_plane_config(
-        mode=resolved_mode, cookie_secret=secret
-    )
-    return _qual.MoonmindAuthConfig(**control_plane.to_qualification_kwargs())
-
 
 def _disabled_auth_test_user():
-    """Explicit test-only principal (never the production path).
-
-    Used only when ``settings.workflow.test_mode`` or ``PYTEST_CURRENT_TEST``
-    marks an explicit test override. Production database failures raise
-    ``503`` instead of synthesizing this stub.
-    """
+    # Test-only principal. Production never mints administrator stubs:
+    # missing identity/DB data fails closed with 503 (see _current_user_fallback).
+    # Tests must use explicit dependency overrides for authenticated paths.
     from types import SimpleNamespace
 
     return SimpleNamespace(id=None, email="stub@example.com", is_superuser=True)
+
+
+def build_moonmind_control_plane_config(environ=None, mode=None):
+    """Resolve the MoonMind control-plane auth config explicitly (#4120 req 2).
+
+    Only MoonMind-owned inputs (AUTH_PROVIDER mode, MOONMIND_* cookie/key
+    material) are consumed. ``OMNIGENT_AUTH_*`` ambient values -- even
+    contradictory ones -- cannot select MoonMind behavior; simultaneous
+    same-origin use stays isolated through distinct cookies/keys/purposes.
+    Callers must pass the durable session secret explicitly; this helper
+    never reads runtime-server secrets.
+
+    ``mode`` accepts the startup-classified production mode so the
+    omitted-fresh path (blank storage, classified ``accounts``) resolves
+    through the same production code as explicit ``accounts``. When omitted,
+    the startup-classified mode is read via the auth-modes owner and blank
+    storage fails closed with 503 (startup owns the fresh-vs-upgrade
+    decision).
+
+    Production wiring: ``api_service.main._initialize_oidc_provider`` calls
+    :func:`resolve_moonmind_auth_config` directly with the classified
+    production mode at startup, so this helper is the request-time
+    counterpart of the same production boundary, not dead code.
+    """
+    from moonmind.security.auth_modes_4120 import default_session_key_path
+
+    if mode is not None:
+        from moonmind.security.omnigent_auth_qualification import (
+            validate_mode_selector,
+        )
+
+        effective = validate_mode_selector(str(mode).strip().lower())
+    else:
+        effective = get_request_production_mode()
+    if not effective:
+        # Omitted selector at request time: the startup classifier owns the
+        # fresh-vs-upgrade decision. Request code fails closed rather than
+        # guessing a mode.
+        raise HTTPException(status_code=503, detail="auth_undecided")
+    mode = effective
+    secret_env = os.environ.get("MOONMIND_SESSION_SECRET", "").strip()
+    cookie_secret: bytes
+    if secret_env:
+        from moonmind.security.auth_modes_4120 import resolve_session_secret
+
+        cookie_secret = resolve_session_secret(explicit_secret=secret_env)
+    else:
+        # Durable deployment-owned key; never a per-process placeholder.
+        from moonmind.security.auth_modes_4120 import resolve_session_secret
+
+        cookie_secret = resolve_session_secret(
+            explicit_secret=None,
+            key_path=default_session_key_path(),
+            allow_generate=False,
+            for_remote_production=False,
+        )
+    runtime_environ = dict(environ) if environ is not None else dict(os.environ)
+    return resolve_moonmind_auth_config(
+        mode=mode,
+        cookie_secret=cookie_secret,
+        require_secure_cookies=os.environ.get("MOONMIND_REQUIRE_SECURE_COOKIES", "1")
+        != "0",
+        environ=runtime_environ,
+    )
 
 
 async def get_default_user_from_db(
@@ -129,55 +119,37 @@ def get_current_user():
     """Return a dependency that yields the current user.
 
     Behaviour:
-    • In normal operation with AUTH_PROVIDER == "disabled" we load the
-      default user from the database (explicit local single-user mode).
-    • Missing identity data or database unavailability fails closed with
-      ``503`` (``unavailable``) on the production path. It never synthesizes
-      an administrator stub (MoonLadderStudios/MoonMind#4120 R5): a missing
-      credential may be optional only at explicitly optional boundaries, and
-      test-only principals belong in explicit test dependency overrides
-      (``settings.workflow.test_mode``), never in production fallbacks.
+    • In normal operation with AUTH_PROVIDER == "disabled" we still try to load the
+      default user from the database (to keep behaviour unchanged for the running
+      API).
+    • **However** when running under unit-test environments the database is often
+      unavailable.  If we cannot reach it (e.g. connection refused) we gracefully
+      fall back to returning a lightweight stub user object so the rest of the
+      application code continues to work without a real database.
+    This removes the hard DB dependency from the vast majority of unit tests that
+    don’t need it, preventing the `[Errno 111] Connect call failed ('127.0.0.1',
+    5432)` failures that appeared after switching back to
+    `Depends(get_current_user())` in the routers.
     """
 
     global _cached_current_user_dependency
-    if _current_auth_mode() != "disabled":
+    from moonmind.security.auth_modes_4120 import get_request_production_mode
+
+    if get_request_production_mode() != "disabled":
         # Authenticated modes share the current bearer validation until the
         # #4124-era session contracts replace it; retired selectors fail at
-        # startup via OIDCSettings.validate_auth_provider, never here. A
-        # startup-resolved effective mode (for example fresh installs that
-        # select accounts through the normal production path) takes
-        # precedence over the import-time settings value.
+        # startup via the auth-modes owner, never here.
         return current_active_user
 
     if _cached_current_user_dependency is None:
 
         async def _current_user_fallback():
-            if is_auth_bootstrap_blocked():
-                # Populated database awaiting a protected operator choice:
-                # serve no owner (not even the persisted default user) and
-                # fail closed instead of synthesizing an administrator.
-                # Checked before the test-only override so an explicit
-                # bootstrap block cannot be bypassed by test markers.
-                raise HTTPException(
-                    status_code=503,
-                    detail="Authentication requires an explicit "
-                    "operator migration choice",
-                )
+            # Explicit test double only: unit tests without a database opt in
+            # via test_mode/PYTEST_CURRENT_TEST. Production (and any
+            # non-test caller) fails closed below -- missing identity/DB data
+            # in local mode never mints a synthetic administrator.
             if settings.workflow.test_mode or os.getenv("PYTEST_CURRENT_TEST"):
-                # Explicit test-only override: unit-test environments without
-                # a database use a stub principal instead of requiring DB.
-                # Production (test_mode False, no PYTEST_CURRENT_TEST) never
-                # takes this path.
                 return _disabled_auth_test_user()
-
-            if _current_auth_mode() != "disabled":
-                # The disabled local path is not the startup-resolved
-                # production flow (for example a fresh install running the
-                # accounts flow); refuse the local principal here.
-                raise HTTPException(
-                    status_code=503,
-                    detail="Local disabled authentication is not active",
-                )
 
             async def _load_default_user() -> User | None:
                 from api_service.db.base import get_async_session_context
@@ -197,19 +169,19 @@ def get_current_user():
                     return user_obj
             except (Exception, asyncio.TimeoutError):
                 logger.warning(
-                    "Failed to load default user in disabled auth mode; failing closed.",
+                    "Identity store unavailable in disabled auth mode; failing closed.",
                     exc_info=True,
                 )
-                raise HTTPException(
-                    status_code=503, detail="Identity store unavailable"
-                )
+                raise HTTPException(status_code=503, detail="unavailable")
 
-            # No synthetic admin fallback: missing identity data fails closed.
-            raise HTTPException(status_code=503, detail="Default user not found")
+            # No synthetic admin fallback: a missing default row in local mode
+            # is a protected-setup signal, not an implicit grant.
+            raise HTTPException(status_code=503, detail="setup_required")
 
         _cached_current_user_dependency = _current_user_fallback
 
     return _cached_current_user_dependency
+
 
 def get_current_user_optional():
     """Return an auth dependency that tolerates missing bearer credentials.
@@ -218,7 +190,7 @@ def get_current_user_optional():
     are not blocked by FastAPI resolving a strict bearer-auth dependency first.
     """
 
-    if _current_auth_mode() != "disabled":
+    if not is_disabled_local_mode():
         return current_active_user_optional
     return get_current_user()
 

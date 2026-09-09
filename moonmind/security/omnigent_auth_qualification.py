@@ -53,7 +53,7 @@ import jwt
 # ---------------------------------------------------------------------------
 
 SUPPORTED_MODES = ("accounts", "oidc", "header", "disabled")
-RETIRED_SELECTORS = ("keycloak", "default", "google", "local")
+RETIRED_SELECTORS = ("keycloak", "default", "google")
 
 _RETIRED_GUIDANCE = {
     "keycloak": "AUTH_PROVIDER='keycloak' was removed. Choose 'accounts', 'oidc', "
@@ -63,9 +63,6 @@ _RETIRED_GUIDANCE = {
     "supported mode. Choose an explicit supported mode.",
     "google": "AUTH_PROVIDER='google' was removed. Use generic 'oidc' with explicit "
     "issuer/client configuration.",
-    "local": "AUTH_PROVIDER='local' was retired. Use explicitly restricted local "
-    "'disabled' with loopback/trusted-ingress evidence, or 'accounts' for "
-    "built-in accounts.",
 }
 
 MOONMIND_TOKEN_ISSUER = "moonmind-control-plane"
@@ -210,20 +207,19 @@ class UnsupportedSurfaceError(Exception):
 def validate_mode_selector(mode: str) -> str:
     """Validate a MoonMind ``AUTH_PROVIDER`` selector, failing closed.
 
-    Delegates to the canonical K3 owner
-    (:func:`moonmind.security.auth_modes.validate_auth_provider`) so the K2
-    adapter never defines a competing contract. Unknown and retired selectors
-    raise :class:`AuthConfigError` with migration guidance; they are never
-    silently translated.
+    Unknown and retired selectors raise :class:`AuthConfigError` with
+    migration guidance; they are never silently translated.
     """
-    from moonmind.security.auth_modes import validate_auth_provider as _canonical
-
-    try:
-        return _canonical(mode)
-    except Exception as exc:
-        # Preserve the adapter-local error type for existing callers while
-        # keeping the single canonical message contract.
-        raise AuthConfigError(str(exc)) from exc
+    normalized = (mode or "").strip().lower()
+    if normalized in SUPPORTED_MODES:
+        return normalized
+    if normalized in _RETIRED_GUIDANCE:
+        raise AuthConfigError(_RETIRED_GUIDANCE[normalized])
+    raise AuthConfigError(
+        f"Unknown AUTH_PROVIDER={mode!r}. Supported: "
+        f"{', '.join(SUPPORTED_MODES)}. See "
+        "docs/Security/AuthenticationContracts.md."
+    )
 
 
 @dataclass(frozen=True)

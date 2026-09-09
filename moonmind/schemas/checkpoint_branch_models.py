@@ -122,13 +122,25 @@ class CheckpointBranchCreateRequest(BaseModel):
     )
     model: str | None = Field(None, min_length=1, max_length=255)
     effort: str | None = Field(None, min_length=1, max_length=64)
-    # Authored in-session follow-up retrieval override for the branch turn
-    # (MoonMind#3514). Recorded as bounded authored intent and folded into the
-    # branch operation idempotency digest; enforcement inherits the parent run's
-    # compiled policy unless a narrower override is materialized at launch.
+    # Built-in vector retrieval authoring retired
+    # (MoonLadderStudios/MoonMind#4105). The field remains accepted only in its
+    # absent/empty/disabled form so historical payloads still parse; explicit
+    # retired requirements fail validation before any new execution is accepted.
     follow_up_retrieval: dict[str, Any] | None = Field(
         None, alias="followUpRetrieval"
     )
+
+    @model_validator(mode="after")
+    def _reject_retired_vector_retrieval(self) -> "CheckpointBranchCreateRequest":
+        from moonmind.workflows.executions.execution_contract import (
+            reject_retired_vector_fields,
+        )
+
+        reject_retired_vector_fields(
+            {"followUpRetrieval": self.follow_up_retrieval},
+            field_path="payload",
+        )
+        return self
 
 
 class CheckpointBranchContinueRequest(BaseModel):
@@ -146,10 +158,22 @@ class CheckpointBranchContinueRequest(BaseModel):
         ..., alias="idempotencyKey", min_length=1, max_length=512
     )
     max_budget_usd: float | None = Field(None, alias="maxBudgetUsd", ge=0)
-    # See CheckpointBranchCreateRequest.follow_up_retrieval (MoonMind#3514).
+    # See CheckpointBranchCreateRequest.follow_up_retrieval (retired #4105).
     follow_up_retrieval: dict[str, Any] | None = Field(
         None, alias="followUpRetrieval"
     )
+
+    @model_validator(mode="after")
+    def _reject_retired_vector_retrieval(self) -> "CheckpointBranchContinueRequest":
+        from moonmind.workflows.executions.execution_contract import (
+            reject_retired_vector_fields,
+        )
+
+        reject_retired_vector_fields(
+            {"followUpRetrieval": self.follow_up_retrieval},
+            field_path="payload",
+        )
+        return self
 
 
 class CheckpointBranchForkRequest(CheckpointBranchContinueRequest):

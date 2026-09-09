@@ -346,11 +346,14 @@ def test_unit_slow_has_separate_non_parallel_job_and_required_contract() -> None
     assert "unit-slow" in workflow["jobs"]["ci-required"]["needs"]
 
 
-def test_full_backend_runs_shard_ownership_verifier() -> None:
+def test_shard_ownership_verifier_always_runs() -> None:
     workflow = _load_workflow()
     job = workflow["jobs"]["verify-test-shard-ownership"]
 
-    assert job["if"] == "needs.select-test-suites.outputs.full_backend == 'true'"
+    # Static repository invariant (MoonLadderStudios/MoonMind#3950): exclusive
+    # shard ownership must gate targeted PRs too, so the job carries no
+    # selection gate and ci-required aggregates it unconditionally.
+    assert "if" not in job
     assert any(
         "tools/verify_test_shard_ownership.py" in step.get("run", "")
         for step in job["steps"]
@@ -418,6 +421,8 @@ def test_ci_required_is_pure_result_aggregator() -> None:
         "omnigent-exact-artifact",
         "omnigent-deterministic-conformance",
         "verify-test-shard-ownership",
+        "test-frontend",
+        "check-generated-contracts",
     ):
         assert dependency in job["needs"]
 
@@ -448,8 +453,22 @@ def test_ci_required_reports_all_failures_before_exiting() -> None:
         "omnigent-exact-artifact",
         "omnigent-deterministic-conformance",
         "verify-test-shard-ownership",
+        "test-frontend",
+        "check-generated-contracts",
     ):
         assert name in script
+
+    # Always-run aggregators and the always-run shard-ownership invariant are
+    # aggregated unconditionally (MoonLadderStudios/MoonMind#3950): a failing
+    # frontend or generated-contract gate must fail ci-required, and targeted
+    # PRs must not trip a success-but-unselected failure on shard ownership.
+    assert 'require_always "test-frontend"' in script
+    assert "needs.test-frontend.result" in script
+    assert 'require_always "check-generated-contracts"' in script
+    assert "needs.check-generated-contracts.result" in script
+    assert 'require_always "verify-test-shard-ownership"' in script
+    assert "needs.verify-test-shard-ownership.result" in script
+    assert 'require_selected "verify-test-shard-ownership"' not in script
 
 
 def test_preflight_policy_runs_in_parallel_and_owns_policy_guards() -> None:
