@@ -34,6 +34,13 @@ _SECRET_PATTERNS = [
     re.compile(r"-----BEGIN\s+(RSA|EC|DSA|OPENSSH)\s+PRIVATE\s+KEY-----"),
 ]
 
+# MoonLadderStudios/MoonMind#4108: managed-vector pipeline retired. New
+# manifests must omit these keys; historical manifests remain readable via
+# ManifestV0 (extra="allow") but are rejected here before fetch/dispatch.
+RETIRED_VECTOR_FIELDS = frozenset(
+    {"embeddings", "vectorStore", "indices", "retrievers"}
+)
+
 @dataclass
 class ValidationIssue:
     """A single validation finding."""
@@ -126,6 +133,12 @@ def validate_manifest_string(content: str) -> ValidationResult:
     # 2. Secret leak scan (before Pydantic — catch leaks even in malformed manifests)
     _scan_secrets(parsed, "", issues)
 
+    # 2b. Retired vector-ingest contract (#4108): reject before any
+    # fetch/dispatch/side effect. Historical reads use ManifestV0 directly.
+    _check_retired_vector_fields(parsed, issues)
+    if any(i.severity == "ERROR" for i in issues):
+        return ValidationResult(valid=False, issues=issues)
+
     # 3. Schema validation via Pydantic
     try:
         manifest = ManifestV0.model_validate(parsed)
@@ -141,8 +154,6 @@ def validate_manifest_string(content: str) -> ValidationResult:
     _check_auth_presence(manifest, issues)
     _check_security_policy(manifest, issues)
     _check_data_source_ids_unique(manifest, issues)
-    _check_index_ids_unique(manifest, issues)
-    _check_retriever_ids_unique(manifest, issues)
 
     has_errors = any(i.severity == "ERROR" for i in issues)
     return ValidationResult(
@@ -244,6 +255,29 @@ def _check_security_policy(
                             )
                         )
 
+def _check_retired_vector_fields(
+    parsed: dict, issues: List[ValidationIssue]
+) -> None:
+    """Reject retired managed-vector keys before Pydantic/fetch/dispatch.
+
+    MoonLadderStudios/MoonMind#4108 retired ``embeddings``, ``vectorStore``,
+    ``indices`` and ``retrievers``. New manifests carrying any of them fail
+    actionably here; historical artifacts remain readable via
+    ``ManifestV0`` (``extra="allow"``) without importing/connecting to Qdrant.
+    """
+    for field in sorted(RETIRED_VECTOR_FIELDS):
+        if field in parsed and parsed[field] not in (None, [], {}):
+            issues.append(
+                ValidationIssue(
+                    "ERROR",
+                    field,
+                    f"'{field}' was retired in MoonLadderStudios/MoonMind#4108: "
+                    "MoonMind ships no managed vector indexing, embedding, "
+                    "collection or retrieval pipeline. Remove this block; "
+                    "new vector-ingest manifests are not ingested.",
+                )
+            )
+
 def _check_data_source_ids_unique(
     manifest: ManifestV0, issues: List[ValidationIssue]
 ) -> None:
@@ -258,39 +292,5 @@ def _check_data_source_ids_unique(
                     "ERROR",
                     f"dataSources.{ds_id}",
                     f"Duplicate dataSource id '{ds_id}' (appears {count} times)",
-                )
-            )
-
-def _check_index_ids_unique(
-    manifest: ManifestV0, issues: List[ValidationIssue]
-) -> None:
-    """Ensure all index IDs are unique."""
-    seen: dict[str, int] = {}
-    for idx in manifest.indices or []:
-        seen[idx.id] = seen.get(idx.id, 0) + 1
-    for idx_id, count in seen.items():
-        if count > 1:
-            issues.append(
-                ValidationIssue(
-                    "ERROR",
-                    f"indices.{idx_id}",
-                    f"Duplicate index id '{idx_id}' (appears {count} times)",
-                )
-            )
-
-def _check_retriever_ids_unique(
-    manifest: ManifestV0, issues: List[ValidationIssue]
-) -> None:
-    """Ensure all retriever IDs are unique."""
-    seen: dict[str, int] = {}
-    for ret in manifest.retrievers or []:
-        seen[ret.id] = seen.get(ret.id, 0) + 1
-    for ret_id, count in seen.items():
-        if count > 1:
-            issues.append(
-                ValidationIssue(
-                    "ERROR",
-                    f"retrievers.{ret_id}",
-                    f"Duplicate retriever id '{ret_id}' (appears {count} times)",
                 )
             )

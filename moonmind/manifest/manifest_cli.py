@@ -24,9 +24,10 @@ def run_validate(*, manifest_path: str) -> ValidationResult:
     return result
 
 def run_plan(*, manifest_path: str) -> dict:
-    """Dry-run: parse manifest and estimate scope without writes.
+    """Dry-run: parse manifest and estimate fetch scope without writes.
 
-    Returns a summary dict with estimated doc/chunk counts.
+    Returns a fetch/transform estimate; explicitly not indexing or live
+    ingestion (MoonLadderStudios/MoonMind#4108 vector-free).
     """
     result = validate_manifest_file(manifest_path)
     if not result.valid:
@@ -44,9 +45,13 @@ def run_plan(*, manifest_path: str) -> dict:
     return plan_result.to_dict()
 
 def run_manifest(*, manifest_path: str) -> dict:
-    """Full pipeline: validate, fetch, transform, embed, upsert.
+    """Full pipeline (vector-free): validate, fetch, transform.
 
-    Returns a summary dict with execution results.
+    No embedding, upsert, collection lifecycle, overlay handling, or index
+    state persistence occurs (MoonLadderStudios/MoonMind#4108). Retired
+    vector-ingest manifests fail validation before fetch.
+
+    Returns a summary dict with fetch execution results.
     """
     result = validate_manifest_file(manifest_path)
     if not result.valid:
@@ -68,9 +73,9 @@ def run_evaluate(
     manifest_path: str,
     dataset: str | None = None,
 ) -> dict:
-    """Evaluate retrieval quality against a golden dataset.
+    """Evaluate recorded/injected retrieval results (no live retrieval).
 
-    Returns a summary dict with metric scores.
+    MoonLadderStudios/MoonMind#4108 retired live-vector evaluation wiring.
     """
     result = validate_manifest_file(manifest_path)
     if not result.valid:

@@ -14,7 +14,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Literal, Optional
 
 import yaml
-from pydantic import BaseModel, Field, model_validator
+from pydantic import BaseModel, Field
 
 # ---------------------------------------------------------------------------
 # Sub-models
@@ -34,35 +34,6 @@ class LLMConfig(BaseModel):
     provider: str
     model: str
     temperature: float = Field(default=0.0, ge=0.0, le=2.0)
-
-class EmbeddingsConfig(BaseModel):
-    """Retired embedding provider settings (MoonLadderStudios/MoonMind#4113).
-
-    The vector-free release ships no MoonMind-managed embedding pipeline.
-    This model remains only so historical manifests stay readable; new
-    manifests must omit ``embeddings``.
-    """
-
-    provider: str
-    model: str
-    batchSize: int = Field(default=128, ge=1)
-
-class VectorStoreConnection(BaseModel):
-    """Retired connection parameters for a historical vector store (see #4113)."""
-
-    model_config = {"extra": "allow"}
-
-class VectorStoreConfig(BaseModel):
-    """Retired vector store destination (MoonLadderStudios/MoonMind#4113).
-
-    The vector-free release ships no MoonMind-managed vector service,
-    profile, extension, or index. This model remains only so historical
-    manifests stay readable; new manifests must omit ``vectorStore``.
-    """
-
-    type: str  # historical values: qdrant, pgvector, milvus (all retired)
-    indexName: str
-    connection: VectorStoreConnection = Field(default_factory=VectorStoreConnection)
 
 class DataSourceAuth(BaseModel):
     """Secret references for a data source (``${ENV}`` interpolated)."""
@@ -86,53 +57,11 @@ class SplitterConfig(BaseModel):
     chunkOverlap: int = Field(default=100, ge=0)
 
 class TransformsConfig(BaseModel):
-    """Document transforms applied before indexing."""
+    """Document transforms applied before compilation."""
 
     htmlToText: bool = False
     splitter: Optional[SplitterConfig] = None
     enrichMetadata: List[Dict[str, Any]] = Field(default_factory=list)
-
-class IndexPersist(BaseModel):
-    """Persistence target for an index."""
-
-    path: Optional[str] = None
-
-class IndexConfig(BaseModel):
-    """A retired vector/summary/keyword index definition.
-
-    Retained for historical manifest reads only; new manifests must omit
-    ``indices``.
-    """
-
-    id: str
-    type: str = "VectorStoreIndex"
-    sources: List[str] = Field(default_factory=list)
-    persist: Optional[IndexPersist] = None
-
-class RerankerConfig(BaseModel):
-    """Optional reranker for retrieval."""
-
-    type: str
-    topK: int = Field(default=5, ge=1)
-
-class RetrieverParams(BaseModel):
-    """Retriever tuning knobs."""
-
-    topK: int = Field(default=8, ge=1)
-    alpha: float = Field(default=0.5, ge=0.0, le=1.0)
-
-class RetrieverConfig(BaseModel):
-    """A retired named retriever (Vector or Hybrid).
-
-    Retained for historical manifest reads only; new manifests must omit
-    ``retrievers``.
-    """
-
-    id: str
-    type: str  # historical values: Vector, Hybrid (both retired)
-    indices: List[str]
-    params: Optional[RetrieverParams] = None
-    reranker: Optional[RerankerConfig] = None
 
 class EvaluationDataset(BaseModel):
     """A golden dataset for retrieval evaluation."""
@@ -171,58 +100,30 @@ class SecurityConfig(BaseModel):
 # ---------------------------------------------------------------------------
 
 class ManifestV0(BaseModel):
-    """Top-level v0 manifest document.
+    """Top-level v0 manifest document (vector-free).
 
-    Validates against the schema described in
-    ``docs/RAG/LlamaIndexManifestSystem.md`` §3.
+    MoonLadderStudios/MoonMind#4108 retired the managed-vector pipeline:
+    ``embeddings``, ``vectorStore``, ``indices`` and ``retrievers`` are no
+    longer part of the product contract and are absent from the generated
+    schema. Historical manifests carrying those keys remain readable because
+    unknown fields are ignored (``extra="allow"``); new submissions carrying
+    them are rejected by validator/queue/pipeline gates before any
+    fetch/dispatch/side effect.
     """
+
+    model_config = {"extra": "allow"}
 
     version: Literal["v0"] = "v0"
     metadata: ManifestMetadata
     llm: Optional[LLMConfig] = None
-    # Retired managed-vector pipeline fields (#4113). Optional so new
-    # vector-free manifests validate; still accepted on historical reads.
-    # Full ManifestIngest schema redesign is owned by #4108.
-    embeddings: Optional[EmbeddingsConfig] = None
-    vectorStore: Optional[VectorStoreConfig] = None
     dataSources: List[DataSourceConfig] = Field(min_length=1)
     transforms: Optional[TransformsConfig] = None
-    indices: Optional[List[IndexConfig]] = None
-    retrievers: Optional[List[RetrieverConfig]] = None
     postprocessors: List[Dict[str, Any]] = Field(default_factory=list)
     evaluation: Optional[EvaluationConfig] = None
     run: Optional[RunConfig] = None
     observability: Optional[Dict[str, Any]] = None
     security: Optional[SecurityConfig] = None
     scheduling: Optional[str] = None
-
-    # ------------------------------------------------------------------
-    # Cross-field semantic validation
-    # ------------------------------------------------------------------
-
-    @model_validator(mode="after")
-    def validate_references(self) -> "ManifestV0":
-        """Ensure retriever → index and index → dataSource refs are valid."""
-        ds_ids = {ds.id for ds in self.dataSources}
-        idx_ids = {idx.id for idx in (self.indices or [])}
-
-        for idx in self.indices or []:
-            for src in idx.sources:
-                if src not in ds_ids:
-                    raise ValueError(
-                        f"Index '{idx.id}' references unknown dataSource '{src}'. "
-                        f"Available: {sorted(ds_ids)}"
-                    )
-
-        for ret in self.retrievers or []:
-            for idx_ref in ret.indices:
-                if idx_ref not in idx_ids:
-                    raise ValueError(
-                        f"Retriever '{ret.id}' references unknown index '{idx_ref}'. "
-                        f"Available: {sorted(idx_ids)}"
-                    )
-
-        return self
 
     # ------------------------------------------------------------------
     # Convenience loaders

@@ -24,10 +24,6 @@ pytestmark = [pytest.mark.asyncio, pytest.mark.integration, pytest.mark.integrat
 MANIFEST = b"""version: v0
 metadata:
   name: boundary
-embeddings:
-  provider: openai
-vectorStore:
-  type: qdrant
 dataSources:
   - id: local-source
     type: GithubRepositoryReader

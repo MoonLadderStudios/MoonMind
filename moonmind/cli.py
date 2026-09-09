@@ -151,7 +151,7 @@ def manifest_plan(
         raise typer.Exit(code=1) from exc
     typer.echo(_json.dumps(summary, indent=2))
 
-@manifest_app.command("run", help="Execute full manifest pipeline: fetch → chunk → embed → upsert.")
+@manifest_app.command("run", help="Execute vector-free manifest pipeline: fetch → transform (no embedding/indexing).")
 def manifest_run(
     file: Path = typer.Option(..., "-f", "--file", help="Path to manifest YAML."),
 ) -> None:
@@ -164,7 +164,7 @@ def manifest_run(
         raise typer.Exit(code=1) from exc
     typer.echo(_json.dumps(result, indent=2))
 
-@manifest_app.command("evaluate", help="Evaluate retrieval quality against golden datasets.")
+@manifest_app.command("evaluate", help="Evaluate recorded/injected results (no live retrieval).")
 def manifest_evaluate(
     file: Path = typer.Option(..., "-f", "--file", help="Path to manifest YAML."),
     dataset: Optional[str] = typer.Option(None, "--dataset", help="Filter to specific dataset name."),
