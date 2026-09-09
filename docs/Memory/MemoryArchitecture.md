@@ -82,10 +82,10 @@ MoonMind uses three orthogonal memory planes. Each plane has a clear purpose and
 
 **Status (MoonLadderStudios/MoonMind#4109):**
 - Hosted Mem0 long-term memory is retired and has no adapter, settings, or
-  package requirement in the shipped application. The resolved `mem0ai` SDK
-  mandatorily depends on `qdrant-client`, so no Mem0 configuration could
-  satisfy the Qdrant-free requirement; it was retired rather than kept as a
-  dormant adapter or hidden in an optional extra.
+  package requirement in the shipped application. The resolved Mem0 SDK
+  mandatorily depends on a managed vector-database client, so no Mem0
+  configuration could satisfy the vector-free requirement; it was retired
+  rather than kept as a dormant adapter or hidden in an optional extra.
 - A stale `MEMORY_LONG_TERM=mem0` (or `MEM0_API_KEY`/`MEM0_USER_ID`) value
   fails fast with an actionable error instead of being silently ignored.
 - Curated, reusable knowledge (decisions, conventions, playbooks,

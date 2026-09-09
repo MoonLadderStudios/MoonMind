@@ -415,8 +415,6 @@ async def test_write_run_digest_constructs_no_vector_client(
 
     import sys
 
-    import moonmind.workflows.temporal.artifacts as artifacts_module
-
     mock_service.list_for_execution.return_value = []
     created = SimpleNamespace(artifact_id="art_run_digest_novec")
     mock_service.create.return_value = (created, None)
@@ -449,7 +447,7 @@ async def test_write_run_digest_constructs_no_vector_client(
     for module_name in [name for name in sys.modules if name in blocked]:
         monkeypatch.delitem(sys.modules, module_name, raising=False)
 
-    artifact_id = await artifacts_module.TemporalArtifactActivities(
+    artifact_id = await TemporalArtifactActivities(
         mock_service
     )._write_run_digest_best_effort(_terminal_record())
 
