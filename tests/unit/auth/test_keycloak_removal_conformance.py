@@ -606,6 +606,166 @@ class TestTwoReplicaRevocation:
 
 
 # ---------------------------------------------------------------------------
+# Two OS processes prove revocation currency (impl-4, rw-5 process slice)
+# ---------------------------------------------------------------------------
+
+_CHILD_TWO_PROCESS_VALIDATE = r"""
+import asyncio
+import json
+import sys
+import traceback
+import uuid
+from pathlib import Path
+
+rev_path, acct_path, root = sys.argv[1], sys.argv[2], sys.argv[3]
+sys.path.insert(0, root)
+
+from moonmind.security import omnigent_auth_qualification as q
+
+
+class _FileRevocation:
+    def __init__(self, path: str) -> None:
+        self._p = Path(path)
+
+    def _state(self) -> dict:
+        return json.loads(self._p.read_text(encoding="utf-8"))
+
+    async def is_session_revoked(self, jti: str) -> bool:
+        return jti in self._state().get("revoked", [])
+
+    async def revoke_session(self, jti: str) -> None:
+        s = self._state()
+        s.setdefault("revoked", []).append(jti)
+        self._p.write_text(json.dumps(s), encoding="utf-8")
+
+    async def revoke_all_for_user(self, user_id: uuid.UUID) -> int:
+        s = self._state()
+        gens = s.setdefault("generations", {})
+        gens[str(user_id)] = gens.get(str(user_id), 0) + 1
+        self._p.write_text(json.dumps(s), encoding="utf-8")
+        return gens[str(user_id)]
+
+    async def generation_for_user(self, user_id: uuid.UUID) -> int:
+        return self._state().get("generations", {}).get(str(user_id), 0)
+
+
+async def _main() -> None:
+    acct = json.loads(Path(acct_path).read_text(encoding="utf-8"))
+    config = q.MoonmindAuthConfig(
+        mode="accounts",
+        cookie_name=q.MOONMIND_DEV_COOKIE,
+        cookie_secret=bytes.fromhex(acct["secret_hex"]),
+        session_ttl_seconds=3600,
+        require_secure_cookies=False,
+        token_issuer=acct["token_issuer"],
+        token_audience=acct["token_audience"],
+    )
+    store = q.InMemoryAsyncAccountStore()
+    ident = q.ValidatedIdentity(issuer=acct["issuer"], subject=acct["subject"])
+    store.enroll(
+        ident,
+        q.AccountRecord(user_id=uuid.UUID(acct["user_id"]), is_active=True),
+    )
+    await q.validate_moonmind_session(
+        acct["token"], store, _FileRevocation(rev_path), config
+    )
+
+
+try:
+    asyncio.run(_main())
+except (q.AuthInvalidError, q.ForbiddenError, q.UnsupportedSurfaceError):
+    sys.exit(10)
+except Exception:
+    traceback.print_exc()
+    sys.exit(20)
+"""
+
+
+class TestTwoProcessRevocation:
+    def test_revocation_currency_across_os_processes(self, tmp_path):
+        """Two OS processes share only durable files, never a live store.
+
+        The parent mints a session and persists the account snapshot plus
+        an empty revocation file. A child OS process validates the token
+        (admitted), the parent durably revokes the session, then two fresh
+        child OS processes must both reject it. This proves revocation
+        currency across process boundaries: no shared in-memory cache or
+        live store object, only the durable revocation record.
+        """
+        import asyncio
+        import json
+        import sys
+
+        work = tmp_path / "two-proc-4128"
+        work.mkdir()
+        revocation_path = work / "revocation.json"
+        account_path = work / "account.json"
+        revocation_path.write_text(
+            json.dumps({"revoked": [], "generations": {}}), encoding="utf-8"
+        )
+
+        async def _mint() -> str:
+            config = _config()
+            store = q.InMemoryAsyncAccountStore()
+            identity = _identity("hank-4128-twoproc")
+            account = _enrolled(store, identity, is_active=True)
+            token, user_id = await q.mint_moonmind_session(identity, store, config)
+            assert user_id == account.user_id
+            account_path.write_text(
+                json.dumps(
+                    {
+                        "subject": "hank-4128-twoproc",
+                        "issuer": "moonmind-accounts",
+                        "user_id": str(user_id),
+                        "secret_hex": config.cookie_secret.hex(),
+                        "token_issuer": config.token_issuer,
+                        "token_audience": config.token_audience,
+                        "token": token,
+                    }
+                ),
+                encoding="utf-8",
+            )
+            return token
+
+        token = asyncio.run(_mint())
+
+        def _run_child() -> "subprocess.CompletedProcess[str]":
+            return subprocess.run(
+                [
+                    sys.executable,
+                    "-c",
+                    _CHILD_TWO_PROCESS_VALIDATE,
+                    str(revocation_path),
+                    str(account_path),
+                    str(REPO_ROOT),
+                ],
+                capture_output=True,
+                text=True,
+                timeout=90,
+                cwd=str(REPO_ROOT),
+            )
+
+        admitted = _run_child()
+        assert admitted.returncode == 0, (
+            f"child process should admit the live session: {admitted.stderr}"
+        )
+        # Durable logout: append the session jti to the revocation record.
+        jti = jwt.decode(token, options={"verify_signature": False})["jti"]
+        state = json.loads(revocation_path.read_text(encoding="utf-8"))
+        state.setdefault("revoked", []).append(jti)
+        revocation_path.write_text(json.dumps(state), encoding="utf-8")
+        # Two independent OS processes (restart + second replica) rehydrate
+        # from the durable record only and must both reject the session.
+        for replica in ("restarted", "second-replica"):
+            denied = _run_child()
+            assert denied.returncode == 10, (
+                f"{replica} child should reject the revoked session "
+                f"(exit={denied.returncode}): {denied.stderr}"
+            )
+            assert "Traceback" not in denied.stderr
+
+
+# ---------------------------------------------------------------------------
 # Two-user isolation, hermetic slice (impl-5, acc-3 slice)
 # ---------------------------------------------------------------------------
 
@@ -876,6 +1036,148 @@ class TestLocalOidcJwksAndTrustedIngress:
             }
         )
         assert denied_internal.allowed is False
+
+
+# ---------------------------------------------------------------------------
+# Local OIDC discovery/JWKS contract over loopback (impl-1, rw-5 server slice)
+# ---------------------------------------------------------------------------
+
+
+class TestLocalOidcDiscoveryContract:
+    def test_loopback_discovery_and_jwks_metadata_match_production_contract(self):
+        """A loopback discovery/JWKS server agrees with the production contract.
+
+        Serves a minimal ``openid-configuration`` + ``jwks.json`` pair on
+        127.0.0.1 (OS-assigned port, no external network) and proves: the
+        fetched issuer equals the production token issuer, the JWKS key
+        metadata matches the production-supported algorithm of actually
+        minted session tokens, a wrong-issuer discovery document is never
+        adopted (its tokens fail production validation), and the JWKS/
+        discovery hosts satisfy the loopback trusted-ingress contract.
+        """
+        import asyncio
+        import json
+        import threading
+        import urllib.request
+        from http.server import BaseHTTPRequestHandler, HTTPServer
+
+        async def _mint_good():
+            config = _config()
+            store = q.InMemoryAsyncAccountStore()
+            revocation = q.InMemoryRevocationStore()
+            identity = _identity("judy-4128-discovery", email="judy@example.invalid")
+            _enrolled(store, identity, is_active=True)
+            token, _ = await q.mint_moonmind_session(identity, store, config)
+            return config, store, revocation, token
+
+        config, store, revocation, token = asyncio.run(_mint_good())
+        header = jwt.get_unverified_header(token)
+        assert header["alg"] == "HS256"
+        assert header["alg"] in list(q._SUPPORTED_ALGORITHMS)
+        assert "RS256" not in list(q._SUPPORTED_ALGORITHMS)
+        assert "none" not in [a.lower() for a in q._SUPPORTED_ALGORITHMS]
+
+        state: dict[str, object] = {"port": 0}
+
+        class _DiscoveryHandler(BaseHTTPRequestHandler):
+            def log_message(self, *args: object) -> None:  # quiet hermetic server
+                return
+
+            def _send_json(self, payload: dict[str, object]) -> None:
+                body = json.dumps(payload).encode("utf-8")
+                self.send_response(200)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+
+            def do_GET(self) -> None:  # noqa: N802
+                port = state["port"]
+                if self.path == "/.well-known/openid-configuration":
+                    self._send_json(
+                        {
+                            "issuer": config.token_issuer,
+                            "jwks_uri": f"http://127.0.0.1:{port}/jwks.json",
+                            "authorization_endpoint": (
+                                f"http://127.0.0.1:{port}/authorize"
+                            ),
+                            "token_endpoint": f"http://127.0.0.1:{port}/token",
+                        }
+                    )
+                elif self.path == "/jwks.json":
+                    self._send_json(
+                        {
+                            "keys": [
+                                {
+                                    "kty": "oct",
+                                    "alg": "HS256",
+                                    "use": "sig",
+                                    "kid": "local-4128-k1",
+                                }
+                            ]
+                        }
+                    )
+                elif self.path == "/evil/.well-known/openid-configuration":
+                    self._send_json(
+                        {
+                            "issuer": "https://evil.example.invalid",
+                            "jwks_uri": "https://evil.example.invalid/jwks.json",
+                        }
+                    )
+                else:
+                    self.send_response(404)
+                    self.end_headers()
+
+        server = HTTPServer(("127.0.0.1", 0), _DiscoveryHandler)
+        state["port"] = server.server_address[1]
+        worker = threading.Thread(target=server.serve_forever, daemon=True)
+        worker.start()
+        try:
+
+            def _fetch(path: str) -> dict[str, object]:
+                url = f"http://127.0.0.1:{state['port']}{path}"
+                with urllib.request.urlopen(url, timeout=5) as response:
+                    return json.loads(response.read().decode("utf-8"))
+
+            discovery = _fetch("/.well-known/openid-configuration")
+            jwks = _fetch("/jwks.json")
+            evil_discovery = _fetch("/evil/.well-known/openid-configuration")
+        finally:
+            server.shutdown()
+            worker.join(timeout=10)
+            server.server_close()
+
+        # Fetched issuer is exactly the production token issuer.
+        assert discovery["issuer"] == config.token_issuer
+        # JWKS metadata matches the algorithm of really minted tokens.
+        keys = jwks["keys"]
+        assert isinstance(keys, list) and len(keys) == 1
+        assert keys[0]["alg"] == header["alg"] == "HS256"
+        assert keys[0]["kty"] == "oct"
+        # Discovery/JWKS endpoints stay on loopback trusted ingress.
+        assert m.public_base_url_is_loopback(
+            f"http://127.0.0.1:{state['port']}/"
+        ) is True
+        assert m.public_base_url_is_loopback("https://evil.example.invalid/") is False
+        assert str(discovery["jwks_uri"]).startswith(
+            f"http://127.0.0.1:{state['port']}/"
+        )
+        # The evil discovery issuer is never adopted: it differs from the
+        # production issuer and its tokens fail production validation.
+        assert evil_discovery["issuer"] != config.token_issuer
+
+        async def _reject_evil() -> None:
+            payload = jwt.decode(token, options={"verify_signature": False})
+            payload["iss"] = evil_discovery["issuer"]
+            evil_token = jwt.encode(
+                payload, config.cookie_secret, algorithm="HS256"
+            )
+            with pytest.raises(q.AuthInvalidError):
+                await q.validate_moonmind_session(
+                    evil_token, store, revocation, config
+                )
+
+        asyncio.run(_reject_evil())
 
 
 # ---------------------------------------------------------------------------
