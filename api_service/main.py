@@ -1177,6 +1177,9 @@ def _resolve_cors_allowed_origins() -> list[str]:
                 port = f":{parts.port}" if parts.port else ""
                 explicit.append(f"{parts.scheme}://{parts.hostname}{port}")
         except ValueError:
+            # Invalid port in MOONMIND_PUBLIC_BASE_URL: base-URL validation
+            # in lifespan startup reports the misconfiguration; CORS simply
+            # skips deriving an origin from it here.
             pass
     if any(origin == "*" for origin in explicit):
         raise RuntimeError(
