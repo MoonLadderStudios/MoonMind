@@ -374,6 +374,7 @@ async def test_default_resolution_requires_paired_build_identity_and_version(
             "hostBuildDigest": BUILD_DIGEST,
             "serverVersion": "0.12.0",
             "hostVersion": "0.12.0",
+            "pendingHost": None,
         },
     }
 
@@ -435,6 +436,7 @@ async def test_resolution_quarantines_operator_and_host_build_identity_mismatch(
         "hostBuildDigest": BUILD_DIGEST,
         "serverVersion": "0.12.0",
         "hostVersion": "0.12.0",
+        "pendingHost": None,
     }
 
 
@@ -546,6 +548,7 @@ async def test_resolution_quarantines_server_and_host_build_drift(
         "hostBuildDigest": stale_host_build,
         "serverVersion": "0.12.0",
         "hostVersion": "0.11.0",
+        "pendingHost": None,
     }
 
 
@@ -843,3 +846,297 @@ def test_host_selection_preserves_adjacent_image_failures(
             materializer_refs=["opencode-auth-json@1"],
             requested_host_class_ref="omnigent-opencode@1",
         )
+
+
+# --- Server-keyed host selection -------------------------------------------
+#
+# Replay of the 2026-09-09 production failure: the host publish workflow
+# tracks ``omnigent-server:latest`` and republished the mutable ``1.18.11`` tag
+# for Omnigent 0.13.0 while Compose was still running the 0.12.0 server. The
+# resolver must keep the admitted compatible host as launch authority and
+# surface the newer image as pending instead of quarantining the Host Class.
+
+HOST_REPOSITORY = "ghcr.io/moonladderstudios/omnigent-host-moonmind"
+RUNNING_SERVER_BUILD = "sha256:" + "1" * 64
+NEWER_SERVER_BUILD = "sha256:" + "9" * 64
+ADMITTED_HOST = HOST_REPOSITORY + "@sha256:" + "a" * 64
+NEWER_HOST = HOST_REPOSITORY + "@sha256:" + "b" * 64
+_HOST_BUILDS = {ADMITTED_HOST: RUNNING_SERVER_BUILD, NEWER_HOST: NEWER_SERVER_BUILD}
+_HOST_VERSIONS = {ADMITTED_HOST: "0.12.0", NEWER_HOST: "0.13.0"}
+
+
+def _install_paired_runtime_fakes(
+    monkeypatch: pytest.MonkeyPatch,
+    *,
+    server_build: str,
+    server_version: str,
+    fresh_host: str | None,
+    shared_host: str | None = None,
+    previous: ResolvedOmnigentDeploymentState | None,
+) -> dict[str, list]:
+    from moonmind.omnigent.bootstrap import store
+
+    observed: dict[str, list] = {"probes": [], "version_probes": []}
+
+    async def resolve_image(image_env, tag_env, ref_env, env=None):
+        del tag_env, ref_env, env
+        if image_env == "OMNIGENT_IMAGE":
+            return SERVER_REF, server_build
+        if image_env == "OMNIGENT_OPENCODE_HOST_IMAGE":
+            return (fresh_host, _extract(fresh_host)) if fresh_host else (None, None)
+        if image_env == "OMNIGENT_SHARED_HOST_IMAGE":
+            return (shared_host, _extract(shared_host)) if shared_host else (None, None)
+        return None, None
+
+    async def run(cmd, timeout=30):
+        del timeout
+        if cmd[0] == "sh":
+            observed["probes"].append(cmd[2])
+            return 0, "", ""
+        if cmd[:3] == ["docker", "image", "inspect"]:
+            ref = cmd[3]
+            if cmd[-1] == "{{json .Config.Labels}}":
+                build = _HOST_BUILDS.get(ref)
+                if build is None:
+                    return 1, "", "No such image"
+                return 0, '{"moonmind.omnigent.build_digest":"' + build + '"}', ""
+            if cmd[-1] == "{{.Architecture}}":
+                return 0, "arm64", ""
+        if cmd[:5] == ["docker", "run", "--rm", "--entrypoint", "/opt/venv/bin/omnigent"]:
+            ref = cmd[-2]
+            observed["version_probes"].append(ref)
+            version = server_version if ref == SERVER_REF else _HOST_VERSIONS.get(ref)
+            if version is None:
+                return 1, "", "No such image"
+            return 0, f"omnigent {version} (built for test)\n", ""
+        if cmd[:2] == ["docker", "pull"]:
+            return 1, "", "registry unavailable in test"
+        raise AssertionError(cmd)
+
+    monkeypatch.setattr(image_resolution, "_resolve_image", resolve_image)
+    monkeypatch.setattr(image_resolution, "_run", run)
+    monkeypatch.setattr(store, "load_resolved_state", lambda: previous)
+    return observed
+
+
+def _extract(ref: str | None) -> str | None:
+    return "sha256:" + ref.rsplit("@sha256:", 1)[-1] if ref else None
+
+
+def _admitted_previous(host: str = ADMITTED_HOST) -> ResolvedOmnigentDeploymentState:
+    return _state(
+        opencodeHostImageRef=host,
+        sharedHostImageRef=host,
+        omnigentBuildDigest=RUNNING_SERVER_BUILD,
+        details={
+            "opencodeHostCompatibility": {
+                "status": "ready",
+                "failureCode": None,
+                "serverImageRef": SERVER_REF,
+                "hostImageRef": host,
+            }
+        },
+    )
+
+
+@pytest.mark.asyncio
+async def test_newer_host_for_a_newer_server_keeps_the_admitted_compatible_host(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Replay: registry host moved to 0.13.0 while Compose still runs 0.12.0."""
+
+    observed = _install_paired_runtime_fakes(
+        monkeypatch,
+        server_build=RUNNING_SERVER_BUILD,
+        server_version="0.12.0",
+        fresh_host=NEWER_HOST,
+        shared_host=NEWER_HOST,
+        previous=_admitted_previous(),
+    )
+
+    resolved = await image_resolution.resolve_omnigent_images({})
+
+    assert resolved.opencode_host_image_ref == ADMITTED_HOST
+    # The shared host resolved to the same incompatible image and follows the
+    # admitted digest: one paired runtime, not a mismatched Codex/Claude host.
+    assert resolved.shared_host_image_ref == ADMITTED_HOST
+    assert resolved.omnigent_build_digest == RUNNING_SERVER_BUILD
+    assert resolved.details["buildIdentitySource"] == "opencode-host-label"
+    assert resolved.details["opencodeHostCompatibility"] == {
+        "status": "ready",
+        "failureCode": None,
+        "serverImageRef": SERVER_REF,
+        "hostImageRef": ADMITTED_HOST,
+        "serverBuildDigest": RUNNING_SERVER_BUILD,
+        "hostBuildDigest": RUNNING_SERVER_BUILD,
+        "serverVersion": "0.12.0",
+        "hostVersion": "0.12.0",
+        "pendingHost": {
+            "imageRef": NEWER_HOST,
+            "buildDigest": NEWER_SERVER_BUILD,
+            "version": "0.13.0",
+            "failureCode": "omnigent_server_host_build_mismatch",
+        },
+    }
+    # Only the admitted host reached the bootstrap probe.
+    assert observed["probes"] == [ADMITTED_HOST]
+
+
+@pytest.mark.asyncio
+async def test_updated_server_adopts_the_pending_host(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The operator recovery path: once Compose runs 0.13.0 the fresh tag wins."""
+
+    observed = _install_paired_runtime_fakes(
+        monkeypatch,
+        server_build=NEWER_SERVER_BUILD,
+        server_version="0.13.0",
+        fresh_host=NEWER_HOST,
+        shared_host=NEWER_HOST,
+        previous=_admitted_previous(),
+    )
+
+    resolved = await image_resolution.resolve_omnigent_images({})
+
+    assert resolved.opencode_host_image_ref == NEWER_HOST
+    assert resolved.shared_host_image_ref == NEWER_HOST
+    compatibility = resolved.details["opencodeHostCompatibility"]
+    assert compatibility["status"] == "ready"
+    assert compatibility["pendingHost"] is None
+    # The fresh candidate was admitted first; the old host was never probed.
+    assert ADMITTED_HOST not in observed["version_probes"]
+    assert observed["probes"] == [NEWER_HOST]
+
+
+@pytest.mark.asyncio
+async def test_no_compatible_host_quarantines_the_fresh_candidate(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Server moved past both the registry host and the admitted host."""
+
+    unrelated_server_build = "sha256:" + "5" * 64
+    observed = _install_paired_runtime_fakes(
+        monkeypatch,
+        server_build=unrelated_server_build,
+        server_version="0.14.0",
+        fresh_host=NEWER_HOST,
+        previous=_admitted_previous(),
+    )
+
+    resolved = await image_resolution.resolve_omnigent_images({})
+
+    assert resolved.opencode_host_image_ref == NEWER_HOST
+    assert resolved.omnigent_build_digest == unrelated_server_build
+    assert resolved.details["buildIdentitySource"] == "server-image-quarantine"
+    compatibility = resolved.details["opencodeHostCompatibility"]
+    assert compatibility["status"] == "blocked"
+    assert compatibility["failureCode"] == "omnigent_server_host_build_mismatch"
+    assert compatibility["hostImageRef"] == NEWER_HOST
+    assert compatibility["hostBuildDigest"] == NEWER_SERVER_BUILD
+    assert compatibility["pendingHost"] is None
+    # Both candidates were judged; neither reached the bootstrap probe.
+    assert set(observed["version_probes"]) >= {ADMITTED_HOST, NEWER_HOST}
+    assert observed["probes"] == []
+
+
+@pytest.mark.asyncio
+async def test_explicit_operator_pin_is_quarantined_never_replaced(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    observed = _install_paired_runtime_fakes(
+        monkeypatch,
+        server_build=RUNNING_SERVER_BUILD,
+        server_version="0.12.0",
+        fresh_host=NEWER_HOST,
+        previous=_admitted_previous(),
+    )
+
+    resolved = await image_resolution.resolve_omnigent_images(
+        {"OMNIGENT_OPENCODE_HOST_IMAGE_REF": NEWER_HOST}
+    )
+
+    assert resolved.opencode_host_image_ref == NEWER_HOST
+    compatibility = resolved.details["opencodeHostCompatibility"]
+    assert compatibility["status"] == "blocked"
+    assert compatibility["failureCode"] == "omnigent_server_host_build_mismatch"
+    assert compatibility["pendingHost"] is None
+    assert ADMITTED_HOST not in observed["version_probes"]
+
+
+@pytest.mark.asyncio
+async def test_previous_host_from_another_repository_is_not_a_candidate(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    foreign_host = "ghcr.io/example/other-host@sha256:" + "d" * 64
+    observed = _install_paired_runtime_fakes(
+        monkeypatch,
+        server_build=RUNNING_SERVER_BUILD,
+        server_version="0.12.0",
+        fresh_host=NEWER_HOST,
+        previous=_admitted_previous(foreign_host),
+    )
+
+    resolved = await image_resolution.resolve_omnigent_images({})
+
+    assert resolved.opencode_host_image_ref == NEWER_HOST
+    assert resolved.details["opencodeHostCompatibility"]["status"] == "blocked"
+    assert foreign_host not in observed["version_probes"]
+
+
+@pytest.mark.asyncio
+async def test_unresolvable_tag_still_judges_the_admitted_host(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Registry outage: the persisted host is a candidate, not blind authority."""
+
+    observed = _install_paired_runtime_fakes(
+        monkeypatch,
+        server_build=RUNNING_SERVER_BUILD,
+        server_version="0.12.0",
+        fresh_host=None,
+        previous=_admitted_previous(),
+    )
+
+    resolved = await image_resolution.resolve_omnigent_images({})
+
+    assert resolved.opencode_host_image_ref == ADMITTED_HOST
+    compatibility = resolved.details["opencodeHostCompatibility"]
+    assert compatibility["status"] == "ready"
+    assert compatibility["pendingHost"] is None
+    assert observed["probes"] == [ADMITTED_HOST]
+
+
+def test_quarantine_error_names_the_judged_pair(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The escaped failure only said 'mismatch'; operators need the pair."""
+
+    from moonmind.omnigent.bootstrap import store
+    from moonmind.omnigent.harness_platform import host_classes
+
+    blocked = _state(
+        details={
+            "opencodeHostCompatibility": {
+                "status": "blocked",
+                "failureCode": "omnigent_server_host_build_mismatch",
+                "serverImageRef": SERVER_REF,
+                "hostImageRef": HOST_REF,
+                "serverBuildDigest": RUNNING_SERVER_BUILD,
+                "hostBuildDigest": NEWER_SERVER_BUILD,
+                "serverVersion": "0.12.0",
+                "hostVersion": "0.13.0",
+            }
+        }
+    )
+    monkeypatch.setenv("OMNIGENT_OPENCODE_HOST_IMAGE_REF", HOST_REF)
+    monkeypatch.setattr(store, "load_resolved_state", lambda: blocked)
+
+    with pytest.raises(Exception) as caught:
+        host_classes.get_opencode_host_image_ref()
+
+    message = str(caught.value)
+    assert "omnigent_server_host_build_mismatch" in message
+    assert "server omnigent 0.12.0 build sha256:111111111111" in message
+    assert "host omnigent 0.13.0 built for sha256:999999999999" in message
+    assert "update the omnigent server image" in message

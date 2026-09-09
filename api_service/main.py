@@ -452,6 +452,29 @@ async def _sync_omnigent_deployment_images() -> bool:
                 "host image is available for the configured image and tag",
             )
             return False
+        pending_host = (
+            compatibility.get("pendingHost")
+            if isinstance(compatibility, dict)
+            else None
+        )
+        if isinstance(pending_host, dict) and pending_host.get("imageRef"):
+            # The registry published a host for a newer Omnigent server than
+            # the one Compose is running. The compatible admitted host stays
+            # launch authority; the operator adopts the newer pair by updating
+            # the omnigent service, not by MoonMind restarting it.
+            logger.warning(
+                "Omnigent host image %s is pending: %s (host build %s, omnigent %s) "
+                "against the running server %s (omnigent %s). Keeping the "
+                "compatible host %s; update the omnigent Compose service to "
+                "adopt the newer image.",
+                pending_host.get("imageRef"),
+                pending_host.get("failureCode"),
+                pending_host.get("buildDigest"),
+                pending_host.get("version"),
+                compatibility.get("serverImageRef"),
+                compatibility.get("serverVersion"),
+                state.opencode_host_image_ref,
+            )
         logger.info(
             "Resolved Omnigent deployment images: serverImageRef=%s "
             "opencodeHostImageRef=%s",
