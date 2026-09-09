@@ -208,6 +208,7 @@ async def test_pr_resolver_bundle_includes_portable_core_and_runs_help(tmp_path)
         "SKILL.md",
         "bin/pr_resolve_contract.py",
         "bin/pr_resolve_finalize.py",
+        "bin/pr_resolve_snapshot.py",
     ):
         source = source_root / ".agents" / "skills" / "pr-resolver" / relative_path
         destination = skill_dir / relative_path
@@ -238,6 +239,32 @@ async def test_pr_resolver_bundle_includes_portable_core_and_runs_help(tmp_path)
 
     assert result.returncode == 0, result.stderr
     assert (extracted / "lib" / "pr_resolver_core" / "__init__.py").is_file()
+    # Exercise the packaged semantic entrypoint outside the repository. A
+    # runtime must receive the new completion protocol and wait ordering from
+    # its immutable Skill bundle, not import the host checkout by accident.
+    script = """
+import runpy, sys
+from datetime import datetime, timezone
+snapshot = runpy.run_path(sys.argv[1])
+from pr_resolver_core import CanonicalPullRequestSnapshot, ResolverAction, classify_snapshot
+request = {'id': 1, 'type': 'issue_comment', 'user': 'owner', 'body': '@codex review', 'created_at': '2026-09-09T01:00:00Z'}
+clean = {'id': 2, 'type': 'issue_comment', 'user': 'chatgpt-codex-connector[bot]', 'body': "Codex Review: Didn't find any major issues. 🚀", 'created_at': '2026-09-09T01:10:00Z'}
+evidence = snapshot['build_automated_review_evidence'](
+    provider='codex', require_fresh_review=True, pr_repo='owner/repo', pr_number=1,
+    head_sha='a'*40, head_committed_at=datetime(2026,9,9,tzinfo=timezone.utc),
+    comments=[request, clean], reviews=[], reactions_for_request=[], reactions_for_pr=[])
+assert evidence['freshReviewForHead'] and not evidence['requestPending']
+pending = CanonicalPullRequestSnapshot(review_loop_enabled=True, automated_review_requested=True, merge_conflict=True)
+assert classify_snapshot(pending).action is ResolverAction.WAIT
+"""
+    result = subprocess.run(
+        [sys.executable, "-c", script, str(extracted / "bin/pr_resolve_snapshot.py")],
+        cwd=tmp_path,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert result.returncode == 0, result.stderr
 
 
 async def test_build_prompt_index_activity_returns_bundle():

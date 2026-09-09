@@ -1844,6 +1844,9 @@ async def test_launch_builds_codex_command_after_workspace_preparation(
 ):
     monkeypatch.setenv("MOONMIND_AGENT_RUNTIME_STORE", str(tmp_path))
     monkeypatch.setenv("RAG_ENABLED", "1")
+    # Vector-free defaults (#4115): this RAG-available path under test opts
+    # in explicitly.
+    monkeypatch.setenv("QDRANT_ENABLED", "1")
     monkeypatch.setenv("GOOGLE_API_KEY", "test-key")
     monkeypatch.delenv("MOONMIND_RETRIEVAL_URL", raising=False)
     monkeypatch.setattr(os, "geteuid", lambda: 1000)

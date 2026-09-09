@@ -1,0 +1,8 @@
+{
+  "incidentWorkflowId": "mm:1d72e336-30cc-434e-9443-c3f833c151bb-2026-09-09T05:41:20Z",
+  "activityType": "integration.omnigent.profile_bound_execute",
+  "failureStage": "exact_host_tool_attestation",
+  "failureCode": "OMNIGENT_HARNESS_BUILD_MISMATCH",
+  "requiredTools": ["docker"],
+  "failureShape": "Tool materialization discarded versionProbe and host attestation invoked moonmind --version instead of its declared --help probe. The real CLI exited 2 before the agent started."
+}

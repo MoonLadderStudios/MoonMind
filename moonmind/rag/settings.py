@@ -167,8 +167,16 @@ class RagRuntimeSettings:
         job_id = _get_env(env, "JOB_ID") or _get_env(env, "MOONMIND_JOB_ID")
         run_id = _get_env(env, "RUN_ID") or _get_env(env, "MOONMIND_RUN_ID")
         rag_enabled = env_to_bool(_get_env(env, "RAG_ENABLED", "true"), default=True)
+        # MoonLadderStudios/MoonMind#4115: vector-free default. The native
+        # Qdrant backend is retired: omitted QDRANT_ENABLED defaults to
+        # disabled and no new path may enable native vector retrieval.
+        # Explicit legacy values still parse so sanitized old .env fixtures
+        # remain readable; old-release drain owns that transition (bounded
+        # drain, never silent proceed). Making the flag fully inert lands
+        # with sibling handler/field removal (#4106-#4109); until then, do
+        # not add new consumers of this flag.
         qdrant_enabled = env_to_bool(
-            _get_env(env, "QDRANT_ENABLED", "true"), default=True
+            _get_env(env, "QDRANT_ENABLED", "false"), default=False
         )
         memory_enabled = env_to_bool(
             _get_env(env, "MEMORY_ENABLED", str(app_settings.memory.enabled)),

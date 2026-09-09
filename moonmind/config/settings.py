@@ -1677,12 +1677,18 @@ class AtlassianSettings(BaseSettings):
             )
 
 class QdrantSettings(BaseSettings):
-    """Qdrant settings"""
+    """Retired native Qdrant settings (MoonLadderStudios/MoonMind#4115).
+
+    The vector-free release ships no live native Qdrant backend. These
+    fields remain only so sanitized old ``.env`` files (QDRANT_*) and
+    persisted historical payloads still parse; new deployments must not
+    enable them and no new code path may consult them to reach Qdrant.
+    """
 
     qdrant_host: str = Field("qdrant", alias="QDRANT_HOST")
     qdrant_port: int = Field(6333, alias="QDRANT_PORT")
     qdrant_api_key: Optional[str] = Field(None, alias="QDRANT_API_KEY")
-    qdrant_enabled: bool = Field(True, alias="QDRANT_ENABLED")
+    qdrant_enabled: bool = Field(False, alias="QDRANT_ENABLED")
     model_config = SettingsConfigDict(populate_by_name=True, env_prefix="")
 
 class RAGSettings(BaseSettings):
@@ -2605,8 +2611,8 @@ class AppSettings(BaseSettings):
         3600, alias="MODEL_CACHE_REFRESH_INTERVAL_SECONDS"
     )
     vector_store_provider: str = Field(
-        "qdrant", alias="VECTOR_STORE_PROVIDER"
-    )  # Added field
+        "none", alias="VECTOR_STORE_PROVIDER"
+    )  # Retired native vector backend (#4115): vector-free default.
 
     # Vector store settings
     vector_store_collection_name: str = Field(
