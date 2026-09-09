@@ -32,6 +32,7 @@ from typing import Any
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 from sqlalchemy.orm import sessionmaker
 
+from api_service.auth import _DEFAULT_USER_EMAIL
 from api_service.db.models import Base
 from api_service.services.identity_migration import (
     ConcurrentApplyError,
@@ -73,7 +74,7 @@ async def _run(args: argparse.Namespace) -> int:
                     session,
                     provider_to_issuer=provider_to_issuer,
                     enrollment_evidence=enrollment,
-                    default_email=settings.oidc.DEFAULT_USER_EMAIL or None,
+                    default_email=settings.oidc.DEFAULT_USER_EMAIL or _DEFAULT_USER_EMAIL,
                 )
                 report = result.report.to_sanitized_dict() if result.report else {}
                 print(json.dumps({
@@ -99,7 +100,7 @@ async def _run(args: argparse.Namespace) -> int:
                         fresh,
                         provider_to_issuer=provider_to_issuer,
                         enrollment_evidence=enrollment,
-                        default_email=settings.oidc.DEFAULT_USER_EMAIL or None,
+                        default_email=settings.oidc.DEFAULT_USER_EMAIL or _DEFAULT_USER_EMAIL,
                     )
                 if inspected.digest != args.preflight_digest:
                     raise StalePreflightError(
@@ -112,7 +113,7 @@ async def _run(args: argparse.Namespace) -> int:
                         apply_session,
                         provider_to_issuer=provider_to_issuer,
                         enrollment_evidence=enrollment,
-                        default_email=settings.oidc.DEFAULT_USER_EMAIL or None,
+                        default_email=settings.oidc.DEFAULT_USER_EMAIL or _DEFAULT_USER_EMAIL,
                     )
                     outcome = await apply_migration(
                         apply_session,

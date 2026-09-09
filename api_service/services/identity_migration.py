@@ -13,12 +13,14 @@ Safety properties:
   mapping, enrollment evidence, database fingerprint). Changed input or
   concurrent identity edits invalidate the preflight instead of applying stale
   assumptions (:class:`StalePreflightError`).
-* Apply is idempotent and resumable: each row commits in its own savepoint,
-  already-migrated rows are skipped, and reruns converge on one safe result.
-* Concurrent applies serialize on the ``identity_migration_runs`` ledger row:
+* Apply is idempotent and resumable: each row commits durably as it
+  completes with a progressive ledger checkpoint, already-migrated rows
+  are skipped, and reruns converge on one safe result.
+* Concurrent applies fail fast on the ``identity_migration_runs`` ledger:
   a second apply with the same digest while one is ``in_progress`` fails
-  closed with :class:`ConcurrentApplyError`; a rerun after completion replays
-  the recorded result.
+  closed with :class:`ConcurrentApplyError` (PostgreSQL advisory claim
+  when available, committed ledger row otherwise); a rerun after
+  completion replays the recorded result.
 * Ambiguous rows (duplicates, missing mappings, duplicate emails, orphan
   profiles, default-ID mismatches, unresolved ownership) block the affected
   rows only — never automatic email linking — and unrelated owners and data
@@ -41,7 +43,7 @@ from dataclasses import dataclass, field
 from typing import Any, Awaitable, Callable
 from uuid import UUID, uuid4
 
-from sqlalchemy import func, select
+from sqlalchemy import func, select, text
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -76,6 +78,59 @@ class StalePreflightError(RuntimeError):
 
 class ConcurrentApplyError(RuntimeError):
     """Another apply holds the same preflight digest."""
+
+
+def _advisory_lock_key(digest: str) -> int:
+    """Derive a signed-64-bit PostgreSQL advisory-lock key for a digest."""
+    return int(
+        hashlib.sha256(f"identity-migration:{digest}".encode()).hexdigest()[:15], 16
+    )
+
+
+async def _try_nonblocking_ledger_claim(
+    session: AsyncSession, digest: str
+) -> bool | None:
+    """Try a fail-fast PostgreSQL advisory claim for the preflight digest.
+
+    Returns True when the claim was acquired, False when another apply
+    holds it, and None when the dialect has no advisory locks (SQLite and
+    other hermetic test backends) so the caller falls back to the
+    committed ledger-row path. A failed probe rolls back only its own
+    savepoint, never the caller's work. The session-level lock survives
+    the per-row commits below and is released in the apply ``finally``.
+    """
+    probe = await session.begin_nested()
+    try:
+        claimed = (
+            await session.execute(
+                text("SELECT pg_try_advisory_lock(:key)"),
+                {"key": _advisory_lock_key(digest)},
+            )
+        ).scalar()
+        await probe.commit()
+    except Exception:
+        await probe.rollback()
+        return None
+    return bool(claimed)
+
+
+async def _release_ledger_claim(session: AsyncSession, digest: str) -> None:
+    """Release a claim acquired by :func:`_try_nonblocking_ledger_claim`."""
+    try:
+        await session.execute(
+            text("SELECT pg_advisory_unlock(:key)"),
+            {"key": _advisory_lock_key(digest)},
+        )
+    except Exception:
+        logger.debug("identity migration advisory unlock skipped", exc_info=True)
+    finally:
+        # End the unlock statement's transaction without committing caller
+        # state: session-level advisory locks act immediately, so a rollback
+        # cannot re-acquire the released claim.
+        try:
+            await session.rollback()
+        except Exception:
+            logger.debug("identity migration unlock rollback skipped", exc_info=True)
 
 
 @dataclass
@@ -228,6 +283,7 @@ async def preflight(
         session,
         provider_to_issuer=provider_to_issuer,
         default_email=default_email,
+        planned_user_ids={row.user_id for row in rows},
     )
     before = await ownership_snapshot(session)
     digest = compute_preflight_digest(
@@ -271,6 +327,11 @@ async def _apply_one_row(
                     "detail": "identity already bound to a different user; "
                     "manual enrollment required, no merge",
                 }
+            # Already bound to the requested user: converge like the
+            # new-binding path by ensuring the required profile before
+            # reporting success, so reruns over partially prepared data
+            # cannot report success while the user still has no profile.
+            await ensure_profile_transactional(session, row.user_id)
             await nested.commit()
             return "skipped", None
         session.add(
@@ -312,9 +373,11 @@ async def apply_migration(
     Requires ``operator_authorized=True`` (operator-only command). Re-inspects
     the database and refuses with :class:`StalePreflightError` when the
     fingerprint, schema revision, mapping, or enrollment evidence changed
-    since preflight. Interruption-safe: each row applies in its own savepoint
-    and already-migrated rows are skipped, so a rerun resumes and converges
-    on one safe result with explicit partial-result reporting.
+    since preflight. Interruption-safe: each row commits durably as it
+    completes with a progressive ledger checkpoint, and already-migrated
+    rows are skipped, so a rerun with a fresh preflight resumes from
+    validated progress and converges on one safe result with explicit
+    partial-result reporting.
     """
     if not operator_authorized:
         raise MigrationAuthorizationError(
@@ -339,70 +402,106 @@ async def apply_migration(
             "stale assumptions"
         )
 
-    ledger_nested = await session.begin_nested()
-    try:
-        run = IdentityMigrationRun(
-            preflight_digest=preflight_result.digest, status="in_progress", result_json={}
+    # Fail fast on a truly concurrent apply instead of blocking on the
+    # ledger unique index until the holder finishes or a DB timeout fires.
+    advisory_held = await _try_nonblocking_ledger_claim(
+        session, preflight_result.digest
+    )
+    if advisory_held is False:
+        raise ConcurrentApplyError(
+            "another apply holds this preflight digest; refusing concurrent apply"
         )
-        session.add(run)
-        await session.flush()
-        await ledger_nested.commit()
-    except IntegrityError:
-        await ledger_nested.rollback()
-        existing = (
+    try:
+        try:
+            run = IdentityMigrationRun(
+                preflight_digest=preflight_result.digest,
+                status="in_progress",
+                result_json={},
+            )
+            session.add(run)
+            await session.flush()
+            # Durably publish the in_progress claim before touching rows so
+            # a concurrent apply observes it instead of duplicating work.
+            await session.commit()
+        except IntegrityError:
+            await session.rollback()
+            existing = (
+                await session.execute(
+                    select(IdentityMigrationRun).where(
+                        IdentityMigrationRun.preflight_digest
+                        == preflight_result.digest
+                    )
+                )
+            ).scalars().first()
+            if existing is None:  # pragma: no cover - ledger race guard
+                raise ConcurrentApplyError(
+                    "migration ledger conflicted without a winner"
+                )
+            if existing.status == "in_progress":
+                raise ConcurrentApplyError(
+                    "another apply holds this preflight digest; "
+                    "refusing concurrent apply"
+                )
+            stored = dict(existing.result_json or {})
+            return ApplyResult(
+                digest=preflight_result.digest,
+                migrated=list(stored.get("migrated", [])),
+                skipped=list(stored.get("skipped", [])),
+                blocked=list(stored.get("blocked", [])),
+                after_snapshot=dict(stored.get("after_snapshot", {})),
+            )
+
+        result = ApplyResult(digest=preflight_result.digest)
+        for row in preflight_result.rows:
+            disposition, blocked = await _apply_one_row(session, row)
+            if disposition == "migrated":
+                result.migrated.append(str(row.user_id))
+            elif disposition == "skipped":
+                result.skipped.append(str(row.user_id))
+            else:
+                result.blocked.append(
+                    {"user_id": str(row.user_id), **(blocked or {"code": "blocked"})}
+                )
+            # Durable per-row progress: checkpoint the partial result into
+            # the ledger and commit before the next row, so an interruption
+            # or a later unexpected row failure preserves validated work
+            # instead of rolling every earlier mapping back to zero.
+            checkpoint = (
+                await session.execute(
+                    select(IdentityMigrationRun).where(
+                        IdentityMigrationRun.preflight_digest
+                        == preflight_result.digest
+                    )
+                )
+            ).scalars().first()
+            if checkpoint is not None:
+                checkpoint.result_json = result.to_sanitized_dict()
+                await session.flush()
+            await session.commit()
+        result.after_snapshot = await ownership_snapshot(session)
+        if preflight_result.before_snapshot is not None:
+            before_ids = set((preflight_result.before_snapshot.get("user_ids") or []))
+            after_ids = set((result.after_snapshot.get("user_ids") or []))
+            if before_ids != after_ids:
+                raise RuntimeError(
+                    "migration changed the retained user set; refusing to record success"
+                )
+        run_row = (
             await session.execute(
                 select(IdentityMigrationRun).where(
                     IdentityMigrationRun.preflight_digest == preflight_result.digest
                 )
             )
         ).scalars().first()
-        if existing is None:  # pragma: no cover - ledger race guard
-            raise ConcurrentApplyError("migration ledger conflicted without a winner")
-        if existing.status == "in_progress":
-            raise ConcurrentApplyError(
-                "another apply holds this preflight digest; refusing concurrent apply"
-            )
-        stored = dict(existing.result_json or {})
-        return ApplyResult(
-            digest=preflight_result.digest,
-            migrated=list(stored.get("migrated", [])),
-            skipped=list(stored.get("skipped", [])),
-            blocked=list(stored.get("blocked", [])),
-            after_snapshot=dict(stored.get("after_snapshot", {})),
-        )
-
-    result = ApplyResult(digest=preflight_result.digest)
-    for row in preflight_result.rows:
-        disposition, blocked = await _apply_one_row(session, row)
-        if disposition == "migrated":
-            result.migrated.append(str(row.user_id))
-        elif disposition == "skipped":
-            result.skipped.append(str(row.user_id))
-        else:
-            result.blocked.append(
-                {"user_id": str(row.user_id), **(blocked or {"code": "blocked"})}
-            )
-    result.after_snapshot = await ownership_snapshot(session)
-    if preflight_result.before_snapshot is not None:
-        before_ids = set((preflight_result.before_snapshot.get("user_ids") or []))
-        after_ids = set((result.after_snapshot.get("user_ids") or []))
-        if before_ids != after_ids:
-            raise RuntimeError(
-                "migration changed the retained user set; refusing to record success"
-            )
-    run_row = (
-        await session.execute(
-            select(IdentityMigrationRun).where(
-                IdentityMigrationRun.preflight_digest == preflight_result.digest
-            )
-        )
-    ).scalars().first()
-    if run_row is not None:
-        run_row.status = "complete"
-        run_row.result_json = result.to_sanitized_dict()
-        await session.flush()
-    await session.commit()
-    return result
+        if run_row is not None:
+            run_row.status = "complete"
+            run_row.result_json = result.to_sanitized_dict()
+            await session.flush()
+        await session.commit()
+        return result
+    finally:
+        if advisory_held:
+            await _release_ledger_claim(session, preflight_result.digest)
 
 
 SessionFactory = Callable[[], Awaitable[AsyncSession]]

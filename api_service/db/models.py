@@ -134,6 +134,18 @@ class User(SQLAlchemyBaseUserTableUUID, Base):
     )
 
 
+def _json_variant() -> JSON:
+    return JSON().with_variant(JSONB(astext_type=Text()), "postgresql")
+
+
+def mutable_json_list() -> JSON:
+    return MutableList.as_mutable(_json_variant())
+
+
+def mutable_json_dict() -> JSON:
+    return MutableDict.as_mutable(_json_variant())
+
+
 class UserExternalIdentity(Base):
     """Single active external-identity authority (K3, #4119).
 
@@ -237,18 +249,6 @@ class UserProfile(Base):
     agent_skill_local_sources_enabled = Column(Boolean, nullable=False, default=False)
 
     user = relationship("User", back_populates="user_profile")
-
-
-def _json_variant() -> JSON:
-    return JSON().with_variant(JSONB(astext_type=Text()), "postgresql")
-
-
-def mutable_json_list() -> JSON:
-    return MutableList.as_mutable(_json_variant())
-
-
-def mutable_json_dict() -> JSON:
-    return MutableDict.as_mutable(_json_variant())
 
 
 class ManifestRecord(Base):

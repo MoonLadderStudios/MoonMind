@@ -279,8 +279,25 @@ async def get_or_create_user_for_identity(
         if user is None:  # pragma: no cover - ledger inconsistency guard
             raise IdentityConflictError("external identity points at a missing user")
         if email is not None and user.email != email:
+            taken = await session.execute(select(User.id).where(User.email == email))
+            owner = taken.scalars().first()
+            if owner is not None and owner != user.id:
+                raise ControlledEnrollmentRequiredError(
+                    "email_taken",
+                    "email is already owned by a different user; explicit operator "
+                    "enrollment is required, automatic linking is refused",
+                )
             user.email = email
-            await session.flush()
+            try:
+                await session.flush()
+            except IntegrityError as exc:
+                # Lost an email-uniqueness race that the pre-check could not
+                # see; the winner is resolved by retrying, never by merging.
+                raise ControlledEnrollmentRequiredError(
+                    "email_taken",
+                    "email was claimed concurrently by a different user; explicit "
+                    "operator enrollment is required, automatic linking is refused",
+                ) from exc
         await ensure_profile_transactional(session, user.id)
         return user, False
 
@@ -389,14 +406,21 @@ async def collect_identity_report(
     provider_to_issuer: dict[str, str] | None = None,
     default_user_id: UUID = DEFAULT_USER_UUID,
     default_email: str | None = None,
+    planned_user_ids: set[UUID] | set[str] | None = None,
 ) -> IdentityReport:
     """Collect duplicate/missing/orphan/mismatch findings without secrets.
 
     Ambiguous rows are reported as blockers; nothing here links accounts by
     email. The report contains UUIDs, issue codes, and redacted issuer
     prefixes only — never password hashes, tokens, or identity exports.
+    ``planned_user_ids`` holds the users whose verified mapping is queued
+    in the current preflight enrollment: they are not reported as
+    ``missing_mapping`` because the pending apply will migrate them.
     """
     provider_to_issuer = provider_to_issuer or {}
+    planned = (
+        {str(uid) for uid in planned_user_ids} if planned_user_ids is not None else None
+    )
     report = IdentityReport()
 
     users = (await session.execute(select(User))).scalars().all()
@@ -448,6 +472,10 @@ async def collect_identity_report(
 
     for u in users:
         if u.id not in mapped and (u.oidc_provider or u.oidc_subject):
+            if planned is not None and str(u.id) in planned:
+                # Verified mapping queued in the current preflight enrollment;
+                # the pending apply migrates this row, so it is not missing.
+                continue
             report.issues.append(
                 IdentityIssue(
                     code="missing_mapping",

@@ -226,6 +226,26 @@ async def test_recycled_email_never_transfers_ownership(tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_returning_user_email_taken_by_other_user_requires_enrollment(tmp_path):
+    _, maker = await _db(tmp_path)
+    async with maker() as session:
+        user, _ = await get_or_create_user_for_identity(
+            session, ISSUER_A, "stable-sub", email="mine@example.invalid"
+        )
+        await session.commit()
+        other = await _make_user(session, email="taken@example.invalid")
+        await session.commit()
+        with pytest.raises(ControlledEnrollmentRequiredError) as exc:
+            await get_or_create_user_for_identity(
+                session, ISSUER_A, "stable-sub", email="taken@example.invalid"
+            )
+        assert exc.value.code == "email_taken"
+        await session.rollback()
+        assert (await session.get(User, user.id)).email == "mine@example.invalid"
+        assert (await session.get(User, other.id)) is not None
+
+
+@pytest.mark.asyncio
 async def test_concurrent_first_login_creates_one_mapping_and_profile(tmp_path):
     from sqlalchemy.exc import OperationalError
 
@@ -500,6 +520,76 @@ async def test_apply_with_partial_blockers_preserves_unrelated_owners(tmp_path):
         assert outcome.blocked[0]["code"] == "unresolved_ownership"
         assert await resolve_user_id_for_identity(session, ISSUER_A, "legacy-sub") == ids["legacy"]
         assert await resolve_user_id_for_identity(session, ISSUER_A, "ghost-sub") is None
+
+
+@pytest.mark.asyncio
+async def test_skipped_apply_row_ensures_missing_profile(tmp_path):
+    _, maker = await _db(tmp_path)
+    async with maker() as session:
+        ids = await _seed_mixed_dataset(session)
+        await session.commit()
+        first = await preflight(
+            session,
+            provider_to_issuer={"keycloak": ISSUER_A},
+            enrollment_evidence=_enrollment(ids),
+        )
+        outcome = await apply_migration(
+            session,
+            first,
+            operator_authorized=True,
+            provider_to_issuer={"keycloak": ISSUER_A},
+            enrollment_evidence=_enrollment(ids),
+        )
+        assert str(ids["legacy"]) in outcome.migrated
+        # Simulate partially prepared data: drop the profile after migration.
+        stale_profile = (
+            await session.execute(
+                select(UserProfile).where(UserProfile.user_id == ids["legacy"])
+            )
+        ).scalars().first()
+        assert stale_profile is not None
+        await session.delete(stale_profile)
+        await session.commit()
+        second = await preflight(
+            session,
+            provider_to_issuer={"keycloak": ISSUER_A},
+            enrollment_evidence=_enrollment(ids),
+        )
+        rerun = await apply_migration(
+            session,
+            second,
+            operator_authorized=True,
+            provider_to_issuer={"keycloak": ISSUER_A},
+            enrollment_evidence=_enrollment(ids),
+        )
+        assert str(ids["legacy"]) in rerun.skipped
+        restored = (
+            await session.execute(
+                select(UserProfile).where(UserProfile.user_id == ids["legacy"])
+            )
+        ).scalars().first()
+        assert restored is not None
+
+
+@pytest.mark.asyncio
+async def test_planned_enrollment_suppresses_missing_mapping(tmp_path):
+    _, maker = await _db(tmp_path)
+    async with maker() as session:
+        ids = await _seed_mixed_dataset(session)
+        await session.commit()
+        # Without enrollment context the legacy row is missing its mapping.
+        bare = await collect_identity_report(
+            session, provider_to_issuer={"keycloak": ISSUER_A}
+        )
+        assert "missing_mapping" in {issue.code for issue in bare.issues}
+        # With the verified mapping queued, the same row is planned, not missing.
+        planned = await preflight(
+            session,
+            provider_to_issuer={"keycloak": ISSUER_A},
+            enrollment_evidence=_enrollment(ids),
+        )
+        assert planned.report is not None
+        assert [i for i in planned.report.issues if i.code == "missing_mapping"] == []
 
 
 @pytest.mark.asyncio
