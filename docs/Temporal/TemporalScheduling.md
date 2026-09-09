@@ -100,6 +100,18 @@ Catchup, manual triggers, and backfills use the approved definition and fresh oc
 
 The schedule stores a Temporal workflow-start target with workflowType, initialParameters, and artifact refs where needed. UserWorkflow and ManifestIngest use their normal input contracts. Queue dispatch is not a separate scheduling authority; any supported legacy transport is normalized at the versioned ingress before use.
 
+For generic Omnigent schedules, deployment maintenance advances the Agent Profile
+snapshot, selected launch-policy version, and execution plan together. It verifies
+the previous durable profile usage and permits only deployment binding changes:
+catalog observation, upstream version metadata for the same source identity, and
+server/host image references within the same launch-policy identity. Profile
+semantics and all other policy boundaries must match. Provider selection, model,
+effort, authored overrides (including nulls), task inputs, and the pinned
+runtime-provider target remain authoritative. A semantic or boundary change
+requires an explicit schedule revision. The normal compiler qualifies the new
+image combination before the schedule action and definition revision advance;
+already-started occurrences retain their immutable inputs.
+
 #### Authored policy and Auto
 
 New authored publication values are default, none, branch, pr, and pr_with_merge_automation. Omission/default is the one user-facing Auto choice. Runtime modes remain none/branch/pr/auto. The compiler never forwards unresolved default to a worker or helper.
