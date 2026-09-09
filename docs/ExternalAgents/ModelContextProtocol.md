@@ -16,7 +16,31 @@ Implementation: [`api_service/api/routers/mcp_tools.py`](../../api_service/api/r
 
 ## Authentication
 
-All MCP routes use the same `get_current_user()` dependency as the rest of the API. When `AUTH_PROVIDER` is enabled, clients must send the configured bearer credential. When authentication is disabled, the API resolves the default database user so downstream calls retain a stable owner identity.
+All MCP routes use the same `get_current_user()` dependency as the rest of the API
+(`api_service/api/routers/mcp_tools.py`). The one MoonMind selector `AUTH_PROVIDER`
+(`accounts` | `oidc` | `header` | explicitly restricted local `disabled`) decides
+how that dependency validates the caller. Retired selectors (`keycloak`, `default`,
+`google`) fail at startup with migration guidance; they are never silently
+translated. See [AuthenticationContracts.md](../Security/AuthenticationContracts.md)
+for the authoritative mode, identity, session, and error contracts.
+
+| Caller | Credential at the MCP boundary | Scope |
+| --- | --- | --- |
+| Browser / API user (`accounts`, `oidc`, `header`) | MoonMind session for the resolved `User.id` UUID (MoonMind cookie; bearer only where the route explicitly accepts it) | Only its authorized routes and resources; conflicting cookie/bearer identities are rejected (`401 auth_conflict`) |
+| Local single-user (`disabled`) | Stable persisted user behind loopback-only bind or documented trusted ingress (`MOONMIND_TRUSTED_INGRESS=1`) | Same execution-linked authorization; never an error fallback |
+| Machine (worker / container-job) | Container-job bearer (`MOONMIND_CONTAINER_JOBS_BEARER_TOKEN` family) or other scoped service credential on its authorized routes | Succeeds only on authorized routes and resources; runtime, session, and worker tokens never become unrestricted browser credentials. The removed legacy worker-token path is rejected (`410 worker_token_deprecated`). |
+
+Missing credentials at strict boundaries are `401 auth_required`; invalid, expired,
+wrong-key/issuer/purpose, or reserved-identity credentials are `401 auth_invalid`,
+including on cache hits. Cookie-authenticated mutations require CSRF protection
+and origin validation; WebSocket handshakes validate origin and are revoked on the
+same bounded interval as other streams. SSE and artifact downloads work without
+placing broad tokens in URLs.
+
+Native Workflow Chat and upstream runtime access stay behind the qualified
+same-origin binding facade: a valid MoonMind login does not grant unrestricted
+access to every upstream session or host, service credentials stay server-side,
+and browser cookies or bearer headers are not blindly forwarded upstream.
 
 ## Streamable HTTP
 

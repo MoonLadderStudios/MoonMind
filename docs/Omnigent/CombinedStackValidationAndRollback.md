@@ -19,7 +19,16 @@ phase stays available without rewriting those immutable per-run snapshots.
 **Audience:** Local and self-hosted MoonMind operators  
 **Authority:** Operator-facing startup, validation, rollback, and troubleshooting behavior for the combined MoonMind plus Omnigent Docker Compose stack  
 **Owning Surface:** Canonical `docker-compose.yaml`, its supported profiles, and workflow-requested profile-bound Codex hosts  
-**Related Docs:** [MoonMind Architecture](../MoonMindArchitecture.md), [Omnigent Adapter](OmnigentAdapter.md), [Omnigent Host OAuth](OmnigentHostOAuth.md), [Omnigent Conformance](ConformanceAndLiveSmoke.md)  
+**Related Docs:** [MoonMind Architecture](../MoonMindArchitecture.md), [Omnigent Adapter](OmnigentAdapter.md), [Omnigent Host OAuth](OmnigentHostOAuth.md), [Omnigent Conformance](ConformanceAndLiveSmoke.md), [Authentication Contracts](../Security/AuthenticationContracts.md) (authoritative MoonMind user-auth modes, identity, session, and error semantics; runtime-server `OMNIGENT_AUTH_*` variables never select MoonMind auth)
+
+> [!NOTE]
+> MoonMind application login (`AUTH_PROVIDER`: `accounts` | `oidc` | `header` |
+> explicitly restricted local `disabled`) is independent of the credentials in
+> the host-class table below. Model Provider Profile OAuth, GitHub/runtime/worker
+> credentials, and Omnigent host-auth lifecycles are not application-login
+> cleanup targets and are never repurposed as user credentials. Retired
+> selectors (`keycloak`, `default`, `google`) fail at startup with migration
+> guidance.  
 **Related Implementation:** MM-972, source issue MM-968, coverage DESIGN-REQ-019 through DESIGN-REQ-022, DESIGN-REQ-010, DESIGN-REQ-018
 
 ## Purpose
