@@ -24,7 +24,12 @@ def test_prerequisites_admission_landed_and_owner_live_blocked() -> None:
         r.name: r for r in rehearsal.check_prerequisites(REPO_ROOT)
     }
     assert results["prerequisite-4105-admission"].status == "completed"
-    assert results["prerequisite-4106-4109-handler-field-removal"].status == "completed"
+    # Executable native Qdrant wiring remains in the checkout under sibling
+    # #4106-#4109 ownership, so this prerequisite stays blocked (never
+    # reported complete) until that removal lands.
+    handler_removal = results["prerequisite-4106-4109-handler-field-removal"]
+    assert handler_removal.status == "blocked", handler_removal.evidence
+    assert "#4106" in handler_removal.evidence
     assert results["prerequisite-named-owner-approval"].status == "blocked"
     assert results["prerequisite-live-deployment-qualification"].status == "blocked"
     assert results["prerequisite-4107-retrieval-state-classification"].status == "blocked"
@@ -333,3 +338,75 @@ def test_full_gate_passes_fixtures_with_deployment_blocked(tmp_path: Path) -> No
     assert summary["verdict"] == "REHEARSAL_PASS_DEPLOYMENT_BLOCKED"
     assert not [s for s in summary["steps"] if s["status"] == "failed"]
     assert any(s["status"] == "blocked" for s in summary["steps"])
+
+
+def test_retirement_without_structured_ownership_stays_blocked() -> None:
+    result = rehearsal.check_retirement_plan(
+        ["stop/remove exact qdrant container moonmind-qdrant-1"]
+    )
+    assert result.status == "blocked", result.evidence
+    assert "ownership" in result.evidence.lower()
+
+
+def test_retirement_cli_requires_ownership_flags(tmp_path: Path) -> None:
+    without_flags = subprocess.run(
+        [sys.executable, "tools/qdrant_cutover_rehearsal.py",
+         "--mode", "retirement-check",
+         "--retire-action", "restart qdrant",
+         "--state-dir", str(tmp_path / "no-flags"),
+         "--migration-id", "retire-no-flags"],
+        capture_output=True, text=True, cwd=REPO_ROOT,
+    )
+    assert without_flags.returncode == 0, without_flags.stderr
+    assert json.loads(without_flags.stdout)["steps"][0]["status"] == "blocked"
+    with_flags = subprocess.run(
+        [sys.executable, "tools/qdrant_cutover_rehearsal.py",
+         "--mode", "retirement-check",
+         "--retire-action", "stop/remove exact qdrant container moonmind-qdrant-1",
+         "--retire-project", "moonmind",
+         "--retire-service", "qdrant",
+         "--retire-container-id", "moonmind-qdrant-1",
+         "--state-dir", str(tmp_path / "flags"),
+         "--migration-id", "retire-flags"],
+        capture_output=True, text=True, cwd=REPO_ROOT,
+    )
+    assert with_flags.returncode == 0, with_flags.stderr
+    assert json.loads(with_flags.stdout)["steps"][0]["status"] == "completed"
+
+
+def test_build_pins_blocked_on_mutable_image_tag() -> None:
+    result = rehearsal.check_build_pins(REPO_ROOT)
+    assert result.status == "blocked", result.evidence
+    assert "digest" in result.evidence.lower()
+
+
+def test_preservation_plan_refuses_negative_keyword_prose() -> None:
+    assert rehearsal.check_preservation_plan(
+        "do not record provenance; skip snapshot and export; "
+        "verification is unnecessary"
+    ).status == "failed"
+
+
+def test_rehearsal_replay_check_is_not_vacuous(monkeypatch) -> None:
+    entries = rehearsal.historical_manifest_entries()
+    tampered = [dict(e) for e in entries]
+    tampered[0] = {**tampered[0], "commands": ["manifest.compile"]}
+    assert rehearsal.check_workflow_history_authority(
+        entries, tampered
+    ).status == "failed"
+    always_complete = rehearsal.StepResult("workflow-history-authority", "completed", "vacuous")
+    monkeypatch.setattr(
+        rehearsal,
+        "check_workflow_history_authority",
+        lambda before, after: always_complete,
+    )
+    assert rehearsal.rehearse_scenario("fresh-vector-free").status == "failed"
+
+
+def test_state_persisted_atomically_without_tmp_residue(tmp_path: Path) -> None:
+    state_dir = tmp_path / "state"
+    assert rehearsal.save_state(state_dir, "mig-atomic", ["a"])[0]
+    assert (state_dir / "qdrant_rehearsal_state.json").exists()
+    assert list(state_dir.glob("*.tmp")) == []
+    payload = json.loads((state_dir / "qdrant_rehearsal_state.json").read_text())
+    assert payload["completed_steps"] == ["a"]

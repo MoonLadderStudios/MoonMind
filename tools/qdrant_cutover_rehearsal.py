@@ -33,9 +33,12 @@ orchestrate) are preserved evidence, never live-backend surfaces.
 from __future__ import annotations
 
 import argparse
+import contextlib
 import hashlib
 import json
+import os
 import re
+import tempfile
 import uuid
 from dataclasses import asdict, dataclass
 from pathlib import Path
@@ -177,6 +180,32 @@ def _admission_present(repo_root: Path) -> tuple[bool, str]:
     )
 
 
+def _residual_native_qdrant_wiring(repo_root: Path) -> list[str]:
+    """Name executable native Qdrant wiring left for sibling #4106-#4109.
+
+    Deployment markers (compose/defaults) are checked separately; this probe
+    covers execution code that references the native Qdrant client
+    (imports, construction, and direct client uses outside the client module
+    itself, which the old release needs for drain). Hermetic and read-only.
+    """
+    targets = (
+        "moonmind/rag/service.py",
+        "moonmind/rag/guardrails.py",
+        "moonmind/rag/cli.py",
+        "moonmind/rag/overlay.py",
+        "moonmind/rag/overlay_cleanup.py",
+        "api_service/api/routers/retrieval_gateway.py",
+    )
+    residual: list[str] = []
+    for rel in targets:
+        text = _read_text(repo_root / rel)
+        if text is None:
+            continue
+        if "RagQdrantClient" in text or "qdrant_client" in text:
+            residual.append(rel)
+    return residual
+
+
 def _vector_free_deployment_present(repo_root: Path) -> tuple[bool, str]:
     """Whether the checkout itself is vector-free (no live native backend)."""
     compose = _read_text(repo_root / "docker-compose.yaml") or ""
@@ -213,11 +242,21 @@ def _vector_free_deployment_present(repo_root: Path) -> tuple[bool, str]:
         return False, (
             "vector-free deployment markers absent: " + "; ".join(problems)
         )
+    residual = _residual_native_qdrant_wiring(repo_root)
+    if residual:
+        return False, (
+            "deployment markers verified (compose vector-free; defaults "
+            "disabled); executable native Qdrant wiring remains in the "
+            "checkout under sibling #4106-#4109 ownership: "
+            + ", ".join(residual)
+            + ". Deployment qualification waits for that removal."
+        )
     return True, (
         "compose carries no qdrant service or QDRANT_URL wiring; "
         "QdrantSettings/RagRuntimeSettings default disabled; "
         "vector_store_provider default is not qdrant; "
-        ".env-template advertises no active Qdrant backend"
+        ".env-template advertises no active Qdrant backend; "
+        "no executable native Qdrant wiring found in execution code"
     )
 
 
@@ -666,6 +705,19 @@ def check_build_pins(repo_root: Path = REPO_ROOT) -> StepResult:
             + ". Refusing positive topology evidence until every required "
             "pin resolves.",
         )
+    app_image = str(pins.get("app_image_default") or "unknown")
+    if "@sha256:" not in app_image:
+        return StepResult(
+            "build-pins",
+            "blocked",
+            "Application image identity is not immutable "
+            f"({app_image}); mutable tags such as :latest move, so the "
+            "recorded evidence cannot identify the image that participated "
+            "in the cutover or restore the matching revision for rollback. "
+            "Pin MOONMIND_IMAGE to an immutable digest "
+            "(ghcr.io/moonladderstudios/moonmind@sha256:...) before "
+            "recording exact build evidence.",
+        )
     return StepResult(
         "build-pins",
         "completed",
@@ -743,12 +795,14 @@ def check_upgrade_fixture(
     old_provider = fixture.get("VECTOR_STORE_PROVIDER", "")
     if old_provider == "qdrant":
         evidence = (
-            "Sanitized old .env tolerated: QDRANT_* vars ignored by the "
-            "vector-free release; stored retired rag requirement rejected at "
-            "admission with actionable guidance (no silent reinterpretation); "
-            "no mandatory disable flag, fake embedding credential, or "
-            "substitute search service introduced. Historical manifest "
-            "artifacts remain readable."
+            "Sanitized old .env tolerated: omitted QDRANT_* vars default to "
+            "disabled in the vector-free release, and explicit legacy values "
+            "still parse for fixture readability but route old-release work "
+            "to bounded drain (never silent proceed); stored retired rag "
+            "requirement rejected at admission with actionable guidance "
+            "(no silent reinterpretation); no mandatory disable flag, fake "
+            "embedding credential, or substitute search service introduced. "
+            "Historical manifest artifacts remain readable."
         )
     else:
         evidence = (
@@ -848,6 +902,20 @@ def check_preservation_plan(description: str) -> StepResult:
             "preservation-plan", "failed",
             "Refused: snapshots/exports belong in operator-controlled "
             "authorized storage, not public issues or source control.",
+        )
+    negated = (
+        re.search(r"\bdo not\b.{0,24}\b(record|provenance|snapshot|export|verif\w*)\b", lowered)
+        or re.search(r"\bskip\b.{0,24}\b(snapshot|export|provenance|verif\w*)\b", lowered)
+        or re.search(r"\b(unnecessary|without|never|no)\b.{0,24}\b(provenance|snapshot|export|verif\w*)\b", lowered)
+    )
+    if negated:
+        return StepResult(
+            "preservation-plan", "failed",
+            "Refused: preservation scope described negatively "
+            f"({negated.group(0)!r}); retirement requires affirmative, "
+            "positively verified preservation evidence (recorded provenance, "
+            "snapshot plus logical export, verified recoverability), not "
+            "keyword-bearing prose that disclaims recovery.",
         )
     required = ("provenance", "snapshot", "export", "verif")
     if not all(r in lowered for r in required):
@@ -1264,30 +1332,30 @@ def check_retirement_plan(
             "retirement stays blocked until inventory names exact "
             "project/service/container IDs.",
         )
-    if ownership is not None:
-        try:
-            resolved = resolve_exact_container(
-                ownership.get("candidates", []),  # type: ignore[arg-type]
-                ownership.get("project", ""),
-                ownership.get("service", ""),
-            )
-        except ValueError as exc:
-            return StepResult("retirement-plan", "blocked", str(exc))
-        container = resolved.get("container_id", "identified-container")
+    if ownership is None:
         return StepResult(
-            "retirement-plan", "completed",
-            f"Retirement plan textually safe with exact ownership "
-            f"(project={ownership.get('project')!r}, service='qdrant', "
-            f"container={container!r}): stop/remove only that container, "
-            "verify absence afterward, repeat checks idempotent. Execution "
-            "still requires owner approval and positive absence verification.",
+            "retirement-plan", "blocked",
+            "Retirement plan names Qdrant work but carries no structured "
+            "ownership (exact Compose project/service/container IDs). "
+            "Ambiguous ownership must block retirement; resolve exact "
+            "ownership before this check can complete.",
         )
+    try:
+        resolved = resolve_exact_container(
+            ownership.get("candidates", []),  # type: ignore[arg-type]
+            ownership.get("project", ""),
+            ownership.get("service", ""),
+        )
+    except ValueError as exc:
+        return StepResult("retirement-plan", "blocked", str(exc))
+    container = resolved.get("container_id", "identified-container")
     return StepResult(
         "retirement-plan", "completed",
-        "Retirement plan textually safe: precisely identified Qdrant "
-        "container only, no destructive volume/database operations. "
-        "Execution still requires exact-ownership resolution, owner "
-        "approval, and positive absence verification.",
+        f"Retirement plan textually safe with exact ownership "
+        f"(project={ownership.get('project')!r}, service='qdrant', "
+        f"container={container!r}): stop/remove only that container, "
+        "verify absence afterward, repeat checks idempotent. Execution "
+        "still requires owner approval and positive absence verification.",
     )
 
 
@@ -1338,6 +1406,66 @@ def load_state(state_dir: Path, migration_id: str) -> dict[str, Any]:
     return data
 
 
+def _atomic_write_text(path: Path, text: str) -> None:
+    """Replace ``path`` atomically via a same-directory temp file.
+
+    A direct overwrite can truncate the sole state file when the process is
+    interrupted mid-write, after which the tool deliberately refuses further
+    progress as corrupt. ``os.replace`` makes the new content appear
+    atomically; the temp file is fsynced before the rename on platforms
+    that support it.
+    """
+    fd, tmp_name = tempfile.mkstemp(
+        dir=str(path.parent), prefix=path.name + ".", suffix=".tmp"
+    )
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as handle:
+            handle.write(text)
+            try:
+                handle.flush()
+                os.fsync(handle.fileno())
+            except OSError:
+                # Best-effort durability; the atomic rename below is the
+                # correctness guarantee, fsync only shortens the crash window.
+                pass
+        os.replace(tmp_name, path)
+    except BaseException:
+        try:
+            os.unlink(tmp_name)
+        except OSError:
+            pass
+        raise
+
+
+@contextlib.contextmanager
+def _state_locked(state_dir: Path):
+    """Hold an exclusive lock for one state read-modify-write cycle.
+
+    Best-effort: serializes concurrent invocations sharing a migration ID
+    so the last writer cannot silently erase another run's completed steps.
+    Platforms without ``fcntl`` still get the atomic-replace guarantee
+    against truncation, just without cross-process mutual exclusion.
+    """
+    try:
+        import fcntl
+    except ImportError:  # pragma: no cover - non-POSIX platforms
+        yield
+        return
+    fd = os.open(state_dir / ".qdrant_rehearsal.lock", os.O_CREAT | os.O_RDWR, 0o600)
+    try:
+        try:
+            fcntl.flock(fd, fcntl.LOCK_EX)
+        except OSError:
+            pass
+        yield
+    finally:
+        try:
+            fcntl.flock(fd, fcntl.LOCK_UN)
+        except OSError:
+            pass
+        os.close(fd)
+
+
 def save_state(
     state_dir: Path,
     migration_id: str,
@@ -1349,8 +1477,21 @@ def save_state(
     Returns (ok, message). A state file owned by a different migration_id is
     a stale/concurrent cutover: refuse unless --allow-replace is given, so
     interruption/restart reconciles the SAME migration instead of forking it.
+    The read-modify-write runs under an exclusive lock and persists through
+    an atomic temp-file rename, so concurrent runs cannot erase each other's
+    progress and an interruption cannot truncate the durable record.
     """
     state_dir.mkdir(parents=True, exist_ok=True)
+    with _state_locked(state_dir):
+        return _save_state_locked(state_dir, migration_id, step_names, allow_replace)
+
+
+def _save_state_locked(
+    state_dir: Path,
+    migration_id: str,
+    step_names: list[str],
+    allow_replace: bool = False,
+) -> tuple[bool, str]:
     state_file = state_dir / "qdrant_rehearsal_state.json"
     existing = load_state(state_dir, migration_id)
     if existing.get("_corrupt"):
@@ -1379,7 +1520,7 @@ def save_state(
             "completed_steps": completed,
             "issue": ISSUE_REF,
         }
-        state_file.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+        _atomic_write_text(state_file, json.dumps(payload, indent=2))
         return True, f"replaced state with migration {migration_id!r} (run 1)."
     completed = list(dict.fromkeys([*existing.get("completed_steps", []), *step_names]))
     payload = {
@@ -1388,7 +1529,7 @@ def save_state(
         "completed_steps": completed,
         "issue": ISSUE_REF,
     }
-    state_file.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+    _atomic_write_text(state_file, json.dumps(payload, indent=2))
     return True, f"reconciled migration {migration_id!r} (run {payload['runs']})."
 
 
@@ -1405,6 +1546,20 @@ def rehearse_scenario(scenario: str) -> StepResult:
         return StepResult(
             f"rehearsal-{scenario}", "failed",
             "Historical manifest entries not replayable; immutable evidence altered.",
+        )
+    # Negative control: the authority check must discriminate, not merely
+    # complete. A tampered history (dropped command) has to fail, otherwise
+    # this gate would pass even after a real ManifestIngest schema, handler,
+    # or ordering incompatibility. Live execution of histories through the
+    # current workflow/activity boundary stays out of hermetic scope and is
+    # owned by the separately blocked live-deployment qualification.
+    tampered = [dict(e) for e in entries]
+    tampered[0] = {**tampered[0], "commands": tampered[0]["commands"][:-1]}
+    if check_workflow_history_authority(entries, tampered).status != "failed":
+        return StepResult(
+            f"rehearsal-{scenario}", "failed",
+            "Replay authority check is vacuous: a history with a dropped "
+            "command still verifies. Refusing positive replay evidence.",
         )
     if scenario in ("fresh-vector-free", "omitted-upgrade"):
         if verdict.status != "proceed":
@@ -1517,6 +1672,21 @@ def main(argv: list[str] | None = None) -> int:
         "schema-compatibility check, rehearsed",
     )
     parser.add_argument("--retire-action", action="append", default=[])
+    parser.add_argument(
+        "--retire-project",
+        default=None,
+        help="Exact Compose project owning the obsolete Qdrant container.",
+    )
+    parser.add_argument(
+        "--retire-service",
+        default=None,
+        help="Exact Compose service owning the obsolete Qdrant container.",
+    )
+    parser.add_argument(
+        "--retire-container-id",
+        default=None,
+        help="Exact container ID of the obsolete Qdrant container.",
+    )
     parser.add_argument("--preservation-description", default=None)
     parser.add_argument("--json-out", type=Path, default=None)
     args = parser.parse_args(argv)
@@ -1577,7 +1747,21 @@ def main(argv: list[str] | None = None) -> int:
             actions = []
         else:
             actions = ["stop/remove exact qdrant container (identified from inventory)"]
-        results.append(check_retirement_plan(actions))
+        if args.retire_project and args.retire_service and args.retire_container_id:
+            ownership = {
+                "project": args.retire_project,
+                "service": args.retire_service,
+                "candidates": [
+                    {
+                        "project": args.retire_project,
+                        "service": args.retire_service,
+                        "container_id": args.retire_container_id,
+                    }
+                ],
+            }
+        else:
+            ownership = None
+        results.append(check_retirement_plan(actions, ownership))
 
     if args.json_out is not None:
         args.json_out.parent.mkdir(parents=True, exist_ok=True)

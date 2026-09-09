@@ -134,8 +134,11 @@ Removing the YAML definition does not stop a running orphan. Creating
 these issues does not authorize any real production deletion.
 
 Hermetic rehearsal: `--mode retirement-check --retire-action "stop/remove
-exact qdrant container (identified from inventory)"`. Without an explicit
-operator-supplied action the check stays blocked; destructive actions fail.
+exact qdrant container (identified from inventory)" --retire-project
+<project> --retire-service qdrant --retire-container-id <container>`.
+Without an explicit operator-supplied action the check stays blocked;
+without exact structured ownership it also stays blocked (ambiguous
+ownership must never complete retirement); destructive actions fail.
 
 ## 7. Retention
 
