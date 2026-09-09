@@ -319,6 +319,53 @@ async def _evaluate_opencode_host(
     return _OpenCodeHostVerdict(image_ref, failure, build_digest, version)
 
 
+_SERVER_DRIFT_FAILURES = frozenset(
+    {
+        "omnigent_server_host_build_mismatch",
+        "omnigent_server_host_version_mismatch",
+    }
+)
+_HOST_QUALIFICATION_FAILURES = frozenset(
+    {
+        "omnigent_host_build_identity_unavailable",
+        "omnigent_server_host_version_probe_failed",
+        "omnigent_host_bootstrap_contract_missing",
+    }
+)
+
+
+def pending_host_remediation(failure_code: object) -> str:
+    """Name the operator action that lets a pending host become admissible.
+
+    Only a server/host drift is cured by moving the Omnigent server. A host
+    that failed its own qualification, or that contradicts an operator build
+    pin, must be repaired or republished; updating the server would only move
+    the deployment onto an unusable pair.
+    """
+
+    code = str(failure_code or "").strip()
+    if code in _SERVER_DRIFT_FAILURES:
+        return (
+            "the newer host targets a newer Omnigent server; update the "
+            "omnigent Compose service to adopt the pair"
+        )
+    if code == "omnigent_operator_host_build_mismatch":
+        return (
+            "the newer host does not match OMNIGENT_BUILD_DIGEST; update the "
+            "operator build identity or publish a host built for it (do not "
+            "update the omnigent server for this)"
+        )
+    if code in _HOST_QUALIFICATION_FAILURES:
+        return (
+            "the newer host failed its own qualification; repair or republish "
+            "the host image (no omnigent server update is indicated)"
+        )
+    return (
+        "repair or republish the host image, or update the omnigent Compose "
+        "service only if the host targets a newer server"
+    )
+
+
 async def resolve_omnigent_images(
     env: Mapping[str, str] | None = None,
 ) -> ResolvedOmnigentDeploymentState:
@@ -442,6 +489,18 @@ async def resolve_omnigent_images(
         if server_ref and host_candidates
         else None
     )
+    if host_candidates and (not server_ref or not server_image_digest):
+        # Without server authority nothing can be judged. Retain the admitted
+        # host as the persisted ref so this recoverable evidence gap (for
+        # example a restarting Omnigent container) cannot replace it with the
+        # unjudged fresh digest; the retry judges both once the server is
+        # observable again.
+        retained = (
+            previous_host_ref
+            if previous_host_ref in host_candidates
+            else host_candidates[0]
+        )
+        host_candidates = [retained]
     verdicts: list[_OpenCodeHostVerdict] = []
     admitted: _OpenCodeHostVerdict | None = None
     for candidate in host_candidates:
@@ -455,9 +514,6 @@ async def resolve_omnigent_images(
         verdicts.append(verdict)
         if verdict.failure_code is None:
             admitted = verdict
-            break
-        if verdict.failure_code == "omnigent_server_build_unavailable":
-            # Without server authority no candidate can be admitted.
             break
 
     pending_host: _OpenCodeHostVerdict | None = None

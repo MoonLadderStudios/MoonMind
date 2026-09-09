@@ -419,6 +419,7 @@ async def _sync_omnigent_deployment_images() -> bool:
 
     try:
         from moonmind.omnigent.bootstrap.image_resolution import (
+            pending_host_remediation,
             publish_resolved_omnigent_images,
         )
         from moonmind.omnigent.settings import (
@@ -458,15 +459,14 @@ async def _sync_omnigent_deployment_images() -> bool:
             else None
         )
         if isinstance(pending_host, dict) and pending_host.get("imageRef"):
-            # The registry published a host for a newer Omnigent server than
-            # the one Compose is running. The compatible admitted host stays
-            # launch authority; the operator adopts the newer pair by updating
-            # the omnigent service, not by MoonMind restarting it.
+            # The registry published a host the running server cannot admit.
+            # The compatible admitted host stays launch authority; the
+            # remediation depends on why the newer host failed, and MoonMind
+            # never performs it itself.
             logger.warning(
                 "Omnigent host image %s is pending: %s (host build %s, omnigent %s) "
                 "against the running server %s (omnigent %s). Keeping the "
-                "compatible host %s; update the omnigent Compose service to "
-                "adopt the newer image.",
+                "compatible host %s; %s.",
                 pending_host.get("imageRef"),
                 pending_host.get("failureCode"),
                 pending_host.get("buildDigest"),
@@ -474,6 +474,7 @@ async def _sync_omnigent_deployment_images() -> bool:
                 compatibility.get("serverImageRef"),
                 compatibility.get("serverVersion"),
                 state.opencode_host_image_ref,
+                pending_host_remediation(pending_host.get("failureCode")),
             )
         logger.info(
             "Resolved Omnigent deployment images: serverImageRef=%s "
