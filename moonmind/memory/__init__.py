@@ -23,7 +23,6 @@ from moonmind.memory.services import (
     InMemoryLongTermMemoryService,
     InMemoryPlanningAdapter,
     InMemoryTaskHistoryStore,
-    Mem0LongTermMemoryService,
     RetrievalGateway,
     TaskHistoryService,
 )
@@ -55,7 +54,6 @@ __all__ = [
     "InMemoryPlanningAdapter",
     "InMemoryTaskHistoryStore",
     "LongTermMemory",
-    "Mem0LongTermMemoryService",
     "MemoryCandidate",
     "MemoryErrorSignature",
     "MemoryFixPattern",

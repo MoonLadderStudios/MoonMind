@@ -37,14 +37,11 @@ def _settings(**overrides: object) -> RagRuntimeSettings:
         memory_enabled=True,
         memory_planning="off",
         memory_history="off",
-        memory_long_term="off",
         memory_fail_open=True,
         memory_context_budget_tokens=4096,
         planning_workspace_root=None,
         beads_command="bd",
         memory_namespace_id="default",
-        mem0_api_key=None,
-        mem0_user_id=None,
     )
     defaults.update(overrides)
     return RagRuntimeSettings(**defaults)
@@ -148,41 +145,6 @@ class _StubQdrant:
         return SearchResult(items=[item], latency_ms=5.0)
 
 
-class _StubLongTermMemory:
-    def __init__(self, *, fail: bool = False, error: Exception | None = None) -> None:
-        self.fail = fail
-        self.error = error
-        self.search_calls: list[dict[str, object]] = []
-        self.write_calls: list[dict[str, object]] = []
-
-    def search(self, **kwargs):
-        self.search_calls.append(kwargs)
-        if self.error is not None:
-            raise self.error
-        if self.fail:
-            from moonmind.rag.long_term_memory import LongTermMemoryError
-
-            raise LongTermMemoryError("mem0 unavailable")
-        item = ContextItem(
-            score=0.95,
-            source="mem0:memory-1",
-            text="Always add provenance to long-term memories.",
-            trust_class="approved",
-            payload={"record_kind": "long_term_memory", "memory_provider": "mem0"},
-        )
-        return [item], 2.0
-
-    def add_or_update(self, **kwargs):
-        self.write_calls.append(kwargs)
-        if self.error is not None:
-            raise self.error
-        if self.fail:
-            from moonmind.rag.long_term_memory import LongTermMemoryError
-
-            raise LongTermMemoryError("mem0 unavailable")
-        return {"id": "memory-1"}
-
-
 def test_retrieve_direct_flow_uses_embedding_and_qdrant_search() -> None:
     embedder = _StubEmbedder()
     qdrant = _StubQdrant()
@@ -241,14 +203,13 @@ def test_retrieve_direct_flow_passes_multiple_collections() -> None:
     assert qdrant.calls[0]["collections"] == ("primary", "docs", "support")
 
 
-def test_retrieve_direct_flow_prepends_approved_long_term_memories() -> None:
+def test_retrieve_direct_flow_has_no_long_term_memory_branch() -> None:
+    """#4109: hosted Mem0 memory is retired; retrieval merges planning+vector only."""
+
     embedder = _StubEmbedder()
     qdrant = _StubQdrant()
-    memory = _StubLongTermMemory()
     settings = _settings(
         run_id="run-xyz",
-        memory_long_term="mem0",
-        mem0_api_key="mem0-secret",
         memory_context_budget_tokens=400,
     )
     service = ContextRetrievalService(
@@ -256,7 +217,6 @@ def test_retrieve_direct_flow_prepends_approved_long_term_memories() -> None:
         env={"GOOGLE_API_KEY": "test"},
         embedding_client=embedder,
         qdrant_client=qdrant,
-        long_term_memory_service=memory,
     )
 
     pack = service.retrieve(
@@ -269,75 +229,10 @@ def test_retrieve_direct_flow_prepends_approved_long_term_memories() -> None:
         initiation_mode="automatic",
     )
 
-    assert pack.items[0].source == "mem0:memory-1"
-    assert pack.items[0].payload["record_kind"] == "long_term_memory"
-    assert memory.search_calls == [
-        {
-            "query": "How should memory work?",
-            "repo": "MoonLadderStudios/MoonMind",
-            "scope": "project",
-            "limit": 1,
-        }
-    ]
-    assert pack.usage["latency_ms"] == 7.0
-
-
-def test_retrieve_direct_flow_fail_opens_when_mem0_unavailable() -> None:
-    embedder = _StubEmbedder()
-    qdrant = _StubQdrant()
-    memory = _StubLongTermMemory(fail=True)
-    settings = _settings(
-        memory_long_term="mem0",
-        mem0_api_key="mem0-secret",
-        memory_fail_open=True,
-    )
-    service = ContextRetrievalService(
-        settings=settings,
-        env={"GOOGLE_API_KEY": "test"},
-        embedding_client=embedder,
-        qdrant_client=qdrant,
-        long_term_memory_service=memory,
-    )
-
-    pack = service.retrieve(
-        query="How should memory work?",
-        filters={"repo": "MoonLadderStudios/MoonMind"},
-        top_k=3,
-        overlay_policy="skip",
-        budgets={},
-        transport="direct",
-    )
-
     assert [item.source for item in pack.items] == ["src/file.py"]
-
-
-def test_retrieve_direct_flow_fail_opens_for_unexpected_mem0_exception() -> None:
-    embedder = _StubEmbedder()
-    qdrant = _StubQdrant()
-    memory = _StubLongTermMemory(error=TypeError("sdk shape changed"))
-    settings = _settings(
-        memory_long_term="mem0",
-        mem0_api_key="mem0-secret",
-        memory_fail_open=True,
-    )
-    service = ContextRetrievalService(
-        settings=settings,
-        env={"GOOGLE_API_KEY": "test"},
-        embedding_client=embedder,
-        qdrant_client=qdrant,
-        long_term_memory_service=memory,
-    )
-
-    pack = service.retrieve(
-        query="How should memory work?",
-        filters={"repo": "MoonLadderStudios/MoonMind"},
-        top_k=3,
-        overlay_policy="skip",
-        budgets={},
-        transport="direct",
-    )
-
-    assert [item.source for item in pack.items] == ["src/file.py"]
+    assert pack.usage["latency_ms"] == 5.0
+    assert not hasattr(service, "long_term_memory_service")
+    assert not hasattr(service, "add_or_update_long_term_memory")
 
 
 def test_retrieve_gateway_flow_skips_embedding_and_preserves_contract_shape(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -679,77 +574,21 @@ def test_memory_apply_policy_fails_closed_for_repo_target_without_accepted_gates
     )
 
 
-def test_add_or_update_long_term_memory_skips_when_disabled() -> None:
-    service = ContextRetrievalService(
-        settings=_settings(memory_enabled=False),
-        env={"GOOGLE_API_KEY": "test"},
-        embedding_client=_StubEmbedder(),
-        qdrant_client=_StubQdrant(),
-    )
+def test_hosted_mem0_adapter_is_retired_from_package() -> None:
+    """#4109: the Mem0 module, import path, and package requirement are gone."""
 
-    result = service.add_or_update_long_term_memory(
-        text="Use approved memory only.",
-        repo="MoonLadderStudios/MoonMind",
-        provenance={"workflowId": "wf-1"},
-    )
+    import re
+    from pathlib import Path
 
-    assert result == {"skipped": True, "reason": "memory_disabled"}
+    import pytest as pytest_module
 
+    with pytest_module.raises(ModuleNotFoundError):
+        __import__("moonmind.rag.long_term_memory")
 
-def test_add_or_update_long_term_memory_writes_with_provenance() -> None:
-    memory = _StubLongTermMemory()
-    service = ContextRetrievalService(
-        settings=_settings(
-            memory_long_term="mem0",
-            mem0_api_key="mem0-secret",
-        ),
-        env={"GOOGLE_API_KEY": "test"},
-        embedding_client=_StubEmbedder(),
-        qdrant_client=_StubQdrant(),
-        long_term_memory_service=memory,
-    )
-
-    result = service.add_or_update_long_term_memory(
-        text="Use approved memory only.",
-        repo="MoonLadderStudios/MoonMind",
-        review_state="draft",
-        provenance={"workflowId": "wf-1", "agentRunId": "run-1"},
-    )
-
-    assert result == {"id": "memory-1"}
-    assert memory.write_calls == [
-        {
-            "text": "Use approved memory only.",
-            "repo": "MoonLadderStudios/MoonMind",
-            "scope": "project",
-            "review_state": "draft",
-            "provenance": {"workflowId": "wf-1", "agentRunId": "run-1"},
-            "memory_id": None,
-        }
-    ]
-
-
-def test_add_or_update_long_term_memory_fail_opens_for_unexpected_exception() -> None:
-    memory = _StubLongTermMemory(error=AttributeError("sdk shape changed"))
-    service = ContextRetrievalService(
-        settings=_settings(
-            memory_long_term="mem0",
-            mem0_api_key="mem0-secret",
-            memory_fail_open=True,
-        ),
-        env={"GOOGLE_API_KEY": "test"},
-        embedding_client=_StubEmbedder(),
-        qdrant_client=_StubQdrant(),
-        long_term_memory_service=memory,
-    )
-
-    result = service.add_or_update_long_term_memory(
-        text="Use approved memory only.",
-        repo="MoonLadderStudios/MoonMind",
-        provenance={"workflowId": "wf-1"},
-    )
-
-    assert result == {"skipped": True, "reason": "long_term_memory_unavailable"}
+    pyproject = (
+        Path(__file__).resolve().parents[3] / "pyproject.toml"
+    ).read_text(encoding="utf-8")
+    assert not re.search(r"(?m)^\s*mem0ai\s*=", pyproject)
 
 
 def test_retrieve_direct_flow_does_not_serialize_secret_env_values() -> None:

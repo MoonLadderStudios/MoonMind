@@ -459,13 +459,12 @@ class TestMemorySettings:
         assert settings.context_budget_tokens == 4096
         assert settings.planning_enabled is False
         assert settings.history_enabled is False
-        assert settings.long_term_enabled is False
 
     def test_memory_flags_accept_documented_env_values(self, monkeypatch):
         monkeypatch.setenv("MEMORY_ENABLED", "true")
         monkeypatch.setenv("MEMORY_PLANNING", "beads")
         monkeypatch.setenv("MEMORY_HISTORY", "digest")
-        monkeypatch.setenv("MEMORY_LONG_TERM", "mem0")
+        monkeypatch.delenv("MEMORY_LONG_TERM", raising=False)
         monkeypatch.setenv("MEMORY_FAIL_OPEN", "false")
         monkeypatch.setenv("MEMORY_CONTEXT_BUDGET_TOKENS", "8192")
 
@@ -474,12 +473,19 @@ class TestMemorySettings:
         assert settings.enabled is True
         assert settings.planning == "beads"
         assert settings.history == "digest"
-        assert settings.long_term == "mem0"
+        assert settings.long_term == "off"
         assert settings.fail_open is False
         assert settings.context_budget_tokens == 8192
         assert settings.planning_enabled is True
         assert settings.history_enabled is True
-        assert settings.long_term_enabled is True
+
+    def test_memory_retired_mem0_long_term_fails_fast(self, monkeypatch):
+        # MoonLadderStudios/MoonMind#4109: hosted Mem0 is retired because its
+        # SDK mandatorily requires Qdrant; a stale opt-in must fail fast.
+        monkeypatch.setenv("MEMORY_LONG_TERM", "mem0")
+
+        with pytest.raises(ValidationError):
+            MemorySettings(_env_file=None)
 
     def test_memory_flags_ignore_generic_env_names(self, monkeypatch):
         monkeypatch.setenv("ENABLED", "false")
@@ -495,26 +501,22 @@ class TestMemorySettings:
     def test_memory_provider_values_are_normalized(self, monkeypatch):
         monkeypatch.setenv("MEMORY_PLANNING", " BEADS ")
         monkeypatch.setenv("MEMORY_HISTORY", " Digest ")
-        monkeypatch.setenv("MEMORY_LONG_TERM", " MEM0 ")
 
         settings = MemorySettings(_env_file=None)
 
         assert settings.planning == "beads"
         assert settings.history == "digest"
-        assert settings.long_term == "mem0"
 
     def test_memory_enabled_master_gate_disables_planes(self, monkeypatch):
         monkeypatch.setenv("MEMORY_ENABLED", "false")
         monkeypatch.setenv("MEMORY_PLANNING", "beads")
         monkeypatch.setenv("MEMORY_HISTORY", "digest")
-        monkeypatch.setenv("MEMORY_LONG_TERM", "mem0")
 
         settings = MemorySettings(_env_file=None)
 
         assert settings.enabled is False
         assert settings.planning_enabled is False
         assert settings.history_enabled is False
-        assert settings.long_term_enabled is False
 
     def test_memory_flags_reject_unknown_providers(self, monkeypatch):
         monkeypatch.setenv("MEMORY_PLANNING", "unknown")

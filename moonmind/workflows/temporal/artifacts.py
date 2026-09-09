@@ -40,7 +40,10 @@ _CROCKFORD_BASE32 = "0123456789ABCDEFGHJKMNPQRSTVWXYZ"
 _PREVIEW_MAX_BYTES = 16 * 1024
 _STREAM_CHUNK_BYTES = 64 * 1024
 _MULTIPART_WRITE_CHUNK_BYTES = 8 * 1024 * 1024
-_RUN_DIGEST_INDEXING_TIMEOUT_SECONDS = 10
+_RUN_DIGEST_PERSIST_TIMEOUT_SECONDS = 10
+_RUN_DIGEST_ARTIFACT_LINK_TYPE = "output.summary"
+_RUN_DIGEST_ARTIFACT_NAME = "run_digest.json"
+_RUN_DIGEST_PERSIST_PRINCIPAL = "service:temporal-finalize"
 _PROVIDER_PROFILE_MANAGER_QUERY_TIMEOUT_SECONDS = 2.0
 _SINGLE_PUT_READ_RETRY_DELAYS_SECONDS = (0.1, 0.2, 0.4, 0.8, 1.6)
 _SINGLE_PUT_READ_RETRYABLE_S3_ERROR_CODES = {"404", "NoSuchKey", "NotFound"}
@@ -3491,48 +3494,109 @@ class TemporalArtifactActivities:
 
         return envelope.model_dump(by_alias=True, mode="json")
 
-    async def _write_run_digest_best_effort(self, record: Any) -> None:
-        """Index a Plane B run digest without making terminal state recording fail."""
+    async def _write_run_digest_best_effort(self, record: Any) -> str | None:
+        """Persist a Plane B run digest as a bounded artifact.
+
+        MoonLadderStudios/MoonMind#4109: authoritative ownership is split
+        three ways and this step changes none of it.
+
+        - Terminal outcome owner: ``TemporalExecutionService.record_terminal_state``
+          (relational execution store), already persisted before this step.
+        - Artifact-persistence owner: ``TemporalArtifactService`` (create +
+          write_complete), used here with the generic ``output.summary`` link
+          type and STANDARD retention.
+        - Cleanup owner: the artifact lifecycle sweep activities; this step
+          never triggers cleanup and never releases workspace/credential
+          authority.
+
+        The digest is a pure projection of the terminal record (identity,
+        provenance, commits, source refs, checkpoint-linked artifact refs). No
+        vector client is constructed, no embeddings are requested, no vectors
+        are upserted, and no semantic recall is consulted. Failures are logged
+        and swallowed so auxiliary summary persistence can never fail terminal
+        recording, delay required artifact capture, or rerun completed
+        agent/publication work. Writes are idempotent per
+        (workflow_id, run_id): a COMPLETE digest artifact is reused on retry.
+
+        Returns the digest artifact_id, or None when persistence is skipped
+        or fails open.
+        """
 
         try:
-            import os
-
-            from moonmind.memory.run_digest import TaskHistoryService
-            from moonmind.rag.service import ContextRetrievalService
-            from moonmind.rag.settings import RagRuntimeSettings
-
-            settings = RagRuntimeSettings.from_env(os.environ)
-            executable, reason = settings.retrieval_execution_reason(
-                os.environ,
-                preferred_transport="direct",
+            from moonmind.memory.run_digest import (
+                RUN_DIGEST_ARTIFACT_SCHEMA_VERSION,
+                RUN_DIGEST_RECORD_KIND,
+                build_run_digest,
+                run_digest_artifact_payload,
             )
-            if not executable:
-                logger.info(
-                    "Skipping run digest indexing for %s: %s",
-                    getattr(record, "workflow_id", "unknown"),
-                    reason,
+
+            digest = build_run_digest(record)
+            payload = run_digest_artifact_payload(digest)
+            workflow_id = digest.evidence.workflow_id
+            run_id = digest.evidence.run_id
+            namespace = digest.namespace_id or self._service._default_namespace
+            idempotency_key = f"run_digest:{workflow_id}:{run_id}"
+
+            async def _persist() -> str:
+                existing = await self._service.list_for_execution(
+                    namespace=namespace,
+                    workflow_id=workflow_id,
+                    run_id=run_id,
+                    principal=_RUN_DIGEST_PERSIST_PRINCIPAL,
+                    link_type=_RUN_DIGEST_ARTIFACT_LINK_TYPE,
                 )
-                return
+                for artifact in existing:
+                    metadata = dict(artifact.metadata_json or {})
+                    if (
+                        metadata.get("name") == _RUN_DIGEST_ARTIFACT_NAME
+                        and metadata.get("workflowId") == workflow_id
+                        and metadata.get("runId") == run_id
+                        and artifact.status
+                        is db_models.TemporalArtifactStatus.COMPLETE
+                    ):
+                        return artifact.artifact_id
+                encoded = (json.dumps(payload, sort_keys=True, indent=2) + "\n").encode(
+                    "utf-8"
+                )
+                created, _upload = await self._service.create(
+                    principal=_RUN_DIGEST_PERSIST_PRINCIPAL,
+                    content_type="application/json",
+                    size_bytes=len(encoded),
+                    link=ExecutionRef(
+                        namespace=namespace,
+                        workflow_id=workflow_id,
+                        run_id=run_id,
+                        link_type=_RUN_DIGEST_ARTIFACT_LINK_TYPE,
+                    ),
+                    metadata_json={
+                        "name": _RUN_DIGEST_ARTIFACT_NAME,
+                        "producer": "activity:execution.record_terminal_state",
+                        "labels": ["run-digest", "terminal"],
+                        "recordKind": RUN_DIGEST_RECORD_KIND,
+                        "schemaVersion": RUN_DIGEST_ARTIFACT_SCHEMA_VERSION,
+                        "workflowId": workflow_id,
+                        "runId": run_id,
+                        "idempotencyKey": idempotency_key,
+                    },
+                )
+                completed = await self._service.write_complete(
+                    artifact_id=created.artifact_id,
+                    principal=_RUN_DIGEST_PERSIST_PRINCIPAL,
+                    payload=encoded,
+                    content_type="application/json",
+                )
+                return completed.artifact_id
 
-            retrieval_service = ContextRetrievalService(settings=settings)
-            history_service = TaskHistoryService(
-                qdrant_client=retrieval_service.qdrant_client,
-                embedding_provider=retrieval_service.embedding_client,
-            )
-            await asyncio.wait_for(
-                asyncio.get_running_loop().run_in_executor(
-                    None,
-                    history_service.build_and_upsert_run_digest,
-                    record,
-                ),
-                timeout=_RUN_DIGEST_INDEXING_TIMEOUT_SECONDS,
+            return await asyncio.wait_for(
+                _persist(), timeout=_RUN_DIGEST_PERSIST_TIMEOUT_SECONDS
             )
         except Exception as exc:
             logger.warning(
-                "Run digest indexing failed for %s: %s",
+                "Run digest persistence failed for %s: %s",
                 getattr(record, "workflow_id", "unknown"),
                 exc,
             )
+            return None
 
     async def artifact_list_for_execution(
         self,
