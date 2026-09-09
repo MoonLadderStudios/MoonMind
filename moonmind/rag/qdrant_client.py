@@ -9,11 +9,9 @@ from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any, Iterable, List, Mapping, MutableMapping, Optional, Sequence
-from uuid import uuid4
 
 from qdrant_client import QdrantClient
 from qdrant_client.http import models as qmodels
-from qdrant_client.http.exceptions import UnexpectedResponse
 
 from moonmind.rag.context_pack import ContextItem
 
@@ -73,7 +71,14 @@ class CollectionHealth:
 
 
 class RagQdrantClient:
-    """High-level helper that enforces guardrails for vector operations."""
+    """High-level helper for read-only vector retrieval.
+
+    MoonLadderStudios/MoonMind#4108 retired managed vector indexing:
+    collection readiness/creation, embedding-dimension sync, canonical
+    upserts/deletes, run-overlay creation/upload/refresh and TTL sweeps are
+    removed. This client retains read-only search/health for drain/evidence
+    only; no write or administration path remains.
+    """
 
     def __init__(
         self,
@@ -83,18 +88,8 @@ class RagQdrantClient:
         url: Optional[str],
         api_key: Optional[str],
         collection: str,
-        overlay_mode: str,
-        overlay_ttl_hours: int,
-        overlay_chunk_chars: int,
-        overlay_chunk_overlap: int,
-        embedding_dimensions: Optional[int],
     ) -> None:
         self.collection = collection
-        self.overlay_mode = overlay_mode
-        self.overlay_ttl_hours = overlay_ttl_hours
-        self.overlay_chunk_chars = overlay_chunk_chars
-        self.overlay_chunk_overlap = overlay_chunk_overlap
-        self._embedding_dimensions = embedding_dimensions
         if url:
             self._client = QdrantClient(url=url, api_key=api_key, timeout=10)
         else:
@@ -105,22 +100,6 @@ class RagQdrantClient:
     @property
     def client(self) -> QdrantClient:
         return self._client
-
-    def ensure_collection_ready(self, collection_name: Optional[str] = None) -> None:
-        target = collection_name or self.collection
-        if not self._embedding_dimensions:
-            return
-        try:
-            info = self._client.get_collection(target)
-        except UnexpectedResponse as exc:
-            raise RuntimeError(
-                f"Qdrant collection '{target}' is not available: {exc}"
-            ) from exc
-        size = info.config.params.vectors.size
-        if size != self._embedding_dimensions:
-            raise RuntimeError(
-                f"Qdrant collection '{target}' vector size {size} does not match embedding dimension {self._embedding_dimensions}."
-            )
 
     def index_health(self, *, freshness_sample_limit: int = 256) -> IndexHealthSummary:
         """Return read-only collection health for dashboard index monitoring."""
@@ -216,40 +195,6 @@ class RagQdrantClient:
         if not must:
             return None
         return qmodels.Filter(must=must)
-
-    def collection_freshness_at(
-        self, collection_name: str, *, sample_limit: int = 64
-    ) -> datetime | None:
-        """Return the newest payload timestamp from one bounded sample page.
-
-        Used to apply an overlay freshness policy on the retrieval hot path, so
-        it samples a single page instead of scrolling the whole collection.
-        """
-        if sample_limit <= 0 or not hasattr(self._client, "scroll"):
-            return None
-        try:
-            points, _ = self._client.scroll(
-                collection_name=collection_name,
-                limit=sample_limit,
-                with_payload=True,
-                with_vectors=False,
-            )
-        except Exception:
-            logger.debug(
-                "Unable to sample freshness for collection %s",
-                collection_name,
-                exc_info=True,
-            )
-            return None
-        latest: datetime | None = None
-        for point in points or ():
-            payload = getattr(point, "payload", None) or {}
-            if not isinstance(payload, Mapping):
-                continue
-            timestamp, _source = self._payload_freshness(payload)
-            if timestamp is not None and (latest is None or timestamp > latest):
-                latest = timestamp
-        return latest
 
     def _collection_freshness(
         self, *, collection_name: str, limit: int
@@ -386,10 +331,13 @@ class RagQdrantClient:
         filters: Mapping[str, Any],
         top_k: int,
         collections: Sequence[str] | None = None,
-        overlay_policy: str,
-        overlay_collection: Optional[str],
         trust_overrides: Optional[Mapping[str, str]] = None,
     ) -> SearchResult:
+        """Read-only canonical search (no overlay lifecycle).
+
+        Run overlays were retired in #4108; overlay arguments were removed
+        so callers cannot request overlay inclusion.
+        """
         start = time.perf_counter()
         filter_obj = self._build_filter(filters)
         target_collections = self._resolve_collections(collections)
@@ -400,19 +348,7 @@ class RagQdrantClient:
             query_filter=filter_obj,
         )
         canonical = self._rank_points(canonical)
-        overlay_points = []
-        if overlay_policy == "include" and overlay_collection:
-            try:
-                overlay_filter = self._build_filter(filters)
-                overlay_points = self._search_collection_points(
-                    collection_name=overlay_collection,
-                    query_vector=query_vector,
-                    limit=top_k,
-                    query_filter=overlay_filter,
-                )
-            except UnexpectedResponse:
-                overlay_points = []
-        merge = self._merge_results(overlay_points, canonical, trust_overrides)
+        merge = self._merge_results(canonical, trust_overrides)
         merge.sort(key=lambda item: item.score, reverse=True)
         latency_ms = (time.perf_counter() - start) * 1000
         return SearchResult(items=merge[:top_k], latency_ms=latency_ms)
@@ -520,7 +456,6 @@ class RagQdrantClient:
 
     def _merge_results(
         self,
-        overlay_points: Iterable[qmodels.ScoredPoint],
         canonical_points: Iterable[qmodels.ScoredPoint],
         trust_overrides: Optional[Mapping[str, str]] = None,
     ) -> List[ContextItem]:
@@ -582,28 +517,10 @@ class RagQdrantClient:
 
         ordered: List[ContextItem] = []
         seen: set[tuple[str, str]] = set()
-        now_utc = datetime.now(timezone.utc)
-
-        def _is_expired(payload: MutableMapping[str, Any]) -> bool:
-            raw_expires = payload.get("expires_at")
-            if not isinstance(raw_expires, str) or not raw_expires.strip():
-                return False
-            normalized = raw_expires.strip()
-            if normalized.endswith("Z"):
-                normalized = normalized[:-1] + "+00:00"
-            try:
-                expires_at = datetime.fromisoformat(normalized)
-            except ValueError:
-                return False
-            if expires_at.tzinfo is None:
-                expires_at = expires_at.replace(tzinfo=timezone.utc)
-            return expires_at <= now_utc
 
         def append(points: Iterable[qmodels.ScoredPoint], trust: str) -> None:
             for point in points:
                 payload = point.payload or {}
-                if trust == "workspace_overlay" and _is_expired(payload):
-                    continue
                 item = to_item(point, trust)
                 discriminator = item.chunk_hash
                 if not discriminator:
@@ -614,7 +531,6 @@ class RagQdrantClient:
                 seen.add(key)
                 ordered.append(item)
 
-        append(overlay_points, "workspace_overlay")
         append(canonical_points, "canonical")
 
         if trust_overrides:
@@ -622,126 +538,6 @@ class RagQdrantClient:
                 if item.source in trust_overrides:
                     item.trust_class = trust_overrides[item.source]
         return ordered
-
-    def ensure_overlay_collection(self, collection_name: str) -> None:
-        if self.overlay_mode != "collection":
-            return
-        try:
-            self._client.get_collection(collection_name)
-            return
-        except UnexpectedResponse:
-            if not self._embedding_dimensions:
-                raise RuntimeError(
-                    "Cannot create overlay collection: unknown vector size"
-                )
-            self._create_collection(
-                collection_name=collection_name, vector_size=self._embedding_dimensions
-            )
-
-    def upsert_overlay_vectors(
-        self,
-        *,
-        collection_name: str,
-        vectors: List[List[float]],
-        payloads: List[MutableMapping[str, Any]],
-    ) -> None:
-        ids = [str(uuid4()) for _ in vectors]
-        batch = qmodels.Batch(ids=ids, vectors=vectors, payloads=payloads)
-        self._client.upsert(collection_name=collection_name, points=batch)
-
-    def upsert_memory_vectors(
-        self,
-        *,
-        vectors: List[List[float]],
-        payloads: List[MutableMapping[str, Any]],
-        ids: List[str],
-        collection_name: Optional[str] = None,
-    ) -> None:
-        if len(vectors) != len(payloads) or len(vectors) != len(ids):
-            raise ValueError("vectors, payloads, and ids must have matching lengths")
-        target = collection_name or self.collection
-        batch = qmodels.Batch(ids=ids, vectors=vectors, payloads=payloads)
-        self._client.upsert(collection_name=target, points=batch)
-
-    def upsert_canonical_vectors(
-        self,
-        *,
-        collection_name: str,
-        ids: Sequence[str],
-        vectors: Sequence[Sequence[float]],
-        payloads: Sequence[MutableMapping[str, Any]],
-    ) -> None:
-        if not (len(ids) == len(vectors) == len(payloads)):
-            raise RuntimeError(
-                "Canonical vector upsert requires equal id, vector, and payload counts"
-            )
-        if not ids:
-            return
-        batch = qmodels.Batch(
-            ids=list(ids),
-            vectors=[list(vector) for vector in vectors],
-            payloads=list(payloads),
-        )
-        self._client.upsert(collection_name=collection_name, points=batch)
-
-    def delete_vectors(
-        self,
-        *,
-        collection_name: str,
-        point_ids: Sequence[str],
-    ) -> None:
-        if not point_ids:
-            return
-        selector = qmodels.PointIdsList(points=list(point_ids))
-        self._client.delete(collection_name=collection_name, points_selector=selector)
-
-    def delete_overlay_collection(self, collection_name: str) -> None:
-        try:
-            self._client.delete_collection(collection_name=collection_name)
-        except UnexpectedResponse:
-            logger.debug("Overlay collection %s already absent", collection_name)
-
-    def sync_collection_dimensions(
-        self,
-        *,
-        collection_name: str,
-        expected_size: int,
-        force: bool = False,
-    ) -> str:
-        if expected_size <= 0:
-            raise RuntimeError("Expected embedding dimension must be positive")
-        try:
-            info = self._client.get_collection(collection_name)
-        except UnexpectedResponse:
-            self._create_collection(
-                collection_name=collection_name, vector_size=expected_size
-            )
-            return "created"
-
-        current_size = info.config.params.vectors.size
-        if current_size == expected_size:
-            return "unchanged"
-        if not force:
-            raise RuntimeError(
-                "Qdrant collection "
-                f"'{collection_name}' uses vector size {current_size} which does not match the expected {expected_size}. "
-                "Re-run with --force after reindexing to recreate the collection."
-            )
-
-        self._client.delete_collection(collection_name=collection_name)
-        self._create_collection(
-            collection_name=collection_name, vector_size=expected_size
-        )
-        return "recreated"
-
-    def _create_collection(self, *, collection_name: str, vector_size: int) -> None:
-        vectors = qmodels.VectorParams(
-            size=vector_size,
-            distance=qmodels.Distance.COSINE,
-        )
-        self._client.create_collection(
-            collection_name=collection_name, vectors_config=vectors
-        )
 
     def collection_health(
         self,

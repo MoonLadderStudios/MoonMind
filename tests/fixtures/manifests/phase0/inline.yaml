@@ -1,3 +1,8 @@
+# Preserved historical evidence (MoonLadderStudios/MoonMind#4108 / #4115).
+# This fixture retains a retired qdrant vectorStore block so the cutover
+# rehearsal gate can verify historical readability. It is not a live
+# surface: new submissions carrying retired blocks are rejected before
+# fetch/dispatch. Do not copy these blocks into new manifests.
 version: "v0"
 metadata:
   name: "demo-manifest"

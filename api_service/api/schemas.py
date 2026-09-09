@@ -183,12 +183,16 @@ class ManifestUpsertRequest(BaseModel):
     content: str = Field(..., alias="content", min_length=1)
 
 class ManifestRunOptions(BaseModel):
-    """Optional queue overrides for manifest runs."""
+    """Optional queue overrides for manifest runs.
+
+    MoonLadderStudios/MoonMind#4108: ``forceFull`` is retired — every run
+    already refetches all sources. The queue contract rejects submissions
+    that still carry it.
+    """
 
     model_config = ConfigDict(populate_by_name=True)
 
     dry_run: Optional[bool] = Field(None, alias="dryRun")
-    force_full: Optional[bool] = Field(None, alias="forceFull")
     max_docs: Optional[int] = Field(None, alias="maxDocs")
 
     @field_validator("max_docs")
@@ -202,8 +206,6 @@ class ManifestRunOptions(BaseModel):
         payload: dict[str, Any] = {}
         if self.dry_run is not None:
             payload["dryRun"] = self.dry_run
-        if self.force_full is not None:
-            payload["forceFull"] = self.force_full
         if self.max_docs is not None:
             payload["maxDocs"] = self.max_docs
         return payload

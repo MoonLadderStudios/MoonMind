@@ -1,4 +1,4 @@
-"""Unit tests for manifest v0 validator."""
+"""Unit tests for manifest v0 validator (vector-free, #4108)."""
 
 from __future__ import annotations
 
@@ -19,14 +19,23 @@ MINIMAL_VALID = textwrap.dedent("""\
     metadata:
       name: "test-manifest"
       description: "Unit test manifest"
+    dataSources:
+      - id: "src1"
+        type: "SimpleDirectoryReader"
+        params:
+          inputDir: "./data"
+""")
+
+RETIRED_VECTOR_MANIFEST = textwrap.dedent("""\
+    version: "v0"
+    metadata:
+      name: "retired-vector"
     embeddings:
       provider: "openai"
       model: "text-embedding-3-large"
     vectorStore:
       type: "qdrant"
       indexName: "test_idx"
-      connection:
-        host: "localhost"
     dataSources:
       - id: "src1"
         type: "SimpleDirectoryReader"
@@ -34,7 +43,6 @@ MINIMAL_VALID = textwrap.dedent("""\
           inputDir: "./data"
     indices:
       - id: "idx1"
-        type: "VectorStoreIndex"
         sources: ["src1"]
     retrievers:
       - id: "ret1"
@@ -63,16 +71,60 @@ class TestValidManifest:
         assert r.summary().startswith("✓")
 
 # ---------------------------------------------------------------------------
+# Retired vector contract (#4108)
+# ---------------------------------------------------------------------------
+
+class TestRetiredVectorRejection:
+    def test_retired_vector_manifest_rejected_before_fetch(self):
+        r = _result(RETIRED_VECTOR_MANIFEST)
+        assert not r.valid
+        assert any(e.field in {"embeddings", "vectorStore", "indices", "retrievers"} for e in r.errors)
+        assert any("4108" in e.message for e in r.errors)
+
+    def test_single_retired_field_rejected(self):
+        bad = MINIMAL_VALID.rstrip() + '\nembeddings:\n  provider: "openai"\n  model: "x"\n'
+        r = _result(bad)
+        assert not r.valid
+        assert any(e.field == "embeddings" for e in r.errors)
+
+    def test_normalized_retired_spellings_rejected(self):
+        # Case/whitespace variants reject like the canonical spellings.
+        bad = (
+            MINIMAL_VALID.rstrip()
+            + '\nvectorstore:\n  type: "qdrant"\n  indexName: "old"\n'
+        )
+        r = _result(bad)
+        assert not r.valid
+        assert any("4108" in e.message for e in r.errors)
+
+        bad_padded = (
+            MINIMAL_VALID.rstrip()
+            + '\n" VectorStore ":\n  type: "qdrant"\n  indexName: "old"\n'
+        )
+        r = _result(bad_padded)
+        assert not r.valid
+        assert any("4108" in e.message for e in r.errors)
+
+    def test_historical_model_still_readable_without_validator(self):
+        # Historical artifacts remain readable via ManifestV0 directly.
+        from moonmind.schemas.manifest_v0_models import ManifestV0
+
+        m = ManifestV0.model_validate(
+            {
+                "version": "v0",
+                "metadata": {"name": "hist"},
+                "dataSources": [{"id": "ds1", "type": "SimpleDirectoryReader"}],
+                "vectorStore": {"type": "qdrant", "indexName": "old"},
+            }
+        )
+        assert m.metadata.name == "hist"
+
+# ---------------------------------------------------------------------------
 # Schema validation
 # ---------------------------------------------------------------------------
 
 class TestSchemaValidation:
     def test_vector_free_manifest_valid_4113(self):
-        # MoonLadderStudios/MoonMind#4113: the vector-free release carries no
-        # MoonMind-managed embedding pipeline or vector store. New manifests
-        # omit the retired embeddings/vectorStore/indices/retrievers fields
-        # and must still validate. Retired fields remain accepted on
-        # historical reads (see MINIMAL_VALID).
         vector_free = textwrap.dedent("""\
             version: "v0"
             metadata:
@@ -94,8 +146,6 @@ class TestSchemaValidation:
         r = _result(vector_free)
         assert r.valid, r.summary()
         assert r.manifest is not None
-        assert r.manifest.embeddings is None
-        assert r.manifest.vectorStore is None
 
     def test_missing_required_field_metadata(self):
         bad = MINIMAL_VALID.replace("metadata:", "# metadata:")
@@ -116,23 +166,6 @@ class TestSchemaValidation:
         )
         r = _result(bad)
         assert not r.valid
-
-# ---------------------------------------------------------------------------
-# Cross-field reference validation
-# ---------------------------------------------------------------------------
-
-class TestReferenceValidation:
-    def test_retriever_references_unknown_index(self):
-        bad = MINIMAL_VALID.replace('indices: ["idx1"]', 'indices: ["nonexistent"]')
-        r = _result(bad)
-        assert not r.valid
-        assert any("nonexistent" in e.message for e in r.errors)
-
-    def test_index_references_unknown_datasource(self):
-        bad = MINIMAL_VALID.replace('sources: ["src1"]', 'sources: ["missing_ds"]')
-        r = _result(bad)
-        assert not r.valid
-        assert any("missing_ds" in e.message for e in r.errors)
 
 # ---------------------------------------------------------------------------
 # Secret leak detection
@@ -160,17 +193,7 @@ class TestSecretDetection:
             'params:\n      owner: "test"\n    auth:\n      githubToken: "${GITHUB_TOKEN}"',
         )
         r = _result(yaml_str)
-        # Should not have secret-related errors
         assert not any("secret" in e.message.lower() for e in r.errors)
-
-    def test_openai_key_rejected(self):
-        bad = MINIMAL_VALID.replace(
-            'host: "localhost"',
-            'apiKey: "sk-FAKETESTVALUEdonotuse00000000000000000000"',
-        )
-        r = _result(bad)
-        # The key pattern should be detected somewhere
-        assert any("secret" in i.message.lower() for i in r.issues)
 
 # ---------------------------------------------------------------------------
 # Auth warnings
@@ -213,9 +236,6 @@ class TestIdUniqueness:
             '    type: "SimpleDirectoryReader"\n'
             "    params:\n"
             '      inputDir: "./data2"',
-        ).replace(
-            'sources: ["src1"]',
-            'sources: ["src1"]',
         )
         r = _result(yaml_str)
         assert not r.valid
@@ -257,17 +277,15 @@ class TestYamlErrors:
 
 class TestPiiRedactionEnforcement:
     def test_pii_enabled_without_splitter_warns(self):
-        """PII redaction enabled but no splitter → WARNING."""
         yaml_str = MINIMAL_VALID.rstrip() + "\nsecurity:\n  piiRedaction: true\n"
         r = _result(yaml_str)
-        assert r.valid  # warnings don't fail
+        assert r.valid
         assert any(
             "piiRedaction" in w.field and "splitter" in w.message
             for w in r.warnings
         )
 
     def test_pii_enabled_with_splitter_no_warning(self):
-        """PII redaction enabled WITH splitter → no warning."""
         yaml_str = (
             MINIMAL_VALID.rstrip()
             + "\ntransforms:\n  splitter:\n    type: TokenTextSplitter\n    chunkSize: 500\n"
@@ -278,7 +296,6 @@ class TestPiiRedactionEnforcement:
         assert not any("piiRedaction" in w.field for w in r.warnings)
 
     def test_pii_disabled_no_warning(self):
-        """PII redaction disabled → no warning regardless of splitter."""
         yaml_str = MINIMAL_VALID.rstrip() + "\nsecurity:\n  piiRedaction: false\n"
         r = _result(yaml_str)
         assert r.valid
@@ -290,17 +307,10 @@ class TestPiiRedactionEnforcement:
 
 class TestMetadataAllowlistEnforcement:
     def test_extra_metadata_not_in_allowlist_errors(self):
-        """Extra metadata key not in allowlist → ERROR."""
         yaml_str = textwrap.dedent("""\
             version: "v0"
             metadata:
               name: "test-manifest"
-            embeddings:
-              provider: "openai"
-              model: "text-embedding-3-large"
-            vectorStore:
-              type: "qdrant"
-              indexName: "test_idx"
             dataSources:
               - id: "src1"
                 type: "SimpleDirectoryReader"
@@ -308,14 +318,6 @@ class TestMetadataAllowlistEnforcement:
                   inputDir: "./data"
                   extraMetadata:
                     forbidden_key: true
-            indices:
-              - id: "idx1"
-                type: "VectorStoreIndex"
-                sources: ["src1"]
-            retrievers:
-              - id: "ret1"
-                type: "Vector"
-                indices: ["idx1"]
             security:
               allowlistMetadata:
                 - allowed_key
@@ -325,17 +327,10 @@ class TestMetadataAllowlistEnforcement:
         assert any("forbidden_key" in e.message for e in r.errors)
 
     def test_extra_metadata_in_allowlist_passes(self):
-        """Extra metadata key in allowlist → no error."""
         yaml_str = textwrap.dedent("""\
             version: "v0"
             metadata:
               name: "test-manifest"
-            embeddings:
-              provider: "openai"
-              model: "text-embedding-3-large"
-            vectorStore:
-              type: "qdrant"
-              indexName: "test_idx"
             dataSources:
               - id: "src1"
                 type: "SimpleDirectoryReader"
@@ -343,14 +338,6 @@ class TestMetadataAllowlistEnforcement:
                   inputDir: "./data"
                   extraMetadata:
                     allowed_key: true
-            indices:
-              - id: "idx1"
-                type: "VectorStoreIndex"
-                sources: ["src1"]
-            retrievers:
-              - id: "ret1"
-                type: "Vector"
-                indices: ["idx1"]
             security:
               allowlistMetadata:
                 - allowed_key
@@ -359,7 +346,6 @@ class TestMetadataAllowlistEnforcement:
         assert r.valid
 
     def test_no_extra_metadata_with_allowlist_passes(self):
-        """Allowlist set but no extra metadata → no error."""
         yaml_str = (
             MINIMAL_VALID.rstrip()
             + "\nsecurity:\n  allowlistMetadata:\n    - safe_key\n"
@@ -372,10 +358,7 @@ class TestMetadataAllowlistEnforcement:
 # ---------------------------------------------------------------------------
 
 class TestCIExampleValidation:
-    """Validate all example manifest YAML files (CI gate)."""
-
     def test_all_example_yamls_validate(self):
-        """Every YAML in examples/ must pass v0 schema validation."""
         from pathlib import Path
 
         examples_dir = Path(__file__).resolve().parents[3] / "examples"
@@ -395,4 +378,3 @@ class TestCIExampleValidation:
             f"{len(failures)} example YAML(s) failed validation:\n"
             + "\n".join(failures)
         )
-

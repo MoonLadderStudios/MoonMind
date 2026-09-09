@@ -32,27 +32,12 @@ def test_mm754_manifest_pipeline_local_source_e2e_with_evaluation(tmp_path):
             version: "v0"
             metadata:
               name: "mm754-local-e2e"
-            embeddings:
-              provider: "openai"
-              model: "text-embedding-3-large"
-            vectorStore:
-              type: "qdrant"
-              indexName: "test"
             dataSources:
               - id: "local"
                 type: "SimpleDirectoryReader"
                 params:
                   inputDir: "{source_dir}"
                   requiredExts: [".md"]
-            indices:
-              - id: "idx"
-                sources: ["local"]
-            retrievers:
-              - id: "ret"
-                type: "Vector"
-                indices: ["idx"]
-                params:
-                  topK: 1
             evaluation:
               datasets:
                 - name: "smoke"
@@ -67,7 +52,8 @@ def test_mm754_manifest_pipeline_local_source_e2e_with_evaluation(tmp_path):
     run = ManifestPipeline(manifest).run()
     fetched_sources = {source.source_id: source for source in run.sources}
     assert run.total_docs == 2
-    assert fetched_sources["local"].state["files"]["rag.md"]["sha256"]
+    assert fetched_sources["local"].doc_count == 2
+    assert "no embedding" in run.to_dict()["outcome"].lower() or "no indexing" in run.to_dict()["outcome"].lower()
 
     eval_result = evaluate_manifest(
         manifest,

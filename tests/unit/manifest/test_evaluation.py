@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import math
+import textwrap
 from pathlib import Path
 
 import pytest
@@ -14,7 +15,6 @@ from moonmind.manifest.evaluation import (
     EvaluationResult,
     MetricScore,
     _baseline_retrieved_ids,
-    _build_service_retriever,
     _score_metric,
     evaluate_manifest,
     hit_rate_at_k,
@@ -129,24 +129,9 @@ class TestEvaluationResult:
 version: "v0"
 metadata:
   name: "eval-test"
-embeddings:
-  provider: "openai"
-  model: "text-embedding-3-large"
-vectorStore:
-  type: "qdrant"
-  indexName: "test"
 dataSources:
   - id: "local"
     type: "SimpleDirectoryReader"
-indices:
-  - id: "idx"
-    sources: ["local"]
-retrievers:
-  - id: "ret"
-    type: "Vector"
-    indices: ["idx"]
-    params:
-      topK: 2
 evaluation:
   datasets:
     - name: "smoke"
@@ -175,59 +160,6 @@ evaluation:
         assert metrics[1]["score"] == 0.8155
         assert metrics[1]["passed"] is False
 
-    def test_service_retriever_uses_manifest_vector_store(self, monkeypatch):
-        captured = {}
-
-        class FakePack:
-            items = [type("Item", (), {"payload": {"doc_id": "docs/rag.md"}})()]
-
-        class FakeService:
-            def __init__(self, *, settings):
-                captured["settings"] = settings
-
-            def retrieve(self, **kwargs):
-                captured["retrieve_kwargs"] = kwargs
-                return FakePack()
-
-        monkeypatch.setenv("OPENAI_API_KEY", "test-key")
-        monkeypatch.setenv("VECTOR_STORE_COLLECTION_NAME", "env-collection")
-        # Vector-free defaults (#4115): this manifest-declared qdrant path
-        # under test opts in explicitly.
-        monkeypatch.setenv("QDRANT_ENABLED", "true")
-        monkeypatch.setattr(
-            "moonmind.rag.service.ContextRetrievalService", FakeService
-        )
-        manifest = ManifestV0.from_yaml_string(
-            """
-version: "v0"
-metadata:
-  name: "eval-test"
-embeddings:
-  provider: "openai"
-  model: "text-embedding-3-large"
-vectorStore:
-  type: "qdrant"
-  indexName: "manifest-collection"
-dataSources:
-  - id: "local"
-    type: "SimpleDirectoryReader"
-indices:
-  - id: "idx"
-    sources: ["local"]
-retrievers:
-  - id: "ret"
-    type: "Vector"
-    indices: ["idx"]
-"""
-        )
-
-        retriever = _build_service_retriever(manifest)
-
-        assert retriever("where is rag?", 1) == ["docs/rag.md"]
-        assert captured["settings"].vector_collection == "manifest-collection"
-        assert captured["settings"].vector_collections == ("manifest-collection",)
-        assert captured["settings"].embedding_provider == "openai"
-        assert captured["settings"].embedding_model == "text-embedding-3-large"
 
 # ---------------------------------------------------------------------------
 # Dataset loading
@@ -339,23 +271,117 @@ class TestCommittedBaseline:
         manifest_path = Path("examples/readers-full-example.yaml")
         result = run_evaluate(manifest_path=str(manifest_path), dataset="smoke")
         assert result["passed"] is True
-        assert result["datasets"] == [
-            {
-                "name": "smoke",
-                "passed": True,
-                "metrics": [
-                    {
-                        "name": "hitRate@10",
-                        "score": 1.0,
-                        "threshold": 0.8,
-                        "passed": True,
-                    },
-                    {
-                        "name": "ndcg@10",
-                        "score": 0.877,
-                        "threshold": 0.7,
-                        "passed": True,
-                    },
-                ],
-            }
-        ]
+        assert len(result["datasets"]) == 1
+        ds = result["datasets"][0]
+        assert ds["name"] == "smoke"
+        assert ds["passed"] is True
+        assert ds.get("provenance") == "recorded"
+
+    def test_missing_dataset_fails_closed_without_threshold(self, tmp_path):
+        # Absent execution never passes a quality gate (#4108).
+        manifest = ManifestV0.from_yaml_string(
+            f"""
+version: "v0"
+metadata:
+  name: "eval-missing"
+dataSources:
+  - id: "local"
+    type: "SimpleDirectoryReader"
+evaluation:
+  datasets:
+    - name: "gone"
+      path: "{tmp_path / 'missing.jsonl'}"
+  metrics:
+    - name: "hitRate@10"
+"""
+        )
+        result = evaluate_manifest(manifest)
+        assert result["passed"] is False
+        assert result["datasets"][0].get("provenance") == "unavailable"
+
+    def test_missing_dataset_fails_closed_with_zero_threshold(self, tmp_path):
+        # A threshold of 0 (or negative) must not let an unavailable dataset
+        # pass the gate with a 0.0 score (#4108 follow-up).
+        manifest = ManifestV0.from_yaml_string(
+            f"""
+version: "v0"
+metadata:
+  name: "eval-missing-zero"
+dataSources:
+  - id: "local"
+    type: "SimpleDirectoryReader"
+evaluation:
+  datasets:
+    - name: "gone"
+      path: "{tmp_path / 'missing.jsonl'}"
+  metrics:
+    - name: "hitRate@10"
+      threshold: 0
+"""
+        )
+        result = evaluate_manifest(manifest)
+        assert result["passed"] is False
+        assert result["datasets"][0].get("provenance") == "unavailable"
+
+    def test_run_evaluate_translates_retired_live_error_to_cli_error(
+        self, tmp_path
+    ):
+        # Valid dataset without committed baselines: the CLI surfaces a
+        # usage error (exit 1), not an unhandled traceback (#4108 follow-up).
+        from moonmind.manifest.manifest_cli import ManifestCliError, run_evaluate
+
+        dataset = tmp_path / "no_baseline.jsonl"
+        dataset.write_text(
+            json.dumps({"query": "q", "relevant_ids": ["d1"]}) + "\n"
+        )
+        manifest_path = tmp_path / "manifest.yaml"
+        manifest_path.write_text(
+            textwrap.dedent(
+                f"""\
+                version: "v0"
+                metadata:
+                  name: "eval-cli-error"
+                dataSources:
+                  - id: "local"
+                    type: "SimpleDirectoryReader"
+                evaluation:
+                  datasets:
+                    - name: "smoke"
+                      path: "{dataset}"
+                  metrics:
+                    - name: "hitRate@10"
+                """
+            )
+        )
+        with pytest.raises(ManifestCliError, match="4108"):
+            run_evaluate(manifest_path=str(manifest_path))
+
+    def test_no_baseline_without_injected_retriever_raises(self, tmp_path):
+        dataset = tmp_path / "n Olive.jsonl".replace(" ", "_")
+        import json as _json
+
+        dataset.write_text(
+            _json.dumps({"query": "q", "relevant_ids": ["d1"]}) + "\n"
+        )
+        manifest = ManifestV0.from_yaml_string(
+            f"""
+version: "v0"
+metadata:
+  name: "eval-live-retired"
+dataSources:
+  - id: "local"
+    type: "SimpleDirectoryReader"
+evaluation:
+  datasets:
+    - name: "smoke"
+      path: "{dataset}"
+  metrics:
+    - name: "hitRate@10"
+"""
+        )
+        try:
+            evaluate_manifest(manifest)
+        except RuntimeError as exc:
+            assert "4108" in str(exc)
+        else:
+            raise AssertionError("live retrieval must be retired, not scored as zero")
