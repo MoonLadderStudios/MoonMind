@@ -74,7 +74,7 @@ OUTCOME_INCOMPLETE = "incomplete"
 OUTCOME_DENIED = "denied"
 OUTCOME_UNKNOWN = "outcome_unknown"
 
-_STATUS_PREFIX_RE = re.compile(r"^status\s*[:/_-]*\s*(.*)$")
+_STATUS_PREFIX_RE = re.compile(r"^status(?:\s+|[:/_-]+)\s*(.*)$")
 
 
 def _normalize_label_name(value: Any) -> str:
@@ -349,7 +349,11 @@ _TARGET_TO_LABEL: dict[str, str | None] = {
     TO_RECOVERY_NEEDED: STATUS_RECOVERY_NEEDED,
     TO_NEEDS_ATTENTION: STATUS_NEEDS_ATTENTION,
     TO_AVAILABLE: None,
-    TO_CLOSED: None,
+    # Terminal presentation: the configured Done label accompanies verified
+    # completed closure (design section 2). It is added before any old
+    # blocking status is removed, so a failed close still leaves a blocking
+    # terminal destination instead of an unblocked open issue.
+    TO_CLOSED: STATUS_DONE,
 }
 
 _TARGET_FROM_CLOSED = {TO_CLOSED}
@@ -392,12 +396,19 @@ _TRANSITION_REQUIREMENTS: dict[tuple[str, str], tuple[str, ...]] = {
     (SETTLED_NEEDS_ATTENTION, TO_CODE_REVIEW): (
         "authorized_resolution",
         "preserved_work_disposition",
+        "pr_url_verified",
+        "gates_satisfied",
     ),
     (SETTLED_NEEDS_ATTENTION, TO_CLOSED): (
         "authorized_resolution",
         "preserved_work_disposition",
     ),
     (SETTLED_NEEDS_ATTENTION, TO_IN_PROGRESS): ("authorized_resolution",),
+    # Idempotent close retry: GitHub may have accepted the close while the
+    # response was lost. A retry that reads Closed with completion evidence
+    # reconciles to the already-applied result instead of reporting a failed
+    # finalization.
+    (SETTLED_CLOSED, TO_CLOSED): ("completion_verified",),
 }
 
 
@@ -565,12 +576,18 @@ def plan_label_mutation(
     to_remove: list[str] = []
     if destination is not None and destination.lower() not in present:
         to_add.append(destination)
-    if origin is not None and to_target != TO_CLOSED:
+    # An attention escalation deliberately coexists with the old writer's
+    # status while its stop status is unknown (design section 2.1); the
+    # declared needs-attention action requests no removal. Preserve the
+    # shared indication that an old writer may still be active.
+    if origin is not None and to_target not in (TO_CLOSED, TO_NEEDS_ATTENTION):
         if origin.lower() in present and (destination is None or origin.lower() != destination.lower()):
             to_remove.append(origin)
     if to_target == TO_CLOSED and origin is not None and origin.lower() in present:
-        # Terminal Done presentation is applied by the completion policy via the
-        # close path; the open-work blocker itself is released on close.
+        # The Done destination is added first (above), so a failed close
+        # still leaves a blocking terminal destination instead of an
+        # unblocked open issue; the open-work blocker itself is released
+        # as part of the close.
         to_remove.append(origin)
     return LabelMutationPlan(
         labels_to_add=tuple(to_add),
