@@ -10,6 +10,10 @@ Usage (operator shell with database access)::
 
 ``mapping.json`` is the reviewed source-provider-to-issuer mapping
 (``{"keycloak": "https://idp.example.invalid/realms/moonmind", ...}``).
+The ``"keycloak"`` key names the historical source provider being migrated
+away from; it is migration input evidence, not an active ``AUTH_PROVIDER``
+selector (retired selectors are rejected per
+``docs/Security/AuthenticationContracts.md``).
 ``enrollment.json`` is the verified target enrollment evidence mapping
 ``str(user_id)`` to ``{"issuer": ..., "subject": ..., "source_provider": ...}``.
 
