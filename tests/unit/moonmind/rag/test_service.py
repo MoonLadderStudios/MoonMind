@@ -46,7 +46,10 @@ def test_context_retrieval_service_direct_flow(monkeypatch):
     assert pack.transport == "direct"
     assert "Retrieved Context" in pack.context_text
 
-def test_context_retrieval_service_honors_overlay_mode_non_collection():
+def test_context_retrieval_service_rejects_overlay_include():
+    """Run overlays retired (#4108): include fails fast, never downgrades."""
+    import pytest
+
     env = {
         "QDRANT_HOST": "localhost",
         "QDRANT_PORT": "6333",
@@ -63,16 +66,47 @@ def test_context_retrieval_service_honors_overlay_mode_non_collection():
         qdrant_client=qdrant,
     )
 
-    service.retrieve(
-        query="overlay check",
-        filters={"repo": "moonmind"},
-        top_k=2,
-        overlay_policy="include",
-        budgets={},
-        transport="direct",
+    with pytest.raises(ValueError, match="4108"):
+        service.retrieve(
+            query="overlay check",
+            filters={"repo": "moonmind"},
+            top_k=2,
+            overlay_policy="include",
+            budgets={},
+            transport="direct",
+        )
+
+    assert not qdrant.calls
+
+
+def test_context_retrieval_service_rejects_overlay_freshness_options():
+    """Retired overlay freshness options fail fast even with skip policy."""
+    import pytest
+
+    env = {
+        "QDRANT_HOST": "localhost",
+        "QDRANT_PORT": "6333",
+        "GOOGLE_EMBEDDING_DIMENSIONS": "2",
+        "MOONMIND_RUN_ID": "run-xyz",
+    }
+    settings = RagRuntimeSettings.from_env(env)
+    service = ContextRetrievalService(
+        settings=settings,
+        env=env,
+        embedding_client=StubEmbedder(),
+        qdrant_client=StubQdrant(),
     )
 
-    assert qdrant.calls
+    with pytest.raises(ValueError, match="4108"):
+        service.retrieve(
+            query="overlay check",
+            filters={"repo": "moonmind"},
+            top_k=2,
+            overlay_policy="skip",
+            budgets={},
+            transport="direct",
+            overlay_max_age_seconds=60,
+        )
 
 def test_context_retrieval_service_uses_configured_collection_set():
     env = {

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import math
+import textwrap
 from pathlib import Path
 
 import pytest
@@ -297,6 +298,63 @@ evaluation:
         result = evaluate_manifest(manifest)
         assert result["passed"] is False
         assert result["datasets"][0].get("provenance") == "unavailable"
+
+    def test_missing_dataset_fails_closed_with_zero_threshold(self, tmp_path):
+        # A threshold of 0 (or negative) must not let an unavailable dataset
+        # pass the gate with a 0.0 score (#4108 follow-up).
+        manifest = ManifestV0.from_yaml_string(
+            f"""
+version: "v0"
+metadata:
+  name: "eval-missing-zero"
+dataSources:
+  - id: "local"
+    type: "SimpleDirectoryReader"
+evaluation:
+  datasets:
+    - name: "gone"
+      path: "{tmp_path / 'missing.jsonl'}"
+  metrics:
+    - name: "hitRate@10"
+      threshold: 0
+"""
+        )
+        result = evaluate_manifest(manifest)
+        assert result["passed"] is False
+        assert result["datasets"][0].get("provenance") == "unavailable"
+
+    def test_run_evaluate_translates_retired_live_error_to_cli_error(
+        self, tmp_path
+    ):
+        # Valid dataset without committed baselines: the CLI surfaces a
+        # usage error (exit 1), not an unhandled traceback (#4108 follow-up).
+        from moonmind.manifest.manifest_cli import ManifestCliError, run_evaluate
+
+        dataset = tmp_path / "no_baseline.jsonl"
+        dataset.write_text(
+            json.dumps({"query": "q", "relevant_ids": ["d1"]}) + "\n"
+        )
+        manifest_path = tmp_path / "manifest.yaml"
+        manifest_path.write_text(
+            textwrap.dedent(
+                f"""\
+                version: "v0"
+                metadata:
+                  name: "eval-cli-error"
+                dataSources:
+                  - id: "local"
+                    type: "SimpleDirectoryReader"
+                evaluation:
+                  datasets:
+                    - name: "smoke"
+                      path: "{dataset}"
+                  metrics:
+                    - name: "hitRate@10"
+                """
+            )
+        )
+        with pytest.raises(ManifestCliError, match="4108"):
+            run_evaluate(manifest_path=str(manifest_path))
 
     def test_no_baseline_without_injected_retriever_raises(self, tmp_path):
         dataset = tmp_path / "n Olive.jsonl".replace(" ", "_")

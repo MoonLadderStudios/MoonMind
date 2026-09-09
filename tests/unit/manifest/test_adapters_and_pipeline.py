@@ -425,6 +425,64 @@ class TestPipelineLocalAdapter:
         assert result.total_docs == 2
         assert result.sources[0].doc_count == 2
         assert result.sources[0].doc_count == 2
+        # No declared transforms: fetch-only result carries no transform claims.
+        assert result.sources[0].transform_applied is False
+        assert result.sources[0].output_chunks == 0
+        assert "transforms applied" not in result.to_dict()["outcome"]
+
+    def test_run_executes_declared_splitter_transform(self, tmp_path):
+        # MoonLadderStudios/MoonMind#4108 follow-up: declared transforms
+        # execute in the fetch pipeline instead of being silently ignored.
+        data_dir = tmp_path / "docs"
+        data_dir.mkdir()
+        (data_dir / "a.txt").write_text("alpha beta gamma")
+        manifest = ManifestV0.from_yaml_string(
+            SPLITTER_MANIFEST.format(input_dir=str(data_dir), chunk_size=8)
+        )
+        result = ManifestPipeline(manifest).run()
+        src = result.sources[0]
+        assert src.doc_count == 1
+        assert src.transform_applied is True
+        # "alpha beta gamma" (16 chars) in windows of 8 with no overlap.
+        assert src.output_chunks == 2
+        payload = result.to_dict()
+        assert payload["sources"][0]["transform_applied"] is True
+        assert payload["sources"][0]["output_chunks"] == 2
+        assert "transforms applied" in payload["outcome"]
+        # Retired index-count keys stay absent.
+        assert "total_chunks" not in payload
+        assert "indexed_docs" not in payload["sources"][0]
+
+    def test_run_executes_html_and_metadata_transforms(self, tmp_path):
+        from moonmind.manifest.pipeline import apply_declared_transforms
+        from moonmind.schemas.manifest_v0_models import TransformsConfig
+
+        transforms = TransformsConfig.model_validate(
+            {
+                "htmlToText": True,
+                "enrichMetadata": [{"lang": "en"}],
+            }
+        )
+        docs, applied, chunks = apply_declared_transforms(
+            [("<p>hello</p>", {"src": "a"})], transforms
+        )
+        assert applied is True
+        assert chunks == 1
+        assert docs == [("hello", {"src": "a", "lang": "en"})]
+
+    def test_run_rejects_normalized_retired_spellings(self, tmp_path):
+        from moonmind.manifest.pipeline import ManifestRetiredError
+
+        manifest = ManifestV0.model_validate(
+            {
+                "version": "v0",
+                "metadata": {"name": "retired-variant"},
+                "dataSources": [{"id": "local", "type": "SimpleDirectoryReader"}],
+                "vectorstore": {"type": "qdrant"},
+            }
+        )
+        with pytest.raises(ManifestRetiredError, match="4108"):
+            ManifestPipeline(manifest).run()
 
     def test_run_fetches_without_incremental_skip_persistence(self, tmp_path):
         # MoonLadderStudios/MoonMind#4108: incremental index-state persistence

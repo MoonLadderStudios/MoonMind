@@ -87,6 +87,24 @@ class TestRetiredVectorRejection:
         assert not r.valid
         assert any(e.field == "embeddings" for e in r.errors)
 
+    def test_normalized_retired_spellings_rejected(self):
+        # Case/whitespace variants reject like the canonical spellings.
+        bad = (
+            MINIMAL_VALID.rstrip()
+            + '\nvectorstore:\n  type: "qdrant"\n  indexName: "old"\n'
+        )
+        r = _result(bad)
+        assert not r.valid
+        assert any("4108" in e.message for e in r.errors)
+
+        bad_padded = (
+            MINIMAL_VALID.rstrip()
+            + '\n" VectorStore ":\n  type: "qdrant"\n  indexName: "old"\n'
+        )
+        r = _result(bad_padded)
+        assert not r.valid
+        assert any("4108" in e.message for e in r.errors)
+
     def test_historical_model_still_readable_without_validator(self):
         # Historical artifacts remain readable via ManifestV0 directly.
         from moonmind.schemas.manifest_v0_models import ManifestV0

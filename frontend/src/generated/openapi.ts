@@ -9777,8 +9777,6 @@ export interface components {
         ManifestRunOptions: {
             /** Dryrun */
             dryRun?: boolean | null;
-            /** Forcefull */
-            forceFull?: boolean | null;
             /** Maxdocs */
             maxDocs?: number | null;
         };
