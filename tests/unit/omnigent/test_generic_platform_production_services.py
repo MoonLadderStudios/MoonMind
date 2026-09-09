@@ -319,12 +319,11 @@ async def test_exact_host_runner_probe_source_runs_against_upstream_layout(
             backend=backend, container_name="mm-host-opencode", argv=["true"]
         )
     )
-    probed = [
-        sys.executable,
-        "-c",
+    probed_source = (
         "import os, sys; sys.exit(3 if os.environ.get('OMNIGENT_RUNNER_ID') "
-        "== 'moonmind-attestation' else 4)",
-    ]
+        "== 'moonmind-attestation' else 4)"
+    )
+    probed = [sys.executable, "-c", probed_source]
     env = {"PATH": os.environ["PATH"], "HOME": str(tmp_path)}
 
     current = tmp_path / "current"
@@ -445,17 +444,33 @@ async def test_exact_host_probe_substrate_failure_is_typed_build_mismatch(
 
 
 @pytest.mark.asyncio
-async def test_exact_host_probe_contract_failures_keep_their_own_status() -> None:
+@pytest.mark.parametrize(
+    ("code", "stderr"),
+    [(1, "test: failed"), (97, "probed command exited 97 without the marker")],
+    ids=["ordinary-failure", "reserved-status-without-marker"],
+)
+async def test_exact_host_probe_contract_failures_keep_their_own_status(
+    code: int, stderr: str
+) -> None:
     class Backend:
         async def run(self, argv, **kwargs):
-            return 1, "", "test: failed"
+            return code, "", stderr
 
     assert await _run_exact_host_runner_command(
         backend=Backend(), container_name="mm-host-opencode", argv=["true"]
-    ) == (1, "", "test: failed")
+    ) == (code, "", stderr)
     assert await _run_exact_host_opencode_command(
         backend=Backend(), container_name="mm-host-opencode", argv=["true"]
-    ) == (1, "", "test: failed")
+    ) == (code, "", stderr)
+    with pytest.raises(HarnessPlatformError) as excinfo:
+        await _read_exact_host_model_options(
+            backend=Backend(),
+            client=SimpleNamespace(),
+            container_name="mm-host-opencode",
+            omnigent_host_id="host-opencode",
+            harness_id="opencode-native",
+        )
+    assert excinfo.value.code == HarnessPlatformFailure.OMNIGENT_MODEL_UNAVAILABLE
 
 
 @pytest.mark.asyncio
