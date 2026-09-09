@@ -3010,8 +3010,8 @@ async def test_tool_delivery_uses_plan_names_and_deployment_owned_volume(
                         "name": "gh",
                         "version": "2.76.2",
                         "path": "bin/gh",
-                        "platforms": {"linux/amd64": {"executableSha256": "a" * 64}},
                         "versionProbe": ["--version"],
+                        "platforms": {"linux/amd64": {"executableSha256": "a" * 64}},
                     }
                 ]
             }
@@ -3039,6 +3039,28 @@ async def test_tool_delivery_uses_plan_names_and_deployment_owned_volume(
     assert result[0]["accessMode"] == "read-only"
     assert result[0]["tools"][0]["executableDigests"] == ["a" * 64]
     assert result[0]["tools"][0]["versionProbe"] == ["--version"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("probe", [None, [], "--help", [None], [""]])
+async def test_tool_delivery_rejects_invalid_probe_before_docker(
+    tmp_path: Path,
+    probe: object,
+) -> None:
+    manifest = tmp_path / "manifest.lock.json"
+    manifest.write_text(
+        json.dumps({"tools": [{"name": "docker", "versionProbe": probe}]}),
+        encoding="utf-8",
+    )
+    backend = SimpleNamespace(run=AsyncMock())
+    service = OmnigentMountedToolService(backend=backend, manifest_path=manifest)
+
+    with pytest.raises(HarnessPlatformError, match="probe is malformed"):
+        await service.materialize(
+            {"toolDeliveryRef": "tool-delivery:sha256:" + "1" * 64, "tools": ["docker"]}
+        )
+
+    backend.run.assert_not_awaited()
 
 
 def test_deployment_mounted_tool_names_come_from_locked_manifest(
