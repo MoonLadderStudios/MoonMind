@@ -18,7 +18,7 @@ from moonmind.workflows.temporal.activity_runtime import (
     build_activity_bindings,
 )
 
-pytestmark = [pytest.mark.asyncio, pytest.mark.integration, pytest.mark.integration_ci]
+pytestmark = [pytest.mark.asyncio, pytest.mark.integration, pytest.mark.reliability_journey]
 
 
 @pytest.mark.parametrize("legacy_path", [False, True], ids=["locator", "historical-path"])
