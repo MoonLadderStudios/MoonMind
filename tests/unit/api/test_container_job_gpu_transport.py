@@ -118,12 +118,19 @@ def enabled(monkeypatch):
 
 @pytest.fixture
 def http_app(monkeypatch, session_factory, temporal) -> FastAPI:
+    from moonmind.schemas.container_job_models import OwnerIdentity
+
     dependency = _install_real_service(
         monkeypatch, http_router, session_factory, temporal
     )
     app = FastAPI()
     app.include_router(http_router.router)
-    app.dependency_overrides[CURRENT_USER_DEP] = lambda: SimpleNamespace(id=_OWNER_ID)
+    # #4126: the HTTP surface resolves its owner through _require_job_owner
+    # (browser user or scoped machine capability), not the strict bearer
+    # dependency, so hermetic tests override the owner resolver directly.
+    app.dependency_overrides[http_router._require_job_owner] = lambda: OwnerIdentity(
+        principalId=_OWNER_ID, principalType="user"
+    )
     app.dependency_overrides[http_router.get_async_session] = dependency
     return app
 

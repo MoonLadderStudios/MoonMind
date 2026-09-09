@@ -305,9 +305,16 @@ async def test_authorization_denial_is_permission_denied() -> None:
 
 @pytest.fixture
 def http_app(monkeypatch) -> FastAPI:
+    from moonmind.schemas.container_job_models import OwnerIdentity
+
     app = FastAPI()
     app.include_router(http_router.router)
-    app.dependency_overrides[CURRENT_USER_DEP] = lambda: SimpleNamespace(id=_OWNER_ID)
+    # #4126: the HTTP surface resolves its owner through _require_job_owner
+    # (browser user or scoped machine capability), not the strict bearer
+    # dependency, so hermetic tests override the owner resolver directly.
+    app.dependency_overrides[http_router._require_job_owner] = lambda: OwnerIdentity(
+        principalId=_OWNER_ID, principalType="user"
+    )
     app.dependency_overrides[http_router.get_async_session] = _empty_namespace
     return app
 
