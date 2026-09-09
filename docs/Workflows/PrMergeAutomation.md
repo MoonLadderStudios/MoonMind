@@ -230,7 +230,8 @@ An active request owns the unchanged head until review completion. CI failures,
 merge conflicts, and older actionable comments do not bypass that wait. Review
 evidence is collected independently of these repairable conditions; missing or
 unknown completion evidence keeps the gate closed. The portable Skill gives
-the same wait precedence over remediation. A head changed externally invalidates
+the same wait precedence over remediation, after terminal evidence validation
+and deferred-comment blockers. A head changed externally invalidates
 the request and re-enters the gate for the new revision.
 
 Completion includes the provider's submitted review, its request-bound clean
@@ -239,7 +240,10 @@ qualified clean-review reaction. Ordinary clean comments and PR-level reactions
 must be newer than the request on its unchanged head. Pending, unknown, blank,
 or dismissed review states, eyes reactions, quoted clean messages, and stale
 responses are not completion. The Skill reads every page of review/reaction
-evidence and refreshes the full comment inventory after observing completion.
+evidence and refreshes the full comment inventory after observing completion,
+then revalidates the remote head. Merge operations require that verified head
+to still match. When a request has multiple provider response comments, the
+latest authoritative response takes precedence over an earlier failure or clean result.
 Once that head has a completed review and no remaining blockers, it finishes
 according to finishMode without requesting another review for the same head.
 

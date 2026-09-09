@@ -191,6 +191,7 @@ metadata flag.
      result has not arrived. Return control to the owning gate with
      `reenter_gate`. This wait takes precedence over every remediation,
      including CI failures, merge conflicts, and older actionable comments.
+     Terminal evidence and deferred-comment blockers still take precedence.
      Do not edit, commit, push, or start a fix Skill while it is pending.
    - `deferred_comments`: the comment ledger deferred or could not fix at least
      one comment that is still present. Publish `manual_review` and stop; a
@@ -207,7 +208,9 @@ metadata flag.
    on its unchanged head, or the provider's qualified clean-review reaction.
    A PR-level reaction must be newer than the request; an eyes reaction is
    never completion. Read all pages and refresh the comment inventory after
-   observing completion. A clean response satisfies review freshness; it does
+   observing completion and revalidate the remote head before accepting the
+   snapshot. Merge with the verified head as an expected-head guard. A clean
+   response satisfies review freshness; it does
    not erase independent actionable findings, CI failures, or conflicts. When
    those gates are clear, finish on the same head without another request.
 5. Enforce `maxIterations`, `finalizeMaxRetries`, and

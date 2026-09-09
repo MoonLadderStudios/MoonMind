@@ -1956,6 +1956,7 @@ class GitHubService:
             f"https://api.github.com/repos/{repo}/issues/{pr_number}/comments"
             "?per_page=100"
         )
+        latest: tuple[datetime, dict[str, Any] | ProviderFailureEvent] | None = None
         try:
             while comments_url:
                 response = await client.get(comments_url, headers=headers)
@@ -1977,19 +1978,22 @@ class GitHubService:
                     ):
                         continue
                     created_at = _parse_github_timestamp(comment.get("created_at"))
-                    if requested_at is not None and (
-                        created_at is None or created_at <= requested_at
+                    if created_at is None or (
+                        requested_at is not None and created_at <= requested_at
                     ):
                         continue
                     if is_clean_review_comment(
                         provider, comment, requested_at=requested_at, head_sha=head_sha
                     ):
-                        return comment
-                    failure = build_provider_failure_event(
-                        reason=comment.get("body")
-                    )
-                    if failure is not None:
-                        return failure
+                        candidate = comment
+                    else:
+                        candidate = build_provider_failure_event(
+                            reason=comment.get("body")
+                        )
+                    if candidate is not None and (
+                        latest is None or created_at >= latest[0]
+                    ):
+                        latest = (created_at, candidate)
                 comments_url = response.links.get("next", {}).get("url")
         except (
             httpx.HTTPStatusError,
@@ -1997,7 +2001,7 @@ class GitHubService:
             httpx.TimeoutException,
         ):
             return None
-        return None
+        return latest[1] if latest is not None else None
 
     async def _find_request_clean_review_reaction(
         self,

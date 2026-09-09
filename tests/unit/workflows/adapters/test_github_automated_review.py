@@ -788,3 +788,49 @@ async def test_review_loop_disabled_keeps_legacy_evaluation(monkeypatch):
 
     assert result.automated_review_complete is True
     assert result.ready is True
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("latest_clean", [True, False])
+async def test_requested_review_uses_latest_comment_across_pages(
+    monkeypatch, latest_clean
+):
+    monkeypatch.setenv("GITHUB_TOKEN", "github-token-fixture")
+    clean = {
+        "id": 56,
+        "body": "Codex Review: Didn't find any major issues. 🚀",
+        "created_at": (
+            "2026-08-24T22:20:00Z" if latest_clean else "2026-08-24T22:19:00Z"
+        ),
+        "user": {"login": "chatgpt-codex-connector[bot]"},
+    }
+    failure = {
+        "id": 55,
+        "body": "You have reached your Codex usage limits. Please try again later.",
+        "created_at": (
+            "2026-08-24T22:19:00Z" if latest_clean else "2026-08-24T22:20:00Z"
+        ),
+        "user": {"login": "chatgpt-codex-connector[bot]"},
+    }
+    first, last = (failure, clean) if latest_clean else (clean, failure)
+    page2 = f"https://api.github.com/repos/{_REPO}/issues/350/comments?page=2"
+    mock_client = _client(
+        get_responses=[
+            *_readiness_prefix(),
+            _get(200, []),
+            _get(200, []),
+            _get(200, []),
+            _get(200, [first], headers={"Link": f'<{page2}>; rel="next"'}),
+            _get(200, [last]),
+        ]
+    )
+    with _patch_client(mock_client):
+        result = await GitHubService().evaluate_pull_request_readiness(
+            repo=_REPO,
+            pr_number=350,
+            head_sha=_HEAD,
+            review_loop_enabled=True,
+            review_request=_ACTIVE_REQUEST,
+        )
+    assert (result.automated_review_complete is True) is latest_clean
+    assert result.ready is latest_clean

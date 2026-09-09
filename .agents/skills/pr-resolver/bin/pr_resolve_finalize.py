@@ -163,9 +163,21 @@ def _read_snapshot(path: Path) -> dict[str, Any]:
         raise RuntimeError(f"snapshot must be a JSON object: {path}")
     return payload
 
-def _merge_pr(pr_selector: str, merge_method: str) -> None:
-    cmd = ["gh", "pr", "merge", pr_selector, f"--{merge_method}"]
+
+def _merge_pr(pr_selector: str, merge_method: str, expected_head: str) -> None:
+    if not expected_head:
+        raise RuntimeError("Cannot merge without the verified PR head")
+    cmd = [
+        "gh",
+        "pr",
+        "merge",
+        pr_selector,
+        f"--{merge_method}",
+        "--match-head-commit",
+        expected_head,
+    ]
     subprocess.run(cmd, check=True)
+
 
 def _write_result(
     result_path: Path,
@@ -356,7 +368,7 @@ def main() -> None:
                         file=sys.stderr,
                     )
                     sys.exit(EXIT_CODE_FAILED if args.strict_exit_codes else 0)
-                
+
                 # Snapshot refresh can fail transiently (network/auth/API blips).
                 # Treat as blocked so orchestrate can retry with backoff.
                 _write_result(
@@ -418,7 +430,9 @@ def main() -> None:
                 )
                 print("Merge gate passed (dry-run).")
                 sys.exit(EXIT_CODE_BLOCKED if args.strict_exit_codes else 0)
-            _merge_pr(pr_selector, args.merge_method)
+            _merge_pr(
+                pr_selector, args.merge_method, normalize_text(pr.get("headRefOid"))
+            )
             if not _check_pr_merged(pr_selector):
                 _write_result(
                     result_path,
