@@ -15,6 +15,8 @@ from moonmind.container_job_cli import (
     run_python_tests,
 )
 from moonmind.manifest import manifest_cli
+from moonmind.rag.guardrails import GuardrailError, ensure_rag_ready
+from moonmind.rag.settings import RagRuntimeSettings
 from moonmind.utils.logging import redact_sensitive_text
 
 app = typer.Typer(help="MoonMind developer utilities.")
@@ -111,9 +113,15 @@ def container_python_tests(
 @worker_app.command("doctor", help="Verify worker prerequisites (vector-free).")
 def worker_doctor() -> None:
     # MoonLadderStudios/MoonMind#4112: native vector backend retired. The
-    # doctor no longer probes Qdrant or reports its absence as a failure;
-    # it preserves actionable failures for real prerequisites via the
-    # worker preflight path and reports success when reached.
+    # doctor delegates to the vector-free guardrail (optional RetrievalGateway
+    # health probe only; never probes Qdrant) so gateway failures surface as
+    # exit-code failures instead of a false healthy result.
+    settings = RagRuntimeSettings.from_env()
+    try:
+        ensure_rag_ready(settings)
+    except GuardrailError as exc:
+        typer.secho(f"Worker prerequisite check failed: {exc}", fg=typer.colors.RED)
+        raise typer.Exit(code=1) from exc
     typer.secho("Worker prerequisites satisfied.", fg=typer.colors.GREEN)
 
 # ----- manifest commands -----

@@ -42,7 +42,9 @@ def _make_request(**overrides) -> AgentExecutionRequest:
 @pytest.mark.parametrize(
     ("rag_enabled", "expected_fragment"),
     [
-        ("1", "moonmind rag search"),
+        # MoonLadderStudios/MoonMind#4112 retired the `moonmind rag search`
+        # CLI entry point, so the enabled note must not advertise it.
+        ("1", "Follow-up retrieval is enabled"),
         ("0", "rag_disabled"),
     ],
 )
