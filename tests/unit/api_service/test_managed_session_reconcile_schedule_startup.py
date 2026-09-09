@@ -49,11 +49,30 @@ async def test_image_sync_blocks_a_quarantined_opencode_host(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "failure_code, remediation_fragment, forbidden_fragment",
+    [
+        (
+            "omnigent_server_host_build_mismatch",
+            "update the omnigent Compose service",
+            "repair or republish",
+        ),
+        (
+            "omnigent_host_bootstrap_contract_missing",
+            "repair or republish the host image",
+            "update the omnigent Compose service",
+        ),
+    ],
+)
 async def test_image_sync_stays_ready_and_warns_about_a_pending_host(
     monkeypatch: pytest.MonkeyPatch,
     caplog: pytest.LogCaptureFixture,
+    failure_code: str,
+    remediation_fragment: str,
+    forbidden_fragment: str,
 ) -> None:
-    """A newer host for a newer server is operator information, not an outage."""
+    """A newer host the server cannot admit is operator information, not an
+    outage, and the remediation follows the pending host's failure code."""
 
     from moonmind.omnigent import settings
     from moonmind.omnigent.bootstrap import image_resolution
@@ -82,7 +101,7 @@ async def test_image_sync_stays_ready_and_warns_about_a_pending_host(
                             "imageRef": pending_host,
                             "buildDigest": "sha256:" + "9" * 64,
                             "version": "0.13.0",
-                            "failureCode": "omnigent_server_host_build_mismatch",
+                            "failureCode": failure_code,
                         },
                     }
                 },
@@ -105,8 +124,9 @@ async def test_image_sync_stays_ready_and_warns_about_a_pending_host(
     message = warnings[0].getMessage()
     assert pending_host in message
     assert admitted_host in message
-    assert "omnigent_server_host_build_mismatch" in message
-    assert "update the omnigent Compose service" in message
+    assert failure_code in message
+    assert remediation_fragment in message
+    assert forbidden_fragment not in message
 
 
 @pytest.mark.asyncio

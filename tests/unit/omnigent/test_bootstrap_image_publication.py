@@ -873,10 +873,20 @@ def _install_paired_runtime_fakes(
     fresh_host: str | None,
     shared_host: str | None = None,
     previous: ResolvedOmnigentDeploymentState | None,
+    server_unavailable: bool = False,
 ) -> dict[str, list]:
     from moonmind.omnigent.bootstrap import store
 
     observed: dict[str, list] = {"probes": [], "version_probes": []}
+
+    if server_unavailable:
+
+        async def running_server(_image, _env):
+            return None
+
+        monkeypatch.setattr(
+            image_resolution, "_resolve_running_server_image", running_server
+        )
 
     async def resolve_image(image_env, tag_env, ref_env, env=None):
         del tag_env, ref_env, env
@@ -1140,3 +1150,64 @@ def test_quarantine_error_names_the_judged_pair(
     assert "server omnigent 0.12.0 build sha256:111111111111" in message
     assert "host omnigent 0.13.0 built for sha256:999999999999" in message
     assert "update the omnigent server image" in message
+
+
+@pytest.mark.asyncio
+async def test_unavailable_server_evidence_retains_the_admitted_host(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A restarting Omnigent container must not let the fresh tag replace the
+    admitted digest before anything has been judged (PR #4170 review)."""
+
+    observed = _install_paired_runtime_fakes(
+        monkeypatch,
+        server_build=RUNNING_SERVER_BUILD,
+        server_version="0.12.0",
+        fresh_host=NEWER_HOST,
+        previous=_admitted_previous(),
+        server_unavailable=True,
+    )
+
+    resolved = await image_resolution.resolve_omnigent_images(
+        {
+            "OMNIGENT_IMAGE": "ghcr.io/omnigent-ai/omnigent-server",
+            "OMNIGENT_IMAGE_TAG": "latest",
+        }
+    )
+
+    assert resolved.server_image_ref is None
+    # The persisted ref is still the admitted host, so the next pass judges it.
+    assert resolved.opencode_host_image_ref == ADMITTED_HOST
+    compatibility = resolved.details["opencodeHostCompatibility"]
+    assert compatibility["status"] == "blocked"
+    assert compatibility["failureCode"] == "omnigent_server_build_unavailable"
+    assert compatibility["hostImageRef"] == ADMITTED_HOST
+    assert compatibility["pendingHost"] is None
+    assert NEWER_HOST not in observed["version_probes"]
+    assert observed["probes"] == []
+
+
+@pytest.mark.parametrize(
+    "failure_code, expects_server_update",
+    [
+        ("omnigent_server_host_build_mismatch", True),
+        ("omnigent_server_host_version_mismatch", True),
+        ("omnigent_operator_host_build_mismatch", False),
+        ("omnigent_host_build_identity_unavailable", False),
+        ("omnigent_server_host_version_probe_failed", False),
+        ("omnigent_host_bootstrap_contract_missing", False),
+        ("", False),
+    ],
+)
+def test_pending_host_remediation_matches_the_failure(
+    failure_code: str, expects_server_update: bool
+) -> None:
+    """Only server drift is cured by moving the server (PR #4170 review)."""
+
+    remediation = image_resolution.pending_host_remediation(failure_code)
+    prescribes_update = remediation.startswith(
+        "the newer host targets a newer Omnigent server"
+    )
+    assert prescribes_update is expects_server_update
+    if not expects_server_update:
+        assert "repair or republish" in remediation or "OMNIGENT_BUILD_DIGEST" in remediation
