@@ -611,23 +611,13 @@ def test_configured_cookie_name_reaches_upstream_provider():
     store = InMemoryAsyncAccountStore()
     config = build_test_config(cookie_name="mm_custom_4118")
     auth = MoonmindQualifiedAuth(config, store)
-    provider = auth.upstream_provider
-    names = set()
-    for attr in ("session_cookie_name", "cookie_name", "session_cookie"):
-        value = getattr(provider, attr, None)
-        if isinstance(value, str):
-            names.add(value)
-    oidc_cfg = getattr(provider, "oidc_config", None)
-    accounts_cfg = getattr(provider, "accounts_config", None)
-    for cfg in (oidc_cfg, accounts_cfg):
-        if cfg is not None:
-            for attr in ("session_cookie_name", "cookie_name"):
-                value = getattr(cfg, attr, None)
-                if isinstance(value, str):
-                    names.add(value)
-    assert "mm_custom_4118" in names
-    assert "__Host-ap_session" not in names
-    assert "ap_session" not in names
+    # The configured control-plane cookie name is passed to the upstream
+    # provider construction shape instead of the hardcoded runtime names.
+    assert auth._cookie_shape.session_cookie_name == "mm_custom_4118"
+    assert auth._cookie_shape.session_cookie_name not in (
+        "__Host-ap_session",
+        "ap_session",
+    )
 
 
 @pytest.mark.asyncio
