@@ -49,6 +49,87 @@ async def test_image_sync_blocks_a_quarantined_opencode_host(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "failure_code, remediation_fragment, forbidden_fragment",
+    [
+        (
+            "omnigent_server_host_build_mismatch",
+            "update the omnigent Compose service",
+            "repair or republish",
+        ),
+        (
+            "omnigent_host_bootstrap_contract_missing",
+            "repair or republish the host image",
+            "update the omnigent Compose service",
+        ),
+    ],
+)
+async def test_image_sync_stays_ready_and_warns_about_a_pending_host(
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+    failure_code: str,
+    remediation_fragment: str,
+    forbidden_fragment: str,
+) -> None:
+    """A newer host the server cannot admit is operator information, not an
+    outage, and the remediation follows the pending host's failure code."""
+
+    from moonmind.omnigent import settings
+    from moonmind.omnigent.bootstrap import image_resolution
+    from moonmind.omnigent.bootstrap.models import ResolvedOmnigentDeploymentState
+
+    admitted_host = "ghcr.io/example/host@sha256:" + "a" * 64
+    pending_host = "ghcr.io/example/host@sha256:" + "b" * 64
+
+    async def resolve() -> ResolvedOmnigentDeploymentState:
+        return ResolvedOmnigentDeploymentState.model_validate(
+            {
+                "serverImageRef": "ghcr.io/example/server@sha256:" + "1" * 64,
+                "opencodeHostImageRef": admitted_host,
+                "omnigentBuildDigest": "sha256:" + "1" * 64,
+                "architecture": "linux/arm64",
+                "resolvedAt": datetime(2026, 9, 9, tzinfo=UTC),
+                "details": {
+                    "opencodeHostCompatibility": {
+                        "status": "ready",
+                        "failureCode": None,
+                        "serverImageRef": "ghcr.io/example/server@sha256:" + "1" * 64,
+                        "hostImageRef": admitted_host,
+                        "serverVersion": "0.12.0",
+                        "hostVersion": "0.12.0",
+                        "pendingHost": {
+                            "imageRef": pending_host,
+                            "buildDigest": "sha256:" + "9" * 64,
+                            "version": "0.13.0",
+                            "failureCode": failure_code,
+                        },
+                    }
+                },
+            }
+        )
+
+    class _EnabledGate:
+        enabled = True
+
+    monkeypatch.setattr(image_resolution, "publish_resolved_omnigent_images", resolve)
+    monkeypatch.setattr(settings, "build_omnigent_gate", _EnabledGate)
+    monkeypatch.setattr(settings, "generic_host_enabled", lambda: True)
+    monkeypatch.setattr(settings, "opencode_support_enabled", lambda: True)
+
+    with caplog.at_level(logging.WARNING, logger="api_service.main"):
+        assert await api_main._sync_omnigent_deployment_images() is True
+
+    warnings = [record for record in caplog.records if record.levelno == logging.WARNING]
+    assert len(warnings) == 1
+    message = warnings[0].getMessage()
+    assert pending_host in message
+    assert admitted_host in message
+    assert failure_code in message
+    assert remediation_fragment in message
+    assert forbidden_fragment not in message
+
+
+@pytest.mark.asyncio
 async def test_omnigent_bootstrap_retries_with_capped_backoff_and_maintains_inventory(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

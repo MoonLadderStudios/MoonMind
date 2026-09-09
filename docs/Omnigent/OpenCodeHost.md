@@ -563,6 +563,29 @@ disabled. Missing or incomplete caches, failed startup, and probe timeouts
 block compatibility even when labels and versions match. Host Class selection
 and advertised inventory consume that verdict until reconciliation succeeds.
 
+Host admission is keyed by the running server, not by the newest tag. On the
+default mutable-tag path the resolver judges the freshly resolved tag first and
+the currently admitted host second, and the first candidate that passes the
+full compatibility ladder becomes launch authority. When the registry has
+already published a host for a newer Omnigent server than Compose is running,
+the admitted compatible host stays authoritative and the newer image is
+recorded as `opencodeHostCompatibility.pendingHost` (image ref, host build,
+host version, and the failure code it would raise). The API logs that pending
+pair on every reconciliation pass together with the remediation derived from
+its failure code: a server/host build or version drift is adopted by updating
+the `omnigent` Compose service, while a host that failed its own qualification
+or contradicts `OMNIGENT_BUILD_DIGEST` must be repaired or republished and never
+prompts a server update. Once the failure is cured the fresh tag passes and
+replaces the admitted host. When server evidence is temporarily unavailable
+(for example while the Omnigent container restarts) nothing is judged and the
+admitted host is retained as the persisted ref. Quarantine is reserved for the
+case where no candidate is compatible with the running server. An explicit
+`OMNIGENT_OPENCODE_HOST_IMAGE_REF`
+pin is a single candidate: it is quarantined, never replaced. When the shared
+host coordinates resolve to the same image the OpenCode path judged, the
+shared ref follows the admitted digest so Codex and Claude Host Classes never
+launch a host built for a different server.
+
 `OMNIGENT_BUILD_DIGEST` remains optional operator authority only for an independently paired server and host build. An image manifest digest must not be substituted for the separate portable Omnigent build identity.
 
 ## 14. Image release and compatibility

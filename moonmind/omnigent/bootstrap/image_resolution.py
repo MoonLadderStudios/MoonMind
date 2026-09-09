@@ -7,6 +7,7 @@ import json
 import os
 import re
 from collections.abc import Mapping
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -46,6 +47,18 @@ def _extract_digest(ref: str) -> str | None:
         if len(digest) == 64 and all(c in "0123456789abcdef" for c in digest.lower()):
             return "sha256:" + digest.lower()
     return None
+
+
+def _is_operator_pin(value: object) -> bool:
+    """Return whether ``value`` is an explicit, non-placeholder digest pin."""
+
+    pinned = str(value or "").strip()
+    return bool(
+        pinned
+        and _is_digest_pinned(pinned)
+        and not pinned.endswith("0" * 64)
+        and not pinned.endswith("c" * 64)
+    )
 
 
 def _image_repository(image: str) -> str:
@@ -143,12 +156,7 @@ async def _resolve_image(
     """Resolve one image to a digest-pinned ref and its image digest."""
     source = os.environ if env is None else env
     pinned = str(source.get(ref_env) or "").strip()
-    if (
-        pinned
-        and _is_digest_pinned(pinned)
-        and not pinned.endswith("0" * 64)
-        and not pinned.endswith("c" * 64)
-    ):
+    if _is_operator_pin(pinned):
         # Valid pinned ref
         build_digest = _extract_digest(pinned)
         return pinned, build_digest
@@ -255,6 +263,109 @@ async def _image_omnigent_version(image_ref: str) -> str | None:
     return match.group(1) if match is not None else None
 
 
+@dataclass(frozen=True)
+class _OpenCodeHostVerdict:
+    """Compatibility verdict for one OpenCode host image candidate."""
+
+    image_ref: str
+    failure_code: str | None
+    build_digest: str | None
+    version: str | None
+
+    def pending_payload(self) -> dict[str, str | None]:
+        return {
+            "imageRef": self.image_ref,
+            "buildDigest": self.build_digest,
+            "version": self.version,
+            "failureCode": self.failure_code,
+        }
+
+
+async def _evaluate_opencode_host(
+    image_ref: str,
+    *,
+    server_ref: str | None,
+    server_image_digest: str | None,
+    server_version: str | None,
+    configured_build_digest: str,
+) -> _OpenCodeHostVerdict:
+    """Judge one host image against the running server's build identity.
+
+    The ladder is the paired-runtime contract: shared build identity, equal
+    executable Omnigent versions, then the release bootstrap probe. Every
+    candidate passes through the same ladder, so the admitted host is always
+    the one that proved compatibility with the server actually running.
+    """
+
+    build_digest = await _image_build_identity(image_ref)
+    version = await _image_omnigent_version(image_ref)
+    failure: str | None
+    if not server_ref or not server_image_digest:
+        failure = "omnigent_server_build_unavailable"
+    elif not build_digest:
+        failure = "omnigent_host_build_identity_unavailable"
+    elif configured_build_digest and configured_build_digest != build_digest:
+        failure = "omnigent_operator_host_build_mismatch"
+    elif not configured_build_digest and server_image_digest != build_digest:
+        failure = "omnigent_server_host_build_mismatch"
+    elif server_version is None or version is None:
+        failure = "omnigent_server_host_version_probe_failed"
+    elif server_version != version:
+        failure = "omnigent_server_host_version_mismatch"
+    elif not await _image_opencode_bootstrap_ready(image_ref):
+        failure = "omnigent_host_bootstrap_contract_missing"
+    else:
+        failure = None
+    return _OpenCodeHostVerdict(image_ref, failure, build_digest, version)
+
+
+_SERVER_DRIFT_FAILURES = frozenset(
+    {
+        "omnigent_server_host_build_mismatch",
+        "omnigent_server_host_version_mismatch",
+    }
+)
+_HOST_QUALIFICATION_FAILURES = frozenset(
+    {
+        "omnigent_host_build_identity_unavailable",
+        "omnigent_server_host_version_probe_failed",
+        "omnigent_host_bootstrap_contract_missing",
+    }
+)
+
+
+def pending_host_remediation(failure_code: object) -> str:
+    """Name the operator action that lets a pending host become admissible.
+
+    Only a server/host drift is cured by moving the Omnigent server. A host
+    that failed its own qualification, or that contradicts an operator build
+    pin, must be repaired or republished; updating the server would only move
+    the deployment onto an unusable pair.
+    """
+
+    code = str(failure_code or "").strip()
+    if code in _SERVER_DRIFT_FAILURES:
+        return (
+            "the newer host targets a newer Omnigent server; update the "
+            "omnigent Compose service to adopt the pair"
+        )
+    if code == "omnigent_operator_host_build_mismatch":
+        return (
+            "the newer host does not match OMNIGENT_BUILD_DIGEST; update the "
+            "operator build identity or publish a host built for it (do not "
+            "update the omnigent server for this)"
+        )
+    if code in _HOST_QUALIFICATION_FAILURES:
+        return (
+            "the newer host failed its own qualification; repair or republish "
+            "the host image (no omnigent server update is indicated)"
+        )
+    return (
+        "repair or republish the host image, or update the omnigent Compose "
+        "service only if the host targets a newer server"
+    )
+
+
 async def resolve_omnigent_images(
     env: Mapping[str, str] | None = None,
 ) -> ResolvedOmnigentDeploymentState:
@@ -301,13 +412,38 @@ async def resolve_omnigent_images(
             "OMNIGENT_IMAGE", "OMNIGENT_IMAGE_TAG", "OMNIGENT_IMAGE_REF", source
         )
 
-    # OpenCode host image
-    opencode_ref, _ = await _resolve_image(
+    # OpenCode host image. The configured coordinate is a refreshable input;
+    # the running server's build identity is the admission key. Every
+    # candidate is judged against that key, so a newer registry image cannot
+    # displace a compatible admitted host until the server itself moves.
+    host_pinned = _is_operator_pin(source.get("OMNIGENT_OPENCODE_HOST_IMAGE_REF"))
+    fresh_host_ref, _ = await _resolve_image(
         "OMNIGENT_OPENCODE_HOST_IMAGE",
         "OMNIGENT_OPENCODE_HOST_IMAGE_TAG",
         "OMNIGENT_OPENCODE_HOST_IMAGE_REF",
         source,
     )
+    host_candidates: list[str] = [fresh_host_ref] if fresh_host_ref else []
+    previous_host_ref = (
+        str(previous.opencode_host_image_ref or "").strip() if previous else ""
+    )
+    configured_host_repository = _image_repository(
+        fresh_host_ref or str(source.get("OMNIGENT_OPENCODE_HOST_IMAGE") or "").strip()
+    )
+    if (
+        not host_pinned
+        and previous_host_ref
+        and previous_host_ref not in host_candidates
+        and _is_digest_pinned(previous_host_ref)
+        and (
+            not configured_host_repository
+            or _image_repository(previous_host_ref) == configured_host_repository
+        )
+    ):
+        # The currently admitted host stays a candidate on the mutable-tag
+        # path as long as it belongs to the configured repository. An explicit
+        # operator pin is quarantined, never replaced.
+        host_candidates.append(previous_host_ref)
 
     # Pi host (optional)
     pi_ref, _ = await _resolve_image(
@@ -334,8 +470,6 @@ async def resolve_omnigent_images(
     ):
         server_ref = previous.server_image_ref
         server_image_digest = _extract_digest(server_ref)
-    if not opencode_ref and previous and previous.opencode_host_image_ref:
-        opencode_ref = previous.opencode_host_image_ref
     if not pi_ref and previous and previous.pi_host_image_ref:
         pi_ref = previous.pi_host_image_ref
     if not shared_ref and previous and previous.shared_host_image_ref:
@@ -350,31 +484,65 @@ async def resolve_omnigent_images(
     configured_build_digest = str(source.get("OMNIGENT_BUILD_DIGEST") or "").strip()
     if configured_build_digest and not _SHA256_RE.fullmatch(configured_build_digest):
         raise ValueError("OMNIGENT_BUILD_DIGEST must be an exact sha256 identity")
-    host_build_digest = (
-        await _image_build_identity(opencode_ref) if opencode_ref else None
-    )
     server_version = (
         await _image_omnigent_version(server_ref)
-        if server_ref and opencode_ref
+        if server_ref and host_candidates
         else None
     )
-    host_version = await _image_omnigent_version(opencode_ref) if opencode_ref else None
-    compatibility_failure: str | None = None
-    if opencode_ref:
-        if not server_ref or not server_image_digest:
-            compatibility_failure = "omnigent_server_build_unavailable"
-        elif not host_build_digest:
-            compatibility_failure = "omnigent_host_build_identity_unavailable"
-        elif configured_build_digest and configured_build_digest != host_build_digest:
-            compatibility_failure = "omnigent_operator_host_build_mismatch"
-        elif not configured_build_digest and server_image_digest != host_build_digest:
-            compatibility_failure = "omnigent_server_host_build_mismatch"
-        elif server_version is None or host_version is None:
-            compatibility_failure = "omnigent_server_host_version_probe_failed"
-        elif server_version != host_version:
-            compatibility_failure = "omnigent_server_host_version_mismatch"
-        elif not await _image_opencode_bootstrap_ready(opencode_ref):
-            compatibility_failure = "omnigent_host_bootstrap_contract_missing"
+    if host_candidates and (not server_ref or not server_image_digest):
+        # Without server authority nothing can be judged. Retain the admitted
+        # host as the persisted ref so this recoverable evidence gap (for
+        # example a restarting Omnigent container) cannot replace it with the
+        # unjudged fresh digest; the retry judges both once the server is
+        # observable again.
+        retained = (
+            previous_host_ref
+            if previous_host_ref in host_candidates
+            else host_candidates[0]
+        )
+        host_candidates = [retained]
+    verdicts: list[_OpenCodeHostVerdict] = []
+    admitted: _OpenCodeHostVerdict | None = None
+    for candidate in host_candidates:
+        verdict = await _evaluate_opencode_host(
+            candidate,
+            server_ref=server_ref,
+            server_image_digest=server_image_digest,
+            server_version=server_version,
+            configured_build_digest=configured_build_digest,
+        )
+        verdicts.append(verdict)
+        if verdict.failure_code is None:
+            admitted = verdict
+            break
+
+    pending_host: _OpenCodeHostVerdict | None = None
+    if admitted is not None:
+        selected: _OpenCodeHostVerdict | None = admitted
+        if verdicts[0].image_ref != admitted.image_ref:
+            # The registry moved ahead of the running server. Keep the
+            # compatible admitted host as launch authority and surface the
+            # newer image as pending until the server is updated.
+            pending_host = verdicts[0]
+    else:
+        selected = verdicts[0] if verdicts else None
+    opencode_ref = selected.image_ref if selected else None
+    host_build_digest = selected.build_digest if selected else None
+    host_version = selected.version if selected else None
+    compatibility_failure = selected.failure_code if selected else None
+
+    if (
+        not _is_operator_pin(source.get("OMNIGENT_SHARED_HOST_IMAGE_REF"))
+        and shared_ref
+        and fresh_host_ref
+        and shared_ref == fresh_host_ref
+        and opencode_ref
+        and opencode_ref != shared_ref
+    ):
+        # The shared host resolved to the very image the OpenCode path judged
+        # incompatible. It is the same runtime pack, so it follows the admitted
+        # digest instead of launching a mismatched host for Codex or Claude.
+        shared_ref = opencode_ref
 
     if compatibility_failure:
         # Keep the current server as catalog authority while quarantining the
@@ -437,6 +605,9 @@ async def resolve_omnigent_images(
                 "hostBuildDigest": host_build_digest,
                 "serverVersion": server_version,
                 "hostVersion": host_version,
+                "pendingHost": (
+                    pending_host.pending_payload() if pending_host else None
+                ),
             },
         },
     )
