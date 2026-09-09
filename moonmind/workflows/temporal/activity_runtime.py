@@ -2929,26 +2929,6 @@ class TemporalSandboxActivities:
     def _provider_lease_refs(self, context_ref: str | None) -> list[str]:
         return [context_ref] if context_ref else []
 
-    def _workspace_has_unsafe_skill_projection(self, workspace: Path) -> bool:
-        try:
-            workspace_uid = workspace.lstat().st_uid
-        except OSError:
-            return True
-        for relative in (".agents/skills", ".gemini/skills"):
-            candidate = workspace / relative
-            if not candidate.exists():
-                continue
-            try:
-                info = candidate.lstat()
-            except OSError:
-                continue
-            # A projection owned by a different principal than the authoritative
-            # workspace is unsafe. UID 0 alone is not evidence of a mismatch:
-            # hermetic CI legitimately creates the whole workspace as root.
-            if info.st_uid != workspace_uid or candidate.is_symlink():
-                return True
-        return False
-
     @staticmethod
     def _workspace_archive_excludes(relative: Path) -> bool:
         return any(part in {".git", "__pycache__"} for part in relative.parts) or (
@@ -3047,10 +3027,10 @@ class TemporalSandboxActivities:
             )
         )
 
-        if model.kind == "worktree_archive" and (
-            self._workspace_has_traversal(workspace)
-            or self._workspace_has_unsafe_skill_projection(workspace)
-        ):
+        # Validate the same members that the archive builder includes. Skill
+        # projections are excluded runtime state; their links and ownership
+        # cannot make an otherwise safe repository checkpoint unsafe.
+        if model.kind == "worktree_archive" and self._workspace_has_traversal(workspace):
             diagnostic_ref = await self._put_checkpoint_bytes(
                 b"unsafe workspace materialization",
                 content_type="text/plain",

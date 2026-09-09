@@ -1286,8 +1286,7 @@ async def test_checkpoint_activity_failures_are_typed_and_secret_safe(
     store = InMemoryArtifactStore()
     root = _workspace_root(tmp_path)
     repo = _repo(root)
-    (repo / ".agents").mkdir(parents=True)
-    (repo / ".agents" / "skills").symlink_to(tmp_path)
+    (repo / "unsafe-link").symlink_to(tmp_path)
     sandbox = TemporalSandboxActivities(workspace_root=root, artifact_store=store)
     checkpoint_activities = TemporalCheckpointActivities(artifact_store=store)
 
