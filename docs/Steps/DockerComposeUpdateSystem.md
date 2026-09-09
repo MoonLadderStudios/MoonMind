@@ -137,6 +137,8 @@ The following rules are fixed.
 11. Command output and verification output must be written to artifacts.
 12. The run must fail closed when verification cannot prove the desired state.
 13. The operation must remain auditable even if MoonMind services restart during the update.
+14. Existing operator URLs, published interfaces and ports, authentication mode, and trusted ingress remain usable across updates. Candidate Compose bindings are compared with the running deployment before recreation; fresh-install defaults cannot silently redefine an installed deployment's access.
+15. Deployment-owned `.env` and override settings survive updates. A required ingress or authentication migration has a verified replacement access path before cutover; it cannot declare success from container health while locking out the operator.
 
 ---
 
@@ -759,12 +761,23 @@ The system verifies Compose state using:
 
 ## 12.2 Application-level verification
 
-The system should optionally run a MoonMind smoke check after Compose-level health succeeds.
+The system must verify the actual operator dashboard/API URL after Compose-level
+health succeeds. The hostname, published port, and ingress path are the ones the
+operator uses; substituting localhost or a container-internal address does not
+prove LAN, VPN, or proxy access. Every supported access path has before/after
+evidence, or an explicit unverified result when the verifier cannot reach that
+client network.
 
-The smoke check may include:
+Required checks include:
 
-- API health endpoint
-- frontend reachability
+- `/healthz` through the operator URL, including authentication readiness
+- dashboard reachability and coherent entry/lazy assets, using
+  `python tools/verify_deployed_ui_assets.py --base-url <operator-url>`
+- a read-only API request through the same ingress, with the configured auth
+  flow when required
+
+Additional checks may include:
+
 - Temporal worker registration or poller health
 - database connectivity, if applicable
 - basic workflow submission readiness, if safe

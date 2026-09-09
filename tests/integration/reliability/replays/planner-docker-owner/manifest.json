@@ -1,0 +1,30 @@
+{
+  "id": "planner-docker-owner",
+  "sourceWorkflowId": "mm:d8c6daa8-91e1-458b-afcd-a896ffdb15ff",
+  "failureShape": "plan.generate on mm.activity.llm rejected docker because the planner had no DOCKER_HOST or socket, although the agent-runtime worker reported containerBackend.ready=true. No child or agent launched.",
+  "request": {
+    "principal": "00000000-0000-0000-0000-000000000000",
+    "inputs_ref": null,
+    "parameters": {
+      "repository": {
+        "provider": "git",
+        "connectionRef": "repository-connection:git-default",
+        "repository": {"name": "MoonLadderStudios/Tactics"},
+        "branch": {"name": "main"}
+      },
+      "requiredCapabilities": ["git", "gh", "execution.fanout", "docker"],
+      "targetRuntime": "omnigent",
+      "model": "opencode-go/muse-spark-1.3-contributor",
+      "effort": "xhigh",
+      "profileId": "opencode-go-default",
+      "publishMode": "none",
+      "workflow": {
+        "tool": {"type": "skill", "name": "batch-pr-resolver"},
+        "skill": {"name": "batch-pr-resolver"},
+        "runtime": {"mode": "omnigent", "profileId": "opencode-go-default"},
+        "publish": {"mode": "none"}
+      }
+    },
+    "registry_snapshot_ref": null
+  }
+}

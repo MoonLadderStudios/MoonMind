@@ -130,6 +130,19 @@ Jira requires trusted issue/project operations or qualifying prefetched trusted 
 
 Docker requires an enabled qualified container path, allowed deployment/workflow policy, enforced resource/network limits, and correct ownership of workspace side effects. Availability of a daemon is not permission to mount arbitrary paths or acquire repository credentials.
 
+The planning Activity validates the deployment-owned configuration through the
+shared Docker Backend settings resolver. It does not require a local socket,
+`DOCKER_HOST`, or raw Docker CLI access on the LLM/planning worker. These are not
+readiness evidence for the selected execution owner, and their presence cannot
+override a disabled or invalid backend.
+
+The agent-runtime worker owns live daemon and egress qualification and publishes
+`containerBackend` readiness. Container-job admission and launch retain workspace,
+resource, network, and authorization checks. Planning acceptance proves static
+configuration eligibility, not live daemon health or permission to execute a job.
+This division is identical for managed and Omnigent runtimes and applies to
+historical planning payloads without changing their serialized contract.
+
 ### 7.5 execution.fanout
 
 Fan-out is bounded child creation and child-only inspection under the current parent, not general MoonMind API access.
