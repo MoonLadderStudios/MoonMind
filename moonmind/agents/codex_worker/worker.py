@@ -3610,12 +3610,14 @@ class CodexWorker:
                 "ragMode": "unavailable",
                 "ragUnavailableReason": reason,
             }
-        transport = settings.resolved_transport(None)
-        mode = "direct-qdrant" if transport == "direct" else "retrieval-gateway"
+        # MoonLadderStudios/MoonMind#4112: native vector retrieval is retired.
+        # Never advertise the removed `moonmind rag search` CLI, even when
+        # legacy settings still parse as executable. Sibling execution
+        # children own the underlying retrieval-service removal.
         return {
-            "ragAvailable": True,
-            "ragMode": mode,
-            "ragCommand": "moonmind rag search --query '<query>' --output-file <path>",
+            "ragAvailable": False,
+            "ragMode": "unavailable",
+            "ragUnavailableReason": "vector_retired",
         }
 
     @staticmethod

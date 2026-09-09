@@ -6741,7 +6741,10 @@ async def test_agent_runtime_prepare_turn_instructions_adds_retrieval_capability
     )
 
     assert "MoonMind retrieval capability:" in result
-    assert "moonmind rag search" in result
+    # MoonLadderStudios/MoonMind#4112: native vector retrieval retired; the
+    # managed note never advertises the removed `moonmind rag search` CLI.
+    assert "moonmind rag search" not in result
+    assert "vector_retired" in result
     assert "Managed Codex CLI note:" in result
 
 

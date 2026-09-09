@@ -32,8 +32,6 @@ from moonmind.jules.runtime import JULES_RUNTIME_DISABLED_MESSAGE
 from moonmind.jules.runtime import (
     build_runtime_gate_state as build_jules_runtime_gate_state,
 )
-from moonmind.rag.guardrails import GuardrailError, ensure_rag_ready
-from moonmind.rag.settings import RagRuntimeSettings
 
 logger = logging.getLogger(__name__)
 
@@ -333,10 +331,9 @@ def run_preflight(env: Mapping[str, str] | None = None) -> None:
         resolved_paths["rg"] = _verify_codex_search_cli(source)
 
     _validate_embedding_profile(source)
-    try:
-        ensure_rag_ready(RagRuntimeSettings.from_env(source))
-    except GuardrailError as exc:
-        raise RuntimeError(str(exc)) from exc
+    # MoonLadderStudios/MoonMind#4112: native vector backend retired. Preflight
+    # performs no Qdrant/overlay/collection probe and no retrieval-gateway
+    # network access here; the retired guardrail is a no-op boundary.
     github_token = str(source.get("GITHUB_TOKEN", "")).strip()
     redaction_values = (github_token,) if github_token else ()
 

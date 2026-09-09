@@ -42,8 +42,10 @@ def _make_request(**overrides) -> AgentExecutionRequest:
 @pytest.mark.parametrize(
     ("rag_enabled", "expected_fragment"),
     [
-        ("1", "moonmind rag search"),
-        ("0", "rag_disabled"),
+        # MoonLadderStudios/MoonMind#4112: native vector retrieval retired;
+        # even an explicitly enabled legacy env reports the retired boundary.
+        ("1", "vector_retired"),
+        ("0", "vector_retired"),
     ],
 )
 async def test_codex_launcher_includes_followup_retrieval_capability_note(

@@ -1,13 +1,12 @@
-"""Unit tests for RAG guardrails (DOC-REQ-002, DOC-REQ-004)."""
+"""Unit tests for the retired vector guardrail boundary (#4112)."""
 
 from __future__ import annotations
 
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 
-import pytest
-
-from moonmind.rag.guardrails import GuardrailError, ensure_rag_ready
+from moonmind.rag.guardrails import ensure_rag_ready
 from moonmind.rag.settings import RagRuntimeSettings
+
 
 def _settings(**overrides: object) -> RagRuntimeSettings:
     defaults = dict(
@@ -48,35 +47,30 @@ def _settings(**overrides: object) -> RagRuntimeSettings:
     defaults.update(overrides)
     return RagRuntimeSettings(**defaults)
 
+
 def test_ensure_rag_ready_noop_when_disabled() -> None:
-    """RAG disabled should succeed without touching Qdrant."""
+    """RAG disabled succeeds without touching any backend."""
+
     settings = _settings(rag_enabled=False)
     ensure_rag_ready(settings)  # should not raise
 
-def test_ensure_rag_ready_raises_when_no_qdrant_and_no_gateway() -> None:
-    """Direct transport with Qdrant disabled and no gateway should fail."""
-    settings = _settings(qdrant_enabled=False, retrieval_gateway_url=None)
-    with pytest.raises(GuardrailError, match="Qdrant access disabled"):
+
+def test_ensure_rag_ready_never_probes_vector_backend() -> None:
+    """Retired guardrail performs no Qdrant or gateway network access."""
+
+    settings = _settings(
+        qdrant_enabled=False,
+        retrieval_gateway_url=None,
+    )
+    with patch("httpx.get") as mock_get:
         ensure_rag_ready(settings)
+        mock_get.assert_not_called()
 
-def test_ensure_rag_ready_uses_gateway_when_url_set() -> None:
-    """Gateway transport should verify gateway health, not direct Qdrant."""
+
+def test_ensure_rag_ready_ignores_gateway_url_without_network() -> None:
+    """Even a configured gateway URL triggers no health probe (#4112)."""
+
     settings = _settings(retrieval_gateway_url="http://gw:8000")
-
-    import httpx
-
-    mock_response = MagicMock()
-    mock_response.status_code = 200
-    with patch.object(httpx, "get", return_value=mock_response) as mock_get:
+    with patch("httpx.get") as mock_get:
         ensure_rag_ready(settings)
-        mock_get.assert_called_once_with("http://gw:8000/health", timeout=5.0)
-
-def test_ensure_rag_ready_raises_on_gateway_health_failure() -> None:
-    """Gateway health check failure should raise GuardrailError."""
-    settings = _settings(retrieval_gateway_url="http://gw:8000")
-
-    mock_response = MagicMock()
-    mock_response.status_code = 503
-    with patch("httpx.get", return_value=mock_response):
-        with pytest.raises(GuardrailError, match="health check failed"):
-            ensure_rag_ready(settings)
+        mock_get.assert_not_called()
