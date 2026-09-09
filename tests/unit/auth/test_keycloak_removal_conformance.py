@@ -258,9 +258,21 @@ class TestMountedRoutesAndLifecycle:
             "temporal_artifacts_router",
             "websockets_router",
             "oauth_sessions_router",
-            "worker_auth",
+            "manifests_router",
         ):
             assert router in source, f"expected production router {router}"
+        # Worker identity is a Depends helper, not a mounted router: the
+        # manifests router consumes _require_worker_auth, which rejects
+        # legacy worker tokens with 410 (see
+        # test_old_worker_tokens_rejected_not_accepted).
+        manifests = (
+            REPO_ROOT / "api_service" / "api" / "routers" / "manifests.py"
+        ).read_text(encoding="utf-8")
+        assert "_require_worker_auth" in manifests
+        worker_auth = (
+            REPO_ROOT / "api_service" / "api" / "routers" / "worker_auth.py"
+        ).read_text(encoding="utf-8")
+        assert "worker_token_deprecated" in worker_auth
 
     def test_auth_dependency_wiring_branches_on_production_mode(self):
         """get_current_user uses bearer auth outside disabled local mode."""
@@ -505,6 +517,88 @@ class TestTwoReplicaRevocation:
             await revocation.revoke_all_for_user(account.user_id)
             with pytest.raises(q.AuthInvalidError):
                 await q.validate_moonmind_session(token, store, revocation, config)
+
+        import asyncio
+
+        asyncio.run(_run())
+
+    def test_revocation_survives_rehydration_without_shared_live_store(
+        self, tmp_path,
+    ):
+        """Two independent replicas rehydrated from durable revocation state.
+
+        Goes beyond sharing one live in-memory object: revocation is
+        persisted to disk, then two fresh store instances (a restarted
+        validator and a second replica with its own empty validation
+        cache) rehydrate from that durable record and both reject the
+        revoked session.
+        """
+        import json
+
+        record = tmp_path / "revocation-4128.json"
+
+        class _FileBackedRevocationStore:
+            def __init__(self, path) -> None:
+                self._path = path
+                self._revoked: set[str] = set()
+                self._generations: dict[str, int] = {}
+                self._load()
+
+            def _load(self) -> None:
+                if self._path.is_file():
+                    payload = json.loads(self._path.read_text(encoding="utf-8"))
+                    self._revoked = set(payload.get("revoked", []))
+                    self._generations = dict(payload.get("generations", {}))
+
+            def _persist(self) -> None:
+                self._path.write_text(
+                    json.dumps(
+                        {
+                            "revoked": sorted(self._revoked),
+                            "generations": self._generations,
+                        }
+                    ),
+                    encoding="utf-8",
+                )
+
+            async def revoke_session(self, jti: str) -> None:
+                self._revoked.add(jti)
+                self._persist()
+
+            async def is_session_revoked(self, jti: str) -> bool:
+                return jti in self._revoked
+
+            async def revoke_all_for_user(self, user_id: uuid.UUID) -> int:
+                key = str(user_id)
+                self._generations[key] = self._generations.get(key, 0) + 1
+                self._persist()
+                return self._generations[key]
+
+            async def generation_for_user(self, user_id: uuid.UUID) -> int:
+                return self._generations.get(str(user_id), 0)
+
+        async def _run() -> None:
+            config = _config()
+            store = q.InMemoryAsyncAccountStore()
+            identity = _identity("grace-4128")
+            _enrolled(store, identity)
+            token, _ = await q.mint_moonmind_session(identity, store, config)
+            writer = _FileBackedRevocationStore(record)
+            await q.SessionValidationCache(config).validate(token, store, writer)
+            jti = jwt.decode(token, options={"verify_signature": False})["jti"]
+            await writer.revoke_session(jti)
+            # Restart + second replica: independent instances, empty
+            # caches, rehydrated from the durable record only.
+            replica_a = _FileBackedRevocationStore(record)
+            replica_b = _FileBackedRevocationStore(record)
+            assert replica_a is not replica_b
+            assert replica_a is not writer
+            cache_a = q.SessionValidationCache(config)
+            cache_b = q.SessionValidationCache(config)
+            with pytest.raises(q.AuthInvalidError):
+                await cache_a.validate(token, store, replica_a)
+            with pytest.raises(q.AuthInvalidError):
+                await cache_b.validate(token, store, replica_b)
 
         import asyncio
 
