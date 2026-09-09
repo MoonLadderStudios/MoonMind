@@ -23,18 +23,19 @@ revoked session.
 
 from __future__ import annotations
 
-from typing import Sequence, Union
+from typing import Union
 
 import sqlalchemy as sa
 from alembic import op
 
-# Alembic consumes these module attributes at migration runtime; they are
-# intentionally assigned here even though this module never reads them
-# directly (unused-variable linters report them as false positives).
-revision: str = "375_session_authority_4121"  # noqa: F841
-down_revision: Union[str, None] = "374_identity_mapping_k3"  # noqa: F841
-branch_labels: Union[str, Sequence[str], None] = None  # noqa: F841
-depends_on: Union[str, None] = None  # noqa: F841
+# Alembic discovers migration identity from these module attributes (it
+# reads ``branch_labels``/``depends_on`` via getattr with None defaults, so
+# only the non-null chain links are declared here); ``__all__`` keeps that
+# external contract explicit for static analysis.
+__all__ = ["revision", "down_revision", "upgrade", "downgrade"]
+
+revision: str = "375_session_authority_4121"
+down_revision: Union[str, None] = "374_identity_mapping_k3"
 
 
 def upgrade() -> None:
@@ -95,9 +96,10 @@ def downgrade() -> None:
     ).scalar()
     if live_sessions:
         raise RuntimeError(
-            "Cannot downgrade K4 session authority: moonmind_sessions still "
-            f"holds {live_sessions} unrevoked session(s). Revoke or let them "
-            "expire before rollback so no live authority is stranded."
+            f"Cannot downgrade session authority {revision} (parent "
+            f"{down_revision}): moonmind_sessions still holds "
+            f"{live_sessions} unrevoked, unexpired session(s). Revoke or let "
+            "them expire before rollback so no live authority is stranded."
         )
     remaining_generations = bind.execute(
         sa.text(
@@ -106,10 +108,11 @@ def downgrade() -> None:
     ).scalar()
     if remaining_generations:
         raise RuntimeError(
-            "Cannot downgrade K4 session authority: "
-            f"{remaining_generations} user generation row(s) carry revocation "
-            "state. Rollback must restore a matching application set and "
-            "intentionally invalidate incompatible sessions."
+            f"Cannot downgrade session authority {revision} (parent "
+            f"{down_revision}): {remaining_generations} user generation "
+            "row(s) carry revocation state. Rollback must restore a matching "
+            "application set and intentionally invalidate incompatible "
+            "sessions."
         )
     op.drop_index("ix_moonmind_sessions_expires", table_name="moonmind_sessions")
     op.drop_index("ix_moonmind_sessions_user", table_name="moonmind_sessions")

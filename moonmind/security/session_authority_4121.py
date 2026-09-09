@@ -82,18 +82,6 @@ from moonmind.security.omnigent_auth_qualification import (  # noqa: F401
 # re-authorization check within 5 minutes of the commit timestamp.
 SESSION_REVOCATION_INTERVAL_SECONDS = 5 * 60
 
-# Upstream runtime credentials are never MoonMind users, even when their
-# JWT shape resembles an application session.
-UPSTREAM_RUNTIME_MARKERS = frozenset(
-    {
-        "__Host-ap_session",
-        "ap_session",
-        "omnigent-runtime",
-        "omnigent_runtime",
-        "ap-runtime",
-    }
-)
-
 _SAFE_METHODS = frozenset({"GET", "HEAD", "OPTIONS", "TRACE"})
 
 
