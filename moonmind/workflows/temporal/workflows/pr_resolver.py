@@ -110,7 +110,10 @@ def pr_resolver_identity_selector(
 
 def classify_pr_resolver_snapshot(snapshot: Mapping[str, Any]) -> dict[str, Any]:
     """Deterministically classify a captured GitHub snapshot."""
-    decision = classify_snapshot(normalize_temporal_snapshot(snapshot))
+    # This retired workflow only replays pre-cutover resolver histories.
+    decision = classify_snapshot(
+        normalize_temporal_snapshot(snapshot), pending_review_precedes_remediation=False
+    )
     return {
         "classification": decision.classification,
         "reasonCode": decision.reason_code,
@@ -529,6 +532,7 @@ class MoonMindPRResolverWorkflow:
                         known_ci_failures_precede_degraded=_workflow_patch_enabled(
                             PR_RESOLVER_CI_FAILURE_PRECEDENCE_PATCH
                         ),
+                        pending_review_precedes_remediation=False,
                     )
                     self._classification = transition.decision.classification
                 transition_reason = (

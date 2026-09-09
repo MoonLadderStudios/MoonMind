@@ -25,6 +25,7 @@ for _package_root in (SCRIPT_DIR.parent / "lib", *SCRIPT_DIR.parents):
         break
 
 from pr_resolver_core.review_providers import (  # noqa: E402
+    is_clean_review_comment,
     resolve_automated_review_provider,
 )
 
@@ -743,11 +744,23 @@ def _fetch_pull_request_reviews(*, pr_repo: str | None, pr_number: object) -> li
     if not repo or not number:
         return []
     payload = run_command_optional(
-        ["gh", "api", f"repos/{repo}/pulls/{number}/reviews?per_page=100"]
+        [
+            "gh",
+            "api",
+            "--paginate",
+            "--slurp",
+            f"repos/{repo}/pulls/{number}/reviews?per_page=100",
+        ]
     )
     if not isinstance(payload, list):
         return []
-    return [item for item in payload if isinstance(item, dict)]
+    return [
+        item
+        for page in payload
+        if isinstance(page, list)
+        for item in page
+        if isinstance(item, dict)
+    ]
 
 
 def _fetch_comment_reactions(*, pr_repo: str | None, comment_id: object) -> list[dict]:
@@ -759,12 +772,43 @@ def _fetch_comment_reactions(*, pr_repo: str | None, comment_id: object) -> list
         [
             "gh",
             "api",
+            "--paginate",
+            "--slurp",
             f"repos/{repo}/issues/comments/{identifier}/reactions?per_page=100",
         ]
     )
     if not isinstance(payload, list):
         return []
-    return [item for item in payload if isinstance(item, dict)]
+    return [
+        item
+        for page in payload
+        if isinstance(page, list)
+        for item in page
+        if isinstance(item, dict)
+    ]
+
+
+def _fetch_pr_reactions(*, pr_repo: str | None, pr_number: object) -> list[dict]:
+    if not pr_repo or not pr_number:
+        return []
+    payload = run_command_optional(
+        [
+            "gh",
+            "api",
+            "--paginate",
+            "--slurp",
+            f"repos/{pr_repo}/issues/{pr_number}/reactions?per_page=100",
+        ]
+    )
+    if not isinstance(payload, list):
+        return []
+    return [
+        item
+        for page in payload
+        if isinstance(page, list)
+        for item in page
+        if isinstance(item, dict)
+    ]
 
 
 def build_automated_review_evidence(
@@ -778,12 +822,14 @@ def build_automated_review_evidence(
     reviews: list[dict] | None = None,
     head_committed_at: datetime | None = None,
     reactions_for_request: list[dict] | None = None,
+    reactions_for_pr: list[dict] | None = None,
 ) -> dict:
     """Collect portable evidence about the configured automated reviewer.
 
     The Skill owns this decision in every host: a review only counts for the
     current head when the provider identity submitted it against that exact
-    commit, or reacted to the request comment that was posted for that head.
+    commit, or answered the request for the unchanged head with a qualified
+    clean comment or reaction. PR-level results must postdate the request.
     """
 
     record = resolve_automated_review_provider(provider)
@@ -826,6 +872,14 @@ def build_automated_review_evidence(
         user = review.get("user") if isinstance(review.get("user"), dict) else {}
         if _strip_bot_suffix(user.get("login")) not in provider_logins:
             continue
+        if str(review.get("state") or "").upper() not in {
+            "APPROVED",
+            "COMMENTED",
+            "CHANGES_REQUESTED",
+        }:
+            continue
+        if _parse_utc_timestamp(review.get("submitted_at")) is None:
+            continue
         provider_reviews.append(
             (_parse_utc_timestamp(review.get("submitted_at")), review)
         )
@@ -834,6 +888,8 @@ def build_automated_review_evidence(
 
     fresh_review = None
     for submitted_at, review in provider_reviews:
+        if request_at is not None and submitted_at <= request_at:
+            continue
         commit_id = str(review.get("commit_id") or "").strip()
         if commit_id:
             if normalized_head and commit_id == normalized_head:
@@ -857,6 +913,16 @@ def build_automated_review_evidence(
         completed_at = str(fresh_review.get("submitted_at") or "").strip() or None
 
     if fresh_review is None and request_comment is not None:
+        for comment in comments:
+            if comment.get("type") == "issue_comment" and is_clean_review_comment(
+                record, comment, requested_at=request_at, head_sha=normalized_head
+            ):
+                completion_kind = "issue_comment"
+                completion_id = comment.get("id")
+                completed_at = comment.get("created_at")
+                break
+
+    if not completion_kind and request_comment is not None:
         if reactions_for_request is None:
             reactions_for_request = _fetch_comment_reactions(
                 pr_repo=pr_repo, comment_id=request_comment.get("id")
@@ -871,6 +937,31 @@ def build_automated_review_evidence(
             completion_id = reaction.get("id")
             completed_at = str(reaction.get("created_at") or "").strip() or None
             break
+
+        if not completion_kind:
+            if reactions_for_pr is None:
+                reactions_for_pr = _fetch_pr_reactions(
+                    pr_repo=pr_repo, pr_number=pr_number
+                )
+            for reaction in reactions_for_pr:
+                user = (
+                    reaction.get("user")
+                    if isinstance(reaction.get("user"), dict)
+                    else {}
+                )
+                created_at = _parse_utc_timestamp(reaction.get("created_at"))
+                if (
+                    _strip_bot_suffix(user.get("login")) in provider_logins
+                    and str(reaction.get("content") or "")
+                    in record.clean_review_reactions
+                    and created_at is not None
+                    and request_at is not None
+                    and created_at > request_at
+                ):
+                    completion_kind = "reaction"
+                    completion_id = reaction.get("id")
+                    completed_at = reaction.get("created_at")
+                    break
 
     fresh = bool(completion_kind)
     evidence: dict = {
@@ -1300,6 +1391,38 @@ def main():
     )
     if not isinstance(comments, list):
         comments = []
+    automated_review = build_automated_review_evidence(
+        provider=args.review_provider,
+        require_fresh_review=bool(args.require_fresh_review),
+        pr_repo=pr_repo,
+        pr_number=pr_data.get("number"),
+        head_sha=head_sha,
+        comments=comments,
+    )
+    if automated_review.get("freshReviewForHead") is True:
+        # GitHub publishes the review summary and inline findings separately.
+        # Fetch the full inventory after observing completion, so a snapshot
+        # collected while the review was running cannot authorize a clean exit.
+        comments_data = run_command(
+            comments_cmd, "Failed to retrieve completed review comments."
+        )
+        comments = (
+            comments_data.get("comments", []) if isinstance(comments_data, dict) else []
+        )
+        if not isinstance(comments, list):
+            comments = []
+        # Comments/reactions have no reviewed commit. Revalidate the remote
+        # head after completion and inventory collection before publishing them.
+        completed_pr, _, _ = fetch_pr_data(args.pr)
+        if (
+            not head_sha
+            or str(completed_pr.get("headRefOid") or "").strip() != head_sha
+        ):
+            print(
+                "PR head changed during review collection; refresh the snapshot.",
+                file=sys.stderr,
+            )
+            sys.exit(1)
     addressed_ids = _load_addressed_comment_ids()
     deferred_ids = _load_deferred_comment_ids()
     comments_summary = summarize_comments(
@@ -1316,22 +1439,14 @@ def main():
         previous_grace=_load_previous_codex_review_grace(snapshot_path),
     )
 
-    automated_review = build_automated_review_evidence(
-        provider=args.review_provider,
-        require_fresh_review=bool(args.require_fresh_review),
-        pr_repo=pr_repo,
-        pr_number=pr_data.get("number"),
-        head_sha=head_sha,
-        comments=comments,
-    )
-
     # 4. Construct Snapshot
     snapshot = {
         "repository": pr_repo or "",
         "pr": pr_data,
         "ci": ci_summary,
         "commentsFetch": {
-            "succeeded": True,
+            "succeeded": isinstance(comments_data, dict)
+            and isinstance(comments_data.get("comments"), list),
             "source": str(comments_script),
         },
         "comments": comments,

@@ -278,6 +278,123 @@ _ACTIVE_REQUEST = {
 }
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize("blocker", ["ci", "conflict"])
+async def test_pending_requested_review_blocks_remediation(monkeypatch, blocker):
+    from moonmind.workflows.temporal.workflows.merge_gate import classify_readiness
+
+    monkeypatch.setenv("GITHUB_TOKEN", "github-token-fixture")
+    prefix = _readiness_prefix()
+    if blocker == "ci":
+        prefix[1] = _get(200, {"state": "failure", "statuses": []})
+        prefix[2] = _get(
+            200, {"check_runs": [{"status": "completed", "conclusion": "failure"}]}
+        )
+    else:
+        prefix = [
+            _get(
+                200,
+                {
+                    "state": "open",
+                    "merged": False,
+                    "head": {"sha": _HEAD},
+                    "mergeable": False,
+                    "mergeable_state": "dirty",
+                },
+            )
+        ]
+    mock_client = _client(get_responses=[*prefix, *[_get(200, []) for _ in range(4)]])
+    with _patch_client(mock_client):
+        result = await GitHubService().evaluate_pull_request_readiness(
+            repo=_REPO,
+            pr_number=350,
+            head_sha=_HEAD,
+            review_loop_enabled=True,
+            review_request=_ACTIVE_REQUEST,
+        )
+    assert result.automated_review_complete is False
+    assert (
+        classify_readiness(
+            result.model_dump(by_alias=True), tracked_head_sha=_HEAD
+        ).ready
+        is False
+    )
+
+
+@pytest.mark.asyncio
+async def test_requested_review_accepts_paginated_clean_comment(monkeypatch):
+    monkeypatch.setenv("GITHUB_TOKEN", "github-token-fixture")
+    page2 = f"https://api.github.com/repos/{_REPO}/issues/350/comments?page=2"
+    mock_client = _client(
+        get_responses=[
+            *_readiness_prefix(),
+            _get(200, []),
+            _get(200, []),
+            _get(200, []),
+            _get(200, [], headers={"Link": f'<{page2}>; rel="next"'}),
+            _get(
+                200,
+                [
+                    {
+                        "id": 56,
+                        "body": "**Codex Review:** Didn't find any major issues. 🚀",
+                        "created_at": "2026-08-24T22:20:00Z",
+                        "user": {"login": "chatgpt-codex-connector[bot]"},
+                    }
+                ],
+            ),
+        ]
+    )
+    with _patch_client(mock_client):
+        result = await GitHubService().evaluate_pull_request_readiness(
+            repo=_REPO,
+            pr_number=350,
+            head_sha=_HEAD,
+            review_loop_enabled=True,
+            review_request=_ACTIVE_REQUEST,
+        )
+    assert result.automated_review_complete is True
+    assert result.automated_review_completion_kind == "issue_comment"
+    assert result.automated_review_completion_id == 56
+    assert result.ready is True
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("state", ["PENDING", "DISMISSED", "", "FUTURE_STATE"])
+async def test_requested_review_requires_a_submitted_known_state(monkeypatch, state):
+    monkeypatch.setenv("GITHUB_TOKEN", "github-token-fixture")
+    mock_client = _client(
+        get_responses=[
+            *_readiness_prefix(),
+            _get(
+                200,
+                [
+                    {
+                        "id": 50,
+                        "state": state,
+                        "commit_id": _HEAD,
+                        "submitted_at": "2026-08-24T22:19:00Z",
+                        "user": {"login": "chatgpt-codex-connector"},
+                    }
+                ],
+            ),
+            _get(200, []),
+            _get(200, []),
+            _get(200, []),
+        ]
+    )
+    with _patch_client(mock_client):
+        result = await GitHubService().evaluate_pull_request_readiness(
+            repo=_REPO,
+            pr_number=350,
+            head_sha=_HEAD,
+            review_loop_enabled=True,
+            review_request=_ACTIVE_REQUEST,
+        )
+    assert result.ready is False
+    assert result.automated_review_complete is False
+
+
 def _readiness_prefix():
     return [
         _get(
@@ -671,3 +788,49 @@ async def test_review_loop_disabled_keeps_legacy_evaluation(monkeypatch):
 
     assert result.automated_review_complete is True
     assert result.ready is True
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("latest_clean", [True, False])
+async def test_requested_review_uses_latest_comment_across_pages(
+    monkeypatch, latest_clean
+):
+    monkeypatch.setenv("GITHUB_TOKEN", "github-token-fixture")
+    clean = {
+        "id": 56,
+        "body": "Codex Review: Didn't find any major issues. 🚀",
+        "created_at": (
+            "2026-08-24T22:20:00Z" if latest_clean else "2026-08-24T22:19:00Z"
+        ),
+        "user": {"login": "chatgpt-codex-connector[bot]"},
+    }
+    failure = {
+        "id": 55,
+        "body": "You have reached your Codex usage limits. Please try again later.",
+        "created_at": (
+            "2026-08-24T22:19:00Z" if latest_clean else "2026-08-24T22:20:00Z"
+        ),
+        "user": {"login": "chatgpt-codex-connector[bot]"},
+    }
+    first, last = (failure, clean) if latest_clean else (clean, failure)
+    page2 = f"https://api.github.com/repos/{_REPO}/issues/350/comments?page=2"
+    mock_client = _client(
+        get_responses=[
+            *_readiness_prefix(),
+            _get(200, []),
+            _get(200, []),
+            _get(200, []),
+            _get(200, [first], headers={"Link": f'<{page2}>; rel="next"'}),
+            _get(200, [last]),
+        ]
+    )
+    with _patch_client(mock_client):
+        result = await GitHubService().evaluate_pull_request_readiness(
+            repo=_REPO,
+            pr_number=350,
+            head_sha=_HEAD,
+            review_loop_enabled=True,
+            review_request=_ACTIVE_REQUEST,
+        )
+    assert (result.automated_review_complete is True) is latest_clean
+    assert result.ready is latest_clean

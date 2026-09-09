@@ -189,7 +189,10 @@ metadata flag.
      owning gate owns that side effect and the durable wait for its result.
    - `automated_review_wait`: a request for this head already exists and its
      result has not arrived. Return control to the owning gate with
-     `reenter_gate`.
+     `reenter_gate`. This wait takes precedence over every remediation,
+     including CI failures, merge conflicts, and older actionable comments.
+     Terminal evidence and deferred-comment blockers still take precedence.
+     Do not edit, commit, push, or start a fix Skill while it is pending.
    - `deferred_comments`: the comment ledger deferred or could not fix at least
      one comment that is still present. Publish `manual_review` and stop; a
      repeated remediation pass cannot clear a deferred disposition.
@@ -200,6 +203,16 @@ metadata flag.
      publish `manual_review` or `failed` evidence and stop without merging.
 4. After every remediation, verify the exact local `HEAD` is visible on the PR
    branch, then return to step 2. Never reuse a pre-remediation snapshot.
+   Completion accepts a submitted provider review, a provider-authored clean
+   response (`Codex Review: Didn't find any major issues. 🚀`) after the request
+   on its unchanged head, or the provider's qualified clean-review reaction.
+   A PR-level reaction must be newer than the request; an eyes reaction is
+   never completion. Read all pages and refresh the comment inventory after
+   observing completion and revalidate the remote head before accepting the
+   snapshot. Merge with the verified head as an expected-head guard. A clean
+   response satisfies review freshness; it does
+   not erase independent actionable findings, CI failures, or conflicts. When
+   those gates are clear, finish on the same head without another request.
 5. Enforce `maxIterations`, `finalizeMaxRetries`, and
    `finalizeMaxElapsedSeconds`. Retryable/no-progress states receive at least five
    finalize checks unless the elapsed-time limit or a hard failure is reached.
