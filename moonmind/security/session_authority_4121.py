@@ -50,6 +50,20 @@ from moonmind.security import omnigent_auth_qualification as q
 logger = logging.getLogger(__name__)
 
 # Re-exported from the #4120 owner so callers have one import surface.
+# ``__all__`` marks the re-export as intentional (consumed via this module
+# by account/OIDC/API/dashboard callers) for unused-import linters.
+__all__ = [
+    "MOONMIND_DEV_COOKIE",
+    "MOONMIND_PROD_COOKIE",
+    "MOONMIND_SESSION_PURPOSE",
+    "AuthConflictError",
+    "AuthConfigError",
+    "AuthInvalidError",
+    "AuthRequiredError",
+    "ForbiddenError",
+    "UnavailableError",
+    "UnsupportedSurfaceError",
+]
 from moonmind.security.omnigent_auth_qualification import (  # noqa: F401
     MOONMIND_DEV_COOKIE,
     MOONMIND_PROD_COOKIE,
@@ -445,6 +459,23 @@ def assert_no_token_in_json(payload: Mapping[str, Any]) -> None:
 # ---------------------------------------------------------------------------
 
 
+def _effective_port(scheme: str, port: int | None) -> int | None:
+    """Return the effective port, filling well-known defaults for http/https.
+
+    Returns ``None`` when the scheme has no well-known default and no
+    explicit port was supplied, so unknown schemes compare by explicit
+    port only.
+    """
+    if port is not None:
+        return port
+    lowered = (scheme or "").lower()
+    if lowered == "https":
+        return 443
+    if lowered == "http":
+        return 80
+    return None
+
+
 def enforce_csrf_origin(
     *,
     method: str,
@@ -460,8 +491,11 @@ def enforce_csrf_origin(
     cookie-authenticated mutations (including login/logout/invitation/
     recovery actions issued over the session cookie) require an ``Origin``
     or ``Referer`` that is same-origin with the configured ``base_url``.
-    Cross-origin cookie mutations are rejected; authorization is never
-    inferred from SameSite or CORS alone.
+    Same-origin compares scheme, hostname, and effective port: cookies and
+    SameSite classification do not isolate ports, so an attacker-controlled
+    service on another port of the same hostname must not pass. Cross-origin
+    cookie mutations are rejected; authorization is never inferred from
+    SameSite or CORS alone.
     """
     if method.upper() in _SAFE_METHODS or not cookie_present:
         return
@@ -471,6 +505,7 @@ def enforce_csrf_origin(
         expected = urlsplit(base_url.strip())
         expected_host = (expected.hostname or "").lower()
         expected_scheme = expected.scheme.lower()
+        expected_port = _effective_port(expected.scheme, expected.port)
     except ValueError as exc:
         raise AuthInvalidError("auth_invalid", "cookie CSRF cannot be checked") from exc
     if not expected_host:
@@ -480,12 +515,15 @@ def enforce_csrf_origin(
         raise AuthInvalidError("auth_invalid", "missing CSRF origin")
     try:
         parts = urlsplit(candidate)
+        candidate_port = _effective_port(parts.scheme, parts.port)
     except ValueError as exc:
         raise AuthInvalidError("auth_invalid", "invalid CSRF origin") from exc
     candidate_host = (parts.hostname or "").lower()
     if not candidate_host or candidate_host != expected_host:
         raise AuthInvalidError("auth_invalid", "cross-origin cookie mutation rejected")
     if parts.scheme and expected_scheme and parts.scheme.lower() != expected_scheme:
+        raise AuthInvalidError("auth_invalid", "cross-origin cookie mutation rejected")
+    if candidate_port != expected_port:
         raise AuthInvalidError("auth_invalid", "cross-origin cookie mutation rejected")
     if host and candidate_host != host.strip().lower().split(":")[0]:
         # Trusted Host/forwarded-origin input is validated by the caller via

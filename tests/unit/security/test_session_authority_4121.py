@@ -465,6 +465,39 @@ def test_csrf_origin_boundary():
         )
 
 
+def test_csrf_origin_rejects_different_port():
+    """Cookies do not isolate ports: another port on the same host is cross-origin."""
+    base = "https://moonmind.example.invalid:8443"
+    # Exact same origin (host + scheme + port) is allowed.
+    s.enforce_csrf_origin(
+        method="POST",
+        cookie_present=True,
+        origin="https://moonmind.example.invalid:8443",
+        referer=None,
+        host="moonmind.example.invalid",
+        base_url=base,
+    )
+    # Same hostname and scheme but a different port is rejected.
+    with pytest.raises(q.AuthInvalidError):
+        s.enforce_csrf_origin(
+            method="POST",
+            cookie_present=True,
+            origin="https://moonmind.example.invalid:9443",
+            referer=None,
+            host="moonmind.example.invalid",
+            base_url=base,
+        )
+    # Explicit default port equals the implicit default origin.
+    s.enforce_csrf_origin(
+        method="POST",
+        cookie_present=True,
+        origin="https://moonmind.example.invalid:443",
+        referer=None,
+        host="moonmind.example.invalid",
+        base_url="https://moonmind.example.invalid",
+    )
+
+
 def test_credentialed_wildcard_cors_rejected():
     with pytest.raises(q.AuthConfigError):
         s.resolve_credentialed_cors_origins(["*"], allow_credentials=True)

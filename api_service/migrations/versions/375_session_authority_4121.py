@@ -28,10 +28,13 @@ from typing import Sequence, Union
 import sqlalchemy as sa
 from alembic import op
 
-revision: str = "375_session_authority_4121"
-down_revision: Union[str, None] = "374_identity_mapping_k3"
-branch_labels: Union[str, Sequence[str], None] = None
-depends_on: Union[str, None] = None
+# Alembic consumes these module attributes at migration runtime; they are
+# intentionally assigned here even though this module never reads them
+# directly (unused-variable linters report them as false positives).
+revision: str = "375_session_authority_4121"  # noqa: F841
+down_revision: Union[str, None] = "374_identity_mapping_k3"  # noqa: F841
+branch_labels: Union[str, Sequence[str], None] = None  # noqa: F841
+depends_on: Union[str, None] = None  # noqa: F841
 
 
 def upgrade() -> None:
@@ -80,8 +83,15 @@ def upgrade() -> None:
 
 def downgrade() -> None:
     bind = op.get_bind()
+    # Only unexpired, unrevoked rows carry live session authority. Expired
+    # rows linger until explicit logout/revocation cleanup, so the gate
+    # must ignore them or the "let them expire before rollback" path can
+    # never succeed once such a row exists.
     live_sessions = bind.execute(
-        sa.text("SELECT COUNT(*) FROM moonmind_sessions WHERE revoked_at IS NULL")
+        sa.text(
+            "SELECT COUNT(*) FROM moonmind_sessions "
+            "WHERE revoked_at IS NULL AND expires_at > CURRENT_TIMESTAMP"
+        )
     ).scalar()
     if live_sessions:
         raise RuntimeError(
