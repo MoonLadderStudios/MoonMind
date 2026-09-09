@@ -4474,6 +4474,37 @@ async def _fetch_github_issue(
             return None, f"GitHub issue fetch failed: {exc.__class__.__name__}"
 
 
+def _github_brief_recovery_handoff(
+    inputs: Mapping[str, Any],
+    context: Mapping[str, Any] | None,
+) -> dict[str, Any]:
+    """Collect caller-supplied recovery handoff evidence for issue selection.
+
+    A Recovery-needed candidate requires ``predecessor_stopped`` plus
+    ``handoff_usable`` at the later start transition. The brief routes
+    supplied evidence (camelCase or snake_case, direct or via previous
+    outputs) so selection can admit the candidate and downstream steps can
+    satisfy those guards.
+    """
+    collected: dict[str, Any] = {}
+    sources: list[Any] = [inputs, _mapping((context or {}).get("previousOutputs"))]
+    for source in sources:
+        if not isinstance(source, Mapping):
+            continue
+        for camel, snake in (
+            ("predecessorStopped", "predecessor_stopped"),
+            ("handoffUsable", "handoff_usable"),
+        ):
+            if snake in collected:
+                continue
+            value = source.get(camel, source.get(snake))
+            if value is True or (
+                isinstance(value, str) and value.strip()
+            ) or isinstance(value, Mapping):
+                collected[snake] = value
+    return collected
+
+
 async def load_github_issue_preset_brief(
     inputs: Mapping[str, Any],
     _context: Mapping[str, Any] | None = None,
@@ -4484,6 +4515,7 @@ async def load_github_issue_preset_brief(
 
     search_evidence: dict[str, Any] = {}
     prerequisite_lookup = PrerequisiteLookup()
+    recovery_handoff: dict[str, Any] = {}
 
     async def blockers_for_issue(issue: Mapping[str, Any]) -> list[dict[str, Any]]:
         return await _resolved_github_blockers(
@@ -4495,12 +4527,19 @@ async def load_github_issue_preset_brief(
 
     if "issueSearch" in inputs:
         repository = _string(inputs.get("repository"))
+        # A recovery candidate without usable handoff evidence would fail
+        # deterministically at the start transition (it requires
+        # predecessor_stopped plus handoff_usable). Route supplied handoff
+        # evidence so the selector can admit it; otherwise the selector scans
+        # on for an Available candidate.
+        recovery_handoff = _github_brief_recovery_handoff(inputs, _context)
         try:
             issue_number, search_evidence = await resolve_issue(
                 repository=repository,
                 query=_string(inputs.get("issueSearch")),
                 github_service=github_service_factory(),
                 blockers_from_issue=blockers_for_issue,
+                recovery_handoff=recovery_handoff or None,
             )
         except ValueError as exc:
             return ToolResult(status="FAILED", outputs={"error": str(exc)})
@@ -4551,8 +4590,40 @@ async def load_github_issue_preset_brief(
                 "error": "Selected GitHub issue changed or could not be confirmed before brief loading.",
             },
         )
+    if not search_evidence and (
+        not is_complete_open_issue(issue_data, repository)
+        or issue_data["number"] != issue_number
+        or has_in_progress_status(issue_data)
+        or not is_lifecycle_selectable_candidate(
+            issue_data, _github_status_attempt_context(inputs, _context)
+        )
+    ):
+        # Direct issue loads run the same admission policy as search: an
+        # explicit issue reference is not a bypass around lifecycle state.
+        return ToolResult(
+            status="FAILED",
+            outputs={
+                "error": (
+                    "Direct GitHub issue load failed lifecycle admission: the issue "
+                    "is not an Available or Recovery-needed candidate."
+                ),
+                "repository": repository,
+                "issueNumber": issue_number,
+            },
+        )
     issue = _github_issue_payload(issue_data, repository)
     issue_ref = f"{repository}#{issue['number'] or issue_number}"
+    # Route usable recovery handoff evidence with the brief so the later
+    # start transition can satisfy its predecessor_stopped/handoff_usable
+    # guards for a Recovery-needed selection.
+    recovery_routing: dict[str, Any] = {}
+    if recovery_handoff and interpret_issue(
+        {"state": issue.get("state", "open"), "labels": issue.get("labels") or []}
+    ).settled == "recovery_needed":
+        recovery_routing = {
+            "predecessor_stopped": recovery_handoff.get("predecessor_stopped"),
+            "handoff_usable": recovery_handoff.get("handoff_usable"),
+        }
     body = _string(issue.get("body"))
     title = _string(issue.get("title"))
     labels = issue.get("labels") if isinstance(issue.get("labels"), list) else []
@@ -4575,6 +4646,7 @@ async def load_github_issue_preset_brief(
             "trustedSource": "moonmind.github.get_issue",
             "issue": issue,
             **search_evidence,
+            **recovery_routing,
             "presetBrief": preset_brief,
             "artifactPath": artifact_path,
             "summary": f"Loaded GitHub issue preset brief for {issue_ref} from trusted GitHub data.",
@@ -5440,6 +5512,31 @@ def _github_status_transition_reason(
     return defaults.get(mode, f"Lifecycle transition for {issue_ref}.")
 
 
+def _github_status_lifecycle_comment(*, mode: str, issue_ref: str) -> str:
+    """Render attempt evidence for the lifecycle mode that just applied.
+
+    Each terminal mode leaves its own disposition and next action instead of
+    a shared started-implementation claim.
+    """
+    comments = {
+        "start": f"MoonMind started implementation for {issue_ref}.",
+        "in_progress": f"MoonMind started implementation for {issue_ref}.",
+        "recovery_needed": (
+            f"MoonMind recorded a continuation handoff for {issue_ref}; "
+            "resume from the preserved work instead of starting fresh."
+        ),
+        "needs_attention": (
+            f"MoonMind flagged {issue_ref} as needing attention; "
+            "operator resolution is required before automatic work continues."
+        ),
+        "available": (
+            f"MoonMind released {issue_ref} to available with terminal proof; "
+            "it is eligible for fresh admission."
+        ),
+    }
+    return comments.get(mode, f"MoonMind updated lifecycle status for {issue_ref}.")
+
+
 def _github_status_transition_evidence(
     *,
     mode: str,
@@ -5536,6 +5633,28 @@ def _truthy_terminal_proof(inputs: Mapping[str, Any]) -> bool:
         if isinstance(value, str) and value.strip():
             return True
     return False
+
+
+async def _github_issue_label_present(
+    *,
+    repository: str,
+    issue_number: int,
+    label: str,
+    github_service_factory: Callable[[], GitHubService] = GitHubService,
+) -> bool | None:
+    """Check one label via exact read-back; ``None`` when the issue is unreadable."""
+    current, _error = await _fetch_github_issue(
+        repository=repository,
+        issue_number=issue_number,
+        github_service_factory=github_service_factory,
+    )
+    if current is None:
+        return None
+    present = {
+        str(name).strip().lower()
+        for name in _github_issue_payload(current, repository).get("labels") or []
+    }
+    return label.strip().lower() in present
 
 
 async def update_github_issue_status(
@@ -5713,12 +5832,17 @@ async def update_github_issue_status(
                 ),
             },
         )
-    # Abandon obsolete updates on observed successor, hold, or conflict.
+    # Abandon obsolete updates on observed successor, hold, or conflict. The
+    # comparison must use the caller's expected state: comparing the observed
+    # state against itself can never detect a successor.
+    caller_expected_settled = _string(
+        inputs.get("expectedFromSettled") or inputs.get("expected_from_settled")
+    )
     abandon, abandon_reason = should_abandon_retry(
-        intended_from_settled=interpretation.settled,
+        intended_from_settled=caller_expected_settled or interpretation.settled,
         observed=interpretation,
     )
-    if abandon and _string(inputs.get("expectedFromSettled") or inputs.get("expected_from_settled")):
+    if abandon and caller_expected_settled:
         return ToolResult(
             status="FAILED",
             outputs={
@@ -5833,11 +5957,42 @@ async def update_github_issue_status(
             )
             if not add_result.get("ok"):
                 if add_result.get("reasonCode") == "outcome_unknown":
-                    warnings.append(
-                        f"Label add result unknown for {label}: "
-                        f"{add_result.get('summary')}"
+                    # An ambiguous add must not flow into removals blindly:
+                    # a lost response may still have applied on GitHub, and a
+                    # failed add leaves no destination to reconcile against.
+                    # One exact read-back decides whether the destination is
+                    # present before any removal runs.
+                    confirmed = await _github_issue_label_present(
+                        repository=repository,
+                        issue_number=issue_number,
+                        label=label,
+                        github_service_factory=github_service_factory,
                     )
-                    continue
+                    if confirmed is True:
+                        warnings.append(
+                            f"Label add for {label} confirmed on read-back after "
+                            f"ambiguous result: {add_result.get('summary')}"
+                        )
+                        applied.append(f"add_label:{label}")
+                        continue
+                    return ToolResult(
+                        status="FAILED",
+                        outputs={
+                            "issueRef": issue_ref,
+                            "decision": "blocked",
+                            "lifecycleSettled": interpretation.settled,
+                            "transition": decision.to_dict(),
+                            "appliedActions": applied,
+                            "mutationOutcome": "outcome_unknown",
+                            "reasonCode": "mutation_unknown",
+                            "summary": (
+                                f"GitHub issue label add result unknown for {issue_ref}: "
+                                f"{add_result.get('summary')} The destination status "
+                                "was not observed on read-back, so the transition "
+                                "stopped before any removal."
+                            ),
+                        },
+                    )
                 return ToolResult(
                     status="FAILED",
                     outputs={
@@ -5862,11 +6017,39 @@ async def update_github_issue_status(
             )
             if not remove_result.get("ok"):
                 if remove_result.get("reasonCode") == "outcome_unknown":
-                    warnings.append(
-                        f"Label remove result unknown for {label}: "
-                        f"{remove_result.get('summary')}"
+                    # Same read-back rule as an ambiguous add: continue only
+                    # when the removal is observably complete.
+                    confirmed = await _github_issue_label_present(
+                        repository=repository,
+                        issue_number=issue_number,
+                        label=label,
+                        github_service_factory=github_service_factory,
                     )
-                    continue
+                    if confirmed is False:
+                        warnings.append(
+                            f"Label remove for {label} confirmed on read-back after "
+                            f"ambiguous result: {remove_result.get('summary')}"
+                        )
+                        applied.append(f"remove_label:{label}")
+                        continue
+                    return ToolResult(
+                        status="FAILED",
+                        outputs={
+                            "issueRef": issue_ref,
+                            "decision": "blocked",
+                            "lifecycleSettled": interpretation.settled,
+                            "transition": decision.to_dict(),
+                            "appliedActions": applied,
+                            "mutationOutcome": "outcome_unknown",
+                            "reasonCode": "mutation_unknown",
+                            "summary": (
+                                f"GitHub issue label remove result unknown for {issue_ref}: "
+                                f"{remove_result.get('summary')} The old status "
+                                "was still observed on read-back, so the transition "
+                                "stopped without claiming success."
+                            ),
+                        },
+                    )
                 return ToolResult(
                     status="FAILED",
                     outputs={
@@ -5943,8 +6126,37 @@ async def update_github_issue_status(
         updated_issue = _github_issue_payload(read_back_data, repository)
         issue_url = updated_issue.get("url") or issue.get("url")
         outcome = classify_mutation_outcome(plan=mutation_plan, read_back=updated_issue)
-        if outcome.outcome == "incomplete" and not applied:
-            outcome = classify_mutation_outcome(plan=mutation_plan, read_back=updated_issue)
+    if outcome.outcome not in ("applied", "already_applied"):
+        # Unknown or incomplete read-back is not authoritative terminal
+        # evidence: the step retains a retry/reconciliation owner instead of
+        # completing, and no success comment is published for it.
+        reason_code = (
+            "mutation_unknown" if outcome.outcome == "outcome_unknown" else "mutation_incomplete"
+        )
+        return ToolResult(
+            status="FAILED",
+            outputs={
+                "issueRef": issue_ref,
+                "decision": "blocked",
+                "issueUrl": issue_url,
+                "appliedActions": applied,
+                "confirmedState": updated_issue.get("state"),
+                "confirmedLabels": updated_issue.get("labels"),
+                "lifecycleSettled": (
+                    interpret_issue(updated_issue).settled
+                    if isinstance(updated_issue, Mapping)
+                    else interpretation.settled
+                ),
+                "transition": decision.to_dict(),
+                "mutationOutcome": outcome.outcome,
+                "reasonCode": reason_code,
+                "summary": (
+                    f"GitHub issue transition for {issue_ref} has no authoritative "
+                    f"terminal evidence ({outcome.outcome}: {outcome.detail}); "
+                    "reconcile by exact read-back before retrying effects."
+                ),
+            },
+        )
     async with httpx.AsyncClient(
         timeout=_GITHUB_ISSUE_MUTATION_TIMEOUT_SECONDS
     ) as client:
@@ -5952,7 +6164,7 @@ async def update_github_issue_status(
         if actions.get("commentPullRequestUrl") and pr_url:
             comment_body = f"Implementation pull request: {pr_url}"
         elif actions.get("comment"):
-            comment_body = f"MoonMind started implementation for {issue_ref}."
+            comment_body = _github_status_lifecycle_comment(mode=mode, issue_ref=issue_ref)
         if comment_body:
             try:
                 comment_response = await client.post(

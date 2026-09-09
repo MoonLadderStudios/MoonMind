@@ -15,6 +15,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
+from urllib.parse import unquote
 from uuid import UUID
 
 import httpx
@@ -8045,6 +8046,7 @@ async def test_existing_pr_survives_unchanged_omnigent_publication(
         AsyncMock(return_value=("fixture-credential", None)),
     )
     requests = []
+    issue_labels: list[str] = []
 
     def github_api(request):
         requests.append(request)
@@ -8070,11 +8072,24 @@ async def test_existing_pr_survives_unchanged_omnigent_publication(
                     },
                 }
             ]
+        elif request.method == "POST" and request.url.path.endswith("/labels"):
+            # Targeted lifecycle label additions apply without replacing the
+            # issue's other labels (design section 8.1).
+            for label in json.loads(request.content).get("labels", []):
+                if label not in issue_labels:
+                    issue_labels.append(label)
+            payload = [{"name": name} for name in issue_labels]
+        elif request.method == "POST":
+            payload = {"id": 1}
+        elif request.method == "DELETE":
+            deleted = unquote(request.url.path.rsplit("/", 1)[-1])
+            issue_labels[:] = [name for name in issue_labels if name != deleted]
+            payload = {}
         else:
             payload = {
                 "number": manifest["issueNumber"],
                 "state": "open",
-                "labels": [],
+                "labels": [{"name": name} for name in issue_labels],
                 "html_url": f"https://github.com/{repository}/issues/{manifest['issueNumber']}",
             }
         return httpx.Response(200, json=payload)
@@ -8140,12 +8155,17 @@ async def test_existing_pr_survives_unchanged_omnigent_publication(
         }
     )
     assert final.status == ("COMPLETED" if pr_state == "ready" else "FAILED")
-    mutations = [r for r in requests if r.method == "PATCH"]
     if pr_state != "ready":
         assert all(r.method == "GET" for r in requests)
         return
-    assert len(mutations) == 1
-    assert "state" not in json.loads(mutations[0].content)  # Code Review, not Done.
+    # Code Review, not Done: exactly one targeted label addition carrying the
+    # code-review destination, and no issue close.
+    label_posts = [
+        r for r in requests if r.method == "POST" and r.url.path.endswith("/labels")
+    ]
+    assert len(label_posts) == 1
+    assert json.loads(label_posts[0].content) == {"labels": ["status: code-review"]}
+    assert not [r for r in requests if r.method == "PATCH"]
 
 
 async def test_verified_no_commit_publication_reaches_the_workflow_publish_handoff(

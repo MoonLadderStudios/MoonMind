@@ -372,6 +372,73 @@ async def test_load_github_issue_preset_brief_uses_requested_artifact_path(
 
 
 @pytest.mark.asyncio
+async def test_load_github_issue_preset_brief_rejects_direct_in_progress_load(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    monkeypatch.setattr(story_tools.httpx, "AsyncClient", _FakeHttpClient)
+    service = _FakeGitHubService()
+    _fake_issue_entry("MoonLadderStudios/MoonMind", 1067)["labels"] = [
+        "status: in-progress"
+    ]
+
+    result = await load_github_issue_preset_brief(
+        {
+            "repository": "MoonLadderStudios/MoonMind",
+            "issueNumber": 1067,
+        },
+        github_service_factory=lambda: service,
+    )
+
+    assert result.status == "FAILED"
+    assert "lifecycle admission" in result.outputs["error"]
+
+
+@pytest.mark.asyncio
+async def test_load_github_issue_preset_brief_rejects_direct_closed_load(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    monkeypatch.setattr(story_tools.httpx, "AsyncClient", _FakeHttpClient)
+    service = _FakeGitHubService()
+    _fake_issue_entry("MoonLadderStudios/MoonMind", 1067)["state"] = "closed"
+
+    result = await load_github_issue_preset_brief(
+        {
+            "repository": "MoonLadderStudios/MoonMind",
+            "issueNumber": 1067,
+        },
+        github_service_factory=lambda: service,
+    )
+
+    assert result.status == "FAILED"
+    assert "lifecycle admission" in result.outputs["error"]
+
+
+@pytest.mark.asyncio
+async def test_load_github_issue_preset_brief_routes_recovery_handoff(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    monkeypatch.setattr(story_tools.httpx, "AsyncClient", _FakeHttpClient)
+    service = _FakeGitHubService()
+    _fake_issue_entry("MoonLadderStudios/MoonMind", 1067)["labels"] = [
+        "status: recovery-needed"
+    ]
+
+    result = await load_github_issue_preset_brief(
+        {
+            "repository": "MoonLadderStudios/MoonMind",
+            "issueNumber": 1067,
+            "predecessorStopped": True,
+            "handoffUsable": {"branch": "moonmind-job-x"},
+        },
+        github_service_factory=lambda: service,
+    )
+
+    assert result.status == "COMPLETED"
+    assert result.outputs["predecessor_stopped"] is True
+    assert result.outputs["handoff_usable"] == {"branch": "moonmind-job-x"}
+
+
+@pytest.mark.asyncio
 async def test_update_github_issue_status_skips_start_for_fully_implemented_assessment(
     tmp_path,
 ):
