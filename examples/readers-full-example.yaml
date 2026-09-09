@@ -1,7 +1,14 @@
+# Manifest — Full Multi-Source Example (vector-free)
+# See: docs/Rag/LlamaIndexManifestSystem.md §4
+#
+# MoonMind is vector-free: manifests declare sources and transforms and
+# compile to an executable plan. No embedding credentials, vector store
+# connection, collection, or retrieval index configuration is required.
+
 version: "v0"
 metadata:
   name: "moonmind-kitchen-sink"
-  description: "Multi-source ingest with hybrid retrieval and evaluation"
+  description: "Multi-source ingest with evaluation"
   owner: "search-platform@moonladdr"
   tags: ["demo","full","example"]
 
@@ -9,18 +16,6 @@ llm:
   provider: "openai"
   model: "gpt-4o-mini"
   temperature: 0.0
-
-embeddings:
-  provider: "openai"
-  model: "text-embedding-3-large"
-  batchSize: 256
-
-vectorStore:
-  type: "qdrant"
-  indexName: "mm_full_v0"
-  connection:
-    host: "${QDRANT_HOST}"
-    port: ${QDRANT_PORT}
 
 dataSources:
   - id: "github-code-docs"
@@ -59,30 +54,6 @@ transforms:
     - type: "PathToTags"
     - type: "InferDocType"   # code|design|spec|handbook
 
-indices:
-  - id: "mm_full_vector"
-    type: "VectorStoreIndex"
-    sources: ["github-code-docs","gdrive-specs","local-handbook"]
-    persist:
-      path: "s3://moonmind-indices/mm_full_vector_v0/"
-
-retrievers:
-  - id: "mm_hybrid"
-    type: "Hybrid"           # vector + BM25
-    indices: ["mm_full_vector"]
-    params:
-      topK: 10
-      alpha: 0.55            # vector weight
-    reranker:
-      type: "bge-reranker-large"
-      topK: 5
-
-postprocessors:
-  - type: "SimilarityCutoff"
-    threshold: 0.74
-  - type: "PrevNextNodeFetcher"
-    window: 1
-
 evaluation:
   datasets:
     - name: "smoke"
@@ -102,7 +73,6 @@ run:
 observability:
   tracing: "opentelemetry"
   logs: "stdout"
-  callbacks: "llamaindex"
 
 security:
   piiRedaction: true

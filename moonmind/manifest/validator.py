@@ -209,15 +209,16 @@ def _check_security_policy(
     if manifest.security.piiRedaction:
         # When PII redaction is requested, we need transforms with a splitter
         # configured so that content passes through chunking where redaction
-        # can be applied. Without transforms, raw text goes directly to
-        # embeddings, bypassing any redaction layer.
+        # can be applied. Without transforms, raw document text flows straight
+        # to downstream handling without redaction. Configure
+        # transforms.splitter to enable chunking-time PII filtering.
         if manifest.transforms is None or manifest.transforms.splitter is None:
             issues.append(
                 ValidationIssue(
                     "WARNING",
                     "security.piiRedaction",
                     "PII redaction is enabled but no transforms.splitter is configured. "
-                    "Without a splitter, raw document text may be embedded without "
+                    "Without a splitter, raw document text may flow downstream without "
                     "redaction. Configure transforms.splitter to enable chunking-time "
                     "PII filtering.",
                 )
@@ -265,7 +266,7 @@ def _check_index_ids_unique(
 ) -> None:
     """Ensure all index IDs are unique."""
     seen: dict[str, int] = {}
-    for idx in manifest.indices:
+    for idx in manifest.indices or []:
         seen[idx.id] = seen.get(idx.id, 0) + 1
     for idx_id, count in seen.items():
         if count > 1:
@@ -282,7 +283,7 @@ def _check_retriever_ids_unique(
 ) -> None:
     """Ensure all retriever IDs are unique."""
     seen: dict[str, int] = {}
-    for ret in manifest.retrievers:
+    for ret in manifest.retrievers or []:
         seen[ret.id] = seen.get(ret.id, 0) + 1
     for ret_id, count in seen.items():
         if count > 1:

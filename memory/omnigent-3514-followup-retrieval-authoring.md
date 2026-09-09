@@ -18,3 +18,11 @@ Key decisions:
 - **Checkpoint branch turn** launch uses a specialized `context_payload`, NOT the normal parameters channel, so a branch turn **inherits the parent run's compiled follow-up retrieval policy**. The branch create/continue/fork request models gained an optional `follow_up_retrieval` field (recorded as authored intent, folded into the idempotency digest); full per-turn launch consumption is follow-on.
 
 Shared frontend: `frontend/src/lib/contextRetrievalAuthoring.ts` (compile/clamp/parse/denials) + `frontend/src/components/ContextRetrievalControls.tsx`, wired into workflow-start, schedules edit, omnigent policy editor, and the branch panel. Diagnostics: `GET /retrieval/bridge-sessions/{id}/follow-up-retrieval` (registry `summarize_bridge_session`) rendered in workflow-detail. Related: [[omnigent-3507-workspace-materialization]].
+
+> **Retired (MoonLadderStudios/MoonMind#4113):** `rag` / `followUpRetrieval`
+> authoring is retired per #4105. New writes carry no vector behavior:
+> authoring compiles to no vector fields, controls render a retired notice
+> with no hidden state, and explicit vector requirements are rejected before
+> execution. Do not restore retired policy fields or reintroduce
+> collection/overlay/embedding controls. This note preserves the hop-by-hop
+> authoring history so later agents do not resurrect it.

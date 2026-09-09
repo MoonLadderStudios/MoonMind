@@ -67,14 +67,35 @@ class TestValidManifest:
 # ---------------------------------------------------------------------------
 
 class TestSchemaValidation:
-    def test_missing_required_field_embeddings(self):
-        bad = MINIMAL_VALID.replace("embeddings:", "# embeddings:")
-        # Remove the two lines after embeddings too
-        bad = bad.replace('  provider: "openai"\n', "")
-        bad = bad.replace('  model: "text-embedding-3-large"\n', "")
-        r = _result(bad)
-        assert not r.valid
-        assert any("embeddings" in e.field for e in r.errors)
+    def test_vector_free_manifest_valid_4113(self):
+        # MoonLadderStudios/MoonMind#4113: the vector-free release carries no
+        # MoonMind-managed embedding pipeline or vector store. New manifests
+        # omit the retired embeddings/vectorStore/indices/retrievers fields
+        # and must still validate. Retired fields remain accepted on
+        # historical reads (see MINIMAL_VALID).
+        vector_free = textwrap.dedent("""\
+            version: "v0"
+            metadata:
+              name: "vector-free-manifest"
+              description: "No managed-vector configuration"
+            dataSources:
+              - id: "src1"
+                type: "SimpleDirectoryReader"
+                params:
+                  inputDir: "./data"
+            transforms:
+              splitter:
+                type: "TokenTextSplitter"
+                chunkSize: 1000
+                chunkOverlap: 100
+            run:
+              concurrency: 4
+        """)
+        r = _result(vector_free)
+        assert r.valid, r.summary()
+        assert r.manifest is not None
+        assert r.manifest.embeddings is None
+        assert r.manifest.vectorStore is None
 
     def test_missing_required_field_metadata(self):
         bad = MINIMAL_VALID.replace("metadata:", "# metadata:")
