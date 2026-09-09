@@ -1715,9 +1715,14 @@ class MemorySettings(BaseSettings):
         "off",
         description="Run-history memory provider. Allowed values: off, digest.",
     )
-    long_term: Literal["off", "mem0"] = Field(
+    long_term: Literal["off"] = Field(
         "off",
-        description="Long-term memory provider. Allowed values: off, mem0.",
+        description=(
+            "Retired long-term memory provider "
+            "(MoonLadderStudios/MoonMind#4109). Hosted Mem0 memory was removed "
+            "because its SDK mandatorily requires Qdrant; only 'off' parses. "
+            "A stale 'mem0' value fails fast instead of being silently ignored."
+        ),
     )
     fail_open: bool = Field(
         True,
@@ -1749,12 +1754,6 @@ class MemorySettings(BaseSettings):
         """Return whether run-history memory retrieval/writeback should run."""
 
         return self.enabled and self.history != "off"
-
-    @property
-    def long_term_enabled(self) -> bool:
-        """Return whether long-term memory retrieval/writeback should run."""
-
-        return self.enabled and self.long_term != "off"
 
     model_config = SettingsConfigDict(
         populate_by_name=True,

@@ -31,14 +31,11 @@ def _settings(**overrides: object) -> RagRuntimeSettings:
         memory_enabled=True,
         memory_planning="off",
         memory_history="off",
-        memory_long_term="off",
         memory_fail_open=True,
         memory_context_budget_tokens=4096,
         planning_workspace_root=None,
         beads_command="bd",
         memory_namespace_id="default",
-        mem0_api_key=None,
-        mem0_user_id=None,
     )
     defaults.update(overrides)
     return RagRuntimeSettings(**defaults)
@@ -141,70 +138,53 @@ def test_retrieval_executable_mirrors_reason() -> None:
         preferred_transport="gateway",
     )
 
-def test_long_term_memory_disabled_by_default() -> None:
-    settings = RagRuntimeSettings.from_env({"MEMORY_ENABLED": "false"})
-    ok, reason = settings.long_term_memory_execution_reason()
-    assert not ok
-    assert reason == "memory_disabled"
-    assert not settings.long_term_memory_enabled()
+def test_retired_mem0_memory_long_term_fails_fast() -> None:
+    """#4109: a stale Mem0 opt-in fails fast instead of being silently ignored."""
 
-def test_long_term_memory_mem0_requires_api_key() -> None:
-    settings = RagRuntimeSettings.from_env(
-        {"MEMORY_ENABLED": "true", "MEMORY_LONG_TERM": "mem0"}
-    )
-    ok, reason = settings.long_term_memory_execution_reason()
-    assert not ok
-    assert reason == "mem0_api_key_missing"
+    import pytest as pytest_module
 
-def test_long_term_memory_mem0_enabled_with_api_key() -> None:
-    settings = RagRuntimeSettings.from_env(
-        {
-            "MEMORY_ENABLED": "true",
-            "MEMORY_LONG_TERM": "mem0",
-            "MEM0_API_KEY": "mem0-secret",
-            "MEMORY_CONTEXT_BUDGET_TOKENS": "600",
-            "MEMORY_NAMESPACE_ID": "tenant-a",
-            "MEM0_USER_ID": "mem-user",
-        }
-    )
-    ok, reason = settings.long_term_memory_execution_reason()
-    assert ok
-    assert reason == "ok"
-    assert settings.long_term_memory_enabled()
-    assert settings.memory_context_budget_tokens == 600
-    assert settings.memory_namespace_id == "tenant-a"
-    assert settings.mem0_user_id == "mem-user"
+    with pytest_module.raises(ValueError, match="MEMORY_LONG_TERM"):
+        RagRuntimeSettings.from_env(
+            {"MEMORY_ENABLED": "true", "MEMORY_LONG_TERM": "mem0"}
+        )
+    with pytest_module.raises(ValueError, match="MEM0_API_KEY"):
+        RagRuntimeSettings.from_env(
+            {"MEMORY_ENABLED": "true", "MEM0_API_KEY": "mem0-secret"}
+        )
+    with pytest_module.raises(ValueError, match="MEM0_USER_ID"):
+        RagRuntimeSettings.from_env(
+            {"MEMORY_ENABLED": "true", "MEM0_USER_ID": "mem-user"}
+        )
 
-def test_long_term_memory_invalid_mode_fails_with_unsupported_reason() -> None:
+
+def test_retired_memory_long_term_off_stays_normal() -> None:
+    """#4109: absence of optional memory is normal; no Qdrant outage noise."""
+
     settings = RagRuntimeSettings.from_env(
-        {"MEMORY_ENABLED": "true", "MEMORY_LONG_TERM": "unsupported"}
+        {"MEMORY_ENABLED": "true", "MEMORY_LONG_TERM": "off"}
     )
-    ok, reason = settings.long_term_memory_execution_reason()
-    assert not ok
-    assert reason == "long_term_memory_unsupported"
+    assert not hasattr(settings, "memory_long_term")
+    assert not hasattr(settings, "long_term_memory_enabled")
+    assert not hasattr(settings, "long_term_memory_execution_reason")
 
 def test_memory_plane_helpers_respect_master_toggle() -> None:
     settings = _settings(
         memory_enabled=True,
         memory_planning="beads",
         memory_history="digest",
-        memory_long_term="mem0",
     )
 
     assert settings.memory_planning_enabled is True
     assert settings.memory_history_enabled is True
-    assert settings.memory_long_term_enabled is True
 
     disabled = _settings(
         memory_enabled=False,
         memory_planning="beads",
         memory_history="digest",
-        memory_long_term="mem0",
     )
 
     assert disabled.memory_planning_enabled is False
     assert disabled.memory_history_enabled is False
-    assert disabled.memory_long_term_enabled is False
 
 def test_planning_memory_enabled_requires_global_and_plane_switch() -> None:
     assert _settings(memory_planning="beads").planning_memory_enabled()

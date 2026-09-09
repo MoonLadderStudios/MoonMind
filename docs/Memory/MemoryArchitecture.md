@@ -38,7 +38,7 @@ MoonMind already has the core primitives we extend:
 - **Durable execution state**: Temporal-backed workflow executions plus Postgres-backed execution/projection records used by the dashboard and execution APIs.
 - **Durable artifacts and run evidence**: S3-compatible workflow artifacts plus managed-run observability artifacts and workspace-backed log spools.
 - **Background orchestration**: Temporal workflows and activities running across specialized worker fleets.
-- **Curated project knowledge (Plane C)**: optional Mem0 adapter support for approved project memories with required provenance metadata, disabled unless explicitly enabled for a scoped integration.
+- **Curated project knowledge (Plane C)**: retired with MoonLadderStudios/MoonMind#4109 (hosted Mem0 removed; see Plane C below).
 - **Exact context assembly**: workflow intent, attachments, artifact refs, and run history composed into a bounded context bundle with budgets and provenance.
 
 This architecture does not replace these primitives. It adds a thin “memory layer” that:
@@ -76,20 +76,23 @@ MoonMind uses three orthogonal memory planes. Each plane has a clear purpose and
 - Digests and fix patterns live in Postgres-backed projections and artifacts (never raw logs).
 - Every digest links back to evidence: `workflowId`, `agentRunId` when applicable, commits/PRs, and artifact refs.
 
-### Plane C — Long-Term Memory (Mem0, opt-in)
+### Plane C — Long-Term Memory (retired)
 
 **Question:** “What do we know / how do we do this here?”
 
-**Chosen approach:**
-- Mem0 is an explicitly scoped, opt-in long-term memory integration for MoonMind.
-- Mem0 stores curated, reusable knowledge:
-  - decisions, conventions, playbooks, preferences, “how we do X”.
-- Mem0 does **not** replace Plane B. Plane B remains the audit trail and evidence base.
-- It is disabled by default and never an implicit replacement vector store.
-
-**Policy:**
-- Every curated entry carries provenance (“derived from run X”, “approved by Y”).
-- Only approved/curated classes are used by default during context assembly.
+**Status (MoonLadderStudios/MoonMind#4109):**
+- Hosted Mem0 long-term memory is retired and has no adapter, settings, or
+  package requirement in the shipped application. The resolved `mem0ai` SDK
+  mandatorily depends on `qdrant-client`, so no Mem0 configuration could
+  satisfy the Qdrant-free requirement; it was retired rather than kept as a
+  dormant adapter or hidden in an optional extra.
+- A stale `MEMORY_LONG_TERM=mem0` (or `MEM0_API_KEY`/`MEM0_USER_ID`) value
+  fails fast with an actionable error instead of being silently ignored.
+- Curated, reusable knowledge (decisions, conventions, playbooks,
+  preferences) lives in reviewable repo surfaces (docs, Beads follow-ups) and
+  durable artifacts, not in a memory service.
+- Plane C does **not** replace Plane B. Plane B remains the audit trail and
+  evidence base.
 
 ## 4) Read Path: Building the Context Bundle
 
@@ -104,8 +107,9 @@ Every chat request and every workflow run may request a context bundle. It is as
 - Look up related run digests scoped to the same namespace/repo by exact metadata (repo, workflow, error signature, recency).
 - If an error signature is known (or predicted), pull the most successful fix patterns first.
 
-3) **Curated project knowledge (Mem0, opt-in)**
-- Load relevant conventions, known pitfalls, preferred workflows, playbooks, and user/team prefs.
+3) **Curated project knowledge (retired Plane C)**
+- Curated conventions, pitfalls, and playbooks live in reviewable repo
+  surfaces and durable artifacts. There is no memory-service lookup step.
 
 4) **Attachments and artifacts**
 - Resolve explicitly referenced design docs, specs, guides, files, and artifact refs.
@@ -141,10 +145,11 @@ Writeback is automatic, async-first, and idempotent by execution identity (`work
 - Extract/normalize error signatures (from logs, structured errors, and/or LLM extraction).
 - When a run succeeds after a fix, attach that run as evidence for the signature and update the playbook.
 
-3) **Promote stable learnings to Mem0 (Plane C, opt-in)**
-- Promotions are small and durable:
-  - conventions, environment pitfalls, stable decisions, reusable playbooks.
-- Promotions default to `draft` unless explicitly marked `approved` (human- or policy-gated).
+3) **Curated learnings stay in reviewable surfaces (Plane C retired)**
+- Stable learnings (conventions, environment pitfalls, decisions, playbooks)
+  are recorded in docs/Beads follow-ups and durable artifacts, defaulting to
+  `draft` unless explicitly marked `approved` (human- or policy-gated). There
+  is no Mem0 promotion step.
 
 4) **Planning writeback to Beads (Plane A)**
 - Close/update the work item and create discovered follow-ups as new nodes.
@@ -169,11 +174,11 @@ Minimum fields:
 - `created_at`, `expires_at` (optional)
 - `trust_class` (e.g., `raw`, `derived`, `approved`)
 
-### 6.3 Mem0: long-term memories (opt-in integration)
-Required metadata on every Mem0 entry:
-- `namespace_id`, `repo`, `scope` (`project | team | user`)
-- `review_state` (`draft | approved | deprecated`)
-- `provenance` pointers (`workflowId`, `agentRunId` when applicable, commits, doc refs)
+### 6.3 Long-term memories (retired integration)
+MoonLadderStudios/MoonMind#4109 retired the hosted Mem0 integration. There is
+no long-term memory service: curated entries live in reviewable repo surfaces
+and durable artifacts with namespace/repo scoping and provenance pointers
+(`workflowId`, `agentRunId` when applicable, commits, doc refs).
 
 Memory provenance must stay model-agnostic. It records durable evidence pointers, not the model or provider that happened to produce the memory contribution.
 
@@ -190,14 +195,10 @@ MoonMind implements this architecture with small adapters/services:
   - `extract_error_signature(artifacts) -> signature`
   - `upsert_digest_and_fix_patterns(...)`
 
-- `LongTermMemoryService` (Mem0, opt-in)
-  - `search(query, scope, filters) -> memories`
-  - `add_or_update(memory, review_state, provenance)`
-
 - `RetrievalGateway` (`moonmind/memory/services.py`)
   - `retrieve_context_pack(query, *, namespace_id, repo, planning_ref?, budget?) -> ContextPack`
-  - used by chat and workflow workers to assemble planning, history, curated
-    knowledge, and explicitly referenced attachments into a budgeted pack.
+  - used by chat and workflow workers to assemble planning, history, and
+    explicitly referenced attachments into a budgeted pack.
 
 ## 8) Runtime Controls (Feature Flags)
 
@@ -206,9 +207,12 @@ Minimal flags (fail-open by default):
 - `MEMORY_ENABLED=true|false`
 - `MEMORY_PLANNING=off|beads`
 - `MEMORY_HISTORY=off|digest`
-- `MEMORY_LONG_TERM=off|mem0`
 - `MEMORY_FAIL_OPEN=true|false` (default `true`)
 - `MEMORY_CONTEXT_BUDGET_TOKENS=<int>`
+
+`MEMORY_LONG_TERM`/`MEM0_API_KEY`/`MEM0_USER_ID` are retired
+(MoonLadderStudios/MoonMind#4109): stale values fail fast instead of enabling
+a removed integration.
 
 ## 9) Operational Expectations
 
@@ -223,4 +227,3 @@ Minimal flags (fail-open by default):
 ## 10) References
 
 - Beads: https://github.com/steveyegge/beads
-- Mem0: https://docs.mem0.ai/ (opt-in integration only; disabled by default)
