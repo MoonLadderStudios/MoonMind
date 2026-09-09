@@ -13,6 +13,7 @@ from moonmind.workflows.executions.manifest_contract import (
 
 def _manifest(**blocks) -> dict:
     base: dict = {
+        "version": "v0",
         "dataSources": [{"id": "local", "type": "SimpleDirectoryReader"}],
     }
     base.update(blocks)

@@ -9773,6 +9773,10 @@ export interface components {
         /**
          * ManifestRunOptions
          * @description Optional queue overrides for manifest runs.
+         *
+         *     MoonLadderStudios/MoonMind#4108: ``forceFull`` is retired — every run
+         *     already refetches all sources. The queue contract rejects submissions
+         *     that still carry it.
          */
         ManifestRunOptions: {
             /** Dryrun */
