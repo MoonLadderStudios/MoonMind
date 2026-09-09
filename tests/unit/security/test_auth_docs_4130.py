@@ -22,6 +22,11 @@ CANONICAL_DOC = REPO_ROOT / "docs/Security/AuthenticationContracts.md"
 README = REPO_ROOT / "README.md"
 ENV_TEMPLATE = REPO_ROOT / ".env-template"
 REMOVAL_PLAN = REPO_ROOT / "docs/tmp/KeycloakRemovalPlan.md"
+PROPOSAL_DOC = REPO_ROOT / "docs/Proposals/OmnigentAuthenticationDesign.md"
+MIGRATE_CLI = REPO_ROOT / "api_service/scripts/migrate_identities.py"
+MAIN_CLI = REPO_ROOT / "moonmind/cli.py"
+API_MAIN = REPO_ROOT / "api_service/main.py"
+EXAMPLES_DIR = REPO_ROOT / "examples"
 
 
 def _read(path: Path) -> str:
@@ -102,3 +107,50 @@ def test_removal_plan_retained_until_execution_complete():
     assert REMOVAL_PLAN.exists()
     text = _read(REMOVAL_PLAN)
     assert "Status: Proposed" in text
+
+
+def test_proposal_keycloak_references_are_classified():
+    # docs/Proposals/OmnigentAuthenticationDesign.md is active proposal
+    # guidance, so its pre-removal Keycloak references must carry an
+    # explicit retirement classification, not read as live setup claims.
+    text = _read(PROPOSAL_DOC)
+    assert "Candidate design only" in text
+    assert "optional Keycloak profile" not in text
+    assert "#4129" in text
+    assert "AuthenticationContracts" in text
+
+
+def test_examples_contain_no_active_keycloak_setup():
+    # Active examples must not claim retired Keycloak paths still work.
+    hits = []
+    for path in sorted(EXAMPLES_DIR.rglob("*")):
+        if not path.is_file():
+            continue
+        try:
+            content = path.read_text(encoding="utf-8", errors="strict")
+        except (UnicodeDecodeError, OSError):
+            continue
+        if "keycloak" in content.lower():
+            hits.append(str(path.relative_to(REPO_ROOT)))
+    assert hits == []
+
+
+def test_cli_help_and_migration_example_are_classified():
+    # moonmind/cli.py (user-facing CLI help source) must not advertise
+    # retired Keycloak paths or realm URLs.
+    cli = _read(MAIN_CLI)
+    assert "keycloak" not in cli.lower()
+    assert "realms/" not in cli
+    # The K3 migration command keeps a historical source-provider key; it
+    # must be classified as migration input, not an active selector.
+    migrate = _read(MIGRATE_CLI)
+    assert "not an active" in migrate
+    assert "AUTH_PROVIDER" in migrate
+
+
+def test_api_composition_mounts_no_legacy_login_routes():
+    # No /api/v1/auth/* application-login or /auth/jwt/* issuance route may
+    # be mounted after #4129 removed the bundled Keycloak integration.
+    text = _read(API_MAIN)
+    assert 'prefix="/api/v1/auth"' not in text
+    assert "auth/jwt" not in text
