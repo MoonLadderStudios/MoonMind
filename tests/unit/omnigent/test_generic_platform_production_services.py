@@ -3,6 +3,9 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import json
+import os
+import subprocess
+import sys
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from types import SimpleNamespace
@@ -248,11 +251,211 @@ async def test_exact_host_opencode_probe_composes_both_environment_builders() ->
         "-c",
     ]
     assert "from omnigent.host.connect import _build_runner_env" in argv[5]
-    assert "from omnigent.opencode_native_app_server import filtered_server_env" in argv[5]
+    assert (
+        "from omnigent.harnesses.opencode_native.app_server import filtered_server_env"
+        in argv[5]
+    )
+    assert "omnigent.opencode_native_app_server" not in argv[5]
     assert "moonmind-context" in argv[5]
     assert "env=runner_env" in argv[5]
     assert argv[6:] == ["gh", "auth", "status", "--hostname", "github.com"]
     assert kwargs == {"timeout_seconds": 30.0, "check": False}
+
+
+def _upstream_helper_layout(root: Path, *, drift: str | None = None) -> None:
+    """Write a minimal package mirroring the Omnigent >=0.13.0 helper layout.
+
+    ``drift`` renames one helper the way an upstream release could, so the
+    probe wrapper's typed substrate failure can be exercised for real.
+    """
+
+    for package in (
+        "omnigent",
+        "omnigent/host",
+        "omnigent/harnesses",
+        "omnigent/harnesses/opencode_native",
+    ):
+        (root / package).mkdir(parents=True, exist_ok=True)
+        (root / package / "__init__.py").write_text("", encoding="utf-8")
+    runner_builder = (
+        "_build_runner_environment" if drift == "runner" else "_build_runner_env"
+    )
+    (root / "omnigent" / "host" / "connect.py").write_text(
+        f"def {runner_builder}(base_env, *, server_url, runner_id, binding_token, "
+        "workspace, parent_pid, **_):\n"
+        "    env = dict(base_env)\n"
+        "    env['OMNIGENT_RUNNER_ID'] = runner_id\n"
+        "    return env\n",
+        encoding="utf-8",
+    )
+    filter_name = "filtered_serve_env" if drift == "opencode" else "filtered_server_env"
+    (root / "omnigent" / "harnesses" / "opencode_native" / "app_server.py").write_text(
+        "import os\n"
+        f"def {filter_name}(*, bridge_dir, auth_secret, extra_env=None):\n"
+        "    return {key: value for key, value in os.environ.items() "
+        "if key in ('PATH', 'HOME')}\n",
+        encoding="utf-8",
+    )
+
+
+async def _capture_probe_source(run_probe) -> str:
+    captured: dict[str, list[str]] = {}
+
+    class Backend:
+        async def run(self, argv, **kwargs):
+            captured["argv"] = argv
+            return 0, "", ""
+
+    await run_probe(Backend())
+    return captured["argv"][5]
+
+
+@pytest.mark.asyncio
+async def test_exact_host_runner_probe_source_runs_against_upstream_layout(
+    tmp_path: Path,
+) -> None:
+    probe_source = await _capture_probe_source(
+        lambda backend: _run_exact_host_runner_command(
+            backend=backend, container_name="mm-host-opencode", argv=["true"]
+        )
+    )
+    probed = [
+        sys.executable,
+        "-c",
+        "import os, sys; sys.exit(3 if os.environ.get('OMNIGENT_RUNNER_ID') "
+        "== 'moonmind-attestation' else 4)",
+    ]
+    env = {"PATH": os.environ["PATH"], "HOME": str(tmp_path)}
+
+    current = tmp_path / "current"
+    _upstream_helper_layout(current)
+    result = subprocess.run(
+        [sys.executable, "-c", probe_source, *probed],
+        cwd=current,
+        env=env,
+        capture_output=True,
+        text=True,
+    )
+    assert result.returncode == 3, result.stderr
+    assert "moonmind-attestation-substrate-unavailable" not in result.stderr
+
+    drifted = tmp_path / "drifted"
+    _upstream_helper_layout(drifted, drift="runner")
+    result = subprocess.run(
+        [sys.executable, "-c", probe_source, *probed],
+        cwd=drifted,
+        env=env,
+        capture_output=True,
+        text=True,
+    )
+    assert result.returncode == 97
+    assert "moonmind-attestation-substrate-unavailable: ImportError" in result.stderr
+    assert "_build_runner_env" in result.stderr
+
+
+@pytest.mark.asyncio
+async def test_exact_host_opencode_probe_source_fails_typed_on_upstream_helper_drift(
+    tmp_path: Path,
+) -> None:
+    probe_source = await _capture_probe_source(
+        lambda backend: _run_exact_host_opencode_command(
+            backend=backend, container_name="mm-host-opencode", argv=["true"]
+        )
+    )
+    env = {"PATH": os.environ["PATH"], "HOME": str(tmp_path)}
+
+    drifted = tmp_path / "drifted"
+    _upstream_helper_layout(drifted, drift="opencode")
+    result = subprocess.run(
+        [sys.executable, "-c", probe_source, "true"],
+        cwd=drifted,
+        env=env,
+        capture_output=True,
+        text=True,
+    )
+    assert result.returncode == 97
+    assert "moonmind-attestation-substrate-unavailable: ImportError" in result.stderr
+    assert "filtered_server_env" in result.stderr
+
+    # With the upstream helpers present, a missing MoonMind context shim is a
+    # launch-contract failure on the probed path, never a substrate fault.
+    current = tmp_path / "current"
+    _upstream_helper_layout(current)
+    result = subprocess.run(
+        [sys.executable, "-c", probe_source, "true"],
+        cwd=current,
+        env=env,
+        capture_output=True,
+        text=True,
+    )
+    assert result.returncode not in (0, 97)
+    assert "moonmind-attestation-substrate-unavailable" not in result.stderr
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("run_probe", "boundary"),
+    [
+        (
+            lambda backend: _run_exact_host_runner_command(
+                backend=backend, container_name="mm-host-opencode", argv=["true"]
+            ),
+            "runner environment",
+        ),
+        (
+            lambda backend: _run_exact_host_opencode_command(
+                backend=backend, container_name="mm-host-opencode", argv=["true"]
+            ),
+            "OpenCode shell environment",
+        ),
+        (
+            lambda backend: _read_exact_host_model_options(
+                backend=backend,
+                client=SimpleNamespace(),
+                container_name="mm-host-opencode",
+                omnigent_host_id="host-opencode",
+                harness_id="opencode-native",
+            ),
+            "OpenCode model catalog",
+        ),
+    ],
+    ids=["runner", "opencode-shell", "model-catalog"],
+)
+async def test_exact_host_probe_substrate_failure_is_typed_build_mismatch(
+    run_probe, boundary: str
+) -> None:
+    class Backend:
+        async def run(self, argv, **kwargs):
+            return (
+                97,
+                "",
+                "Traceback (most recent call last):\n  ...\n"
+                "moonmind-attestation-substrate-unavailable: ModuleNotFoundError: "
+                "No module named 'omnigent.harnesses'\n",
+            )
+
+    with pytest.raises(HarnessPlatformError) as excinfo:
+        await run_probe(Backend())
+
+    assert excinfo.value.code == HarnessPlatformFailure.OMNIGENT_HARNESS_BUILD_MISMATCH
+    assert str(excinfo.value) == (
+        f"{boundary} attestation helper is unavailable in the exact host image: "
+        "ModuleNotFoundError: No module named 'omnigent.harnesses'"
+    )
+
+
+@pytest.mark.asyncio
+async def test_exact_host_probe_contract_failures_keep_their_own_status() -> None:
+    class Backend:
+        async def run(self, argv, **kwargs):
+            return 1, "", "test: failed"
+
+    assert await _run_exact_host_runner_command(
+        backend=Backend(), container_name="mm-host-opencode", argv=["true"]
+    ) == (1, "", "test: failed")
+    assert await _run_exact_host_opencode_command(
+        backend=Backend(), container_name="mm-host-opencode", argv=["true"]
+    ) == (1, "", "test: failed")
 
 
 @pytest.mark.asyncio
