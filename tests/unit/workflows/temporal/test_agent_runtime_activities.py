@@ -6773,7 +6773,9 @@ async def test_agent_runtime_prepare_turn_instructions_reports_disabled_retrieva
 
     assert "MoonMind retrieval capability:" in result
     assert "currently unavailable" in result
-    assert "rag_disabled" in result
+    # MoonLadderStudios/MoonMind#4112: native vector retrieval retired; the
+    # managed note reports vector_retired regardless of legacy RAG_ENABLED.
+    assert "vector_retired" in result
 
 
 @pytest.mark.asyncio
