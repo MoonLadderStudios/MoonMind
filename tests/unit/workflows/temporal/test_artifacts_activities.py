@@ -278,10 +278,14 @@ def _completed_digest_artifact(artifact_id: str = "art_run_digest_1"):
     artifact = SimpleNamespace(
         artifact_id=artifact_id,
         status=db_models.TemporalArtifactStatus.COMPLETE,
+        created_by_principal="service:temporal-finalize",
         metadata_json={
             "name": "run_digest.json",
             "workflowId": "mm:run:123",
             "runId": "temporal-run-1",
+            "recordKind": "run_digest",
+            "schemaVersion": "run_digest_artifact/v1",
+            "idempotencyKey": "run_digest:mm:run:123:temporal-run-1",
         },
     )
     return artifact
@@ -322,6 +326,10 @@ async def test_write_run_digest_persists_bounded_output_summary_artifact(
     _, create_kwargs = mock_service.create.await_args
     assert create_kwargs["principal"] == "service:temporal-finalize"
     assert create_kwargs["content_type"] == "application/json"
+    assert (
+        create_kwargs["retention_class"]
+        is db_models.TemporalArtifactRetentionClass.LONG
+    )
     link = create_kwargs["link"]
     assert link.namespace == "default"
     assert link.workflow_id == "mm:run:123"
@@ -365,6 +373,61 @@ async def test_write_run_digest_retry_reuses_completed_artifact(
     assert artifact_id == "art_run_digest_1"
     mock_service.create.assert_not_awaited()
     mock_service.write_complete.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_write_run_digest_ignores_foreign_owned_artifact(
+    activities,
+    mock_service,
+):
+    """#4109: caller-controlled metadata alone never suppresses the digest."""
+
+    from api_service.db import models as db_models
+
+    foreign = _completed_digest_artifact(artifact_id="art_spoofed")
+    foreign.created_by_principal = "user:mallory"
+    mock_service.list_for_execution.return_value = [foreign]
+    created = SimpleNamespace(artifact_id="art_run_digest_new")
+    mock_service.create.return_value = (created, None)
+    mock_service.write_complete.return_value = SimpleNamespace(
+        artifact_id="art_run_digest_new",
+        status=db_models.TemporalArtifactStatus.COMPLETE,
+    )
+
+    artifact_id = await activities._write_run_digest_best_effort(
+        _terminal_record()
+    )
+
+    assert artifact_id == "art_run_digest_new"
+    mock_service.create.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_write_run_digest_retry_resumes_pending_artifact(
+    activities,
+    mock_service,
+):
+    """#4109: an interrupted attempt is completed, not duplicated."""
+
+    from api_service.db import models as db_models
+
+    pending = _completed_digest_artifact(artifact_id="art_run_digest_pending")
+    pending.status = db_models.TemporalArtifactStatus.PENDING_UPLOAD
+    mock_service.list_for_execution.return_value = [pending]
+    mock_service.write_complete.return_value = SimpleNamespace(
+        artifact_id="art_run_digest_pending",
+        status=db_models.TemporalArtifactStatus.COMPLETE,
+    )
+
+    artifact_id = await activities._write_run_digest_best_effort(
+        _terminal_record()
+    )
+
+    assert artifact_id == "art_run_digest_pending"
+    mock_service.create.assert_not_awaited()
+    _, write_kwargs = mock_service.write_complete.await_args
+    assert write_kwargs["artifact_id"] == "art_run_digest_pending"
+    assert write_kwargs["principal"] == "service:temporal-finalize"
 
 
 @pytest.mark.asyncio

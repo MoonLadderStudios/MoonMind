@@ -2739,6 +2739,11 @@ async def startup_event():
         app.state.retrieval_service = ContextRetrievalService(
             settings=RagRuntimeSettings.from_env()
         )
+    except ValueError:
+        # Operator configuration errors (for example retired Mem0 keys from
+        # MoonLadderStudios/MoonMind#4109) must fail fast at startup instead
+        # of being swallowed by best-effort retrieval initialization.
+        raise
     except Exception as exc:
         logger.warning(
             "Retrieval service startup initialization skipped: %s",
