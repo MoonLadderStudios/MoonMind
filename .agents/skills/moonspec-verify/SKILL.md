@@ -336,7 +336,8 @@ choices in those sources, not in this verifier.
 
 Distinguish the agent's local tools from its authorized execution substrate.
 In MoonMind, inspect the exposed container tool contract and CLI help, and use
-the repository's managed test entrypoint or `moonmind container run --spec`
+the repository's managed test entrypoint or
+`moonmind container run --spec <job.json> --request-id <stable-phase-id>`
 with a job specification derived from documented test commands and approved
 image sources. The API-owned Docker Backend supplies the daemon and toolchain;
 neither a local Docker executable nor a daemon socket in the agent is required.
@@ -345,6 +346,12 @@ authorizes direct Docker access. Preserve test isolation, workspace access
 policy, bounded resources, and cleanup in either host. Do not bypass the managed
 boundary, guess image references, provision credentials, or alter deployment
 configuration to make a test runnable.
+
+For generic jobs, persist a stable request ID for the verification phase,
+candidate revision or workspace checkpoint, and workload specification. Reuse
+that ID when retrying the same job after a client timeout or continuation;
+recover the existing job and its terminal evidence instead of creating another
+submission identity. Use a new ID when the candidate, phase, or workload changes.
 
 When an applicable authorized container path exists, attempt the targeted build
 or test and inspect its terminal result and logs. CLI help, a submitted job ID,
