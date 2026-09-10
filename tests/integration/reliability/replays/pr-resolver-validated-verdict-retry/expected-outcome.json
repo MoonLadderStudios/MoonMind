@@ -1,0 +1,10 @@
+{
+  "failureClass": "execution_error",
+  "providerErrorCode": "PR_RESOLVER_MANUAL_REVIEW",
+  "summary": "pr-resolver reported status 'blocked'; ci_failures; next_step=run_full_remediation",
+  "terminalContractOutcome": "terminal_failure",
+  "terminalContractRecoveryOutcome": "skill_terminal_verdict",
+  "currentRetryable": false,
+  "preFlattenedRetryable": true,
+  "evaluationActivityCalls": 1
+}

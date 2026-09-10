@@ -549,8 +549,6 @@ def test_github_permission_profiles_define_required_modes():
     assert profiles["indexing"].required_permissions == {"Contents": "read"}
     assert profiles["publish"].required_permissions["Contents"] == "write"
     assert profiles["publish"].required_permissions["Pull requests"] == "write"
-    assert profiles["publish"].required_permissions["Issues"] == "write"
-    assert profiles["full_pr_automation"].required_permissions["Issues"] == "write"
     assert profiles["readiness"].required_permissions["Pull requests"] == "read"
     assert profiles["readiness"].required_permissions["Checks"] == "read"
     assert profiles["readiness"].required_permissions["Commit statuses"] == "read"
@@ -566,7 +564,6 @@ async def test_probe_github_token_targets_repo_and_reports_publish_checklist(mon
         side_effect=[
             _mock_get_response(200, {"full_name": "owner/repo"}),
             _mock_get_response(200, {"name": "main"}),
-            _mock_get_response(200, []),
             _mock_get_response(200, []),
         ]
     )
@@ -588,7 +585,6 @@ async def test_probe_github_token_targets_repo_and_reports_publish_checklist(mon
         "https://api.github.com/repos/owner/repo",
         "https://api.github.com/repos/owner/repo/branches/main",
         "https://api.github.com/repos/owner/repo/pulls?per_page=1",
-        "https://api.github.com/repos/owner/repo/issues?per_page=1",
     ]
     checklist = {
         item["permission"]: item for item in result["permissionChecklist"]
@@ -597,8 +593,6 @@ async def test_probe_github_token_targets_repo_and_reports_publish_checklist(mon
     assert checklist["Contents"]["status"] == "verified_read_access"
     assert checklist["Pull requests"]["level"] == "write"
     assert checklist["Pull requests"]["status"] == "verified_read_access"
-    assert checklist["Issues"]["level"] == "write"
-    assert checklist["Issues"]["status"] == "verified_read_access"
     assert checklist["Checks"]["status"] == "not_checked"
     assert any("resource owner" in item for item in result["limitations"])
     assert any("GitHub App" in item for item in result["limitations"])
@@ -1447,78 +1441,3 @@ async def test_evaluate_pull_request_readiness_blocks_changes_requested_review(m
     assert result.ready is False
     assert result.automated_review_complete is False
     assert result.blockers[0]["summary"] == "Automated review has requested changes."
-
-
-# ---------------------------------------------------------------------------
-# issue comments for portable per-attempt handoffs (#4177)
-# ---------------------------------------------------------------------------
-
-@pytest.mark.asyncio
-async def test_list_issue_comments_returns_poster_provenance(monkeypatch):
-    monkeypatch.setenv("GITHUB_TOKEN", "github-token-fixture")
-    payload = [
-        {"id": 1, "body": "hello", "user": {"login": "moonmind-bot", "type": "Bot"},
-         "created_at": "2026-01-01T00:00:00Z", "updated_at": "2026-01-01T00:00:00Z"},
-        {"id": 2, "body": "other", "user": {"login": "human", "type": "User"},
-         "created_at": "", "updated_at": ""},
-    ]
-    mock_client = AsyncMock()
-    mock_client.get = AsyncMock(return_value=_mock_get_response(200, payload))
-    mock_client.__aenter__ = AsyncMock(return_value=mock_client)
-    mock_client.__aexit__ = AsyncMock(return_value=False)
-
-    with patch("moonmind.workflows.adapters.github_service.httpx.AsyncClient", return_value=mock_client):
-        result = await GitHubService().list_issue_comments(repo="o/r", issue_number=4177)
-
-    assert result["ok"] is True
-    assert [comment["poster_login"] for comment in result["comments"]] == ["moonmind-bot", "human"]
-    assert result["comments"][0]["poster_type"] == "Bot"
-
-
-@pytest.mark.asyncio
-async def test_create_issue_comment_redacts_secrets_before_publish(monkeypatch):
-    monkeypatch.setenv("GITHUB_TOKEN", "github-token-fixture")
-    leaked = "ghp_" + "s" * 30
-    mock_client = AsyncMock()
-    mock_client.post = AsyncMock(return_value=_mock_response(201, {"id": 77}))
-    mock_client.__aenter__ = AsyncMock(return_value=mock_client)
-    mock_client.__aexit__ = AsyncMock(return_value=False)
-
-    with patch("moonmind.workflows.adapters.github_service.httpx.AsyncClient", return_value=mock_client):
-        result = await GitHubService().create_issue_comment(
-            repo="o/r", issue_number=4177, body=f"saw {leaked} token=supersecret-value in logs")
-
-    assert result["ok"] is True and result["commentId"] == 77
-    sent_body = mock_client.post.call_args.kwargs["json"]["body"]
-    assert leaked not in sent_body and "supersecret-value" not in sent_body
-
-
-@pytest.mark.asyncio
-async def test_create_issue_comment_refuses_empty_body(monkeypatch):
-    monkeypatch.setenv("GITHUB_TOKEN", "github-token-fixture")
-    result = await GitHubService().create_issue_comment(repo="o/r", issue_number=4177, body="   ")
-    assert result["ok"] is False and result["reasonCode"] == "empty_body"
-
-
-@pytest.mark.asyncio
-async def test_issue_comment_transport_loss_is_outcome_unknown(monkeypatch):
-    monkeypatch.setenv("GITHUB_TOKEN", "github-token-fixture")
-    mock_client = AsyncMock()
-    mock_client.post = AsyncMock(side_effect=httpx.ReadTimeout("lost"))
-    mock_client.patch = AsyncMock(side_effect=httpx.ConnectError("down"))
-    mock_client.__aenter__ = AsyncMock(return_value=mock_client)
-    mock_client.__aexit__ = AsyncMock(return_value=False)
-
-    with patch("moonmind.workflows.adapters.github_service.httpx.AsyncClient", return_value=mock_client):
-        created = await GitHubService().create_issue_comment(repo="o/r", issue_number=4177, body="attempt")
-        updated = await GitHubService().update_issue_comment(repo="o/r", comment_id=1, body="attempt")
-
-    assert created["reasonCode"] == "outcome_unknown" and "marker" in created["summary"]
-    assert updated["reasonCode"] == "outcome_unknown" and "read-back" in updated["summary"]
-
-
-@pytest.mark.asyncio
-async def test_issue_comment_without_auth_is_unavailable(monkeypatch):
-    monkeypatch.delenv("GITHUB_TOKEN", raising=False)
-    result = await GitHubService().list_issue_comments(repo="o/r", issue_number=4177)
-    assert result["ok"] is False and result["reasonCode"] == "auth_unavailable"

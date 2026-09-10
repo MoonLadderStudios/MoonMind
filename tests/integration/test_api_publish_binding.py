@@ -10,6 +10,7 @@ import pytest
 from fastapi import FastAPI
 
 from api_service import main
+from moonmind.deployment_access import DeploymentAccessError, validate_access
 from moonmind.security import auth_modes_4120 as auth_modes
 
 pytestmark = [pytest.mark.integration, pytest.mark.integration_ci, pytest.mark.asyncio]
@@ -117,6 +118,55 @@ async def test_rendered_binding_matches_production_startup(
     assert str(api["ports"][0]["published"]) == expected_port
     assert api["ports"][0]["target"] == 8000
     environment = api["environment"]
+    # The deployed binding must survive reconciliation of the rendered config.
+    previous = [
+        {
+            "HostConfig": {
+                "PortBindings": {
+                    "8000/tcp": [
+                        {
+                            "HostIp": expected_host,
+                            "HostPort": expected_port,
+                        }
+                    ]
+                }
+            },
+            "Config": {"Env": [f"{key}={value}" for key, value in environment.items()]},
+            "NetworkSettings": {
+                "Networks": {
+                    json.loads(rendered.stdout)["networks"][key]["name"]: {}
+                    for key in api["networks"]
+                }
+            },
+        }
+    ]
+    candidate = json.loads(rendered.stdout)
+    validate_access(candidate, previous)
+    previous[0]["NetworkSettings"]["Networks"]["operator-proxy-ingress"] = {}
+    with pytest.raises(DeploymentAccessError, match="API network attachments"):
+        validate_access(candidate, previous)
+    del previous[0]["NetworkSettings"]["Networks"]["operator-proxy-ingress"]
+    if expected_host == "127.0.0.1":
+        # Replay the actual unpinned-install cutover, using the real newly
+        # rendered local default rather than a synthetic replacement config.
+        previous[0]["HostConfig"]["PortBindings"]["8000/tcp"][0]["HostIp"] = "0.0.0.0"
+        with pytest.raises(DeploymentAccessError, match="published interfaces/ports"):
+            validate_access(candidate, previous)
+        previous[0]["HostConfig"]["PortBindings"]["8000/tcp"][0]["HostIp"] = (
+            expected_host
+        )
+    previous[0]["HostConfig"]["PortBindings"]["8000/tcp"][0]["HostPort"] = "19999"
+    with pytest.raises(DeploymentAccessError, match="published interfaces/ports"):
+        validate_access(candidate, previous)
+    if expected_host == "127.0.0.1":
+        # Replay the actual unpinned-install cutover, using the real newly
+        # rendered local default rather than a synthetic replacement config.
+        previous[0]["HostConfig"]["PortBindings"]["8000/tcp"][0]["HostIp"] = "0.0.0.0"
+        with pytest.raises(DeploymentAccessError, match="published interfaces/ports"):
+            validate_access(candidate, previous)
+        previous[0]["HostConfig"]["PortBindings"]["8000/tcp"][0]["HostIp"] = (
+            expected_host
+        )
     assert environment["MOONMIND_API_PUBLISH_HOST"] == expected_host
     assert environment["MOONMIND_TRUSTED_INGRESS"] == overrides.get(
         "MOONMIND_TRUSTED_INGRESS", ""

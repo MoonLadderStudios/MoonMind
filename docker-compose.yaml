@@ -185,12 +185,6 @@ services:
       # Temporal schedule state; the agent-runtime worker performs each pass.
       - MOONMIND_AGENT_RUNTIME_STORE=${MOONMIND_AGENT_RUNTIME_STORE:-/work/agent_jobs}
       - MOONMIND_AGENT_RUNTIME_ARTIFACTS=${MOONMIND_AGENT_RUNTIME_ARTIFACTS:-/work/agent_jobs/artifacts}
-      # Stable installation identity for portable GitHub issue attempt
-      # handoffs. Must differ across deployments and persist through
-      # restart/retry; empty keeps the previous fail-fast behavior with an
-      # actionable missing_installation_identity error.
-      - MOONMIND_INSTALLATION_ID=${MOONMIND_INSTALLATION_ID:-}
-      - MOONMIND_DEPLOYMENT_ID=${MOONMIND_DEPLOYMENT_ID:-}
       - MOONMIND_MANAGED_RUNTIME_JANITOR_ENABLED=${MOONMIND_MANAGED_RUNTIME_JANITOR_ENABLED:-true}
       - MOONMIND_MANAGED_RUNTIME_JANITOR_DRY_RUN=${MOONMIND_MANAGED_RUNTIME_JANITOR_DRY_RUN:-false}
       - MOONMIND_MANAGED_RUNTIME_WORKSPACE_RETENTION_DAYS=${MOONMIND_MANAGED_RUNTIME_WORKSPACE_RETENTION_DAYS:-10}
