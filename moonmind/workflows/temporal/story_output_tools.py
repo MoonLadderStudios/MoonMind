@@ -7,7 +7,6 @@ import hashlib
 import inspect
 import json
 import re
-import threading
 from pathlib import Path, PurePosixPath
 from typing import Any, Awaitable, Callable, Mapping, Sequence
 from urllib.parse import urlparse
@@ -28,28 +27,14 @@ from moonmind.integrations.jira.models import (
 from moonmind.integrations.jira.tool import JiraToolService
 from moonmind.workflows.adapters.github_service import GitHubService
 from moonmind.workflows.skills.tool_plan_contracts import ToolResult
-from moonmind.workflows.temporal.github_issue_attempt import (
-    ATTEMPT_ACTIVITY_ACTIVE,
-    ATTEMPT_ACTIVITY_ATTENTION,
-    ATTEMPT_ACTIVITY_AWAITING_REVIEW,
-    ATTEMPT_ACTIVITY_PREPARING,
-    ATTEMPT_ACTIVITY_RELEASING,
-    ATTEMPT_ACTIVITY_RELEASED,
-    AttemptHandoff,
-    attempt_binding_key,
-    build_attempt_id,
-    build_safe_comment,
-    collect_attempt_comments,
-    compute_retry_state,
-    normalize_attempt_id,
-    reconcile_uncertain_create,
-    redact_comment_text,
-    redact_structured_error,
+from moonmind.workflows.temporal.github_issue_attempts import (
+    activity_for_lifecycle_mode,
+    build_attempt_handoff,
+    get_or_create_installation_id,
+    new_attempt_id,
+    reconcile_uncertain_creation,
+    render_attempt_comment,
     resolve_installation_id,
-    scan_comment_text,
-    select_own_comment,
-    should_coalesce_progress,
-    validate_attempt_comment,
 )
 from moonmind.workflows.temporal.github_issue_lifecycle import (
     attempt_evidence_blocks_admission,
@@ -5540,6 +5525,11 @@ def _github_status_lifecycle_comment(*, mode: str, issue_ref: str) -> str:
 
     Each terminal mode leaves its own disposition and next action instead of
     a shared started-implementation claim.
+
+    Retained for backward compatibility; the trusted Activity path now
+    publishes the versioned bounded handoff from
+    ``moonmind.workflows.temporal.github_issue_attempts`` (which embeds
+    these same readable summaries plus machine-readable metadata).
     """
     comments = {
         "start": f"MoonMind started implementation for {issue_ref}.",
@@ -5559,6 +5549,153 @@ def _github_status_lifecycle_comment(*, mode: str, issue_ref: str) -> str:
     }
     return comments.get(mode, f"MoonMind updated lifecycle status for {issue_ref}.")
 
+
+def _github_attempt_handoff_for_transition(
+    *,
+    mode: str,
+    repository: str,
+    issue_number: int,
+    inputs: Mapping[str, Any],
+    context: Mapping[str, Any] | None,
+    pull_request_url: str,
+    assessment_verdict: str = "",
+    verification_summary: str = "",
+) -> Any:
+    """Build the bounded portable handoff for one lifecycle transition.
+
+    The real Activity/adapter path publishes this record (readable summary
+    plus machine-readable metadata) instead of plain prose. All fields are
+    bounded and redacted at render time; local workflow links stay optional
+    diagnostics and are never the sole recoverability evidence.
+    """
+    import os as _os
+
+    previous = _mapping((context or {}).get("previousOutputs"))
+
+    def _first(*keys: str, default: Any = "") -> Any:
+        for key in keys:
+            value = inputs.get(key)
+            if value is None and isinstance(inputs.get("previousOutputs"), Mapping):
+                value = _mapping(inputs.get("previousOutputs")).get(key)
+            if value is None:
+                value = previous.get(key)
+            if isinstance(value, bool) or isinstance(value, (int, float)):
+                return value
+            if isinstance(value, (list, tuple)):
+                if value:
+                    return value
+                continue
+            if _string(value):
+                return value
+        return default
+
+    explicit_attempt = _string(_first("attemptId", "attempt_id"))
+    workflow_id = _string(_first("workflowId", "workflow_id", "workflowID"))
+    run_id = _string(_first("runId", "run_id"))
+    attempt_id = explicit_attempt or new_attempt_id(
+        repository=repository,
+        issue_number=issue_number,
+        workflow_id=workflow_id,
+        run_id=run_id,
+    )
+    explicit_deployment = _string(
+        _first("deploymentId", "deployment_id", "installationId", "installation_id")
+    )
+    deployment_id = resolve_installation_id(explicit_deployment) or resolve_installation_id(
+        _os.getenv("MOONMIND_INSTALLATION_ID")
+    )
+    if not deployment_id:
+        # Activity-boundary persistence: stable across restart/retry.
+        # Explicit inputs and env take precedence; this path only runs
+        # when the deployment has not configured an identity yet.
+        try:
+            deployment_id = get_or_create_installation_id()
+        except Exception:
+            deployment_id = "inst-unconfigured"
+    pr_head = _string(_first("prHead", "pr_head", "headSha", "head_sha"))
+    pr_base = _string(_first("prBase", "pr_base", "baseBranch", "base_branch", "base"))
+    saved_branch = _string(_first("savedBranch", "saved_branch", "branch"))
+    saved_sha = _string(_first("savedSha", "saved_sha", "headSha", "head_sha"))
+    writers_stopped_raw = _first("writersStopped", "writers_stopped", default=False)
+    writers_stopped = bool(
+        writers_stopped_raw is True
+        or (isinstance(writers_stopped_raw, str) and writers_stopped_raw.strip().lower() in {"1", "true", "yes"})
+    )
+    if mode in {"recovery_needed", "needs_attention", "available", "done"} and _truthy_terminal_proof(inputs):
+        writers_stopped = True
+    operator_hold_raw = _first("operatorHold", "operator_hold", "holdIntent", "hold_intent", default=False)
+    operator_hold = bool(
+        operator_hold_raw is True
+        or (isinstance(operator_hold_raw, str) and operator_hold_raw.strip().lower() in {"1", "true", "yes", "hold"})
+    )
+    remaining = _first("remainingRequirements", "remaining_requirements", default=[])
+    if isinstance(remaining, str):
+        remaining = [remaining]
+    retry_history = _first("retryHistory", "retry_history", default=[])
+    if isinstance(retry_history, str):
+        retry_history = [retry_history]
+    try:
+        retry_allowance = int(_first("retryAllowance", "retry_allowance", default=3) or 3)
+    except (TypeError, ValueError):
+        retry_allowance = 3
+    try:
+        retry_remaining = int(_first("retryRemaining", "retry_remaining", default=retry_allowance) or retry_allowance)
+    except (TypeError, ValueError):
+        retry_remaining = retry_allowance
+    try:
+        internal_retries = int(_first("internalRetryCount", "internal_retry_count", default=0) or 0)
+    except (TypeError, ValueError):
+        internal_retries = 0
+    outcome_default = "in_progress"
+    if mode == "code_review":
+        outcome_default = "implemented"
+    elif mode in {"available", "done"}:
+        outcome_default = "no_work" if not pull_request_url else "implemented"
+    elif mode == "needs_attention":
+        outcome_default = "failed"
+    next_default = "continue_implementation"
+    if mode == "code_review":
+        next_default = "continue_review"
+    elif mode == "needs_attention":
+        next_default = "obtain_attention"
+    elif mode in {"available", "done"}:
+        next_default = "finalize_status"
+    verification_text = _string(verification_summary) or _string(
+        _first("verificationSummary", "verification_summary")
+    )
+    if assessment_verdict and assessment_verdict != "FULLY_IMPLEMENTED" and not verification_text:
+        verification_text = f"Assessment: {assessment_verdict}."
+    return build_attempt_handoff(
+        attempt_id=attempt_id,
+        deployment_id=deployment_id,
+        repository=repository,
+        issue_number=issue_number,
+        activity=activity_for_lifecycle_mode(mode),
+        workflow_id=workflow_id,
+        run_id=run_id,
+        predecessor_attempt_id=_string(_first("predecessorAttemptId", "predecessor_attempt_id")),
+        predecessor_comment_id=_string(_first("predecessorCommentId", "predecessor_comment_id")),
+        last_report=_string(_first("lastReport", "last_report", "reason", "transitionReason", "transition_reason")),
+        writers_stopped=writers_stopped,
+        pending_disposition=_string(_first("pendingDisposition", "pending_disposition")),
+        pr_url=pull_request_url,
+        pr_head=pr_head,
+        pr_base=pr_base,
+        saved_branch=saved_branch,
+        saved_sha=saved_sha,
+        outcome=_string(_first("outcome")) or outcome_default,
+        remaining_requirements=list(remaining) if isinstance(remaining, (list, tuple)) else [],
+        verification_summary=verification_text,
+        next_action=_string(_first("nextAction", "next_action")) or next_default,
+        retry_history=list(retry_history) if isinstance(retry_history, (list, tuple)) else [],
+        retry_allowance=retry_allowance,
+        retry_remaining=retry_remaining,
+        cooldown_until=_string(_first("cooldownUntil", "cooldown_until")),
+        operator_hold=operator_hold,
+        operator_hold_reason=_string(_first("operatorHoldReason", "operator_hold_reason")),
+        reset_authorization=_string(_first("resetAuthorization", "reset_authorization")),
+        internal_retry_count=internal_retries,
+    )
 
 def _github_status_transition_evidence(
     *,
@@ -5678,539 +5815,6 @@ async def _github_issue_label_present(
         for name in _github_issue_payload(current, repository).get("labels") or []
     }
     return label.strip().lower() in present
-
-
-_GITHUB_ATTEMPT_MODE_TO_ACTIVITY = {
-    "start": ATTEMPT_ACTIVITY_ACTIVE,
-    "in_progress": ATTEMPT_ACTIVITY_ACTIVE,
-    "code_review": ATTEMPT_ACTIVITY_AWAITING_REVIEW,
-    "done": ATTEMPT_ACTIVITY_RELEASED,
-    "recovery_needed": ATTEMPT_ACTIVITY_RELEASING,
-    "needs_attention": ATTEMPT_ACTIVITY_ATTENTION,
-    "available": ATTEMPT_ACTIVITY_RELEASED,
-}
-
-
-def _github_attempt_identities(
-    inputs: Mapping[str, Any],
-    context: Mapping[str, Any] | None,
-) -> tuple[str, str, bool]:
-    """Resolve (attempt_id, deployment_id, reused) for one status update.
-
-    The attempt ID is globally unique and bound to the exact repository/issue
-    plus the local workflow/run; it is reused from inputs/previousOutputs when
-    present so restart/retry keeps writing the same attempt comment instead of
-    minting unlimited issue attempts. The deployment ID is the single stable
-    installation identity (never the shared GitHub username).
-    """
-    previous = _github_status_previous_outputs(inputs, context)
-    repository, issue_number = "", 0
-    try:
-        repository, issue_number = _github_issue_inputs(inputs)
-    except ValueError:
-        # Inputs without a resolvable repo/issue still get a bound attempt
-        # under the "unknown" scope; the caller fails later on validation.
-        pass
-    candidate_attempt = normalize_attempt_id(
-        _first_string(
-            inputs.get("attemptId"),
-            inputs.get("attempt_id"),
-            previous.get("attemptId"),
-            previous.get("attempt_id"),
-        )
-    )
-    candidate_deployment = str(
-        _first_string(
-            inputs.get("deploymentId"),
-            inputs.get("deployment_id"),
-            inputs.get("installationId"),
-            inputs.get("installation_id"),
-            previous.get("deploymentId"),
-            previous.get("deployment_id"),
-            previous.get("installationId"),
-            previous.get("installation_id"),
-        )
-    ).strip()[:128]
-    deployment_id = candidate_deployment or resolve_installation_id()
-    if candidate_attempt:
-        return candidate_attempt, deployment_id, True
-    workflow_id = _first_string(
-        inputs.get("workflowId"),
-        inputs.get("workflow_id"),
-        previous.get("workflowId"),
-        previous.get("workflow_id"),
-        (context or {}).get("workflowId"),
-        (context or {}).get("workflow_id"),
-    )
-    run_id = _first_string(
-        inputs.get("runId"),
-        inputs.get("run_id"),
-        previous.get("runId"),
-        previous.get("run_id"),
-        (context or {}).get("runId"),
-        (context or {}).get("run_id"),
-    )
-    attempt_id = build_attempt_id(
-        repository=repository or "unknown",
-        issue_number=issue_number or 0,
-        workflow_id=workflow_id,
-        run_id=run_id,
-        deployment_id=deployment_id,
-    )
-    _ = attempt_binding_key(
-        repository=repository or "unknown",
-        issue_number=issue_number or 0,
-        attempt_id=attempt_id,
-    )
-    return attempt_id, deployment_id, False
-
-
-def _github_attempt_handoff(
-    *,
-    mode: str,
-    inputs: Mapping[str, Any],
-    context: Mapping[str, Any] | None,
-    repository: str,
-    issue_number: int,
-    attempt_id: str,
-    deployment_id: str,
-    pull_request_url: str,
-    assessment_verdict: str,
-    verification_verdict: str,
-    reason: str,
-) -> AttemptHandoff:
-    """Build the portable per-attempt handoff for one status update."""
-    previous = _github_status_previous_outputs(inputs, context)
-    workflow_id = _first_string(
-        inputs.get("workflowId"),
-        inputs.get("workflow_id"),
-        previous.get("workflowId"),
-        previous.get("workflow_id"),
-    )
-    run_id = _first_string(
-        inputs.get("runId"),
-        inputs.get("run_id"),
-        previous.get("runId"),
-        previous.get("run_id"),
-    )
-    predecessor_attempt = normalize_attempt_id(
-        _first_string(
-            inputs.get("predecessorAttemptId"),
-            inputs.get("predecessor_attempt_id"),
-            previous.get("predecessorAttemptId"),
-            previous.get("predecessor_attempt_id"),
-        )
-    )
-    predecessor_comment = _first_string(
-        inputs.get("predecessorCommentId"),
-        inputs.get("predecessor_comment_id"),
-        previous.get("predecessorCommentId"),
-        previous.get("predecessor_comment_id"),
-    )
-    head_sha = _first_string(
-        inputs.get("headSha"), inputs.get("head_sha"),
-        previous.get("headSha"), previous.get("head_sha"),
-    )
-    head_branch = _first_string(
-        inputs.get("headBranch"), inputs.get("head_branch"),
-        inputs.get("branch"), previous.get("headBranch"),
-        previous.get("head_branch"), previous.get("branch"),
-    )
-    base_branch = _first_string(
-        inputs.get("baseBranch"), inputs.get("base_branch"),
-        inputs.get("push_base_ref"), previous.get("baseBranch"),
-        previous.get("base_branch"),
-    )
-    saved_branch = _first_string(
-        inputs.get("savedBranch"), inputs.get("saved_branch"),
-        previous.get("savedBranch"), previous.get("saved_branch"),
-    )
-    saved_sha = _first_string(
-        inputs.get("savedSha"), inputs.get("saved_sha"),
-        previous.get("savedSha"), previous.get("saved_sha"),
-    )
-    outcome = _first_string(
-        inputs.get("attemptOutcome"), inputs.get("attempt_outcome"),
-        inputs.get("outcome"), previous.get("attemptOutcome"),
-        previous.get("outcome"),
-    ) or _github_attempt_outcome_for_mode(mode, assessment_verdict)
-    verification_summary = _first_string(
-        inputs.get("verificationSummary"), inputs.get("verification_summary"),
-        previous.get("verificationSummary"), previous.get("verification_summary"),
-    )
-    if not verification_summary and verification_verdict:
-        verification_summary = f"Verification verdict: {verification_verdict}."
-    next_action = _first_string(
-        inputs.get("nextAction"), inputs.get("next_action"),
-        previous.get("nextAction"), previous.get("next_action"),
-    ) or _github_attempt_next_action_for_mode(mode)
-    retry_history = _github_attempt_retry_history(inputs, previous)
-    retry_allowance = _first_string(
-        inputs.get("retryAllowance"), inputs.get("retry_allowance"),
-        previous.get("retryAllowance"), previous.get("retry_allowance"),
-    )
-    cooldown_until = _first_string(
-        inputs.get("cooldownUntil"), inputs.get("cooldown_until"),
-        previous.get("cooldownUntil"), previous.get("cooldown_until"),
-    )
-    operator_hold = _github_attempt_flag(
-        inputs, previous, "operatorHold", "operator_hold",
-    ) or _github_attempt_flag(inputs, previous, "holdIntent", "hold_intent")
-    writers_stopped = _github_attempt_flag(
-        inputs, previous, "writersStopped", "writers_stopped",
-    )
-    publication_outcome = _first_string(
-        inputs.get("publicationOutcome"), inputs.get("publication_outcome"),
-        previous.get("publicationOutcome"), previous.get("publication_outcome"),
-    )
-    pending_disposition = _first_string(
-        inputs.get("pendingDisposition"), inputs.get("pending_disposition"),
-        previous.get("pendingDisposition"), previous.get("pending_disposition"),
-    )
-    reset_record = _first_string(
-        inputs.get("resetRecord"), inputs.get("reset_record"),
-        inputs.get("authorizedResolution"), inputs.get("authorized_resolution"),
-    )
-    policy_ref = _first_string(
-        inputs.get("policyRef"), inputs.get("policy_ref"),
-        previous.get("policyRef"), previous.get("policy_ref"),
-    )
-    diagnostics_ref = _first_string(
-        inputs.get("diagnosticsRef"), inputs.get("diagnostics_ref"),
-        inputs.get("verificationArtifactRef"), inputs.get("verification_artifact_ref"),
-        previous.get("diagnosticsRef"), previous.get("diagnostics_ref"),
-    )
-    last_report = _first_string(
-        inputs.get("lastReport"), inputs.get("last_report"),
-        previous.get("lastReport"), previous.get("last_report"),
-    ) or reason
-    unmet = _github_attempt_string_list_present(inputs, previous, "unmetRequirements", "unmet_requirements")
-    met = _github_attempt_string_list_present(inputs, previous, "metRequirements", "met_requirements")
-    activity = _GITHUB_ATTEMPT_MODE_TO_ACTIVITY.get(mode, ATTEMPT_ACTIVITY_ACTIVE)
-    if mode == "start" and (
-        _first_string(inputs.get("preparing"), previous.get("preparing")).strip().lower()
-        in {"1", "true", "yes"}
-    ):
-        activity = ATTEMPT_ACTIVITY_PREPARING
-    from datetime import UTC, datetime
-
-    last_activity_at = _first_string(
-        inputs.get("lastActivityAt"),
-        inputs.get("last_activity_at"),
-        previous.get("lastActivityAt"),
-        previous.get("last_activity_at"),
-    ) or datetime.now(UTC).isoformat()
-    return AttemptHandoff(
-        repository=repository,
-        issue_number=issue_number,
-        attempt_id=attempt_id,
-        deployment_id=deployment_id,
-        workflow_id=workflow_id,
-        run_id=run_id,
-        predecessor_attempt_id=predecessor_attempt,
-        predecessor_comment_id=predecessor_comment,
-        activity=activity,
-        last_report=last_report,
-        last_activity_at=last_activity_at,
-        writers_stopped=writers_stopped,
-        publication_outcome=publication_outcome,
-        pending_disposition=pending_disposition,
-        pull_request_url=pull_request_url,
-        head_sha=head_sha,
-        head_branch=head_branch,
-        base_branch=base_branch,
-        saved_branch=saved_branch,
-        saved_sha=saved_sha,
-        outcome=outcome,
-        met_requirements=tuple(met),
-        unmet_requirements=tuple(unmet),
-        verification_summary=verification_summary,
-        next_action=next_action,
-        retry_history=tuple(retry_history),
-        retry_allowance=retry_allowance,
-        cooldown_until=cooldown_until,
-        operator_hold=operator_hold,
-        reset_record=reset_record,
-        policy_ref=policy_ref,
-        diagnostics_ref=diagnostics_ref,
-    )
-
-
-def _github_attempt_outcome_for_mode(mode: str, assessment_verdict: str) -> str:
-    if mode in {"needs_attention"}:
-        return "attention"
-    if mode in {"recovery_needed"}:
-        return "no_progress"
-    if mode in {"available"}:
-        return "no_progress"
-    if mode in {"code_review", "done"}:
-        return "completed"
-    if assessment_verdict and assessment_verdict != "FULLY_IMPLEMENTED":
-        return "incomplete"
-    return "in_progress"
-
-
-def _github_attempt_next_action_for_mode(mode: str) -> str:
-    return {
-        "start": "continue_implementation",
-        "in_progress": "continue_implementation",
-        "code_review": "continue_review",
-        "done": "finalize_status",
-        "recovery_needed": "continue_implementation",
-        "needs_attention": "obtain_operator_attention",
-        "available": "fresh_retry",
-    }.get(mode, "continue_implementation")
-
-
-def _github_attempt_flag(
-    inputs: Mapping[str, Any], previous: Mapping[str, Any], *keys: str
-) -> bool:
-    for source in (inputs, previous):
-        for key in keys:
-            value = source.get(key)
-            if value is True:
-                return True
-            if isinstance(value, str) and value.strip().lower() in {"1", "true", "yes"}:
-                return True
-    return False
-
-
-def _github_attempt_string_list(value: Any) -> list[str]:
-    if isinstance(value, str):
-        return [value.strip()] if value.strip() else []
-    if isinstance(value, Sequence) and not isinstance(value, (bytes, bytearray)):
-        items = [str(item).strip() for item in value if str(item or "").strip()]
-        return items[:50]
-    if isinstance(value, Mapping):
-        return []
-    return []
-
-
-def _github_attempt_string_list_present(
-    inputs: Mapping[str, Any], previous: Mapping[str, Any], *keys: str
-) -> list[str]:
-    """Return the first present requirement list, honoring explicit empties.
-
-    An explicitly supplied empty list means verification completed the final
-    requirement; it must not fall back to a stale nonempty previous list.
-    Absent keys fall through to the next source.
-    """
-    for source in (inputs, previous):
-        for key in keys:
-            if key in source:
-                value = source.get(key)
-                if value is None:
-                    continue
-                if isinstance(value, str):
-                    return [value.strip()] if value.strip() else []
-                return _github_attempt_string_list(value)
-    return []
-
-
-def _github_attempt_retry_history(
-    inputs: Mapping[str, Any], previous: Mapping[str, Any]
-) -> list[str]:
-    for source in (inputs, previous):
-        for key in ("retryHistory", "retry_history"):
-            value = source.get(key)
-            if isinstance(value, str) and value.strip():
-                return [value.strip()][:50]
-            if isinstance(value, Sequence) and not isinstance(value, (bytes, bytearray)):
-                items = [str(item).strip() for item in value if str(item or "").strip()]
-                if items:
-                    return items[:50]
-    return []
-
-
-async def _fetch_attempt_comments(
-    *,
-    client: Any,
-    repository: str,
-    issue_number: int,
-    headers: Mapping[str, str],
-) -> list[dict[str, Any]] | None:
-    """List all issue comments for attempt reconciliation; ``None`` = unreadable.
-
-    All pages are followed so an attempt marker beyond the first 100 comments
-    is never treated as absent (which would create duplicates and hide
-    hold/failure evidence).
-    """
-    collected: list[dict[str, Any]] = []
-    page = 1
-    try:
-        while True:
-            response = await client.get(
-                f"https://api.github.com/repos/{repository}/issues/{issue_number}/comments",
-                headers=headers,
-                params={"per_page": "100", "page": str(page)},
-            )
-            response.raise_for_status()
-            payload = response.json()
-            if not isinstance(payload, list):
-                return None
-            collected.extend(item for item in payload if isinstance(item, dict))
-            if len(payload) < 100:
-                break
-            page += 1
-            if page > 100:
-                break
-    except Exception:
-        # Ambiguous read: callers must fail closed, never reconcile against
-        # an empty history that could duplicate or ignore prior evidence.
-        return None
-    return collected
-
-
-# Per-attempt serialization for the in-process read-then-create/update
-# sequence. The binding key scopes the lock; the GitHub marker remains the
-# cross-process rendezvous (reconcile by marker, never last-writer-wins).
-_ATTEMPT_WRITE_LOCKS: dict[str, threading.Lock] = {}
-_ATTEMPT_WRITE_LOCKS_GUARD = threading.Lock()
-_ATTEMPT_LAST_UPDATE_AT: dict[str, str] = {}
-
-
-def _attempt_write_lock(key: str) -> threading.Lock:
-    with _ATTEMPT_WRITE_LOCKS_GUARD:
-        lock = _ATTEMPT_WRITE_LOCKS.get(key)
-        if lock is None:
-            lock = threading.Lock()
-            _ATTEMPT_WRITE_LOCKS[key] = lock
-        return lock
-
-
-async def _publish_attempt_comment(
-    *,
-    client: Any,
-    repository: str,
-    issue_number: int,
-    headers: Mapping[str, str],
-    handoff: AttemptHandoff,
-    legacy_body: str,
-) -> tuple[str, str, dict[str, Any]]:
-    """Create or update this attempt's own comment; never another attempt's.
-
-    Returns ``(action, comment_id, scan)`` where action is one of
-    ``created``/``updated``/``coalesced``/``blocked``. An unreadable comment
-    history fails closed to ``blocked``; only provenance-validated comments
-    select the write target; conflicting same-ID copies escalate to
-    ``blocked`` instead of last-timestamp-wins. Writes serialize per attempt
-    binding key and nonterminal same-activity progress coalesces within the
-    documented rate-limit window.
-    """
-    from datetime import UTC, datetime
-
-    binding_key = attempt_binding_key(
-        repository=repository,
-        issue_number=issue_number,
-        attempt_id=handoff.attempt_id,
-    )
-    body, scan = build_safe_comment(handoff)
-    if legacy_body and legacy_body.strip() not in body:
-        # Keep the legacy human disposition discoverable inside the bounded
-        # envelope without duplicating machine metadata. The merged text is
-        # re-redacted and re-scanned because legacy prose may carry
-        # caller-supplied reason strings.
-        merged = f"{legacy_body.strip()}\n{body}"
-        merged = redact_comment_text(merged)
-        scan = scan_comment_text(merged)
-        body = merged[:8000] if len(merged) <= 8000 else body
-    if not scan.get("allowed"):
-        return "blocked", "", scan
-    lock = _attempt_write_lock(binding_key)
-    # Synchronous lock guards the in-process read-then-write sequence for
-    # this attempt; the GitHub marker remains the cross-process rendezvous.
-    acquired = lock.acquire(blocking=False)
-    if not acquired:
-        return "blocked", "", {
-            **scan,
-            "bindingKey": binding_key,
-            "writePlan": {
-                "action": "blocked",
-                "commentId": "",
-                "reasonCode": "write_serialized",
-                "detail": f"Another write for {binding_key} is in progress.",
-            },
-        }
-    try:
-        comments = await _fetch_attempt_comments(
-            client=client, repository=repository, issue_number=issue_number,
-            headers=headers,
-        )
-        if comments is None:
-            return "blocked", "", {
-                **scan,
-                "bindingKey": binding_key,
-                "writePlan": {
-                    "action": "blocked",
-                    "commentId": "",
-                    "reasonCode": "history_unreadable",
-                    "detail": "Attempt comment history could not be read; retry after reread.",
-                },
-            }
-        parsed = collect_attempt_comments(comments)
-        # Provenance gate: only schema/lineage-validated comments may serve
-        # as ownership or conflict evidence, so a copied marker or malformed
-        # envelope can never hijack or block this attempt's write target.
-        validated = [
-            item
-            for item in parsed
-            if validate_attempt_comment(
-                item,
-                repository=repository,
-                issue_number=issue_number,
-                require_trusted_poster=False,
-            ).usable
-        ]
-        plan = select_own_comment(validated, attempt_id=handoff.attempt_id)
-        scan = {**scan, "bindingKey": binding_key, "writePlan": plan.to_dict()}
-        if plan.action == "attention":
-            return "blocked", "", scan
-        terminal = handoff.activity in {"released", "attention", "releasing"}
-        if plan.action == "update" and plan.comment_id:
-            previous_update = _ATTEMPT_LAST_UPDATE_AT.get(binding_key)
-            # Activity transitions and terminal handoffs always publish;
-            # repeated same-activity progress coalesces within the window.
-            activity_changed = bool(previous_update) and handoff.activity not in {
-                "active",
-            }
-            coalesce, _ = should_coalesce_progress(
-                last_update_at=previous_update or "",
-                now=datetime.now(UTC).isoformat(),
-                activity_changed=activity_changed,
-                terminal_update=terminal,
-            )
-            if coalesce and not activity_changed and not terminal:
-                return "coalesced", plan.comment_id, scan
-            try:
-                response = await client.patch(
-                    f"https://api.github.com/repos/{repository}/issues/comments/{plan.comment_id}",
-                    headers=headers,
-                    json={"body": body},
-                )
-                response.raise_for_status()
-                _ATTEMPT_LAST_UPDATE_AT[binding_key] = datetime.now(UTC).isoformat()
-                return "updated", plan.comment_id, scan
-            except Exception as exc:
-                raise exc
-        try:
-            response = await client.post(
-                f"https://api.github.com/repos/{repository}/issues/{issue_number}/comments",
-                headers=headers,
-                json={"body": body},
-            )
-            response.raise_for_status()
-            payload = response.json()
-            comment_id = str(payload.get("id") or "") if isinstance(payload, dict) else ""
-            _ATTEMPT_LAST_UPDATE_AT[binding_key] = datetime.now(UTC).isoformat()
-            return "created", comment_id, scan
-        except Exception as exc:
-            raise exc
-    finally:
-        try:
-            lock.release()
-        except RuntimeError:
-            # Lock was never held by this path; safe to ignore.
-            pass
 
 
 async def update_github_issue_status(
@@ -6388,59 +5992,6 @@ async def update_github_issue_status(
                 ),
             },
         )
-    if target == "to_in_progress":
-        # Apply the portable GitHub history before admitting work: prior
-        # failures, cooldowns, operator holds, and unresolved active
-        # attempts recorded in issue comments survive new workflow IDs,
-        # device changes, and label clears.
-        async with httpx.AsyncClient(
-            timeout=_GITHUB_ISSUE_MUTATION_TIMEOUT_SECONDS
-        ) as admission_client:
-            admission_comments = await _fetch_attempt_comments(
-                client=admission_client,
-                repository=repository,
-                issue_number=issue_number,
-                headers=headers,
-            )
-        if admission_comments is None:
-            return ToolResult(
-                status="FAILED",
-                outputs={
-                    "issueRef": issue_ref,
-                    "decision": "blocked",
-                    "lifecycleSettled": interpretation.settled,
-                    "reasonCode": "history_unreadable",
-                    "summary": (
-                        f"Skipped GitHub issue admission for {issue_ref}: attempt "
-                        "history could not be read; retry after reread instead of "
-                        "resetting the shared retry policy."
-                    ),
-                },
-            )
-        admission_parsed = collect_attempt_comments(admission_comments)
-        admission_state = compute_retry_state(admission_parsed)
-        if admission_state.reason_code in {
-            "operator_hold",
-            "cancelled",
-            "cooldown_active",
-            "retry_exhausted",
-            "incompatible_policy_lineage",
-        }:
-            return ToolResult(
-                status="FAILED",
-                outputs={
-                    "issueRef": issue_ref,
-                    "decision": "blocked",
-                    "lifecycleSettled": interpretation.settled,
-                    "reasonCode": admission_state.reason_code,
-                    "retryState": admission_state.to_dict(),
-                    "summary": (
-                        f"Skipped GitHub issue admission for {issue_ref}: portable "
-                        f"history blocks automatic work ({admission_state.reason_code}: "
-                        f"{admission_state.detail})."
-                    ),
-                },
-            )
     # Abandon obsolete updates on observed successor, hold, or conflict. The
     # comparison must use the caller's expected state: comparing the observed
     # state against itself can never detect a successor.
@@ -6552,6 +6103,7 @@ async def update_github_issue_status(
         )
     applied: list[str] = []
     warnings: list[str] = []
+    comment_body = ""
     # Targeted additions/removals only: never replace the complete label list.
     # The destination status is added before any old blocking status is
     # removed. This is eventual reconciliation, not an atomic compare-and-swap
@@ -6765,147 +6317,152 @@ async def update_github_issue_status(
                 ),
             },
         )
-    attempt_id, deployment_id, attempt_reused = _github_attempt_identities(
-        inputs, _context
-    )
-    handoff = _github_attempt_handoff(
-        mode=mode,
-        inputs=inputs,
-        context=_context,
-        repository=repository,
-        issue_number=issue_number,
-        attempt_id=attempt_id,
-        deployment_id=deployment_id,
-        pull_request_url=pull_request_url,
-        assessment_verdict=assessment_verdict,
-        verification_verdict=verification_verdict,
-        reason=reason,
-    )
+    handoff = None
+    comment_body = ""
+    pr_url = pull_request_url
+    if actions.get("commentPullRequestUrl") and pr_url:
+        handoff = _github_attempt_handoff_for_transition(
+            mode=mode,
+            repository=repository,
+            issue_number=issue_number,
+            inputs=inputs,
+            context=_context,
+            pull_request_url=pr_url,
+            assessment_verdict=assessment_verdict,
+        )
+        comment_body = render_attempt_comment(handoff)
+    elif actions.get("comment"):
+        handoff = _github_attempt_handoff_for_transition(
+            mode=mode,
+            repository=repository,
+            issue_number=issue_number,
+            inputs=inputs,
+            context=_context,
+            pull_request_url=pr_url,
+            assessment_verdict=assessment_verdict,
+        )
+        comment_body = render_attempt_comment(handoff)
+    attempt_comment_id: Any = None
+    if comment_body:
+        # Serialize writes to this attempt's own comment. When the adapter
+        # supports listing, reconcile an uncertain creation by stable
+        # attempt marker before retrying creation, so a lost response is
+        # adopted rather than duplicated. Never overwrite another
+        # attempt's comment to become the current owner.
+        if handoff is not None and hasattr(service, "list_issue_comments"):
+            try:
+                listed = await service.list_issue_comments(repo=repository, issue_number=issue_number)
+            except Exception:
+                listed = {"ok": False, "comments": []}
+            observed = listed.get("comments") if isinstance(listed, Mapping) else []
+            if isinstance(observed, list):
+                reconciliation = reconcile_uncertain_creation(observed, handoff.attempt_id)
+                if reconciliation.outcome == "needs_attention":
+                    warnings.append(reconciliation.summary)
+                elif reconciliation.outcome == "already_created" and reconciliation.comment_id:
+                    existing_id_raw = _string(inputs.get("existingAttemptCommentId") or inputs.get("existing_attempt_comment_id"))
+                    # Adopt the observed comment; an explicit caller-owned
+                    # update path refreshes it, otherwise record adoption
+                    # without duplicating the marker.
+                    if existing_id_raw and existing_id_raw == reconciliation.comment_id and hasattr(service, "update_issue_comment"):
+                        try:
+                            update_result = await service.update_issue_comment(
+                                repo=repository,
+                                comment_id=int(existing_id_raw),
+                                body=comment_body,
+                            )
+                        except (TypeError, ValueError):
+                            update_result = {"ok": False, "reasonCode": "invalid_comment_id"}
+                        if update_result.get("ok"):
+                            applied.append("comment")
+                            attempt_comment_id = existing_id_raw
+                            comment_body = ""
+                        else:
+                            reason = str(update_result.get("reasonCode") or "update_failed")
+                            if reason == "outcome_unknown":
+                                warnings.append(
+                                    "GitHub attempt comment update result could not be confirmed; "
+                                    "the comment was not retried to avoid a duplicate."
+                                )
+                                applied.append("comment")
+                                attempt_comment_id = existing_id_raw
+                                comment_body = ""
+                    else:
+                        warnings.append(reconciliation.summary)
+                        applied.append("comment")
+                        attempt_comment_id = reconciliation.comment_id
+                        comment_body = ""
+        if comment_body and hasattr(service, "create_issue_comment"):
+            create_result = await service.create_issue_comment(
+                repo=repository, issue_number=issue_number, body=comment_body
+            )
+            if create_result.get("ok"):
+                applied.append("comment")
+                attempt_comment_id = create_result.get("commentId")
+                comment_body = ""
+            elif str(create_result.get("reasonCode") or "") == "outcome_unknown":
+                warnings.append(
+                    "GitHub issue status was updated, but the automation comment "
+                    "result could not be confirmed; reconcile by stable attempt "
+                    "marker before retrying creation."
+                )
+                comment_body = ""
+            else:
+                from moonmind.workflows.temporal.github_issue_attempts import redacted_error_summary as _redacted_summary
+
+                summary_text = _redacted_summary(str(create_result.get("summary") or "comment rejected"))
+                return ToolResult(
+                    status="FAILED",
+                    outputs={
+                        "issueRef": issue_ref,
+                        "issueUrl": issue_url,
+                        "appliedActions": applied,
+                        "confirmedState": updated_issue.get("state"),
+                        "confirmedLabels": updated_issue.get("labels"),
+                        "commentStatus": "rejected",
+                        "attemptId": handoff.attempt_id if handoff is not None else "",
+                        "summary": (
+                            "GitHub issue status was updated, but the automation "
+                            f"comment failed. {summary_text}"
+                        ).strip(),
+                    },
+                )
     async with httpx.AsyncClient(
         timeout=_GITHUB_ISSUE_MUTATION_TIMEOUT_SECONDS
     ) as client:
-        pr_url = pull_request_url
-        if actions.get("commentPullRequestUrl") and pr_url:
-            legacy_body = f"Implementation pull request: {pr_url}"
-        elif actions.get("comment"):
-            legacy_body = _github_status_lifecycle_comment(mode=mode, issue_ref=issue_ref)
-        else:
-            legacy_body = ""
-        # The portable attempt handoff is published independently of legacy
-        # prose: even a `done` transition with no legacy comment must leave
-        # a terminal envelope so other deployments never see stale evidence.
-        comment_action = ""
-        comment_id = ""
-        comment_scan: dict[str, Any] = {}
-        binding_key = attempt_binding_key(
-            repository=repository,
-            issue_number=issue_number,
-            attempt_id=attempt_id,
-        )
-        try:
-            comment_action, comment_id, comment_scan = await _publish_attempt_comment(
-                client=client,
-                repository=repository,
-                issue_number=issue_number,
-                headers=headers,
-                handoff=handoff,
-                legacy_body=legacy_body,
-            )
-        except httpx.HTTPStatusError as exc:
-            summary = service._github_permission_summary(exc.response)
-            redacted_error = redact_structured_error(
-                {"message": summary, "statusCode": exc.response.status_code}
-            )
-            return ToolResult(
-                status="FAILED",
-                outputs={
-                    "issueRef": issue_ref,
-                    "issueUrl": issue_url,
-                    "appliedActions": applied,
-                    "confirmedState": updated_issue.get("state"),
-                    "confirmedLabels": updated_issue.get("labels"),
-                    "commentStatus": "rejected",
-                    "attemptId": attempt_id,
-                    "deploymentId": deployment_id,
-                    "attemptBindingKey": binding_key,
-                    "attemptCommentAction": "rejected",
-                    "outboundScan": redacted_error.get("outboundScan"),
-                    "summary": (
-                        "GitHub issue status was updated, but the automation "
-                        f"comment failed with HTTP {exc.response.status_code}. "
-                        f"{summary}"
-                    ).strip(),
-                },
-            )
-        except (httpx.TransportError, httpx.TimeoutException) as exc:
-            # Response loss after an accepted write is unknown, never proof
-            # of failure: retain the binding-key retry owner and reconcile
-            # by stable marker instead of completing without evidence.
-            return ToolResult(
-                status="FAILED",
-                outputs={
-                    "issueRef": issue_ref,
-                    "issueUrl": issue_url,
-                    "appliedActions": applied,
-                    "confirmedState": updated_issue.get("state"),
-                    "confirmedLabels": updated_issue.get("labels"),
-                    "commentStatus": "unknown",
-                    "attemptId": attempt_id,
-                    "deploymentId": deployment_id,
-                    "attemptBindingKey": binding_key,
-                    "attemptCommentAction": "unknown",
-                    "reasonCode": "comment_outcome_unknown",
-                    "summary": (
-                        "GitHub issue status was updated, but the attempt comment "
-                        f"result is unknown after {exc.__class__.__name__}; "
-                        f"retry by stable marker {binding_key} and reconcile "
-                        "with reconcile_uncertain_create before completing."
-                    ),
-                },
-            )
-        if comment_action == "blocked":
-            warnings.append(
-                "GitHub issue status was updated, but the attempt comment "
-                "was blocked: "
-                f"{comment_scan.get('writePlan', {}).get('reasonCode', 'outbound_scan') or 'outbound_scan'}; "
-                "conflicting same-ID copies require attention instead of "
-                "last-timestamp-wins."
-                if comment_scan.get("writePlan", {}).get("reasonCode") == "conflicting_copies"
-                else "GitHub issue status was updated, but the attempt comment "
-                "was blocked by outbound scanning/redaction; no secret-bearing "
-                "content was published."
-            )
-        elif comment_action in {"created", "updated", "coalesced"}:
-            applied.append("comment")
-        elif comment_action:
-            applied.append(f"comment:{comment_action}")
-        if mode == "available" and comment_action not in {"created", "updated", "coalesced"}:
-            # Release evidence must be durably verified before ownership
-            # labels are cleared: an Available issue without its terminal
-            # handoff would let another deployment start work without proof.
-            return ToolResult(
-                status="FAILED",
-                outputs={
-                    "issueRef": issue_ref,
-                    "issueUrl": issue_url,
-                    "appliedActions": applied,
-                    "confirmedState": updated_issue.get("state"),
-                    "confirmedLabels": updated_issue.get("labels"),
-                    "commentStatus": "missing",
-                    "attemptId": attempt_id,
-                    "deploymentId": deployment_id,
-                    "attemptBindingKey": binding_key,
-                    "attemptCommentAction": comment_action or "none",
-                    "attemptCommentId": comment_id,
-                    "outboundScan": comment_scan,
-                    "reasonCode": "release_evidence_missing",
-                    "summary": (
-                        f"GitHub issue labels for {issue_ref} were updated, but the "
-                        "terminal release handoff was not verified; retry the "
-                        "comment publish before clearing ownership."
-                    ),
-                },
-            )
+        if comment_body:
+            try:
+                comment_response = await client.post(
+                    f"https://api.github.com/repos/{repository}/issues/{issue_number}/comments",
+                    headers=headers,
+                    json={"body": comment_body},
+                )
+                comment_response.raise_for_status()
+                applied.append("comment")
+            except httpx.HTTPStatusError as exc:
+                summary = service._github_permission_summary(exc.response)
+                return ToolResult(
+                    status="FAILED",
+                    outputs={
+                        "issueRef": issue_ref,
+                        "issueUrl": issue_url,
+                        "appliedActions": applied,
+                        "confirmedState": updated_issue.get("state"),
+                        "confirmedLabels": updated_issue.get("labels"),
+                        "commentStatus": "rejected",
+                        "summary": (
+                            "GitHub issue status was updated, but the automation "
+                            f"comment failed with HTTP {exc.response.status_code}. "
+                            f"{summary}"
+                        ).strip(),
+                    },
+                )
+            except (httpx.TransportError, httpx.TimeoutException) as exc:
+                warnings.append(
+                    "GitHub issue status was updated, but the automation comment "
+                    f"result could not be confirmed after {exc.__class__.__name__}; "
+                    "the comment was not retried to avoid a duplicate."
+                )
     summary = f"Updated GitHub issue {issue_ref} with mode {mode}."
     outputs: dict[str, Any] = {
         "issueUrl": issue_url,
@@ -6915,15 +6472,12 @@ async def update_github_issue_status(
         "lifecycleSettled": interpret_issue(updated_issue).settled if isinstance(updated_issue, Mapping) else interpretation.settled,
         "transition": decision.to_dict(),
         "mutationOutcome": outcome.outcome,
-        "attemptId": attempt_id,
-        "deploymentId": deployment_id,
-        "attemptBindingKey": binding_key,
-        "attemptReused": attempt_reused,
-        "attemptActivity": handoff.activity,
-        "attemptCommentAction": comment_action or "none",
-        "attemptCommentId": comment_id,
-        "outboundScan": comment_scan,
         "summary": summary,
+        "attemptId": handoff.attempt_id if handoff is not None else "",
+        "deploymentId": handoff.deployment_id if handoff is not None else "",
+        "attemptActivity": handoff.activity if handoff is not None else "",
+        "attemptCommentId": attempt_comment_id,
+        "attemptHandoff": handoff.to_dict() if handoff is not None else None,
         "sideEffect": {
             "effectClass": "external_non_idempotent",
             "kind": "github",

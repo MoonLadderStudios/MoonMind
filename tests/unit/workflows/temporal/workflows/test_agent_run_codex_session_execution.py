@@ -717,6 +717,59 @@ async def test_continuation_metadata_does_not_suppress_runtime_failure(
     assert "continuation_accepted" not in result.metrics
 
 
+async def test_validated_skill_verdict_is_not_relabeled_as_exhausted_continuation(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A manual-review verdict is the Skill's answer; AgentRun must not continue.
+
+    Regression for MoonLadderStudios/MoonMind#4222: the evaluate activity now
+    reports ``skill_terminal_verdict`` for a validated blocked/failed
+    pr-resolver result, and AgentRun previously overwrote that with
+    ``continuation_boundary_unavailable`` while attempting recovery.
+    """
+
+    _configure_workflow_runtime(monkeypatch)
+    run = MoonMindAgentRun()
+    calls: list[str] = []
+    verdict_summary = (
+        "pr-resolver reported status 'blocked'; ci_failures; "
+        "next_step=run_full_remediation"
+    )
+
+    async def fake_activity(name: str, _payload: Any, **_kwargs: Any) -> Any:
+        calls.append(name)
+        return {
+            "summary": verdict_summary,
+            "failureClass": "execution_error",
+            "providerErrorCode": "PR_RESOLVER_MANUAL_REVIEW",
+            "metadata": {
+                "terminalContractId": "pr_resolver_terminal.v1",
+                "terminalContractOutcome": "terminal_failure",
+                "terminalContractSatisfied": False,
+                "terminalContractMissingEvidence": [],
+                "terminalContractRecoveryOutcome": "skill_terminal_verdict",
+                "mergeAutomationDisposition": "manual_review",
+                "prResolverReason": "ci_failures",
+            },
+        }
+
+    run._execute_routed_activity = fake_activity  # type: ignore[method-assign]
+    result = await run._evaluate_terminal_contract(
+        request=_request_with_terminal_contract(),
+        result=AgentRunResult(summary="Omnigent session completed"),
+    )
+
+    assert calls == ["agent_runtime.evaluate_terminal_evidence"]
+    assert result.failure_class == "execution_error"
+    assert result.provider_error_code == "PR_RESOLVER_MANUAL_REVIEW"
+    assert result.summary == verdict_summary
+    assert (
+        result.metadata["terminalContractRecoveryOutcome"]
+        == "skill_terminal_verdict"
+    )
+    assert "terminalContractContinuationCount" not in result.metadata
+
+
 async def test_terminal_contract_continuation_exhaustion_is_agent_run_owned(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
