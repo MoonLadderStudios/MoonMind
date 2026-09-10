@@ -27,6 +27,25 @@ from moonmind.integrations.jira.models import (
 from moonmind.integrations.jira.tool import JiraToolService
 from moonmind.workflows.adapters.github_service import GitHubService
 from moonmind.workflows.skills.tool_plan_contracts import ToolResult
+from moonmind.workflows.temporal.github_issue_attempt import (
+    ATTEMPT_ACTIVITY_ACTIVE,
+    ATTEMPT_ACTIVITY_ATTENTION,
+    ATTEMPT_ACTIVITY_AWAITING_REVIEW,
+    ATTEMPT_ACTIVITY_PREPARING,
+    ATTEMPT_ACTIVITY_RELEASING,
+    ATTEMPT_ACTIVITY_RELEASED,
+    AttemptHandoff,
+    attempt_binding_key,
+    build_attempt_id,
+    build_safe_comment,
+    collect_attempt_comments,
+    normalize_attempt_id,
+    redact_comment_text,
+    redact_structured_error,
+    resolve_installation_id,
+    scan_comment_text,
+    select_own_comment,
+)
 from moonmind.workflows.temporal.github_issue_lifecycle import (
     attempt_evidence_blocks_admission,
     classify_mutation_outcome,
@@ -5656,6 +5675,406 @@ async def _github_issue_label_present(
     return label.strip().lower() in present
 
 
+_GITHUB_ATTEMPT_MODE_TO_ACTIVITY = {
+    "start": ATTEMPT_ACTIVITY_ACTIVE,
+    "in_progress": ATTEMPT_ACTIVITY_ACTIVE,
+    "code_review": ATTEMPT_ACTIVITY_AWAITING_REVIEW,
+    "done": ATTEMPT_ACTIVITY_RELEASED,
+    "recovery_needed": ATTEMPT_ACTIVITY_RELEASING,
+    "needs_attention": ATTEMPT_ACTIVITY_ATTENTION,
+    "available": ATTEMPT_ACTIVITY_RELEASED,
+}
+
+
+def _github_attempt_identities(
+    inputs: Mapping[str, Any],
+    context: Mapping[str, Any] | None,
+) -> tuple[str, str, bool]:
+    """Resolve (attempt_id, deployment_id, reused) for one status update.
+
+    The attempt ID is globally unique and bound to the exact repository/issue
+    plus the local workflow/run; it is reused from inputs/previousOutputs when
+    present so restart/retry keeps writing the same attempt comment instead of
+    minting unlimited issue attempts. The deployment ID is the single stable
+    installation identity (never the shared GitHub username).
+    """
+    previous = _github_status_previous_outputs(inputs, context)
+    repository, issue_number = "", 0
+    try:
+        repository, issue_number = _github_issue_inputs(inputs)
+    except ValueError:
+        pass
+    candidate_attempt = normalize_attempt_id(
+        _first_string(
+            inputs.get("attemptId"),
+            inputs.get("attempt_id"),
+            previous.get("attemptId"),
+            previous.get("attempt_id"),
+        )
+    )
+    candidate_deployment = str(
+        _first_string(
+            inputs.get("deploymentId"),
+            inputs.get("deployment_id"),
+            inputs.get("installationId"),
+            inputs.get("installation_id"),
+            previous.get("deploymentId"),
+            previous.get("deployment_id"),
+            previous.get("installationId"),
+            previous.get("installation_id"),
+        )
+    ).strip()[:128]
+    deployment_id = candidate_deployment or resolve_installation_id()
+    if candidate_attempt:
+        return candidate_attempt, deployment_id, True
+    workflow_id = _first_string(
+        inputs.get("workflowId"),
+        inputs.get("workflow_id"),
+        previous.get("workflowId"),
+        previous.get("workflow_id"),
+        (context or {}).get("workflowId"),
+        (context or {}).get("workflow_id"),
+    )
+    run_id = _first_string(
+        inputs.get("runId"),
+        inputs.get("run_id"),
+        previous.get("runId"),
+        previous.get("run_id"),
+        (context or {}).get("runId"),
+        (context or {}).get("run_id"),
+    )
+    attempt_id = build_attempt_id(
+        repository=repository or "unknown",
+        issue_number=issue_number or 0,
+        workflow_id=workflow_id,
+        run_id=run_id,
+        deployment_id=deployment_id,
+    )
+    _ = attempt_binding_key(
+        repository=repository or "unknown",
+        issue_number=issue_number or 0,
+        attempt_id=attempt_id,
+    )
+    return attempt_id, deployment_id, False
+
+
+def _github_attempt_handoff(
+    *,
+    mode: str,
+    inputs: Mapping[str, Any],
+    context: Mapping[str, Any] | None,
+    repository: str,
+    issue_number: int,
+    attempt_id: str,
+    deployment_id: str,
+    pull_request_url: str,
+    assessment_verdict: str,
+    verification_verdict: str,
+    reason: str,
+) -> AttemptHandoff:
+    """Build the portable per-attempt handoff for one status update."""
+    previous = _github_status_previous_outputs(inputs, context)
+    workflow_id = _first_string(
+        inputs.get("workflowId"),
+        inputs.get("workflow_id"),
+        previous.get("workflowId"),
+        previous.get("workflow_id"),
+    )
+    run_id = _first_string(
+        inputs.get("runId"),
+        inputs.get("run_id"),
+        previous.get("runId"),
+        previous.get("run_id"),
+    )
+    predecessor_attempt = normalize_attempt_id(
+        _first_string(
+            inputs.get("predecessorAttemptId"),
+            inputs.get("predecessor_attempt_id"),
+            previous.get("predecessorAttemptId"),
+            previous.get("predecessor_attempt_id"),
+        )
+    )
+    predecessor_comment = _first_string(
+        inputs.get("predecessorCommentId"),
+        inputs.get("predecessor_comment_id"),
+        previous.get("predecessorCommentId"),
+        previous.get("predecessor_comment_id"),
+    )
+    head_sha = _first_string(
+        inputs.get("headSha"), inputs.get("head_sha"),
+        previous.get("headSha"), previous.get("head_sha"),
+    )
+    head_branch = _first_string(
+        inputs.get("headBranch"), inputs.get("head_branch"),
+        inputs.get("branch"), previous.get("headBranch"),
+        previous.get("head_branch"), previous.get("branch"),
+    )
+    base_branch = _first_string(
+        inputs.get("baseBranch"), inputs.get("base_branch"),
+        inputs.get("push_base_ref"), previous.get("baseBranch"),
+        previous.get("base_branch"),
+    )
+    saved_branch = _first_string(
+        inputs.get("savedBranch"), inputs.get("saved_branch"),
+        previous.get("savedBranch"), previous.get("saved_branch"),
+    )
+    saved_sha = _first_string(
+        inputs.get("savedSha"), inputs.get("saved_sha"),
+        previous.get("savedSha"), previous.get("saved_sha"),
+    )
+    outcome = _first_string(
+        inputs.get("attemptOutcome"), inputs.get("attempt_outcome"),
+        inputs.get("outcome"), previous.get("attemptOutcome"),
+        previous.get("outcome"),
+    ) or _github_attempt_outcome_for_mode(mode, assessment_verdict)
+    verification_summary = _first_string(
+        inputs.get("verificationSummary"), inputs.get("verification_summary"),
+        previous.get("verificationSummary"), previous.get("verification_summary"),
+    )
+    if not verification_summary and verification_verdict:
+        verification_summary = f"Verification verdict: {verification_verdict}."
+    next_action = _first_string(
+        inputs.get("nextAction"), inputs.get("next_action"),
+        previous.get("nextAction"), previous.get("next_action"),
+    ) or _github_attempt_next_action_for_mode(mode)
+    retry_history = _github_attempt_retry_history(inputs, previous)
+    retry_allowance = _first_string(
+        inputs.get("retryAllowance"), inputs.get("retry_allowance"),
+        previous.get("retryAllowance"), previous.get("retry_allowance"),
+    )
+    cooldown_until = _first_string(
+        inputs.get("cooldownUntil"), inputs.get("cooldown_until"),
+        previous.get("cooldownUntil"), previous.get("cooldown_until"),
+    )
+    operator_hold = _github_attempt_flag(
+        inputs, previous, "operatorHold", "operator_hold",
+    ) or _github_attempt_flag(inputs, previous, "holdIntent", "hold_intent")
+    writers_stopped = _github_attempt_flag(
+        inputs, previous, "writersStopped", "writers_stopped",
+    )
+    publication_outcome = _first_string(
+        inputs.get("publicationOutcome"), inputs.get("publication_outcome"),
+        previous.get("publicationOutcome"), previous.get("publication_outcome"),
+    )
+    pending_disposition = _first_string(
+        inputs.get("pendingDisposition"), inputs.get("pending_disposition"),
+        previous.get("pendingDisposition"), previous.get("pending_disposition"),
+    )
+    reset_record = _first_string(
+        inputs.get("resetRecord"), inputs.get("reset_record"),
+        inputs.get("authorizedResolution"), inputs.get("authorized_resolution"),
+    )
+    policy_ref = _first_string(
+        inputs.get("policyRef"), inputs.get("policy_ref"),
+        previous.get("policyRef"), previous.get("policy_ref"),
+    )
+    diagnostics_ref = _first_string(
+        inputs.get("diagnosticsRef"), inputs.get("diagnostics_ref"),
+        inputs.get("verificationArtifactRef"), inputs.get("verification_artifact_ref"),
+        previous.get("diagnosticsRef"), previous.get("diagnostics_ref"),
+    )
+    last_report = _first_string(
+        inputs.get("lastReport"), inputs.get("last_report"),
+        previous.get("lastReport"), previous.get("last_report"),
+    ) or reason
+    unmet = _github_attempt_string_list(
+        inputs.get("unmetRequirements") or inputs.get("unmet_requirements")
+        or previous.get("unmetRequirements") or previous.get("unmet_requirements")
+    )
+    met = _github_attempt_string_list(
+        inputs.get("metRequirements") or inputs.get("met_requirements")
+        or previous.get("metRequirements") or previous.get("met_requirements")
+    )
+    activity = _GITHUB_ATTEMPT_MODE_TO_ACTIVITY.get(mode, ATTEMPT_ACTIVITY_ACTIVE)
+    if mode == "start" and (
+        _first_string(inputs.get("preparing"), previous.get("preparing")).strip().lower()
+        in {"1", "true", "yes"}
+    ):
+        activity = ATTEMPT_ACTIVITY_PREPARING
+    return AttemptHandoff(
+        repository=repository,
+        issue_number=issue_number,
+        attempt_id=attempt_id,
+        deployment_id=deployment_id,
+        workflow_id=workflow_id,
+        run_id=run_id,
+        predecessor_attempt_id=predecessor_attempt,
+        predecessor_comment_id=predecessor_comment,
+        activity=activity,
+        last_report=last_report,
+        writers_stopped=writers_stopped,
+        publication_outcome=publication_outcome,
+        pending_disposition=pending_disposition,
+        pull_request_url=pull_request_url,
+        head_sha=head_sha,
+        head_branch=head_branch,
+        base_branch=base_branch,
+        saved_branch=saved_branch,
+        saved_sha=saved_sha,
+        outcome=outcome,
+        met_requirements=tuple(met),
+        unmet_requirements=tuple(unmet),
+        verification_summary=verification_summary,
+        next_action=next_action,
+        retry_history=tuple(retry_history),
+        retry_allowance=retry_allowance,
+        cooldown_until=cooldown_until,
+        operator_hold=operator_hold,
+        reset_record=reset_record,
+        policy_ref=policy_ref,
+        diagnostics_ref=diagnostics_ref,
+    )
+
+
+def _github_attempt_outcome_for_mode(mode: str, assessment_verdict: str) -> str:
+    if mode in {"needs_attention"}:
+        return "attention"
+    if mode in {"recovery_needed"}:
+        return "no_progress"
+    if mode in {"available"}:
+        return "no_progress"
+    if mode in {"code_review", "done"}:
+        return "completed"
+    if assessment_verdict and assessment_verdict != "FULLY_IMPLEMENTED":
+        return "incomplete"
+    return "in_progress"
+
+
+def _github_attempt_next_action_for_mode(mode: str) -> str:
+    return {
+        "start": "continue_implementation",
+        "in_progress": "continue_implementation",
+        "code_review": "continue_review",
+        "done": "finalize_status",
+        "recovery_needed": "continue_implementation",
+        "needs_attention": "obtain_operator_attention",
+        "available": "fresh_retry",
+    }.get(mode, "continue_implementation")
+
+
+def _github_attempt_flag(
+    inputs: Mapping[str, Any], previous: Mapping[str, Any], *keys: str
+) -> bool:
+    for source in (inputs, previous):
+        for key in keys:
+            value = source.get(key)
+            if value is True:
+                return True
+            if isinstance(value, str) and value.strip().lower() in {"1", "true", "yes"}:
+                return True
+    return False
+
+
+def _github_attempt_string_list(value: Any) -> list[str]:
+    if isinstance(value, str):
+        return [value.strip()] if value.strip() else []
+    if isinstance(value, Sequence) and not isinstance(value, (bytes, bytearray)):
+        items = [str(item).strip() for item in value if str(item or "").strip()]
+        return items[:50]
+    if isinstance(value, Mapping):
+        return []
+    return []
+
+
+def _github_attempt_retry_history(
+    inputs: Mapping[str, Any], previous: Mapping[str, Any]
+) -> list[str]:
+    for source in (inputs, previous):
+        for key in ("retryHistory", "retry_history"):
+            value = source.get(key)
+            if isinstance(value, str) and value.strip():
+                return [value.strip()][:50]
+            if isinstance(value, Sequence) and not isinstance(value, (bytes, bytearray)):
+                items = [str(item).strip() for item in value if str(item or "").strip()]
+                if items:
+                    return items[:50]
+    return []
+
+
+async def _fetch_attempt_comments(
+    *,
+    client: Any,
+    repository: str,
+    issue_number: int,
+    headers: Mapping[str, str],
+) -> list[dict[str, Any]] | None:
+    """List issue comments for attempt reconciliation; ``None`` = unreadable."""
+    try:
+        response = await client.get(
+            f"https://api.github.com/repos/{repository}/issues/{issue_number}/comments",
+            headers=headers,
+            params={"per_page": "100"},
+        )
+        response.raise_for_status()
+        payload = response.json()
+    except Exception:
+        return None
+    if not isinstance(payload, list):
+        return None
+    return [item for item in payload if isinstance(item, dict)]
+
+
+async def _publish_attempt_comment(
+    *,
+    client: Any,
+    repository: str,
+    issue_number: int,
+    headers: Mapping[str, str],
+    handoff: AttemptHandoff,
+    legacy_body: str,
+) -> tuple[str, str, dict[str, Any]]:
+    """Create or update this attempt's own comment; never another attempt's.
+
+    Returns ``(action, comment_id, scan)`` where action is one of
+    ``created``/``updated``/``blocked``. Uncertain listing reconciles by the
+    stable attempt marker before any create is retried; conflicting same-ID
+    copies escalate to ``blocked`` instead of last-timestamp-wins.
+    """
+    body, scan = build_safe_comment(handoff)
+    if legacy_body and legacy_body.strip() not in body:
+        # Keep the legacy human disposition discoverable inside the bounded
+        # envelope without duplicating machine metadata. The merged text is
+        # re-redacted and re-scanned because legacy prose may carry
+        # caller-supplied reason strings.
+        merged = f"{legacy_body.strip()}\n{body}"
+        merged = redact_comment_text(merged)
+        scan = scan_comment_text(merged)
+        body = merged[:8000] if len(merged) <= 8000 else body
+    if not scan.get("allowed"):
+        return "blocked", "", scan
+    comments = await _fetch_attempt_comments(
+        client=client, repository=repository, issue_number=issue_number,
+        headers=headers,
+    )
+    parsed = collect_attempt_comments(comments) if comments is not None else []
+    plan = select_own_comment(parsed, attempt_id=handoff.attempt_id)
+    if plan.action == "attention":
+        return "blocked", "", {**scan, "writePlan": plan.to_dict()}
+    if plan.action == "update" and plan.comment_id:
+        try:
+            response = await client.patch(
+                f"https://api.github.com/repos/{repository}/issues/comments/{plan.comment_id}",
+                headers=headers,
+                json={"body": body},
+            )
+            response.raise_for_status()
+            return "updated", plan.comment_id, {**scan, "writePlan": plan.to_dict()}
+        except Exception as exc:
+            raise exc
+    try:
+        response = await client.post(
+            f"https://api.github.com/repos/{repository}/issues/{issue_number}/comments",
+            headers=headers,
+            json={"body": body},
+        )
+        response.raise_for_status()
+        payload = response.json()
+        comment_id = str(payload.get("id") or "") if isinstance(payload, dict) else ""
+        return "created", comment_id, {**scan, "writePlan": plan.to_dict()}
+    except Exception as exc:
+        raise exc
+
+
 async def update_github_issue_status(
     inputs: Mapping[str, Any],
     _context: Mapping[str, Any] | None = None,
@@ -6156,25 +6575,51 @@ async def update_github_issue_status(
                 ),
             },
         )
+    attempt_id, deployment_id, attempt_reused = _github_attempt_identities(
+        inputs, _context
+    )
+    handoff = _github_attempt_handoff(
+        mode=mode,
+        inputs=inputs,
+        context=_context,
+        repository=repository,
+        issue_number=issue_number,
+        attempt_id=attempt_id,
+        deployment_id=deployment_id,
+        pull_request_url=pull_request_url,
+        assessment_verdict=assessment_verdict,
+        verification_verdict=verification_verdict,
+        reason=reason,
+    )
     async with httpx.AsyncClient(
         timeout=_GITHUB_ISSUE_MUTATION_TIMEOUT_SECONDS
     ) as client:
         pr_url = pull_request_url
         if actions.get("commentPullRequestUrl") and pr_url:
-            comment_body = f"Implementation pull request: {pr_url}"
+            legacy_body = f"Implementation pull request: {pr_url}"
         elif actions.get("comment"):
-            comment_body = _github_status_lifecycle_comment(mode=mode, issue_ref=issue_ref)
+            legacy_body = _github_status_lifecycle_comment(mode=mode, issue_ref=issue_ref)
+        else:
+            legacy_body = ""
+        comment_body = legacy_body
+        comment_action = ""
+        comment_id = ""
+        comment_scan: dict[str, Any] = {}
         if comment_body:
             try:
-                comment_response = await client.post(
-                    f"https://api.github.com/repos/{repository}/issues/{issue_number}/comments",
+                comment_action, comment_id, comment_scan = await _publish_attempt_comment(
+                    client=client,
+                    repository=repository,
+                    issue_number=issue_number,
                     headers=headers,
-                    json={"body": comment_body},
+                    handoff=handoff,
+                    legacy_body=legacy_body,
                 )
-                comment_response.raise_for_status()
-                applied.append("comment")
             except httpx.HTTPStatusError as exc:
                 summary = service._github_permission_summary(exc.response)
+                redacted_error = redact_structured_error(
+                    {"message": summary, "statusCode": exc.response.status_code}
+                )
                 return ToolResult(
                     status="FAILED",
                     outputs={
@@ -6184,6 +6629,10 @@ async def update_github_issue_status(
                         "confirmedState": updated_issue.get("state"),
                         "confirmedLabels": updated_issue.get("labels"),
                         "commentStatus": "rejected",
+                        "attemptId": attempt_id,
+                        "deploymentId": deployment_id,
+                        "attemptCommentAction": "rejected",
+                        "outboundScan": redacted_error.get("outboundScan"),
                         "summary": (
                             "GitHub issue status was updated, but the automation "
                             f"comment failed with HTTP {exc.response.status_code}. "
@@ -6197,6 +6646,23 @@ async def update_github_issue_status(
                     f"result could not be confirmed after {exc.__class__.__name__}; "
                     "the comment was not retried to avoid a duplicate."
                 )
+            if comment_action == "blocked":
+                warnings.append(
+                    "GitHub issue status was updated, but the attempt comment "
+                    "was blocked: "
+                    f"{comment_scan.get('writePlan', {}).get('reasonCode', 'outbound_scan') or 'outbound_scan'}; "
+                    "conflicting same-ID copies require attention instead of "
+                    "last-timestamp-wins."
+                    if comment_scan.get("writePlan", {}).get("reasonCode") == "conflicting_copies"
+                    else "GitHub issue status was updated, but the attempt comment "
+                    "was blocked by outbound scanning/redaction; no secret-bearing "
+                    "content was published."
+                )
+            elif comment_action in {"created", "updated"}:
+                applied.append("comment")
+            elif comment_action:
+                applied.append(f"comment:{comment_action}")
+            comment_body = "published" if comment_action in {"created", "updated"} else comment_body
     summary = f"Updated GitHub issue {issue_ref} with mode {mode}."
     outputs: dict[str, Any] = {
         "issueUrl": issue_url,
@@ -6206,6 +6672,13 @@ async def update_github_issue_status(
         "lifecycleSettled": interpret_issue(updated_issue).settled if isinstance(updated_issue, Mapping) else interpretation.settled,
         "transition": decision.to_dict(),
         "mutationOutcome": outcome.outcome,
+        "attemptId": attempt_id,
+        "deploymentId": deployment_id,
+        "attemptReused": attempt_reused,
+        "attemptActivity": handoff.activity,
+        "attemptCommentAction": comment_action or "none",
+        "attemptCommentId": comment_id,
+        "outboundScan": comment_scan,
         "summary": summary,
         "sideEffect": {
             "effectClass": "external_non_idempotent",
