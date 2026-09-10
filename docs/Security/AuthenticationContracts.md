@@ -313,3 +313,22 @@ Clean it up only then: retain the accepted contracts in this document and
 its adapter companion, resolve backlinks, and archive or remove the
 temporary plan. Do not erase necessary operator upgrade guidance
 prematurely.
+
+### 12.4 Advanced-mode logout limitations and MFA qualification (#4124)
+
+- OIDC logout always invalidates the local MoonMind session first, even
+  when the optional IdP end-session call fails. IdP-wide (single) logout
+  across all clients is not guaranteed and is never claimed; the logout
+  response reports `idp_logout_ok` honestly.
+- Trusted-proxy logout clears the local MoonMind session only. The
+  upstream proxy may continue asserting the same identity on the next
+  request; upstream revocation is owned by the proxy. Local account
+  disablement still blocks every request at validation time, and
+  per-resource authorization stays enforced after identity resolution in
+  both advanced modes.
+- No new MFA or proxy product is introduced here. Deployments requiring
+  MFA retain it through verified IdP policy (OIDC) or explicitly block
+  cutover until an MFA-capable path is qualified; a valid IdP account,
+  matching email, verified domain, or upstream admin list never grants
+  MoonMind superuser authority. Live-provider and MFA qualification is
+  recorded separately from hermetic CI per §12.1.

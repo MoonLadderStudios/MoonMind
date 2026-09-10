@@ -102,6 +102,7 @@ from api_service.api.routers.system_operations import (
     router as system_operations_router,
 )
 from api_service.api.routers.proxy import router as proxy_router
+from api_service.api.routers.auth_advanced_4124 import router as auth_advanced_4124_router
 from api_service.api.websockets import router as websockets_router
 from api_service.api.schemas import UserProfileUpdate
 from api_service.db.base import get_async_session_context
@@ -920,6 +921,21 @@ async def _initialize_oidc_provider(app: FastAPI):
             )
         except Exception as exc:
             raise RuntimeError(str(exc)) from exc
+    # Advanced modes (#4124): shape-validate oidc/header operator config at
+    # startup (no outbound discovery fetch here; hermetic CI stays offline).
+    # Failures abort startup actionably instead of serving a half-configured
+    # login that would silently fall back to another mode.
+    if production_mode in ("oidc", "header"):
+        try:
+            from api_service.services.advanced_auth_service_4124 import (
+                validate_advanced_mode_config as _validate_advanced_config,
+            )
+
+            app.state.advanced_auth_config = _validate_advanced_config(
+                production_mode
+            )
+        except Exception as exc:
+            raise RuntimeError(str(exc)) from exc
     app.state.auth_production_mode = production_mode
     app.state.auth_classification = classification
     from moonmind.security.auth_modes_4120 import set_active_production_mode as _set_active_mode
@@ -1179,12 +1195,17 @@ app.include_router(workflow_console_router)
 app.include_router(presets_router)
 app.include_router(temporal_artifacts_router)
 app.include_router(websockets_router, prefix="/ws/v1", tags=["WebSockets"])
+# Advanced identity sources (#4124): generic OIDC + trusted-proxy journeys
+# through the shared auth boundary. Endpoints fail closed when the classified
+# production mode does not select them.
+app.include_router(auth_advanced_4124_router)
 if _ENABLE_TEST_UI_ROUTE:
     app.include_router(test_ui_router)
 
 # Legacy fastapi-users login/register/reset/verify/users routes were removed with
-# the bundled Keycloak integration (#4129). No /api/v1/auth/* application-login
-# route is mounted; supported modes authenticate through the #4124-era contracts
+# the bundled Keycloak integration (#4129). The only /api/v1/auth/* routes are
+# the #4124 advanced journeys above; supported modes authenticate through the
+# #4124-era contracts
 # (docs/Security/AuthenticationContracts.md), and `disabled` mode resolves the
 # persisted default user via get_current_user().
 
