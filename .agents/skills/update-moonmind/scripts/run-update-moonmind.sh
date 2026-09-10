@@ -283,16 +283,6 @@ mark_not_running_services_for_restart() {
   done
 }
 
-compose_cmd() {
-  if command -v docker >/dev/null 2>&1 && docker compose version >/dev/null 2>&1; then
-    echo docker compose
-  elif command -v docker-compose >/dev/null 2>&1; then
-    echo docker-compose
-  else
-    die "Docker compose command not found."
-  fi
-}
-
 detect_compose_project() {
   local repo_root="$1"
   local mount_root
@@ -369,8 +359,7 @@ resolve_workspace_mount_source() {
   return 1
 }
 
-COMPOSE_CMD=()
-read -r -a COMPOSE_CMD <<<"$(compose_cmd)"
+COMPOSE_CMD=(docker compose)
 
 REPO_PATH="."
 BRANCH="main"
@@ -434,6 +423,12 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
+command -v python3 >/dev/null 2>&1 && \
+  python3 -c 'import sys; sys.exit(sys.version_info < (3, 10))' || \
+  die "Python 3.10 or newer is required on the host for deployment access checks; install python3 before updating."
+command -v docker >/dev/null 2>&1 && docker compose version >/dev/null 2>&1 || \
+  die "Docker Compose V2 is required; install the Docker Compose plugin before updating."
+
 validate_branch "$BRANCH"
 if [[ -z "$COMPOSE_PROJECT" ]]; then
   COMPOSE_PROJECT="${COMPOSE_PROJECT_NAME:-}"
@@ -486,6 +481,7 @@ if [[ "$ALLOW_DIRTY" != "true" ]]; then
 fi
 
 PRE_PULL_COMMIT="$(git rev-parse HEAD)"
+PRE_PULL_BRANCH="$(git symbolic-ref --quiet --short HEAD || true)"
 
 say "Fetching remote branch '$BRANCH' from origin"
 run_cmd git fetch --prune origin -- "$BRANCH"
@@ -552,6 +548,24 @@ fi
 # revision selected before each long-lived application process is created, so a
 # later update can detect a stale process even when git was updated separately.
 export MOONMIND_RUNTIME_SOURCE_REVISION="$POST_PULL_COMMIT"
+access_check_output=""
+if ! run_cmd_capture_into access_check_output python3 "$(pwd)/moonmind/deployment_access.py" "${COMPOSE_CMD[@]}"; then
+  # The checkout is live-mounted. Restore its authoritative source before the
+  # EXIT trap may resume the worker, and leave operator edits/.env intact.
+  warn "Deployment access preflight failed; restoring pre-update checkout $PRE_PULL_COMMIT."
+  if [[ -n "$PRE_PULL_BRANCH" ]]; then
+    restore_checkout=(git checkout -B "$PRE_PULL_BRANCH" "$PRE_PULL_COMMIT")
+  else
+    restore_checkout=(git checkout --detach "$PRE_PULL_COMMIT")
+  fi
+  if ! "${restore_checkout[@]}" || [[ "$(git rev-parse HEAD)" != "$PRE_PULL_COMMIT" ]]; then
+    SKILL_RESOLUTION_BARRIER_ACTIVE="false"
+    trap - EXIT
+    die "Could not restore the pre-update checkout; the Skill resolution worker remains stopped. Restore $PRE_PULL_COMMIT before resuming it."
+  fi
+  export MOONMIND_RUNTIME_SOURCE_REVISION="$PRE_PULL_COMMIT"
+  die "Deployment access preflight failed; restored the previous checkout. $access_check_output"
+fi
 persist_runtime_source_revision "$POST_PULL_COMMIT"
 
 if [[ "$SKIP_COMPOSE_PULL" != "true" ]]; then
