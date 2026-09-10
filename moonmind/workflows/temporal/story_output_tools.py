@@ -7,6 +7,7 @@ import hashlib
 import inspect
 import json
 import re
+import threading
 from pathlib import Path, PurePosixPath
 from typing import Any, Awaitable, Callable, Mapping, Sequence
 from urllib.parse import urlparse
@@ -39,12 +40,16 @@ from moonmind.workflows.temporal.github_issue_attempt import (
     build_attempt_id,
     build_safe_comment,
     collect_attempt_comments,
+    compute_retry_state,
     normalize_attempt_id,
+    reconcile_uncertain_create,
     redact_comment_text,
     redact_structured_error,
     resolve_installation_id,
     scan_comment_text,
     select_own_comment,
+    should_coalesce_progress,
+    validate_attempt_comment,
 )
 from moonmind.workflows.temporal.github_issue_lifecycle import (
     attempt_evidence_blocks_admission,
@@ -5703,6 +5708,8 @@ def _github_attempt_identities(
     try:
         repository, issue_number = _github_issue_inputs(inputs)
     except ValueError:
+        # Inputs without a resolvable repo/issue still get a bound attempt
+        # under the "unknown" scope; the caller fails later on validation.
         pass
     candidate_attempt = normalize_attempt_id(
         _first_string(
@@ -5877,20 +5884,22 @@ def _github_attempt_handoff(
         inputs.get("lastReport"), inputs.get("last_report"),
         previous.get("lastReport"), previous.get("last_report"),
     ) or reason
-    unmet = _github_attempt_string_list(
-        inputs.get("unmetRequirements") or inputs.get("unmet_requirements")
-        or previous.get("unmetRequirements") or previous.get("unmet_requirements")
-    )
-    met = _github_attempt_string_list(
-        inputs.get("metRequirements") or inputs.get("met_requirements")
-        or previous.get("metRequirements") or previous.get("met_requirements")
-    )
+    unmet = _github_attempt_string_list_present(inputs, previous, "unmetRequirements", "unmet_requirements")
+    met = _github_attempt_string_list_present(inputs, previous, "metRequirements", "met_requirements")
     activity = _GITHUB_ATTEMPT_MODE_TO_ACTIVITY.get(mode, ATTEMPT_ACTIVITY_ACTIVE)
     if mode == "start" and (
         _first_string(inputs.get("preparing"), previous.get("preparing")).strip().lower()
         in {"1", "true", "yes"}
     ):
         activity = ATTEMPT_ACTIVITY_PREPARING
+    from datetime import UTC, datetime
+
+    last_activity_at = _first_string(
+        inputs.get("lastActivityAt"),
+        inputs.get("last_activity_at"),
+        previous.get("lastActivityAt"),
+        previous.get("last_activity_at"),
+    ) or datetime.now(UTC).isoformat()
     return AttemptHandoff(
         repository=repository,
         issue_number=issue_number,
@@ -5902,6 +5911,7 @@ def _github_attempt_handoff(
         predecessor_comment_id=predecessor_comment,
         activity=activity,
         last_report=last_report,
+        last_activity_at=last_activity_at,
         writers_stopped=writers_stopped,
         publication_outcome=publication_outcome,
         pending_disposition=pending_disposition,
@@ -5976,6 +5986,27 @@ def _github_attempt_string_list(value: Any) -> list[str]:
     return []
 
 
+def _github_attempt_string_list_present(
+    inputs: Mapping[str, Any], previous: Mapping[str, Any], *keys: str
+) -> list[str]:
+    """Return the first present requirement list, honoring explicit empties.
+
+    An explicitly supplied empty list means verification completed the final
+    requirement; it must not fall back to a stale nonempty previous list.
+    Absent keys fall through to the next source.
+    """
+    for source in (inputs, previous):
+        for key in keys:
+            if key in source:
+                value = source.get(key)
+                if value is None:
+                    continue
+                if isinstance(value, str):
+                    return [value.strip()] if value.strip() else []
+                return _github_attempt_string_list(value)
+    return []
+
+
 def _github_attempt_retry_history(
     inputs: Mapping[str, Any], previous: Mapping[str, Any]
 ) -> list[str]:
@@ -5998,20 +6029,53 @@ async def _fetch_attempt_comments(
     issue_number: int,
     headers: Mapping[str, str],
 ) -> list[dict[str, Any]] | None:
-    """List issue comments for attempt reconciliation; ``None`` = unreadable."""
+    """List all issue comments for attempt reconciliation; ``None`` = unreadable.
+
+    All pages are followed so an attempt marker beyond the first 100 comments
+    is never treated as absent (which would create duplicates and hide
+    hold/failure evidence).
+    """
+    collected: list[dict[str, Any]] = []
+    page = 1
     try:
-        response = await client.get(
-            f"https://api.github.com/repos/{repository}/issues/{issue_number}/comments",
-            headers=headers,
-            params={"per_page": "100"},
-        )
-        response.raise_for_status()
-        payload = response.json()
+        while True:
+            response = await client.get(
+                f"https://api.github.com/repos/{repository}/issues/{issue_number}/comments",
+                headers=headers,
+                params={"per_page": "100", "page": str(page)},
+            )
+            response.raise_for_status()
+            payload = response.json()
+            if not isinstance(payload, list):
+                return None
+            collected.extend(item for item in payload if isinstance(item, dict))
+            if len(payload) < 100:
+                break
+            page += 1
+            if page > 100:
+                break
     except Exception:
+        # Ambiguous read: callers must fail closed, never reconcile against
+        # an empty history that could duplicate or ignore prior evidence.
         return None
-    if not isinstance(payload, list):
-        return None
-    return [item for item in payload if isinstance(item, dict)]
+    return collected
+
+
+# Per-attempt serialization for the in-process read-then-create/update
+# sequence. The binding key scopes the lock; the GitHub marker remains the
+# cross-process rendezvous (reconcile by marker, never last-writer-wins).
+_ATTEMPT_WRITE_LOCKS: dict[str, threading.Lock] = {}
+_ATTEMPT_WRITE_LOCKS_GUARD = threading.Lock()
+_ATTEMPT_LAST_UPDATE_AT: dict[str, str] = {}
+
+
+def _attempt_write_lock(key: str) -> threading.Lock:
+    with _ATTEMPT_WRITE_LOCKS_GUARD:
+        lock = _ATTEMPT_WRITE_LOCKS.get(key)
+        if lock is None:
+            lock = threading.Lock()
+            _ATTEMPT_WRITE_LOCKS[key] = lock
+        return lock
 
 
 async def _publish_attempt_comment(
@@ -6026,10 +6090,20 @@ async def _publish_attempt_comment(
     """Create or update this attempt's own comment; never another attempt's.
 
     Returns ``(action, comment_id, scan)`` where action is one of
-    ``created``/``updated``/``blocked``. Uncertain listing reconciles by the
-    stable attempt marker before any create is retried; conflicting same-ID
-    copies escalate to ``blocked`` instead of last-timestamp-wins.
+    ``created``/``updated``/``coalesced``/``blocked``. An unreadable comment
+    history fails closed to ``blocked``; only provenance-validated comments
+    select the write target; conflicting same-ID copies escalate to
+    ``blocked`` instead of last-timestamp-wins. Writes serialize per attempt
+    binding key and nonterminal same-activity progress coalesces within the
+    documented rate-limit window.
     """
+    from datetime import UTC, datetime
+
+    binding_key = attempt_binding_key(
+        repository=repository,
+        issue_number=issue_number,
+        attempt_id=handoff.attempt_id,
+    )
     body, scan = build_safe_comment(handoff)
     if legacy_body and legacy_body.strip() not in body:
         # Keep the legacy human disposition discoverable inside the bounded
@@ -6042,37 +6116,101 @@ async def _publish_attempt_comment(
         body = merged[:8000] if len(merged) <= 8000 else body
     if not scan.get("allowed"):
         return "blocked", "", scan
-    comments = await _fetch_attempt_comments(
-        client=client, repository=repository, issue_number=issue_number,
-        headers=headers,
-    )
-    parsed = collect_attempt_comments(comments) if comments is not None else []
-    plan = select_own_comment(parsed, attempt_id=handoff.attempt_id)
-    if plan.action == "attention":
-        return "blocked", "", {**scan, "writePlan": plan.to_dict()}
-    if plan.action == "update" and plan.comment_id:
+    lock = _attempt_write_lock(binding_key)
+    # Synchronous lock guards the in-process read-then-write sequence for
+    # this attempt; the GitHub marker remains the cross-process rendezvous.
+    acquired = lock.acquire(blocking=False)
+    if not acquired:
+        return "blocked", "", {
+            **scan,
+            "bindingKey": binding_key,
+            "writePlan": {
+                "action": "blocked",
+                "commentId": "",
+                "reasonCode": "write_serialized",
+                "detail": f"Another write for {binding_key} is in progress.",
+            },
+        }
+    try:
+        comments = await _fetch_attempt_comments(
+            client=client, repository=repository, issue_number=issue_number,
+            headers=headers,
+        )
+        if comments is None:
+            return "blocked", "", {
+                **scan,
+                "bindingKey": binding_key,
+                "writePlan": {
+                    "action": "blocked",
+                    "commentId": "",
+                    "reasonCode": "history_unreadable",
+                    "detail": "Attempt comment history could not be read; retry after reread.",
+                },
+            }
+        parsed = collect_attempt_comments(comments)
+        # Provenance gate: only schema/lineage-validated comments may serve
+        # as ownership or conflict evidence, so a copied marker or malformed
+        # envelope can never hijack or block this attempt's write target.
+        validated = [
+            item
+            for item in parsed
+            if validate_attempt_comment(
+                item,
+                repository=repository,
+                issue_number=issue_number,
+                require_trusted_poster=False,
+            ).usable
+        ]
+        plan = select_own_comment(validated, attempt_id=handoff.attempt_id)
+        scan = {**scan, "bindingKey": binding_key, "writePlan": plan.to_dict()}
+        if plan.action == "attention":
+            return "blocked", "", scan
+        terminal = handoff.activity in {"released", "attention", "releasing"}
+        if plan.action == "update" and plan.comment_id:
+            previous_update = _ATTEMPT_LAST_UPDATE_AT.get(binding_key)
+            # Activity transitions and terminal handoffs always publish;
+            # repeated same-activity progress coalesces within the window.
+            activity_changed = bool(previous_update) and handoff.activity not in {
+                "active",
+            }
+            coalesce, _ = should_coalesce_progress(
+                last_update_at=previous_update or "",
+                now=datetime.now(UTC).isoformat(),
+                activity_changed=activity_changed,
+                terminal_update=terminal,
+            )
+            if coalesce and not activity_changed and not terminal:
+                return "coalesced", plan.comment_id, scan
+            try:
+                response = await client.patch(
+                    f"https://api.github.com/repos/{repository}/issues/comments/{plan.comment_id}",
+                    headers=headers,
+                    json={"body": body},
+                )
+                response.raise_for_status()
+                _ATTEMPT_LAST_UPDATE_AT[binding_key] = datetime.now(UTC).isoformat()
+                return "updated", plan.comment_id, scan
+            except Exception as exc:
+                raise exc
         try:
-            response = await client.patch(
-                f"https://api.github.com/repos/{repository}/issues/comments/{plan.comment_id}",
+            response = await client.post(
+                f"https://api.github.com/repos/{repository}/issues/{issue_number}/comments",
                 headers=headers,
                 json={"body": body},
             )
             response.raise_for_status()
-            return "updated", plan.comment_id, {**scan, "writePlan": plan.to_dict()}
+            payload = response.json()
+            comment_id = str(payload.get("id") or "") if isinstance(payload, dict) else ""
+            _ATTEMPT_LAST_UPDATE_AT[binding_key] = datetime.now(UTC).isoformat()
+            return "created", comment_id, scan
         except Exception as exc:
             raise exc
-    try:
-        response = await client.post(
-            f"https://api.github.com/repos/{repository}/issues/{issue_number}/comments",
-            headers=headers,
-            json={"body": body},
-        )
-        response.raise_for_status()
-        payload = response.json()
-        comment_id = str(payload.get("id") or "") if isinstance(payload, dict) else ""
-        return "created", comment_id, {**scan, "writePlan": plan.to_dict()}
-    except Exception as exc:
-        raise exc
+    finally:
+        try:
+            lock.release()
+        except RuntimeError:
+            # Lock was never held by this path; safe to ignore.
+            pass
 
 
 async def update_github_issue_status(
@@ -6250,6 +6388,59 @@ async def update_github_issue_status(
                 ),
             },
         )
+    if target == "to_in_progress":
+        # Apply the portable GitHub history before admitting work: prior
+        # failures, cooldowns, operator holds, and unresolved active
+        # attempts recorded in issue comments survive new workflow IDs,
+        # device changes, and label clears.
+        async with httpx.AsyncClient(
+            timeout=_GITHUB_ISSUE_MUTATION_TIMEOUT_SECONDS
+        ) as admission_client:
+            admission_comments = await _fetch_attempt_comments(
+                client=admission_client,
+                repository=repository,
+                issue_number=issue_number,
+                headers=headers,
+            )
+        if admission_comments is None:
+            return ToolResult(
+                status="FAILED",
+                outputs={
+                    "issueRef": issue_ref,
+                    "decision": "blocked",
+                    "lifecycleSettled": interpretation.settled,
+                    "reasonCode": "history_unreadable",
+                    "summary": (
+                        f"Skipped GitHub issue admission for {issue_ref}: attempt "
+                        "history could not be read; retry after reread instead of "
+                        "resetting the shared retry policy."
+                    ),
+                },
+            )
+        admission_parsed = collect_attempt_comments(admission_comments)
+        admission_state = compute_retry_state(admission_parsed)
+        if admission_state.reason_code in {
+            "operator_hold",
+            "cancelled",
+            "cooldown_active",
+            "retry_exhausted",
+            "incompatible_policy_lineage",
+        }:
+            return ToolResult(
+                status="FAILED",
+                outputs={
+                    "issueRef": issue_ref,
+                    "decision": "blocked",
+                    "lifecycleSettled": interpretation.settled,
+                    "reasonCode": admission_state.reason_code,
+                    "retryState": admission_state.to_dict(),
+                    "summary": (
+                        f"Skipped GitHub issue admission for {issue_ref}: portable "
+                        f"history blocks automatic work ({admission_state.reason_code}: "
+                        f"{admission_state.detail})."
+                    ),
+                },
+            )
     # Abandon obsolete updates on observed successor, hold, or conflict. The
     # comparison must use the caller's expected state: comparing the observed
     # state against itself can never detect a successor.
@@ -6361,7 +6552,6 @@ async def update_github_issue_status(
         )
     applied: list[str] = []
     warnings: list[str] = []
-    comment_body = ""
     # Targeted additions/removals only: never replace the complete label list.
     # The destination status is added before any old blocking status is
     # removed. This is eventual reconciliation, not an atomic compare-and-swap
@@ -6601,68 +6791,121 @@ async def update_github_issue_status(
             legacy_body = _github_status_lifecycle_comment(mode=mode, issue_ref=issue_ref)
         else:
             legacy_body = ""
-        comment_body = legacy_body
+        # The portable attempt handoff is published independently of legacy
+        # prose: even a `done` transition with no legacy comment must leave
+        # a terminal envelope so other deployments never see stale evidence.
         comment_action = ""
         comment_id = ""
         comment_scan: dict[str, Any] = {}
-        if comment_body:
-            try:
-                comment_action, comment_id, comment_scan = await _publish_attempt_comment(
-                    client=client,
-                    repository=repository,
-                    issue_number=issue_number,
-                    headers=headers,
-                    handoff=handoff,
-                    legacy_body=legacy_body,
-                )
-            except httpx.HTTPStatusError as exc:
-                summary = service._github_permission_summary(exc.response)
-                redacted_error = redact_structured_error(
-                    {"message": summary, "statusCode": exc.response.status_code}
-                )
-                return ToolResult(
-                    status="FAILED",
-                    outputs={
-                        "issueRef": issue_ref,
-                        "issueUrl": issue_url,
-                        "appliedActions": applied,
-                        "confirmedState": updated_issue.get("state"),
-                        "confirmedLabels": updated_issue.get("labels"),
-                        "commentStatus": "rejected",
-                        "attemptId": attempt_id,
-                        "deploymentId": deployment_id,
-                        "attemptCommentAction": "rejected",
-                        "outboundScan": redacted_error.get("outboundScan"),
-                        "summary": (
-                            "GitHub issue status was updated, but the automation "
-                            f"comment failed with HTTP {exc.response.status_code}. "
-                            f"{summary}"
-                        ).strip(),
-                    },
-                )
-            except (httpx.TransportError, httpx.TimeoutException) as exc:
-                warnings.append(
-                    "GitHub issue status was updated, but the automation comment "
-                    f"result could not be confirmed after {exc.__class__.__name__}; "
-                    "the comment was not retried to avoid a duplicate."
-                )
-            if comment_action == "blocked":
-                warnings.append(
-                    "GitHub issue status was updated, but the attempt comment "
-                    "was blocked: "
-                    f"{comment_scan.get('writePlan', {}).get('reasonCode', 'outbound_scan') or 'outbound_scan'}; "
-                    "conflicting same-ID copies require attention instead of "
-                    "last-timestamp-wins."
-                    if comment_scan.get("writePlan", {}).get("reasonCode") == "conflicting_copies"
-                    else "GitHub issue status was updated, but the attempt comment "
-                    "was blocked by outbound scanning/redaction; no secret-bearing "
-                    "content was published."
-                )
-            elif comment_action in {"created", "updated"}:
-                applied.append("comment")
-            elif comment_action:
-                applied.append(f"comment:{comment_action}")
-            comment_body = "published" if comment_action in {"created", "updated"} else comment_body
+        binding_key = attempt_binding_key(
+            repository=repository,
+            issue_number=issue_number,
+            attempt_id=attempt_id,
+        )
+        try:
+            comment_action, comment_id, comment_scan = await _publish_attempt_comment(
+                client=client,
+                repository=repository,
+                issue_number=issue_number,
+                headers=headers,
+                handoff=handoff,
+                legacy_body=legacy_body,
+            )
+        except httpx.HTTPStatusError as exc:
+            summary = service._github_permission_summary(exc.response)
+            redacted_error = redact_structured_error(
+                {"message": summary, "statusCode": exc.response.status_code}
+            )
+            return ToolResult(
+                status="FAILED",
+                outputs={
+                    "issueRef": issue_ref,
+                    "issueUrl": issue_url,
+                    "appliedActions": applied,
+                    "confirmedState": updated_issue.get("state"),
+                    "confirmedLabels": updated_issue.get("labels"),
+                    "commentStatus": "rejected",
+                    "attemptId": attempt_id,
+                    "deploymentId": deployment_id,
+                    "attemptBindingKey": binding_key,
+                    "attemptCommentAction": "rejected",
+                    "outboundScan": redacted_error.get("outboundScan"),
+                    "summary": (
+                        "GitHub issue status was updated, but the automation "
+                        f"comment failed with HTTP {exc.response.status_code}. "
+                        f"{summary}"
+                    ).strip(),
+                },
+            )
+        except (httpx.TransportError, httpx.TimeoutException) as exc:
+            # Response loss after an accepted write is unknown, never proof
+            # of failure: retain the binding-key retry owner and reconcile
+            # by stable marker instead of completing without evidence.
+            return ToolResult(
+                status="FAILED",
+                outputs={
+                    "issueRef": issue_ref,
+                    "issueUrl": issue_url,
+                    "appliedActions": applied,
+                    "confirmedState": updated_issue.get("state"),
+                    "confirmedLabels": updated_issue.get("labels"),
+                    "commentStatus": "unknown",
+                    "attemptId": attempt_id,
+                    "deploymentId": deployment_id,
+                    "attemptBindingKey": binding_key,
+                    "attemptCommentAction": "unknown",
+                    "reasonCode": "comment_outcome_unknown",
+                    "summary": (
+                        "GitHub issue status was updated, but the attempt comment "
+                        f"result is unknown after {exc.__class__.__name__}; "
+                        f"retry by stable marker {binding_key} and reconcile "
+                        "with reconcile_uncertain_create before completing."
+                    ),
+                },
+            )
+        if comment_action == "blocked":
+            warnings.append(
+                "GitHub issue status was updated, but the attempt comment "
+                "was blocked: "
+                f"{comment_scan.get('writePlan', {}).get('reasonCode', 'outbound_scan') or 'outbound_scan'}; "
+                "conflicting same-ID copies require attention instead of "
+                "last-timestamp-wins."
+                if comment_scan.get("writePlan", {}).get("reasonCode") == "conflicting_copies"
+                else "GitHub issue status was updated, but the attempt comment "
+                "was blocked by outbound scanning/redaction; no secret-bearing "
+                "content was published."
+            )
+        elif comment_action in {"created", "updated", "coalesced"}:
+            applied.append("comment")
+        elif comment_action:
+            applied.append(f"comment:{comment_action}")
+        if mode == "available" and comment_action not in {"created", "updated", "coalesced"}:
+            # Release evidence must be durably verified before ownership
+            # labels are cleared: an Available issue without its terminal
+            # handoff would let another deployment start work without proof.
+            return ToolResult(
+                status="FAILED",
+                outputs={
+                    "issueRef": issue_ref,
+                    "issueUrl": issue_url,
+                    "appliedActions": applied,
+                    "confirmedState": updated_issue.get("state"),
+                    "confirmedLabels": updated_issue.get("labels"),
+                    "commentStatus": "missing",
+                    "attemptId": attempt_id,
+                    "deploymentId": deployment_id,
+                    "attemptBindingKey": binding_key,
+                    "attemptCommentAction": comment_action or "none",
+                    "attemptCommentId": comment_id,
+                    "outboundScan": comment_scan,
+                    "reasonCode": "release_evidence_missing",
+                    "summary": (
+                        f"GitHub issue labels for {issue_ref} were updated, but the "
+                        "terminal release handoff was not verified; retry the "
+                        "comment publish before clearing ownership."
+                    ),
+                },
+            )
     summary = f"Updated GitHub issue {issue_ref} with mode {mode}."
     outputs: dict[str, Any] = {
         "issueUrl": issue_url,
@@ -6674,6 +6917,7 @@ async def update_github_issue_status(
         "mutationOutcome": outcome.outcome,
         "attemptId": attempt_id,
         "deploymentId": deployment_id,
+        "attemptBindingKey": binding_key,
         "attemptReused": attempt_reused,
         "attemptActivity": handoff.activity,
         "attemptCommentAction": comment_action or "none",

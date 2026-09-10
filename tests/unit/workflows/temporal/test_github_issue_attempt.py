@@ -149,12 +149,18 @@ def test_attempt_id_bound_and_unique() -> None:
         repository=REPO, issue_number=ISSUE, workflow_id="wf",
         run_id="run", deployment_id=DEPLOY_A,
     )
+    # Stable scope reuses the same marker across Activity retries so the
+    # retry reconciles instead of minting a duplicate logical attempt.
     assert normalize_attempt_id(first) == first
-    assert first != second
+    assert first == second
     assert attempt_binding_key(
         repository=REPO, issue_number=ISSUE, attempt_id=first
     ).startswith(f"{REPO.lower()}#{ISSUE}:")
     assert normalize_attempt_id("not-an-id") == ""
+    # Callers without any stable scope still get fresh unique IDs.
+    ephemeral_first = build_attempt_id(repository=REPO, issue_number=ISSUE)
+    ephemeral_second = build_attempt_id(repository=REPO, issue_number=ISSUE)
+    assert ephemeral_first != ephemeral_second
 
 
 # ---------------------------------------------------------------------------
