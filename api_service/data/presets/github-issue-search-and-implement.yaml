@@ -23,8 +23,7 @@ annotations:
       comment: true
       labelsToAdd:
       - 'status: in-progress'
-      labelsToRemove:
-      - 'status: todo'
+      labelsToRemove: []
     codeReview:
       commentPullRequestUrl: true
       labelsToAdd:
