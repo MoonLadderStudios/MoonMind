@@ -5737,7 +5737,8 @@ async def test_agent_runtime_prepare_turn_instructions_temporal_boundary(
                 task_queue="boundary-test-queue-prepare-turn-instructions",
             )
 
-            assert result.startswith("Injected context instruction")
+            assert result.startswith("artifact:instructions")
+            assert "Injected context instruction" not in result
             assert "Managed Codex CLI note:" in result
 
 async def test_agent_runtime_reconcile_managed_sessions_returns_bounded_summary() -> None:

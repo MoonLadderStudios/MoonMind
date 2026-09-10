@@ -350,7 +350,7 @@ def test_dashboard_ui_info_endpoint_exposes_spa_boundary(client: TestClient) -> 
     assert payload["destinations"] == [
         destination.to_ui_info() for destination in DASHBOARD_DESTINATIONS
     ]
-    assert len({item["canonicalPath"] for item in payload["destinations"]}) == 12
+    assert len({item["canonicalPath"] for item in payload["destinations"]}) == 11
     configuration_destinations = [
         item
         for item in payload["destinations"]
@@ -666,7 +666,6 @@ def test_data_wide_panel_on_selected_react_routes(client: TestClient) -> None:
 
 def test_top_level_detail_deep_links_render_react_shell(client: TestClient) -> None:
     for path in (
-        "/manifests/nightly-docs",
         "/schedules/123e4567-e89b-12d3-a456-426614174000",
     ):
         response = client.get(path)
@@ -674,6 +673,19 @@ def test_top_level_detail_deep_links_render_react_shell(client: TestClient) -> N
         assert "moonmind-ui-boot" in response.text
         payload = _extract_boot_payload(response.text)
         assert payload["page"] == "dashboard"
+
+
+def test_retired_manifest_routes_are_not_dashboard_surfaces(
+    client: TestClient,
+) -> None:
+    """MoonLadderStudios/MoonMind#4192: the manifests product is retired."""
+
+    for path in (
+        "/manifests",
+        "/manifests/nightly-docs",
+    ):
+        response = client.get(path)
+        assert response.status_code == 404
 
 
 def test_retired_follow_up_routes_are_not_dashboard_surfaces(client: TestClient) -> None:

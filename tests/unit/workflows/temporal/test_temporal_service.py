@@ -404,7 +404,7 @@ def mock_client_adapter():
     adapter.terminate_workflow = AsyncMock()
     return adapter
 
-@asynccontextmanager
+
 async def _insert_historical_manifest_ingest_record(session, *, owner_id) -> object:
     """Insert an old-release ManifestIngest row without launching it.
 
@@ -431,6 +431,7 @@ async def _insert_historical_manifest_ingest_record(session, *, owner_id) -> obj
     return record
 
 
+@asynccontextmanager
 async def temporal_db(tmp_path):
     original_artifact_backend = settings.workflow.temporal_artifact_backend
     original_artifact_root = settings.workflow.temporal_artifact_root
