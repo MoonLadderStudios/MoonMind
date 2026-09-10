@@ -1569,6 +1569,47 @@ class RecurringWorkflowsService:
 
         for dfn in definitions:
             try:
+                # MoonLadderStudios/MoonMind#4192: retired ManifestIngest
+                # cutover. An upgraded database may still hold an enabled
+                # definition targeting the retired workflow type. Never
+                # (re)create or update its Temporal action: pause the
+                # existing Temporal Schedule producer so it stops firing
+                # new runs for an unregistered type, then skip normal
+                # reconciliation for this definition.
+                try:
+                    raw_target = (
+                        dict(dfn.target)
+                        if isinstance(dfn.target, Mapping)
+                        else {}
+                    )
+                    raw_workflow_type = str(
+                        raw_target.get("workflowType")
+                        or raw_target.get("workflow_type")
+                        or ""
+                    ).strip()
+                except Exception:
+                    raw_workflow_type = ""
+                if raw_workflow_type == "MoonMind.ManifestIngest":
+                    try:
+                        await self._adapter.pause_schedule(
+                            definition_id=dfn.id
+                        )
+                        reconciled += 1
+                    except ScheduleNotFoundError:
+                        logger.info(
+                            "Retired ManifestIngest schedule already absent "
+                            "for %s",
+                            dfn.id,
+                        )
+                    except ScheduleAdapterError as exc:
+                        logger.warning(
+                            "Failed to pause retired ManifestIngest schedule "
+                            "for %s: %s",
+                            dfn.id,
+                            exc,
+                        )
+                    continue
+
                 policy_src = dfn.policy if isinstance(dfn.policy, Mapping) else None
                 try:
                     policy_obj = _normalize_policy(
