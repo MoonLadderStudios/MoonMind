@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import copy
 import contextlib
 import fcntl
 import functools
@@ -5999,7 +6000,11 @@ class TemporalAgentRuntimeActivities:
         if not webhook_url and not email_configured:
             return {"status": "skipped", "reason": "no_channels"}
 
-        event = _build_execution_notification_payload(payload, redact=True)
+        # Inspect original content before redaction can erase a finding. The
+        # independently built delivery payload remains redacted for low-security
+        # sends and cannot mutate the scan input through nested references.
+        scan_event = _build_execution_notification_payload(payload, redact=False)
+        event = redact_sensitive_payload(copy.deepcopy(scan_event))
         results: list[dict[str, str]] = []
         errors: list[dict[str, str]] = []
         timeout_seconds = max(1, int(notification_settings.timeout_seconds or 5))
@@ -6009,7 +6014,7 @@ class TemporalAgentRuntimeActivities:
             if authorization:
                 headers["Authorization"] = authorization
             blocked_reason = _scan_execution_notification_before_send(
-                event,
+                scan_event,
                 surface="execution.notification.webhook.payload",
             )
             if blocked_reason is not None:
@@ -6047,7 +6052,7 @@ class TemporalAgentRuntimeActivities:
                     )
         if email_configured:
             blocked_reason = _scan_execution_notification_before_send(
-                event,
+                scan_event,
                 surface="execution.notification.email.payload",
             )
             if blocked_reason is not None:

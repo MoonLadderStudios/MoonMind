@@ -691,6 +691,25 @@ async def _maintain_omnigent_bootstrap_reconciliation() -> None:
             retry_delay_seconds = min(retry_delay_seconds * 2, 120)
 
 
+_OMNIGENT_INVENTORY_REFRESH_INTERVAL_SECONDS = 120
+
+
+async def _maintain_omnigent_inventory() -> None:
+    """Keep discovery fresh even while bootstrap waits on credential authority."""
+    from api_service.services.omnigent_agent_profile_service import (
+        refresh_upstream_inventory,
+    )
+
+    while True:
+        try:
+            await refresh_upstream_inventory()
+        except Exception as exc:
+            logger.warning(
+                "Omnigent inventory refresh deferred (%s)", type(exc).__name__
+            )
+        await asyncio.sleep(_OMNIGENT_INVENTORY_REFRESH_INTERVAL_SECONDS)
+
+
 async def _initialize_oidc_provider(app: FastAPI):
     """Validate the authentication selector; generic OIDC discovery lives in #4124."""
     # The bundled Keycloak integration was removed (#4129): retired selectors
@@ -976,21 +995,23 @@ async def lifespan(app: FastAPI):
             _maintain_omnigent_bootstrap_reconciliation(),
             name="omnigent-bootstrap-reconciliation",
         )
+        app.state.omnigent_inventory_task = asyncio.create_task(
+            _maintain_omnigent_inventory(), name="omnigent-inventory-refresh"
+        )
     try:
         yield
     finally:
-        retry_task = getattr(
-            app.state,
-            "omnigent_bootstrap_reconciliation_task",
-            None,
-        )
-        if retry_task is not None and not retry_task.done():
-            retry_task.cancel()
-            try:
-                await retry_task
-            except asyncio.CancelledError:
-                # Shutdown owns this task, so cancellation is the expected outcome.
-                pass
+        maintenance_tasks = [
+            task
+            for name in (
+                "omnigent_bootstrap_reconciliation_task",
+                "omnigent_inventory_task",
+            )
+            if (task := getattr(app.state, name, None)) is not None
+        ]
+        for task in maintenance_tasks:
+            task.cancel()
+        await asyncio.gather(*maintenance_tasks, return_exceptions=True)
         # The pooled Omnigent HTTP/SSE transport lives for the process, so
         # this process closes it (MoonLadderStudios/MoonMind#3878).
         from moonmind.omnigent.production import close_omnigent_transport_pool
