@@ -47,7 +47,6 @@ from moonmind.workflows.temporal.runtime.workspace_locators import (
     resolve_managed_workspace_locator,
     resolve_sandbox_workspace_locator,
 )
-from moonmind.schemas.manifest_ingest_models import CompiledManifestPlanModel
 from moonmind.schemas.managed_checkpoint_models import (
     ManagedCheckpointEntry,
     ManagedWorkspaceCheckpointCaptureInput,
@@ -234,12 +233,6 @@ from moonmind.workflows.temporal.artifacts import (
     TemporalArtifactService,
     TemporalArtifactValidationError,
     build_artifact_ref,
-)
-from moonmind.workflows.temporal.manifest_ingest import (
-    build_manifest_run_index,
-    build_manifest_summary,
-    compile_manifest_plan,
-    plan_nodes_to_runtime_nodes,
 )
 from moonmind.workflows.temporal.runtime.managed_api_key_resolve import (
     build_github_credential_descriptor_for_launch,
@@ -852,13 +845,6 @@ class PlanGenerateActivityResult:
     plan_ref: ArtifactRef
 
 @dataclass(frozen=True, slots=True)
-class ManifestCompileActivityResult:
-    """Result from manifest compile activity helpers."""
-
-    plan_ref: ArtifactRef
-    manifest_digest: str
-
-@dataclass(frozen=True, slots=True)
 class SandboxCommandResult:
     """Structured result from ``sandbox.run_command``."""
 
@@ -944,8 +930,6 @@ _ACTIVITY_HANDLER_ATTRS: dict[str, tuple[str, str]] = {
     "step_checkpoint.create": ("artifacts", "step_checkpoint_create"),
     "step_checkpoint.create_v2": ("artifacts", "step_checkpoint_create"),
     "step_checkpoint.validate": ("artifacts", "step_checkpoint_validate"),
-    "manifest.compile": ("manifest", "manifest_compile"),
-    "manifest.write_summary": ("manifest", "manifest_write_summary"),
     "plan.generate": ("plans", "plan_generate"),
     "plan.check_preset_capabilities": ("plans", "plan_check_preset_capabilities"),
     "plan.validate": ("plans", "plan_validate"),
@@ -2711,155 +2695,6 @@ def _scrub_temporal_failure_text(
 ) -> str:
     return redact_sensitive_text(redactor.scrub(text))
 
-
-class TemporalManifestActivities:
-    """Implementation helpers for manifest-ingest activity steps."""
-
-    def __init__(self, *, artifact_service: TemporalArtifactService) -> None:
-        self._artifact_service = artifact_service
-
-    async def manifest_read(
-        self,
-        *,
-        principal: str,
-        manifest_ref: ArtifactRef | str,
-    ) -> str:
-        _artifact, payload = await self._artifact_service.read(
-            artifact_id=_artifact_id_from_ref(manifest_ref),
-            principal=principal,
-            allow_restricted_raw=True,
-        )
-        return payload.decode("utf-8")
-
-    async def manifest_compile(
-        self,
-        *,
-        principal: str,
-        manifest_ref: ArtifactRef | str,
-        action: str,
-        options: Mapping[str, Any] | None,
-        requested_by: Mapping[str, Any],
-        execution_policy: Mapping[str, Any],
-        execution_ref: ExecutionRef | dict[str, Any] | None = None,
-    ) -> ManifestCompileActivityResult:
-        _artifact, manifest_payload = await self._artifact_service.read(
-            artifact_id=_artifact_id_from_ref(manifest_ref),
-            principal=principal,
-            allow_restricted_raw=True,
-        )
-        plan = compile_manifest_plan(
-            manifest_ref=_artifact_id_from_ref(manifest_ref),
-            manifest_payload=manifest_payload,
-            action=action,
-            options=options,
-            requested_by=requested_by,
-            execution_policy=execution_policy,
-        )
-        plan_ref = await _write_json_artifact(
-            self._artifact_service,
-            principal=principal,
-            payload=plan.model_dump(by_alias=True),
-            execution_ref=execution_ref,
-            metadata_json={
-                "name": "manifest_plan.json",
-                "producer": "activity:manifest.compile",
-                "labels": ["manifest", "plan"],
-            },
-        )
-        return ManifestCompileActivityResult(
-            plan_ref=plan_ref,
-            manifest_digest=plan.manifest_digest,
-        )
-
-    async def manifest_write_summary(
-        self,
-        *,
-        principal: str,
-        workflow_id: str,
-        state: str,
-        phase: str,
-        manifest_ref: str,
-        plan_ref: str | None,
-        nodes: Sequence[Mapping[str, Any]] | None = None,
-        execution_ref: ExecutionRef | dict[str, Any] | None = None,
-    ) -> tuple[ArtifactRef, ArtifactRef]:
-        # A completed manifest.compile Activity serializes ArtifactRef as an
-        # object. Preserve that recorded invocation shape at the Activity owner.
-        if isinstance(plan_ref, Mapping):
-            plan_ref = ArtifactRef(**dict(plan_ref)).artifact_id
-        elif isinstance(plan_ref, ArtifactRef):
-            plan_ref = plan_ref.artifact_id
-        resolved_nodes = await self._resolve_manifest_nodes(
-            principal=principal,
-            plan_ref=plan_ref,
-            nodes=nodes,
-        )
-        summary = build_manifest_summary(
-            workflow_id=workflow_id,
-            state=state,
-            phase=phase,
-            manifest_ref=manifest_ref,
-            plan_ref=plan_ref,
-            nodes=resolved_nodes,
-        )
-        run_index = build_manifest_run_index(
-            workflow_id=workflow_id,
-            manifest_ref=manifest_ref,
-            nodes=resolved_nodes,
-        )
-        summary_ref = await _write_json_artifact(
-            self._artifact_service,
-            principal=principal,
-            payload=summary.model_dump(by_alias=True),
-            execution_ref=execution_ref,
-            metadata_json={
-                "name": "manifest_summary.json",
-                "producer": "activity:manifest.summary",
-                "labels": ["manifest", "summary"],
-            },
-        )
-        run_index_ref = await _write_json_artifact(
-            self._artifact_service,
-            principal=principal,
-            payload=run_index.model_dump(by_alias=True),
-            execution_ref=execution_ref,
-            metadata_json={
-                "name": "manifest_run_index.json",
-                "producer": "activity:manifest.run_index",
-                "labels": ["manifest", "run-index"],
-            },
-        )
-        return summary_ref, run_index_ref
-
-    async def _resolve_manifest_nodes(
-        self,
-        *,
-        principal: str,
-        plan_ref: str | None,
-        nodes: Sequence[Mapping[str, Any]] | None,
-    ) -> list[Mapping[str, Any]]:
-        if nodes:
-            return list(nodes)
-        if not plan_ref:
-            return []
-
-        try:
-            payload = await _read_json_artifact(
-                self._artifact_service,
-                artifact_ref=plan_ref,
-                principal=principal,
-            )
-            compiled_plan = CompiledManifestPlanModel.model_validate(payload)
-        except Exception as exc:
-            raise TemporalActivityRuntimeError(
-                "manifest.write_summary could not hydrate plan nodes from plan_ref"
-            ) from exc
-
-        runtime_nodes = plan_nodes_to_runtime_nodes(
-            compiled_plan,
-            requested_by=compiled_plan.requested_by,
-        )
-        return [node.model_dump(by_alias=True, mode="json") for node in runtime_nodes]
 
 class TemporalSandboxActivities:
     """Implementation helper for ``sandbox.run_command``."""
@@ -8999,13 +8834,10 @@ class TemporalAgentRuntimeActivities:
                 raise TemporalActivityRuntimeError(
                     "payload.workspace_path or payload.workspacePath is required when request.instructionRef is set"
                 )
-            from moonmind.rag.context_injection import ContextInjectionService
-
-            service = ContextInjectionService()
-            await service.inject_context(
-                request=request,
-                workspace_path=Path(workspace_path_raw),
-            )
+            # MoonLadderStudios/MoonMind#4192: native RAG context injection
+            # is retired with the Manifest/RAG ingestion product. Managed
+            # sessions proceed with the author-provided instruction; no
+            # retrieval, embedding, or vector lookup runs here.
             if self._session_controller is not None:
                 await self._session_controller.ensure_repo_artifacts_writable_by_runtime_user(
                     workspace_path_raw
@@ -15056,7 +14888,6 @@ def build_activity_bindings(
     *,
     artifact_activities: Any | None = None,
     plan_activities: Any | None = None,
-    manifest_activities: Any | None = None,
     skill_activities: Any | None = None,
     sandbox_activities: Any | None = None,
     integration_activities: Any | None = None,
@@ -15071,7 +14902,6 @@ def build_activity_bindings(
     implementations = {
         "artifacts": artifact_activities,
         "plans": plan_activities,
-        "manifest": manifest_activities,
         "skills": skill_activities,
         "sandbox": sandbox_activities,
         "integrations": integration_activities,

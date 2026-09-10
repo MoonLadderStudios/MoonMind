@@ -134,10 +134,6 @@ from moonmind.runtime_intent import (
     validate_runtime_tier_intent,
 )
 from moonmind.schemas.agent_runtime_models import OmnigentExecutionPlanBinding
-from moonmind.schemas.manifest_ingest_models import (
-    ManifestNodePageModel,
-    ManifestStatusSnapshotModel,
-)
 from moonmind.schemas.temporal_artifact_models import ArtifactRefModel
 from moonmind.utils.logging import redact_sensitive_payload, redact_sensitive_text
 from moonmind.schemas.temporal_models import (
@@ -221,7 +217,6 @@ from moonmind.workflows.temporal import (
     TemporalExecutionRerunSkillSnapshotError,
     TemporalExecutionService,
     TemporalExecutionValidationError,
-    build_manifest_status_snapshot,
 )
 from moonmind.workflows.temporal.step_ledger import build_initial_step_rows
 from moonmind.workflows.temporal.title_search import tokenize_title
@@ -3568,9 +3563,6 @@ async def _get_service(
         run_continue_as_new_wait_cycle_threshold=(
             settings.temporal.run_continue_as_new_wait_cycle_threshold
         ),
-        manifest_continue_as_new_phase_threshold=(
-            settings.temporal.manifest_continue_as_new_phase_threshold
-        ),
     )
 
 def _ensure_actions_enabled() -> None:
@@ -3972,9 +3964,10 @@ def _serialize_execution(
         temporal_status = "failed"
 
     raw_state = state_value
+    # MoonLadderStudios/MoonMind#4192: the native ManifestIngest product is
+    # retired. No status snapshot is built; record-attribute fallbacks below
+    # preserve historical lineage refs for old-release executions.
     manifest_status = None
-    if workflow_type_value == "MoonMind.ManifestIngest":
-        manifest_status = build_manifest_status_snapshot(record)
     owner_type = _normalize_owner_type(record, search_attributes)
     owner_id = str(search_attributes.get("mm_owner_id") or record.owner_id or "system")
     entry = _resolve_execution_entry(record, search_attributes)
@@ -4444,11 +4437,8 @@ def _serialize_execution(
         checkpoint_artifact_ref=_manifest_attr(
             manifest_status, "checkpoint_artifact_ref"
         ) if is_admin else None,
-        requested_by=_manifest_attr(manifest_status, "requested_by"),
-        execution_policy=_manifest_attr(manifest_status, "execution_policy"),
         phase=_manifest_attr(manifest_status, "phase"),
         paused=_manifest_attr(manifest_status, "paused"),
-        counts=_manifest_attr(manifest_status, "counts"),
         artifacts_count=len(record.artifact_refs or []),
         scheduled_for=scheduled_for,
         created_at=created_at,
@@ -11807,61 +11797,6 @@ async def _create_execution_from_workflow_request(
     execution = _serialize_execution(record, user=user)
     return execution
 
-async def _create_execution_from_manifest_request(
-    *,
-    request: CreateJobRequest,
-    service: TemporalExecutionService,
-    user: User,
-) -> ExecutionModel:
-    if str(request.type).strip().lower() != "manifest":
-        raise _invalid_workflow_request(
-            "Only manifest-shaped submit requests can be mapped to Temporal manifest executions."
-        )
-
-    payload = request.payload if isinstance(request.payload, dict) else {}
-    manifest_payload = (
-        payload.get("manifest") if isinstance(payload.get("manifest"), dict) else {}
-    )
-    if not manifest_payload:
-        raise _invalid_workflow_request(
-            "Manifest-shaped Temporal submit requests require payload.manifest."
-        )
-
-    name = str(manifest_payload.get("name", "inline")).strip()
-    action = str(manifest_payload.get("action", "run")).strip()
-    options = manifest_payload.get("options", {})
-    idempotency_key = str(payload.get("idempotencyKey") or "").strip() or None
-
-    try:
-        record = await service.create_execution(
-            workflow_type="MoonMind.ManifestIngest",
-            owner_id=user.id,
-            title=f"Manifest: {name}",
-            summary=f"Manifest execution for {name} ({action})",
-            input_artifact_ref=None,
-            plan_artifact_ref=None,
-            manifest_artifact_ref=None,
-            failure_policy=None,
-            initial_parameters={
-                "manifestName": name,
-                "action": action,
-                "options": options,
-                "systemPayload": {"manifest": manifest_payload},
-            },
-            idempotency_key=idempotency_key,
-        )
-    except TemporalExecutionValidationError as exc:
-        message = str(exc)
-        raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
-            detail={
-                "code": _validation_error_code(message),
-                "message": message,
-            },
-        ) from exc
-
-    return _serialize_execution(record, user=user)
-
 async def _get_owned_execution(
     *,
     service: TemporalExecutionService,
@@ -18053,10 +17988,6 @@ async def update_execution(
             plan_artifact_ref=payload.plan_artifact_ref,
             parameters_patch=effective_parameters_patch,
             title=payload.title,
-            new_manifest_artifact_ref=payload.new_manifest_artifact_ref,
-            mode=payload.mode,
-            max_concurrency=payload.max_concurrency,
-            node_ids=payload.node_ids,
             idempotency_key=payload.idempotency_key,
         )
     except (
@@ -18181,56 +18112,6 @@ async def update_execution(
             refreshed_at=refreshed_at,
         ),
     )
-
-@router.get(
-    "/{workflow_id}/manifest-status",
-    response_model=ManifestStatusSnapshotModel,
-)
-async def describe_manifest_status(
-    workflow_id: str,
-    service: TemporalExecutionService = Depends(_get_service),
-    user: User = Depends(get_current_user()),
-) -> ManifestStatusSnapshotModel:
-    await _get_owned_execution(service=service, workflow_id=workflow_id, user=user)
-    try:
-        return await service.describe_manifest_status(workflow_id)
-    except TemporalExecutionValidationError as exc:
-        raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
-            detail={
-                "code": "invalid_manifest_status_request",
-                "message": str(exc),
-            },
-        ) from exc
-
-@router.get(
-    "/{workflow_id}/manifest-nodes",
-    response_model=ManifestNodePageModel,
-)
-async def list_manifest_node_page(
-    workflow_id: str,
-    state: Optional[str] = Query(None, alias="state"),
-    cursor: Optional[str] = Query(None, alias="cursor"),
-    limit: int = Query(50, alias="limit", ge=1, le=200),
-    service: TemporalExecutionService = Depends(_get_service),
-    user: User = Depends(get_current_user()),
-) -> ManifestNodePageModel:
-    await _get_owned_execution(service=service, workflow_id=workflow_id, user=user)
-    try:
-        return await service.list_manifest_nodes(
-            workflow_id,
-            state=state,
-            cursor=cursor,
-            limit=limit,
-        )
-    except TemporalExecutionValidationError as exc:
-        raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
-            detail={
-                "code": "invalid_manifest_nodes_request",
-                "message": str(exc),
-            },
-        ) from exc
 
 @router.post(
     "/{workflow_id}/integration",

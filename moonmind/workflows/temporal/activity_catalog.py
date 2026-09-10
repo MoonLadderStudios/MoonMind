@@ -538,24 +538,6 @@ def build_default_activity_catalog(
             retries=_activity_retries(max_attempts=3, max_interval_seconds=30),
         ),
         TemporalActivityDefinition(
-            activity_type="manifest.compile",
-            family="manifest",
-            capability_class="artifacts",
-            task_queue=cfg.activity_artifacts_task_queue,
-            fleet=ARTIFACTS_FLEET,
-            timeouts=TemporalActivityTimeouts(300, 600),
-            retries=_activity_retries(max_attempts=5, max_interval_seconds=60),
-        ),
-        TemporalActivityDefinition(
-            activity_type="manifest.write_summary",
-            family="manifest",
-            capability_class="artifacts",
-            task_queue=cfg.activity_artifacts_task_queue,
-            fleet=ARTIFACTS_FLEET,
-            timeouts=TemporalActivityTimeouts(300, 600),
-            retries=_activity_retries(max_attempts=5, max_interval_seconds=60),
-        ),
-        TemporalActivityDefinition(
             activity_type="plan.check_preset_capabilities",
             family="plan",
             capability_class="llm",
@@ -1846,21 +1828,6 @@ def build_default_activity_catalog(
     return TemporalActivityCatalog(activities=activities, fleets=fleets)
 
 
-def manifest_ingest_activity_routes(
-    catalog: TemporalActivityCatalog | None = None,
-) -> tuple[TemporalActivityRoute, ...]:
-    """Return the canonical activity routes used by manifest ingest."""
-
-    resolved_catalog = catalog or build_default_activity_catalog()
-    return tuple(
-        resolved_catalog.resolve_activity(activity_type)
-        for activity_type in (
-            "manifest.compile",
-            "manifest.write_summary",
-        )
-    )
-
-
 def skill_policy_as_route(
     *,
     activity_type: str,
@@ -1918,6 +1885,5 @@ __all__ = [
     "build_default_activity_catalog",
     "get_workflow_task_queue",
     "get_workflow_poll_task_queues",
-    "manifest_ingest_activity_routes",
     "skill_policy_as_route",
 ]

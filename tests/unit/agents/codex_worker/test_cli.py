@@ -12,10 +12,10 @@ from moonmind.agents.codex_worker import cli
 from moonmind.utils.cli import CliVerificationError
 
 @pytest.fixture(autouse=True)
-def _disable_rag_preflight_checks(monkeypatch) -> None:
-    """Prevent preflight tests from performing slow external RAG readiness checks."""
+def _disable_external_preflight_checks(monkeypatch) -> None:
+    """Prevent preflight tests from performing slow external readiness checks."""
 
-    monkeypatch.setattr(cli, "ensure_rag_ready", lambda _settings: None)
+    monkeypatch.setattr(cli, "_run_checked_command", lambda *args, **kwargs: None)
 
 
 @pytest.mark.parametrize(
@@ -451,22 +451,24 @@ def test_run_checked_command_error_message_without_detail_uses_compact_hint(
     message = str(exc_info.value)
     assert "run now" not in message
 
-def test_run_preflight_google_embedding_requires_credential(monkeypatch) -> None:
-    """Google embedding profiles should fail fast when key material is absent."""
+def test_run_preflight_ignores_retired_embedding_env(monkeypatch) -> None:
+    """Retired embedding env (#4192) must not fail worker preflight."""
 
     monkeypatch.setattr(
         cli,
         "verify_cli_is_executable",
         lambda name: f"/usr/bin/{name}",
     )
+    monkeypatch.setattr(cli, "_run_checked_command", lambda *args, **kwargs: None)
 
-    with pytest.raises(RuntimeError, match="GOOGLE_API_KEY or GEMINI_API_KEY"):
-        cli.run_preflight(
-            env={
-                "DEFAULT_EMBEDDING_PROVIDER": "google",
-                "GOOGLE_EMBEDDING_MODEL": "gemini-embedding-2-preview",
-            }
-        )
+    # No embedding credential is required: native retrieval is retired and
+    # no embedding profile is consulted.
+    cli.run_preflight(
+        env={
+            "DEFAULT_EMBEDDING_PROVIDER": "google",
+            "GOOGLE_EMBEDDING_MODEL": "gemini-embedding-2-preview",
+        }
+    )
 
 def test_run_preflight_claude_runtime_requires_api_key(monkeypatch) -> None:
     """Claude runtime should fail fast when no Claude API credential env is set."""

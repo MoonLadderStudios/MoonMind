@@ -147,10 +147,7 @@ The SPA shell should be served for recognized dashboard UI paths and deep links,
 - `/skills/*` extensionless subroutes
 - `/settings`
 - `/settings/*` extensionless subroutes
-- `/manifests`
-- `/manifests/{manifestName}`
 - `/oauth-terminal`
-- `/index-health` if retained as a dashboard surface
 
 The initial response for these routes should be the same shell. The client route table decides which page renders.
 
@@ -185,8 +182,6 @@ const router = createBrowserRouter([
       { path: 'schedules/:definitionId', lazy: () => import('./pages/SchedulesPage') },
       { path: 'skills/*', lazy: () => import('./pages/SkillsPage') },
       { path: 'settings/*', lazy: () => import('./pages/SettingsPage') },
-      { path: 'manifests', lazy: () => import('./pages/ManifestsPage') },
-      { path: 'manifests/:manifestName', lazy: () => import('./pages/ManifestsPage') },
       { path: 'oauth-terminal', lazy: () => import('./pages/OAuthTerminalPage') },
     ],
   },
@@ -195,7 +190,7 @@ const router = createBrowserRouter([
 
 Rules:
 
-- use client route params for `workflowId`, `definitionId`, and `manifestName`;
+- use client route params for `workflowId` and `definitionId`;
 - use URL search params for shareable filters and view state only;
 - do not serialize large or secret-bearing state into URLs;
 - use route loaders or query hooks for data, not server boot payloads;

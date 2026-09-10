@@ -10,6 +10,7 @@ import logging
 from collections.abc import AsyncIterator, Mapping
 from contextlib import asynccontextmanager, suppress
 from contextvars import ContextVar
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
@@ -535,6 +536,22 @@ def _first_message_marker(*, request: AgentExecutionRequest) -> str:
     )
 
 
+@dataclass(frozen=True, slots=True)
+class PromptContextResolution:
+    """Retired native-RAG injection resolution (MoonLadderStudios/MoonMind#4192).
+
+    The Manifest/RAG ingestion product is removed, so first-message
+    preparation always resolves to the authored instruction unchanged with
+    no retrieved items and no context-pack artifact. The shape mirrors the
+    retired ``moonmind.rag`` resolution so downstream evidence paths keep
+    working through the established degraded projection.
+    """
+
+    instruction: str
+    items_count: int = 0
+    artifact_path: Path | None = None
+
+
 def _retrieval_evidence(request: AgentExecutionRequest) -> dict[str, Any]:
     parameters = request.parameters if isinstance(request.parameters, dict) else {}
     metadata = parameters.get("metadata")
@@ -659,20 +676,14 @@ async def _resolve_initial_context_message(
 
     text = _first_message_text(first_message)
     if text:
-        from moonmind.rag.context_injection import ContextInjectionService
-
-        retrieval_request = request.model_copy(deep=True)
-        retrieval_request.instruction_ref = text
-        resolution = await ContextInjectionService().inject_context(
-            request=retrieval_request,
-            # The provider session workspace may be a URL or a path visible only
-            # inside the Omnigent host. Retrieval and staging run on this worker.
-            workspace_path=Path.cwd().resolve(),
-        )
+        # MoonLadderStudios/MoonMind#4192: native RAG context injection is
+        # retired with the Manifest/RAG ingestion product. The authored
+        # first message ships unchanged; downstream evidence records the
+        # retired state through the established degraded path.
+        resolution = PromptContextResolution(instruction=text)
         first_message["data"]["content"][0]["text"] = resolution.instruction
         # Copy only the compact RAG metadata back to the canonical request so it
         # is projected into terminal Step Execution evidence.
-        request.parameters = retrieval_request.parameters
         moonmind = (
             request.parameters.get("metadata", {}).get("moonmind", {})
             if isinstance(request.parameters, dict)

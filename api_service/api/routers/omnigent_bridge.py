@@ -72,11 +72,26 @@ from api_service.api.routers.omnigent_bridge_composition import (
     rotate_active_host_auth_profile,
     verify_embedded_host_request,
 )
-from api_service.api.routers.retrieval_gateway import get_capability_registry
 from api_service.auth_providers import get_current_user
 from api_service.db.base import get_async_session
 from api_service.db.models import User
 from api_service.retrieval_capabilities import RetrievalCapabilityRegistry
+
+
+def get_capability_registry(request: Request) -> RetrievalCapabilityRegistry:
+    """Return the process-cached retrieval-authority registry.
+
+    MoonLadderStudios/MoonMind#4192: relocated here from the retired
+    ``retrieval_gateway`` router. The bridge keeps only session-authority
+    lifecycle (revocation on session teardown); no retrieval query path
+    remains.
+    """
+
+    registry = getattr(request.app.state, "retrieval_capability_registry", None)
+    if registry is None:
+        registry = RetrievalCapabilityRegistry()
+        request.app.state.retrieval_capability_registry = registry
+    return registry
 from api_service.services.omnigent_policies import (
     PolicyConflict,
     PolicyNotFound,

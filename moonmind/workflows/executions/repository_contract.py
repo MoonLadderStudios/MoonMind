@@ -17,8 +17,6 @@ from urllib.parse import urlsplit
 
 from pydantic import BaseModel, ConfigDict, Field, TypeAdapter, model_validator
 
-from moonmind.schemas.manifest_models import SecretRef
-
 DEFAULT_GIT_CONNECTION_REF = "repository-connection:git-default"
 LEGACY_REPOSITORY_DECODER_VERSION = "moonmind.repository-legacy-history.v1"
 REPOSITORY_CAPABILITY_UNKNOWN = "REPOSITORY_CAPABILITY_UNKNOWN"
@@ -33,6 +31,21 @@ class RepositoryContractError(ValueError):
     def __init__(self, code: str, message: str) -> None:
         self.code = code
         super().__init__(f"{code}: {message}")
+
+
+class SecretRef(BaseModel):
+    """Generic provider/key secret locator for repository credentials.
+
+    MoonLadderStudios/MoonMind#4192: relocated here from the retired native
+    Manifest schema module (``moonmind.schemas.manifest_models``). The
+    repository credential contract is generic workflow functionality and
+    does not depend on the removed Manifest product.
+    """
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+    provider: str
+    key: str
+    extra: dict[str, Any] = Field(default_factory=dict)
 
 
 class RepositoryName(BaseModel):
