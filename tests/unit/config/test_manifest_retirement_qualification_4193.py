@@ -55,7 +55,10 @@ Matrix-to-evidence mapping (issue acceptance matrix):
 - No reintroduction: GUARD DEFINED here, residual PINNED here. The targeted
   import/registration/route/dependency guard fails a deliberately
   reintroduced product component (fixture negative controls) but allows
-  arbitrary user manifests. Real-repo absence is owned by siblings.
+  arbitrary user manifests. The repo-derived scan
+  (``scan_repo_for_native_manifest_product_files``) reports the real
+  inventory, including unlisted or relocated surfaces; real-repo absence is
+  owned by siblings.
 
 Negative controls (issue evidence requirement 8 / plan-coverage ledger):
 every guard below is proven with a fixture that reintroduces the retired
@@ -90,13 +93,32 @@ NATIVE_MANIFEST_PRODUCT_FILES = (
     "moonmind/manifest/pipeline.py",
     "moonmind/manifest/loader.py",
     "moonmind/manifest/validator.py",
+    "moonmind/manifest/runner.py",
+    "moonmind/manifest/adapters.py",
+    "moonmind/manifest/evaluation.py",
+    "moonmind/manifest/interpolation.py",
+    "moonmind/manifest/manifest_cli.py",
+    "moonmind/manifest/reader_adapter.py",
+    "moonmind/manifest/secret_providers.py",
+    "moonmind/manifest/sync.py",
     "api_service/api/routers/manifests.py",
     "api_service/services/manifests_service.py",
     "api_service/services/manifest_sync_service.py",
     "manifest.schema.json",
     "moonmind/workflows/temporal/workflows/manifest_ingest.py",
+    "moonmind/workflows/temporal/manifest_ingest.py",
     "moonmind/workflows/executions/manifest_contract.py",
     "moonmind/schemas/manifest_ingest_models.py",
+    "frontend/src/entrypoints/manifests.tsx",
+)
+
+# Path markers for native product surfaces that may appear under a new path.
+# The exact tuple above pins known surfaces; these markers let the guard flag
+# reintroduced or relocated product files without a tuple update.
+_NATIVE_MANIFEST_PRODUCT_PATH_RES = (
+    re.compile(r"^moonmind/manifest/"),
+    re.compile(r"manifest_ingest"),
+    re.compile(r"^frontend/src/entrypoints/manifests"),
 )
 
 # Native product route/workflow/activity markers. User-facing
@@ -117,6 +139,13 @@ _ALLOWED_USER_MANIFEST_RE = re.compile(
 )
 
 
+def _is_native_manifest_product_path(name: str) -> bool:
+    """Whether a repo-relative path is a native Manifest product surface."""
+    if name in NATIVE_MANIFEST_PRODUCT_FILES:
+        return True
+    return any(rx.search(name) for rx in _NATIVE_MANIFEST_PRODUCT_PATH_RES)
+
+
 def check_native_manifest_product_absent(
     present_files: list[str],
     *,
@@ -126,7 +155,7 @@ def check_native_manifest_product_absent(
     """Return problems when native Manifest product surfaces are present."""
     problems: list[str] = []
     for name in present_files:
-        if name in NATIVE_MANIFEST_PRODUCT_FILES:
+        if _is_native_manifest_product_path(name):
             problems.append(f"native Manifest product file present: {name!r}")
     if _NATIVE_MANIFEST_ROUTE_RE.search(main_py_text):
         problems.append("API mounts native manifests router")
@@ -161,6 +190,71 @@ def _present_native_product_files() -> list[str]:
     return [name for name in NATIVE_MANIFEST_PRODUCT_FILES if (REPO_ROOT / name).exists()]
 
 
+def scan_repo_for_native_manifest_product_files(
+    root: Path = REPO_ROOT,
+) -> list[str]:
+    """Derive the native Manifest product inventory from the real repository.
+
+    Combines the pinned exact tuple with a filesystem scan so unlisted or
+    relocated product surfaces (for example a new file under
+    ``moonmind/manifest/``, another ``manifest_ingest`` path, or a frontend
+    manifests entrypoint) are still reported instead of passing the guard.
+    """
+    found: list[str] = []
+    seen: set[str] = set()
+
+    def _add(rel: str) -> None:
+        if rel not in seen:
+            seen.add(rel)
+            found.append(rel)
+
+    for name in NATIVE_MANIFEST_PRODUCT_FILES:
+        if (root / name).exists():
+            _add(name)
+    manifest_pkg = root / "moonmind/manifest"
+    if manifest_pkg.is_dir():
+        for path in sorted(manifest_pkg.rglob("*")):
+            if path.is_file():
+                rel = path.relative_to(root).as_posix()
+                if _is_native_manifest_product_path(rel):
+                    _add(rel)
+    for pattern in ("**/manifest_ingest.py", "**/manifest_ingest_models.py"):
+        for path in sorted(root.glob(pattern)):
+            if path.is_file():
+                try:
+                    rel = path.relative_to(root).as_posix()
+                except ValueError:
+                    continue
+                if _is_native_manifest_product_path(rel):
+                    _add(rel)
+    entrypoints = root / "frontend/src/entrypoints"
+    if entrypoints.is_dir():
+        for path in sorted(entrypoints.glob("manifests*")):
+            if path.is_file():
+                rel = path.relative_to(root).as_posix()
+                if _is_native_manifest_product_path(rel):
+                    _add(rel)
+    return found
+
+
+def check_repo_native_manifest_product_absent(
+    root: Path = REPO_ROOT,
+) -> list[str]:
+    """Run the no-reintroduction guard against the real repository state."""
+    present = scan_repo_for_native_manifest_product_files(root)
+    main_py = root / "api_service/main.py"
+    worker_runtime = root / "moonmind/workflows/temporal/worker_runtime.py"
+    main_py_text = main_py.read_text(encoding="utf-8") if main_py.exists() else ""
+    worker_runtime_text = (
+        worker_runtime.read_text(encoding="utf-8") if worker_runtime.exists() else ""
+    )
+    return check_native_manifest_product_absent(
+        present,
+        main_py_text=main_py_text,
+        worker_runtime_text=worker_runtime_text,
+    )
+
+
 # ---------------------------------------------------------------------------
 # Residual ownership: the native product is still present. These tests pin
 # that fact so retirement rows cannot be misreported as qualified.
@@ -168,32 +262,49 @@ def _present_native_product_files() -> list[str]:
 
 
 def test_native_manifest_product_pending_sibling_removal() -> None:
-    """Record the real product residual owned by #4188/#4190/#4191/#4192/#4189.
+    """Guard state stays coherent with the real repo across staged removals.
 
-    The retirement candidate has NOT landed: the executable Manifest package,
-    API router, services, schema, ManifestIngest workflow, contracts, and
-    existing Manifest suites are all still present. When the sibling removal
-    lands, replace these assertions with absence checks via
-    ``check_native_manifest_product_absent`` and update the matrix mapping
-    above; do not edit shipped code here to claim removal while it ships.
+    The retirement candidate has NOT fully landed, but sibling removals
+    (#4188/#4190/#4191/#4192/#4189) may delete individual product files
+    independently. Requiring the complete pre-retirement file set to remain
+    would fail as soon as any sibling lands and would enforce the deprecated
+    implementation this suite is supposed to retire. Instead pin the enduring
+    invariant: while any native surface remains, the repo-derived guard must
+    flag it as a sibling-owned residual; once no surface remains, the guard
+    must pass. Either state is coherent; a silent pass while surfaces remain
+    is not.
     """
-    present = _present_native_product_files()
-    assert set(present) == set(NATIVE_MANIFEST_PRODUCT_FILES), (
-        f"expected all native Manifest product files present, missing: "
-        f"{set(NATIVE_MANIFEST_PRODUCT_FILES) - set(present)}"
+    present = scan_repo_for_native_manifest_product_files()
+    problems = check_repo_native_manifest_product_absent()
+    if present:
+        assert problems, (
+            "native Manifest surfaces remain but the repo-derived guard "
+            f"reports clean; present={sorted(present)}"
+        )
+    else:
+        assert problems == [], f"guard reports problems with no surfaces: {problems}"
+    # The guard contract itself must keep rejecting a deliberate
+    # reintroduction regardless of how many siblings have landed.
+    reintroduced = check_native_manifest_product_absent(
+        ["moonmind/manifest/pipeline.py"],
     )
-    main_py = (REPO_ROOT / "api_service/main.py").read_text(encoding="utf-8")
-    assert "manifests_router" in main_py
-    worker_runtime = (REPO_ROOT / "moonmind/workflows/temporal/worker_runtime.py").read_text(
-        encoding="utf-8"
+    assert reintroduced, "guard must flag a reintroduced product component"
+
+
+def test_scan_finds_unlisted_native_surfaces() -> None:
+    """The repo scan reports product surfaces outside the original allowlist."""
+    present = scan_repo_for_native_manifest_product_files()
+    assert "moonmind/manifest/runner.py" in present
+    assert "moonmind/workflows/temporal/manifest_ingest.py" in present
+    assert "frontend/src/entrypoints/manifests.tsx" in present
+
+
+def test_guard_flags_unlisted_product_path() -> None:
+    """A relocated product file fails the guard without a tuple update."""
+    problems = check_native_manifest_product_absent(
+        ["moonmind/manifest/runner.py"],
     )
-    assert "MoonMindManifestIngest" in worker_runtime
-    # Existing suites asserting the deleted feature exists are still present.
-    assert (REPO_ROOT / "tests/unit/api/routers/test_manifests.py").exists()
-    assert (REPO_ROOT / "tests/unit/services/test_manifests_service.py").exists()
-    assert (
-        REPO_ROOT / "tests/integration/workflows/temporal/test_manifest_registration_boundary.py"
-    ).exists()
+    assert any("runner.py" in p for p in problems)
 
 
 def test_guard_rejects_deliberately_reintroduced_product_component() -> None:
