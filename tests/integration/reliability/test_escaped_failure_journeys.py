@@ -2670,8 +2670,20 @@ async def test_standalone_omnigent_resolver_rejects_unowned_continuation_without
         "standaloneInstruction"
     ]
 
+    # Replay the recorded child result through the production mapper. The
+    # mapper flattens ``AgentRunResult.metadata`` into the step outputs, so a
+    # fixture that hands the classifier a nested ``metadata`` mapping would
+    # assert against a shape production never emits
+    # (MoonLadderStudios/MoonMind#4221).
+    child_result = AgentRunResult.model_validate(manifest["childAgentRunResult"])
+    execution_result = parent._map_agent_run_result(child_result)
+    assert "metadata" not in execution_result["outputs"]
+    assert execution_result["outputs"]["terminalContractOutcome"] == (
+        "continuation_requested"
+    )
+
     retryable = parent._activity_result_retryable(
-        manifest["childResult"],
+        execution_result,
         failure_message="execution_error",
         tool_type="agent_runtime",
     )
