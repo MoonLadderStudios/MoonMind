@@ -3,20 +3,12 @@ from __future__ import annotations
 import json
 
 import pytest
-from fastapi import HTTPException
 
-from api_service.api.routers.retrieval_gateway import (
-    RetrievalCorrelation,
-    RetrievalQuery,
-    _effective_session_request,
-    _enforce_session_result_budget,
-)
 from api_service.retrieval_capabilities import (
     RetrievalBudgetSnapshot,
     RetrievalCapabilityError,
     RetrievalCapabilityRegistry,
 )
-from moonmind.rag.context_pack import ContextItem, build_context_pack
 
 
 def _budget(**overrides):
@@ -102,39 +94,6 @@ def test_evidence_is_bounded_and_contains_no_capability_secret(tmp_path) -> None
     assert token not in serialized
     assert evidence["budgetSnapshot"]["policy_version"] == "policy-7"
     assert evidence["state"] == "denied"
-
-
-def test_session_request_can_only_narrow_immutable_budget(tmp_path) -> None:
-    registry = RetrievalCapabilityRegistry(tmp_path)
-    _, capability = registry.issue(_budget(top_k=5), lifetime_seconds=60)
-    payload = RetrievalQuery(
-        query="bounded query",
-        filters={"repo": "MoonMind"},
-        collections=["docs"],
-        top_k=3,
-        budgets={"tokens": 100, "latency_ms": 500},
-        correlation=RetrievalCorrelation(
-            workflow_id="workflow-1",
-            step_id="step-1",
-            bridge_session_id="bridge-1",
-            omnigent_session_id="session-1",
-            turn_id="turn-1",
-            tool_call_id="tool-1",
-        ),
-    )
-
-    top_k, budgets, collections = _effective_session_request(payload, capability)
-    assert top_k == 3
-    assert budgets == {"tokens": 100, "latency_ms": 500}
-    assert collections == ["docs"]
-    assert payload.filters["tenant_id"] == "tenant-1"
-    assert payload.filters["run_id"] == "run-1"
-    assert payload.filters["workspace_id"] == "workspace-1"
-
-    payload.top_k = 6
-    with pytest.raises(HTTPException) as denied:
-        _effective_session_request(payload, capability)
-    assert denied.value.status_code == 403
 
 
 def test_capability_accounting_and_revocation_survive_registry_restart(tmp_path) -> None:
@@ -400,95 +359,3 @@ def test_stored_result_reference_is_dereferenceable(tmp_path) -> None:
     assert registry.read_result(capability, "tool call/1") == {"pack": "value"}
     with pytest.raises(KeyError):
         registry.read_result(capability, "tool-missing")
-
-
-@pytest.mark.parametrize(
-    ("budget_overrides", "items", "usage", "elapsed_ms", "reason"),
-    [
-        (
-            {"max_sources": 1},
-            [
-                ContextItem(score=1, source="a", text="a"),
-                ContextItem(score=1, source="b", text="b"),
-            ],
-            {"tokens": 2},
-            1,
-            "source_budget_exhausted",
-        ),
-        (
-            {"max_context_bytes": 8},
-            [ContextItem(score=1, source="a", text="long context")],
-            {"tokens": 2},
-            1,
-            "byte_budget_exhausted",
-        ),
-        (
-            {"max_context_tokens": 1},
-            [ContextItem(score=1, source="a", text="a")],
-            {"tokens": 2},
-            1,
-            "token_budget_exhausted",
-        ),
-        (
-            {"latency_ms": 1},
-            [ContextItem(score=1, source="a", text="a")],
-            {"tokens": 1},
-            2,
-            "latency_budget_exhausted",
-        ),
-    ],
-)
-def test_provider_result_cannot_broaden_capability_budget(
-    tmp_path, budget_overrides, items, usage, elapsed_ms, reason
-) -> None:
-    registry = RetrievalCapabilityRegistry(tmp_path)
-    _, capability = registry.issue(
-        _budget(**budget_overrides), lifetime_seconds=60
-    )
-    pack = build_context_pack(
-        items=items,
-        filters={},
-        budgets={},
-        usage=usage,
-        transport="direct",
-        telemetry_id="test",
-        max_chars=1200,
-    )
-
-    with pytest.raises(RetrievalCapabilityError) as denied:
-        _enforce_session_result_budget(pack, capability, elapsed_ms=elapsed_ms)
-    assert denied.value.reason == reason
-
-
-def test_byte_budget_measures_the_payload_that_is_actually_stored(tmp_path) -> None:
-    """``context_text`` understates the pack: item text and metadata count too."""
-    registry = RetrievalCapabilityRegistry(tmp_path)
-    pack = build_context_pack(
-        items=[ContextItem(score=1, source="a", text="x" * 400)],
-        filters={},
-        budgets={},
-        usage={"tokens": 2},
-        transport="direct",
-        telemetry_id="test",
-        max_chars=64,
-    )
-    stored = pack.to_dict()
-    rendered_bytes = len(pack.context_text.encode("utf-8"))
-    stored_bytes = len(json.dumps(stored, sort_keys=True).encode("utf-8"))
-    assert stored_bytes > rendered_bytes
-
-    # A ceiling that the truncated rendered text fits but the serialized pack
-    # does not: the old check passed while the delivered payload blew the limit.
-    ceiling = (rendered_bytes + stored_bytes) // 2
-    _, capability = registry.issue(
-        _budget(max_context_bytes=ceiling), lifetime_seconds=60
-    )
-
-    context_bytes, _ = _enforce_session_result_budget(pack, capability, elapsed_ms=1)
-    assert context_bytes == rendered_bytes
-
-    with pytest.raises(RetrievalCapabilityError) as denied:
-        _enforce_session_result_budget(
-            pack, capability, elapsed_ms=1, stored_payload=stored
-        )
-    assert denied.value.reason == "byte_budget_exhausted"

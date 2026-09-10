@@ -23,6 +23,11 @@ from typing import Sequence, Union
 
 from alembic import op
 
+# Alembic discovers migration identity from these module attributes (it
+# reads ``branch_labels``/``depends_on`` via getattr with None defaults, so
+# only the non-null chain links are declared here); ``__all__`` keeps that
+# external contract explicit for static analysis.
+__all__ = ["revision", "down_revision", "upgrade", "downgrade"]
 
 revision: str = "376_drop_manifest_registry_4192"
 down_revision: Union[str, None] = "376_merge_375_heads"
