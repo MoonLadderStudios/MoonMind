@@ -5999,7 +5999,12 @@ class TemporalAgentRuntimeActivities:
         if not webhook_url and not email_configured:
             return {"status": "skipped", "reason": "no_channels"}
 
-        event = _build_execution_notification_payload(payload, redact=True)
+        # Scan the unredacted payload so credential-shaped secrets block the
+        # send; only the redacted event is ever transmitted. Scanning the
+        # redacted event would miss secrets because redaction replaces them
+        # with sentinels that the outbound scan intentionally ignores.
+        unredacted_event = _build_execution_notification_payload(payload, redact=False)
+        event = redact_sensitive_payload(unredacted_event)
         results: list[dict[str, str]] = []
         errors: list[dict[str, str]] = []
         timeout_seconds = max(1, int(notification_settings.timeout_seconds or 5))
@@ -6009,7 +6014,7 @@ class TemporalAgentRuntimeActivities:
             if authorization:
                 headers["Authorization"] = authorization
             blocked_reason = _scan_execution_notification_before_send(
-                event,
+                unredacted_event,
                 surface="execution.notification.webhook.payload",
             )
             if blocked_reason is not None:
@@ -6047,7 +6052,7 @@ class TemporalAgentRuntimeActivities:
                     )
         if email_configured:
             blocked_reason = _scan_execution_notification_before_send(
-                event,
+                unredacted_event,
                 surface="execution.notification.email.payload",
             )
             if blocked_reason is not None:
