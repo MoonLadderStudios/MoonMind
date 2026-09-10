@@ -39,9 +39,15 @@ from moonmind.statuses.step_ledger import (
 )
 from moonmind.statuses.temporal_status import TemporalStatusValue
 
+# MoonLadderStudios/MoonMind#4192: the native ManifestIngest product is
+# retired. MoonMind.ManifestIngest is intentionally absent from the live
+# advertised catalog: new launches are rejected actionably below and in
+# TemporalExecutionService.create_execution. The TemporalWorkflowType enum
+# member and "manifest" entry mapping are retained read-only so old-release
+# rows stay readable as replay/drain evidence (see
+# docs/tmp/QdrantCutoverRunbook-4115.md); they are not supported for new work.
 SUPPORTED_WORKFLOW_TYPES = (
     "MoonMind.UserWorkflow",
-    "MoonMind.ManifestIngest",
     "MoonMind.MergeAutomation",
 )
 SUPPORTED_FAILURE_POLICIES = (
@@ -2594,13 +2600,17 @@ class CreateExecutionRequest(BaseModel):
 
     @model_validator(mode="after")
     def _validate_required_fields(self) -> "CreateExecutionRequest":
-        if (
-            self.workflow_type == "MoonMind.ManifestIngest"
-            and not self.manifest_artifact_ref
-        ):
+        # MoonLadderStudios/MoonMind#4192: the native ManifestIngest product
+        # is retired. The workflow type is rejected actionably here (and
+        # again in TemporalExecutionService.create_execution) instead of
+        # requiring a manifestArtifactRef. The optional manifest_artifact_ref
+        # field is retained for backward-compatible parsing of old payloads
+        # only; it is ignored for new launches.
+        if self.workflow_type == "MoonMind.ManifestIngest":
             raise ValueError(
-                "manifestArtifactRef is required when workflowType is "
-                "MoonMind.ManifestIngest"
+                "MoonMind.ManifestIngest was retired "
+                "(MoonLadderStudios/MoonMind#4192): the new release does not "
+                "register or launch manifest ingest workflows."
             )
         if (
             self.workflow_type == "MoonMind.UserWorkflow"

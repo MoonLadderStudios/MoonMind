@@ -375,7 +375,7 @@ Suggested shape:
 │ Nightly code scan            │
 │ Active · next 2:00 AM        │
 ├──────────────────────────────┤
-│ Weekly manifest refresh      │
+│ Weekly dependency audit      │
 │ Paused · next —              │
 └──────────────────────────────┘
 ```

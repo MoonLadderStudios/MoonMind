@@ -98,7 +98,7 @@ Catchup, manual triggers, and backfills use the approved definition and fresh oc
 
 ### 5.7 Target resolution
 
-The schedule stores a Temporal workflow-start target with workflowType, initialParameters, and artifact refs where needed. UserWorkflow and ManifestIngest use their normal input contracts. Queue dispatch is not a separate scheduling authority; any supported legacy transport is normalized at the versioned ingress before use.
+The schedule stores a Temporal workflow-start target with workflowType, initialParameters, and artifact refs where needed. UserWorkflow uses its normal input contract. (`MoonMind.ManifestIngest` recurring targets were retired by MoonLadderStudios/MoonMind#4192: new targets are rejected; old definitions stay readable as replay/drain evidence.) Queue dispatch is not a separate scheduling authority; any supported legacy transport is normalized at the versioned ingress before use.
 
 For generic Omnigent schedules, deployment maintenance advances the Agent Profile
 snapshot, selected launch-policy version, and execution plan together. It verifies

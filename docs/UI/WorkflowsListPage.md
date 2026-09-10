@@ -743,16 +743,16 @@ Existing URLs must continue to fail safe:
 | Existing parameter | Desired mapping |
 | --- | --- |
 | `scope=tasks` | Default Workflow-run view. No visible column filter is required. |
-| `scope=user` | Prefer the default Workflow-run view on `/workflows`; manifest ingest belongs on the Manifests page or diagnostics. |
+| `scope=user` | Prefer the default Workflow-run view on `/workflows`; retired manifest ingest belongs on diagnostics as replay/drain evidence, not a live Manifests page. |
 | `scope=system` | Not honored by the normal Workflows List page. Authorized admins may be redirected to diagnostics; ordinary users stay in the default Workflow-run view or see a recoverable message. |
 | `scope=all` | Not honored by the normal Workflows List page. Authorized admins may be redirected to diagnostics; ordinary users stay in the default Workflow-run view or see a recoverable message. |
 | `workflowType=MoonMind.UserWorkflow` | Default Workflow-run view when paired with `entry=user_workflow`, `entry=run`, or no entry. |
-| `workflowType=MoonMind.ManifestIngest` | Redirect to the Manifests page or show a recoverable message; do not add a `Workflow Type` column to the Workflow table. |
+| `workflowType=MoonMind.ManifestIngest` | Show a recoverable retired-product message (MoonLadderStudios/MoonMind#4192); the Manifests page is removed, so never redirect to it; do not add a `Workflow Type` column to the Workflow table. |
 | `workflowType=<system value>` | Not honored by the normal Workflows List page; use admin diagnostics when authorized. |
 | `state=<value>` | Status column include filter for one value. |
 | `entry=user_workflow` | Default Workflow-run view. No visible column filter is required. |
 | `entry=run` | Historical alias for the default Workflow-run view. |
-| `entry=manifest` | Redirect to the Manifests page or show a recoverable message. |
+| `entry=manifest` | Show a recoverable retired-product message (MoonLadderStudios/MoonMind#4192); the Manifests page is removed, so never redirect to it. |
 | `repo=<value>` | Repository text filter. |
 | legacy `sort` / `sortDir` while frontend sort is current-page-only | Dropped or ignored so old links do not imply global order. |
 | legacy `sort=progress` | Normalize to `sort=progressPct` only after server-authoritative Progress sort exists; otherwise drop or ignore with current-page-only behavior. |

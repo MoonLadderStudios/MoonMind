@@ -19,7 +19,7 @@ Native chat is an interactive session surface bound to a Workflow Execution. It 
 | **Workflow Execution** | The top-level MoonMind product/runtime entity. It is a durable Temporal-backed execution identified by `workflowId`. |
 | `workflowId` | The stable MoonMind product identity and route key. It is preserved across Continue-As-New and is the primary handle for links, lookups, and operator workflows. |
 | `runId` | The current/latest Temporal run instance for the Workflow Execution. It is useful for debugging, artifacts, and history correlation, but is not the product route key. |
-| `workflowType` | The root orchestration category, such as `MoonMind.UserWorkflow`, `MoonMind.AgentRun`, or `MoonMind.ManifestIngest`. |
+| `workflowType` | The root orchestration category, such as `MoonMind.UserWorkflow`, `MoonMind.AgentRun`, or `MoonMind.MergeAutomation`. (`MoonMind.ManifestIngest` was retired by #4192; old rows stay readable as replay/drain evidence.) |
 | `entry` | A short, URL-safe workflow type slug used in payloads and routing. For example, `user_workflow` identifies `MoonMind.UserWorkflow`. |
 | **Step** | A user-visible unit of work inside a Workflow Execution. A Step is not a Temporal Activity and not a Temporal Task. |
 | **Step Execution** | One semantic execution of a logical Step, scoped to Workflow Execution, run, logical Step, and execution ordinal. |
@@ -161,6 +161,6 @@ Do not use an unqualified Task label for MoonMind-owned product work.
 
 `MoonMind.UserWorkflow` is the user-submitted, Step-ledger-owning Workflow Execution type. Existing references to historic naming identify the live implementation or durable history boundary, not a separate product entity named Task.
 
-`MoonMind.AgentRun` remains the durable lifecycle wrapper for one true managed or external agent execution. `MoonMind.ManifestIngest`, `MoonMind.AgentSession`, `MoonMind.ManagedSessionReconcile`, `MoonMind.ProviderProfileManager`, `MoonMind.OAuthSession`, and `MoonMind.MergeAutomation` retain specialized workflow semantics.
+`MoonMind.AgentRun` remains the durable lifecycle wrapper for one true managed or external agent execution. `MoonMind.AgentSession`, `MoonMind.ManagedSessionReconcile`, `MoonMind.ProviderProfileManager`, `MoonMind.OAuthSession`, and `MoonMind.MergeAutomation` retain specialized workflow semantics. (`MoonMind.ManifestIngest` was retired by MoonLadderStudios/MoonMind#4192: new launches are rejected; old rows stay readable as replay/drain evidence.)
 
 A future `MoonMind.ChatThread` workflow should be added only if chat threads become durable orchestration objects that own multi-execution lifecycle, not merely because the UI embeds a native session.

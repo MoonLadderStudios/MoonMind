@@ -191,7 +191,7 @@ Temporal Schedules are the authoritative recurring scheduling system for Tempora
 
 ### 5.1 Concept
 
-A one-time execution starts a single Temporal workflow and runs it through to completion. This is the standard path for ad-hoc workflow executions — the user submits a request and MoonMind starts a `MoonMind.UserWorkflow` or `MoonMind.ManifestIngest` workflow.
+A one-time execution starts a single Temporal workflow and runs it through to completion. This is the standard path for ad-hoc workflow executions — the user submits a request and MoonMind starts a `MoonMind.UserWorkflow` workflow. (`MoonMind.ManifestIngest` was retired by MoonLadderStudios/MoonMind#4192: new launches are rejected; old rows stay readable as replay/drain evidence.)
 
 ### 5.2 Backend: Starting a One-Time Workflow
 
@@ -226,11 +226,11 @@ POST /api/executions
 
 | Field | Type | Required | Description |
 | --- | --- | --- | --- |
-| `workflowType` | `string` | Yes | `MoonMind.UserWorkflow` or `MoonMind.ManifestIngest` |
+| `workflowType` | `string` | Yes | `MoonMind.UserWorkflow` (`MoonMind.ManifestIngest` retired by #4192 and rejected) |
 | `title` | `string` | No | Human-readable title for the execution |
 | `inputArtifactRef` | `string` | No | Reference to input artifact containing instructions |
 | `planArtifactRef` | `string` | No | Pre-computed plan artifact |
-| `manifestArtifactRef` | `string` | No | Required for `MoonMind.ManifestIngest` |
+| `manifestArtifactRef` | `string` | No | Historical-only: ignored for new launches; old ManifestIngest payloads parse but are rejected with the retirement error |
 | `failurePolicy` | `string` | No | `"fail_fast"` or `"continue"` |
 | `initialParameters` | `object` | No | Runtime, model, effort, repository, publish mode |
 | `idempotencyKey` | `string` | No | Prevents duplicate starts |

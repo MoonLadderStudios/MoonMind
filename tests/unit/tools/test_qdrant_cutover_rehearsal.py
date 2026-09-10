@@ -24,11 +24,12 @@ def test_prerequisites_admission_landed_and_owner_live_blocked() -> None:
         r.name: r for r in rehearsal.check_prerequisites(REPO_ROOT)
     }
     assert results["prerequisite-4105-admission"].status == "completed"
-    # Executable native Qdrant wiring remains in the checkout under sibling
-    # #4106-#4109 ownership, so this prerequisite stays blocked (never
-    # reported complete) until that removal lands.
+    # MoonLadderStudios/MoonMind#4192 (MR5): the checkout is vector-free, so
+    # the handler/field-removal prerequisite reports completed with its
+    # ownership evidence. Live deployment qualification and named-owner
+    # approval stay blocked until the operator supplies that evidence.
     handler_removal = results["prerequisite-4106-4109-handler-field-removal"]
-    assert handler_removal.status == "blocked", handler_removal.evidence
+    assert handler_removal.status == "completed", handler_removal.evidence
     assert "#4106" in handler_removal.evidence
     assert results["prerequisite-named-owner-approval"].status == "blocked"
     assert results["prerequisite-live-deployment-qualification"].status == "blocked"
@@ -41,8 +42,12 @@ def test_inventory_survey_names_no_live_surfaces_and_preserves_fixtures() -> Non
     assert survey["qdrant_image"] == "absent"
     assert "qdrant-storage" in str(survey.get("qdrant_storage_volume", ""))
     assert "moonmind_retrieval_state" in str(survey.get("retrieval_state_volume", ""))
-    # Historical fixtures are preserved evidence, never removal failures.
-    assert survey["historical_fixture_count"] > 0
+    # MoonLadderStudios/MoonMind#4192: file fixtures carrying
+    # ``type: qdrant`` were removed with the native backend. The preserved
+    # historical evidence is the two in-code generic ManifestIngest entry
+    # contracts (never live-backend surfaces).
+    assert survey["historical_fixture_count"] == 0
+    assert len(rehearsal.historical_manifest_entries()) == 2
     result = rehearsal.check_inventory_survey(REPO_ROOT)
     assert result.status == "completed", result.evidence
 
