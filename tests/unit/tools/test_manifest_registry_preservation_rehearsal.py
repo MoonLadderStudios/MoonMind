@@ -7,8 +7,6 @@ import subprocess
 import sys
 from pathlib import Path
 
-import pytest
-
 from tools import manifest_registry_preservation_rehearsal as rehearsal
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
