@@ -225,9 +225,6 @@ async def test_generic_rerun_does_not_carry_recovery_reference_fields(
                 plan_artifact_ref=None,
                 parameters_patch=None,
                 title=None,
-                    mode=None,
-                max_concurrency=None,
-                node_ids=None,
                 idempotency_key="rerun-mm-643",
             )
             rerun = await service.describe_execution(created.workflow_id)
@@ -298,9 +295,6 @@ async def test_edited_full_retry_does_not_carry_recovery_reference_fields(
                 plan_artifact_ref="artifact://plan/replacement",
                 parameters_patch=None,
                 title=None,
-                    mode=None,
-                max_concurrency=None,
-                node_ids=None,
                 idempotency_key="edited-retry-mm-643",
             )
             edited_retry = await service.describe_execution(created.workflow_id)
