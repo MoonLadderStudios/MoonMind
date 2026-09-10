@@ -7990,8 +7990,11 @@ async def test_list_executions_filters_owner_and_paginates(tmp_path):
             page_size=10,
             next_page_token=None,
         )
-        assert len(manifest_page.items) == 1
-        assert manifest_page.items[0].entry == "manifest"
+        # MoonLadderStudios/MoonMind#4192: retired ManifestIngest rows stay
+        # readable as old-release replay/drain evidence but are excluded
+        # from the product listing (product scope is UserWorkflow only).
+        assert len(manifest_page.items) == 0
+        assert manifest_page.count == 0
 
 @pytest.mark.asyncio
 async def test_list_executions_orders_by_updated_at_then_workflow_id(tmp_path):

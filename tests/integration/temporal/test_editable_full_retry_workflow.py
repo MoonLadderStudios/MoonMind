@@ -110,9 +110,6 @@ async def test_changed_edited_full_retry_creates_fresh_execution_with_provenance
                     }
                 },
                 title=None,
-                    mode=None,
-                max_concurrency=None,
-                node_ids=None,
                 idempotency_key="edited-full-retry-mm-644",
             )
             assert "workflow_id" in result, result
