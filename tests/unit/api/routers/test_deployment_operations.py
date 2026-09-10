@@ -13,7 +13,7 @@ from api_service.api.routers.deployment_operations import (
     _get_temporal_execution_service,
     router,
 )
-from api_service.auth_providers import get_current_user
+from api_service.auth_providers import get_current_user, get_current_user_optional
 from api_service.services.deployment_operations import (
     DeploymentOperationsService,
     DeploymentRecentAction,
@@ -57,8 +57,12 @@ def _override_user(app: FastAPI, *, is_superuser: bool) -> None:
         for route in router.routes
         if route.dependant is not None
         for dep in route.dependant.dependencies
-        if getattr(dep.call, "__name__", "") == "_current_user_fallback"
-    } or {get_current_user()}
+        if getattr(dep.call, "__name__", "") in {
+            "_current_user_fallback",
+            "_strict_current_user",
+            "_optional_current_user",
+        }
+    } or {get_current_user(), get_current_user_optional()}
     for dependency in dependencies:
         app.dependency_overrides[dependency] = lambda user=user: user
 
@@ -316,9 +320,10 @@ def test_non_admin_cannot_submit_deployment_update(
     assert response.json()["detail"]["failureClass"] == "authorization_failure"
 
 
-def test_disabled_auth_user_can_submit_deployment_update_as_default_admin(
+def test_disabled_mode_still_enforces_admin_after_identity_resolution(
     user_client: TestClient, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    """#4125: disabled mode grants no bypass; a non-admin is denied like any mode."""
     monkeypatch.setattr(settings.oidc, "AUTH_PROVIDER", "disabled")
 
     response = user_client.post(
@@ -326,8 +331,9 @@ def test_disabled_auth_user_can_submit_deployment_update_as_default_admin(
         json=_valid_update_payload(),
     )
 
-    assert response.status_code == 202
-    assert response.json()["status"] == "QUEUED"
+    assert response.status_code == 403
+    assert response.json()["detail"]["code"] == "deployment_update_forbidden"
+    assert response.json()["detail"]["failureClass"] == "authorization_failure"
 
 
 @pytest.mark.parametrize(

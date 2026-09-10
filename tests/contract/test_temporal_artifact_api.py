@@ -14,7 +14,7 @@ from api_service.api.routers.temporal_artifacts import (
     _get_temporal_artifact_service,
     router,
 )
-from api_service.auth_providers import get_current_user
+from api_service.auth_providers import get_current_user, get_current_user_optional
 from api_service.db import models as db_models
 from moonmind.schemas.temporal_artifact_models import (
     ArtifactListResponse,
@@ -85,10 +85,10 @@ def _build_app() -> tuple[FastAPI, AsyncMock]:
         for route_item in router.routes
         if route_item.dependant is not None
         for dep in route_item.dependant.dependencies
-        if dep.call.__name__ == "_current_user_fallback"
+        if dep.call.__name__ in {"_current_user_fallback", "_strict_current_user", "_optional_current_user"}
     }
     if not user_dependencies:
-        user_dependencies = {get_current_user()}
+        user_dependencies = {get_current_user(), get_current_user_optional()}
     for dependency in user_dependencies:
         app.dependency_overrides[dependency] = lambda mock_user=mock_user: mock_user
     return app, service

@@ -3,14 +3,10 @@ import logging
 import os
 import uuid
 
-from fastapi import Depends, HTTPException
+from fastapi import Depends, HTTPException, Request
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from api_service.auth import (
-    _DEFAULT_USER_ID,
-    current_active_user,
-    current_active_user_optional,
-)
+from api_service.auth import _DEFAULT_USER_ID
 from api_service.db.base import get_async_session
 from api_service.db.models import User
 from api_service.services.profile_service import ProfileService
@@ -19,21 +15,204 @@ from moonmind.config.settings import settings
 from moonmind.security.auth_modes_4120 import (
     get_request_production_mode,
     is_disabled_local_mode,
-    resolve_moonmind_auth_config,
 )
 
 logger = logging.getLogger(__name__)
 
-_cached_current_user_dependency = None
+
+def _extract_session_credentials(request: Request) -> tuple[str | None, str | None]:
+    """Extract the MoonMind session cookie and bearer credentials.
+
+    Both MoonMind cookie names are honored (production ``__Host-`` cookie
+    plus the separately named loopback development cookie); upstream
+    runtime cookie names are never read here. Empty strings count as
+    missing. Precedence/conflict semantics belong to the session
+    authority, not this extractor.
+    """
+    from moonmind.security.session_authority_4121 import (
+        MOONMIND_DEV_COOKIE,
+        MOONMIND_PROD_COOKIE,
+    )
+
+    cookies = getattr(request, "cookies", None) or {}
+    cookie_token = cookies.get(MOONMIND_PROD_COOKIE) or cookies.get(
+        MOONMIND_DEV_COOKIE
+    )
+    if isinstance(cookie_token, str):
+        cookie_token = cookie_token.strip() or None
+    else:
+        cookie_token = None
+    authorization = request.headers.get("authorization", "")
+    bearer_token: str | None = None
+    if isinstance(authorization, str) and authorization.strip().lower().startswith(
+        "bearer "
+    ):
+        bearer_token = authorization.strip()[7:].strip() or None
+    return cookie_token, bearer_token
 
 
-def _disabled_auth_test_user():
-    # Test-only principal. Production never mints administrator stubs:
-    # missing identity/DB data fails closed with 503 (see _current_user_fallback).
-    # Tests must use explicit dependency overrides for authenticated paths.
-    from types import SimpleNamespace
+def _session_http_exception(exc: BaseException):
+    """Map a session-authority error to the §8 HTTP contract."""
+    from moonmind.security.session_authority_4121 import http_status_for_error
 
-    return SimpleNamespace(id=None, email="stub@example.com", is_superuser=True)
+    status_code, code = http_status_for_error(exc)
+    mode = get_request_production_mode() or "undecided"
+    # Redacted audit event: mode + reason code only, never tokens/cookies.
+    logger.info(
+        "auth_event mode=%s reason=session_denial code=%s",
+        mode,
+        code,
+    )
+    if status_code == 403:
+        return HTTPException(status_code=status_code, detail={"code": code})
+    if status_code == 503:
+        return HTTPException(status_code=status_code, detail=code)
+    return HTTPException(status_code=status_code, detail={"code": code})
+
+
+async def _load_disabled_user(session: AsyncSession) -> User:
+    """Resolve the persisted local-mode principal, failing closed.
+
+    No synthetic administrator is ever minted: identity-store outage
+    returns 503 ``unavailable`` and a missing default row returns 503
+    ``setup_required``. Test callers must use explicit dependency
+    overrides; no environment-driven test identity shortcut exists on
+    this path.
+    """
+
+    async def _fetch() -> User | None:
+        user_id_str = settings.oidc.DEFAULT_USER_ID or _DEFAULT_USER_ID
+        user_uuid = uuid.UUID(user_id_str)
+        return await session.get(User, user_uuid)
+
+    try:
+        user_obj = await asyncio.wait_for(_fetch(), timeout=1.0)
+    except (Exception, asyncio.TimeoutError):
+        logger.info(
+            "auth_event mode=disabled reason=session_denial code=unavailable",
+        )
+        raise HTTPException(status_code=503, detail="unavailable")
+    if user_obj is None:
+        logger.info(
+            "auth_event mode=disabled reason=session_denial code=setup_required",
+        )
+        raise HTTPException(status_code=503, detail="setup_required")
+    # Disabled auth is single-user local mode; treat that principal as the
+    # local administrator even if the persisted row predates this policy.
+    user_obj.is_superuser = True
+    return user_obj
+
+
+async def _resolve_session_principal(
+    request: Request,
+    session: AsyncSession,
+    *,
+    optional: bool,
+) -> User | None:
+    """Validate the presented MoonMind session and return the live User."""
+    from moonmind.security.session_authority_4121 import resolve_session_user
+
+    from api_service.services.session_store import (
+        DbAccountStore,
+        DbRevocationStore,
+    )
+
+    cookie_token, bearer_token = _extract_session_credentials(request)
+    if optional and cookie_token is None and bearer_token is None:
+        # Optional boundary with no presented credential: the separately
+        # authenticated worker path authorizes below; nothing is swallowed
+        # and no session configuration is required to observe absence.
+        return None
+    try:
+        config = build_moonmind_control_plane_config()
+    except HTTPException:
+        mode = get_request_production_mode() or "undecided"
+        logger.info(
+            "auth_event mode=%s reason=session_denial code=unavailable",
+            mode,
+        )
+        raise
+    except Exception as exc:
+        logger.info(
+            "auth_event mode=%s reason=session_denial code=unavailable",
+            get_request_production_mode() or "undecided",
+        )
+        raise HTTPException(status_code=503, detail="unavailable") from exc
+    account_store = DbAccountStore(session)
+    revocation_store = DbRevocationStore(session)
+    try:
+        account = await resolve_session_user(
+            cookie_token=cookie_token,
+            bearer_token=bearer_token,
+            account_store=account_store,
+            revocation=revocation_store,
+            config=config,
+            optional=optional,
+        )
+    except Exception as exc:
+        raise _session_http_exception(exc)
+    if account is None:
+        # Optional boundary with no presented credential: the separately
+        # authenticated worker path authorizes below; nothing is swallowed.
+        return None
+    try:
+        user = await session.get(User, account.user_id)
+    except Exception as exc:
+        logger.info(
+            "auth_event mode=%s reason=session_denial code=unavailable",
+            config.mode,
+        )
+        raise HTTPException(status_code=503, detail="unavailable") from exc
+    if user is None:
+        logger.info(
+            "auth_event mode=%s reason=session_denial code=auth_invalid",
+            config.mode,
+        )
+        raise HTTPException(
+            status_code=401, detail={"code": "auth_invalid"}
+        )
+    # Authoritative live flags: the persisted row decides active/admin
+    # status at request time, never upstream advisory claims.
+    if not bool(user.is_active):
+        logger.info(
+            "auth_event mode=%s reason=session_denial code=inactive",
+            config.mode,
+        )
+        raise HTTPException(status_code=403, detail={"code": "inactive"})
+    return user
+
+
+async def _strict_current_user(
+    request: Request,
+    session: AsyncSession = Depends(get_async_session),
+) -> User:
+    """Shared strict boundary: every user-facing path resolves here.
+
+    The production mode is evaluated per request (never captured at
+    import/app-construction time), so a classified mode change cannot
+    retain another provider's resolver. Authenticated modes validate
+    MoonMind sessions through the qualified #4121 authority; legacy
+    application JWTs fail closed as ``auth_invalid``.
+    """
+    if is_disabled_local_mode():
+        return await _load_disabled_user(session)
+    user = await _resolve_session_principal(request, session, optional=False)
+    assert user is not None
+    return user
+
+
+async def _optional_current_user(
+    request: Request,
+    session: AsyncSession = Depends(get_async_session),
+) -> User | None:
+    """Optional counterpart for the separately authenticated worker path.
+
+    Missing credentials return ``None``; a bad presented credential is
+    never swallowed as anonymous success.
+    """
+    if is_disabled_local_mode():
+        return await _load_disabled_user(session)
+    return await _resolve_session_principal(request, session, optional=True)
 
 
 def build_moonmind_control_plane_config(environ=None, mode=None):
@@ -91,6 +270,8 @@ def build_moonmind_control_plane_config(environ=None, mode=None):
             for_remote_production=False,
         )
     runtime_environ = dict(environ) if environ is not None else dict(os.environ)
+    from moonmind.security.auth_modes_4120 import resolve_moonmind_auth_config
+
     return resolve_moonmind_auth_config(
         mode=mode,
         cookie_secret=cookie_secret,
@@ -115,84 +296,28 @@ async def get_default_user_from_db(
         raise HTTPException(status_code=500, detail="Default user not found")
     return user
 
+
 def get_current_user():
-    """Return a dependency that yields the current user.
+    """Return the shared strict principal dependency.
 
-    Behaviour:
-    • In normal operation with AUTH_PROVIDER == "disabled" we still try to load the
-      default user from the database (to keep behaviour unchanged for the running
-      API).
-    • **However** when running under unit-test environments the database is often
-      unavailable.  If we cannot reach it (e.g. connection refused) we gracefully
-      fall back to returning a lightweight stub user object so the rest of the
-      application code continues to work without a real database.
-    This removes the hard DB dependency from the vast majority of unit tests that
-    don’t need it, preventing the `[Errno 111] Connect call failed ('127.0.0.1',
-    5432)` failures that appeared after switching back to
-    `Depends(get_current_user())` in the routers.
+    A stable function reference is returned (no per-call closure and no
+    cached foreign resolver) so route registration and test dependency
+    overrides share one identity while the production mode is still
+    evaluated per request inside the dependency.
     """
-
-    global _cached_current_user_dependency
-    from moonmind.security.auth_modes_4120 import get_request_production_mode
-
-    if get_request_production_mode() != "disabled":
-        # Authenticated modes share the current bearer validation until the
-        # #4124-era session contracts replace it; retired selectors fail at
-        # startup via the auth-modes owner, never here.
-        return current_active_user
-
-    if _cached_current_user_dependency is None:
-
-        async def _current_user_fallback():
-            # Explicit test double only: unit tests without a database opt in
-            # via test_mode/PYTEST_CURRENT_TEST. Production (and any
-            # non-test caller) fails closed below -- missing identity/DB data
-            # in local mode never mints a synthetic administrator.
-            if settings.workflow.test_mode or os.getenv("PYTEST_CURRENT_TEST"):
-                return _disabled_auth_test_user()
-
-            async def _load_default_user() -> User | None:
-                from api_service.db.base import get_async_session_context
-
-                user_id_str = settings.oidc.DEFAULT_USER_ID or _DEFAULT_USER_ID
-                user_uuid = uuid.UUID(user_id_str)
-                async with get_async_session_context() as session:
-                    return await session.get(User, user_uuid)
-
-            try:
-                user_obj = await asyncio.wait_for(_load_default_user(), timeout=1.0)
-                if user_obj is not None:
-                    # Disabled auth is single-user local mode; treat that principal
-                    # as the local administrator even if the persisted row predates
-                    # this policy.
-                    user_obj.is_superuser = True
-                    return user_obj
-            except (Exception, asyncio.TimeoutError):
-                logger.warning(
-                    "Identity store unavailable in disabled auth mode; failing closed.",
-                    exc_info=True,
-                )
-                raise HTTPException(status_code=503, detail="unavailable")
-
-            # No synthetic admin fallback: a missing default row in local mode
-            # is a protected-setup signal, not an implicit grant.
-            raise HTTPException(status_code=503, detail="setup_required")
-
-        _cached_current_user_dependency = _current_user_fallback
-
-    return _cached_current_user_dependency
+    return _strict_current_user
 
 
 def get_current_user_optional():
-    """Return an auth dependency that tolerates missing bearer credentials.
+    """Return the shared optional principal dependency.
 
     Worker-token authenticated endpoints use this helper so header-only workers
     are not blocked by FastAPI resolving a strict bearer-auth dependency first.
+    A missing credential returns ``None``; an invalid or conflicting
+    presented credential raises instead of falling back to anonymous.
     """
+    return _optional_current_user
 
-    if not is_disabled_local_mode():
-        return current_active_user_optional
-    return get_current_user()
 
 async def get_auth_manager(
     db: AsyncSession = Depends(get_async_session),
@@ -201,4 +326,3 @@ async def get_auth_manager(
     profile_provider = ProfileAuthProvider(db, ProfileService())
     env_provider = EnvAuthProvider()
     return AuthProviderManager(profile_provider, env_provider)
-

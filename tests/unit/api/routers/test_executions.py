@@ -59,7 +59,7 @@ from api_service.api.routers.executions import (
 )
 from api_service.api.routers import executions as executions_module
 from api_service.api.schemas import CreateJobRequest
-from api_service.auth_providers import get_current_user
+from api_service.auth_providers import get_current_user, get_current_user_optional
 from api_service.db.base import get_async_session
 from moonmind.omnigent.bridge_store import (
     BridgeChatBindingAmbiguousError,
@@ -1565,10 +1565,15 @@ def _override_user_dependencies(
         for route in router.routes
         if route.dependant is not None
         for dep in route.dependant.dependencies
-        if dep.call.__name__ == "_current_user_fallback"
+        if dep.call.__name__
+        in {
+            "_current_user_fallback",
+            "_strict_current_user",
+            "_optional_current_user",
+        }
     }
     if not user_dependencies:
-        user_dependencies = {get_current_user()}
+        user_dependencies = {get_current_user(), get_current_user_optional()}
 
     def _current_user() -> SimpleNamespace:
         return mock_user
@@ -9169,7 +9174,11 @@ def test_create_task_shaped_execution_accepts_scoped_fanout_bearer(
 ) -> None:
     test_client, service, user = client
     for dependency in tuple(test_client.app.dependency_overrides):
-        if getattr(dependency, "__name__", "") == "_current_user_fallback":
+        if getattr(dependency, "__name__", "") in {
+            "_current_user_fallback",
+            "_strict_current_user",
+            "_optional_current_user",
+        }:
             test_client.app.dependency_overrides[dependency] = lambda: None
     service.create_execution.return_value = _build_execution_record(
         owner_id=str(user.id)
@@ -9226,7 +9235,11 @@ def test_execution_fanout_inherits_exact_omnigent_agent_profile(
 
     test_client, service, user = client
     for dependency in tuple(test_client.app.dependency_overrides):
-        if getattr(dependency, "__name__", "") == "_current_user_fallback":
+        if getattr(dependency, "__name__", "") in {
+            "_current_user_fallback",
+            "_strict_current_user",
+            "_optional_current_user",
+        }:
             test_client.app.dependency_overrides[dependency] = lambda: None
     service.create_execution.return_value = _build_execution_record(owner_id=str(user.id))
     digest = "sha256:a40d86b5a425308cebc144392c0ef9d69733a37f7abe005ee0cf0439767e6e91"
