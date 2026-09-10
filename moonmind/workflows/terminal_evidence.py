@@ -103,6 +103,54 @@ def _evaluate_auto_publish_evidence(
     return _success(metadata)
 
 
+PR_RESOLVER_VERDICT_FAILURE_CODES = frozenset(
+    {"PR_RESOLVER_MANUAL_REVIEW", "PR_RESOLVER_FAILED"}
+)
+
+
+def _first_stripped_text(*values: Any) -> str:
+    for value in values:
+        candidate = str(value or "").strip()
+        if candidate:
+            return candidate
+    return ""
+
+
+def _pr_resolver_verdict_metadata(payload: Mapping[str, Any]) -> dict[str, Any]:
+    """Return the compact, validated pr-resolver verdict fields.
+
+    Only the terminal verdict facts the Skill wrote (status, reason, next step)
+    are carried; MoonMind does not reinterpret them.
+    """
+
+    final = payload.get("final")
+    final_payload = dict(final) if isinstance(final, Mapping) else {}
+    verdict: dict[str, Any] = {}
+    status = _first_stripped_text(
+        payload.get("status"),
+        payload.get("merge_outcome"),
+        final_payload.get("status"),
+    )
+    reason = _first_stripped_text(
+        payload.get("final_reason"),
+        payload.get("reason"),
+        final_payload.get("final_reason"),
+        final_payload.get("reason"),
+    )
+    next_step = _first_stripped_text(
+        payload.get("next_step"),
+        payload.get("nextStep"),
+        final_payload.get("next_step"),
+    )
+    if status:
+        verdict["prResolverStatus"] = status
+    if reason:
+        verdict["prResolverReason"] = reason
+    if next_step:
+        verdict["prResolverNextStep"] = next_step
+    return verdict
+
+
 def resolve_terminal_evidence_source(
     contract: Mapping[str, Any],
     *,
@@ -465,6 +513,11 @@ def evaluate_terminal_evidence(
             "manual_review": "PR_RESOLVER_MANUAL_REVIEW",
             "failed": "PR_RESOLVER_FAILED",
         }
+        # A manual-review or failed disposition is the Skill's validated
+        # terminal verdict, not missing evidence. Carry the compact verdict
+        # fields so the runtime can report the blocker instead of "valid
+        # terminal evidence" (MoonLadderStudios/MoonMind#4222).
+        metadata.update(_pr_resolver_verdict_metadata(payload))
         return _failure(failure_codes[disposition], metadata=metadata)
     expected_schema = str(
         contract.get("expectedSchemaVersion")
