@@ -209,9 +209,22 @@ async def _optional_current_user(
 
     Missing credentials return ``None``; a bad presented credential is
     never swallowed as anonymous success.
+
+    Workflow-scoped execution fan-out requests carry their capability in
+    the same ``Authorization: Bearer`` header plus the
+    ``X-MoonMind-Execution-Fanout: v1`` marker. The session extractor
+    would reject that bearer as ``auth_invalid`` before the route can
+    verify it, so a marked request skips session validation here and the
+    route authorizes via ``resolve_execution_fanout_capability``.
     """
     if is_disabled_local_mode():
         return await _load_disabled_user(session)
+    try:
+        marker = request.headers.get("x-moonmind-execution-fanout", "")
+    except Exception:
+        marker = ""
+    if isinstance(marker, str) and marker.strip() == "v1":
+        return None
     return await _resolve_session_principal(request, session, optional=True)
 
 
@@ -253,7 +266,10 @@ def build_moonmind_control_plane_config(environ=None, mode=None):
         # guessing a mode.
         raise HTTPException(status_code=503, detail="auth_undecided")
     mode = effective
-    secret_env = os.environ.get("MOONMIND_SESSION_SECRET", "").strip()
+    secret_env = (
+        os.environ.get("MOONMIND_SESSION_SECRET", "").strip()
+        or os.environ.get("JWT_SECRET", "").strip()
+    )
     cookie_secret: bytes
     if secret_env:
         from moonmind.security.auth_modes_4120 import resolve_session_secret
