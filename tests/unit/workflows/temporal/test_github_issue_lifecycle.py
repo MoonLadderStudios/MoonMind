@@ -263,6 +263,40 @@ def test_no_attempt_evidence_keeps_available_selectable() -> None:
     assert ok is True
 
 
+def test_linked_retry_history_blocks_admission_when_budget_is_spent() -> None:
+    first = "att_" + "1" * 24
+    second = "att_" + "2" * 24
+    linked = [
+        {"attemptId": first, "outcome": "failed", "policyLineage": "policy-v1"},
+        {
+            "attemptId": second,
+            "outcome": "failed",
+            "predecessorAttemptId": first,
+            "policyLineage": "policy-v1",
+        },
+    ]
+    blocked_context: dict[str, Any] = {
+        "linkedAttempts": linked,
+        "retryPolicy": {"maxAttempts": 2, "lineageRef": "policy-v1"},
+    }
+    assert attempt_evidence_blocks_admission(blocked_context) is True
+    ok, _ = is_selectable_candidate({"state": "open", "labels": []}, blocked_context)
+    assert ok is False
+    allowed_context: dict[str, Any] = {
+        "linked_attempts": linked,
+        "retry_policy": {"maxAttempts": 5, "lineageRef": "policy-v1"},
+    }
+    assert attempt_evidence_blocks_admission(allowed_context) is False
+    gap_context: dict[str, Any] = {
+        "linkedAttempts": [
+            {"attemptId": second, "outcome": "pending", "policyLineage": "policy-v1"},
+            {"attemptId": first, "lineageGap": True, "missingPredecessor": first},
+        ],
+        "retryPolicy": {"maxAttempts": 5, "lineageRef": "policy-v1"},
+    }
+    assert attempt_evidence_blocks_admission(gap_context) is True
+
+
 # ---------------------------------------------------------------------------
 # Tool-level tests with targeted-mutation fakes
 # ---------------------------------------------------------------------------
