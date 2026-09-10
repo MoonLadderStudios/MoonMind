@@ -4,6 +4,7 @@ import pytest
 from httpx import ASGITransport, AsyncClient
 
 from api_service.api.routers import settings as settings_router
+from api_service.auth_providers import get_current_user
 from api_service.main import app
 from api_service.services.settings_catalog import (
     SettingRegistryEntry,
@@ -13,6 +14,25 @@ from api_service.services.settings_catalog import (
 
 
 pytestmark = [pytest.mark.integration, pytest.mark.integration_ci]
+
+
+@pytest.fixture(autouse=True)
+def _explicit_settings_test_principal(monkeypatch):
+    """Bind an explicit test principal to the shared session boundary.
+
+    Production no longer mints environment-driven test identities (#4125),
+    so these contract tests must not depend on ambient disabled-mode DB
+    state for their principal.
+    """
+    user = SimpleNamespace(
+        id="settings-contract-tests",
+        email="settings-contract-tests@example.com",
+        is_active=True,
+        is_superuser=True,
+    )
+    monkeypatch.setitem(
+        app.dependency_overrides, get_current_user(), lambda: user
+    )
 
 
 @pytest.mark.asyncio
