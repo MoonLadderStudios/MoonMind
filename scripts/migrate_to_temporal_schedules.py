@@ -2,8 +2,9 @@ import asyncio
 import logging
 
 from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
+from sqlalchemy.orm import sessionmaker
 
-from api_service.core.sync import create_async_session_maker
 from api_service.db.models import RecurringWorkflowDefinition
 from moonmind.config.settings import AppSettings
 from moonmind.workflows.temporal.client import TemporalClientAdapter
@@ -15,19 +16,40 @@ from moonmind.workflows.temporal.schedule_errors import (
 
 logger = logging.getLogger(__name__)
 
-def _workflow_type_for_target(target: dict) -> str:
+def _create_session_maker(postgres_url: str):
+    # Local session factory for this one-shot migration script (mirrors
+    # api_service/db/base.py). ``api_service.core.sync`` owns projection
+    # sync, not session factories; the script must not depend on it.
+    engine = create_async_engine(postgres_url, future=True)
+    return sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
+
+def _workflow_type_for_target(target: dict) -> str | None:
+    # MoonLadderStudios/MoonMind#4188: the native Manifest product (including
+    # the legacy ``manifest_run`` target kind and its ``MoonMind.ManifestIngest``
+    # successor) is retired. The migration must never (re)create a Temporal
+    # Schedule for retired work and must never silently convert it to
+    # ``MoonMind.Run``/``MoonMind.UserWorkflow``. Callers skip ``None`` with
+    # protected evidence instead of dispatching.
     kind = str(target.get("kind") or "")
     if kind in {"queue_task", "queue_task_template"}:
         return "MoonMind.Run"
     if kind == "manifest_run":
-        return "MoonMind.ManifestIngest"
+        return None
+    workflow_type = str(
+        target.get("workflowType") or target.get("workflow_type") or ""
+    ).strip()
+    if workflow_type == "MoonMind.ManifestIngest":
+        return None
     return "MoonMind.Run"
 
 async def migrate_definitions() -> None:
     logger.info("Starting migration to Temporal Schedules...")
     settings = AppSettings()
-    async_session = create_async_session_maker(settings.database.POSTGRES_URL)
-    adapter = TemporalClientAdapter.from_settings(settings)
+    async_session = _create_session_maker(settings.database.POSTGRES_URL)
+    # One-shot migration tooling constructs the adapter the same way as the
+    # live routers/services (bare constructor); there is no from_settings
+    # entrypoint on TemporalClientAdapter.
+    adapter = TemporalClientAdapter()
 
     async with async_session() as session:
         stmt = select(RecurringWorkflowDefinition).where(
@@ -58,6 +80,21 @@ async def migrate_definitions() -> None:
 
             target = dfn.target if isinstance(dfn.target, dict) else {}
             workflow_type = _workflow_type_for_target(target)
+            if workflow_type is None:
+                # MoonLadderStudios/MoonMind#4188: retired Manifest target
+                # (legacy ``manifest_run`` kind or explicit ManifestIngest
+                # workflow type). Leave the definition unmigrated
+                # (``temporal_schedule_id`` stays None) so it cannot reactivate
+                # through trigger/backfill/resume; the protected export and
+                # disable/remove path own it. Never convert to UserWorkflow.
+                logger.warning(
+                    "Skipping retired Manifest target for %s (%s); "
+                    "not creating a Temporal Schedule "
+                    "(MoonLadderStudios/MoonMind#4188).",
+                    dfn.id,
+                    dfn.name,
+                )
+                continue
 
             workflow_input = {
                 "title": dfn.name,
