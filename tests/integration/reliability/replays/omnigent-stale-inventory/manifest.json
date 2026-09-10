@@ -1,0 +1,13 @@
+{
+  "failureShapeId": "omnigent-stale-inventory",
+  "observedFailure": "Workflow submission returned 409 after sequential bootstrap maintenance stopped refreshing inventory for more than five minutes.",
+  "inventoryAgeSeconds": 660,
+  "upstreamId": "selected-agent",
+  "upstreamVersion": "7",
+  "expected": {
+    "recoverWithoutChangingSelection": true,
+    "commitOnlyDiscovery": true,
+    "missingOrIncompatibleIdentityBlocks": true,
+    "maintenanceWaitDoesNotStopDiscovery": true
+  }
+}
