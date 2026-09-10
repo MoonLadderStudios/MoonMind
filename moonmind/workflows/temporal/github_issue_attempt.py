@@ -43,7 +43,7 @@ import json
 import os
 import re
 import uuid
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any, Mapping, Sequence
@@ -110,10 +110,13 @@ INSTALLATION_ID_ENV_VARS = (
     "MOONMIND_DEPLOYMENT_ID",
     "MOONMIND_INSTANCE_ID",
 )
-DEFAULT_INSTALLATION_ID_PATH = Path("var/moonmind-installation-id")
+# Persistent deployment-owned location first (mounted named volume on the
+# integrations worker); legacy relative path is a local-dev fallback that is
+# still honored on read for backwards compatibility.
+DEFAULT_INSTALLATION_ID_PATH = Path("/app/var/secrets/moonmind-installation-id")
+LEGACY_INSTALLATION_ID_PATH = Path("var/moonmind-installation-id")
 
 _ATTEMPT_ID_RE = re.compile(r"^[0-9a-f]{32}$")
-_UUID_HEX_RE = re.compile(r"^[0-9a-f]{32}$")
 _MARKER_ATTRS_RE = re.compile(r'(\w[\w-]*)="([^"]*)"')
 _FENCE_RE = re.compile(
     r"```json moonmind-issue-attempt\s*\n(.*?)\n```", re.DOTALL
@@ -163,8 +166,11 @@ def resolve_installation_id(
     """Resolve the single stable installation identity for this deployment.
 
     Precedence is deterministic and alias-free: explicit input, then the
-    canonical environment names, then the persisted local file (created once
-    and reused across restarts/retries). The value differs across deployments
+    canonical environment names (``MOONMIND_INSTALLATION_ID`` pins one
+    canonical ID across scaled replicas), then the persisted deployment-owned
+    file (created once on the persistent secrets volume and reused across
+    restarts/retries/replicas sharing that volume), then the legacy relative
+    path for backwards compatibility. The value differs across deployments
     because each deployment owns its environment/file; shared GitHub usernames
     are never consulted here.
     """
@@ -176,22 +182,32 @@ def resolve_installation_id(
         candidate = _normalize_installation_id((env or {}).get(name))
         if candidate:
             return candidate
-    target = Path(path) if path is not None else DEFAULT_INSTALLATION_ID_PATH
-    try:
-        if target.exists():
-            candidate = _normalize_installation_id(
-                target.read_text(encoding="utf-8")
-            )
-            if candidate:
-                return candidate
-    except OSError:
-        pass
+    targets: list[Path] = []
+    if path is not None:
+        targets = [Path(path)]
+    else:
+        targets = [DEFAULT_INSTALLATION_ID_PATH, LEGACY_INSTALLATION_ID_PATH]
+    for target in targets:
+        try:
+            if target.exists():
+                candidate = _normalize_installation_id(
+                    target.read_text(encoding="utf-8")
+                )
+                if candidate:
+                    return candidate
+        except OSError:
+            # Missing/unreadable file means no persisted identity yet; fall
+            # through to generate (and best-effort persist) a fresh value.
+            continue
     generated = uuid.uuid4().hex
     if persist:
+        primary = targets[0]
         try:
-            target.parent.mkdir(parents=True, exist_ok=True)
-            target.write_text(generated + "\n", encoding="utf-8")
+            primary.parent.mkdir(parents=True, exist_ok=True)
+            primary.write_text(generated + "\n", encoding="utf-8")
         except OSError:
+            # Ephemeral filesystems may reject the write; the generated
+            # value is still returned for this invocation.
             pass
     return generated
 
@@ -204,17 +220,27 @@ def build_attempt_id(
     run_id: str = "",
     deployment_id: str = "",
 ) -> str:
-    """Build a globally unique attempt ID bound to repo/issue/workflow/run."""
-    scope = "|".join(
-        [
-            str(repository or "").strip().lower(),
-            str(issue_number or ""),
-            str(workflow_id or "").strip(),
-            str(run_id or "").strip(),
-            str(deployment_id or "").strip(),
-            uuid.uuid4().hex,
-        ]
-    )
+    """Build a globally unique attempt ID bound to repo/issue/workflow/run.
+
+    The ID is deterministically derived from the stable scope whenever the
+    caller supplies a workflow or run identity, so an Activity retry that
+    receives the same original inputs reconciles the same marker instead of
+    minting a second logical attempt. Callers without any stable scope get a
+    fresh random ID. The durable assignment must happen before the retryable
+    Activity boundary: workflows should mint (or forward) ``attemptId`` once
+    and reuse it from ``inputs``/``previousOutputs`` on retry.
+    """
+    stable_scope = [
+        str(repository or "").strip().lower(),
+        str(issue_number or ""),
+        str(workflow_id or "").strip(),
+        str(run_id or "").strip(),
+        str(deployment_id or "").strip(),
+    ]
+    if str(workflow_id or "").strip() or str(run_id or "").strip():
+        scope = "|".join(stable_scope)
+    else:
+        scope = "|".join(stable_scope + [uuid.uuid4().hex])
     return hashlib.sha256(scope.encode("utf-8")).hexdigest()[:32]
 
 
@@ -383,24 +409,76 @@ def render_attempt_comment(handoff: AttemptHandoff) -> str:
     )
     if len(body) <= MAX_ATTEMPT_COMMENT_CHARS:
         return body
-    # Bound by shrinking free-text fields first, then hard-truncating metadata.
-    shrunk = AttemptHandoff(
-        **{
+    # Bound by shrinking free-text fields first, then dropping optional
+    # variable-length fields entirely until a complete JSON envelope fits.
+    # The envelope is never sliced mid-JSON: a truncated fence would make
+    # parse_attempt_comment return empty metadata and destroy the durable
+    # cross-deployment handoff.
+    candidates = [
+        {
             **handoff.__dict__,
             "last_report": _truncate(handoff.last_report, 200),
             "verification_summary": _truncate(handoff.verification_summary, 200),
             "diagnostics_ref": "",
-        }
+        },
+        {
+            **handoff.__dict__,
+            "last_report": _truncate(handoff.last_report, 100),
+            "verification_summary": "",
+            "diagnostics_ref": "",
+            "met_requirements": (),
+            "retry_history": tuple(list(handoff.retry_history)[:10]),
+        },
+        {
+            **handoff.__dict__,
+            "last_report": "",
+            "verification_summary": "",
+            "diagnostics_ref": "",
+            "met_requirements": (),
+            "unmet_requirements": tuple(list(handoff.unmet_requirements)[:20]),
+            "retry_history": tuple(list(handoff.retry_history)[:10]),
+        },
+        {
+            **handoff.__dict__,
+            "last_report": "",
+            "verification_summary": "",
+            "diagnostics_ref": "",
+            "met_requirements": (),
+            "unmet_requirements": (),
+            "retry_history": (),
+        },
+    ]
+    for fields in candidates:
+        shrunk = AttemptHandoff(**fields)
+        machine = json.dumps(shrunk.to_metadata(), sort_keys=True, separators=(",", ":"))
+        candidate_body = (
+            f"{marker}\n{summary[:1500]}\n\n"
+            f"{ATTEMPT_FENCE_OPEN}\n{machine}\n{ATTEMPT_FENCE_CLOSE}\n"
+            f"{ATTEMPT_MARKER_PREFIX} end{ATTEMPT_MARKER_SUFFIX}"
+        )
+        if len(candidate_body) <= MAX_ATTEMPT_COMMENT_CHARS:
+            return candidate_body
+    # Minimal envelope: still a complete, parseable handoff carrying the
+    # stable identity; optional detail is omitted rather than corrupted.
+    minimal = AttemptHandoff(
+        repository=handoff.repository,
+        issue_number=handoff.issue_number,
+        attempt_id=handoff.attempt_id,
+        deployment_id=handoff.deployment_id,
+        workflow_id=handoff.workflow_id,
+        run_id=handoff.run_id,
+        version=handoff.version,
+        activity=handoff.activity,
+        outcome=handoff.outcome,
+        next_action=handoff.next_action,
     )
-    machine = json.dumps(shrunk.to_metadata(), sort_keys=True, separators=(",", ":"))
-    body = (
-        f"{marker}\n{summary[:1500]}\n\n"
+    machine = json.dumps(minimal.to_metadata(), sort_keys=True, separators=(",", ":"))
+    minimal_body = (
+        f"{marker}\n{summary[:500]}\n\n"
         f"{ATTEMPT_FENCE_OPEN}\n{machine}\n{ATTEMPT_FENCE_CLOSE}\n"
         f"{ATTEMPT_MARKER_PREFIX} end{ATTEMPT_MARKER_SUFFIX}"
     )
-    if len(body) <= MAX_ATTEMPT_COMMENT_CHARS:
-        return body
-    return body[:MAX_ATTEMPT_COMMENT_CHARS]
+    return minimal_body[:MAX_ATTEMPT_COMMENT_CHARS] if len(minimal_body) > MAX_ATTEMPT_COMMENT_CHARS else minimal_body
 
 
 @dataclass(frozen=True)
@@ -426,10 +504,15 @@ def parse_attempt_comment(comment: Mapping[str, Any]) -> ParsedAttemptComment | 
     if ATTEMPT_MARKER_PREFIX not in body:
         return None
     marker_attrs: dict[str, str] = {}
-    for match in _MARKER_ATTRS_RE.finditer(body):
+    # Restrict attribute parsing to the single canonical opening marker so
+    # human-readable prose after the marker (e.g. lastReport text containing
+    # attempt="..." or deployment="...") cannot shadow the true identity.
+    marker_end = body.find(ATTEMPT_MARKER_SUFFIX)
+    marker_scope = body[: marker_end + len(ATTEMPT_MARKER_SUFFIX)] if marker_end != -1 else body
+    for match in _MARKER_ATTRS_RE.finditer(marker_scope):
         marker_attrs[match.group(1)] = match.group(2)
     version = 0
-    version_match = re.search(r"\bv=(\d+)", body)
+    version_match = re.search(r"\bv=(\d+)", marker_scope)
     if version_match:
         try:
             version = int(version_match.group(1))
@@ -447,6 +530,8 @@ def parse_attempt_comment(comment: Mapping[str, Any]) -> ParsedAttemptComment | 
                 try:
                     version = int(str(raw_version))
                 except (TypeError, ValueError):
+                    # Keep the marker-derived version; an unparsable
+                    # envelope version falls through to validation.
                     pass
         except (ValueError, TypeError):
             metadata = {}
@@ -820,7 +905,27 @@ def compute_retry_state(
     allowance, never an exact global counter claim.
     """
     moment = _parse_moment(now) or _utcnow()
-    usable = [item for item in parsed if item.attempt_id]
+    # Canonicalize duplicate same-ID comments to one logical attempt: keep
+    # the latest observable copy per attempt ID so a retried create that left
+    # two same-ID markers cannot exhaust the allowance twice.
+    latest_by_id: dict[str, ParsedAttemptComment] = {}
+    for item in parsed:
+        if not item.attempt_id:
+            continue
+        key = normalize_attempt_id(item.attempt_id)
+        if not key:
+            continue
+        current = latest_by_id.get(key)
+        if current is None or (
+            item.updated_at,
+            item.created_at,
+            item.comment_id,
+        ) >= (current.updated_at, current.created_at, current.comment_id):
+            latest_by_id[key] = item
+    usable = sorted(
+        latest_by_id.values(),
+        key=lambda item: (item.created_at, item.updated_at, item.comment_id),
+    )
     policy_refs = {
         str((item.metadata or {}).get("policyRef") or "") for item in usable
     }
@@ -866,9 +971,16 @@ def compute_retry_state(
     holds = False
     cancelled = False
     latest_cooldown = ""
-    reset_seen = False
+    latest_cooldown_moment = None
     for item in usable:
         metadata = item.metadata or {}
+        # An audited reset/resolution record supersedes earlier holds and
+        # failures at its lineage point; later failures/holds still count.
+        if str(metadata.get("resetRecord") or "").strip():
+            failures = 0
+            no_progress = 0
+            holds = False
+            cancelled = False
         outcome = str(metadata.get("outcome") or "").strip().lower()
         if outcome in {"failed", "failure", "error", "no_progress", "no-progress"}:
             failures += 1
@@ -878,11 +990,14 @@ def compute_retry_state(
             holds = True
         if outcome in {"cancelled", "canceled"}:
             cancelled = True
-        if str(metadata.get("resetRecord") or "").strip():
-            reset_seen = True
         cooldown = str(metadata.get("cooldownUntil") or "").strip()
-        if cooldown and (not latest_cooldown or cooldown > latest_cooldown):
-            latest_cooldown = cooldown
+        if cooldown:
+            cooldown_moment = _parse_moment(cooldown)
+            if cooldown_moment is not None and (
+                latest_cooldown_moment is None or cooldown_moment > latest_cooldown_moment
+            ):
+                latest_cooldown_moment = cooldown_moment
+                latest_cooldown = cooldown
     if holds or cancelled:
         return RetryState(
             failures=failures,
@@ -895,8 +1010,6 @@ def compute_retry_state(
             reason_code="operator_hold" if holds else "cancelled",
             detail="Operator hold/cancellation evidence survives new IDs and devices.",
         )
-    if reset_seen:
-        failures = 0
     remaining = max(0, int(max_attempts) - failures)
     if latest_cooldown:
         cooldown_moment = _parse_moment(latest_cooldown)
@@ -1139,6 +1252,7 @@ __all__ = [
     "ATTEMPT_NEXT_ACTIONS",
     "DEFAULT_COOLDOWN_SECONDS",
     "DEFAULT_INSTALLATION_ID_PATH",
+    "LEGACY_INSTALLATION_ID_PATH",
     "DEFAULT_MAX_ATTEMPTS",
     "INSTALLATION_ID_ENV_VARS",
     "MAX_ATTEMPT_COMMENT_CHARS",
