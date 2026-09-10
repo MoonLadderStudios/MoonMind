@@ -47,7 +47,7 @@ import json
 import os
 import re
 import uuid
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Mapping, Sequence
 
@@ -195,12 +195,14 @@ def get_or_create_installation_id(*, path: Path | None = None) -> str:
             if persisted:
                 return persisted
     except OSError:
+        # Best-effort read: fall through and generate a fresh ephemeral id.
         pass
     generated = f"inst-{uuid.uuid4().hex[:16]}"
     try:
         target.parent.mkdir(parents=True, exist_ok=True)
         target.write_text(generated + "\n", encoding="utf-8")
     except OSError:
+        # Best-effort persist: keep the generated id in memory for this run.
         pass
     return generated
 
