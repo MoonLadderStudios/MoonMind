@@ -23,11 +23,17 @@ from moonmind.security.egress import (
     attest_docker_workload_egress,
 )
 
-# Exact-host probes execute Omnigent's own portable helpers inside the admitted
-# host. Upstream >=0.13.0 ships the OpenCode app-server helpers under this
-# module; the admission ladder judges the host build, so the probe pins the
-# current upstream layout instead of branching on version.
-_OPENCODE_APP_SERVER_MODULE = "omnigent.harnesses.opencode_native.app_server"
+# Resolve the upstream package layout inside the admitted image. Both 0.12 and
+# 0.13 hosts can be digest-pinned by existing plans. Select before importing:
+# a broken helper or dependency in the selected layout must fail attestation,
+# never trigger an import-error fallback to a different implementation.
+_OPENCODE_APP_SERVER_IMPORT = (
+    "import importlib, importlib.util; "
+    "opencode_app_server = importlib.import_module("
+    "'omnigent.harnesses.opencode_native.app_server' "
+    "if importlib.util.find_spec('omnigent.harnesses') is not None "
+    "else 'omnigent.opencode_native_app_server'); "
+)
 # Reserved exit status meaning "the attestation helper itself is unavailable in
 # the host image". The wrapper pairs it with the marker line below; only that
 # pair is remapped, so a probed command that happens to exit 97 keeps its own
@@ -128,10 +134,8 @@ async def _read_exact_host_model_options(
         )
 
     probe = _substrate_guarded_probe(
-        "import json; "
-        f"from {_OPENCODE_APP_SERVER_MODULE} import "
-        "list_opencode_cli_model_options; "
-        "print(json.dumps({'models': list_opencode_cli_model_options()}))"
+        "import json; " + _OPENCODE_APP_SERVER_IMPORT + "print(json.dumps({'models': "
+        "opencode_app_server.list_opencode_cli_model_options()}))"
     )
     code, stdout, stderr = await backend.run(
         [
@@ -220,8 +224,8 @@ async def _run_exact_host_opencode_command(
 
     filtered_child_probe = _substrate_guarded_probe(
         "import subprocess, sys; from pathlib import Path; "
-        f"from {_OPENCODE_APP_SERVER_MODULE} import filtered_server_env; "
-        "env = filtered_server_env("
+        + _OPENCODE_APP_SERVER_IMPORT
+        + "env = opencode_app_server.filtered_server_env("
         "bridge_dir=Path('/tmp/moonmind-opencode-attestation'), "
         "auth_secret='moonmind-attestation'); "
         "result = subprocess.run("
