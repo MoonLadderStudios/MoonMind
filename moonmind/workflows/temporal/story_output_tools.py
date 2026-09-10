@@ -35,7 +35,6 @@ from moonmind.workflows.temporal.github_issue_attempts import (
     reconcile_uncertain_creation,
     render_attempt_comment,
     resolve_installation_id,
-    stable_attempt_marker,
 )
 from moonmind.workflows.temporal.github_issue_lifecycle import (
     attempt_evidence_blocks_admission,
