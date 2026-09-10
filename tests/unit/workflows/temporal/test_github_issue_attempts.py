@@ -10,7 +10,6 @@ bounded internal retries with surviving holds, and redaction coverage.
 
 from __future__ import annotations
 
-import json
 from typing import Any
 
 import pytest
