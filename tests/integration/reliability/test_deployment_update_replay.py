@@ -57,6 +57,14 @@ def selected_services(parts):
 args = sys.argv[1:]
 state = load_state()
 
+if args[:3] == ["ps", "-a", "-q"]:
+    # This infrastructure fixture has no API container. The production gate
+    # still queries the selected project's installed API before each up.
+    assert "label=com.docker.compose.service=api" in args
+    state["accessPreflightCalls"] = state.get("accessPreflightCalls", 0) + 1
+    save_state(state)
+    raise SystemExit(0)
+
 if args[:2] == ["image", "inspect"]:
     requested_image = args[2]
     print(
@@ -332,6 +340,7 @@ async def test_deployment_update_reconciles_non_image_infrastructure(
     state = json.loads(state_path.read_text(encoding="utf-8"))
     assert result.status == "COMPLETED"
     assert result.outputs["status"] == "SUCCEEDED"
+    assert state["accessPreflightCalls"] >= 1
     assert state["composeConfigCalls"] >= 4
     assert state["pullServices"] == expected["pullServices"] + (
         ["init-db"] if windows_replay else []

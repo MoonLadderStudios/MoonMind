@@ -63,6 +63,7 @@ def _run_update_scenario(
     initial_env_contents: str | None = None,
     no_compose_pull: bool = False,
     remove_agent_runtime_after_update: bool = False,
+    access_drift: bool = False,
 ) -> list[str]:
     bash = _modern_bash()
     seed = tmp_path / "seed"
@@ -76,8 +77,12 @@ def _run_update_scenario(
     _run_git("config", "user.name", "MoonMind Test", cwd=seed)
     _run_git("config", "user.email", "moonmind-test@example.invalid", cwd=seed)
     (seed / ".gitignore").write_text(".env\n", encoding="utf-8")
+    access_gate = seed / "moonmind/deployment_access.py"
+    access_gate.parent.mkdir(parents=True)
+    access_gate.write_bytes((ROOT / "moonmind/deployment_access.py").read_bytes())
+    _run_git("add", "moonmind/deployment_access.py", cwd=seed)
     source_file = seed / changed_file
-    source_file.parent.mkdir(parents=True)
+    source_file.parent.mkdir(parents=True, exist_ok=True)
     source_file.write_text("VERSION = 1\n", encoding="utf-8")
     _run_git("add", ".gitignore", changed_file, cwd=seed)
     _run_git("commit", "-m", "initial", cwd=seed)
@@ -121,9 +126,16 @@ set -euo pipefail
 printf '%s\\n' "$*" >> "$DOCKER_LOG"
 
 if [[ "${1:-}" == "ps" ]]; then
+  if [[ "${FAKE_ACCESS_DRIFT:-false}" == "true" ]]; then
+    printf '%s\\n' installed-api
+  fi
   exit 0
 fi
 if [[ "${1:-}" == "inspect" ]]; then
+  if [[ "${2:-}" == "installed-api" ]]; then
+    printf '%s\\n' '[{"HostConfig":{"PortBindings":{"8000/tcp":[{"HostIp":"0.0.0.0","HostPort":"7000"}]}},"Config":{"Env":["AUTH_PROVIDER=disabled"]}}]'
+    exit 0
+  fi
   if [[ "$*" == *".State.Status"* ]]; then
     printf '%s\\n' running
   elif [[ "$*" == *"moonmind.runtime_source_revision"* ]]; then
@@ -151,9 +163,9 @@ case "${1:-} ${2:-}" in
   "config --format")
     if [[ "__REMOVE_AGENT_RUNTIME_AFTER_UPDATE__" == "true" ]] \
       && [[ "$(git -C "$UPDATE_CHECKOUT" rev-parse HEAD)" != "$UPDATE_INITIAL_HEAD" ]]; then
-      printf '%s\\n' '{"services":{"api":{"image":"moonmind:test"},"postgres":{"image":"postgres:test"},"temporal-worker-deployment-control":{"image":"moonmind:test"},"temporal-worker-workflow":{"image":"moonmind:test"}}}'
+      printf '%s\\n' '{"name":"moonmind-test-update","services":{"api":{"image":"moonmind:test","ports":[{"host_ip":"127.0.0.1","published":"7000","target":8000}],"environment":{"AUTH_PROVIDER":"disabled"}},"postgres":{"image":"postgres:test"},"temporal-worker-deployment-control":{"image":"moonmind:test"},"temporal-worker-workflow":{"image":"moonmind:test"}}}'
     else
-      printf '%s\\n' '{"services":{"api":{"image":"moonmind:test"},"postgres":{"image":"postgres:test"},"temporal-worker-agent-runtime":{"image":"moonmind:test"},"temporal-worker-deployment-control":{"image":"moonmind:test"},"temporal-worker-workflow":{"image":"moonmind:test"}}}'
+      printf '%s\\n' '{"name":"moonmind-test-update","services":{"api":{"image":"moonmind:test","ports":[{"host_ip":"127.0.0.1","published":"7000","target":8000}],"environment":{"AUTH_PROVIDER":"disabled"}},"postgres":{"image":"postgres:test"},"temporal-worker-agent-runtime":{"image":"moonmind:test"},"temporal-worker-deployment-control":{"image":"moonmind:test"},"temporal-worker-workflow":{"image":"moonmind:test"}}}'
     fi
     ;;
   "pull ")
@@ -198,6 +210,7 @@ esac
         agent_runtime_revision_state is not None
     ).lower()
     env["FAKE_AGENT_RUNTIME_SOURCE_REVISION"] = agent_runtime_revision
+    env["FAKE_ACCESS_DRIFT"] = str(access_drift).lower()
     update_command = [
         bash,
         str(UPDATE_SCRIPT),
@@ -216,6 +229,12 @@ esac
         capture_output=True,
         text=True,
     )
+    if access_drift:
+        assert update.returncode != 0
+        assert "published interfaces/ports" in update.stderr
+        commands = docker_log.read_text(encoding="utf-8").splitlines()
+        assert not any(line.startswith("compose up ") for line in commands)
+        return commands
     assert update.returncode == 0, (
         f"update script failed with exit code {update.returncode}\n"
         f"stdout:\n{update.stdout}\n"
@@ -354,12 +373,21 @@ def test_update_preserves_operator_network_access(tmp_path: Path) -> None:
     assert {name: persisted[name] for name in operator_settings} == operator_settings
 
 
+def test_update_refuses_unpinned_installed_binding_cutover(tmp_path: Path) -> None:
+    _run_update_scenario(
+        tmp_path,
+        changed_file="api_service/main.py",
+        access_drift=True,
+        initial_env_contents="KEEP_ME=yes\n",
+        no_compose_pull=True,
+    )
+    assert (tmp_path / "checkout/.env").read_text() == "KEEP_ME=yes\n"
+
+
 def test_skill_source_update_quiesces_resolver_before_checkout_mutation(
     tmp_path: Path,
 ) -> None:
-    manifest = json.loads(
-        (REPLAY_ROOT / "manifest.json").read_text(encoding="utf-8")
-    )
+    manifest = json.loads((REPLAY_ROOT / "manifest.json").read_text(encoding="utf-8"))
     expected = json.loads(
         (REPLAY_ROOT / "expected-outcome.json").read_text(encoding="utf-8")
     )
@@ -374,9 +402,7 @@ def test_skill_source_update_quiesces_resolver_before_checkout_mutation(
     assert stop_command in commands
     assert barrier_recreate in commands
     assert commands.count(barrier_recreate) == 1
-    assert commands.index(stop_command) < commands.index(
-        expected["composePullCommand"]
-    )
+    assert commands.index(stop_command) < commands.index(expected["composePullCommand"])
     assert commands.index(expected["composePullCommand"]) < commands.index(
         barrier_recreate
     )
@@ -386,8 +412,7 @@ def test_skill_source_update_quiesces_resolver_before_checkout_mutation(
         if command.startswith("compose up ") and "--force-recreate" in command
     ]
     assert all(
-        expected["barrierService"] not in command
-        for command in final_force_recreates
+        expected["barrierService"] not in command for command in final_force_recreates
     )
 
 

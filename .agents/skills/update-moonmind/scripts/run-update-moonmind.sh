@@ -552,6 +552,7 @@ fi
 # revision selected before each long-lived application process is created, so a
 # later update can detect a stale process even when git was updated separately.
 export MOONMIND_RUNTIME_SOURCE_REVISION="$POST_PULL_COMMIT"
+run_cmd python3 "$(pwd)/moonmind/deployment_access.py" "${COMPOSE_CMD[@]}"
 persist_runtime_source_revision "$POST_PULL_COMMIT"
 
 if [[ "$SKIP_COMPOSE_PULL" != "true" ]]; then

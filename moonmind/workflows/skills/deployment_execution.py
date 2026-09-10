@@ -14,6 +14,8 @@ from datetime import UTC, datetime
 from pathlib import Path, PurePosixPath
 from typing import Any, Mapping, Protocol, Sequence
 
+from moonmind.deployment_access import DeploymentAccessError, check_compose_access
+
 from .deployment_tools import (
     DEPLOYMENT_UPDATE_TOOL_NAME,
     DEPLOYMENT_UPDATE_TOOL_VERSION,
@@ -523,6 +525,22 @@ class HostDockerComposeRunner:
         command: tuple[str, ...],
         requested_image: str,
     ) -> Mapping[str, Any]:
+        # Validate at the side-effect owner, before any Compose recreation.
+        # Config rendering uses worker-visible paths; it never creates mounts.
+        try:
+            await asyncio.to_thread(
+                check_compose_access,
+                self._compose_base_command(project_dir=self._local_dir()),
+                cwd=str(self._local_dir()),
+                env={**os.environ, "MOONMIND_IMAGE": requested_image},
+            )
+        except DeploymentAccessError as exc:
+            raise ToolFailure(
+                error_code="DEPLOYMENT_ACCESS_CHANGED",
+                message=str(exc),
+                retryable=False,
+                details={"failureClass": "deployment_access_changed"},
+            ) from exc
         return await self._run_compose_command(command, requested_image=requested_image)
 
     async def inspect_image(self, requested_image: str) -> Mapping[str, Any]:
