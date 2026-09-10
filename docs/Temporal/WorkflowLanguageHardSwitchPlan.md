@@ -108,7 +108,7 @@ The hard switch reduces ambiguity, makes MoonMind feel Temporal-native, and prev
 | --- | --- |
 | **Workflow** | UI shorthand for a MoonMind Workflow Execution when ambiguity is low. |
 | **Workflow Execution** | The top-level MoonMind product/runtime entity. A durable Temporal-backed execution identified by `workflowId`. |
-| **Workflow Type** | The root orchestration category, such as `MoonMind.UserWorkflow`, `MoonMind.AgentRun`, or `MoonMind.ManifestIngest`. |
+| **Workflow Type** | The root orchestration category, such as `MoonMind.UserWorkflow`, `MoonMind.AgentRun`, or `MoonMind.MergeAutomation`. |
 | **Workflow Entry** | A short, URL-safe slug representing a `Workflow Type` for API payloads and routing (for example `user_workflow` for `MoonMind.UserWorkflow`). Surfaced as the `entry` field on canonical responses. |
 | **Workflow ID** | The stable product identity and route key. Preserved across Continue-As-New. |
 | **Run ID** | The current/latest Temporal run instance for a Workflow Execution. Useful for debugging, artifacts, and run history. |
@@ -316,7 +316,7 @@ Rationale:
 | Workflow Type | Status | Meaning |
 | --- | --- | --- |
 | `MoonMind.UserWorkflow` | Rename from `MoonMind.UserWorkflow` | User-requested, Step-ledger-owning Workflow Execution. |
-| `MoonMind.ManifestIngest` | Keep | Manifest ingest, validation, compilation, and orchestration. |
+| `MoonMind.ManifestIngest` | Retired (MoonLadderStudios/MoonMind#4192) | Manifest ingest retired: new launches rejected; old rows readable as replay/drain evidence only. |
 | `MoonMind.AgentRun` | Keep | Durable lifecycle wrapper for one true managed or external agent execution. |
 | `MoonMind.AgentSession` | Keep | Managed runtime session workflow. |
 | `MoonMind.ManagedSessionReconcile` | Keep | Internal managed-session reconciliation workflow. |

@@ -404,6 +404,33 @@ def mock_client_adapter():
     adapter.terminate_workflow = AsyncMock()
     return adapter
 
+
+async def _insert_historical_manifest_ingest_record(session, *, owner_id) -> object:
+    """Insert an old-release ManifestIngest row without launching it.
+
+    MoonLadderStudios/MoonMind#4192: the new release never registers or
+    launches ``MoonMind.ManifestIngest`` (``create_execution`` rejects it),
+    but old-release rows must remain readable as replay/drain evidence.
+    """
+    from uuid import uuid4 as _uuid4
+
+    record = TemporalExecutionCanonicalRecord(
+        workflow_id=f"mm:historical-manifest:{_uuid4().hex[:8]}",
+        run_id=_uuid4().hex,
+        namespace="default",
+        workflow_type=TemporalWorkflowType.MANIFEST_INGEST,
+        owner_id=str(owner_id),
+        owner_type=TemporalExecutionOwnerType.USER,
+        state=MoonMindWorkflowState.COMPLETED,
+        entry="manifest",
+        manifest_ref="artifact://manifest/historical",
+    )
+    session.add(record)
+    await session.commit()
+    await session.refresh(record)
+    return record
+
+
 @asynccontextmanager
 async def temporal_db(tmp_path):
     original_artifact_backend = settings.workflow.temporal_artifact_backend
@@ -998,13 +1025,15 @@ async def test_create_execution_rejects_unsupported_workflow_type(tmp_path):
             )
 
 @pytest.mark.asyncio
-async def test_create_execution_rejects_missing_manifest_artifact_ref(tmp_path):
+async def test_create_execution_rejects_retired_manifest_ingest(tmp_path):
+    # MoonLadderStudios/MoonMind#4192: the new release never registers or
+    # launches ManifestIngest workflows.
     async with temporal_db(tmp_path) as session:
         service = TemporalExecutionService(session)
 
         with pytest.raises(
             TemporalExecutionValidationError,
-            match="manifestArtifactRef is required",
+            match="retired",
         ):
             await service.create_execution(
                 workflow_type="MoonMind.ManifestIngest",
@@ -1012,7 +1041,7 @@ async def test_create_execution_rejects_missing_manifest_artifact_ref(tmp_path):
                 title=None,
                 input_artifact_ref=None,
                 plan_artifact_ref=None,
-                manifest_artifact_ref=None,
+                manifest_artifact_ref="artifact://manifest/1",
                 failure_policy=None,
                 initial_parameters={},
                 idempotency_key=None,
@@ -1174,16 +1203,8 @@ async def test_create_execution_rejects_non_run_dependency(tmp_path, mock_client
         service = TemporalExecutionService(session, client_adapter=mock_client_adapter)
         owner_id = uuid4()
 
-        manifest = await service.create_execution(
-            workflow_type="MoonMind.ManifestIngest",
-            owner_id=owner_id,
-            title="Manifest dependency",
-            input_artifact_ref=None,
-            plan_artifact_ref=None,
-            manifest_artifact_ref="artifact://manifest/1",
-            failure_policy=None,
-            initial_parameters={},
-            idempotency_key=None,
+        manifest = await _insert_historical_manifest_ingest_record(
+            session, owner_id=owner_id
         )
 
         with pytest.raises(
@@ -2215,16 +2236,8 @@ async def test_create_execution_rejects_non_run_remediation_target(
     async with temporal_db(tmp_path) as session:
         owner_id = uuid4()
         service = TemporalExecutionService(session, client_adapter=mock_client_adapter)
-        target = await service.create_execution(
-            workflow_type="MoonMind.ManifestIngest",
-            owner_id=owner_id,
-            title="Manifest target",
-            input_artifact_ref=None,
-            plan_artifact_ref=None,
-            manifest_artifact_ref="artifact://manifest/1",
-            failure_policy=None,
-            initial_parameters={},
-            idempotency_key=None,
+        target = await _insert_historical_manifest_ingest_record(
+            session, owner_id=owner_id
         )
 
         with pytest.raises(
@@ -4107,10 +4120,6 @@ async def test_request_rerun_uses_continue_as_new_same_workflow_id(
             plan_artifact_ref=None,
             parameters_patch=None,
             title=None,
-            new_manifest_artifact_ref=None,
-            mode=None,
-            max_concurrency=None,
-            node_ids=None,
             idempotency_key="rerun-1",
         )
 
@@ -4189,10 +4198,6 @@ async def test_request_rerun_rejects_incomplete_skill_snapshot_at_shared_boundar
                 plan_artifact_ref=None,
                 parameters_patch=None,
                 title=None,
-                new_manifest_artifact_ref=None,
-                mode=None,
-                max_concurrency=None,
-                node_ids=None,
                 idempotency_key="rerun-incomplete-snapshot",
             )
 
@@ -4298,10 +4303,6 @@ async def test_request_rerun_converts_malformed_stored_skill_selector_to_conflic
                 plan_artifact_ref=None,
                 parameters_patch=None,
                 title=None,
-                new_manifest_artifact_ref=None,
-                mode=None,
-                max_concurrency=None,
-                node_ids=None,
                 idempotency_key="rerun-malformed-selector",
             )
 
@@ -4377,10 +4378,6 @@ async def test_request_rerun_creates_fresh_execution_for_terminal_execution(
             plan_artifact_ref=None,
             parameters_patch=None,
             title=None,
-            new_manifest_artifact_ref=None,
-            mode=None,
-            max_concurrency=None,
-            node_ids=None,
             idempotency_key="rerun-terminal",
         )
         source = await service.describe_execution(source_workflow_id)
@@ -4455,10 +4452,6 @@ async def test_request_rerun_pins_patch_recovery_to_terminal_source_execution(
                 }
             },
             title=None,
-            new_manifest_artifact_ref=None,
-            mode=None,
-            max_concurrency=None,
-            node_ids=None,
             idempotency_key="rerun-edited",
         )
         rerun = await service.describe_execution(response["workflow_id"])
@@ -5613,10 +5606,6 @@ async def test_request_rerun_bounds_fresh_execution_idempotency_key(
             plan_artifact_ref=None,
             parameters_patch=None,
             title=None,
-            new_manifest_artifact_ref=None,
-            mode=None,
-            max_concurrency=None,
-            node_ids=None,
             idempotency_key=long_idempotency_key,
         )
         second_response = await service.update_execution(
@@ -5626,10 +5615,6 @@ async def test_request_rerun_bounds_fresh_execution_idempotency_key(
             plan_artifact_ref=None,
             parameters_patch=None,
             title=None,
-            new_manifest_artifact_ref=None,
-            mode=None,
-            max_concurrency=None,
-            node_ids=None,
             idempotency_key=long_idempotency_key,
         )
 
@@ -5671,10 +5656,6 @@ async def test_request_rerun_creates_fresh_execution_when_temporal_reports_compl
             plan_artifact_ref=None,
             parameters_patch=None,
             title=None,
-            new_manifest_artifact_ref=None,
-            mode=None,
-            max_concurrency=None,
-            node_ids=None,
             idempotency_key="rerun-temporal-completed",
         )
         source = await service.describe_execution(source_workflow_id)
@@ -5750,10 +5731,6 @@ async def test_fresh_rerun_expands_unexpanded_jira_orchestrate_template(
             plan_artifact_ref=None,
             parameters_patch=None,
             title=None,
-            new_manifest_artifact_ref=None,
-            mode=None,
-            max_concurrency=None,
-            node_ids=None,
             idempotency_key="rerun-jira-orchestrate-template",
         )
         rerun = await service.describe_execution(response["workflow_id"])
@@ -5802,14 +5779,10 @@ async def test_manifest_only_updates_rejected_for_non_manifest_workflow(
                 plan_artifact_ref=None,
                 parameters_patch=None,
                 title=None,
-                new_manifest_artifact_ref=None,
-                mode=None,
-                max_concurrency=None,
-                node_ids=None,
                 idempotency_key=None,
             )
 
-        assert "only supported for MoonMind.ManifestIngest" in str(exc_info.value)
+        assert "was retired with MoonMind.ManifestIngest" in str(exc_info.value)
 
 @pytest.mark.asyncio
 async def test_request_rerun_clears_pause_flags_when_continuing_as_new(
@@ -5845,10 +5818,6 @@ async def test_request_rerun_clears_pause_flags_when_continuing_as_new(
             plan_artifact_ref=None,
             parameters_patch=None,
             title=None,
-            new_manifest_artifact_ref=None,
-            mode=None,
-            max_concurrency=None,
-            node_ids=None,
             idempotency_key="rerun-clears-pause",
         )
         refreshed = await service.describe_execution(created.workflow_id)
@@ -6488,14 +6457,14 @@ async def test_cancel_marks_terminal_state_and_close_status(
         service._client_adapter = mock_client_adapter
 
         created = await service.create_execution(
-            workflow_type="MoonMind.ManifestIngest",
+            workflow_type="MoonMind.UserWorkflow",
             owner_id=uuid4(),
             title=None,
             input_artifact_ref=None,
             plan_artifact_ref=None,
-            manifest_artifact_ref="artifact://manifest/1",
+            manifest_artifact_ref=None,
             failure_policy="fail_fast",
-            initial_parameters={},
+            initial_parameters=_valid_user_workflow_parameters(),
             idempotency_key=None,
         )
 
@@ -7121,10 +7090,6 @@ async def test_request_rerun_can_override_inputs_and_parameters(
             plan_artifact_ref="artifact://plan/new",
             parameters_patch={"force": "yes"},
             title=None,
-            new_manifest_artifact_ref=None,
-            mode=None,
-            max_concurrency=None,
-            node_ids=None,
             idempotency_key="rerun-with-overrides",
         )
         refreshed = await service.describe_execution(created.workflow_id)
@@ -7183,10 +7148,6 @@ async def test_update_inputs_major_reconfiguration_records_distinct_continue_as_
             plan_artifact_ref="artifact://plan/replacement",
             parameters_patch=None,
             title=None,
-            new_manifest_artifact_ref=None,
-            mode=None,
-            max_concurrency=None,
-            node_ids=None,
             idempotency_key="update-major-reconfig",
         )
         refreshed = await service.describe_execution(created.workflow_id)
@@ -7253,10 +7214,6 @@ async def test_update_inputs_continue_as_new_preserves_recovery_provenance_for_r
             plan_artifact_ref=None,
             parameters_patch={"request_continue_as_new": True},
             title=None,
-            new_manifest_artifact_ref=None,
-            mode=None,
-            max_concurrency=None,
-            node_ids=None,
             idempotency_key="update-rollover-only",
         )
         refreshed = await service.describe_execution(created.workflow_id)
@@ -7988,16 +7945,11 @@ async def test_list_executions_filters_owner_and_paginates(tmp_path):
             initial_parameters=_valid_user_workflow_parameters(),
             idempotency_key="owner-b-0",
         )
-        await service.create_execution(
-            workflow_type="MoonMind.ManifestIngest",
-            owner_id=owner_a,
-            title="manifest-0",
-            input_artifact_ref=None,
-            plan_artifact_ref=None,
-            manifest_artifact_ref="artifact://manifest/owner-a",
-            failure_policy=None,
-            initial_parameters={},
-            idempotency_key="owner-a-manifest-0",
+        # MoonLadderStudios/MoonMind#4192: ManifestIngest creation is retired;
+        # the manifest-entry listing is proven with a historical old-release
+        # row instead.
+        await _insert_historical_manifest_ingest_record(
+            session, owner_id=owner_a
         )
 
         first_page = await service.list_executions(
@@ -8038,8 +7990,11 @@ async def test_list_executions_filters_owner_and_paginates(tmp_path):
             page_size=10,
             next_page_token=None,
         )
-        assert len(manifest_page.items) == 1
-        assert manifest_page.items[0].entry == "manifest"
+        # MoonLadderStudios/MoonMind#4192: retired ManifestIngest rows stay
+        # readable as old-release replay/drain evidence but are excluded
+        # from the product listing (product scope is UserWorkflow only).
+        assert len(manifest_page.items) == 0
+        assert manifest_page.count == 0
 
 @pytest.mark.asyncio
 async def test_list_executions_orders_by_updated_at_then_workflow_id(tmp_path):
@@ -8245,16 +8200,10 @@ async def test_list_executions_filters_entry_repo_and_integration(tmp_path):
             repository="Other/Repo",
             integration="github",
         )
-        await service.create_execution(
-            workflow_type="MoonMind.ManifestIngest",
-            owner_id=owner_id,
-            title="Manifest",
-            input_artifact_ref=None,
-            plan_artifact_ref=None,
-            manifest_artifact_ref="artifact://manifest/1",
-            failure_policy=None,
-            initial_parameters={},
-            idempotency_key="manifest-run",
+        # MoonLadderStudios/MoonMind#4192: ManifestIngest creation is retired;
+        # the entry filter is proven with a historical old-release row instead.
+        await _insert_historical_manifest_ingest_record(
+            session, owner_id=owner_id
         )
         result = await service.list_executions(
             workflow_type=None,

@@ -19,7 +19,6 @@ def app_settings_defaults():
     return {
         "google": GoogleSettings(
             google_chat_model="test-google-chat",
-            google_embedding_model="test-google-embed",
             google_api_key="test_google_key",  # Required for is_provider_enabled
         ),
         "openai": OpenAISettings(
@@ -28,11 +27,7 @@ def app_settings_defaults():
         ),
         # Ensure other required fields for AppSettings have defaults if not provided
         "default_chat_provider": "google",  # Default to google for fixture
-        "default_embedding_provider": "google",  # Default to google for fixture
-        "qdrant": {"qdrant_enabled": False},  # Disable things not under test
-        "rag": {},
         "github": {"github_enabled": False},
-        "google_drive": {},
         "atlassian": {
             "confluence": {"confluence_enabled": False},
             "jira": {"jira_enabled": False},
@@ -722,19 +717,18 @@ class TestWorkflowSettings:
 
         monkeypatch.delenv("WORKFLOW_GITHUB_REPOSITORY", raising=False)
 
-    def test_manifest_required_capabilities_supports_legacy_spec_prefix(
+    def test_manifest_required_capabilities_field_is_retired(
         self, monkeypatch
     ):
-        """Legacy WORKFLOW manifest capability env var should remain supported."""
+        """Retired manifest capability env var is inert (#4192)."""
 
-        monkeypatch.delenv("WORKFLOW_MANIFEST_REQUIRED_CAPABILITIES", raising=False)
         monkeypatch.setenv(
             "WORKFLOW_MANIFEST_REQUIRED_CAPABILITIES", '["manifest", "planner"]'
         )
 
         settings = WorkflowSettings(_env_file=None)
 
-        assert settings.manifest_required_capabilities == ("manifest", "planner")
+        assert not hasattr(settings, "manifest_required_capabilities")
 
         monkeypatch.delenv(
             "WORKFLOW_MANIFEST_REQUIRED_CAPABILITIES", raising=False

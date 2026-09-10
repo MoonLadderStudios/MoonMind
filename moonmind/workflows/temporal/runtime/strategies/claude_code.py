@@ -297,9 +297,11 @@ class ClaudeCodeStrategy(ManagedRuntimeStrategy):
         request: Any,
         environment: Mapping[str, str] | None = None,
     ) -> None:
-        """Inject shared retrieval context for Claude Code.
+        """Prepare the shared turn instruction for Claude Code.
 
-        The turn instruction (and any prepended skill activation summary built
+        MoonLadderStudios/MoonMind#4192: native RAG retrieval context is
+        retired with the Manifest/RAG ingestion product. The turn
+        instruction (and any prepended skill activation summary built
         by :meth:`ManagedRuntimeLauncher._project_run_skill_snapshot`) is
         passed to the Claude CLI via ``-p`` in :meth:`build_command`. Writing
         the same content into ``CLAUDE.md`` would conflate it with project
@@ -307,15 +309,4 @@ class ClaudeCodeStrategy(ManagedRuntimeStrategy):
         instructions when it ships under a SAFETY NOTICE wrapper, so the task
         is delivered as a first-class user prompt instead.
         """
-        if not getattr(request, "instruction_ref", None):
-            return
-
-        from moonmind.rag.context_injection import ContextInjectionService
-
-        service = ContextInjectionService(
-            env=dict(environment) if environment is not None else None
-        )
-        await service.inject_context(
-            request=request,
-            workspace_path=workspace_path,
-        )
+        return

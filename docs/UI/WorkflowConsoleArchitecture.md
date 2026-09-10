@@ -804,7 +804,7 @@ The backend resolves those into workflow start inputs and immutable runtime cont
 Representative mappings:
 
 * user workflow submit flows → `MoonMind.UserWorkflow` (renames to `MoonMind.UserWorkflow` in the hard switch)
-* manifest-oriented submit flows → `MoonMind.ManifestIngest`
+* manifest-oriented submit flows → retired with `MoonMind.ManifestIngest` (MoonLadderStudios/MoonMind#4192): rejected actionably, never launched
 
 The UI should submit **selection intent**, not full mutable skill bodies inline.
 

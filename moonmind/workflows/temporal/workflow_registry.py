@@ -46,11 +46,20 @@ STATIC_WORKFLOW_REGISTRATIONS = (
         "MoonMindContainerJobWorkflow",
         "operator",
     ),
-    WorkflowRegistration(
-        "moonmind.workflows.temporal.workflows.manifest_ingest",
-        "MoonMindManifestIngestWorkflow",
-        "product",
-    ),
+    # MoonLadderStudios/MoonMind#4192: the native ManifestIngest product is
+    # retired and intentionally absent from this registration. New
+    # MoonMind.ManifestIngest launches are rejected actionably at the schema,
+    # recurring, and service boundaries, existing ManifestIngest-targeted
+    # schedules are paused (never recreated) during reconciliation, and the
+    # corresponding manifest.compile / manifest.write_summary activity
+    # bindings are removed with the workflow. Deploying this removal
+    # requires an empty-history cutover verified through the versioned drain
+    # gate in ``moonmind.gates.manifest_ingest_drain``
+    # (``manifest-ingest-removal-drain-v1``): zero open ManifestIngest
+    # histories, zero pending manifest tasks, and zero existing
+    # ManifestIngest-targeted schedules, all from live deployment probes.
+    # Unobservable dimensions retain the old release for drain; fixture
+    # replay is history compatibility, not deployed drainage evidence.
     WorkflowRegistration(
         "moonmind.workflows.temporal.workflows.control_stop_continuation",
         "MoonMindControlStopContinuationWorkflow",

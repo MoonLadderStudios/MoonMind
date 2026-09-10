@@ -1836,9 +1836,7 @@ async def test_launch_cleans_materialized_support_files_on_render_failure(
     assert not any(support_root.glob("mm_profile_support_*"))
 
 @pytest.mark.asyncio
-@patch("moonmind.rag.context_injection.ContextInjectionService")
 async def test_launch_builds_codex_command_after_workspace_preparation(
-    mock_service_class,
     tmp_path,
     monkeypatch,
 ):
@@ -1856,8 +1854,6 @@ async def test_launch_builds_codex_command_after_workspace_preparation(
     workspace = tmp_path / "workspace"
     workspace.mkdir()
 
-    mock_service = mock_service_class.return_value
-    mock_service.inject_context = AsyncMock()
 
     async def _fake_resolve(*args, **kwargs):
         return None
@@ -1910,15 +1906,13 @@ async def test_launch_builds_codex_command_after_workspace_preparation(
     assert captured_args[:2] == ("codex", "exec")
     prompt_arg = next(arg for arg in captured_args if isinstance(arg, str) and "Managed Codex CLI note:" in arg)
     assert "MoonMind retrieval capability:" in prompt_arg
-    # MoonLadderStudios/MoonMind#4112 retired the `moonmind rag search` CLI
-    # entry point, so the enabled note must not advertise it.
+    # MoonLadderStudios/MoonMind#4192 retired native retrieval: the managed
+    # note reports the retired state and advertises no retrieval command.
+    assert "native_retrieval_retired" in prompt_arg
     assert "moonmind rag search" not in prompt_arg
-    assert "currently unavailable" not in prompt_arg
 
 @pytest.mark.asyncio
-@patch("moonmind.rag.context_injection.ContextInjectionService")
 async def test_launch_uses_run_scoped_env_for_retrieval_capability_note(
-    mock_service_class,
     tmp_path,
     monkeypatch,
 ):
@@ -1933,8 +1927,6 @@ async def test_launch_uses_run_scoped_env_for_retrieval_capability_note(
     workspace = tmp_path / "workspace-run-env"
     workspace.mkdir()
 
-    mock_service = mock_service_class.return_value
-    mock_service.inject_context = AsyncMock()
 
     async def _fake_resolve(*args, **kwargs):
         return None
@@ -1987,15 +1979,12 @@ async def test_launch_uses_run_scoped_env_for_retrieval_capability_note(
 
     prompt_arg = next(arg for arg in captured_args if isinstance(arg, str) and "Managed Codex CLI note:" in arg)
     assert "MoonMind retrieval capability:" in prompt_arg
-    assert "currently unavailable" in prompt_arg
-    assert "rag_disabled" in prompt_arg
+    assert "native_retrieval_retired" in prompt_arg
     assert "moonmind rag search" not in prompt_arg
 
 
 @pytest.mark.asyncio
-@patch("moonmind.rag.context_injection.ContextInjectionService")
 async def test_launch_hides_retrieval_capability_when_gateway_auth_is_unavailable(
-    mock_service_class,
     tmp_path,
     monkeypatch,
 ):
@@ -2010,8 +1999,6 @@ async def test_launch_hides_retrieval_capability_when_gateway_auth_is_unavailabl
     workspace = tmp_path / "workspace-gateway-env"
     workspace.mkdir()
 
-    mock_service = mock_service_class.return_value
-    mock_service.inject_context = AsyncMock()
 
     async def _fake_resolve(*args, **kwargs):
         return None
@@ -2067,15 +2054,12 @@ async def test_launch_hides_retrieval_capability_when_gateway_auth_is_unavailabl
 
     prompt_arg = next(arg for arg in captured_args if isinstance(arg, str) and "Managed Codex CLI note:" in arg)
     assert "MoonMind retrieval capability:" in prompt_arg
-    assert "currently unavailable" in prompt_arg
-    assert "retrieval_gateway_auth_missing" in prompt_arg
+    assert "native_retrieval_retired" in prompt_arg
     assert "moonmind rag search" not in prompt_arg
 
 
 @pytest.mark.asyncio
-@patch("moonmind.rag.context_injection.ContextInjectionService")
 async def test_launch_enables_gateway_retrieval_capability_with_scoped_token(
-    mock_service_class,
     tmp_path,
     monkeypatch,
 ):
@@ -2088,8 +2072,6 @@ async def test_launch_enables_gateway_retrieval_capability_with_scoped_token(
     workspace = tmp_path / "workspace-gateway-token-env"
     workspace.mkdir()
 
-    mock_service = mock_service_class.return_value
-    mock_service.inject_context = AsyncMock()
 
     async def _fake_resolve(*args, **kwargs):
         return None
@@ -2149,10 +2131,10 @@ async def test_launch_enables_gateway_retrieval_capability_with_scoped_token(
         if isinstance(arg, str) and "Managed Codex CLI note:" in arg
     )
     assert "MoonMind retrieval capability:" in prompt_arg
-    # MoonLadderStudios/MoonMind#4112 retired the `moonmind rag search` CLI
-    # entry point, so the gateway-enabled note must not advertise it.
+    # MoonLadderStudios/MoonMind#4192 retired native retrieval: no retrieval
+    # command is advertised and no enabled capability is claimed.
     assert "moonmind rag search" not in prompt_arg
-    assert "currently unavailable" not in prompt_arg
+    assert "native_retrieval_retired" in prompt_arg
 
 @pytest.mark.asyncio
 async def test_launch_resets_stale_live_log_spool(tmp_path, monkeypatch):
@@ -4198,9 +4180,7 @@ async def test_launch_materializes_claude_oauth_home_profile_without_auth_volume
     assert all("/home/app/.claude" not in str(path) for path in cleanup_paths)
 
 @pytest.mark.asyncio
-@patch("moonmind.rag.context_injection.ContextInjectionService")
 async def test_launch_builds_claude_command_after_workspace_preparation(
-    mock_service_class,
     tmp_path,
     monkeypatch,
 ):
@@ -4212,13 +4192,6 @@ async def test_launch_builds_claude_command_after_workspace_preparation(
     workspace = tmp_path / "workspace"
     workspace.mkdir()
 
-    mock_service = mock_service_class.return_value
-
-    async def _inject_context(*, request, workspace_path):
-        assert workspace_path == workspace
-        request.instruction_ref = "Injected retrieval context"
-
-    mock_service.inject_context = AsyncMock(side_effect=_inject_context)
 
     async def _fake_resolve(*args, **kwargs):
         return None
@@ -4268,10 +4241,11 @@ async def test_launch_builds_claude_command_after_workspace_preparation(
     )
     await process.wait()
 
-    # RAG injection mutates request.instruction_ref; the launcher passes that
-    # to the Claude CLI via -p. CLAUDE.md is project context and must not be
-    # overwritten with the turn instruction.
-    assert any(arg == "Injected retrieval context" for arg in captured_args)
+    # MoonLadderStudios/MoonMind#4192: native RAG injection is retired.
+    # The launcher passes the authored instruction to the Claude CLI via -p
+    # unchanged. CLAUDE.md is project context and must not be overwritten
+    # with the turn instruction.
+    assert any("Original instruction" in str(arg) for arg in captured_args)
     assert not (workspace / "CLAUDE.md").exists()
 
 

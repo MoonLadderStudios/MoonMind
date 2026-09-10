@@ -49,7 +49,6 @@ present, are listed with their supported condition below.
 | `MoonMind.ControlStopContinuation` <a id="moonmindcontrolstopcontinuation"></a> | `moonmind.workflows.temporal.workflows.control_stop_continuation.MoonMindControlStopContinuationWorkflow` | `operator` | [lifecycle](#moonmindcontrolstopcontinuation) |
 | `MoonMind.ManagedRuntimeWorkspaceCleanup` <a id="moonmindmanagedruntimeworkspacecleanup"></a> | `moonmind.workflows.temporal.workflows.managed_runtime_workspace_cleanup.MoonMindManagedRuntimeWorkspaceCleanupWorkflow` | `excluded` | [lifecycle](#moonmindmanagedruntimeworkspacecleanup) |
 | `MoonMind.ManagedSessionReconcile` <a id="moonmindmanagedsessionreconcile"></a> | `moonmind.workflows.temporal.workflows.managed_session_reconcile.MoonMindManagedSessionReconcileWorkflow` | `excluded` | [lifecycle](WorkflowTypeCatalogAndLifecycle.md#116-moonmindmanagedsessionreconcile-lifecycle) |
-| `MoonMind.ManifestIngest` <a id="moonmindmanifestingest"></a> | `moonmind.workflows.temporal.workflows.manifest_ingest.MoonMindManifestIngestWorkflow` | `product` | [lifecycle](WorkflowTypeCatalogAndLifecycle.md#112-moonmindmanifestingest-lifecycle) |
 | `MoonMind.MergeAutomation` <a id="moonmindmergeautomation"></a> | `moonmind.workflows.temporal.workflows.merge_automation.MoonMindMergeAutomationWorkflow` | `operator` | [lifecycle](WorkflowTypeCatalogAndLifecycle.md#119-moonmindmergeautomation-lifecycle) |
 | `MoonMind.OAuthSession` <a id="moonmindoauthsession"></a> | `moonmind.workflows.temporal.workflows.oauth_session.MoonMindOAuthSessionWorkflow` | `operator` | [lifecycle](WorkflowTypeCatalogAndLifecycle.md#118-moonmindoauthsession-lifecycle) |
 | `MoonMind.OmnigentOAuthHostJanitor` <a id="moonmindomnigentoauthhostjanitor"></a> | `moonmind.workflows.temporal.workflows.omnigent_oauth_host_janitor.MoonMindOmnigentOAuthHostJanitorWorkflow` | `excluded` | [lifecycle](#moonmindomnigentoauthhostjanitor) |
@@ -58,12 +57,6 @@ present, are listed with their supported condition below.
 | `MoonMind.ProviderProfileManager` <a id="moonmindproviderprofilemanager"></a> | `moonmind.workflows.temporal.workflows.provider_profile_manager.MoonMindProviderProfileManagerWorkflow` | `operator` | [lifecycle](WorkflowTypeCatalogAndLifecycle.md#117-moonmindproviderprofilemanager-lifecycle) |
 | `MoonMind.PublicationRecoveryV1` <a id="moonmindpublicationrecoveryv1"></a> | `moonmind.workflows.temporal.workflows.publication_recovery.MoonMindPublicationRecoveryWorkflow` | `operator` | [lifecycle](#moonmindpublicationrecoveryv1) |
 | `MoonMind.UserWorkflow` <a id="moonminduserworkflow"></a> | `moonmind.workflows.temporal.workflows.run.MoonMindUserWorkflow` | `product` | [lifecycle](WorkflowTypeCatalogAndLifecycle.md#111-moonminduserworkflow-lifecycle) |
-
-`MoonMind.ManifestIngest` retains two entry contracts as inputs to the
-single registered type above: the current catalogued-Activity path and
-the historical `manifest_read` / `manifest_compile` commands kept for
-replay (`moonmind/workflows/temporal/workflows/manifest_ingest.py`).
-They are not duplicate catalog entries.
 
 ## Workflow task queues
 
@@ -178,8 +171,6 @@ with deterministic workflow code, not Temporal Local Activities.
 | `integration.omnigent.profile_bound_execute` | `agent_runtime` | `mm.activity.agent_runtime` |
 | `integration.openclaw.execute` | `integrations` | `mm.activity.integrations` |
 | `integration.resolve_adapter_metadata` | `workflow` | `mm.workflow.user.v2` |
-| `manifest.compile` | `artifacts` | `mm.activity.artifacts` |
-| `manifest.write_summary` | `artifacts` | `mm.activity.artifacts` |
 | `memory.apply_policy` | `integrations` | `mm.activity.integrations` |
 | `memory.evaluate_proposals` | `integrations` | `mm.activity.integrations` |
 | `merge_automation.complete_post_merge_github` | `integrations` | `mm.activity.integrations` |

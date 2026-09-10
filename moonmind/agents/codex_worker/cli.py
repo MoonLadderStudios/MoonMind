@@ -32,8 +32,6 @@ from moonmind.jules.runtime import JULES_RUNTIME_DISABLED_MESSAGE
 from moonmind.jules.runtime import (
     build_runtime_gate_state as build_jules_runtime_gate_state,
 )
-from moonmind.rag.guardrails import GuardrailError, ensure_rag_ready
-from moonmind.rag.settings import RagRuntimeSettings
 
 logger = logging.getLogger(__name__)
 
@@ -214,25 +212,6 @@ def _run_checked_command(
         )
     )
 
-def _validate_embedding_profile(env: Mapping[str, str]) -> None:
-    """Enforce embedding prerequisites for runtime profiles that use Google."""
-
-    provider = str(env.get("DEFAULT_EMBEDDING_PROVIDER", "google")).strip().lower()
-    if provider != "google":
-        return
-
-    google_key = str(env.get("GOOGLE_API_KEY", "")).strip()
-    gemini_key = str(env.get("GEMINI_API_KEY", "")).strip()
-    if google_key or gemini_key:
-        return
-
-    model = str(env.get("GOOGLE_EMBEDDING_MODEL", "gemini-embedding-2-preview")).strip()
-    raise RuntimeError(
-        "Google embedding profile is configured "
-        f"(provider=google, model={model or 'unknown'}) but GOOGLE_API_KEY "
-        "or GEMINI_API_KEY is missing."
-    )
-
 def _verify_codex_search_cli(source: Mapping[str, str]) -> str:
     """Validate ripgrep availability for Codex-first repository search defaults."""
 
@@ -332,11 +311,6 @@ def run_preflight(env: Mapping[str, str] | None = None) -> None:
     if "codex" in capabilities:
         resolved_paths["rg"] = _verify_codex_search_cli(source)
 
-    _validate_embedding_profile(source)
-    try:
-        ensure_rag_ready(RagRuntimeSettings.from_env(source))
-    except GuardrailError as exc:
-        raise RuntimeError(str(exc)) from exc
     github_token = str(source.get("GITHUB_TOKEN", "")).strip()
     redaction_values = (github_token,) if github_token else ()
 

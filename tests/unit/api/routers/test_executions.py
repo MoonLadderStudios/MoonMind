@@ -15528,8 +15528,8 @@ def test_list_executions_reads_progress_from_persisted_finish_summary() -> None:
         assert progress["currentStepTitle"] == "Verify compact response"
 
 
-def test_describe_manifest_execution_exposes_bounded_manifest_fields() -> None:
-    """Manifest ingest detail should expose refs, policy, and bounded counts."""
+def test_describe_historical_manifest_execution_exposes_lineage_refs_only() -> None:
+    """Historical ingest detail exposes lineage refs, not retired policy/counts."""
 
     for test_client, service in _client_with_service():
         service.describe_execution.return_value = _build_execution_record(
@@ -15543,9 +15543,9 @@ def test_describe_manifest_execution_exposes_bounded_manifest_fields() -> None:
         assert payload["workflowType"] == "MoonMind.ManifestIngest"
         assert payload["manifestArtifactRef"] == "art_manifest_1"
         assert payload["planArtifactRef"] == "art_plan_1"
-        assert payload["executionPolicy"]["maxConcurrency"] == 3
-        assert payload["counts"]["ready"] == 1
-        assert payload["counts"]["running"] == 1
+        assert "executionPolicy" not in payload
+        assert "counts" not in payload
+        assert "requestedBy" not in payload
 
 def test_describe_execution_enriches_dependency_summaries_without_dunder_dict() -> None:
     for test_client, service in _client_with_service():
@@ -15603,18 +15603,19 @@ def test_describe_execution_enriches_dependency_summaries_without_dunder_dict() 
             }
         ]
 
-def test_manifest_update_route_passes_manifest_specific_fields() -> None:
-    """Manifest-specific update requests should be forwarded unchanged to the service."""
+def test_retired_manifest_update_is_rejected_actionably() -> None:
+    """Retired manifest-only updates surface the service rejection as 422."""
+
+    from moonmind.workflows.temporal.service import TemporalExecutionValidationError
 
     for test_client, service in _client_with_service():
         service.describe_execution.return_value = _build_execution_record(
             workflow_type=TemporalWorkflowType.MANIFEST_INGEST
         )
-        service.update_execution.return_value = {
-            "accepted": True,
-            "applied": "next_safe_point",
-            "message": "Manifest update accepted and will be applied at the next safe point.",
-        }
+        service.update_execution.side_effect = TemporalExecutionValidationError(
+            "Update UpdateManifest was retired with MoonMind.ManifestIngest "
+            "(MoonLadderStudios/MoonMind#4192) and is no longer supported."
+        )
 
         response = test_client.post(
             "/api/executions/mm:wf-1/update",
@@ -15622,75 +15623,33 @@ def test_manifest_update_route_passes_manifest_specific_fields() -> None:
                 "updateName": "UpdateManifest",
                 "newManifestArtifactRef": "art_manifest_2",
                 "mode": "REPLACE_FUTURE",
+                "maxConcurrency": 3,
+                "nodeIds": ["node-a"],
                 "idempotencyKey": "manifest-update-1",
             },
         )
 
-        assert response.status_code == 200
-        called = service.update_execution.await_args.kwargs
-        assert called["update_name"] == "UpdateManifest"
-        assert called["new_manifest_artifact_ref"] == "art_manifest_2"
-        assert called["mode"] == "REPLACE_FUTURE"
+        assert response.status_code == 422
+        assert response.json()["detail"]["code"] == "invalid_update_request"
 
-def test_manifest_status_route_returns_bounded_snapshot() -> None:
-    """Manifest status route should return the service snapshot unchanged."""
-
+def test_retired_manifest_status_route_is_gone() -> None:
+    # MoonLadderStudios/MoonMind#4192: the manifest-status endpoint is
+    # removed with the ManifestIngest product.
     for test_client, service in _client_with_service():
-        service.describe_execution.return_value = _build_execution_record(
-            workflow_type=TemporalWorkflowType.MANIFEST_INGEST
-        )
-        service.describe_manifest_status.return_value = {
-            "workflowId": "mm:wf-1",
-            "state": "executing",
-            "phase": "executing",
-            "paused": False,
-            "maxConcurrency": 3,
-            "failurePolicy": "best_effort",
-            "counts": {
-                "pending": 0,
-                "ready": 1,
-                "running": 1,
-                "completed": 0,
-                "failed": 0,
-                "canceled": 0,
-            },
-        }
-
         response = test_client.get("/api/executions/mm:wf-1/manifest-status")
 
-        assert response.status_code == 200
-        assert response.json()["counts"]["running"] == 1
+        assert response.status_code in {404, 405}
 
-def test_manifest_nodes_route_returns_page_payload() -> None:
-    """Manifest node page route should preserve cursor and count fields."""
-
+def test_retired_manifest_nodes_route_is_gone() -> None:
+    # MoonLadderStudios/MoonMind#4192: the manifest-nodes endpoint is
+    # removed with the ManifestIngest product.
     for test_client, service in _client_with_service():
-        service.describe_execution.return_value = _build_execution_record(
-            workflow_type=TemporalWorkflowType.MANIFEST_INGEST
-        )
-        service.list_manifest_nodes.return_value = {
-            "items": [
-                {
-                    "nodeId": "node-b",
-                    "state": "running",
-                    "workflowType": "MoonMind.UserWorkflow",
-                }
-            ],
-            "nextCursor": "cursor-1",
-            "count": 1,
-        }
-
         response = test_client.get(
             "/api/executions/mm:wf-1/manifest-nodes",
             params={"state": "running", "limit": 25},
         )
 
-        assert response.status_code == 200
-        body = response.json()
-        assert body["count"] == 1
-        assert body["nextCursor"] == "cursor-1"
-        assert body["items"][0]["nodeId"] == "node-b"
-        assert body["items"][0]["workflowType"] == "MoonMind.UserWorkflow"
+        assert response.status_code in {404, 405}
 
 def test_describe_execution_includes_actions_and_debug_fields(
     monkeypatch: pytest.MonkeyPatch,

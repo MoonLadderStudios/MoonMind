@@ -315,38 +315,6 @@ class UserProfile(Base):
     user = relationship("User", back_populates="user_profile")
 
 
-class ManifestRecord(Base):
-    __tablename__ = "manifest"
-
-    id = Column(Integer, primary_key=True, index=True)
-    name = Column(String(255), unique=True, nullable=False)
-    content = Column(Text, nullable=False)
-    content_hash = Column(String(80), nullable=False)
-    version = Column(String(32), nullable=False, default="v0", server_default="v0")
-    created_at = Column(
-        DateTime(timezone=True),
-        nullable=False,
-        server_default=func.now(),
-    )
-    updated_at = Column(
-        DateTime(timezone=True),
-        nullable=False,
-        server_default=func.now(),
-        onupdate=func.now(),
-    )
-    last_indexed_at = Column(DateTime(timezone=True), nullable=True)
-    last_run_job_id = Column(Uuid, nullable=True)
-    last_run_source = Column(String(16), nullable=True)
-    last_run_status = Column(String(32), nullable=True)
-    last_run_workflow_id = Column(String(64), nullable=True)
-    last_run_temporal_run_id = Column(String(64), nullable=True)
-    last_run_manifest_ref = Column(String(512), nullable=True)
-    last_run_started_at = Column(DateTime(timezone=True), nullable=True)
-    last_run_finished_at = Column(DateTime(timezone=True), nullable=True)
-    state_json = Column(mutable_json_dict(), nullable=True)
-    state_updated_at = Column(DateTime(timezone=True), nullable=True)
-
-
 class RecurringWorkflowScheduleType(str, enum.Enum):
     """Supported recurring definition schedule kinds."""
 
@@ -1664,7 +1632,6 @@ __all__ = [
     "Base",
     "User",
     "UserProfile",
-    "ManifestRecord",
     "RecurringWorkflowDefinition",
     "RecurringWorkflowRun",
     "RecurringWorkflowRunOutcome",

@@ -25,7 +25,6 @@ from moonmind.workflows.temporal import (
     TemporalArtifactRepository,
     TemporalArtifactService,
     TemporalIntegrationActivities,
-    TemporalManifestActivities,
     TemporalPlanActivities,
     TemporalSandboxActivities,
     TemporalSkillActivities,
@@ -126,9 +125,6 @@ async def test_activity_worker_topology_routes_one_activity_per_family(
                     fleet=ARTIFACTS_FLEET,
                     catalog=catalog,
                     artifact_activities=TemporalArtifactActivities(service),
-                    manifest_activities=TemporalManifestActivities(
-                        artifact_service=service,
-                    ),
                     plan_activities=TemporalPlanActivities(
                         artifact_service=service,
                         planner=_planner,

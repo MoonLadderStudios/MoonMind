@@ -72,7 +72,7 @@ The following workflow types constitute the live Temporal application layer at t
 | Workflow type | Purpose |
 | --- | --- |
 | `MoonMind.UserWorkflow` | General root execution workflow for plan-driven orchestration |
-| `MoonMind.ManifestIngest` | Fan-out/fan-in manifest ingestion |
+| `MoonMind.MergeAutomation` | Merge automation workflow |
 | `MoonMind.AgentRun` | Durable lifecycle wrapper for true agent execution (managed and external) |
 | `MoonMind.AgentSession` | Workflow-scoped managed-session workflow, currently Codex-backed |
 | `MoonMind.ManagedSessionReconcile` | Bounded support workflow for managed-session reconciliation and cleanup |
@@ -352,6 +352,6 @@ The Temporal Platform Foundation is "done" when:
 5. Worker fleets are polling their configured workflow and activity task queues directly.
 6. Shard count decision recorded and signed off; if 1 shard is chosen, the migration implications are acknowledged.
 7. SQL visibility schema upgrade path rehearsed in pre-rollout validation.
-8. Core workflow catalog (`MoonMind.UserWorkflow`, `MoonMind.AgentRun`, `MoonMind.AgentSession`, `MoonMind.ManagedSessionReconcile`, `MoonMind.ManifestIngest`, `MoonMind.ProviderProfileManager`, `MoonMind.OAuthSession`) registered and schedulable.
+8. Core workflow catalog (`MoonMind.UserWorkflow`, `MoonMind.AgentRun`, `MoonMind.AgentSession`, `MoonMind.ManagedSessionReconcile`, `MoonMind.MergeAutomation`, `MoonMind.ProviderProfileManager`, `MoonMind.OAuthSession`) registered and schedulable. (`MoonMind.ManifestIngest` retired by MoonLadderStudios/MoonMind#4192: old rows readable as replay/drain evidence only.)
 9. Canonical Search Attributes (`mm_owner_type`, `mm_owner_id`, `mm_state`, `mm_updated_at`, `mm_entry`) registered and verified in Visibility queries.
 10. Provider-profile coordination workflows running for managed runtimes that require them.

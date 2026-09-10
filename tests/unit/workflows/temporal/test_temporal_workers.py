@@ -41,7 +41,6 @@ from moonmind.workflows.temporal.activity_runtime import (
     TemporalActivityRuntimeError,
 )
 from moonmind.workflows.temporal.activity_runtime import TemporalAgentRuntimeActivities
-from moonmind.workflows.temporal.activity_runtime import TemporalManifestActivities
 from moonmind.workflows.temporal.publish_auto_evidence import parse_auto_publish_evidence
 from moonmind.workflows.agent_skills.agent_skills_activities import AgentSkillsActivities
 from moonmind.workflows.temporal.workers import (
@@ -125,11 +124,13 @@ def test_workflow_worker_startup_rejects_unroutable_activity_handler(
         build_worker_topology(fleet=WORKFLOW_FLEET)
 
 
-def test_registered_workflow_types_include_manifest_ingest():
+def test_registered_workflow_types_exclude_retired_manifest_ingest():
+    # MoonLadderStudios/MoonMind#4192: the native ManifestIngest product is
+    # removed; the new release never registers that type.
+    assert "MoonMind.ManifestIngest" not in list_registered_workflow_types()
     assert list_registered_workflow_types() == (
         "MoonMind.UserWorkflow",
         "MoonMind.ContainerJob",
-        "MoonMind.ManifestIngest",
         "MoonMind.ControlStopContinuation",
         "MoonMind.ProviderProfileManager",
         "MoonMind.AgentSession",
@@ -375,9 +376,6 @@ def test_build_worker_activity_bindings_only_registers_selected_fleet(tmp_path: 
                 fleet=ARTIFACTS_FLEET,
                 catalog=catalog,
                 artifact_activities=TemporalArtifactActivities(service),
-                manifest_activities=TemporalManifestActivities(
-                    artifact_service=service,
-                ),
                 plan_activities=TemporalPlanActivities(artifact_service=service),
                 skill_activities=TemporalSkillActivities(
                     dispatcher=SkillActivityDispatcher()
@@ -398,8 +396,8 @@ def test_build_worker_activity_bindings_only_registers_selected_fleet(tmp_path: 
             assert "oauth_session.mark_failed" in activity_types
             assert "oauth_session.cleanup_stale" in activity_types
             assert "oauth_session.start_auth_runner" not in activity_types
-            assert "manifest.compile" in activity_types
-            assert "manifest.write_summary" in activity_types
+            assert "manifest.compile" not in activity_types
+            assert "manifest.write_summary" not in activity_types
             assert {binding.task_queue for binding in bindings} == {
                 settings.temporal.activity_artifacts_task_queue
             }

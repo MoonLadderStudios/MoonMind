@@ -39,9 +39,15 @@ from moonmind.statuses.step_ledger import (
 )
 from moonmind.statuses.temporal_status import TemporalStatusValue
 
+# MoonLadderStudios/MoonMind#4192: the native ManifestIngest product is
+# retired. MoonMind.ManifestIngest is intentionally absent from the live
+# advertised catalog: new launches are rejected actionably below and in
+# TemporalExecutionService.create_execution. The TemporalWorkflowType enum
+# member and "manifest" entry mapping are retained read-only so old-release
+# rows stay readable as replay/drain evidence (see
+# docs/tmp/QdrantCutoverRunbook-4115.md); they are not supported for new work.
 SUPPORTED_WORKFLOW_TYPES = (
     "MoonMind.UserWorkflow",
-    "MoonMind.ManifestIngest",
     "MoonMind.MergeAutomation",
 )
 SUPPORTED_FAILURE_POLICIES = (
@@ -53,12 +59,8 @@ SUPPORTED_UPDATE_NAMES = (
     "UpdateInputs",
     "SetTitle",
     "RequestRerun",
-    "UpdateManifest",
-    "SetConcurrency",
     "Pause",
     "Resume",
-    "CancelNodes",
-    "RetryNodes",
     "Cancel",
     "Approve",
 )
@@ -2392,12 +2394,6 @@ class DependencyResolvedSignalPayload(BaseModel):
     failure_category: str | None = Field(None, alias="failureCategory")
     message: str | None = Field(None, alias="message")
 
-from moonmind.schemas.manifest_ingest_models import (
-    ManifestExecutionPolicyModel,
-    ManifestNodeCountsModel,
-    RequestedByModel,
-)
-
 NormalizedIntegrationStatus = Literal[
     "queued",
     "running",
@@ -2604,13 +2600,17 @@ class CreateExecutionRequest(BaseModel):
 
     @model_validator(mode="after")
     def _validate_required_fields(self) -> "CreateExecutionRequest":
-        if (
-            self.workflow_type == "MoonMind.ManifestIngest"
-            and not self.manifest_artifact_ref
-        ):
+        # MoonLadderStudios/MoonMind#4192: the native ManifestIngest product
+        # is retired. The workflow type is rejected actionably here (and
+        # again in TemporalExecutionService.create_execution) instead of
+        # requiring a manifestArtifactRef. The optional manifest_artifact_ref
+        # field is retained for backward-compatible parsing of old payloads
+        # only; it is ignored for new launches.
+        if self.workflow_type == "MoonMind.ManifestIngest":
             raise ValueError(
-                "manifestArtifactRef is required when workflowType is "
-                "MoonMind.ManifestIngest"
+                "MoonMind.ManifestIngest was retired "
+                "(MoonLadderStudios/MoonMind#4192): the new release does not "
+                "register or launch manifest ingest workflows."
             )
         if (
             self.workflow_type == "MoonMind.UserWorkflow"
@@ -2637,12 +2637,6 @@ class UpdateExecutionRequest(BaseModel):
     plan_artifact_ref: Optional[str] = Field(None, alias="planArtifactRef")
     parameters_patch: Optional[dict[str, Any]] = Field(None, alias="parametersPatch")
     title: Optional[str] = Field(None, alias="title")
-    new_manifest_artifact_ref: Optional[str] = Field(
-        None, alias="newManifestArtifactRef"
-    )
-    mode: Optional[Literal["REPLACE_FUTURE", "APPEND"]] = Field(None, alias="mode")
-    max_concurrency: Optional[int] = Field(None, alias="maxConcurrency")
-    node_ids: list[str] = Field(default_factory=list, alias="nodeIds")
     idempotency_key: Optional[str] = Field(None, alias="idempotencyKey")
 
 class RecoverFromFailedStepRequest(BaseModel):
@@ -4182,14 +4176,8 @@ class ExecutionModel(BaseModel):
     summary_artifact_ref: Optional[str] = Field(None, alias="summaryArtifactRef")
     run_index_artifact_ref: Optional[str] = Field(None, alias="runIndexArtifactRef")
     checkpoint_artifact_ref: Optional[str] = Field(None, alias="checkpointArtifactRef")
-    requested_by: Optional[RequestedByModel] = Field(None, alias="requestedBy")
-    execution_policy: Optional[ManifestExecutionPolicyModel] = Field(
-        None,
-        alias="executionPolicy",
-    )
     phase: Optional[str] = Field(None, alias="phase")
     paused: Optional[bool] = Field(None, alias="paused")
-    counts: Optional[ManifestNodeCountsModel] = Field(None, alias="counts")
     artifacts_count: int = Field(0, alias="artifactsCount")
     scheduled_for: Optional[datetime] = Field(None, alias="scheduledFor")
     created_at: datetime = Field(..., alias="createdAt")

@@ -197,11 +197,6 @@ class TemporalSettings(BaseSettings):
         validation_alias="TEMPORAL_RUN_CONTINUE_AS_NEW_WAIT_CYCLE_THRESHOLD",
         ge=1,
     )
-    manifest_continue_as_new_phase_threshold: int = Field(
-        5,
-        validation_alias="TEMPORAL_MANIFEST_CONTINUE_AS_NEW_PHASE_THRESHOLD",
-        ge=1,
-    )
     model_config = SettingsConfigDict(
         populate_by_name=True,
         env_prefix="",
@@ -623,19 +618,6 @@ class WorkflowSettings(BaseSettings):
             " as stale-running to operators."
         ),
         ge=60,
-    )
-    allow_manifest_path_source: bool = Field(
-        False,
-        alias="MOONMIND_ALLOW_MANIFEST_PATH_SOURCE",
-        description="Allow manifest.source.kind='path' submissions (intended for dev/test images).",
-    )
-    manifest_required_capabilities: tuple[str, ...] = Field(
-        ("manifest",),
-        validation_alias=AliasChoices(
-            "WORKFLOW_MANIFEST_REQUIRED_CAPABILITIES",
-            "WORKFLOW_MANIFEST_REQUIRED_CAPABILITIES",
-        ),
-        description="Comma-delimited list of base capability labels applied to manifest jobs.",
     )
     job_image: str = Field(
         "ghcr.io/moonladderstudios/moonmind:latest",
@@ -1081,30 +1063,6 @@ class WorkflowSettings(BaseSettings):
         extra="ignore",
     )
 
-    @field_validator("manifest_required_capabilities", mode="before")
-    @classmethod
-    def _split_manifest_capabilities(
-        cls, value: Optional[str | Sequence[str]]
-    ) -> tuple[str, ...] | None:
-        """Allow comma-delimited strings for manifest capability flags."""
-
-        if value is None:
-            return None
-
-        if isinstance(value, str):
-            raw_items: Sequence[object] = value.split(",")
-        elif isinstance(value, Sequence) and not isinstance(
-            value, (bytes, bytearray, str)
-        ):
-            raw_items = value
-        else:
-            return value
-
-        tokens = [str(item).strip() for item in raw_items if str(item).strip()]
-        if not tokens:
-            return ()
-        return tuple(dict.fromkeys(tokens))
-
     @field_validator("temporal_artifact_backend", mode="before")
     @classmethod
     def _normalize_temporal_artifact_backend(cls, value: object) -> str:
@@ -1390,8 +1348,6 @@ class SecuritySettings(BaseSettings):
 
 
 
-DEFAULT_GOOGLE_EMBEDDING_DIMENSIONS: int = 3072
-
 class GoogleSettings(BaseSettings):
     """Google/Gemini API settings"""
 
@@ -1402,15 +1358,7 @@ class GoogleSettings(BaseSettings):
         ),
     )
     google_chat_model: str = Field("gemini-3.1-pro", alias="GOOGLE_CHAT_MODEL")
-    google_embedding_model: str = Field(
-        "gemini-embedding-2-preview", alias="GOOGLE_EMBEDDING_MODEL"
-    )
-    google_embedding_dimensions: int = Field(
-        DEFAULT_GOOGLE_EMBEDDING_DIMENSIONS, alias="GOOGLE_EMBEDDING_DIMENSIONS"
-    )
     google_enabled: bool = Field(True, alias="GOOGLE_ENABLED")
-    google_embed_batch_size: int = Field(100, alias="GOOGLE_EMBED_BATCH_SIZE")
-    # google_application_credentials has been moved to GoogleDriveSettings as per requirements
 
     model_config = SettingsConfigDict(populate_by_name=True, env_prefix="")
 
@@ -1447,24 +1395,11 @@ class GitHubSettings(BaseSettings):
 
     model_config = SettingsConfigDict(populate_by_name=True, env_prefix="")
 
-class GoogleDriveSettings(BaseSettings):
-    """Google credentials available to manifest reader adapters."""
-
-    google_application_credentials: Optional[str] = Field(
-        None, alias="GOOGLE_APPLICATION_CREDENTIALS"
-    )
-
-    model_config = SettingsConfigDict(populate_by_name=True, env_prefix="")
-
 class OpenAISettings(BaseSettings):
     """OpenAI API settings"""
 
     openai_api_key: Optional[str] = Field(None, alias="OPENAI_API_KEY")
     openai_chat_model: str = Field("gpt-3.5-turbo", alias="OPENAI_CHAT_MODEL")
-    openai_embedding_model: str = Field(
-        "text-embedding-3-small", alias="OPENAI_EMBEDDING_MODEL"
-    )
-    openai_embedding_dimensions: int = Field(1536, alias="OPENAI_EMBEDDING_DIMENSIONS")
     openai_enabled: bool = Field(True, alias="OPENAI_ENABLED")
 
     model_config = SettingsConfigDict(populate_by_name=True, env_prefix="")
@@ -1675,30 +1610,6 @@ class AtlassianSettings(BaseSettings):
             self.jira.jira_require_explicit_transition_lookup = (
                 jira_transition_env.lower() == "true"
             )
-
-class QdrantSettings(BaseSettings):
-    """Retired native Qdrant settings (MoonLadderStudios/MoonMind#4115).
-
-    The vector-free release ships no live native Qdrant backend. These
-    fields remain only so sanitized old ``.env`` files (QDRANT_*) and
-    persisted historical payloads still parse; new deployments must not
-    enable them and no new code path may consult them to reach Qdrant.
-    """
-
-    qdrant_host: str = Field("qdrant", alias="QDRANT_HOST")
-    qdrant_port: int = Field(6333, alias="QDRANT_PORT")
-    qdrant_api_key: Optional[str] = Field(None, alias="QDRANT_API_KEY")
-    qdrant_enabled: bool = Field(False, alias="QDRANT_ENABLED")
-    model_config = SettingsConfigDict(populate_by_name=True, env_prefix="")
-
-class RAGSettings(BaseSettings):
-    """RAG (Retrieval-Augmented Generation) settings"""
-
-    rag_enabled: bool = Field(True, alias="RAG_ENABLED")
-    similarity_top_k: int = Field(5, alias="RAG_SIMILARITY_TOP_K")
-    max_context_length_chars: int = Field(8000, alias="RAG_MAX_CONTEXT_LENGTH_CHARS")
-
-    model_config = SettingsConfigDict(populate_by_name=True, env_prefix="")
 
 class MemorySettings(BaseSettings):
     """Runtime controls for memory and procedural-learning surfaces."""
@@ -2443,9 +2354,6 @@ class AppSettings(BaseSettings):
     openai: OpenAISettings = Field(default_factory=OpenAISettings)
     anthropic: AnthropicSettings = Field(default_factory=AnthropicSettings)
     github: GitHubSettings = Field(default_factory=GitHubSettings)
-    google_drive: GoogleDriveSettings = Field(default_factory=GoogleDriveSettings)
-    qdrant: QdrantSettings = Field(default_factory=QdrantSettings)
-    rag: RAGSettings = Field(default_factory=RAGSettings)
     memory: MemorySettings = Field(default_factory=MemorySettings)
     atlassian: AtlassianSettings = Field(default_factory=AtlassianSettings)
     oidc: OIDCSettings = Field(default_factory=OIDCSettings)
@@ -2598,9 +2506,6 @@ class AppSettings(BaseSettings):
 
     # Default providers and models
     default_chat_provider: str = Field("google", alias="DEFAULT_CHAT_PROVIDER")
-    default_embedding_provider: str = Field(
-        "google", alias="DEFAULT_EMBEDDING_PROVIDER"
-    )
 
     # Model cache settings
     model_cache_refresh_interval: int = Field(
@@ -2609,15 +2514,6 @@ class AppSettings(BaseSettings):
     model_cache_refresh_interval_seconds: int = Field(
         3600, alias="MODEL_CACHE_REFRESH_INTERVAL_SECONDS"
     )
-    vector_store_provider: str = Field(
-        "none", alias="VECTOR_STORE_PROVIDER"
-    )  # Retired native vector backend (#4115): vector-free default.
-
-    # Vector store settings
-    vector_store_collection_name: str = Field(
-        "moonmind", alias="VECTOR_STORE_COLLECTION_NAME"
-    )
-
     # Other settings
     fastapi_reload: bool = Field(False, alias="FASTAPI_RELOAD")
     fernet_key: Optional[str] = Field(None, alias="FERNET_KEY")

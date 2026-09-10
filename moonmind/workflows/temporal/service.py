@@ -55,10 +55,6 @@ from moonmind.statuses.compat import (
     canonicalize_workflow_state_alias,
     normalize_no_commit_finish_summary,
 )
-from moonmind.schemas.manifest_ingest_models import (
-    ManifestNodePageModel,
-    ManifestStatusSnapshotModel,
-)
 from moonmind.schemas.temporal_models import (
     SUPPORTED_FAILURE_POLICIES,
     SUPPORTED_SIGNAL_NAMES,
@@ -100,13 +96,13 @@ from moonmind.workflows.executions.repository_contract import (
 from moonmind.workflows.temporal.hard_switch_cutover import (
     resolve_user_workflow_start_contract,
 )
-from moonmind.workflows.temporal.manifest_ingest import (
-    MANIFEST_UPDATE_NAMES,
-    ManifestIngestValidationError,
-    apply_manifest_update,
-    build_manifest_status_snapshot,
-    initialize_manifest_projection,
-    list_manifest_nodes,
+# MoonLadderStudios/MoonMind#4192: the native ManifestIngest product is
+# retired. Manifest-only update names below are rejected actionably in
+# send_update; the new release never registers or launches ManifestIngest
+# workflows. Old-release replay/drain evidence may retain the historical
+# strings (see docs/tmp/QdrantCutoverRunbook-4115.md).
+RETIRED_MANIFEST_UPDATE_NAMES: frozenset[str] = frozenset(
+    {"UpdateManifest", "SetConcurrency", "CancelNodes", "RetryNodes"}
 )
 from moonmind.workflows.temporal.runtime.managed_session_store import (
     ManagedSessionStore,
@@ -551,7 +547,6 @@ class TemporalExecutionService:
         integration_poll_jitter_ratio: float = 0.2,
         run_continue_as_new_step_threshold: int = 500,
         run_continue_as_new_wait_cycle_threshold: int = 200,
-        manifest_continue_as_new_phase_threshold: int = 5,
     ) -> None:
         self._session = session
         self._namespace = namespace
@@ -571,9 +566,6 @@ class TemporalExecutionService:
         self._run_continue_as_new_step_threshold = run_continue_as_new_step_threshold
         self._run_continue_as_new_wait_cycle_threshold = (
             run_continue_as_new_wait_cycle_threshold
-        )
-        self._manifest_continue_as_new_phase_threshold = (
-            manifest_continue_as_new_phase_threshold
         )
         self._client_adapter = client_adapter or TemporalClientAdapter()
 
@@ -2046,10 +2038,11 @@ class TemporalExecutionService:
         )
 
         if workflow_type_enum is TemporalWorkflowType.MANIFEST_INGEST:
-            if not manifest_artifact_ref:
-                raise TemporalExecutionValidationError(
-                    "manifestArtifactRef is required for MoonMind.ManifestIngest"
-                )
+            raise TemporalExecutionValidationError(
+                "MoonMind.ManifestIngest was retired "
+                "(MoonLadderStudios/MoonMind#4192): the new release does not "
+                "register or launch manifest ingest workflows."
+            )
         if workflow_type_enum is TemporalWorkflowType.USER_WORKFLOW:
             if not has_user_workflow_plan_source(
                 initial_parameters=initial_parameters,
@@ -2290,8 +2283,6 @@ class TemporalExecutionService:
             )
         if remediation_link is not None:
             self._session.add(remediation_link)
-        if workflow_type_enum is TemporalWorkflowType.MANIFEST_INGEST:
-            initialize_manifest_projection(record)
         try:
             await self._session.commit()
         except IntegrityError as exc:
@@ -2332,13 +2323,6 @@ class TemporalExecutionService:
                 }
                 if scheduled_for is not None:
                     input_args["scheduled_for"] = scheduled_for.isoformat()
-            elif workflow_type_enum is TemporalWorkflowType.MANIFEST_INGEST:
-                input_args = {
-                    "workflow_type": "MoonMind.ManifestIngest",
-                    "manifest_ref": manifest_artifact_ref,
-                    "action": params.get("action", "run"),
-                    "options": params.get("options", {}),
-                }
 
             start_result = await self._client_adapter.start_workflow(
                 workflow_type=(
@@ -2741,28 +2725,20 @@ class TemporalExecutionService:
         plan_artifact_ref: str | None = None,
         parameters_patch: dict[str, Any] | None = None,
         title: str | None = None,
-        new_manifest_artifact_ref: str | None = None,
-        mode: str | None = None,
-        max_concurrency: int | None = None,
-        node_ids: list[str] | None = None,
         idempotency_key: str | None = None,
     ) -> dict[str, Any]:
+        if update_name in RETIRED_MANIFEST_UPDATE_NAMES:
+            raise TemporalExecutionValidationError(
+                f"Update {update_name} was retired with MoonMind.ManifestIngest "
+                "(MoonLadderStudios/MoonMind#4192) and is no longer supported."
+            )
+
         if update_name not in ALLOWED_UPDATE_NAMES:
             raise TemporalExecutionValidationError(
                 f"Unsupported update name: {update_name}"
             )
 
         record = await self._require_source_execution(workflow_id)
-
-        if (
-            update_name in MANIFEST_UPDATE_NAMES
-            and update_name not in {"Pause", "Resume"}
-            and record.workflow_type is not TemporalWorkflowType.MANIFEST_INGEST
-        ):
-            raise TemporalExecutionValidationError(
-                f"Update {update_name} is only supported for "
-                "MoonMind.ManifestIngest workflows"
-            )
 
         if (
             record.workflow_type is TemporalWorkflowType.USER_WORKFLOW
@@ -2824,10 +2800,6 @@ class TemporalExecutionService:
                 "plan_artifact_ref": plan_artifact_ref,
                 "parameters_patch": parameters_patch,
                 "title": title,
-                "new_manifest_artifact_ref": new_manifest_artifact_ref,
-                "mode": mode,
-                "max_concurrency": max_concurrency,
-                "node_ids": node_ids,
                 "idempotency_key": idempotency_key,
             }
             update_arg = {k: v for k, v in update_arg.items() if v is not None}
@@ -2863,24 +2835,7 @@ class TemporalExecutionService:
                         f"Temporal update failed: {exc}"
                     ) from exc
 
-        if record.workflow_type is TemporalWorkflowType.MANIFEST_INGEST and (
-            update_name in MANIFEST_UPDATE_NAMES
-        ):
-            try:
-                response = apply_manifest_update(
-                    record,
-                    update_name=update_name,
-                    new_manifest_artifact_ref=new_manifest_artifact_ref,
-                    mode=mode,
-                    max_concurrency=max_concurrency,
-                    node_ids=node_ids,
-                )
-            except ManifestIngestValidationError as exc:
-                raise TemporalExecutionValidationError(str(exc)) from exc
-            self._touch(record)
-            if response.get("message"):
-                self._update_summary(record, str(response["message"]))
-        elif update_name == "UpdateInputs":
+        if update_name == "UpdateInputs":
             response = self._apply_update_inputs(
                 record,
                 input_artifact_ref=input_artifact_ref,
@@ -2981,35 +2936,6 @@ class TemporalExecutionService:
         return any(
             pattern in message for pattern in _TERMINAL_WORKFLOW_UPDATE_ERROR_PATTERNS
         )
-
-    async def describe_manifest_status(
-        self,
-        workflow_id: str,
-    ) -> ManifestStatusSnapshotModel:
-        record = await self.describe_execution(workflow_id)
-        try:
-            return build_manifest_status_snapshot(record)
-        except ManifestIngestValidationError as exc:
-            raise TemporalExecutionValidationError(str(exc)) from exc
-
-    async def list_manifest_nodes(
-        self,
-        workflow_id: str,
-        *,
-        state: str | None,
-        cursor: str | None,
-        limit: int,
-    ) -> ManifestNodePageModel:
-        record = await self.describe_execution(workflow_id)
-        try:
-            return list_manifest_nodes(
-                record,
-                state=state,
-                cursor=cursor,
-                limit=limit,
-            )
-        except ManifestIngestValidationError as exc:
-            raise TemporalExecutionValidationError(str(exc)) from exc
 
     async def signal_execution(
         self,
@@ -5839,8 +5765,6 @@ class TemporalExecutionService:
         )
 
     def _default_title_for_type(self, workflow_type: TemporalWorkflowType) -> str:
-        if workflow_type is TemporalWorkflowType.MANIFEST_INGEST:
-            return "Manifest Ingest"
         return "Run"
 
     async def _find_by_create_idempotency(
@@ -6038,11 +5962,6 @@ class TemporalExecutionService:
                 int(record.step_count or 0) >= self._run_continue_as_new_step_threshold
                 or int(record.wait_cycle_count or 0)
                 >= self._run_continue_as_new_wait_cycle_threshold
-            )
-        if record.workflow_type is TemporalWorkflowType.MANIFEST_INGEST:
-            return (
-                int(record.wait_cycle_count or 0)
-                >= self._manifest_continue_as_new_phase_threshold
             )
         return False
 

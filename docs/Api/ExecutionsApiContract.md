@@ -108,7 +108,12 @@ Static child-policy/handoff incompatibility is checked before parent effects whe
 
 ## 7. Workflow Catalog and Lifecycle
 
-Supported root workflow types are `MoonMind.UserWorkflow` and `MoonMind.ManifestIngest` until explicitly extended.
+Supported root workflow types are `MoonMind.UserWorkflow` and `MoonMind.MergeAutomation` until explicitly extended.
+
+> **Retirement note (MoonLadderStudios/MoonMind#4192):** the native
+> `MoonMind.ManifestIngest` product is retired. It is absent from the live
+> advertised catalog: new launches are rejected actionably. Old-release rows
+> stay readable as replay/drain evidence; they are not supported for new work.
 
 Domain states include `scheduled`, `initializing`, `waiting_on_dependencies`, `planning`, `awaiting_slot`, `executing`, `awaiting_external`, `finalizing`, `no_commit`, `completed`, `failed`, and `canceled`.
 
@@ -192,11 +197,11 @@ New managed and agent-owned publication results are derived from accepted `moonm
 
 | Field | Type | Required | Notes |
 | --- | --- | --- | --- |
-| workflowType | supported root type | yes | UserWorkflow or ManifestIngest |
+| workflowType | supported root type | yes | UserWorkflow or MergeAutomation (`MoonMind.ManifestIngest` retired by #4192 and rejected) |
 | title | string/null | no | Display title |
 | inputArtifactRef | string/null | no | Input reference |
 | planArtifactRef | string/null | no | Plan reference |
-| manifestArtifactRef | string/null | conditional | Required for ManifestIngest |
+| manifestArtifactRef | string/null | no | Historical-only: ignored for new launches; old ManifestIngest payloads parse but are rejected with the retirement error |
 | failurePolicy | fail_fast/continue_and_report/best_effort/null | no | Initial failure policy |
 | initialParameters | object | no | Small JSON authored parameters |
 | idempotencyKey | string/null | no | Deduplication key |

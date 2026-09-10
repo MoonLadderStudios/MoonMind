@@ -21,7 +21,6 @@ from temporalio.exceptions import WorkflowAlreadyStartedError
 
 from api_service.db.models import TemporalExecutionRecord
 from moonmind.config.settings import settings
-from moonmind.schemas.manifest_ingest_models import ManifestNodeModel, RequestedByModel
 from moonmind.schemas.container_job_models import (
     ContainerJobWorkflowInput,
     container_job_workflow_id,
@@ -40,8 +39,6 @@ from moonmind.observability import temporal_tracing_interceptors
 
 if TYPE_CHECKING:
     from moonmind.workflows.temporal.service import TemporalExecutionService
-
-MANIFEST_CHILD_PARENT_CLOSE_POLICY = "REQUEST_CANCEL"
 
 # All MoonMind-owned Temporal task queues.  Used to scope Visibility queries
 # so that drain metrics and batch signals only target our own workflows.
@@ -1328,7 +1325,7 @@ class TemporalClientAdapter:
             ) from exc
 
 class TemporalExecutionCreatorProtocol(Protocol):
-    """Protocol for the execution service used by manifest child scheduling."""
+    """Protocol for the execution service used to create executions."""
 
     async def create_execution(
         self,
@@ -1347,75 +1344,3 @@ class TemporalExecutionCreatorProtocol(Protocol):
         summary: str | None = ...,
     ) -> TemporalExecutionRecord:
         pass
-
-@dataclass(frozen=True, slots=True)
-class ManifestChildWorkflowStart:
-    """Child workflow metadata captured for one scheduled manifest node."""
-
-    node_id: str
-    workflow_id: str
-    run_id: str
-    workflow_type: str
-    parent_close_policy: str = MANIFEST_CHILD_PARENT_CLOSE_POLICY
-
-def build_manifest_child_parameters(
-    *,
-    parent_execution: TemporalExecutionRecord,
-    node: ManifestNodeModel,
-    requested_by: RequestedByModel | Mapping[str, object],
-) -> dict[str, object]:
-    """Return the child-run lineage payload for one manifest node."""
-
-    requested_by_model = RequestedByModel.model_validate(requested_by)
-    return {
-        "manifestIngestWorkflowId": parent_execution.workflow_id,
-        "manifestIngestRunId": parent_execution.run_id,
-        "manifestArtifactRef": parent_execution.manifest_ref,
-        "nodeId": node.node_id,
-        "requestedBy": requested_by_model.model_dump(by_alias=True),
-        "runtimeHints": {
-            "manifestNodeState": node.state,
-            "workflowType": "MoonMind.UserWorkflow",
-        },
-        "parentClosePolicy": MANIFEST_CHILD_PARENT_CLOSE_POLICY,
-    }
-
-async def start_manifest_child_runs(
-    *,
-    execution_service: TemporalExecutionService,
-    parent_execution: TemporalExecutionRecord,
-    requested_by: RequestedByModel | Mapping[str, object],
-    nodes: Sequence[ManifestNodeModel],
-    limit: int,
-) -> list[ManifestChildWorkflowStart]:
-    """Start bounded child runs for ready manifest nodes."""
-
-    starts: list[ManifestChildWorkflowStart] = []
-    for node in list(nodes)[: max(0, limit)]:
-        child = await execution_service.create_execution(
-            workflow_type="MoonMind.UserWorkflow",
-            owner_id=parent_execution.owner_id,
-            title=node.title or f"Manifest node {node.node_id}",
-            input_artifact_ref=parent_execution.manifest_ref,
-            plan_artifact_ref=parent_execution.plan_ref,
-            manifest_artifact_ref=None,
-            failure_policy=None,
-            initial_parameters=build_manifest_child_parameters(
-                parent_execution=parent_execution,
-                node=node,
-                requested_by=requested_by,
-            ),
-            idempotency_key=(
-                f"{parent_execution.workflow_id}:{parent_execution.run_id}:{node.node_id}"
-            ),
-            _skip_pause_guard=True,
-        )
-        starts.append(
-            ManifestChildWorkflowStart(
-                node_id=node.node_id,
-                workflow_id=child.workflow_id,
-                run_id=child.run_id,
-                workflow_type=child.workflow_type.value,
-            )
-        )
-    return starts
