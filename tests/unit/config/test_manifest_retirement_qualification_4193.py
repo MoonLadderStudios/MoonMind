@@ -34,8 +34,8 @@ Matrix-to-evidence mapping (issue acceptance matrix):
   workflow, Temporal activities, router mount, worker composition). Guard
   helpers prove detection; real-repo absence is owned by siblings.
 - Historical reads: NOT qualified here. Both contracts (``manifest_ref``
-  compile, ``manifestArtifactRef`` node) are named and their current model
-  files pinned; readable-after-removal belongs to #4189 A/B.
+  compile, ``manifestArtifactRef`` node) are named in retained sanitized
+  fixtures; readable-after-removal belongs to #4189 A/B.
 - Upgrade/data: NOT qualified here. Protected PostgreSQL/migration/artifact
   handoff checks are named in ``test_qualification_gaps_are_explicit``.
 - Ordinary product journey: QUALIFIED here for the hermetic boundary —
@@ -291,12 +291,18 @@ def test_native_manifest_product_pending_sibling_removal() -> None:
     assert reintroduced, "guard must flag a reintroduced product component"
 
 
-def test_scan_finds_unlisted_native_surfaces() -> None:
-    """The repo scan reports product surfaces outside the original allowlist."""
-    present = scan_repo_for_native_manifest_product_files()
-    assert "moonmind/manifest/runner.py" in present
-    assert "moonmind/workflows/temporal/manifest_ingest.py" in present
-    assert "frontend/src/entrypoints/manifests.tsx" in present
+def test_scan_finds_unlisted_native_surfaces(tmp_path: Path) -> None:
+    """Detect reintroduced surfaces without requiring retired code to survive."""
+    paths = (
+        "moonmind/manifest/runner.py",
+        "moonmind/workflows/temporal/manifest_ingest.py",
+        "frontend/src/entrypoints/manifests.tsx",
+    )
+    for relative in paths:
+        path = tmp_path / relative
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text("# deliberately reintroduced product surface\n")
+    assert set(scan_repo_for_native_manifest_product_files(tmp_path)) == set(paths)
 
 
 def test_guard_flags_unlisted_product_path() -> None:
@@ -457,14 +463,13 @@ def test_historical_contract_shapes_are_named_for_sibling_ownership() -> None:
     histories are validated against the pinned old release by #4189; no claim
     is made here that a deleted workflow replays on the new binary.
     """
-    ingest_models = (REPO_ROOT / "moonmind/schemas/manifest_ingest_models.py").read_text(
-        encoding="utf-8"
-    )
-    assert "manifest" in ingest_models.lower()
-    manifests_service = (REPO_ROOT / "api_service/services/manifests_service.py").read_text(
-        encoding="utf-8"
-    )
-    assert "manifestArtifactRef" in manifests_service or "manifest_artifact_ref" in manifests_service
+    from tools.manifest_registry_preservation_rehearsal import historical_execution_entries
+
+    entries = historical_execution_entries()
+    assert {entry["entry_shape"] for entry in entries} == {
+        "manifest_ref", "manifestArtifactRef",
+    }
+    assert all(entry["workflow_type"] == "MoonMind.ManifestIngest" for entry in entries)
 
 
 # ---------------------------------------------------------------------------

@@ -322,6 +322,34 @@ def test_missing_terminal_evidence_remains_retryable(
     )
 
 
+@pytest.mark.parametrize("disposition", ["manual_review", "failed"])
+@pytest.mark.parametrize(
+    "failure_code", ["STALE_TERMINAL_EVIDENCE", "MALFORMED_TERMINAL_EVIDENCE"]
+)
+def test_unvalidated_resolver_disposition_remains_retryable(
+    monkeypatch: pytest.MonkeyPatch,
+    disposition: str,
+    failure_code: str,
+) -> None:
+    monkeypatch.setattr(run_workflow_module.workflow, "patched", lambda _patch: True)
+    workflow = MoonMindRunWorkflow()
+    result = _mapped_step_result(
+        workflow,
+        providerErrorCode=failure_code,
+        metadata={
+            **_RECORDED_MANUAL_REVIEW_RESULT["metadata"],
+            "failureCode": failure_code,
+            "mergeAutomationDisposition": disposition,
+            "terminalContractRecoveryOutcome": "unsupported_or_exhausted",
+        },
+    )
+    assert workflow._activity_result_retryable(
+        result,
+        failure_message="execution_error",
+        tool_type="agent_runtime",
+    )
+
+
 def test_real_provider_failure_with_rejected_continuation_remains_retryable(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

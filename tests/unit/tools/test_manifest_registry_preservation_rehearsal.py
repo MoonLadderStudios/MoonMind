@@ -3,9 +3,12 @@
 from __future__ import annotations
 
 import json
+import shutil
 import subprocess
 import sys
 from pathlib import Path
+
+import pytest
 
 from tools import manifest_registry_preservation_rehearsal as rehearsal
 
@@ -32,16 +35,61 @@ def test_disposition_table_covers_dedicated_shared_and_temporary() -> None:
     assert result.status == "completed", result.evidence
 
 
-def test_inventory_survey_confirms_pre_removal_footprint() -> None:
+def test_inventory_survey_confirms_retired_sources_and_retained_history() -> None:
     survey = rehearsal.collect_inventory_survey(REPO_ROOT)
     assert survey["sources"]["models"] == "present"
-    assert survey["findings"]["manifest_table_present"] is True
-    assert survey["findings"]["writers_active"] is True
+    assert survey["findings"]["manifest_table_model_present"] is False
+    assert survey["findings"]["manifest_record_present"] is False
+    assert survey["findings"]["writers_active"] is False
+    assert survey["sources"]["manifests_service"] == "retired-absent"
+    assert survey["sources"]["registry_retirement_migration"] == "present"
     assert survey["findings"]["shared_enum_present"] is True
     assert survey["findings"]["old_revisions_import_manifest_runtime"] == []
     assert len(survey["findings"]["migration_heads"]) == 1
     result = rehearsal.check_inventory_survey(REPO_ROOT)
     assert result.status == "completed", result.evidence
+
+
+@pytest.mark.parametrize("remaining_path,content", [
+    ("api_service/services/manifests_service.py", "def upsert_manifest(): pass\n"),
+    ("api_service/services/manifest_sync_service.py", "def sync_manifest(): pass\n"),
+    ("api_service/api/routers/manifests.py", "# Residual router module\n"),
+    ("api_service/db/models.py", 'class ManifestRecord: __tablename__ = "manifest"\n'),
+])
+def test_partial_retirement_fails_inventory_and_migration_gate(
+    tmp_path: Path, remaining_path: str, content: str,
+) -> None:
+    for source in (
+        "api_service/db/models.py", "moonmind/workflows/temporal/service.py",
+    ):
+        destination = tmp_path / source
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        destination.write_text((REPO_ROOT / source).read_text())
+    shutil.copytree(REPO_ROOT / "api_service/migrations", tmp_path / "api_service/migrations")
+    residual = tmp_path / remaining_path
+    residual.parent.mkdir(parents=True, exist_ok=True)
+    with residual.open("a") as handle:
+        handle.write("\n" + content)
+    for check in (rehearsal.check_inventory_survey, rehearsal.check_migration_gate):
+        result = check(tmp_path)
+        assert result.status == "failed", result.evidence
+        assert "Incomplete registry retirement" in result.evidence
+
+
+def test_retirement_requires_migration_and_retained_history(tmp_path: Path) -> None:
+    for source in ("api_service/db/models.py", "moonmind/workflows/temporal/service.py"):
+        destination = tmp_path / source
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        destination.write_text((REPO_ROOT / source).read_text())
+    result = rehearsal.check_migration_gate(tmp_path)
+    assert result.status == "failed"
+    assert "registry_retirement_migration" in result.evidence
+    shutil.copytree(REPO_ROOT / "api_service/migrations", tmp_path / "api_service/migrations")
+    models = tmp_path / "api_service/db/models.py"
+    models.write_text(models.read_text().replace("MoonMind.ManifestIngest", "removed"))
+    result = rehearsal.check_migration_gate(tmp_path)
+    assert result.status == "failed"
+    assert "historical evidence broken" in result.evidence
 
 
 def test_preflight_verdicts_derive_from_fixture_not_field_names() -> None:
@@ -152,7 +200,8 @@ def test_failure_injection_refuses_silent_completion() -> None:
 def test_migration_gate_keeps_destructive_step_gated() -> None:
     result = rehearsal.check_migration_gate(REPO_ROOT)
     assert result.status == "completed", result.evidence
-    assert "writers still active" in result.evidence
+    assert "graph check only" in result.evidence
+    assert "owner authorization remain blocked" in result.evidence
 
 
 def test_artifact_retention_stays_independent() -> None:
