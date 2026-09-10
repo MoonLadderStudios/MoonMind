@@ -13,9 +13,20 @@ from moonmind.utils.cli import CliVerificationError
 
 @pytest.fixture(autouse=True)
 def _disable_external_preflight_checks(monkeypatch) -> None:
-    """Prevent preflight tests from performing slow external readiness checks."""
+    """Prevent preflight tests from performing slow external readiness checks.
 
-    monkeypatch.setattr(cli, "_run_checked_command", lambda *args, **kwargs: None)
+    MoonLadderStudios/MoonMind#4192 retired the RAG readiness gate, so only
+    CLI version/login probes remain. Mock subprocess.run (not
+    _run_checked_command) so per-test call assertions on the checked-command
+    layer keep working.
+    """
+
+    def _no_external_run(command, *args, **kwargs):
+        return subprocess.CompletedProcess(
+            args=command, returncode=0, stdout="", stderr=""
+        )
+
+    monkeypatch.setattr(subprocess, "run", _no_external_run)
 
 
 @pytest.mark.parametrize(

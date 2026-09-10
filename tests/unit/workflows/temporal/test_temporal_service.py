@@ -6457,14 +6457,14 @@ async def test_cancel_marks_terminal_state_and_close_status(
         service._client_adapter = mock_client_adapter
 
         created = await service.create_execution(
-            workflow_type="MoonMind.ManifestIngest",
+            workflow_type="MoonMind.UserWorkflow",
             owner_id=uuid4(),
             title=None,
             input_artifact_ref=None,
             plan_artifact_ref=None,
-            manifest_artifact_ref="artifact://manifest/1",
+            manifest_artifact_ref=None,
             failure_policy="fail_fast",
-            initial_parameters={},
+            initial_parameters=_valid_user_workflow_parameters(),
             idempotency_key=None,
         )
 
@@ -7945,16 +7945,11 @@ async def test_list_executions_filters_owner_and_paginates(tmp_path):
             initial_parameters=_valid_user_workflow_parameters(),
             idempotency_key="owner-b-0",
         )
-        await service.create_execution(
-            workflow_type="MoonMind.ManifestIngest",
-            owner_id=owner_a,
-            title="manifest-0",
-            input_artifact_ref=None,
-            plan_artifact_ref=None,
-            manifest_artifact_ref="artifact://manifest/owner-a",
-            failure_policy=None,
-            initial_parameters={},
-            idempotency_key="owner-a-manifest-0",
+        # MoonLadderStudios/MoonMind#4192: ManifestIngest creation is retired;
+        # the manifest-entry listing is proven with a historical old-release
+        # row instead.
+        await _insert_historical_manifest_ingest_record(
+            session, owner_id=owner_a
         )
 
         first_page = await service.list_executions(
@@ -8202,16 +8197,10 @@ async def test_list_executions_filters_entry_repo_and_integration(tmp_path):
             repository="Other/Repo",
             integration="github",
         )
-        await service.create_execution(
-            workflow_type="MoonMind.ManifestIngest",
-            owner_id=owner_id,
-            title="Manifest",
-            input_artifact_ref=None,
-            plan_artifact_ref=None,
-            manifest_artifact_ref="artifact://manifest/1",
-            failure_policy=None,
-            initial_parameters={},
-            idempotency_key="manifest-run",
+        # MoonLadderStudios/MoonMind#4192: ManifestIngest creation is retired;
+        # the entry filter is proven with a historical old-release row instead.
+        await _insert_historical_manifest_ingest_record(
+            session, owner_id=owner_id
         )
         result = await service.list_executions(
             workflow_type=None,
