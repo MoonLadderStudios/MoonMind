@@ -89,6 +89,18 @@ Use the actual operator URL when verifying an update. Preserve these `.env`
 settings across upgrades; changing a fresh-install default must not remove an
 existing installation's access.
 
+The host update scripts require Python 3.10+ and the Docker Compose plugin
+(V2 or newer); they validate both before changing source or services. The update
+scripts and deployment runner compare the installed API's published ports,
+network attachments, and access settings with rendered Compose before replacing
+containers.
+They stop on a change and identify the settings to preserve in `.env` or an
+override. A rejected git update restores the previous checkout before resuming
+a quiesced worker. Maintenance targeting unrelated services does not require
+API reconciliation; dependency or orphan removal that can affect the API still
+runs the access check. Direct `docker compose up` does not run this preflight; use it for
+intentional access migrations and verify the operator URL afterward.
+
 ### OAuth Workflow
 
 When you already have a subscription with a model provider:

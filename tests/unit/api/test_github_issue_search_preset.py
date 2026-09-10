@@ -57,7 +57,12 @@ def activity_boundary(monkeypatch):
 
     def handler(request):
         requests.append(request)
-        if request.url.path.endswith("/issues"):
+        if request.method == "POST" and request.url.path.endswith("/labels"):
+            for label in json.loads(request.content)["labels"]:
+                if {"name": label} not in detail["labels"]:
+                    detail["labels"].append({"name": label})
+            payload = detail["labels"]
+        elif request.url.path.endswith("/issues"):
             payload = pages[int(request.url.params["page"]) - 1]
             if request.url.path == "/search/issues" and isinstance(payload, list):
                 payload = {"items": payload, "incomplete_results": False}
@@ -808,7 +813,7 @@ async def test_default_preset_resolves_and_preserves_issue_across_agent_steps(
         result = await activity_boundary.execute(
             tool["id"], {**tool["inputs"], "previousOutputs": previous}
         )
-        assert result.status == "COMPLETED"
+        assert result.status == "COMPLETED", result.outputs
         assert (
             result.outputs.get("issueRef") == f"{REPOSITORY}#4025"
             or result.outputs.get("issueUrl") == issue()["html_url"]
@@ -817,27 +822,25 @@ async def test_default_preset_resolves_and_preserves_issue_across_agent_steps(
         previous = workflow._merge_trusted_issue_context(result.outputs)
         assert previous["searchEvidence"]["candidatesExamined"] == 1
         assert previous["searchEvidence"]["pagesExamined"] == 1
-    patches = [
-        request for request in activity_boundary.requests if request.method == "PATCH"
+    mutations = [
+        request for request in activity_boundary.requests if request.method != "GET"
     ]
-    assert len(patches) == 1
-    assert patches[0].url.path == f"/repos/{REPOSITORY}/issues/4025"
+    assert [(request.method, request.url.path) for request in mutations] == [
+        ("POST", f"/repos/{REPOSITORY}/issues/4025/labels"),
+        ("POST", f"/repos/{REPOSITORY}/issues/4025/comments"),
+    ]
+    assert json.loads(mutations[0].content) == {"labels": ["status: in-progress"]}
+    assert result.outputs["mutationOutcome"] == "applied"
+    assert set(result.outputs["confirmedLabels"]) == {"bug", "status: in-progress"}
     # Finalization still requires its verification / PR evidence before mutation.
     final_tool = steps[-1]["tool"]
     final = await activity_boundary.execute(
         final_tool["id"], {**final_tool["inputs"], "previousOutputs": previous}
     )
     assert final.status == "FAILED"
-    assert (
-        len(
-            [
-                request
-                for request in activity_boundary.requests
-                if request.method == "PATCH"
-            ]
-        )
-        == 1
-    )
+    assert [
+        request for request in activity_boundary.requests if request.method != "GET"
+    ] == mutations
 
 
 @pytest.mark.asyncio
