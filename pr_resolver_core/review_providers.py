@@ -78,9 +78,23 @@ def normalize_reviewer_login(login: object) -> str:
 # finding that carries only P2/medium-or-below severity ends the loop: it is
 # not actionable and a clean response carrying only such trailing findings
 # still counts as a clean review.
-_HIGH_SEVERITY_FINDING_RE = re.compile(
-    r"\bP\s*[01]\b|\bsev\s*[01]\b|\bcritical\b|\bhigh\b",
+#
+# High-severity detection is restricted to structured priority/severity
+# labels (for example `[P1]`, `priority: high`, or `severity: critical`)
+# so prose adjectives in explicitly low-priority findings (for example
+# `[P2] Avoid high memory usage`) cannot promote them back to high.
+_HIGH_SEVERITY_P_RE = re.compile(
+    r"\bP\s*[01]\b|\bsev\s*[01]\b",
     re.IGNORECASE,
+)
+_HIGH_SEVERITY_TEXT_RE = re.compile(
+    r"\bseverity\s*[:=\-]\s*(critical|high|major|severe|urgent|blocker|p[01])\b"
+    r"|\bpriority\s*[:=\-]\s*(critical|high|highest|urgent|blocker|p[01])\b"
+    r"|\[(critical|high|major|severe|urgent|blocker|p[01]|sev[01])\]"
+    r"|^(critical|high)\s*[:\-]"
+    r"|\b(critical|high)\s+(severity|priority)\b"
+    r"|\b(severity|priority)\s+(critical|high)\b",
+    re.IGNORECASE | re.MULTILINE,
 )
 _LOW_SEVERITY_P_RE = re.compile(
     r"\bP\s*[2-9]\b|\bsev\s*[2-9]\b",
@@ -102,9 +116,12 @@ _LOW_SEVERITY_BARE_RE = re.compile(
 
 
 def has_high_severity_finding(body: object) -> bool:
-    """Return True when *body* carries a P0/critical or P1/high marker."""
+    """Return True when *body* carries a structured P0/critical or P1/high marker."""
 
-    return bool(_HIGH_SEVERITY_FINDING_RE.search(str(body or "")))
+    text = str(body or "")
+    return bool(
+        _HIGH_SEVERITY_P_RE.search(text) or _HIGH_SEVERITY_TEXT_RE.search(text)
+    )
 
 
 def has_low_severity_marker(body: object) -> bool:
