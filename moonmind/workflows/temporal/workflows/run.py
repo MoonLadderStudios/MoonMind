@@ -665,6 +665,14 @@ RUN_TERMINAL_CONTINUATION_AUTHORITY_INSTRUCTIONS_PATCH = (
 # the prior provider-only decision. New executions use validated terminal
 # contract provenance to avoid repeating completed resolver mutations.
 RUN_TERMINAL_CONTRACT_RETRY_DECISION_PATCH = "run-terminal-contract-retry-decision-v1"
+# ``_map_agent_run_result`` flattens ``AgentRunResult.metadata`` into the step
+# outputs, so the terminal-contract decision fields live at the top level of
+# ``outputs``. Histories recorded before this patch looked for a nested
+# ``metadata`` mapping that production never produced and therefore retried
+# validated manual-review verdicts (MoonLadderStudios/MoonMind#4221).
+RUN_TERMINAL_CONTRACT_RETRY_FLATTENED_OUTPUTS_PATCH = (
+    "run-terminal-contract-retry-flattened-outputs-v1"
+)
 # Merge-automation dispositions that are *continuations*: they only have meaning
 # when a MoonMind.MergeAutomation gate re-enters and finalizes the merge. A
 # standalone (ungated) resolver run that ends in one of these states has not
@@ -14687,10 +14695,6 @@ class MoonMindRunWorkflow:
         if failure_message in {"user_error", "permanent"}:
             return False
 
-        metadata = outputs.get("metadata")
-        if not isinstance(metadata, Mapping):
-            metadata = {}
-
         # A validated resolver terminal disposition belongs to the selected
         # Skill, not generic provider recovery. Retrying manual-review or failed
         # terminal evidence can repeat mutations. A rejected typed continuation
@@ -14699,15 +14703,32 @@ class MoonMindRunWorkflow:
         # bounded retry classification. Missing or malformed terminal evidence
         # also stays retryable so the repair path can recover it.
         if self._workflow_patch_enabled(RUN_TERMINAL_CONTRACT_RETRY_DECISION_PATCH):
+            if self._workflow_patch_enabled(
+                RUN_TERMINAL_CONTRACT_RETRY_FLATTENED_OUTPUTS_PATCH
+            ):
+                terminal_fields: Mapping[str, Any] = outputs
+            else:
+                # Replay-only: pre-patch histories read a nested mapping that
+                # the production mapper never emits, so they always retried.
+                nested_metadata = outputs.get("metadata")
+                terminal_fields = (
+                    nested_metadata if isinstance(nested_metadata, Mapping) else {}
+                )
             terminal_contract_outcome = (
-                str(metadata.get("terminalContractOutcome") or "").strip().lower()
+                str(terminal_fields.get("terminalContractOutcome") or "")
+                .strip()
+                .lower()
             )
             merge_automation_disposition = (
-                str(metadata.get("mergeAutomationDisposition") or "").strip().lower()
+                str(terminal_fields.get("mergeAutomationDisposition") or "")
+                .strip()
+                .lower()
             )
             if (
                 terminal_contract_outcome == "terminal_failure"
                 and merge_automation_disposition in {"manual_review", "failed"}
+                and terminal_fields.get("terminalContractRecoveryOutcome")
+                == "skill_terminal_verdict"
             ):
                 return False
             if (

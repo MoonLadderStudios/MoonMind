@@ -1,39 +1,41 @@
 """Portable per-attempt GitHub issue handoffs and cross-deployment retry history.
 
-Single policy entrypoint for issue MoonLadderStudios/MoonMind#4177
-(design: docs/Workflows/GitHubIssueStatusStateMachineDesign.md, sections 4
-and 5.3). Deterministic and side-effect-free, except for the explicit
-installation-identity persistence helper: trusted Activities/services perform
-GitHub reads/writes; this module decides what comments mean and what the
-retry/release policy allows.
+Single policy entrypoint for MoonLadderStudios/MoonMind#4177 (design:
+docs/Workflows/GitHubIssueStatusStateMachineDesign.md, sections 4 and 5.3).
+Deterministic and side-effect-free except for the explicit trusted-boundary
+``publish_attempt_handoff`` orchestration, which performs GitHub reads/writes
+only through an injected service object (``GitHubService`` in production,
+fakes in tests).
 
 Contract summary:
-  - Every issue-work attempt gets one identifiable GitHub comment that another
-    independent deployment can validate and use. GitHub is the shared handoff
-    surface, not a pointer to another device's private database or MinIO.
-  - A stable installation identity differs across deployments; shared GitHub
-    usernames are not deployment identities. One canonical resolver owns it
-    (no competing internal aliases).
-  - One versioned, bounded comment representation carries a readable summary
-    plus machine-readable metadata. No equivalent label families are
-    introduced: activity stays a comment field, never a label.
-  - Provenance validation treats a copied machine marker as unauthenticated,
-    issue prose as untrusted reference content, and shared-account comments
-    as mutually non-adversarial only (never a security boundary).
-  - Writes serialize per attempt: uncertain creates reconcile by stable
-    marker, same-ID duplicates are one logical attempt, conflicts require
-    attention (never last-timestamp-wins), progress coalesces within rate
-    limits, and no attempt overwrites another attempt's comment.
-  - Retry history (failed-attempt/no-progress linkage, allowance, cooldown,
-    operator hold) survives new workflow IDs, device changes, and label
-    clears. Missing/incompatible lineage blocks automatic recovery; audited
-    resets only; no exact global counter is claimed under races.
-  - Proposed release vs completed release are distinct: ``released`` requires
-    confirmed stopped writers, settled mutations, verified preservation (or
-    explicit no-work evidence), and observed label outcome. Released attempts
-    never resume publication/cleanup on reconnect.
-  - Outbound comments and structured errors pass the existing
-    scanning/redaction boundary; local workflow links stay diagnostics-only.
+
+* Every issue-work attempt owns exactly one identifiable GitHub issue comment.
+  The comment carries a stable machine marker (the attempt ID) plus a readable
+  summary and one versioned, bounded JSON metadata block. GitHub is the shared
+  handoff surface: another independent deployment reconstructs remaining work
+  and retry restrictions from GitHub-visible comments alone.
+* A GitHub account name never substitutes for deployment identity. The stable
+  installation ID comes from one canonical source (explicit input or
+  ``MOONMIND_INSTALLATION_ID``); there are no competing aliases or silent
+  hostname/username fallbacks, so the value persists unchanged through
+  restart/retry. A copied machine marker never authenticates itself: provenance
+  is validated against a caller-supplied trusted-poster set at read time.
+* Issue prose and arbitrary comments are untrusted reference content. Only the
+  versioned metadata block of a provenance-validated comment drives admission
+  and retry decisions. Unsupported formats and inconsistent/missing referenced
+  history are rejected explicitly rather than inferred as a fresh start.
+* Production consumption (no parallel reimplementation): admission consumes
+  the portable retry budget through ``attempt_evidence_blocks_admission`` in
+  ``github_issue_lifecycle`` (which honors ``linkedAttempts``/``retryPolicy``
+  context via :func:`derive_retry_state`); progress and release publication
+  run through ``attempt_handoff_activities.publish_attempt_progress`` /
+  ``publish_attempt_release``, which supply the production ``GitHubService``,
+  the canonical installation identity, and the caller-owned trusted-poster
+  allow-list. Workflows never call the GitHub comment endpoints for attempt
+  state directly.
+* Operators provision one stable value per deployment as
+  ``MOONMIND_INSTALLATION_ID`` (see ``.env-template``); there are no
+  competing aliases or silent fallbacks.
 """
 
 from __future__ import annotations
@@ -42,542 +44,572 @@ import hashlib
 import json
 import os
 import re
-import uuid
+import secrets
 from dataclasses import dataclass
-from datetime import UTC, datetime, timedelta
-from pathlib import Path
 from typing import Any, Mapping, Sequence
 
-#: Version of the machine-readable attempt comment envelope. Unknown versions
-#: fail closed (attention), they are never silently admitted or normalized.
-ATTEMPT_COMMENT_VERSION = 1
-SUPPORTED_ATTEMPT_COMMENT_VERSIONS = frozenset({1})
+#: Single supported metadata schema. Unknown versions fail closed.
+ATTEMPT_COMMENT_FORMAT_VERSION = "moonmind.github_issue_attempt.v1"
 
-#: Hard bound for the rendered comment body. The human summary plus the fenced
-#: metadata block never exceed this; longer free-text fields are truncated
-#: with an explicit marker rather than silently dropped.
-MAX_ATTEMPT_COMMENT_CHARS = 8000
+#: Stable per-comment machine marker. Reconciliation keys creation retries on
+#: this marker before repeating effects (design section 4.2).
+ATTEMPT_MARKER_PREFIX = "<!-- moonmind-github-attempt:"
+ATTEMPT_MARKER_SUFFIX = " -->"
 
-#: Stable marker prefix identifying MoonMind attempt comments. The attempt ID
-#: rendezvous key is the ``attempt="<id>"`` attribute inside the marker.
-ATTEMPT_MARKER_PREFIX = "<!-- moonmind-issue-attempt"
-ATTEMPT_MARKER_SUFFIX = "-->"
-ATTEMPT_FENCE_OPEN = "```json moonmind-issue-attempt"
-ATTEMPT_FENCE_CLOSE = "```"
+#: Bounded comment size. GitHub issue comments support far more, but the
+#: handoff is a compact portable record, not another workflow database.
+MAX_COMMENT_CHARS = 8000
 
-#: Canonical attempt activities (comment field only; never labels).
-ATTEMPT_ACTIVITY_PREPARING = "preparing"
-ATTEMPT_ACTIVITY_ACTIVE = "active"
-ATTEMPT_ACTIVITY_AWAITING_REVIEW = "awaiting-review"
-ATTEMPT_ACTIVITY_RELEASING = "releasing"
-ATTEMPT_ACTIVITY_RELEASED = "released"
-ATTEMPT_ACTIVITY_ATTENTION = "attention"
-ATTEMPT_ACTIVITIES = frozenset(
+#: Minimum seconds between routine progress updates for one attempt.
+#: Activity/outcome changes and explicit force bypass coalescing.
+PROGRESS_COALESCE_SECONDS = 300
+
+#: Per-field bounds applied before the total-size check.
+_MAX_REPORT_CHARS = 500
+_MAX_VERIFICATION_CHARS = 1000
+_MAX_STOP_EVIDENCE_CHARS = 500
+_MAX_REQUIREMENTS = 20
+_MAX_REQUIREMENT_CHARS = 200
+_MAX_REF_CHARS = 300
+
+#: Attempt activity vocabulary (design section 4.1). No equivalent label
+#: families are introduced: these values live only inside attempt comments.
+ACTIVITY_PREPARING = "preparing"
+ACTIVITY_ACTIVE = "active"
+ACTIVITY_AWAITING_REVIEW = "awaiting-review"
+ACTIVITY_RELEASING = "releasing"
+ACTIVITY_RELEASED = "released"
+ACTIVITY_ATTENTION = "attention"
+
+ACTIVITIES = frozenset(
     {
-        ATTEMPT_ACTIVITY_PREPARING,
-        ATTEMPT_ACTIVITY_ACTIVE,
-        ATTEMPT_ACTIVITY_AWAITING_REVIEW,
-        ATTEMPT_ACTIVITY_RELEASING,
-        ATTEMPT_ACTIVITY_RELEASED,
-        ATTEMPT_ACTIVITY_ATTENTION,
+        ACTIVITY_PREPARING,
+        ACTIVITY_ACTIVE,
+        ACTIVITY_AWAITING_REVIEW,
+        ACTIVITY_RELEASING,
+        ACTIVITY_RELEASED,
+        ACTIVITY_ATTENTION,
     }
 )
 
-#: Canonical next actions carried in the handoff.
-ATTEMPT_NEXT_ACTIONS = frozenset(
+ACTIVITY_MEANINGS: dict[str, str] = {
+    ACTIVITY_PREPARING: "The attempt announced ownership and is assessing or preparing work; it has no verified output yet.",
+    ACTIVITY_ACTIVE: "The attempt is editing, verifying, or repairing work under its own ownership.",
+    ACTIVITY_AWAITING_REVIEW: "The attempt published a verified implementation and the remaining review/merge journey owns next action.",
+    ACTIVITY_RELEASING: "The attempt recorded a proposed disposition and is settling writers, mutations, preservation, and labels.",
+    ACTIVITY_RELEASED: "The attempt completed release: writers stopped, mutations settled, preservation verified or explicitly absent, and the label outcome observed. A released attempt performs no further issue-state or PR writes.",
+    ACTIVITY_ATTENTION: "The attempt requires operator intervention before any automatic continuation.",
+}
+
+#: Bounded next-action vocabulary for the portable handoff.
+NEXT_ACTIONS = frozenset(
     {
-        "fresh_retry",
-        "continue_implementation",
+        "fresh-retry",
+        "continue-implementation",
         "verify",
-        "continue_review",
-        "finalize_status",
-        "obtain_operator_attention",
+        "continue-review",
+        "finalize-status",
+        "obtain-operator-attention",
     }
 )
 
-#: Progress reports coalesce within this window instead of rewriting the
-#: attempt comment on every runtime poll.
-PROGRESS_COALESCE_SECONDS = 60
-
-#: Default retry policy when the portable handoff carries explicit history.
-#: Operators tune these through the handoff/policy inputs consumed here, not
-#: through hidden per-runtime fallbacks.
-DEFAULT_MAX_ATTEMPTS = 3
-DEFAULT_COOLDOWN_SECONDS = 300
-
-INSTALLATION_ID_ENV_VARS = (
-    "MOONMIND_INSTALLATION_ID",
-    "MOONMIND_DEPLOYMENT_ID",
-    "MOONMIND_INSTANCE_ID",
-)
-# Persistent deployment-owned location first (mounted named volume on the
-# integrations worker); legacy relative path is a local-dev fallback that is
-# still honored on read for backwards compatibility.
-DEFAULT_INSTALLATION_ID_PATH = Path("/app/var/secrets/moonmind-installation-id")
-LEGACY_INSTALLATION_ID_PATH = Path("var/moonmind-installation-id")
-
-_ATTEMPT_ID_RE = re.compile(r"^[0-9a-f]{32}$")
-_MARKER_ATTRS_RE = re.compile(r'(\w[\w-]*)="([^"]*)"')
-_FENCE_RE = re.compile(
-    r"```json moonmind-issue-attempt\s*\n(.*?)\n```", re.DOTALL
+#: Bounded terminal outcome vocabulary. Intermediate (non-terminal) handoffs
+#: use ``"pending"``.
+OUTCOMES = frozenset(
+    {
+        "pending",
+        "completed",
+        "failed",
+        "cancelled",
+        "blocked",
+        "no-work",
+    }
 )
 
+#: Exact machine-block sentinel emitted by :func:`render_attempt_comment`.
+#: Extraction anchors to this sentinel so untrusted report/verification prose
+#: cannot inject a competing JSON fence earlier in the comment body.
+_METADATA_SENTINEL = f"<!-- {ATTEMPT_COMMENT_FORMAT_VERSION} metadata"
 
-def _utcnow() -> datetime:
-    return datetime.now(UTC)
+_ATTEMPT_ID_RE = re.compile(r"^att_[0-9a-f]{24}$")
+_INSTALLATION_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{2,127}$")
+_REPO_RE = re.compile(r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$")
+_SHA_RE = re.compile(r"^[0-9a-f]{40}$")
+_PR_URL_RE = re.compile(r"^https://github\.com/([A-Za-z0-9_.-]+)/([A-Za-z0-9_.-]+)/pull/([1-9]\d*)$")
+_BRANCH_RE = re.compile(r"^[A-Za-z0-9_./-]{1,200}$")
 
 
-def _isoformat(value: Any) -> str:
-    if isinstance(value, datetime):
-        moment = value if value.tzinfo is not None else value.replace(tzinfo=UTC)
-        return moment.astimezone(UTC).isoformat()
-    return str(value or "")
+def _string(value: Any) -> str:
+    return str(value or "").strip() if not isinstance(value, bool) else ""
 
 
-def _parse_moment(value: Any) -> datetime | None:
-    if isinstance(value, datetime):
-        return value if value.tzinfo is not None else value.replace(tzinfo=UTC)
-    text = str(value or "").strip()
-    if not text:
-        return None
-    try:
-        parsed = datetime.fromisoformat(text.replace("Z", "+00:00"))
-    except ValueError:
-        return None
-    return parsed if parsed.tzinfo is not None else parsed.replace(tzinfo=UTC)
+def _truncate(text: str, limit: int) -> str:
+    text = str(text or "")
+    if len(text) <= limit:
+        return text
+    return text[: max(0, limit - len("[truncated]"))] + "[truncated]"
 
 
 # ---------------------------------------------------------------------------
-# Requirement 1: stable installation identity + globally unique attempt ID
+# Requirement 1: stable installation identity + attempt identity
 # ---------------------------------------------------------------------------
-
-
-def _normalize_installation_id(value: Any) -> str:
-    return re.sub(r"[^A-Za-z0-9._-]", "", str(value or "").strip())[:128]
 
 
 def resolve_installation_id(
     explicit: Any = None,
     *,
-    environ: Mapping[str, str] | None = None,
-    path: Path | str | None = None,
-    persist: bool = True,
-) -> str:
-    """Resolve the single stable installation identity for this deployment.
+    env: Mapping[str, str] | None = None,
+) -> tuple[str, str]:
+    """Resolve the one canonical stable installation identity.
 
-    Precedence is deterministic and alias-free: explicit input, then the
-    canonical environment names (``MOONMIND_INSTALLATION_ID`` pins one
-    canonical ID across scaled replicas), then the persisted deployment-owned
-    file (created once on the persistent secrets volume and reused across
-    restarts/retries/replicas sharing that volume), then the legacy relative
-    path for backwards compatibility. The value differs across deployments
-    because each deployment owns its environment/file; shared GitHub usernames
-    are never consulted here.
+    Returns ``(installation_id, error)``: exactly one is non-empty. The value
+    comes from the explicit input or ``MOONMIND_INSTALLATION_ID`` only. There
+    is intentionally no hostname, username, or generated fallback: silent
+    fallbacks would create competing aliases that diverge across restarts and
+    would let two devices sharing one GitHub account blend into each other.
+    Operators persist one value per deployment (environment or file-backed
+    environment) so restarts and retries reuse it unchanged.
     """
-    env = os.environ if environ is None else environ
-    candidate = _normalize_installation_id(explicit)
-    if candidate:
-        return candidate
-    for name in INSTALLATION_ID_ENV_VARS:
-        candidate = _normalize_installation_id((env or {}).get(name))
-        if candidate:
-            return candidate
-    targets: list[Path] = []
-    if path is not None:
-        targets = [Path(path)]
-    else:
-        targets = [DEFAULT_INSTALLATION_ID_PATH, LEGACY_INSTALLATION_ID_PATH]
-    for target in targets:
-        try:
-            if target.exists():
-                candidate = _normalize_installation_id(
-                    target.read_text(encoding="utf-8")
-                )
-                if candidate:
-                    return candidate
-        except OSError:
-            # Missing/unreadable file means no persisted identity yet; fall
-            # through to generate (and best-effort persist) a fresh value.
-            continue
-    generated = uuid.uuid4().hex
-    if persist:
-        primary = targets[0]
-        try:
-            primary.parent.mkdir(parents=True, exist_ok=True)
-            primary.write_text(generated + "\n", encoding="utf-8")
-        except OSError:
-            # Ephemeral filesystems may reject the write; the generated
-            # value is still returned for this invocation.
-            pass
-    return generated
+
+    candidate = _string(explicit)
+    if not candidate and env is None:
+        candidate = str(os.environ.get("MOONMIND_INSTALLATION_ID") or "").strip()
+    elif not candidate and env is not None:
+        candidate = str(env.get("MOONMIND_INSTALLATION_ID") or "").strip()
+    if not candidate:
+        return "", "MOONMIND_INSTALLATION_ID is not configured; set one stable value per deployment."
+    if not _INSTALLATION_ID_RE.fullmatch(candidate):
+        return "", f"Invalid installation ID {candidate!r}: use 3-128 [A-Za-z0-9._-] characters starting alphanumeric."
+    return candidate, ""
 
 
-def build_attempt_id(
+def new_attempt_id() -> str:
+    """Return a fresh globally unique attempt ID."""
+    return f"att_{secrets.token_hex(12)}"
+
+
+def build_attempt_identity(
     *,
     repository: str,
     issue_number: int,
-    workflow_id: str = "",
-    run_id: str = "",
-    deployment_id: str = "",
-) -> str:
-    """Build a globally unique attempt ID bound to repo/issue/workflow/run.
+    workflow_id: str,
+    run_id: str,
+    installation_id: str,
+    attempt_id: str = "",
+) -> tuple[dict[str, Any], str]:
+    """Bind one attempt ID to the exact repository/issue and workflow/run.
 
-    The ID is deterministically derived from the stable scope whenever the
-    caller supplies a workflow or run identity, so an Activity retry that
-    receives the same original inputs reconciles the same marker instead of
-    minting a second logical attempt. Callers without any stable scope get a
-    fresh random ID. The durable assignment must happen before the retryable
-    Activity boundary: workflows should mint (or forward) ``attemptId`` once
-    and reuse it from ``inputs``/``previousOutputs`` on retry.
+    Returns ``(identity, error)``. The attempt ID itself is opaque randomness;
+    the binding lives in the validated metadata fields so any deployment can
+    check that a comment belongs to the issue it is reading.
     """
-    stable_scope = [
-        str(repository or "").strip().lower(),
-        str(issue_number or ""),
-        str(workflow_id or "").strip(),
-        str(run_id or "").strip(),
-        str(deployment_id or "").strip(),
+
+    repo = _string(repository)
+    workflow = _string(workflow_id)
+    run = _string(run_id)
+    deployment = _string(installation_id)
+    candidate = _string(attempt_id) or new_attempt_id()
+    if not _REPO_RE.fullmatch(repo):
+        return {}, f"Invalid repository {repo!r}: expected owner/name."
+    if type(issue_number) is not int or issue_number <= 0:
+        return {}, f"Invalid issue number {issue_number!r}."
+    if not workflow:
+        return {}, "Missing workflow identity for the attempt."
+    if not run:
+        return {}, "Missing run identity for the attempt."
+    if not _INSTALLATION_ID_RE.fullmatch(deployment):
+        return {}, "Invalid installation identity for the attempt."
+    if not _ATTEMPT_ID_RE.fullmatch(candidate):
+        return {}, f"Invalid attempt ID {candidate!r}."
+    return (
+        {
+            "attemptId": candidate,
+            "deploymentId": deployment,
+            "repository": repo,
+            "issueNumber": issue_number,
+            "workflowId": _truncate(workflow, _MAX_REF_CHARS),
+            "runId": _truncate(run, _MAX_REF_CHARS),
+        },
+        "",
+    )
+
+
+# ---------------------------------------------------------------------------
+# Requirement 2: versioned, bounded comment representation
+# ---------------------------------------------------------------------------
+
+
+@dataclass
+class AttemptHandoff:
+    """Portable per-attempt handoff (design section 4.1, required fields)."""
+
+    attempt_id: str = ""
+    deployment_id: str = ""
+    repository: str = ""
+    issue_number: int = 0
+    workflow_id: str = ""
+    run_id: str = ""
+    # Lineage: predecessor attempt/comment when continuing previous work.
+    predecessor_attempt_id: str = ""
+    predecessor_comment_id: int = 0
+    # Activity + last report.
+    activity: str = ACTIVITY_PREPARING
+    last_report: str = ""
+    update_seq: int = 1
+    last_activity_at: str = ""
+    # Stop evidence for all writers + pending publication disposition.
+    writers_stopped: bool = False
+    stop_evidence: str = ""
+    pending_disposition: str = ""
+    # Preserved work: exact PR/head/base or saved branch/SHA.
+    pr_url: str = ""
+    pr_head_sha: str = ""
+    pr_base: str = ""
+    saved_branch: str = ""
+    saved_sha: str = ""
+    # Result: outcome, met/unmet requirements, verification summary.
+    outcome: str = "pending"
+    met_requirements: tuple[str, ...] = ()
+    remaining_requirements: tuple[str, ...] = ()
+    verification_summary: str = ""
+    next_action: str = "continue-implementation"
+    # Retry eligibility: history, allowance, cooldown, operator hold.
+    failed_attempt_refs: tuple[str, ...] = ()
+    no_progress_attempt_refs: tuple[str, ...] = ()
+    internal_retries: int = 0
+    cooldown_until: str = ""
+    operator_hold: bool = False
+    operator_hold_reason: str = ""
+    policy_lineage: str = ""
+    authorized_reset: Mapping[str, Any] | None = None
+    # Optional diagnostics only: never the sole recoverability evidence.
+    local_workflow_ref: str = ""
+    # Redaction tombstone marker (design section 4.2).
+    tombstone: bool = False
+    successor_attempt_id: str = ""
+
+    def to_metadata(self) -> dict[str, Any]:
+        metadata: dict[str, Any] = {
+            "formatVersion": ATTEMPT_COMMENT_FORMAT_VERSION,
+            "attemptId": self.attempt_id,
+            "deploymentId": self.deployment_id,
+            "repository": self.repository,
+            "issueNumber": self.issue_number,
+            "workflowId": self.workflow_id,
+            "runId": self.run_id,
+            "activity": self.activity,
+            "lastReport": self.last_report,
+            "updateSeq": self.update_seq,
+            "writersStopped": self.writers_stopped,
+            "pendingDisposition": self.pending_disposition,
+            "outcome": self.outcome,
+            "metRequirements": list(self.met_requirements),
+            "remainingRequirements": list(self.remaining_requirements),
+            "verificationSummary": self.verification_summary,
+            "nextAction": self.next_action,
+            "retryHistory": {
+                "failedAttempts": list(self.failed_attempt_refs),
+                "noProgressAttempts": list(self.no_progress_attempt_refs),
+                "internalRetries": self.internal_retries,
+                "cooldownUntil": self.cooldown_until,
+                "operatorHold": self.operator_hold,
+                "policyLineage": self.policy_lineage,
+            },
+        }
+        if self.predecessor_attempt_id:
+            metadata["predecessorAttemptId"] = self.predecessor_attempt_id
+        if self.predecessor_comment_id:
+            metadata["predecessorCommentId"] = self.predecessor_comment_id
+        if self.last_activity_at:
+            metadata["lastActivityAt"] = self.last_activity_at
+        if self.stop_evidence:
+            metadata["stopEvidence"] = self.stop_evidence
+        if self.pr_url:
+            metadata["preservedWork"] = {
+                "prUrl": self.pr_url,
+                "prHeadSha": self.pr_head_sha,
+                "prBase": self.pr_base,
+            }
+        if self.saved_branch or self.saved_sha:
+            saved = metadata.setdefault("preservedWork", {})
+            if self.saved_branch:
+                saved["savedBranch"] = self.saved_branch
+            if self.saved_sha:
+                saved["savedSha"] = self.saved_sha
+        if self.operator_hold_reason:
+            metadata["retryHistory"]["operatorHoldReason"] = self.operator_hold_reason
+        if self.authorized_reset:
+            metadata["retryHistory"]["authorizedReset"] = dict(self.authorized_reset)
+        if self.local_workflow_ref:
+            metadata["localWorkflowRef"] = self.local_workflow_ref
+        if self.tombstone:
+            metadata["tombstone"] = True
+        if self.successor_attempt_id:
+            metadata["successorAttemptId"] = self.successor_attempt_id
+        return metadata
+
+
+def handoff_from_metadata(metadata: Mapping[str, Any]) -> AttemptHandoff:
+    """Rebuild a handoff from validated metadata (same logical attempt)."""
+    retry = metadata.get("retryHistory") if isinstance(metadata.get("retryHistory"), Mapping) else {}
+    preserved = metadata.get("preservedWork") if isinstance(metadata.get("preservedWork"), Mapping) else {}
+    retry = retry or {}
+    preserved = preserved or {}
+    authorized_reset = retry.get("authorizedReset")
+    return AttemptHandoff(
+        attempt_id=_string(metadata.get("attemptId")),
+        deployment_id=_string(metadata.get("deploymentId")),
+        repository=_string(metadata.get("repository")),
+        issue_number=metadata.get("issueNumber") if type(metadata.get("issueNumber")) is int else 0,
+        workflow_id=_string(metadata.get("workflowId")),
+        run_id=_string(metadata.get("runId")),
+        predecessor_attempt_id=_string(metadata.get("predecessorAttemptId")),
+        predecessor_comment_id=metadata.get("predecessorCommentId") if type(metadata.get("predecessorCommentId")) is int else 0,
+        activity=_string(metadata.get("activity")),
+        last_report=_string(metadata.get("lastReport")),
+        update_seq=metadata.get("updateSeq") if type(metadata.get("updateSeq")) is int else 1,
+        last_activity_at=_string(metadata.get("lastActivityAt")),
+        writers_stopped=bool(metadata.get("writersStopped")),
+        stop_evidence=_string(metadata.get("stopEvidence")),
+        pending_disposition=_string(metadata.get("pendingDisposition")),
+        pr_url=_string(preserved.get("prUrl")),
+        pr_head_sha=_string(preserved.get("prHeadSha")),
+        pr_base=_string(preserved.get("prBase")),
+        saved_branch=_string(preserved.get("savedBranch")),
+        saved_sha=_string(preserved.get("savedSha")),
+        outcome=_string(metadata.get("outcome")) or "pending",
+        met_requirements=tuple(str(item) for item in (metadata.get("metRequirements") or []) if str(item).strip()),
+        remaining_requirements=tuple(str(item) for item in (metadata.get("remainingRequirements") or []) if str(item).strip()),
+        verification_summary=_string(metadata.get("verificationSummary")),
+        next_action=_string(metadata.get("nextAction")) or "continue-implementation",
+        failed_attempt_refs=tuple(str(item) for item in (retry.get("failedAttempts") or []) if str(item).strip()),
+        no_progress_attempt_refs=tuple(str(item) for item in (retry.get("noProgressAttempts") or []) if str(item).strip()),
+        internal_retries=retry.get("internalRetries") if type(retry.get("internalRetries")) is int else 0,
+        cooldown_until=_string(retry.get("cooldownUntil")),
+        operator_hold=bool(retry.get("operatorHold")),
+        operator_hold_reason=_string(retry.get("operatorHoldReason")),
+        policy_lineage=_string(retry.get("policyLineage")),
+        authorized_reset=dict(authorized_reset) if isinstance(authorized_reset, Mapping) else None,
+        local_workflow_ref=_string(metadata.get("localWorkflowRef")),
+        tombstone=bool(metadata.get("tombstone")),
+        successor_attempt_id=_string(metadata.get("successorAttemptId")),
+    )
+
+
+def _metadata_digest(metadata: Mapping[str, Any]) -> str:
+    serialized = json.dumps(metadata, sort_keys=True, ensure_ascii=False, separators=(",", ":"), default=str)
+    return hashlib.sha256(serialized.encode("utf-8")).hexdigest()
+
+
+def render_attempt_comment(handoff: AttemptHandoff) -> tuple[str, str]:
+    """Render the one bounded comment body for an attempt.
+
+    Returns ``(body, error)``. The body is redacted and outbound-scanned
+    before it is returned: secret-like content blocks rendering with an
+    explicit error instead of producing a postable comment. Oversized content
+    is truncated at field bounds first; content still exceeding the total
+    bound is rejected rather than silently dropped.
+    """
+    from moonmind.utils.logging import redact_sensitive_text
+
+    metadata = handoff.to_metadata()
+    # Bound every free-text field before serialization so the comment stays a
+    # compact portable record.
+    metadata["lastReport"] = _truncate(metadata.get("lastReport", ""), _MAX_REPORT_CHARS)
+    metadata["verificationSummary"] = _truncate(metadata.get("verificationSummary", ""), _MAX_VERIFICATION_CHARS)
+    if metadata.get("stopEvidence"):
+        metadata["stopEvidence"] = _truncate(metadata["stopEvidence"], _MAX_STOP_EVIDENCE_CHARS)
+    for key in ("metRequirements", "remainingRequirements"):
+        items = [str(item) for item in (metadata.get(key) or [])]
+        metadata[key] = [_truncate(item, _MAX_REQUIREMENT_CHARS) for item in items[:_MAX_REQUIREMENTS]]
+    if metadata.get("pendingDisposition"):
+        metadata["pendingDisposition"] = _truncate(metadata["pendingDisposition"], _MAX_REPORT_CHARS)
+
+    try:
+        metadata_json = json.dumps(metadata, indent=2, ensure_ascii=False, sort_keys=True)
+    except (TypeError, ValueError) as exc:
+        return "", f"Attempt metadata is not serializable: {exc.__class__.__name__}."
+    summary_lines = _readable_summary(handoff, metadata)
+    marker = f"{ATTEMPT_MARKER_PREFIX} {handoff.attempt_id} v1{ATTEMPT_MARKER_SUFFIX}"
+    body = (
+        f"{marker}\n{summary_lines}\n\n"
+        f"<!-- {ATTEMPT_COMMENT_FORMAT_VERSION} metadata (machine-readable, do not edit) -->\n"
+        f"```json\n{metadata_json}\n```\n"
+    )
+    # Scan the raw body first: secret-like content blocks the comment with an
+    # explicit error instead of being laundered through redaction into a
+    # postable body. The posted body is still redacted below as defense in
+    # depth so scanner-missed shapes are scrubbed as well.
+    blocked, block_detail = _scan_comment_body(body)
+    if blocked:
+        return "", f"Attempt comment blocked by outbound scan: {block_detail}."
+    body = redact_sensitive_text(body)
+    if len(body) > MAX_COMMENT_CHARS:
+        return "", (
+            f"Attempt comment exceeds the {MAX_COMMENT_CHARS}-character bound "
+            f"({len(body)} characters); shorten reports and requirement lists."
+        )
+    field_error = _validate_handoff_shapes(handoff)
+    if field_error:
+        return "", field_error
+    return body, ""
+
+
+def _readable_summary(handoff: AttemptHandoff, metadata: Mapping[str, Any]) -> str:
+    meaning = ACTIVITY_MEANINGS.get(handoff.activity, "Unknown activity.")
+    lines = [
+        f"## MoonMind attempt `{handoff.attempt_id}` — {handoff.activity}",
+        "",
+        f"Deployment `{handoff.deployment_id}` works {handoff.repository}#{handoff.issue_number} "
+        f"(workflow `{handoff.workflow_id}`, run `{handoff.run_id}`).",
+        f"Activity: **{handoff.activity}** — {meaning}",
     ]
-    if str(workflow_id or "").strip() or str(run_id or "").strip():
-        scope = "|".join(stable_scope)
-    else:
-        scope = "|".join(stable_scope + [uuid.uuid4().hex])
-    return hashlib.sha256(scope.encode("utf-8")).hexdigest()[:32]
+    if handoff.predecessor_attempt_id:
+        lines.append(
+            f"Continues attempt `{handoff.predecessor_attempt_id}`"
+            + (f" (comment {handoff.predecessor_comment_id})" if handoff.predecessor_comment_id else "")
+            + "."
+        )
+    if handoff.last_report:
+        lines.append(f"Last report: {_truncate(handoff.last_report, _MAX_REPORT_CHARS)}")
+    lines.append(f"Writers stopped: {'yes' if handoff.writers_stopped else 'no'}.")
+    if handoff.pending_disposition:
+        lines.append(f"Pending disposition: {_truncate(handoff.pending_disposition, _MAX_REPORT_CHARS)}")
+    preserved = metadata.get("preservedWork") if isinstance(metadata.get("preservedWork"), Mapping) else {}
+    if preserved:
+        parts = []
+        if preserved.get("prUrl"):
+            parts.append(f"PR {preserved.get('prUrl')} @ {preserved.get('prHeadSha') or 'unknown head'} (base {preserved.get('prBase') or 'unknown'})")
+        if preserved.get("savedBranch"):
+            parts.append(f"saved {preserved.get('savedBranch')}@{preserved.get('savedSha') or 'unknown'}")
+        if parts:
+            lines.append("Preserved work: " + "; ".join(parts) + ".")
+    lines.append(f"Outcome: **{handoff.outcome}**; next action: **{handoff.next_action}**.")
+    # Render from the already-truncated metadata values: the raw handoff may
+    # carry unbounded requirement text that would push the final body past the
+    # total bound even though the bounded metadata itself fits.
+    _bounded_remaining = metadata.get("remainingRequirements")
+    if isinstance(_bounded_remaining, list) and _bounded_remaining:
+        lines.append("Remaining: " + "; ".join(str(item) for item in _bounded_remaining[:_MAX_REQUIREMENTS]) + ".")
+    elif handoff.remaining_requirements:
+        lines.append("Remaining: " + "; ".join(list(handoff.remaining_requirements)[:_MAX_REQUIREMENTS]) + ".")
+    if handoff.verification_summary:
+        lines.append(f"Verification: {_truncate(handoff.verification_summary, _MAX_VERIFICATION_CHARS)}")
+    retry_bits = []
+    if handoff.failed_attempt_refs or handoff.no_progress_attempt_refs:
+        retry_bits.append(
+            f"{len(handoff.failed_attempt_refs)} failed / {len(handoff.no_progress_attempt_refs)} no-progress linked attempts"
+        )
+    if handoff.cooldown_until:
+        retry_bits.append(f"cooldown until {handoff.cooldown_until}")
+    if handoff.operator_hold:
+        retry_bits.append("operator hold active")
+    if retry_bits:
+        lines.append("Retry: " + "; ".join(retry_bits) + ".")
+    if handoff.tombstone:
+        lines.append(
+            "Redaction tombstone: content withheld; lineage fields above remain authoritative. "
+            + (f"Successor: `{handoff.successor_attempt_id}`." if handoff.successor_attempt_id else "No successor recorded.")
+        )
+    return "\n".join(lines)
 
 
-def normalize_attempt_id(value: Any) -> str:
-    """Return the canonical attempt ID or ``""`` when malformed."""
-    candidate = str(value or "").strip().lower()
-    if _ATTEMPT_ID_RE.fullmatch(candidate):
-        return candidate
+def render_tombstone(
+    *,
+    attempt_id: str,
+    deployment_id: str,
+    repository: str,
+    issue_number: int,
+    failed_attempt_refs: Sequence[str] = (),
+    no_progress_attempt_refs: Sequence[str] = (),
+    policy_lineage: str = "",
+    successor_attempt_id: str = "",
+) -> tuple[str, str]:
+    """Render a redaction tombstone retaining lineage (design section 4.2)."""
+    handoff = AttemptHandoff(
+        attempt_id=_string(attempt_id),
+        deployment_id=_string(deployment_id),
+        repository=_string(repository),
+        issue_number=issue_number,
+        workflow_id="redacted",
+        run_id="redacted",
+        activity=ACTIVITY_ATTENTION,
+        last_report="Content redacted; lineage fields remain authoritative.",
+        writers_stopped=True,
+        outcome="blocked",
+        next_action="obtain-operator-attention",
+        failed_attempt_refs=tuple(failed_attempt_refs),
+        no_progress_attempt_refs=tuple(no_progress_attempt_refs),
+        policy_lineage=_string(policy_lineage),
+        tombstone=True,
+        successor_attempt_id=_string(successor_attempt_id),
+    )
+    return render_attempt_comment(handoff)
+
+
+def _validate_handoff_shapes(handoff: AttemptHandoff) -> str:
+    if not _ATTEMPT_ID_RE.fullmatch(handoff.attempt_id):
+        return f"Invalid attempt ID {handoff.attempt_id!r}."
+    if not _INSTALLATION_ID_RE.fullmatch(handoff.deployment_id):
+        return "Invalid deployment ID for the attempt."
+    if not _REPO_RE.fullmatch(handoff.repository):
+        return f"Invalid repository {handoff.repository!r}."
+    if type(handoff.issue_number) is not int or handoff.issue_number <= 0:
+        return "Invalid issue number for the attempt."
+    if handoff.activity not in ACTIVITIES:
+        return f"Unsupported activity {handoff.activity!r}; use one of {sorted(ACTIVITIES)} without label-family aliases."
+    if handoff.outcome not in OUTCOMES:
+        return f"Unsupported outcome {handoff.outcome!r}."
+    if handoff.next_action not in NEXT_ACTIONS:
+        return f"Unsupported next action {handoff.next_action!r}."
+    if handoff.predecessor_attempt_id and not _ATTEMPT_ID_RE.fullmatch(handoff.predecessor_attempt_id):
+        return f"Invalid predecessor attempt ID {handoff.predecessor_attempt_id!r}."
+    if handoff.pr_url and not _PR_URL_RE.fullmatch(handoff.pr_url):
+        return f"Invalid preserved PR URL {handoff.pr_url!r}."
+    for sha_value, label in ((handoff.pr_head_sha, "PR head"), (handoff.saved_sha, "saved commit")):
+        if sha_value and not _SHA_RE.fullmatch(sha_value.strip().lower()):
+            return f"Invalid {label} SHA {sha_value!r}: expected a 40-character hex commit SHA."
+    if handoff.saved_branch and not _BRANCH_RE.fullmatch(handoff.saved_branch):
+        return f"Invalid saved branch {handoff.saved_branch!r}."
+    if handoff.successor_attempt_id and not _ATTEMPT_ID_RE.fullmatch(handoff.successor_attempt_id):
+        return f"Invalid successor attempt ID {handoff.successor_attempt_id!r}."
     return ""
 
 
-def attempt_binding_key(*, repository: str, issue_number: int, attempt_id: str) -> str:
-    """Return the stable reconcile key for uncertain creates/retries."""
-    return (
-        f"{str(repository or '').strip().lower()}#"
-        f"{int(issue_number)}:{normalize_attempt_id(attempt_id)}"
-    )
+def _scan_comment_body(body: str) -> tuple[bool, str]:
+    """Scan a rendered comment; returns ``(blocked, redacted_detail)``."""
+    from moonmind.security import OutboundBundleItem, scan_outbound_bundle
+    from moonmind.utils.logging import redact_sensitive_text
 
-
-# ---------------------------------------------------------------------------
-# Requirement 2: one versioned, bounded comment representation
-# ---------------------------------------------------------------------------
-
-
-@dataclass(frozen=True)
-class AttemptHandoff:
-    """Portable per-attempt handoff carried in one GitHub issue comment."""
-
-    repository: str
-    issue_number: int
-    attempt_id: str
-    deployment_id: str
-    workflow_id: str = ""
-    run_id: str = ""
-    version: int = ATTEMPT_COMMENT_VERSION
-    predecessor_attempt_id: str = ""
-    predecessor_comment_id: str = ""
-    activity: str = ATTEMPT_ACTIVITY_ACTIVE
-    last_report: str = ""
-    last_activity_at: str = ""
-    writers_stopped: bool = False
-    publication_outcome: str = ""
-    pending_disposition: str = ""
-    pull_request_url: str = ""
-    head_sha: str = ""
-    head_branch: str = ""
-    base_branch: str = ""
-    saved_branch: str = ""
-    saved_sha: str = ""
-    outcome: str = ""
-    met_requirements: tuple[str, ...] = ()
-    unmet_requirements: tuple[str, ...] = ()
-    verification_summary: str = ""
-    next_action: str = ""
-    retry_history: tuple[str, ...] = ()
-    retry_allowance: str = ""
-    cooldown_until: str = ""
-    operator_hold: bool = False
-    reset_record: str = ""
-    policy_ref: str = ""
-    diagnostics_ref: str = ""
-
-    def to_metadata(self) -> dict[str, Any]:
-        return {
-            "format": "moonmind-issue-attempt",
-            "version": int(self.version),
-            "repository": str(self.repository or ""),
-            "issueNumber": int(self.issue_number),
-            "attemptId": normalize_attempt_id(self.attempt_id),
-            "deploymentId": str(self.deployment_id or ""),
-            "workflowId": str(self.workflow_id or ""),
-            "runId": str(self.run_id or ""),
-            "predecessorAttemptId": normalize_attempt_id(
-                self.predecessor_attempt_id
-            ),
-            "predecessorCommentId": str(self.predecessor_comment_id or ""),
-            "activity": str(self.activity or ""),
-            "lastReport": str(self.last_report or ""),
-            "lastActivityAt": str(self.last_activity_at or ""),
-            "writersStopped": bool(self.writers_stopped),
-            "publicationOutcome": str(self.publication_outcome or ""),
-            "pendingDisposition": str(self.pending_disposition or ""),
-            "pullRequestUrl": str(self.pull_request_url or ""),
-            "headSha": str(self.head_sha or ""),
-            "headBranch": str(self.head_branch or ""),
-            "baseBranch": str(self.base_branch or ""),
-            "savedBranch": str(self.saved_branch or ""),
-            "savedSha": str(self.saved_sha or ""),
-            "outcome": str(self.outcome or ""),
-            "metRequirements": list(self.met_requirements),
-            "unmetRequirements": list(self.unmet_requirements),
-            "verificationSummary": str(self.verification_summary or ""),
-            "nextAction": str(self.next_action or ""),
-            "retryHistory": list(self.retry_history),
-            "retryAllowance": str(self.retry_allowance or ""),
-            "cooldownUntil": str(self.cooldown_until or ""),
-            "operatorHold": bool(self.operator_hold),
-            "resetRecord": str(self.reset_record or ""),
-            "policyRef": str(self.policy_ref or ""),
-            "diagnosticsRef": str(self.diagnostics_ref or ""),
-        }
-
-
-_ACTIVITY_SUMMARY = {
-    ATTEMPT_ACTIVITY_PREPARING: "preparing work",
-    ATTEMPT_ACTIVITY_ACTIVE: "started implementation",
-    ATTEMPT_ACTIVITY_AWAITING_REVIEW: "awaiting review",
-    ATTEMPT_ACTIVITY_RELEASING: "releasing lifecycle status",
-    ATTEMPT_ACTIVITY_RELEASED: "released lifecycle status",
-    ATTEMPT_ACTIVITY_ATTENTION: "needing attention",
-}
-
-
-def _truncate(text: str, limit: int) -> str:
-    cleaned = str(text or "")
-    if len(cleaned) <= limit:
-        return cleaned
-    return cleaned[: max(0, limit - len(" …[truncated]"))] + " …[truncated]"
-
-
-def render_attempt_comment(handoff: AttemptHandoff) -> str:
-    """Render one bounded attempt comment (readable summary + metadata)."""
-    metadata = handoff.to_metadata()
-    machine = json.dumps(metadata, sort_keys=True, separators=(",", ":"))
-    marker = (
-        f"{ATTEMPT_MARKER_PREFIX} v={int(handoff.version)} "
-        f'attempt="{normalize_attempt_id(handoff.attempt_id)}" '
-        f'deployment="{str(handoff.deployment_id or "")[:128]}" '
-        f'issue="{str(handoff.repository or "")}#{int(handoff.issue_number)}"'
-        f"{ATTEMPT_MARKER_SUFFIX}"
-    )
-    activity_phrase = _ACTIVITY_SUMMARY.get(
-        str(handoff.activity or ""), str(handoff.activity or "active")
-    )
-    issue_ref = f"{handoff.repository}#{int(handoff.issue_number)}"
-    summary_lines = [
-        f"MoonMind attempt `{normalize_attempt_id(handoff.attempt_id)[:12]}` "
-        f"({activity_phrase}) for {issue_ref}.",
-    ]
-    # Preserve the legacy lifecycle sentence shapes so existing projections
-    # keep reading the same human dispositions from the new envelope.
-    if handoff.activity == ATTEMPT_ACTIVITY_ATTENTION:
-        summary_lines.append(
-            f"MoonMind flagged {issue_ref} as needing attention; "
-            "operator resolution is required before automatic work continues."
+    try:
+        result = scan_outbound_bundle(
+            [OutboundBundleItem(location="attempt.comment", content=body)],
+            high_security_mode=True,
         )
-    elif handoff.activity in {ATTEMPT_ACTIVITY_RELEASING, ATTEMPT_ACTIVITY_RELEASED}:
-        summary_lines.append(
-            f"MoonMind recorded a continuation handoff for {issue_ref}; "
-            "resume from the preserved work instead of starting fresh."
-            if handoff.pending_disposition or handoff.pull_request_url
-            else f"MoonMind released {issue_ref} to available with terminal proof; "
-            "it is eligible for fresh admission."
-        )
-    if handoff.last_report:
-        summary_lines.append(_truncate(str(handoff.last_report), 500))
-    if handoff.next_action:
-        summary_lines.append(f"Next action: {_truncate(str(handoff.next_action), 200)}.")
-    if handoff.operator_hold:
-        summary_lines.append("Operator hold is in effect; automatic retry is blocked.")
-    summary = "\n".join(line for line in summary_lines if line)
-    body = (
-        f"{marker}\n{summary}\n\n"
-        f"{ATTEMPT_FENCE_OPEN}\n{machine}\n{ATTEMPT_FENCE_CLOSE}\n"
-        f"{ATTEMPT_MARKER_PREFIX} end{ATTEMPT_MARKER_SUFFIX}"
-    )
-    if len(body) <= MAX_ATTEMPT_COMMENT_CHARS:
-        return body
-    # Bound by shrinking free-text fields first, then dropping optional
-    # variable-length fields entirely until a complete JSON envelope fits.
-    # The envelope is never sliced mid-JSON: a truncated fence would make
-    # parse_attempt_comment return empty metadata and destroy the durable
-    # cross-deployment handoff.
-    candidates = [
-        {
-            **handoff.__dict__,
-            "last_report": _truncate(handoff.last_report, 200),
-            "verification_summary": _truncate(handoff.verification_summary, 200),
-            "diagnostics_ref": "",
-        },
-        {
-            **handoff.__dict__,
-            "last_report": _truncate(handoff.last_report, 100),
-            "verification_summary": "",
-            "diagnostics_ref": "",
-            "met_requirements": (),
-            "retry_history": tuple(list(handoff.retry_history)[:10]),
-        },
-        {
-            **handoff.__dict__,
-            "last_report": "",
-            "verification_summary": "",
-            "diagnostics_ref": "",
-            "met_requirements": (),
-            "unmet_requirements": tuple(list(handoff.unmet_requirements)[:20]),
-            "retry_history": tuple(list(handoff.retry_history)[:10]),
-        },
-        {
-            **handoff.__dict__,
-            "last_report": "",
-            "verification_summary": "",
-            "diagnostics_ref": "",
-            "met_requirements": (),
-            "unmet_requirements": (),
-            "retry_history": (),
-        },
-    ]
-    for fields in candidates:
-        shrunk = AttemptHandoff(**fields)
-        machine = json.dumps(shrunk.to_metadata(), sort_keys=True, separators=(",", ":"))
-        candidate_body = (
-            f"{marker}\n{summary[:1500]}\n\n"
-            f"{ATTEMPT_FENCE_OPEN}\n{machine}\n{ATTEMPT_FENCE_CLOSE}\n"
-            f"{ATTEMPT_MARKER_PREFIX} end{ATTEMPT_MARKER_SUFFIX}"
-        )
-        if len(candidate_body) <= MAX_ATTEMPT_COMMENT_CHARS:
-            return candidate_body
-    # Minimal envelope: still a complete, parseable handoff carrying the
-    # stable identity; optional detail is omitted rather than corrupted.
-    minimal = AttemptHandoff(
-        repository=handoff.repository,
-        issue_number=handoff.issue_number,
-        attempt_id=handoff.attempt_id,
-        deployment_id=handoff.deployment_id,
-        workflow_id=handoff.workflow_id,
-        run_id=handoff.run_id,
-        version=handoff.version,
-        activity=handoff.activity,
-        outcome=handoff.outcome,
-        next_action=handoff.next_action,
-    )
-    machine = json.dumps(minimal.to_metadata(), sort_keys=True, separators=(",", ":"))
-    minimal_body = (
-        f"{marker}\n{summary[:500]}\n\n"
-        f"{ATTEMPT_FENCE_OPEN}\n{machine}\n{ATTEMPT_FENCE_CLOSE}\n"
-        f"{ATTEMPT_MARKER_PREFIX} end{ATTEMPT_MARKER_SUFFIX}"
-    )
-    return minimal_body[:MAX_ATTEMPT_COMMENT_CHARS] if len(minimal_body) > MAX_ATTEMPT_COMMENT_CHARS else minimal_body
+    except Exception as exc:  # noqa: BLE001 - scanner failure must fail closed
+        return True, f"scanner unavailable ({exc.__class__.__name__})"
+    if not result.allowed:
+        categories = sorted({finding.category for finding in result.findings})
+        detail = redact_sensitive_text("; ".join(result.sanitized_diagnostics) or ",".join(categories))
+        return True, detail or "secret-like content detected"
+    return False, ""
 
 
-@dataclass(frozen=True)
-class ParsedAttemptComment:
-    """One GitHub comment carrying (or claiming) an attempt envelope."""
+def redacted_error_detail(raw: Any) -> tuple[str, str]:
+    """Render a structured-error detail safe for comments and error payloads.
 
-    comment_id: str
-    author: str
-    created_at: str
-    updated_at: str
-    attempt_id: str
-    deployment_id: str
-    version: int
-    metadata: dict[str, Any]
-    raw_body: str = ""
-    has_marker: bool = False
-    has_fence: bool = False
+    Returns ``(safe_detail, error)``. Secret-like content is never echoed: a
+    blocked input yields an explicit placeholder plus the redacted categories.
+    """
+    from moonmind.utils.logging import redact_sensitive_text
 
-
-def parse_attempt_comment(comment: Mapping[str, Any]) -> ParsedAttemptComment | None:
-    """Parse one GitHub comment into an attempt envelope (``None`` = none)."""
-    body = str(comment.get("body") or "")
-    if ATTEMPT_MARKER_PREFIX not in body:
-        return None
-    marker_attrs: dict[str, str] = {}
-    # Restrict attribute parsing to the single canonical opening marker so
-    # human-readable prose after the marker (e.g. lastReport text containing
-    # attempt="..." or deployment="...") cannot shadow the true identity.
-    marker_end = body.find(ATTEMPT_MARKER_SUFFIX)
-    marker_scope = body[: marker_end + len(ATTEMPT_MARKER_SUFFIX)] if marker_end != -1 else body
-    for match in _MARKER_ATTRS_RE.finditer(marker_scope):
-        marker_attrs[match.group(1)] = match.group(2)
-    version = 0
-    version_match = re.search(r"\bv=(\d+)", marker_scope)
-    if version_match:
-        try:
-            version = int(version_match.group(1))
-        except ValueError:
-            version = 0
-    metadata: dict[str, Any] = {}
-    has_fence = ATTEMPT_FENCE_OPEN in body
-    fence_match = _FENCE_RE.search(body)
-    if fence_match:
-        try:
-            payload = json.loads(fence_match.group(1))
-            if isinstance(payload, Mapping):
-                metadata = dict(payload)
-                raw_version = metadata.get("version")
-                try:
-                    version = int(str(raw_version))
-                except (TypeError, ValueError):
-                    # Keep the marker-derived version; an unparsable
-                    # envelope version falls through to validation.
-                    pass
-        except (ValueError, TypeError):
-            metadata = {}
-    if not version:
-        raw_version = metadata.get("version")
-        try:
-            version = int(str(raw_version)) if raw_version is not None else 0
-        except (TypeError, ValueError):
-            version = 0
-    attempt_id = normalize_attempt_id(
-        marker_attrs.get("attempt") or metadata.get("attemptId")
-    )
-    deployment_id = str(
-        marker_attrs.get("deployment") or metadata.get("deploymentId") or ""
-    ).strip()[:128]
-    user = comment.get("user")
-    author = ""
-    if isinstance(user, Mapping):
-        author = str(user.get("login") or "").strip()
-    return ParsedAttemptComment(
-        comment_id=str(comment.get("id") or "").strip(),
-        author=author,
-        created_at=str(comment.get("created_at") or ""),
-        updated_at=str(comment.get("updated_at") or ""),
-        attempt_id=attempt_id,
-        deployment_id=deployment_id,
-        version=version,
-        metadata=metadata,
-        raw_body=body,
-        has_marker=True,
-        has_fence=has_fence,
-    )
-
-
-def collect_attempt_comments(
-    comments: Sequence[Mapping[str, Any]] | None,
-) -> list[ParsedAttemptComment]:
-    """Collect parsed attempt comments, skipping non-attempt prose."""
-    parsed: list[ParsedAttemptComment] = []
-    for comment in comments or []:
-        if not isinstance(comment, Mapping):
-            continue
-        item = parse_attempt_comment(comment)
-        if item is not None:
-            parsed.append(item)
-    return parsed
+    text = str(raw or "").strip()
+    if not text:
+        return "No detail available.", ""
+    blocked, block_detail = _scan_comment_body(text)
+    if blocked:
+        return f"Error detail withheld by outbound scan ({block_detail}).", ""
+    return _truncate(redact_sensitive_text(text), _MAX_REPORT_CHARS), ""
 
 
 # ---------------------------------------------------------------------------
@@ -585,519 +617,480 @@ def collect_attempt_comments(
 # ---------------------------------------------------------------------------
 
 
-@dataclass(frozen=True)
-class AttemptValidation:
-    """Explicit validation outcome for one parsed attempt comment."""
+def extract_attempt_metadata(body: Any) -> tuple[dict[str, Any] | None, str]:
+    """Extract the versioned metadata block from one comment body.
 
-    outcome: str
-    reason_code: str
-    detail: str = ""
-    usable: bool = False
-
-    def to_dict(self) -> dict[str, Any]:
-        return {
-            "outcome": self.outcome,
-            "reasonCode": self.reason_code,
-            "detail": self.detail,
-            "usable": self.usable,
-        }
-
-
-def validate_attempt_comment(
-    parsed: ParsedAttemptComment,
-    *,
-    repository: str,
-    issue_number: int,
-    trusted_posters: Sequence[str] | None = None,
-    known_attempt_ids: Sequence[str] | None = None,
-    require_trusted_poster: bool = True,
-) -> AttemptValidation:
-    """Validate one parsed attempt comment without trusting its marker.
-
-    A copied machine marker is not authentication: the poster must belong to
-    the trusted GitHub identity set, the schema version must be supported, the
-    issue identity must match exactly, and predecessor links must resolve to
-    known attempt history. Issue prose outside the envelope stays untrusted
-    reference content and is never executed or treated as authority.
+    Returns ``(metadata, error)``. A comment without the machine marker yields
+    ``(None, "")``: it is ordinary discussion, not a parse failure. Marker
+    present but metadata missing/unparseable yields an explicit error.
     """
-    if parsed.version not in SUPPORTED_ATTEMPT_COMMENT_VERSIONS:
-        return AttemptValidation(
-            outcome="rejected",
-            reason_code="unsupported_version",
-            detail=f"Unsupported attempt format version {parsed.version}; attention required.",
-        )
-    if not parsed.attempt_id:
-        return AttemptValidation(
-            outcome="rejected",
-            reason_code="missing_attempt_id",
-            detail="Attempt marker has no usable attempt ID; attention required.",
-        )
-    metadata = parsed.metadata or {}
-    if not parsed.has_fence or not metadata:
-        return AttemptValidation(
-            outcome="rejected",
-            reason_code="missing_metadata",
-            detail="Attempt marker has no machine-readable metadata; attention required.",
-        )
-    meta_repo = str(metadata.get("repository") or "").strip().lower()
-    try:
-        meta_number = int(str(metadata.get("issueNumber") or "0").strip())
-    except (TypeError, ValueError):
-        meta_number = 0
-    if (
-        meta_repo != str(repository or "").strip().lower()
-        or meta_number != int(issue_number)
-    ):
-        return AttemptValidation(
-            outcome="rejected",
-            reason_code="issue_mismatch",
-            detail="Attempt envelope names a different repository/issue; rejected.",
-        )
-    if str(metadata.get("format") or "") != "moonmind-issue-attempt":
-        return AttemptValidation(
-            outcome="rejected",
-            reason_code="unsupported_format",
-            detail="Attempt envelope format is not recognized; attention required.",
-        )
-    if require_trusted_poster and trusted_posters is not None:
-        trusted = {str(name).strip().lower() for name in trusted_posters if str(name).strip()}
-        if trusted and parsed.author.strip().lower() not in trusted:
-            return AttemptValidation(
-                outcome="rejected",
-                reason_code="untrusted_poster",
-                detail=(
-                    "Comment poster is not in the trusted GitHub identity set; "
-                    "a copied machine marker is not authentication."
-                ),
-            )
-    predecessor = normalize_attempt_id(metadata.get("predecessorAttemptId"))
-    if predecessor and known_attempt_ids is not None:
-        known = {normalize_attempt_id(item) for item in known_attempt_ids}
-        known.discard("")
-        if predecessor not in known:
-            return AttemptValidation(
-                outcome="rejected",
-                reason_code="missing_predecessor",
-                detail=(
-                    "Predecessor attempt is not in the referenced GitHub history; "
-                    "a fresh start is not inferred."
-                ),
-            )
-    pr_url = str(metadata.get("pullRequestUrl") or "").strip()
-    if pr_url and not _looks_like_github_pr_url(pr_url, repository=repository):
-        return AttemptValidation(
-            outcome="rejected",
-            reason_code="invalid_reference",
-            detail="Referenced pull request URL is inconsistent; attention required.",
-        )
-    activity = str(metadata.get("activity") or "")
-    if activity and activity not in ATTEMPT_ACTIVITIES:
-        return AttemptValidation(
-            outcome="rejected",
-            reason_code="unsupported_activity",
-            detail=f"Unknown attempt activity {activity!r}; attention required.",
-        )
-    return AttemptValidation(
-        outcome="usable",
-        reason_code="usable",
-        detail="Attempt comment validated against trusted provenance and schema.",
-        usable=True,
+    text = str(body or "")
+    if ATTEMPT_MARKER_PREFIX not in text:
+        return None, ""
+    marker_match = re.search(
+        r"<!--\s*moonmind-github-attempt:\s*(att_[0-9a-f]{24})\s+v1\s*-->",
+        text,
     )
-
-
-def _looks_like_github_pr_url(url: str, *, repository: str) -> bool:
-    text = str(url or "").strip()
-    match = re.match(
-        r"^https://github\.com/([^/]+/[^/]+)/pull/(\d+)(?:[/?#].*)?$", text
-    )
+    if not marker_match:
+        return None, "unsupported_format: attempt marker is present but malformed"
+    # Anchor to the dedicated machine-block sentinel: free-text fields such as
+    # lastReport or verificationSummary are untrusted and may themselves
+    # contain JSON fences. Only the fence following the exact sentinel is the
+    # authoritative metadata block.
+    sentinel_idx = text.find(_METADATA_SENTINEL)
+    if sentinel_idx == -1:
+        return None, "unsupported_format: attempt marker without the versioned metadata block"
+    match = re.search(r"```json\s*(\{.*?\})\s*```", text[sentinel_idx:], re.DOTALL)
     if not match:
-        return False
-    return match.group(1).strip().lower() == str(repository or "").strip().lower()
+        return None, "unsupported_format: attempt marker without a machine-readable JSON block"
+    try:
+        metadata = json.loads(match.group(1))
+    except (json.JSONDecodeError, ValueError):
+        return None, "unsupported_format: attempt metadata JSON is malformed"
+    if not isinstance(metadata, Mapping):
+        return None, "unsupported_format: attempt metadata is not an object"
+    metadata = dict(metadata)
+    # The marker binds the comment to one attempt ID; a mismatched embedded
+    # ID is conflicting-copy evidence, surfaced to the caller.
+    if metadata.get("attemptId") and metadata["attemptId"] != marker_match.group(1):
+        return None, f"conflicting_marker: marker {marker_match.group(1)} disagrees with embedded {metadata.get('attemptId')!r}"
+    metadata.setdefault("attemptId", marker_match.group(1))
+    return metadata, ""
 
 
-# ---------------------------------------------------------------------------
-# Requirement 4: per-attempt serialization, reconciliation, coalescing
-# ---------------------------------------------------------------------------
-
-
-@dataclass(frozen=True)
-class AttemptWritePlan:
-    """Serialization decision for one attempt's own comment."""
-
-    action: str
-    comment_id: str = ""
-    reason_code: str = ""
-    detail: str = ""
-
-    def to_dict(self) -> dict[str, Any]:
-        return {
-            "action": self.action,
-            "commentId": self.comment_id,
-            "reasonCode": self.reason_code,
-            "detail": self.detail,
-        }
-
-
-def select_own_comment(
-    parsed: Sequence[ParsedAttemptComment],
-    *,
-    attempt_id: str,
-) -> AttemptWritePlan:
-    """Decide the single write target for this attempt's own comment.
-
-    Duplicate same-ID comments are one logical attempt (update the earliest
-    stable copy); conflicting copies with the same ID but divergent payloads
-    require attention instead of last-timestamp-wins; another attempt's comment
-    is never selected as a write target.
-    """
-    own = [item for item in parsed if item.attempt_id == normalize_attempt_id(attempt_id)]
-    if not own:
-        return AttemptWritePlan(
-            action="create",
-            reason_code="no_own_comment",
-            detail="No existing comment carries this attempt ID; create one.",
-        )
-    payloads = {json.dumps(item.metadata, sort_keys=True) for item in own}
-    if len(payloads) > 1:
-        return AttemptWritePlan(
-            action="attention",
-            reason_code="conflicting_copies",
-            detail=(
-                "Multiple same-ID comments carry conflicting payloads; "
-                "reconciliation is required instead of last-timestamp-wins."
-            ),
-        )
-    earliest = sorted(own, key=lambda item: (item.created_at, item.comment_id))[0]
-    return AttemptWritePlan(
-        action="update",
-        comment_id=earliest.comment_id,
-        reason_code="own_comment_found",
-        detail="Updating this attempt's own comment; other attempts untouched.",
-    )
-
-
-def reconcile_uncertain_create(
-    parsed: Sequence[ParsedAttemptComment],
-    *,
-    attempt_id: str,
-    create_outcome_unknown: bool,
-) -> AttemptWritePlan:
-    """Reconcile a create whose HTTP response was lost before retrying.
-
-    A lost response is an unknown result, never proof of failure: reread by
-    the stable attempt marker first and adopt the observed comment instead of
-    blindly posting a duplicate.
-    """
-    if not create_outcome_unknown:
-        return select_own_comment(parsed, attempt_id=attempt_id)
-    plan = select_own_comment(parsed, attempt_id=attempt_id)
-    if plan.action == "create":
-        return AttemptWritePlan(
-            action="blocked",
-            reason_code="create_outcome_unknown",
-            detail=(
-                "Create result is unknown and no same-ID comment is observable; "
-                "reread GitHub before repeating the create."
-            ),
-        )
-    if plan.action == "update":
-        return AttemptWritePlan(
-            action="adopt",
-            comment_id=plan.comment_id,
-            reason_code="create_reconciled",
-            detail="Adopted the already-created same-ID comment after response loss.",
-        )
-    return plan
-
-
-def should_coalesce_progress(
-    *,
-    last_update_at: Any,
-    now: Any | None = None,
-    activity_changed: bool = False,
-    terminal_update: bool = False,
-) -> tuple[bool, str]:
-    """Decide whether a progress report coalesces within rate limits."""
-    if activity_changed or terminal_update:
-        return False, "activity or terminal transition always publishes"
-    last = _parse_moment(last_update_at)
-    moment = _parse_moment(now) or _utcnow()
-    if last is None:
-        return False, "no previous update timestamp"
-    elapsed = (moment - last).total_seconds()
-    if elapsed < PROGRESS_COALESCE_SECONDS:
-        return True, (
-            f"progress coalesced: only {elapsed:.0f}s since last update "
-            f"(limit {PROGRESS_COALESCE_SECONDS}s)"
-        )
-    return False, "coalesce window elapsed"
-
-
-# ---------------------------------------------------------------------------
-# Requirement 5: portable retry history surviving IDs/devices/labels
-# ---------------------------------------------------------------------------
-
-
-@dataclass(frozen=True)
-class RetryState:
-    """Effective retry allowance derived from portable GitHub history."""
-
-    failures: int
-    no_progress_count: int
-    holds: bool
-    cancelled: bool
-    allowance_remaining: int
-    cooldown_until: str
-    blocked: bool
-    reason_code: str
-    detail: str
-
-    def to_dict(self) -> dict[str, Any]:
-        return {
-            "failures": self.failures,
-            "noProgressCount": self.no_progress_count,
-            "holds": self.holds,
-            "cancelled": self.cancelled,
-            "allowanceRemaining": self.allowance_remaining,
-            "cooldownUntil": self.cooldown_until,
-            "blocked": self.blocked,
-            "reasonCode": self.reason_code,
-            "detail": self.detail,
-        }
-
-
-def _retry_entries(
-    parsed: Sequence[ParsedAttemptComment],
-) -> list[dict[str, Any]]:
-    entries: list[dict[str, Any]] = []
-    for item in parsed:
-        metadata = item.metadata or {}
-        history = metadata.get("retryHistory")
-        items = list(history) if isinstance(history, Sequence) and not isinstance(history, (str, bytes)) else []
-        entries.append(
-            {
-                "attemptId": item.attempt_id,
-                "outcome": str(metadata.get("outcome") or ""),
-                "operatorHold": bool(metadata.get("operatorHold")),
-                "resetRecord": str(metadata.get("resetRecord") or ""),
-                "policyRef": str(metadata.get("policyRef") or ""),
-                "history": [str(entry) for entry in items],
-            }
-        )
-    return entries
-
-
-def compute_retry_state(
-    parsed: Sequence[ParsedAttemptComment],
-    *,
-    max_attempts: int = DEFAULT_MAX_ATTEMPTS,
-    cooldown_seconds: int = DEFAULT_COOLDOWN_SECONDS,
-    policy_ref: str = "",
-    now: Any | None = None,
-) -> RetryState:
-    """Compute the effective retry allowance from linked GitHub history.
-
-    New workflow IDs, device changes, and label clears never reset the count:
-    every linked attempt contributes. Internal step retries stay inside the
-    controlling attempt (they are not separate comments). Missing or
-    incompatible policy lineage blocks automatic recovery; authorized resets
-    require an audited ``resetRecord``; simultaneous races yield a bounded
-    allowance, never an exact global counter claim.
-    """
-    moment = _parse_moment(now) or _utcnow()
-    # Canonicalize duplicate same-ID comments to one logical attempt: keep
-    # the latest observable copy per attempt ID so a retried create that left
-    # two same-ID markers cannot exhaust the allowance twice.
-    latest_by_id: dict[str, ParsedAttemptComment] = {}
-    for item in parsed:
-        if not item.attempt_id:
-            continue
-        key = normalize_attempt_id(item.attempt_id)
-        if not key:
-            continue
-        current = latest_by_id.get(key)
-        if current is None or (
-            item.updated_at,
-            item.created_at,
-            item.comment_id,
-        ) >= (current.updated_at, current.created_at, current.comment_id):
-            latest_by_id[key] = item
-    usable = sorted(
-        latest_by_id.values(),
-        key=lambda item: (item.created_at, item.updated_at, item.comment_id),
-    )
-    policy_refs = {
-        str((item.metadata or {}).get("policyRef") or "") for item in usable
-    }
-    policy_refs.discard("")
-    if len(policy_refs) > 1:
-        return RetryState(
-            failures=len(usable),
-            no_progress_count=0,
-            holds=False,
-            cancelled=False,
-            allowance_remaining=0,
-            cooldown_until="",
-            blocked=True,
-            reason_code="incompatible_policy_lineage",
-            detail="Conflicting policy lineage across linked attempts; attention required.",
-        )
-    if policy_ref and policy_refs and policy_ref not in policy_refs:
-        return RetryState(
-            failures=len(usable),
-            no_progress_count=0,
-            holds=False,
-            cancelled=False,
-            allowance_remaining=0,
-            cooldown_until="",
-            blocked=True,
-            reason_code="incompatible_policy_lineage",
-            detail="Portable history uses a different policy lineage; attention required.",
-        )
-    if not usable:
-        return RetryState(
-            failures=0,
-            no_progress_count=0,
-            holds=False,
-            cancelled=False,
-            allowance_remaining=max(0, int(max_attempts)),
-            cooldown_until="",
-            blocked=True,
-            reason_code="missing_lineage",
-            detail="No observable attempt history; automatic recovery is not claimed.",
-        )
-    failures = 0
-    no_progress = 0
-    holds = False
-    cancelled = False
-    latest_cooldown = ""
-    latest_cooldown_moment = None
-    for item in usable:
-        metadata = item.metadata or {}
-        # An audited reset/resolution record supersedes earlier holds and
-        # failures at its lineage point; later failures/holds still count.
-        if str(metadata.get("resetRecord") or "").strip():
-            failures = 0
-            no_progress = 0
-            holds = False
-            cancelled = False
-        outcome = str(metadata.get("outcome") or "").strip().lower()
-        if outcome in {"failed", "failure", "error", "no_progress", "no-progress"}:
-            failures += 1
-        if outcome in {"no_progress", "no-progress", "no_work", "no-work"}:
-            no_progress += 1
-        if bool(metadata.get("operatorHold")):
-            holds = True
-        if outcome in {"cancelled", "canceled"}:
-            cancelled = True
-        cooldown = str(metadata.get("cooldownUntil") or "").strip()
-        if cooldown:
-            cooldown_moment = _parse_moment(cooldown)
-            if cooldown_moment is not None and (
-                latest_cooldown_moment is None or cooldown_moment > latest_cooldown_moment
-            ):
-                latest_cooldown_moment = cooldown_moment
-                latest_cooldown = cooldown
-    if holds or cancelled:
-        return RetryState(
-            failures=failures,
-            no_progress_count=no_progress,
-            holds=holds,
-            cancelled=cancelled,
-            allowance_remaining=0,
-            cooldown_until=latest_cooldown,
-            blocked=True,
-            reason_code="operator_hold" if holds else "cancelled",
-            detail="Operator hold/cancellation evidence survives new IDs and devices.",
-        )
-    remaining = max(0, int(max_attempts) - failures)
-    if latest_cooldown:
-        cooldown_moment = _parse_moment(latest_cooldown)
-        if cooldown_moment is not None and cooldown_moment > moment:
-            return RetryState(
-                failures=failures,
-                no_progress_count=no_progress,
-                holds=False,
-                cancelled=False,
-                allowance_remaining=remaining,
-                cooldown_until=latest_cooldown,
-                blocked=True,
-                reason_code="cooldown_active",
-                detail="Cooldown from portable history is still active.",
-            )
-    if remaining <= 0:
-        return RetryState(
-            failures=failures,
-            no_progress_count=no_progress,
-            holds=False,
-            cancelled=False,
-            allowance_remaining=0,
-            cooldown_until=latest_cooldown,
-            blocked=True,
-            reason_code="retry_exhausted",
-            detail="Retry allowance from linked GitHub history is exhausted.",
-        )
-    if failures:
-        cooldown_until = (moment + timedelta(seconds=int(cooldown_seconds))).isoformat()
-    else:
-        cooldown_until = ""
-    return RetryState(
-        failures=failures,
-        no_progress_count=no_progress,
-        holds=False,
-        cancelled=False,
-        allowance_remaining=remaining,
-        cooldown_until=cooldown_until,
-        blocked=False,
-        reason_code="retry_allowed",
-        detail=(
-            "Retry allowance derived from linked GitHub history; "
-            "no exact global counter is claimed under races."
-        ),
-    )
-
-
-def reconstruct_handoff(
-    parsed: Sequence[ParsedAttemptComment],
+def validate_attempt_handoff(
+    metadata: Mapping[str, Any],
     *,
     repository: str,
     issue_number: int,
+    trusted_posters: Sequence[str],
+    author_login: str,
 ) -> dict[str, Any]:
-    """Reconstruct remaining work + retry restrictions from GitHub alone.
+    """Validate one extracted handoff against provenance, schema, and lineage.
 
-    Device B needs no private logs: the latest usable attempt contributes its
-    remaining requirements, next action, preserved PR/branch/SHA, and the
-    portable retry state computed above.
+    A copied machine marker is not authentication: the comment author's login
+    must exactly match the caller-supplied trusted-poster set. Issue prose is
+    never consulted; only this metadata block is validated.
     """
-    usable = [item for item in parsed if item.attempt_id and (item.metadata or {})]
-    if not usable:
-        return {
-            "reconstructable": False,
-            "reasonCode": "missing_lineage",
-            "detail": "No usable attempt history is observable on GitHub.",
-        }
-    latest = sorted(
-        usable, key=lambda item: (item.updated_at, item.created_at, item.comment_id)
-    )[-1]
-    metadata = latest.metadata or {}
-    retry = compute_retry_state(parsed)
+
+    def _deny(code: str, summary: str) -> dict[str, Any]:
+        return {"allowed": False, "reasonCode": code, "summary": summary, "metadata": dict(metadata)}
+
+    trusted = {str(login).strip().lower() for login in trusted_posters if str(login).strip()}
+    author = str(author_login or "").strip().lower()
+    # Shared GitHub usernames do not separate mutually adversarial devices:
+    # trust requires an explicit per-deployment poster allow-list match, never
+    # the mere presence of a machine marker.
+    if not author or author not in trusted:
+        return _deny(
+            "untrusted_poster",
+            "Comment poster is not in the trusted poster set; a copied machine marker is not authentication.",
+        )
+    version = _string(metadata.get("formatVersion"))
+    if version != ATTEMPT_COMMENT_FORMAT_VERSION:
+        return _deny(
+            "unsupported_version",
+            f"Unsupported attempt format {version!r}; expected {ATTEMPT_COMMENT_FORMAT_VERSION}.",
+        )
+    if _string(metadata.get("repository")).lower() != _string(repository).lower() or metadata.get("issueNumber") != issue_number:
+        return _deny(
+            "issue_identity_mismatch",
+            f"Attempt targets {metadata.get('repository')}#{metadata.get('issueNumber')}, not {repository}#{issue_number}.",
+        )
+    if not _ATTEMPT_ID_RE.fullmatch(_string(metadata.get("attemptId"))):
+        return _deny("unsupported_format", "Attempt metadata lacks a valid attemptId.")
+    if not _INSTALLATION_ID_RE.fullmatch(_string(metadata.get("deploymentId"))):
+        return _deny("unsupported_format", "Attempt metadata lacks a valid deploymentId.")
+    activity = _string(metadata.get("activity"))
+    if activity not in ACTIVITIES:
+        return _deny(
+            "unsupported_format",
+            f"Unsupported activity {activity!r}; use one of {sorted(ACTIVITIES)} without label-family aliases.",
+        )
+    if _string(metadata.get("outcome")) not in OUTCOMES:
+        return _deny("unsupported_format", "Attempt metadata carries an unsupported outcome.")
+    if _string(metadata.get("nextAction")) not in NEXT_ACTIONS:
+        return _deny("unsupported_format", "Attempt metadata carries an unsupported next action.")
+    # Authority-sensitive fields must carry their declared JSON types.
+    # Coercion after validation (bool("false") is True) would let a
+    # provenance-valid malformed comment flip stop/sequence semantics, so
+    # mistyped fields fail closed here instead of being coerced later.
+    if "writersStopped" in metadata and not isinstance(metadata.get("writersStopped"), bool):
+        return _deny("unsupported_format", "Attempt metadata writersStopped must be a boolean.")
+    if "updateSeq" in metadata and (
+        not isinstance(metadata.get("updateSeq"), int) or isinstance(metadata.get("updateSeq"), bool)
+    ):
+        return _deny("unsupported_format", "Attempt metadata updateSeq must be an integer.")
+    for _collection_key in ("metRequirements", "remainingRequirements"):
+        _collection = metadata.get(_collection_key)
+        if _collection is not None and (
+            not isinstance(_collection, list) or not all(isinstance(item, str) for item in _collection)
+        ):
+            return _deny("unsupported_format", f"Attempt metadata {_collection_key} must be a list of strings.")
+    _retry_shape = metadata.get("retryHistory")
+    if isinstance(_retry_shape, Mapping) and "operatorHold" in _retry_shape and not isinstance(
+        _retry_shape.get("operatorHold"), bool
+    ):
+        return _deny("unsupported_format", "Attempt metadata retryHistory.operatorHold must be a boolean.")
+    predecessor = _string(metadata.get("predecessorAttemptId"))
+    if predecessor and not _ATTEMPT_ID_RE.fullmatch(predecessor):
+        return _deny("invalid_predecessor", f"Predecessor attempt ID {predecessor!r} is malformed.")
+    preserved = metadata.get("preservedWork")
+    if preserved is not None:
+        if not isinstance(preserved, Mapping):
+            return _deny("invalid_reference", "preservedWork must be an object when present.")
+        pr_url = _string(preserved.get("prUrl"))
+        if pr_url:
+            pr_match = _PR_URL_RE.fullmatch(pr_url)
+            if not pr_match:
+                return _deny("invalid_reference", f"Preserved PR URL {pr_url!r} is not a valid GitHub PR URL.")
+            if pr_match.group(1).lower() != repository.split("/")[0].lower() or pr_match.group(2).lower() != repository.split("/")[-1].lower():
+                return _deny("invalid_reference", f"Preserved PR {pr_url!r} belongs to a different repository than {repository}.")
+        for sha_value, label in ((preserved.get("prHeadSha"), "PR head"), (preserved.get("savedSha"), "saved commit")):
+            if _string(sha_value) and not _SHA_RE.fullmatch(_string(sha_value).lower()):
+                return _deny("invalid_reference", f"{label} SHA {_string(sha_value)!r} is not a 40-character hex commit SHA.")
+        if _string(preserved.get("savedBranch")) and not _BRANCH_RE.fullmatch(_string(preserved.get("savedBranch"))):
+            return _deny("invalid_reference", "Saved branch name is malformed.")
+    retry = metadata.get("retryHistory")
+    if retry is not None and not isinstance(retry, Mapping):
+        return _deny("unsupported_format", "retryHistory must be an object when present.")
     return {
-        "reconstructable": True,
-        "repository": str(repository or ""),
-        "issueNumber": int(issue_number),
-        "latestAttemptId": latest.attempt_id,
-        "latestCommentId": latest.comment_id,
-        "deploymentId": latest.deployment_id,
-        "activity": str(metadata.get("activity") or ""),
-        "unmetRequirements": list(metadata.get("unmetRequirements") or []),
-        "nextAction": str(metadata.get("nextAction") or ""),
-        "pullRequestUrl": str(metadata.get("pullRequestUrl") or ""),
-        "headSha": str(metadata.get("headSha") or ""),
-        "headBranch": str(metadata.get("headBranch") or ""),
-        "baseBranch": str(metadata.get("baseBranch") or ""),
-        "savedBranch": str(metadata.get("savedBranch") or ""),
-        "savedSha": str(metadata.get("savedSha") or ""),
-        "retry": retry.to_dict(),
+        "allowed": True,
+        "reasonCode": "allowed",
+        "summary": f"Validated attempt {metadata.get('attemptId')} ({activity}) for {repository}#{issue_number}.",
+        "metadata": dict(metadata),
+    }
+
+
+def check_predecessor_available(
+    metadata: Mapping[str, Any],
+    known_attempt_ids: Sequence[str],
+) -> dict[str, Any]:
+    """Require referenced predecessors to resolve; never infer a fresh start."""
+    predecessor = _string(metadata.get("predecessorAttemptId"))
+    if not predecessor:
+        return {"ok": True, "reasonCode": "no_predecessor", "summary": "No predecessor claimed."}
+    known = {_string(item) for item in known_attempt_ids if _string(item)}
+    if predecessor not in known:
+        return {
+            "ok": False,
+            "reasonCode": "missing_predecessor",
+            "summary": (
+                f"Predecessor attempt {predecessor} is not in the observed GitHub history; "
+                "the continuation is blocked rather than started fresh."
+            ),
+        }
+    return {"ok": True, "reasonCode": "predecessor_observed", "summary": f"Predecessor {predecessor} observed."}
+
+
+def is_stale_local_update(*, local_seq: int, remote_seq: int) -> bool:
+    """Detect out-of-order local updates: a local seq at/below the published
+    remote seq for the same attempt must not overwrite newer remote state."""
+    return int(local_seq) <= int(remote_seq)
+
+
+# ---------------------------------------------------------------------------
+# Requirement 4: serialized per-attempt writes + reconciliation
+# ---------------------------------------------------------------------------
+
+
+def reconcile_attempt_comments(
+    comments: Sequence[Mapping[str, Any]],
+    *,
+    attempt_id: str,
+) -> dict[str, Any]:
+    """Reconcile uncertain creation by the stable attempt marker.
+
+    ``comments`` are GitHub-visible ``{"id": int, "body": str}`` mappings.
+    Duplicate same-ID comments are one logical attempt, never extra retry
+    allowance: identical copies reconcile to the canonical (lowest-ID) comment
+    while conflicting copies require attention instead of last-timestamp-wins.
+    """
+
+    matches: list[dict[str, Any]] = []
+    malformed = 0
+    for comment in comments:
+        if not isinstance(comment, Mapping):
+            continue
+        body = str(comment.get("body") or "")
+        if f"{ATTEMPT_MARKER_PREFIX} {attempt_id} v1" not in body:
+            continue
+        metadata, error = extract_attempt_metadata(body)
+        if metadata is None:
+            malformed += 1
+            continue
+        try:
+            comment_id = int(comment.get("id"))  # type: ignore[arg-type]
+        except (TypeError, ValueError):
+            continue
+        matches.append({"id": comment_id, "metadata": metadata, "digest": _metadata_digest(metadata)})
+    if not matches:
+        if malformed:
+            return {
+                "action": "attention",
+                "reasonCode": "malformed_marker",
+                "summary": "Comments carry the attempt marker but no parseable metadata; attention required.",
+                "commentId": None,
+            }
+        return {
+            "action": "create",
+            "reasonCode": "no_existing_comment",
+            "summary": "No comment carries this attempt marker; creation is safe after this read.",
+            "commentId": None,
+        }
+    if len(matches) == 1:
+        return {
+            "action": "update",
+            "reasonCode": "own_comment_found",
+            "summary": f"Attempt owns comment {matches[0]['id']}; update that comment only.",
+            "commentId": matches[0]["id"],
+        }
+    digests = {match["digest"] for match in matches}
+    if len(digests) == 1:
+        canonical = min(match["id"] for match in matches)
+        return {
+            "action": "update",
+            "reasonCode": "duplicate_copies_one_attempt",
+            "summary": (
+                f"{len(matches)} identical copies represent one logical attempt; "
+                f"update canonical comment {canonical} only."
+            ),
+            "commentId": canonical,
+        }
+    return {
+        "action": "attention",
+        "reasonCode": "conflicting_copies",
+        "summary": (
+            f"{len(matches)} same-ID comments conflict; reconciliation required, "
+            "not last-timestamp-wins. No write is authorized."
+        ),
+        "commentId": None,
+    }
+
+
+def should_publish_progress(
+    *,
+    last_publish_ts: float | None,
+    now_ts: float,
+    activity_changed: bool = False,
+    outcome_changed: bool = False,
+    force: bool = False,
+) -> bool:
+    """Coalesce routine progress reports within bounded rate limits."""
+    if force or activity_changed or outcome_changed:
+        return True
+    if last_publish_ts is None:
+        return True
+    try:
+        return (float(now_ts) - float(last_publish_ts)) >= PROGRESS_COALESCE_SECONDS
+    except (TypeError, ValueError):
+        return True
+
+
+# ---------------------------------------------------------------------------
+# Requirement 5: portable retry history (this issue owns the calculation)
+# ---------------------------------------------------------------------------
+
+
+def _referenced_attempt_ids(entry: Mapping[str, Any], *keys: str) -> set[str]:
+    """Collect well-formed attempt IDs retained inside one chain entry.
+
+    ``AttemptHandoff`` serializes accumulated ``retryHistory.failedAttempts``
+    and ``retryHistory.noProgressAttempts`` (including in redaction
+    tombstones), so the references an entry carries are part of the portable
+    retry budget, not free text.
+    """
+    refs: set[str] = set()
+    candidates: list[Any] = []
+    for key in keys:
+        candidates.append(entry.get(key))
+    retry_history = entry.get("retryHistory")
+    if isinstance(retry_history, Mapping):
+        for key in keys:
+            candidates.append(retry_history.get(key))
+    for candidate in candidates:
+        if isinstance(candidate, (list, tuple)):
+            for item in candidate:
+                if isinstance(item, str) and _ATTEMPT_ID_RE.fullmatch(item.strip()):
+                    refs.add(item.strip())
+    return refs
+
+
+def _count_retry_evidence(entries: Sequence[Mapping[str, Any]]) -> tuple[int, int]:
+    """Count failures and no-progress signals as a union of direct and retained evidence.
+
+    Direct per-entry outcomes and retained ``failedAttempts`` /
+    ``noProgressAttempts`` references are unioned by attempt ID so a current
+    handoff carrying retained history cannot silently reset the budget, while
+    visible chain entries are never double-counted.
+    """
+    failed_ids: set[str] = set()
+    no_progress_ids: set[str] = set()
+    for index, entry in enumerate(entries):
+        attempt_id = _string(entry.get("attemptId")) or f"__entry_{index}"
+        if _string(entry.get("outcome")) in {"failed", "blocked"} or bool(entry.get("failed")):
+            failed_ids.add(attempt_id)
+        if bool(entry.get("noProgress")):
+            no_progress_ids.add(attempt_id)
+        failed_ids |= _referenced_attempt_ids(entry, "failedAttempts", "failed_attempt_refs", "failedAttemptRefs")
+        no_progress_ids |= _referenced_attempt_ids(
+            entry, "noProgressAttempts", "no_progress_attempt_refs", "noProgressAttemptRefs"
+        )
+    # References that resolve to a visible chain entry already counted above
+    # add no extra allowance either way; the union keeps them counted once.
+    return len(failed_ids), len(no_progress_ids)
+
+
+def derive_retry_state(
+    linked_attempts: Sequence[Mapping[str, Any]],
+    *,
+    policy: Mapping[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Derive effective retry allowance, cooldown, and hold from GitHub evidence.
+
+    Only the predecessor-linked chain counts: new workflow IDs, device
+    (deployment) changes, and label clearing never reset history. Internal
+    retries (``internalRetries`` inside one attempt) never create new issue
+    attempts. Missing or incompatible policy lineage blocks automatic recovery.
+    Simultaneous races (duplicate/conflicting copies or forked successors of
+    one predecessor) make the exact global count unknowable: the result is
+    then explicitly approximate with no claimed remaining allowance.
+    """
+
+    policy = dict(policy or {})
+    max_attempts = policy.get("maxAttempts", 3)
+    try:
+        max_attempts = int(max_attempts)
+    except (TypeError, ValueError):
+        return _retry_blocked("invalid_policy", "Retry policy maxAttempts is not an integer.")
+    expected_lineage = _string(policy.get("lineageRef") or policy.get("lineage_ref"))
+    chain: list[Mapping[str, Any]] = [entry for entry in linked_attempts if isinstance(entry, Mapping)]
+    # A lineage gap (successor referencing a missing predecessor) is unknown
+    # prior work, never a clean slate: block automatic recovery explicitly.
+    if any(
+        bool(entry.get("lineageGap")) or _string(entry.get("missingPredecessor"))
+        for entry in chain
+    ):
+        return _retry_blocked(
+            "lineage_gap",
+            "Linked history contains a lineage gap; unknown prior work blocks automatic recovery.",
+        )
+    failures, no_progress = _count_retry_evidence(chain)
+    operator_hold = False
+    hold_reason = ""
+    cooldown_until = ""
+    reset_index = -1
+    for index, entry in enumerate(chain):
+        retry_history = entry.get("retryHistory") if isinstance(entry.get("retryHistory"), Mapping) else {}
+        lineage = _string(entry.get("policyLineage")) or _string(retry_history.get("policyLineage"))
+        if expected_lineage and lineage and lineage != expected_lineage:
+            return _retry_blocked(
+                "incompatible_policy_lineage",
+                f"Attempt {entry.get('attemptId')} carries incompatible policy lineage {lineage!r}; automatic recovery is blocked.",
+            )
+        if not _string(lineage) and chain and expected_lineage:
+            return _retry_blocked(
+                "missing_policy_lineage",
+                "Linked history is missing policy lineage; automatic recovery is blocked rather than assumed fresh.",
+            )
+        if bool(entry.get("operatorHold")) or bool(retry_history.get("operatorHold")):
+            operator_hold = True
+            hold_reason = _string(retry_history.get("operatorHoldReason")) or _string(entry.get("operatorHoldReason")) or "operator hold recorded in portable handoff"
+        candidate_cooldown = _string(retry_history.get("cooldownUntil")) or _string(entry.get("cooldownUntil"))
+        if candidate_cooldown > cooldown_until:
+            cooldown_until = candidate_cooldown
+        reset = retry_history.get("authorizedReset") or entry.get("authorizedReset")
+        if isinstance(reset, Mapping) and _string(reset.get("resetBy")) and _string(reset.get("resetReason")) and _string(reset.get("resetAt")):
+            reset_index = index
+    if reset_index >= 0:
+        failures, no_progress = _count_retry_evidence(chain[reset_index + 1 :])
+        if not any(
+            bool(entry.get("operatorHold"))
+            or bool(((entry.get("retryHistory") or {}) if isinstance(entry.get("retryHistory"), Mapping) else {}).get("operatorHold"))
+            for entry in chain[reset_index + 1 :]
+        ):
+            operator_hold = False
+            hold_reason = ""
+    # Forked successors of one predecessor (or duplicate/conflicting markers
+    # reported by the caller) mean the exact global count cannot be claimed.
+    successor_counts: dict[str, int] = {}
+    for entry in chain:
+        predecessor = _string(entry.get("predecessorAttemptId"))
+        if predecessor:
+            successor_counts[predecessor] = successor_counts.get(predecessor, 0) + 1
+    raced = any(count > 1 for count in successor_counts.values()) or bool(policy.get("raceObserved"))
+    attempts_observed = len(chain)
+    if raced:
+        return {
+            "blocked": True,
+            "reasonCode": "race_approximate",
+            "summary": "Simultaneous duplicate starts observed; no exact global retry count is claimed.",
+            "attemptsObserved": attempts_observed,
+            "failuresRetained": failures,
+            "noProgressRetained": no_progress,
+            "remainingAllowance": None,
+            "cooldownUntil": cooldown_until,
+            "operatorHold": operator_hold,
+            "operatorHoldReason": hold_reason,
+            "approximate": True,
+        }
+    remaining: int | None = max(0, max_attempts - failures)
+    if operator_hold:
+        return {
+            "blocked": True,
+            "reasonCode": "operator_hold",
+            "summary": f"Operator hold active: {hold_reason or 'manual intervention required'}. No automatic replacement is scheduled.",
+            "attemptsObserved": attempts_observed,
+            "failuresRetained": failures,
+            "noProgressRetained": no_progress,
+            "remainingAllowance": remaining,
+            "cooldownUntil": cooldown_until,
+            "operatorHold": True,
+            "operatorHoldReason": hold_reason,
+            "approximate": False,
+        }
+    if remaining is not None and remaining <= 0:
+        return {
+            "blocked": True,
+            "reasonCode": "retry_budget_exhausted",
+            "summary": f"Retry budget exhausted ({failures} linked failures against allowance {max_attempts}); attention required.",
+            "attemptsObserved": attempts_observed,
+            "failuresRetained": failures,
+            "noProgressRetained": no_progress,
+            "remainingAllowance": 0,
+            "cooldownUntil": cooldown_until,
+            "operatorHold": False,
+            "operatorHoldReason": "",
+            "approximate": False,
+        }
+    return {
+        "blocked": False,
+        "reasonCode": "retry_allowed",
+        "summary": f"{remaining} of {max_attempts} automatic attempts remain from portable GitHub history.",
+        "attemptsObserved": attempts_observed,
+        "failuresRetained": failures,
+        "noProgressRetained": no_progress,
+        "remainingAllowance": remaining,
+        "cooldownUntil": cooldown_until,
+        "operatorHold": False,
+        "operatorHoldReason": "",
+        "approximate": False,
+    }
+
+
+def _retry_blocked(code: str, summary: str) -> dict[str, Any]:
+    return {
+        "blocked": True,
+        "reasonCode": code,
+        "summary": summary,
+        "attemptsObserved": 0,
+        "failuresRetained": 0,
+        "noProgressRetained": 0,
+        "remainingAllowance": None,
+        "cooldownUntil": "",
+        "operatorHold": False,
+        "operatorHoldReason": "",
+        "approximate": False,
     }
 
 
@@ -1106,181 +1099,387 @@ def reconstruct_handoff(
 # ---------------------------------------------------------------------------
 
 
-@dataclass(frozen=True)
-class ReleaseDecision:
-    """Distinction between a proposed and a completed (released) disposition."""
-
-    released: bool
-    reason_code: str
-    detail: str
-
-    def to_dict(self) -> dict[str, Any]:
-        return {
-            "released": self.released,
-            "reasonCode": self.reason_code,
-            "detail": self.detail,
-        }
-
-
-def decide_release(
-    metadata: Mapping[str, Any],
+def evaluate_release(
+    handoff: AttemptHandoff,
     *,
     writers_stopped: bool,
     mutations_settled: bool,
-    preservation_verified: bool,
-    no_work_evidence: bool = False,
+    preservation_verified_or_no_work: bool,
     label_outcome_observed: bool,
-) -> ReleaseDecision:
-    """Decide whether a terminal comment may record ``released``.
-
-    The terminal comment may always record the intended next disposition
-    (``pendingDisposition``); ``released`` additionally requires confirmed
-    stopped writers, resolved shared mutations, verified preservation or
-    explicit no-work evidence, and the observed label outcome. Terminal
-    attempts never resume publication/cleanup merely on device reconnect:
-    callers must route a ``released`` attempt to read-only observation.
-    """
-    _ = metadata
-    if not writers_stopped:
-        return ReleaseDecision(
-            released=False,
-            reason_code="writers_not_stopped",
-            detail="Release proposed but writers are not confirmed stopped.",
-        )
-    if not mutations_settled:
-        return ReleaseDecision(
-            released=False,
-            reason_code="mutations_unsettled",
-            detail="Release proposed but shared mutations are unresolved.",
-        )
-    if not (preservation_verified or no_work_evidence):
-        return ReleaseDecision(
-            released=False,
-            reason_code="preservation_unverified",
-            detail="Release proposed but preservation/no-work evidence is missing.",
-        )
-    if not label_outcome_observed:
-        return ReleaseDecision(
-            released=False,
-            reason_code="label_outcome_unobserved",
-            detail="Release proposed but the label outcome was not observed.",
-        )
-    return ReleaseDecision(
-        released=True,
-        reason_code="released",
-        detail="Terminal handoff released: stop, preservation, mutation, and label evidence all observed.",
-    )
-
-
-def is_terminal_released(metadata: Mapping[str, Any]) -> bool:
-    """Return True when the handoff records a completed ``released`` state."""
-    return (
-        str(metadata.get("activity") or "") == ATTEMPT_ACTIVITY_RELEASED
-        and str(metadata.get("pendingDisposition") or "released") == "released"
-        and bool(metadata.get("writersStopped"))
-    )
-
-
-# ---------------------------------------------------------------------------
-# Requirement 7: outbound scanning/redaction boundary
-# ---------------------------------------------------------------------------
-
-
-def redact_comment_text(text: str) -> str:
-    """Redact secret-shaped content before it reaches a GitHub comment."""
-    from moonmind.utils.logging import redact_sensitive_text
-
-    return redact_sensitive_text(str(text or ""))
-
-
-def scan_comment_text(
-    text: str, *, location: str = "github.issue_attempt.comment"
 ) -> dict[str, Any]:
-    """Scan one outbound comment through the existing outbound boundary."""
-    from moonmind.security import scan_outbound_text
+    """Distinguish a proposed disposition from a completed release.
 
-    result = scan_outbound_text(
-        str(text or ""), location=location, high_security_mode=True
-    )
+    The terminal comment may record the intended next disposition
+    (``pendingDisposition``) before label changes, but ``released`` requires
+    all four confirmations. Anything less stays ``releasing`` with the
+    explicit missing list.
+    """
+    missing: list[str] = []
+    if not writers_stopped:
+        missing.append("writers_stopped")
+    if not mutations_settled:
+        missing.append("mutations_settled")
+    if not preservation_verified_or_no_work:
+        missing.append("preservation_verified_or_no_work")
+    if not label_outcome_observed:
+        missing.append("label_outcome_observed")
+    if not missing:
+        return {
+            "released": True,
+            "reasonCode": "released",
+            "missing": [],
+            "summary": "Attempt release completed: writers stopped, mutations settled, preservation verified or explicitly absent, and label outcome observed.",
+        }
     return {
-        "allowed": bool(result.allowed),
-        "decision": str(result.decision),
-        "diagnostics": list(result.sanitized_diagnostics),
-        "policyRef": "moonmind.security.outbound_scan.v1",
+        "released": False,
+        "reasonCode": "release_proposed",
+        "missing": missing,
+        "summary": f"Release proposed but not completed; missing: {', '.join(missing)}.",
     }
 
 
-def redact_structured_error(error: Mapping[str, Any] | None) -> dict[str, Any]:
-    """Redact one structured error payload for GitHub-visible surfaces."""
-    from moonmind.utils.logging import redact_sensitive_payload
+def is_terminal_released(handoff: AttemptHandoff) -> bool:
+    """Return True when the attempt must not resume publication or cleanup.
 
-    payload = dict(error or {})
-    redacted = redact_sensitive_payload(payload)
-    scan = scan_comment_text(
-        json.dumps(payload, sort_keys=True, default=str)[:4000],
-        location="github.issue_attempt.error",
-    )
-    if isinstance(redacted, Mapping):
-        redacted = dict(redacted)
+    A released attempt performs no further issue-state or PR writes, even when
+    its device reconnects: a resumed old process rereads GitHub and stops.
+    """
+    return handoff.activity == ACTIVITY_RELEASED
+
+
+# ---------------------------------------------------------------------------
+# Trusted-boundary publish path (Activity/adapter orchestration)
+# ---------------------------------------------------------------------------
+
+
+def _comment_poster_login(comment: Any) -> str:
+    """Return the normalized GitHub login that authored one listed comment."""
+    if not isinstance(comment, Mapping):
+        return ""
+    user = comment.get("user")
+    login = user.get("login") if isinstance(user, Mapping) else None
+    return str(login or "").strip().lower()
+
+
+async def publish_attempt_handoff(
+    *,
+    service: Any,
+    repository: str,
+    issue_number: int,
+    handoff: AttemptHandoff,
+    last_publish_ts: float | None = None,
+    now_ts: float | None = None,
+    force: bool = False,
+    trusted_posters: Sequence[str] | None = None,
+    prior_activity: str | None = None,
+    prior_outcome: str | None = None,
+) -> dict[str, Any]:
+    """Create or update the attempt's own comment through the trusted adapter.
+
+    The real Activity/adapter path: renders the bounded, redacted comment,
+    reconciles uncertain creation by the stable attempt marker, updates only
+    the attempt's own comment, coalesces routine progress, and refuses to
+    overwrite another attempt's comment. A lost create/update response
+    surfaces ``outcome_unknown`` with a reconcile-by-marker instruction
+    instead of blindly repeating effects.
+
+    ``trusted_posters`` is the caller-supplied provenance allow-list: when
+    provided, only comments authored by those logins participate in
+    reconciliation, so a copied machine marker from any other poster can
+    neither force ``conflicting_copies`` nor steer the write decision. A
+    released handoff may always perform its initial publication (creation);
+    the no-more-writes rule applies once the remote comment is already
+    released or names a successor. Stale local updates (local ``updateSeq``
+    at/below the published remote seq with divergent content) are refused
+    instead of overwriting newer terminal evidence.
+    """
+    import time as _time
+
+    shape_error = _validate_handoff_shapes(handoff)
+    if shape_error:
+        return {"ok": False, "reasonCode": "invalid_handoff", "summary": shape_error, "commentId": None}
+    if _string(handoff.repository).lower() != _string(repository).lower() or handoff.issue_number != issue_number:
+        return {
+            "ok": False,
+            "reasonCode": "issue_identity_mismatch",
+            "summary": f"Handoff targets {handoff.repository}#{handoff.issue_number}, not {repository}#{issue_number}.",
+            "commentId": None,
+        }
+    body, render_error = render_attempt_comment(handoff)
+    if render_error:
+        code = "comment_blocked_by_scan" if "outbound scan" in render_error else "comment_render_failed"
+        return {"ok": False, "reasonCode": code, "summary": render_error, "commentId": None}
+    trusted: set[str] | None = None
+    if trusted_posters is not None:
+        trusted = {str(login).strip().lower() for login in trusted_posters if str(login).strip()}
+        if not trusted:
+            return {
+                "ok": False,
+                "reasonCode": "invalid_trusted_posters",
+                "summary": "trusted_posters must be a non-empty allow-list of GitHub logins.",
+                "commentId": None,
+            }
+    current_ts = float(now_ts) if now_ts is not None else _time.time()
+    listed = await service.list_issue_comments(repo=repository, issue_number=issue_number)
+    if not listed.get("ok"):
+        if listed.get("reasonCode") == "outcome_unknown":
+            return {
+                "ok": False,
+                "reasonCode": "outcome_unknown",
+                "summary": "Issue comments unreadable; no local-only claim is made and no write was attempted.",
+                "commentId": None,
+            }
+        return {
+            "ok": False,
+            "reasonCode": str(listed.get("reasonCode") or "list_failed"),
+            "summary": str(listed.get("summary") or "Issue comment listing failed."),
+            "commentId": None,
+        }
+    comments = listed.get("comments") or []
+    if not isinstance(comments, list):
+        return {"ok": False, "reasonCode": "malformed_list", "summary": "Issue comment listing returned malformed evidence.", "commentId": None}
+    ignored_untrusted = 0
+    if trusted is not None:
+        provenanced: list[Any] = []
+        for comment in comments:
+            if isinstance(comment, Mapping) and _comment_poster_login(comment) in trusted:
+                provenanced.append(comment)
+            elif isinstance(comment, Mapping):
+                ignored_untrusted += 1
+        comments = provenanced
+    decision = reconcile_attempt_comments(comments, attempt_id=handoff.attempt_id)
+    if decision["action"] == "attention":
+        return {
+            "ok": False,
+            "reasonCode": decision["reasonCode"],
+            "summary": decision["summary"],
+            "commentId": None,
+        }
+    local_meta, _ = extract_attempt_metadata(body)
+    local_digest = _metadata_digest(local_meta) if local_meta is not None else ""
+    if decision["action"] == "update":
+        assert decision["commentId"] is not None
+        remote_body = ""
+        for comment in comments:
+            if not isinstance(comment, Mapping):
+                continue
+            try:
+                candidate_id = int(comment.get("id"))  # type: ignore[arg-type]
+            except (TypeError, ValueError):
+                continue
+            if candidate_id == int(decision["commentId"]):
+                remote_body = str(comment.get("body") or "")
+                break
+        remote_meta, remote_error = extract_attempt_metadata(remote_body)
+        if remote_meta is None:
+            return {
+                "ok": False,
+                "reasonCode": "malformed_remote" if remote_error else "outcome_unknown",
+                "summary": remote_error or "Own attempt comment is unreadable; no overwrite is authorized.",
+                "commentId": decision["commentId"],
+            }
+        remote_digest = _metadata_digest(remote_meta)
+        remote_seq = remote_meta.get("updateSeq")
+        if not isinstance(remote_seq, int) or isinstance(remote_seq, bool):
+            return {
+                "ok": False,
+                "reasonCode": "malformed_remote",
+                "summary": "Own attempt comment carries a mistyped updateSeq; no overwrite is authorized.",
+                "commentId": decision["commentId"],
+            }
+        if _string(remote_meta.get("activity")) == ACTIVITY_RELEASED:
+            if remote_digest == local_digest:
+                return {
+                    "ok": True,
+                    "reasonCode": "already_released",
+                    "summary": f"Attempt comment {decision['commentId']} is already released; no further write performed.",
+                    "commentId": decision["commentId"],
+                }
+            return {
+                "ok": False,
+                "reasonCode": "terminal_released_no_resume",
+                "summary": "Remote attempt comment is already released; a resumed process must not overwrite terminal evidence.",
+                "commentId": decision["commentId"],
+            }
+        if _string(remote_meta.get("successorAttemptId")) and remote_digest != local_digest:
+            return {
+                "ok": False,
+                "reasonCode": "successor_recorded",
+                "summary": "Remote attempt comment names a successor; a resumed process must not overwrite superseded state.",
+                "commentId": decision["commentId"],
+            }
+        if remote_digest != local_digest and is_stale_local_update(
+            local_seq=handoff.update_seq, remote_seq=int(remote_seq)
+        ):
+            return {
+                "ok": False,
+                "reasonCode": "stale_local_update",
+                "summary": (
+                    f"Local updateSeq {handoff.update_seq} does not advance published remote seq {remote_seq}; "
+                    "a resumed old process must not overwrite newer remote state."
+                ),
+                "commentId": decision["commentId"],
+            }
+        if prior_activity is not None:
+            activity_changed = bool(force) or (prior_activity != handoff.activity)
+        else:
+            activity_changed = bool(force) or (_string(remote_meta.get("activity")) != handoff.activity)
+        if prior_outcome is not None:
+            outcome_changed = prior_outcome != handoff.outcome
+        else:
+            outcome_changed = _string(remote_meta.get("outcome")) != handoff.outcome
+        if not should_publish_progress(
+            last_publish_ts=last_publish_ts,
+            now_ts=current_ts,
+            activity_changed=activity_changed,
+            outcome_changed=outcome_changed,
+            force=force,
+        ):
+            return {
+                "ok": True,
+                "reasonCode": "coalesced",
+                "summary": "Routine progress coalesced within the bounded rate limit; no GitHub write performed.",
+                "commentId": None,
+            }
+        updated = await service.update_issue_comment(
+            repo=repository,
+            comment_id=int(decision["commentId"]),
+            body=body,
+        )
+        if updated.get("ok"):
+            summary = f"Updated attempt comment {decision['commentId']}."
+            if ignored_untrusted:
+                summary += f" Ignored {ignored_untrusted} untrusted same-marker copies."
+            return {
+                "ok": True,
+                "reasonCode": "updated",
+                "summary": summary,
+                "commentId": decision["commentId"],
+            }
+        if updated.get("reasonCode") == "outcome_unknown":
+            return {
+                "ok": False,
+                "reasonCode": "outcome_unknown",
+                "summary": "Comment update response lost; reconcile by the stable attempt marker before retrying effects.",
+                "commentId": decision["commentId"],
+            }
+        return {
+            "ok": False,
+            "reasonCode": str(updated.get("reasonCode") or "update_failed"),
+            "summary": str(updated.get("summary") or "Comment update failed."),
+            "commentId": decision["commentId"],
+        }
+    # Create path: initial publication (including the first released terminal
+    # state) is always authorized; only routine re-publication coalesces.
+    if prior_activity is not None:
+        create_activity_changed = bool(force) or (prior_activity != handoff.activity)
     else:
-        redacted = {"value": redacted}
-    redacted["outboundScan"] = scan
-    return redacted
+        create_activity_changed = bool(force)
+    create_outcome_changed = (prior_outcome != handoff.outcome) if prior_outcome is not None else False
+    if not should_publish_progress(
+        last_publish_ts=last_publish_ts,
+        now_ts=current_ts,
+        activity_changed=create_activity_changed,
+        outcome_changed=create_outcome_changed,
+        force=force,
+    ):
+        return {
+            "ok": True,
+            "reasonCode": "coalesced",
+            "summary": "Routine progress coalesced within the bounded rate limit; no GitHub write performed.",
+            "commentId": None,
+        }
+    created = await service.create_issue_comment(repo=repository, issue_number=issue_number, body=body)
+    if created.get("ok"):
+        summary = f"Created attempt comment {created.get('commentId')}."
+        if ignored_untrusted:
+            summary += f" Ignored {ignored_untrusted} untrusted same-marker copies."
+        return {
+            "ok": True,
+            "reasonCode": "created",
+            "summary": summary,
+            "commentId": created.get("commentId"),
+        }
+    if created.get("reasonCode") == "outcome_unknown":
+        return {
+            "ok": False,
+            "reasonCode": "outcome_unknown",
+            "summary": "Comment create response lost; reconcile by the stable attempt marker before retrying effects.",
+            "commentId": None,
+        }
+    return {
+        "ok": False,
+        "reasonCode": str(created.get("reasonCode") or "create_failed"),
+        "summary": str(created.get("summary") or "Comment creation failed."),
+        "commentId": None,
+    }
 
 
-def build_safe_comment(handoff: AttemptHandoff) -> tuple[str, dict[str, Any]]:
-    """Render a redacted, scanned, bounded comment plus scan evidence."""
-    raw = render_attempt_comment(handoff)
-    redacted = redact_comment_text(raw)
-    scan = scan_comment_text(redacted)
-    return redacted[:MAX_ATTEMPT_COMMENT_CHARS], scan
+def collect_linked_chain(
+    validated_handoffs: Sequence[Mapping[str, Any]],
+    *,
+    head_attempt_id: str,
+) -> list[dict[str, Any]]:
+    """Order validated handoffs oldest-first along the predecessor chain.
+
+    Device B reconstructs A's remaining work from GitHub alone: starting at
+    the head attempt, follow ``predecessorAttemptId`` links through the
+    validated set. A lineage gap (successor referencing a missing
+    predecessor) stops the chain with an explicit marker instead of inferring
+    a clean slate.
+    """
+    by_id = {str(entry.get("attemptId")): dict(entry) for entry in validated_handoffs if str(entry.get("attemptId"))}
+    chain: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    current: str | None = _string(head_attempt_id)
+    gap = ""
+    while current and current not in seen:
+        seen.add(current)
+        entry = by_id.get(current)
+        if entry is None:
+            gap = current
+            break
+        chain.append(entry)
+        current = _string(entry.get("predecessorAttemptId")) or None
+    chain.reverse()
+    if gap:
+        chain.append({"attemptId": gap, "lineageGap": True, "missingPredecessor": gap})
+    return chain
 
 
 __all__ = [
-    "ATTEMPT_ACTIVITIES",
-    "ATTEMPT_ACTIVITY_ACTIVE",
-    "ATTEMPT_ACTIVITY_ATTENTION",
-    "ATTEMPT_ACTIVITY_AWAITING_REVIEW",
-    "ATTEMPT_ACTIVITY_PREPARING",
-    "ATTEMPT_ACTIVITY_RELEASING",
-    "ATTEMPT_ACTIVITY_RELEASED",
-    "ATTEMPT_COMMENT_VERSION",
-    "ATTEMPT_FENCE_CLOSE",
-    "ATTEMPT_FENCE_OPEN",
+    "ACTIVITIES",
+    "ACTIVITY_ACTIVE",
+    "ACTIVITY_ATTENTION",
+    "ACTIVITY_AWAITING_REVIEW",
+    "ACTIVITY_MEANINGS",
+    "ACTIVITY_PREPARING",
+    "ACTIVITY_RELEASED",
+    "ACTIVITY_RELEASING",
+    "ATTEMPT_COMMENT_FORMAT_VERSION",
     "ATTEMPT_MARKER_PREFIX",
     "ATTEMPT_MARKER_SUFFIX",
-    "ATTEMPT_NEXT_ACTIONS",
-    "DEFAULT_COOLDOWN_SECONDS",
-    "DEFAULT_INSTALLATION_ID_PATH",
-    "LEGACY_INSTALLATION_ID_PATH",
-    "DEFAULT_MAX_ATTEMPTS",
-    "INSTALLATION_ID_ENV_VARS",
-    "MAX_ATTEMPT_COMMENT_CHARS",
+    "MAX_COMMENT_CHARS",
+    "NEXT_ACTIONS",
+    "OUTCOMES",
     "PROGRESS_COALESCE_SECONDS",
-    "SUPPORTED_ATTEMPT_COMMENT_VERSIONS",
     "AttemptHandoff",
-    "AttemptValidation",
-    "AttemptWritePlan",
-    "ParsedAttemptComment",
-    "ReleaseDecision",
-    "RetryState",
-    "attempt_binding_key",
-    "build_attempt_id",
-    "build_safe_comment",
-    "collect_attempt_comments",
-    "compute_retry_state",
-    "decide_release",
+    "build_attempt_identity",
+    "check_predecessor_available",
+    "collect_linked_chain",
+    "derive_retry_state",
+    "evaluate_release",
+    "extract_attempt_metadata",
+    "handoff_from_metadata",
+    "is_stale_local_update",
     "is_terminal_released",
-    "normalize_attempt_id",
-    "parse_attempt_comment",
-    "reconcile_uncertain_create",
-    "reconstruct_handoff",
-    "redact_comment_text",
-    "redact_structured_error",
+    "new_attempt_id",
+    "publish_attempt_handoff",
+    "reconcile_attempt_comments",
+    "redacted_error_detail",
     "render_attempt_comment",
+    "render_tombstone",
     "resolve_installation_id",
-    "scan_comment_text",
-    "select_own_comment",
-    "should_coalesce_progress",
-    "validate_attempt_comment",
+    "should_publish_progress",
+    "validate_attempt_handoff",
 ]

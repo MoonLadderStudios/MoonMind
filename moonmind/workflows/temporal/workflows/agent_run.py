@@ -2832,6 +2832,16 @@ class MoonMindAgentRun:
             )
         if evaluated.failure_class is None:
             return evaluated
+        if (
+            (evaluated.metadata or {}).get("terminalContractRecoveryOutcome")
+            == "skill_terminal_verdict"
+        ):
+            # A validated manual-review/failed verdict is the Skill's terminal
+            # answer. There is nothing to continue or repair, so keep the
+            # verdict instead of relabeling it as an exhausted continuation.
+            # Pre-existing histories never carry this value, so replay of older
+            # runs still takes the continuation path below.
+            return evaluated
 
         runtime_id = (
             request.managed_session.runtime_id

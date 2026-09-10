@@ -2530,6 +2530,197 @@ class GitHubService:
                     "summary": f"Label remove result unknown: {exc.__class__.__name__}.",
                 }
 
+    async def list_issue_comments(
+        self,
+        *,
+        repo: str,
+        issue_number: int,
+        github_token: str | None = None,
+    ) -> dict[str, Any]:
+        """List GitHub-visible issue comments for attempt-handoff reads.
+
+        Bounded to five pages of 100 comments. An unreadable page (transport
+        loss, rate limit, or malformed payload) returns ``outcome_unknown``
+        instead of an empty list: callers must never interpret unreadable
+        comments as no owner. A full final page exhausts the bounded budget
+        with newer comments possibly unread, so it returns an explicit
+        ``incomplete_evidence`` failure rather than a truncated list reported
+        as complete.
+        """
+        token, resolution_error = await self.resolve_github_token(
+            github_token,
+            repo=repo,
+        )
+        if not token:
+            return {
+                "ok": False,
+                "reasonCode": "auth_unavailable",
+                "summary": resolution_error or self._missing_auth_summary("list issue comments"),
+            }
+        headers = self._github_headers(token)
+        comments: list[dict[str, Any]] = []
+        async with httpx.AsyncClient(timeout=self._timeout) as client:
+            for page in range(1, 6):
+                try:
+                    response = await client.get(
+                        f"https://api.github.com/repos/{repo}/issues/{issue_number}/comments",
+                        headers=headers,
+                        params={"per_page": 100, "page": page, "sort": "created", "direction": "asc"},
+                    )
+                    response.raise_for_status()
+                    payload = response.json()
+                except httpx.HTTPStatusError as exc:
+                    return {
+                        "ok": False,
+                        "reasonCode": "denied" if exc.response.status_code in {401, 403, 404} else "list_failed",
+                        "httpStatus": exc.response.status_code,
+                        "summary": (
+                            f"Issue comment list failed with HTTP {exc.response.status_code}. "
+                            f"{self._github_permission_summary(exc.response)}"
+                        ).strip(),
+                    }
+                except (httpx.TransportError, httpx.TimeoutException) as exc:
+                    return {
+                        "ok": False,
+                        "reasonCode": "outcome_unknown",
+                        "summary": f"Issue comment list result unknown: {exc.__class__.__name__}.",
+                    }
+                if not isinstance(payload, list):
+                    return {
+                        "ok": False,
+                        "reasonCode": "outcome_unknown",
+                        "summary": "Issue comment list returned malformed evidence.",
+                    }
+                for comment in payload:
+                    if not isinstance(comment, dict):
+                        return {
+                            "ok": False,
+                            "reasonCode": "outcome_unknown",
+                            "summary": "Issue comment list returned malformed evidence.",
+                        }
+                    comments.append(comment)
+                if len(payload) < 100:
+                    break
+                if page == 5:
+                    return {
+                        "ok": False,
+                        "reasonCode": "incomplete_evidence",
+                        "summary": (
+                            "Issue comment listing exhausted the bounded page budget with a full "
+                            "final page; newer comments may remain unread."
+                        ),
+                    }
+        return {"ok": True, "reasonCode": "listed", "summary": f"Listed {len(comments)} issue comments.", "comments": comments}
+
+    async def create_issue_comment(
+        self,
+        *,
+        repo: str,
+        issue_number: int,
+        body: str,
+        github_token: str | None = None,
+    ) -> dict[str, Any]:
+        """Create one issue comment (one attempt's handoff creation)."""
+        token, resolution_error = await self.resolve_github_token(
+            github_token,
+            repo=repo,
+        )
+        if not token:
+            return {
+                "ok": False,
+                "reasonCode": "auth_unavailable",
+                "summary": resolution_error or self._missing_auth_summary("create issue comments"),
+            }
+        headers = self._github_headers(token)
+        async with httpx.AsyncClient(timeout=self._timeout) as client:
+            try:
+                response = await client.post(
+                    f"https://api.github.com/repos/{repo}/issues/{issue_number}/comments",
+                    headers=headers,
+                    json={"body": body},
+                )
+                response.raise_for_status()
+                payload = response.json()
+            except httpx.HTTPStatusError as exc:
+                return {
+                    "ok": False,
+                    "reasonCode": "denied" if exc.response.status_code in {401, 403, 404} else "create_failed",
+                    "httpStatus": exc.response.status_code,
+                    "summary": (
+                        f"Issue comment create failed with HTTP {exc.response.status_code}. "
+                        f"{self._github_permission_summary(exc.response)}"
+                    ).strip(),
+                }
+            except (httpx.TransportError, httpx.TimeoutException) as exc:
+                # A lost response is an unknown result, not proof of failure:
+                # the caller reconciles by the stable attempt marker.
+                return {
+                    "ok": False,
+                    "reasonCode": "outcome_unknown",
+                    "summary": f"Issue comment create result unknown: {exc.__class__.__name__}.",
+                }
+            comment_id = payload.get("id") if isinstance(payload, dict) else None
+            return {
+                "ok": True,
+                "reasonCode": "created",
+                "summary": f"Created issue comment {comment_id}.",
+                "commentId": comment_id,
+                "comment": payload if isinstance(payload, dict) else {},
+            }
+
+    async def update_issue_comment(
+        self,
+        *,
+        repo: str,
+        comment_id: int,
+        body: str,
+        github_token: str | None = None,
+    ) -> dict[str, Any]:
+        """Update one issue comment (an attempt updates only its own comment)."""
+        token, resolution_error = await self.resolve_github_token(
+            github_token,
+            repo=repo,
+        )
+        if not token:
+            return {
+                "ok": False,
+                "reasonCode": "auth_unavailable",
+                "summary": resolution_error or self._missing_auth_summary("update issue comments"),
+            }
+        headers = self._github_headers(token)
+        async with httpx.AsyncClient(timeout=self._timeout) as client:
+            try:
+                response = await client.patch(
+                    f"https://api.github.com/repos/{repo}/issues/comments/{comment_id}",
+                    headers=headers,
+                    json={"body": body},
+                )
+                response.raise_for_status()
+                payload = response.json()
+            except httpx.HTTPStatusError as exc:
+                return {
+                    "ok": False,
+                    "reasonCode": "denied" if exc.response.status_code in {401, 403, 404} else "update_failed",
+                    "httpStatus": exc.response.status_code,
+                    "summary": (
+                        f"Issue comment update failed with HTTP {exc.response.status_code}. "
+                        f"{self._github_permission_summary(exc.response)}"
+                    ).strip(),
+                }
+            except (httpx.TransportError, httpx.TimeoutException) as exc:
+                return {
+                    "ok": False,
+                    "reasonCode": "outcome_unknown",
+                    "summary": f"Issue comment update result unknown: {exc.__class__.__name__}.",
+                }
+            return {
+                "ok": True,
+                "reasonCode": "updated",
+                "summary": f"Updated issue comment {comment_id}.",
+                "commentId": comment_id,
+                "comment": payload if isinstance(payload, dict) else {},
+            }
+
 __all__ = [
     "AutomatedReviewRequestResult",
     "CreatePRResult",
