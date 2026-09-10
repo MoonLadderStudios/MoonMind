@@ -300,6 +300,12 @@ def attempt_evidence_blocks_admission(attempt_context: Mapping[str, Any] | None)
     A missing in-progress label can never override supplied unresolved
     active-attempt evidence: selectors honor unresolved attempt evidence even
     when the label is missing (design section 8.1).
+
+    When the context carries portable linked retry history (``linkedAttempts``
+    plus an optional ``retryPolicy``), the cross-deployment retry budget owns
+    the decision: exhausted budgets, operator holds, lineage gaps, and
+    simultaneous-race approximations all block automatic admission rather
+    than starting fresh.
     """
     context = attempt_context or {}
     for key in (
@@ -312,6 +318,16 @@ def attempt_evidence_blocks_admission(attempt_context: Mapping[str, Any] | None)
     ):
         value = context.get(key)
         if value is True or (isinstance(value, str) and value.strip().lower() in {"1", "true", "yes"}):
+            return True
+    linked = context.get("linkedAttempts", context.get("linked_attempts"))
+    if isinstance(linked, Sequence) and not isinstance(linked, (str, bytes)) and len(linked) > 0:
+        from moonmind.workflows.temporal import github_issue_attempt as _attempt
+
+        policy = context.get("retryPolicy", context.get("retry_policy"))
+        retry_state = _attempt.derive_retry_state(
+            linked, policy=policy if isinstance(policy, Mapping) else None
+        )
+        if retry_state.get("blocked"):
             return True
     return False
 
