@@ -33,6 +33,30 @@ def git(*args: str, cwd: Path) -> str:
     ).stdout.strip()
 
 
+@pytest.mark.parametrize(
+    ("diagnostic", "retryable"),
+    [
+        ("Could not resolve host: github.com", True),
+        ("Could not resolve proxy: proxy.internal", True),
+        (
+            "Failed to connect to github.com port 443 after 10 ms: Couldn't connect to server",
+            True,
+        ),
+        ("The requested URL returned error: 403", False),
+        ("SSL certificate problem: unable to get local issuer certificate", False),
+        ("new transport failure", False),
+        ("", False),
+    ],
+)
+def test_publication_transport_diagnostics_fail_closed(diagnostic, retryable):
+    from moonmind.omnigent.workspace_publication import _PRE_CONNECTION_FAILURE
+
+    error = f"fatal: unable to access 'https://github.com/example/repo.git/': {diagnostic}\n"
+    assert bool(_PRE_CONNECTION_FAILURE.fullmatch(error.strip())) is retryable
+    # A marker inside an unrelated diagnostic is not transport authority.
+    assert not _PRE_CONNECTION_FAILURE.fullmatch(f"remote: {error}")
+
+
 @pytest.mark.asyncio
 async def test_checkpoint_restore_preserves_accepted_pr_publication(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
