@@ -18,7 +18,10 @@ from temporalio import client, exceptions
 from temporalio.testing import WorkflowEnvironment
 from temporalio.worker import UnsandboxedWorkflowRunner, Worker
 
-from moonmind.schemas.agent_runtime_models import AgentExecutionRequest
+from moonmind.schemas.agent_runtime_models import (
+    AgentExecutionRequest,
+    AgentRunResult,
+)
 from moonmind.workflows.temporal.workflows.merge_gate import (
     build_resolver_run_request,
 )
@@ -162,24 +165,99 @@ def test_continuation_authority_is_exposed_to_runtime_adapter_metadata() -> None
     )
 
 
+# Recorded production result (AgentRun
+# ``resolver:pr:4209:head:d71492a5bb89:h:dc64ac4fa7ec2f99:1:agent:node-1``,
+# 2026-09-10). The pr-resolver Skill wrote a valid ``blocked / ci_failures``
+# verdict, yet the plan re-ran the step three more times because the retry
+# decision looked for a nested ``metadata`` mapping that
+# ``_map_agent_run_result`` never produces (MoonLadderStudios/MoonMind#4221).
+_RECORDED_MANUAL_REVIEW_RESULT: dict[str, Any] = {
+    "outputRefs": ["artifact:art_01M264P5C569H11F48C0MXSQN9"],
+    "summary": (
+        "pr-resolver reported status 'blocked'; ci_failures; "
+        "next_step=run_full_remediation"
+    ),
+    "metrics": {},
+    "diagnosticsRef": "art_01M264P87Z71TSFRCDM7E1HGGV",
+    "failureClass": "execution_error",
+    "providerErrorCode": "PR_RESOLVER_MANUAL_REVIEW",
+    "retryRecommendation": None,
+    "metadata": {
+        "providerName": "omnigent",
+        "normalizedStatus": "completed",
+        "terminalContractId": "pr_resolver_terminal.v1",
+        "terminalContractEvidencePath": "var/pr_resolver/result.json",
+        "mergeAutomationDisposition": "manual_review",
+        "terminalContractAuthority": "MoonMind.AgentRun",
+        "terminalContractOutcome": "terminal_failure",
+        "failureCode": "PR_RESOLVER_MANUAL_REVIEW",
+        "terminalContractEvidenceRef": "art_01M264P832WTY8ZFRVH9AX88E3",
+        "terminalContractSatisfied": False,
+        "terminalContractMissingEvidence": [],
+        "terminalContractRecoveryOutcome": "skill_terminal_verdict",
+        "terminalContractContinuationCount": 0,
+    },
+}
+
+
+def _mapped_step_result(
+    workflow: MoonMindRunWorkflow, **overrides: Any
+) -> dict[str, Any]:
+    """Build the plan-step result exactly as the production child path does."""
+
+    payload: dict[str, Any] = {
+        **_RECORDED_MANUAL_REVIEW_RESULT,
+        "metadata": {**_RECORDED_MANUAL_REVIEW_RESULT["metadata"]},
+    }
+    metadata_overrides = overrides.pop("metadata", None)
+    payload.update(overrides)
+    if metadata_overrides is not None:
+        payload["metadata"] = metadata_overrides
+    return workflow._map_agent_run_result(AgentRunResult.model_validate(payload))
+
+
+def test_production_mapper_flattens_terminal_contract_metadata() -> None:
+    """The retry decision must read the shape the mapper actually emits."""
+
+    workflow = MoonMindRunWorkflow()
+    result = _mapped_step_result(workflow)
+
+    assert result["status"] == "FAILED"
+    assert "metadata" not in result["outputs"]
+    assert result["outputs"]["terminalContractOutcome"] == "terminal_failure"
+    assert result["outputs"]["mergeAutomationDisposition"] == "manual_review"
+    assert result["outputs"]["providerErrorCode"] == "PR_RESOLVER_MANUAL_REVIEW"
+
+
+def test_recorded_manual_review_verdict_is_not_retried(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(run_workflow_module.workflow, "patched", lambda _patch: True)
+    workflow = MoonMindRunWorkflow()
+
+    assert (
+        workflow._activity_result_retryable(
+            _mapped_step_result(workflow),
+            failure_message="execution_error",
+            tool_type="agent_runtime",
+        )
+        is False
+    )
+
+
 @pytest.mark.parametrize(
-    ("metadata", "provider_error_code"),
+    ("metadata_overrides", "provider_error_code"),
     [
         (
-            {
-                "terminalContractOutcome": "terminal_failure",
-                "terminalContractRecoveryOutcome": "unsupported_or_exhausted",
-                "mergeAutomationDisposition": "manual_review",
-            },
-            None,
+            {"mergeAutomationDisposition": "manual_review"},
+            "PR_RESOLVER_MANUAL_REVIEW",
         ),
         (
             {
-                "terminalContractOutcome": "terminal_failure",
-                "terminalContractRecoveryOutcome": "unsupported_or_exhausted",
                 "mergeAutomationDisposition": "failed",
+                "failureCode": "PR_RESOLVER_FAILED",
             },
-            None,
+            "PR_RESOLVER_FAILED",
         ),
         (
             {
@@ -193,20 +271,19 @@ def test_continuation_authority_is_exposed_to_runtime_adapter_metadata() -> None
 )
 def test_terminal_contract_decisions_do_not_trigger_generic_runtime_retry(
     monkeypatch: pytest.MonkeyPatch,
-    metadata: dict[str, str],
-    provider_error_code: str | None,
+    metadata_overrides: dict[str, str],
+    provider_error_code: str,
 ) -> None:
     monkeypatch.setattr(run_workflow_module.workflow, "patched", lambda _patch: True)
     workflow = MoonMindRunWorkflow()
-    result = {
-        "status": "FAILED",
-        "outputs": {
-            "error": "execution_error",
-            "failureClass": "execution_error",
-            "providerErrorCode": provider_error_code,
-            "metadata": metadata,
+    result = _mapped_step_result(
+        workflow,
+        providerErrorCode=provider_error_code,
+        metadata={
+            **_RECORDED_MANUAL_REVIEW_RESULT["metadata"],
+            **metadata_overrides,
         },
-    }
+    )
 
     assert (
         workflow._activity_result_retryable(
@@ -223,19 +300,49 @@ def test_missing_terminal_evidence_remains_retryable(
 ) -> None:
     monkeypatch.setattr(run_workflow_module.workflow, "patched", lambda _patch: True)
     workflow = MoonMindRunWorkflow()
-    result = {
-        "status": "FAILED",
-        "outputs": {
-            "error": "execution_error",
-            "failureClass": "execution_error",
-            "metadata": {
-                "terminalContractOutcome": "terminal_failure",
-                "terminalContractRecoveryOutcome": "continuation_boundary_unavailable",
-                "terminalContractMissingEvidence": ["var/pr_resolver/result.json"],
-            },
+    result = _mapped_step_result(
+        workflow,
+        summary=(
+            "Agent completed without required terminal evidence: "
+            "var/pr_resolver/result.json"
+        ),
+        providerErrorCode="INCOMPLETE_TERMINAL_CONTRACT",
+        metadata={
+            "terminalContractId": "pr_resolver_terminal.v1",
+            "terminalContractOutcome": "terminal_failure",
+            "terminalContractRecoveryOutcome": "continuation_boundary_unavailable",
+            "terminalContractMissingEvidence": ["var/pr_resolver/result.json"],
         },
-    }
+    )
 
+    assert workflow._activity_result_retryable(
+        result,
+        failure_message="execution_error",
+        tool_type="agent_runtime",
+    )
+
+
+@pytest.mark.parametrize("disposition", ["manual_review", "failed"])
+@pytest.mark.parametrize(
+    "failure_code", ["STALE_TERMINAL_EVIDENCE", "MALFORMED_TERMINAL_EVIDENCE"]
+)
+def test_unvalidated_resolver_disposition_remains_retryable(
+    monkeypatch: pytest.MonkeyPatch,
+    disposition: str,
+    failure_code: str,
+) -> None:
+    monkeypatch.setattr(run_workflow_module.workflow, "patched", lambda _patch: True)
+    workflow = MoonMindRunWorkflow()
+    result = _mapped_step_result(
+        workflow,
+        providerErrorCode=failure_code,
+        metadata={
+            **_RECORDED_MANUAL_REVIEW_RESULT["metadata"],
+            "failureCode": failure_code,
+            "mergeAutomationDisposition": disposition,
+            "terminalContractRecoveryOutcome": "unsupported_or_exhausted",
+        },
+    )
     assert workflow._activity_result_retryable(
         result,
         failure_message="execution_error",
@@ -248,22 +355,18 @@ def test_real_provider_failure_with_rejected_continuation_remains_retryable(
 ) -> None:
     monkeypatch.setattr(run_workflow_module.workflow, "patched", lambda _patch: True)
     workflow = MoonMindRunWorkflow()
-    result = {
-        "status": "FAILED",
-        "outputs": {
-            "error": "execution_error",
-            "failureClass": "execution_error",
-            "providerErrorCode": "RATE_LIMITED",
-            "retryRecommendation": "retry",
-            "metadata": {
-                "terminalContractOutcome": "continuation_requested",
-                "terminalContractRecoveryOutcome": (
-                    "continuation_rejected_failure_provenance"
-                ),
-                "mergeAutomationDisposition": "reenter_gate",
-            },
+    result = _mapped_step_result(
+        workflow,
+        providerErrorCode="RATE_LIMITED",
+        retryRecommendation="retry",
+        metadata={
+            "terminalContractOutcome": "continuation_requested",
+            "terminalContractRecoveryOutcome": (
+                "continuation_rejected_failure_provenance"
+            ),
+            "mergeAutomationDisposition": "reenter_gate",
         },
-    }
+    )
 
     assert workflow._activity_result_retryable(
         result,
@@ -277,20 +380,29 @@ def test_existing_history_preserves_provider_retry_decision(
 ) -> None:
     monkeypatch.setattr(run_workflow_module.workflow, "patched", lambda _patch: False)
     workflow = MoonMindRunWorkflow()
-    result = {
-        "status": "FAILED",
-        "outputs": {
-            "error": "execution_error",
-            "failureClass": "execution_error",
-            "metadata": {
-                "terminalContractOutcome": "terminal_failure",
-                "mergeAutomationDisposition": "manual_review",
-            },
-        },
-    }
 
     assert workflow._activity_result_retryable(
-        result,
+        _mapped_step_result(workflow),
+        failure_message="execution_error",
+        tool_type="agent_runtime",
+    )
+
+
+def test_pre_flattened_history_replays_the_recorded_retry(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Histories written before the flattened read retried; replay must agree."""
+
+    monkeypatch.setattr(
+        run_workflow_module.workflow,
+        "patched",
+        lambda patch: patch
+        != run_workflow_module.RUN_TERMINAL_CONTRACT_RETRY_FLATTENED_OUTPUTS_PATCH,
+    )
+    workflow = MoonMindRunWorkflow()
+
+    assert workflow._activity_result_retryable(
+        _mapped_step_result(workflow),
         failure_message="execution_error",
         tool_type="agent_runtime",
     )
