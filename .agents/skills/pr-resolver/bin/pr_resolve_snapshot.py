@@ -26,6 +26,7 @@ for _package_root in (SCRIPT_DIR.parent / "lib", *SCRIPT_DIR.parents):
 
 from pr_resolver_core.review_providers import (  # noqa: E402
     is_clean_review_comment,
+    is_low_severity_only_finding,
     resolve_automated_review_provider,
 )
 
@@ -390,6 +391,14 @@ def _classify_comment_actionability(
 
     Actionability rules are intentionally simple and deterministic:
     - Ignore comments with empty bodies.
+    - Ignore automated-review inline findings that carry only
+      P2/medium-or-below severity: they end the Fix and Review Loop instead
+      of triggering remediation or another review request. Only P0/critical
+      or P1/high findings keep the loop going. The threshold applies only
+      to bot-authored review comments from the latest automated review
+      round; human issue comments, review bodies, and other discussion
+      stay actionable even when they mention a low priority. Comments
+      without an explicit severity marker stay actionable.
     - Ignore review comments only when explicitly marked resolved/outdated.
     - Treat issue comments and review bodies as actionable.
     - Treat review comments as actionable except resolved/outdated threads and
@@ -408,6 +417,10 @@ def _classify_comment_actionability(
             return False, "thread_resolved"
         if comment.get("thread_outdated", False):
             return False, "thread_outdated"
+        if is_bot_user(comment.get("user") or "") and is_low_severity_only_finding(
+            body
+        ):
+            return False, "low_severity_finding"
         if not include_bot_review_comments and is_bot_user(comment.get("user") or ""):
             return False, "bot_review_comment_excluded"
         return True, "actionable"

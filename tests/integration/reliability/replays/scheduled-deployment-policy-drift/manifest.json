@@ -1,0 +1,10 @@
+{
+  "incidentWorkflowId": "mm:12352fc2-44cb-4f82-8dbd-9283d0fa8f63-2026-09-09T22:00:00Z",
+  "runtime": "omnigent",
+  "harness": "opencode-native",
+  "failure": "Schedule refresh retained the previous profile and launch policy while Host Class and server image authority advanced.",
+  "events": ["deployment_image_update", "schedule_refresh", "temporal_schedule_action_update", "agent_dispatch"],
+  "expected": "Future occurrences receive matching profile, policy and deployment authority; historical inputs and authored execution semantics remain unchanged.",
+  "workspaceArtifacts": [],
+  "agentLaunched": false
+}

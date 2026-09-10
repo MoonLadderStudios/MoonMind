@@ -8168,6 +8168,151 @@ async def test_existing_pr_survives_unchanged_omnigent_publication(
     assert not [r for r in requests if r.method == "PATCH"]
 
 
+@pytest.mark.parametrize("authored_base", [None, "main"])
+@pytest.mark.parametrize("entrypoint", ["generic", "profile_bound"])
+@pytest.mark.parametrize("operation", ["fetch", "ls-remote", "push"])
+@pytest.mark.parametrize(
+    "failure", ["recovered", "exhausted", "authentication", "cancelled"]
+)
+async def test_publication_transport_recovery_preserves_workspace_authority(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    authored_base: str | None,
+    entrypoint: str,
+    operation: str,
+    failure: str,
+) -> None:
+    """Replay the failed read through real Git, realizer, and parent evidence."""
+    manifest = load_replay("omnigent-publication-transient-transport", "manifest.json")
+    workflow_id = manifest["incidentWorkflowId"]
+    workspace_id = hashlib.sha256(f"{workflow_id}:{workflow_id}".encode()).hexdigest()[
+        :24
+    ]
+    repo, origin = _seed_no_commit_publication_repo(
+        workspace_root=tmp_path,
+        workspace_id=workspace_id,
+        relative_path="repo",
+        starting_branch="candidate",
+    )
+    SandboxWorkspaceRecordStore(tmp_path).ensure(
+        SandboxWorkspaceRecord(workspace_id, workflow_id, workflow_id, "repo")
+    )
+    _git(repo, "symbolic-ref", "refs/remotes/origin/HEAD", "refs/remotes/origin/main")
+    (repo / "implemented.txt").write_text("completed remediation\n")
+    initial_head = _git(repo, "rev-parse", "HEAD")
+    initial_refs = _git(repo, "ls-remote", "--heads", "origin")
+    request = AgentExecutionRequest(
+        agentKind="external",
+        agentId="omnigent",
+        correlationId=workflow_id,
+        idempotencyKey=f"{workflow_id}:publish",
+        workspaceSpec={
+            "repository": "MoonLadderStudios/Tactics",
+            **({"startingBranch": authored_base} if authored_base else {}),
+            "workspaceLocator": {
+                "kind": "sandbox",
+                "workspaceId": workspace_id,
+                "relativePath": "repo",
+            },
+        },
+        parameters={"publishMode": "branch"},
+    )
+    # The existing serialized invocation needs no new retry field or cutover.
+    request = AgentExecutionRequest.model_validate_json(
+        request.model_dump_json(by_alias=True)
+    )
+    monkeypatch.setattr(settings.security, "high_security_mode", False)
+    credential = AsyncMock(return_value=SimpleNamespace(token="fixture-credential"))
+    monkeypatch.setattr(
+        "moonmind.omnigent.workspace_publication.resolve_github_credential",
+        credential,
+    )
+    realizer = _no_commit_publication_realizer(tmp_path)
+    publisher = realizer._workspace_publisher
+    original_run = publisher._run
+    attempts = []
+
+    async def transport(*args, env=None, check=True):
+        if operation in args:
+            attempts.append((args, dict(env)))
+            if failure != "recovered" or len(attempts) <= 2:
+                error = manifest["escapedFailure"]["stderr"]
+                if failure == "authentication":
+                    error = "fatal: Authentication failed for 'https://github.com/example/repo.git/'\n"
+                return 128, "", error
+        return await original_run(*args, env=env, check=check)
+
+    monkeypatch.setattr(
+        OmnigentWorkspacePublicationService, "_run", staticmethod(transport)
+    )
+    sleep = AsyncMock(
+        side_effect=asyncio.CancelledError if failure == "cancelled" else None
+    )
+    monkeypatch.setattr("moonmind.omnigent.workspace_publication.asyncio.sleep", sleep)
+
+    async def publish():
+        if entrypoint == "generic":
+            return await realizer._publish_repository(
+                request, AgentRunResult(summary="completed")
+            )
+        runtime = OmnigentOAuthHostRuntime(
+            client=SimpleNamespace(), workspace_root=tmp_path
+        )
+        publication = await runtime.publish_workspace(
+            workspace_locator=request.workspace_spec["workspaceLocator"],
+            current_workflow_id=workflow_id,
+            current_step_execution_id=workflow_id,
+            publication_identity=request.idempotency_key,
+            publish_mode="branch",
+            base_branch=authored_base,
+            repository="MoonLadderStudios/Tactics",
+            github_token="fixture-credential",
+        )
+        return AgentRunResult(metadata=publication)
+
+    if failure != "recovered" or operation == "push":
+        expected_error = (
+            asyncio.CancelledError
+            if failure == "cancelled" and operation != "push"
+            else RuntimeError if operation == "ls-remote" else HarnessPlatformError
+        )
+        with pytest.raises(expected_error):
+            await publish()
+        assert len(attempts) == (
+            4 if failure == "exhausted" and operation != "push" else 1
+        )
+        assert (repo / "implemented.txt").read_text() == "completed remediation\n"
+        assert _git(repo, "ls-remote", "--heads", "origin") == initial_refs
+        if operation == "fetch":
+            assert _git(repo, "rev-parse", "HEAD") == initial_head
+            assert "implemented.txt" in _git(repo, "status", "--porcelain")
+    else:
+        result = await publish()
+        assert result.metadata["remote_verified"] is True
+        assert result.metadata["push_head_sha"] == _git(
+            origin, "rev-parse", "refs/heads/main"
+        )
+        if entrypoint == "generic":
+            assert (
+                result.metadata["acceptedRepositoryEvidence"]["remoteVerified"] is True
+            )
+        assert _git(origin, "show", "main:implemented.txt") == "completed remediation"
+        parent = MoonMindRunWorkflow()
+        parent._record_publish_result(
+            parameters={"publishMode": "branch"},
+            execution_result=SimpleNamespace(outputs=result.metadata),
+        )
+        assert parent._publish_status == "published"
+        assert len(attempts) >= 3
+        assert [call.args[0] for call in sleep.await_args_list] == [2, 4]
+    assert all(attempt == attempts[0] for attempt in attempts[:3])
+    assert credential.await_count == (1 if entrypoint == "generic" else 0)
+    if operation == "push" or failure == "authentication":
+        sleep.assert_not_awaited()
+    elif failure == "exhausted":
+        assert [call.args[0] for call in sleep.await_args_list] == [2, 4, 8]
+
+
 async def test_verified_no_commit_publication_reaches_the_workflow_publish_handoff(
     tmp_path: Path,
 ) -> None:
