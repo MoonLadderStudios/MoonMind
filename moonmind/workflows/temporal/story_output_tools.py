@@ -4515,7 +4515,7 @@ async def load_github_issue_preset_brief(
 
     search_evidence: dict[str, Any] = {}
     prerequisite_lookup = PrerequisiteLookup()
-    recovery_handoff: dict[str, Any] = {}
+    recovery_handoff: dict[str, Any] = _github_brief_recovery_handoff(inputs, _context)
 
     async def blockers_for_issue(issue: Mapping[str, Any]) -> list[dict[str, Any]]:
         return await _resolved_github_blockers(
@@ -4529,10 +4529,9 @@ async def load_github_issue_preset_brief(
         repository = _string(inputs.get("repository"))
         # A recovery candidate without usable handoff evidence would fail
         # deterministically at the start transition (it requires
-        # predecessor_stopped plus handoff_usable). Route supplied handoff
-        # evidence so the selector can admit it; otherwise the selector scans
-        # on for an Available candidate.
-        recovery_handoff = _github_brief_recovery_handoff(inputs, _context)
+        # predecessor_stopped plus handoff_usable); the routed handoff above
+        # lets the selector admit it, otherwise the selector scans on for an
+        # Available candidate.
         try:
             issue_number, search_evidence = await resolve_issue(
                 repository=repository,
