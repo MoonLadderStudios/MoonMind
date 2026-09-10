@@ -22,7 +22,6 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 from pydantic import BaseModel
 
-from moonmind.rag.context_pack import ContextItem, ContextPack
 
 from moonmind.schemas.agent_runtime_models import (
     AgentRunResult,
@@ -4167,24 +4166,13 @@ async def test_agent_runtime_send_turn_temporal_boundary() -> None:
             }
 
 @pytest.mark.asyncio
-async def test_agent_runtime_prepare_turn_instructions_injects_context(
+async def test_agent_runtime_prepare_turn_instructions_keeps_authored_instruction(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
-    class _FakeContextInjectionService:
-        async def inject_context(
-            self,
-            *,
-            request: Any,
-            workspace_path: Path,
-        ) -> None:
-            assert workspace_path == tmp_path
-            request.instruction_ref = "Injected context instruction"
-
-    monkeypatch.setattr(
-        "moonmind.rag.context_injection.ContextInjectionService",
-        _FakeContextInjectionService,
-    )
+    # MoonLadderStudios/MoonMind#4192: native RAG injection is retired. The
+    # authored instruction crosses unchanged; the session controller hook
+    # for repo-artifact writability still runs.
     class _FakeSessionController:
         def __init__(self) -> None:
             self.repaired_workspace_paths: list[str] = []
@@ -4214,8 +4202,9 @@ async def test_agent_runtime_prepare_turn_instructions_injects_context(
         }
     )
 
-    assert result.startswith("Injected context instruction")
+    assert "artifact:instructions" in result
     assert "Managed Codex CLI note:" in result
+    assert "native_retrieval_retired" in result
     assert session_controller.repaired_workspace_paths == [str(tmp_path)]
 
 
@@ -5621,34 +5610,13 @@ async def test_publish_path_filter_allows_checked_in_skill_directory(
 
 
 @pytest.mark.asyncio
-async def test_agent_runtime_prepare_turn_instructions_includes_context_artifact_reference(
+async def test_agent_runtime_prepare_turn_instructions_skips_retired_injection(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
-    async def _fake_to_thread(func, *args, **kwargs):
-        return func(*args, **kwargs)
-
-    def _fake_retrieve(self, request):
-        return (
-            ContextPack(
-                items=[ContextItem(score=0.9, source="docs/spec.md", text="retrieved text")],
-                filters={"repo": "moonmind"},
-                budgets={},
-                usage={"tokens": 8, "latency_ms": 4},
-                transport="direct",
-                context_text="Retrieved context snippet",
-                retrieved_at="2026-04-24T00:00:00Z",
-                telemetry_id="tid-1",
-            ),
-            None,
-        )
-
-    monkeypatch.setattr("moonmind.rag.context_injection.asyncio.to_thread", _fake_to_thread)
-    monkeypatch.setattr(
-        "moonmind.rag.context_injection.ContextInjectionService._retrieve_context_pack",
-        _fake_retrieve,
-    )
-
+    # MoonLadderStudios/MoonMind#4192: native RAG injection is retired. The
+    # prepared turn carries the authored instruction plus the managed note
+    # with the retired retrieval state; no context artifact is produced.
     activities = TemporalAgentRuntimeActivities()
 
     result = await activities.agent_runtime_prepare_turn_instructions(
@@ -5665,42 +5633,20 @@ async def test_agent_runtime_prepare_turn_instructions_includes_context_artifact
         }
     )
 
-    assert "BEGIN_RETRIEVED_CONTEXT" in result
-    assert "Retrieved context artifact: artifacts/context/" in result
+    assert "BEGIN_RETRIEVED_CONTEXT" not in result
+    assert "Retrieved context artifact: artifacts/context/" not in result
+    assert "native_retrieval_retired" in result
     assert str(tmp_path) not in result
-
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("metadata_only", [False, True])
-async def test_agent_runtime_prepare_turn_instructions_returns_durable_retrieval_metadata_when_requested(
+async def test_agent_runtime_prepare_turn_instructions_returns_retired_retrieval_metadata_when_requested(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
     metadata_only: bool,
 ) -> None:
-    async def _fake_to_thread(func, *args, **kwargs):
-        return func(*args, **kwargs)
-
-    def _fake_retrieve(self, request):
-        return (
-            ContextPack(
-                items=[ContextItem(score=0.9, source="docs/spec.md", text="retrieved text")],
-                filters={"repo": "moonmind"},
-                budgets={},
-                usage={"tokens": 8, "latency_ms": 4},
-                transport="direct",
-                context_text="Retrieved context snippet",
-                retrieved_at="2026-04-24T00:00:00Z",
-                telemetry_id="tid-1",
-            ),
-            None,
-        )
-
-    monkeypatch.setattr("moonmind.rag.context_injection.asyncio.to_thread", _fake_to_thread)
-    monkeypatch.setattr(
-        "moonmind.rag.context_injection.ContextInjectionService._retrieve_context_pack",
-        _fake_retrieve,
-    )
-
+    # MoonLadderStudios/MoonMind#4192: with injection retired, the durable
+    # retrieval metadata carries no context pack ref.
     activities = TemporalAgentRuntimeActivities()
 
     result = await activities.agent_runtime_prepare_turn_instructions(
@@ -5723,14 +5669,9 @@ async def test_agent_runtime_prepare_turn_instructions_returns_durable_retrieval
     if metadata_only:
         assert "instructions" not in result
     else:
-        assert "BEGIN_RETRIEVED_CONTEXT" in result["instructions"]
-    assert result["durableRetrievalMetadata"]["latestContextPackRef"].startswith(
-        "artifacts/context/"
-    )
-    assert result["durableRetrievalMetadata"]["retrievalDurabilityAuthority"] == "artifact_ref"
+        assert "BEGIN_RETRIEVED_CONTEXT" not in result["instructions"]
+    assert not result["durableRetrievalMetadata"].get("latestContextPackRef")
 
-
-@pytest.mark.asyncio
 async def test_agent_runtime_prepare_turn_instructions_requires_workspace_for_instruction_ref() -> None:
     activities = TemporalAgentRuntimeActivities()
 
@@ -5761,20 +5702,8 @@ async def test_agent_runtime_prepare_turn_instructions_temporal_boundary(
 ) -> None:
     from temporalio import activity
 
-    class _FakeContextInjectionService:
-        async def inject_context(
-            self,
-            *,
-            request: Any,
-            workspace_path: Path,
-        ) -> None:
-            assert workspace_path == tmp_path
-            request.instruction_ref = "Injected context instruction"
-
-    monkeypatch.setattr(
-        "moonmind.rag.context_injection.ContextInjectionService",
-        _FakeContextInjectionService,
-    )
+    # MoonLadderStudios/MoonMind#4192: native RAG injection is retired; the
+    # boundary test proves the authored instruction crosses unchanged.
     activities_impl = TemporalAgentRuntimeActivities()
 
     @activity.defn(name="agent_runtime.prepare_turn_instructions")
@@ -5808,7 +5737,8 @@ async def test_agent_runtime_prepare_turn_instructions_temporal_boundary(
                 task_queue="boundary-test-queue-prepare-turn-instructions",
             )
 
-            assert result.startswith("Injected context instruction")
+            assert result.startswith("artifact:instructions")
+            assert "Injected context instruction" not in result
             assert "Managed Codex CLI note:" in result
 
 async def test_agent_runtime_reconcile_managed_sessions_returns_bounded_summary() -> None:
@@ -6712,17 +6642,6 @@ async def test_launch_session_claude_auth_diagnostics_do_not_alias_workspace_or_
 async def test_agent_runtime_prepare_turn_instructions_adds_retrieval_capability_hint(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setenv("RAG_ENABLED", "1")
-    monkeypatch.setenv("GOOGLE_API_KEY", "test-key")
-    # MoonLadderStudios/MoonMind#4115 retired the native Qdrant backend:
-    # omitted QDRANT_ENABLED now defaults to disabled. This test covers the
-    # explicitly-enabled retrieval-hint branch, so opt in directly.
-    monkeypatch.setenv("QDRANT_ENABLED", "1")
-    monkeypatch.delenv("MOONMIND_RETRIEVAL_URL", raising=False)
-    # Vector-free defaults (#4115): the direct-transport case under test
-    # opts in explicitly; the gateway case ignores this flag.
-    monkeypatch.setenv("QDRANT_ENABLED", "true")
-
     activities = TemporalAgentRuntimeActivities()
 
     result = await activities.agent_runtime_prepare_turn_instructions(
@@ -6741,9 +6660,10 @@ async def test_agent_runtime_prepare_turn_instructions_adds_retrieval_capability
     )
 
     assert "MoonMind retrieval capability:" in result
-    # MoonLadderStudios/MoonMind#4112 retired the `moonmind rag search` CLI
-    # entry point, so the enabled note must not advertise it.
+    # MoonLadderStudios/MoonMind#4192 retired native retrieval: the managed
+    # note reports the retired state and advertises no retrieval command.
     assert "moonmind rag search" not in result
+    assert "native_retrieval_retired" in result
     assert "Managed Codex CLI note:" in result
 
 
@@ -6751,8 +6671,6 @@ async def test_agent_runtime_prepare_turn_instructions_adds_retrieval_capability
 async def test_agent_runtime_prepare_turn_instructions_reports_disabled_retrieval_reason(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setenv("RAG_ENABLED", "0")
-
     activities = TemporalAgentRuntimeActivities()
 
     result = await activities.agent_runtime_prepare_turn_instructions(
@@ -6771,8 +6689,8 @@ async def test_agent_runtime_prepare_turn_instructions_reports_disabled_retrieva
     )
 
     assert "MoonMind retrieval capability:" in result
-    assert "currently unavailable" in result
-    assert "rag_disabled" in result
+    assert "native_retrieval_retired" in result
+    assert "moonmind rag search" not in result
 
 
 @pytest.mark.asyncio

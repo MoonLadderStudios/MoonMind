@@ -3,8 +3,6 @@ import { WORKFLOW_DETAIL_SUPPORTED_SUBROUTES } from './workflowDetailRoutes';
 
 export type DashboardPage =
   | 'artifacts'
-  | 'index-health'
-  | 'manifests'
   | 'omnigent-inventory'
   | 'oauth-terminal'
   | 'remediations'
@@ -92,7 +90,6 @@ export const DASHBOARD_DESTINATIONS: readonly DashboardDestination[] = [
   { key: 'create', label: 'Create', iconKey: 'rocket', canonicalPath: '/workflows/new', pathPatterns: ['/workflows/new'], navigationGroup: 'primary', pageClassification: 'create', capabilityKey: 'workflowActions', page: 'workflows-workspace', dataWidePanel: true },
   { key: 'recurring', label: 'Recurring', iconKey: 'moon', canonicalPath: '/schedules', pathPatterns: ['/schedules', '/schedules/:definitionId'], navigationGroup: 'system', pageClassification: 'workspace', capabilityKey: 'schedules', endpointKey: 'schedules', displayMode: 'recurring-list', page: 'schedules', dataWidePanel: true },
   { key: 'skills', label: 'Skills', iconKey: 'sparkles', canonicalPath: '/skills', pathPatterns: ['/skills/*'], navigationGroup: 'system', pageClassification: 'workspace', capabilityKey: 'skills', endpointKey: 'skills', displayMode: 'skills-list', page: 'skills', dataWidePanel: true },
-  { key: 'manifests', label: 'Manifests', iconKey: 'manifest', canonicalPath: '/manifests', pathPatterns: ['/manifests', '/manifests/:manifestName'], navigationGroup: 'operations', pageClassification: 'collection', capabilityKey: 'manifests', endpointKey: 'manifests', page: 'manifests', dataWidePanel: true },
   { key: 'omnigent-agents', label: 'Agents', iconKey: 'bot', canonicalPath: '/omnigent/agents', pathPatterns: ['/omnigent/agents/*'], navigationGroup: 'operations', pageClassification: 'collection', capabilityKey: 'omnigentAgents', endpointKey: 'omnigentAgents', page: 'omnigent-inventory', dataWidePanel: true },
   { key: 'omnigent-policies', label: 'Policies', iconKey: 'shield-check', canonicalPath: '/omnigent/policies', pathPatterns: ['/omnigent/policies/*'], navigationGroup: 'operations', pageClassification: 'collection', capabilityKey: 'omnigentPolicies', endpointKey: 'omnigentPolicies', page: 'omnigent-inventory', dataWidePanel: true },
   { key: 'remediation', label: 'Remediation', iconKey: 'wrench', canonicalPath: '/remediations', pathPatterns: ['/remediations/*'], navigationGroup: 'operations', pageClassification: 'collection', capabilityKey: 'remediationCollection', endpointKey: 'remediations', page: 'remediations', dataWidePanel: true },
@@ -238,7 +235,7 @@ function isWorkflowDetailPath(path: string): boolean {
   return Boolean(tab && WORKFLOW_DETAIL_TABS.has(tab));
 }
 
-function isDetailPath(path: string, prefix: 'manifests' | 'schedules'): boolean {
+function isDetailPath(path: string, prefix: 'schedules'): boolean {
   const parts = pathParts(path);
   if (parts.length !== 2 || parts[0] !== prefix) {
     return false;
@@ -286,14 +283,8 @@ export function resolveDashboardRoute(pathname: string): DashboardRoute | null {
   if (path === '/schedules' || isDetailPath(path, 'schedules')) {
     return { page: 'schedules', dataWidePanel: true, currentPath: path };
   }
-  if (path === '/manifests' || isDetailPath(path, 'manifests')) {
-    return { page: 'manifests', dataWidePanel: true, currentPath: path };
-  }
   if (path === '/omnigent/agents' || path.startsWith('/omnigent/agents/') || path === '/omnigent/policies' || path.startsWith('/omnigent/policies/')) {
     return { page: 'omnigent-inventory', dataWidePanel: true, currentPath: path };
-  }
-  if (path === '/index-health') {
-    return { page: 'index-health', dataWidePanel: true, currentPath: path };
   }
   if (path === '/remediations' || path.startsWith('/remediations/')) {
     return { page: 'remediations', dataWidePanel: true, currentPath: path };

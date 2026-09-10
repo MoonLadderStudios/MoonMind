@@ -181,15 +181,15 @@ vi.mock('lucide-animated', async () => {
 // MM-960: simulate a transient dynamic-import (chunk-load) failure for one page
 // so we can assert the route boundary's Retry recreates the lazy import instead
 // of replaying React.lazy's cached rejection. The factory rejects the first time
-// it is evaluated and resolves to a real component afterward. The index-health
+// it is evaluated and resolves to a real component afterward. The remediations
 // page carries the failure because no other test imports it first.
-const indexHealthImport = vi.hoisted(() => ({ attempts: 0 }));
-vi.mock('./index-health', () => {
-  indexHealthImport.attempts += 1;
-  if (indexHealthImport.attempts === 1) {
-    throw new Error('Failed to fetch dynamically imported module: index-health');
+const remediationsImport = vi.hoisted(() => ({ attempts: 0 }));
+vi.mock('./remediations', () => {
+  remediationsImport.attempts += 1;
+  if (remediationsImport.attempts === 1) {
+    throw new Error('Failed to fetch dynamically imported module: remediations');
   }
-  return { default: () => <div>Index health page recovered</div> };
+  return { default: () => <div>Remediation page recovered</div> };
 });
 
 vi.mock('./skills', () => ({
@@ -307,7 +307,6 @@ function uiInfo(overrides: Record<string, unknown> = {}) {
       settingsProvidersSecrets: true,
       settingsUserWorkspace: true,
       settingsOperations: true,
-      manifests: true,
       remediationCollection: false,
       omnigentAgents: false,
       omnigentPolicies: false,
@@ -434,7 +433,7 @@ describe('Dashboard shared entry', () => {
     expect(screen.getByRole('menuitem', { name: 'Recurring' })).toBeTruthy();
     expect(screen.getByRole('menuitem', { name: 'Skills' })).toBeTruthy();
     expect(screen.getByText('Workflow resources')).toBeTruthy();
-    expect(screen.getByRole('menuitem', { name: 'Manifests' })).toBeTruthy();
+    expect(screen.queryByRole('menuitem', { name: 'Manifests' })).toBeNull();
     expect(screen.getByRole('menuitem', { name: 'Artifacts' })).toBeTruthy();
     const configuration = screen.getByText('Configuration').closest('.dashboard-system-menu-section');
     expect(configuration).not.toBeNull();
@@ -498,7 +497,6 @@ describe('Dashboard shared entry', () => {
   });
 
   it.each([
-    ['/manifests', 'Manifests'],
     ['/artifacts/example', 'Artifacts'],
     ['/observability/example', 'Artifacts'],
     ['/remediations/example', 'Remediation'],
@@ -608,7 +606,7 @@ describe('Dashboard shared entry', () => {
     renderWithClient(
       <MemoryRouter initialEntries={['/settings/operations']}>
         <DashboardSystemMenu
-          uiInfo={uiInfo({ features: { ...uiInfo().features, manifests: false, artifacts: false } })}
+          uiInfo={uiInfo({ features: { ...uiInfo().features, artifacts: false } })}
           mobileDrawerOpen
         />
       </MemoryRouter>,
@@ -1739,19 +1737,19 @@ describe('Dashboard shared entry', () => {
   it('recovers from a failed lazy page import when the user retries (MM-960)', async () => {
     const consoleErrorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
     try {
-      window.history.replaceState({}, '', '/index-health');
+      window.history.replaceState({}, '', '/remediations');
       renderWithClient(<DashboardApp payload={{ page: 'dashboard', apiBase: '/api' }} />);
 
       // First dynamic import rejects -> styled route error with a Retry action.
       expect(await screen.findByText('This page failed to load')).toBeTruthy();
-      expect(screen.queryByText('Index health page recovered')).toBeNull();
+      expect(screen.queryByText('Remediation page recovered')).toBeNull();
 
       // Retry must recreate the lazy import (a cached rejection would re-throw).
       fireEvent.click(screen.getByRole('button', { name: 'Retry' }));
 
-      expect(await screen.findByText('Index health page recovered')).toBeTruthy();
+      expect(await screen.findByText('Remediation page recovered')).toBeTruthy();
       expect(screen.queryByText('This page failed to load')).toBeNull();
-      expect(indexHealthImport.attempts).toBeGreaterThanOrEqual(2);
+      expect(remediationsImport.attempts).toBeGreaterThanOrEqual(2);
     } finally {
       consoleErrorSpy.mockRestore();
     }

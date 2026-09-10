@@ -101,10 +101,6 @@ async def test_failed_execution_direct_rerun_creates_exact_full_rerun_from_origi
                 plan_artifact_ref=None,
                 parameters_patch=None,
                 title=None,
-                new_manifest_artifact_ref=None,
-                mode=None,
-                max_concurrency=None,
-                node_ids=None,
                 idempotency_key="exact-full-rerun-mm-645",
             )
             source_after_rerun = await service.describe_execution(source.workflow_id)

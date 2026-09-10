@@ -155,10 +155,7 @@ async def test_supported_workflow_routes_render_console_shell(
         "/settings/user-workspace/",
         "/settings/operations",
         "/settings/operations/",
-        "/manifests",
-        "/manifests/default-workflow",
         "/oauth-terminal",
-        "/index-health",
     ),
 )
 async def test_supported_dashboard_deep_links_share_spa_shell(

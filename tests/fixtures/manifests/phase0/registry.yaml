@@ -1,8 +1,0 @@
-version: "v0"
-metadata:
-  name: "demo"
-dataSources:
-  - id: "repo-docs"
-    type: "GithubRepositoryReader"
-run:
-  dryRun: false

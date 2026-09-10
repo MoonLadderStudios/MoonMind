@@ -789,24 +789,14 @@ async def test_run_once_success_uploads_and_completes(tmp_path: Path) -> None:
     assert payload["selectedSkill"] == "auto"
     assert payload["executionPath"] == "direct_only"
 
-@pytest.mark.parametrize(
-    "provider",
-    ("[REDACTED]", "unsupported-provider", "google"),
-)
-async def test_run_once_reports_rag_unavailable_when_embedding_provider_unexecutable(
+async def test_run_once_reports_rag_retired(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
-    provider: str,
 ) -> None:
-    """task_context and claim metadata should agree when retrieval cannot execute."""
+    """task_context and claim metadata should agree retrieval is retired (#4192)."""
 
     monkeypatch.setenv("RAG_ENABLED", "1")
     monkeypatch.setenv("QDRANT_ENABLED", "1")
-    monkeypatch.setenv("DEFAULT_EMBEDDING_PROVIDER", provider)
-    monkeypatch.delenv("MOONMIND_RETRIEVAL_URL", raising=False)
-    monkeypatch.delenv("GOOGLE_API_KEY", raising=False)
-    monkeypatch.delenv("GEMINI_API_KEY", raising=False)
-    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
 
     job = ClaimedJob(
         id=uuid4(),
@@ -846,10 +836,7 @@ async def test_run_once_reports_rag_unavailable_when_embedding_provider_unexecut
     assert isinstance(claimed_payload, dict)
     assert claimed_payload["ragAvailable"] is False
     assert claimed_payload["ragMode"] == "unavailable"
-    assert claimed_payload["ragUnavailableReason"] in {
-        "embedding_provider_unsupported",
-        "embedding_provider_not_configured",
-    }
+    assert claimed_payload["ragUnavailableReason"] == "native_retrieval_retired"
     assert "ragCommand" not in claimed_payload
 
     task_context_path = tmp_path / str(job.id) / "artifacts" / "task_context.json"
@@ -857,10 +844,7 @@ async def test_run_once_reports_rag_unavailable_when_embedding_provider_unexecut
     rag_payload = task_context["rag"]
     assert rag_payload["ragAvailable"] is False
     assert rag_payload["ragMode"] == "unavailable"
-    assert rag_payload["ragUnavailableReason"] in {
-        "embedding_provider_unsupported",
-        "embedding_provider_not_configured",
-    }
+    assert rag_payload["ragUnavailableReason"] == "native_retrieval_retired"
     assert "ragCommand" not in rag_payload
 
 async def test_run_once_writes_runtime_config_into_task_context(tmp_path: Path) -> None:

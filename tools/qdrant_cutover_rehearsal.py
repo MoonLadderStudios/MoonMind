@@ -221,18 +221,28 @@ def _vector_free_deployment_present(repo_root: Path) -> tuple[bool, str]:
     m = re.search(
         r"qdrant_enabled:\s*bool\s*=\s*Field\((True|False)", settings_text
     )
-    if not m or m.group(1) != "False":
+    if "class QdrantSettings" not in settings_text:
+        # MoonLadderStudios/MoonMind#4192: the retired settings class itself
+        # is removed. Absence is the strongest vector-free marker.
+        pass
+    elif not m or m.group(1) != "False":
         problems.append("QdrantSettings.qdrant_enabled default is not False")
     m2 = re.search(
         r'_get_env\(env,\s*"QDRANT_ENABLED",\s*"(true|false)"\)', rag_settings
     )
-    if not m2 or m2.group(1) != "false":
+    if "RagRuntimeSettings" not in rag_settings and "qdrant" not in rag_settings.lower():
+        # #4192: the native RAG runtime settings module is removed.
+        pass
+    elif not m2 or m2.group(1) != "false":
         problems.append("RagRuntimeSettings QDRANT_ENABLED default is not false")
     m3 = re.search(
         r"vector_store_provider:\s*str\s*=\s*Field\(\s*\n?\s*\"([^\"]+)\"",
         settings_text,
     )
-    if not m3 or m3.group(1) == "qdrant":
+    if "vector_store_provider" not in settings_text:
+        # #4192: the retired vector-store selector field is removed.
+        pass
+    elif not m3 or m3.group(1) == "qdrant":
         problems.append("vector_store_provider default is still qdrant")
     if re.search(r'(?m)^QDRANT_ENABLED="true"', env_template):
         problems.append('.env-template QDRANT_ENABLED="true"')
@@ -253,8 +263,9 @@ def _vector_free_deployment_present(repo_root: Path) -> tuple[bool, str]:
         )
     return True, (
         "compose carries no qdrant service or QDRANT_URL wiring; "
-        "QdrantSettings/RagRuntimeSettings default disabled; "
-        "vector_store_provider default is not qdrant; "
+        "QdrantSettings/RagRuntimeSettings default disabled or retired-absent "
+        "(MoonLadderStudios/MoonMind#4192); "
+        "vector_store_provider default is not qdrant or retired-absent; "
         ".env-template advertises no active Qdrant backend; "
         "no executable native Qdrant wiring found in execution code"
     )
@@ -411,7 +422,11 @@ def collect_inventory_survey(repo_root: Path = REPO_ROOT) -> dict[str, Any]:
             )
     rag_settings = _read_text(repo_root / "moonmind/rag/settings.py")
     if rag_settings is None:
-        survey["sources"]["moonmind/rag/settings.py"] = "missing"
+        # MoonLadderStudios/MoonMind#4192: the native RAG runtime module was
+        # removed. Absence is the strongest vector-free marker, not a gap.
+        survey["sources"]["moonmind/rag/settings.py"] = (
+            "retired-absent (#4192: native RAG module removed)"
+        )
     else:
         m = re.search(
             r'_get_env\(env,\s*"QDRANT_ENABLED",\s*"(true|false)"\)', rag_settings
@@ -438,7 +453,11 @@ def collect_inventory_survey(repo_root: Path = REPO_ROOT) -> dict[str, Any]:
         repo_root / "api_service/api/routers/retrieval_gateway.py"
     )
     if gateway is None:
-        survey["sources"]["api_service/api/routers/retrieval_gateway.py"] = "missing"
+        # MoonLadderStudios/MoonMind#4192: the native retrieval gateway was
+        # removed. Absence is the strongest vector-free marker, not a gap.
+        survey["sources"]["api_service/api/routers/retrieval_gateway.py"] = (
+            "retired-absent (#4192: native retrieval gateway removed)"
+        )
     else:
         hits = len(re.findall(r"qdrant|Qdrant|QDRANT", gateway))
         survey["sources"]["api_service/api/routers/retrieval_gateway.py"] = (
@@ -463,7 +482,8 @@ def collect_inventory_survey(repo_root: Path = REPO_ROOT) -> dict[str, Any]:
         "Structural survey only. Live facts (active workflows, pending "
         "Activities, recurring schedules, collection provenance, unique "
         "payloads, mounts, ownership) require the operator preflight and "
-        "are NOT established by this survey. Historical fixtures above are "
+        "are NOT established by this survey. Retired-absent native RAG "
+        "modules and the in-code historical manifest entry contracts are "
         "preserved evidence, not removal failures."
     )
     return survey
@@ -659,7 +679,13 @@ def collect_build_pins(repo_root: Path = REPO_ROOT) -> dict[str, Any]:
         r"vector_store_provider:\s*str\s*=\s*Field\(\s*\n?\s*\"([^\"]+)\"",
         settings_text,
     )
-    pins["vector_store_provider_default"] = m.group(1) if m else "unknown"
+    if m:
+        pins["vector_store_provider_default"] = m.group(1)
+    elif "vector_store_provider" not in settings_text:
+        # MoonLadderStudios/MoonMind#4192: retired selector removed entirely.
+        pins["vector_store_provider_default"] = "retired"
+    else:
+        pins["vector_store_provider_default"] = "unknown"
     versions_dir = repo_root / "api_service/migrations/versions"
     if versions_dir.exists():
         revisions = sorted(p.name for p in versions_dir.glob("*.py"))
@@ -780,17 +806,25 @@ def check_upgrade_fixture(
             "application services.",
         )
     _, detail = _vector_free_deployment_present(repo_root)
-    if "absent" in detail or "still" in detail:
+    # MoonLadderStudios/MoonMind#4192: probe the boolean, not prose
+    # substrings. The vector-free evidence string itself mentions
+    # "retired-absent", so a substring match on "absent" would fail the
+    # very checkout it describes.
+    vector_free, detail = _vector_free_deployment_present(repo_root)
+    if not vector_free:
         return StepResult(
             "upgrade-fixture", "failed",
             f"Upgrade fixture fails: deployment not vector-free ({detail}).",
         )
-    survey = collect_inventory_survey(repo_root)
-    if not survey.get("historical_fixture_count"):
+    # MoonLadderStudios/MoonMind#4192: file fixtures carrying
+    # ``type: qdrant`` were removed with the native backend; the preserved
+    # historical evidence is the two in-code generic ManifestIngest entry
+    # contracts below, never a live backend surface.
+    if len(historical_manifest_entries()) != 2:
         return StepResult(
             "upgrade-fixture", "failed",
-            "Upgrade fixture fails: no historical qdrant fixtures readable; "
-            "generic manifest evidence must stay readable.",
+            "Upgrade fixture fails: historical manifest entry contracts "
+            "unreadable; generic manifest evidence must stay readable.",
         )
     old_provider = fixture.get("VECTOR_STORE_PROVIDER", "")
     if old_provider == "qdrant":

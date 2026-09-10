@@ -209,8 +209,10 @@ Reconciliation/backfill remains required because Temporal and Postgres do not
 share a transaction.
 
 The canonical workflow registry explicitly assigns `product`, `operator`, or
-`excluded` projection scope. `MoonMind.UserWorkflow` and `MoonMind.ManifestIngest`
-belong in product execution views. Internal supervisors, managers and control
+`excluded` projection scope. `MoonMind.UserWorkflow` belongs in product
+execution views (`MoonMind.ManifestIngest` was retired by
+MoonLadderStudios/MoonMind#4192: old rows stay readable as replay/drain
+evidence but are never registered for new work). Internal supervisors, managers and control
 owners have operator scope; janitors and reconciliation loops are excluded.
 Unknown types are reported as unknown and never relabeled as UserWorkflow.
 Product admission and list/detail readers enforce the same registry policy.

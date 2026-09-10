@@ -42,10 +42,11 @@ def _make_request(**overrides) -> AgentExecutionRequest:
 @pytest.mark.parametrize(
     ("rag_enabled", "expected_fragment"),
     [
-        # MoonLadderStudios/MoonMind#4112 retired the `moonmind rag search`
-        # CLI entry point, so the enabled note must not advertise it.
-        ("1", "Follow-up retrieval is enabled"),
-        ("0", "rag_disabled"),
+        # MoonLadderStudios/MoonMind#4192 retired native retrieval with the
+        # Manifest/RAG ingestion product: managed sessions never advertise a
+        # retrieval capability regardless of legacy env toggles.
+        ("1", "Follow-up retrieval is retired"),
+        ("0", "Follow-up retrieval is retired"),
     ],
 )
 async def test_codex_launcher_includes_followup_retrieval_capability_note(
@@ -72,19 +73,8 @@ async def test_codex_launcher_includes_followup_retrieval_capability_note(
         _fake_resolve,
     )
 
-    class _FakeContextInjectionService:
-        def __init__(self, *args, **kwargs) -> None:
-            _ = args, kwargs
-
-        async def inject_context(self, *, request, workspace_path):
-            assert workspace_path == workspace
-            request.instruction_ref = "Implement MM-722."
-
-    monkeypatch.setattr(
-        "moonmind.rag.context_injection.ContextInjectionService",
-        _FakeContextInjectionService,
-    )
-
+    # MoonLadderStudios/MoonMind#4192: native retrieval injection is retired;
+    # the launcher no longer consults a context-injection service.
     class _FakeProcess:
         def __init__(self, pid: int = 901) -> None:
             self.pid = pid

@@ -2133,7 +2133,7 @@ export function SchedulesPage({ payload }: { payload: BootPayload }) {
       <header className="toolbar schedules-toolbar">
         <div>
           <h2 className="page-title" tabIndex={-1} data-recurring-table-title>Recurring Schedules</h2>
-          <p className="page-meta">Managed recurring schedules for queue and manifest targets.</p>
+          <p className="page-meta">Managed recurring schedules for workflow targets.</p>
         </div>
         <div className="toolbar-controls">
           <button type="button" className="secondary" onClick={() => void refetch()} disabled={isFetching}>

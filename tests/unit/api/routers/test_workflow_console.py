@@ -188,8 +188,6 @@ def test_dashboard_destination_registry_matches_registered_spa_routes() -> None:
         "/skills/{dashboard_path:path}",
         "/settings",
         "/settings/{dashboard_path:path}",
-        "/manifests",
-        "/manifests/{manifest_name}",
         "/omnigent/agents",
         "/omnigent/policies",
         "/omnigent/agents/{dashboard_path:path}",
@@ -221,7 +219,6 @@ def test_dashboard_destination_registry_matches_registered_spa_routes() -> None:
         "/settings/providers-secrets",
         "/settings/user-workspace",
         "/settings/operations",
-        "/manifests",
         "/omnigent/agents",
         "/omnigent/policies",
         "/remediations",
@@ -344,7 +341,7 @@ def test_dashboard_ui_info_endpoint_exposes_spa_boundary(client: TestClient) -> 
     assert payload["features"]["omnigentPolicies"] is (
         "settings.catalog.read" in payload["settingsPermissions"]
     )
-    assert payload["features"]["manifests"] is True
+    assert "manifests" not in payload["features"]
     assert {
         "settingsProvidersSecrets",
         "settingsUserWorkspace",
@@ -353,7 +350,7 @@ def test_dashboard_ui_info_endpoint_exposes_spa_boundary(client: TestClient) -> 
     assert payload["destinations"] == [
         destination.to_ui_info() for destination in DASHBOARD_DESTINATIONS
     ]
-    assert len({item["canonicalPath"] for item in payload["destinations"]}) == 12
+    assert len({item["canonicalPath"] for item in payload["destinations"]}) == 11
     configuration_destinations = [
         item
         for item in payload["destinations"]
@@ -419,8 +416,6 @@ def test_dashboard_ui_info_endpoint_exposes_spa_boundary(client: TestClient) -> 
     for path in (
         "/workflows",
         "/workflows/new",
-        "/manifests",
-        "/index-health",
         "/artifacts",
         "/observability",
         "/schedules",
@@ -473,13 +468,12 @@ def test_dashboard_ui_info_marks_mutation_only_configuration_destinations_unavai
     assert features["settingsOperations"] is False
 
 
-def test_index_health_route_uses_index_health_boot_payload(client: TestClient) -> None:
+def test_retired_index_health_route_is_gone(client: TestClient) -> None:
+    # MoonLadderStudios/MoonMind#4192: the vector-index health page is
+    # removed with the RAG retrieval backend.
     response = client.get("/index-health")
 
-    assert response.status_code == 200
-    boot_payload = _extract_boot_payload(response.text)
-    assert boot_payload["page"] == "dashboard"
-    assert "initialData" not in boot_payload
+    assert response.status_code == 404
 
 
 def test_dashboard_logo_asset_exists() -> None:
@@ -546,13 +540,14 @@ def test_removed_task_routes_do_not_redirect_or_render_console(
         assert "location" not in response.headers
 
 
-def test_legacy_manifest_submit_route_redirects_to_unified_manifests_page(
+def test_retired_manifest_routes_are_gone(
     client: TestClient,
 ) -> None:
-    response = client.get("/manifests/new", follow_redirects=False)
-
-    assert response.status_code == 307
-    assert response.headers["location"] == "/manifests"
+    # MoonLadderStudios/MoonMind#4192: the native Manifest product pages
+    # are removed; the legacy submit redirect goes with them.
+    for retired_path in ("/manifests", "/manifests/new", "/manifests/example"):
+        response = client.get(retired_path, follow_redirects=False)
+        assert response.status_code == 404
 
 
 def test_legacy_manifest_submit_route_openapi_documents_redirect(
@@ -561,16 +556,17 @@ def test_legacy_manifest_submit_route_openapi_documents_redirect(
     response = client.get("/openapi.json")
 
     assert response.status_code == 200
-    route = response.json()["paths"]["/manifests/new"]["get"]
-    assert "307" in route["responses"]
-    assert "200" not in route["responses"]
-    assert "application/json" not in route["responses"]["307"].get("content", {})
+    assert "/manifests/new" not in response.json()["paths"]
+    assert "/manifests" not in response.json()["paths"]
+    assert "/api/manifests" not in response.json()["paths"]
 
 
-def test_navigation_hides_incomplete_manifest_and_index_health_pages(
+def test_navigation_advertises_no_retired_manifest_or_index_health_pages(
     client: TestClient,
 ) -> None:
-    response = client.get("/manifests")
+    # MoonLadderStudios/MoonMind#4192: retired Manifest and vector-index
+    # pages must not be linked anywhere in the served shell.
+    response = client.get("/workflows")
 
     assert response.status_code == 200
     assert 'href="/manifests"' not in response.text
@@ -578,6 +574,7 @@ def test_navigation_hides_incomplete_manifest_and_index_health_pages(
     assert "Index Health" not in response.text
     assert "Manifest Submit" not in response.text
     assert 'href="/manifests/new"' not in response.text
+    assert 'href="/retrieval/' not in response.text
 
 
 def test_react_shell_wraps_navigation_in_centered_masthead_slot(
@@ -657,7 +654,6 @@ def test_data_wide_panel_on_selected_react_routes(client: TestClient) -> None:
     for path in (
         "/workflows",
         "/settings",
-        "/manifests",
         "/workflows/mm:workflow-123",
         "/workflows/mm:workflow-123/steps",
     ):
@@ -670,7 +666,6 @@ def test_data_wide_panel_on_selected_react_routes(client: TestClient) -> None:
 
 def test_top_level_detail_deep_links_render_react_shell(client: TestClient) -> None:
     for path in (
-        "/manifests/nightly-docs",
         "/schedules/123e4567-e89b-12d3-a456-426614174000",
     ):
         response = client.get(path)
@@ -678,6 +673,19 @@ def test_top_level_detail_deep_links_render_react_shell(client: TestClient) -> N
         assert "moonmind-ui-boot" in response.text
         payload = _extract_boot_payload(response.text)
         assert payload["page"] == "dashboard"
+
+
+def test_retired_manifest_routes_are_not_dashboard_surfaces(
+    client: TestClient,
+) -> None:
+    """MoonLadderStudios/MoonMind#4192: the manifests product is retired."""
+
+    for path in (
+        "/manifests",
+        "/manifests/nightly-docs",
+    ):
+        response = client.get(path)
+        assert response.status_code == 404
 
 
 def test_retired_follow_up_routes_are_not_dashboard_surfaces(client: TestClient) -> None:

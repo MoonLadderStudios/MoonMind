@@ -20,11 +20,11 @@ import {
 describe('dashboard route resolution', () => {
   it('keeps one canonical typed inventory for every major destination', () => {
     expect(DASHBOARD_DESTINATIONS.map(({ key }) => key)).toEqual([
-      'workflows', 'create', 'recurring', 'skills', 'manifests',
+      'workflows', 'create', 'recurring', 'skills',
       'omnigent-agents', 'omnigent-policies', 'remediation', 'artifacts',
       'settings-providers-secrets', 'settings-user-workspace', 'settings-operations',
     ]);
-    expect(new Set(DASHBOARD_DESTINATIONS.map(({ canonicalPath }) => canonicalPath)).size).toBe(12);
+    expect(new Set(DASHBOARD_DESTINATIONS.map(({ canonicalPath }) => canonicalPath)).size).toBe(11);
     expect(DASHBOARD_REACT_ROUTE_PATHS).toEqual(
       Array.from(new Set([
         ...DASHBOARD_DESTINATIONS.flatMap(({ pathPatterns }) => pathPatterns),
@@ -61,7 +61,7 @@ describe('dashboard route resolution', () => {
       'workflows', 'create',
     ]);
     expect(visibleSystemDestinations(info).map(({ key }) => key)).toEqual([
-      'recurring', 'skills', 'manifests', 'omnigent-agents', 'remediation', 'artifacts',
+      'recurring', 'skills', 'omnigent-agents', 'remediation', 'artifacts',
       'settings-providers-secrets', 'settings-user-workspace', 'settings-operations',
     ]);
   });
@@ -74,7 +74,6 @@ describe('dashboard route resolution', () => {
   });
 
   it.each([
-    ['/manifests/default', 'manifests'],
     ['/artifacts/run/1', 'artifacts'],
     ['/observability/run/1', 'artifacts'],
     ['/remediations/mm:1', 'remediation'],
@@ -183,12 +182,8 @@ describe('dashboard route resolution', () => {
     expect(resolveDashboardRoute('/workflows/mm%2Fbad')).toBeNull();
   });
 
-  it('resolves encoded manifest and schedule detail IDs', () => {
-    expect(resolveDashboardRoute('/manifests/default%3Aworkflow')).toEqual({
-      page: 'manifests',
-      dataWidePanel: true,
-      currentPath: '/manifests/default%3Aworkflow',
-    });
+  it('resolves encoded schedule detail IDs', () => {
+    expect(resolveDashboardRoute('/manifests/default%3Aworkflow')).toBeNull();
     expect(resolveDashboardRoute('/schedules/nightly%3Abuild')).toEqual({
       page: 'schedules',
       dataWidePanel: true,
@@ -196,7 +191,7 @@ describe('dashboard route resolution', () => {
     });
   });
 
-  it.each(['/schedules', '/manifests', '/skills'])('uses the fluid shell for the %s collection', (path) => {
+  it.each(['/schedules', '/skills'])('uses the fluid shell for the %s collection', (path) => {
     expect(resolveDashboardRoute(path)?.dataWidePanel).toBe(true);
   });
 

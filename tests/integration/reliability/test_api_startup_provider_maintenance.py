@@ -53,9 +53,9 @@ async def test_http_serves_while_bootstrap_waits_and_lifespan_owns_cleanup(
     monkeypatch.delattr(
         api_main.app.state, "omnigent_bootstrap_reconciliation_task", raising=False
     )
-    from moonmind.rag import service as rag_service
 
-    monkeypatch.setattr(rag_service, "ContextRetrievalService", lambda **_: object())
+    # MoonLadderStudios/MoonMind#4192: native RAG retrieval is retired, so
+    # startup no longer touches a retrieval service; no stub is needed.
 
     # Keep unrelated startup integrations hermetic. The production startup,
     # lifespan, reconciliation ordering, health route and TCP server all run.

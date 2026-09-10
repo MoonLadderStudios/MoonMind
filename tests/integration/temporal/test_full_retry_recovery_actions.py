@@ -71,10 +71,6 @@ async def test_exact_rerun_creates_fresh_execution_without_recovery_progress(
                 plan_artifact_ref=None,
                 parameters_patch=None,
                 title=None,
-                new_manifest_artifact_ref=None,
-                mode=None,
-                max_concurrency=None,
-                node_ids=None,
                 idempotency_key="exact-rerun",
             )
 

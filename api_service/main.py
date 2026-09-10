@@ -32,7 +32,6 @@ from fastapi.templating import Jinja2Templates
 from sqlalchemy import text
 from sqlalchemy.exc import OperationalError, ProgrammingError, SQLAlchemyError
 
-from api_service.api.routers import retrieval_gateway as retrieval_router
 from api_service.api.routers.provider_profiles import router as provider_profiles_router
 from api_service.api.routers.omnigent_agent_profiles import (
     router as omnigent_agent_profiles_router,
@@ -44,7 +43,6 @@ from api_service.api.routers.execution_integrations import (
     router as execution_integrations_router,
 )
 from api_service.api.routers.executions import router as executions_router
-from api_service.api.routers.manifests import router as manifests_router
 from api_service.api.routers.container_jobs import router as container_jobs_router
 from api_service.api.routers.mcp_tools import router as mcp_tools_router
 from api_service.api.routers.jira_browser import router as jira_browser_router
@@ -1141,11 +1139,9 @@ async def docs_redirect() -> RedirectResponse:
 app.include_router(health_router, tags=["health"])
 
 # Include workflow-oriented and operational routers.
-app.include_router(retrieval_router.router)
 app.include_router(mcp_tools_router)
 app.include_router(container_jobs_router)
 app.include_router(jira_browser_router)
-app.include_router(manifests_router)
 app.include_router(
     profile_router, prefix="", tags=["Profile"]
 )  # Include profile router
@@ -2812,23 +2808,6 @@ async def startup_event():
     _assert_omnigent_configuration_is_current()
     await _initialize_oidc_provider(app)  # Fail fast on retired selectors; no discovery fetch
     _register_settings_change_subscribers()
-    try:
-        from moonmind.rag.service import ContextRetrievalService
-        from moonmind.rag.settings import RagRuntimeSettings
-
-        app.state.retrieval_service = ContextRetrievalService(
-            settings=RagRuntimeSettings.from_env()
-        )
-    except ValueError:
-        # Operator configuration errors (for example retired Mem0 keys from
-        # MoonLadderStudios/MoonMind#4109) must fail fast at startup instead
-        # of being swallowed by best-effort retrieval initialization.
-        raise
-    except Exception as exc:
-        logger.warning(
-            "Retrieval service startup initialization skipped: %s",
-            exc,
-        )
     await _sync_preset_seed_catalog()
     # Provider defaults are input authority for the Omnigent bootstrap. Seed
     # them before the first reconciliation pass so a fresh restart can validate

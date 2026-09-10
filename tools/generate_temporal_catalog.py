@@ -57,7 +57,6 @@ _WORKFLOW_FLEET_NAME = "workflow"
 #: authored section must never drop a registered type from the reference.
 LIFECYCLE_SECTIONS = {
     "MoonMind.UserWorkflow": "111-moonminduserworkflow-lifecycle",
-    "MoonMind.ManifestIngest": "112-moonmindmanifestingest-lifecycle",
     "MoonMind.AgentRun": "113-moonmindagentrun-lifecycle",
     "MoonMind.OmnigentSession": "114-moonmindomnigentsession-lifecycle",
     "MoonMind.AgentSession": "115-moonmindagentsession-lifecycle",
@@ -455,12 +454,6 @@ def render_reference(
             f"| `{row.projection_scope}` | [lifecycle]({lifecycle}) |"
         )
     lines += [
-        "",
-        "`MoonMind.ManifestIngest` retains two entry contracts as inputs to the",
-        "single registered type above: the current catalogued-Activity path and",
-        "the historical `manifest_read` / `manifest_compile` commands kept for",
-        "replay (`moonmind/workflows/temporal/workflows/manifest_ingest.py`).",
-        "They are not duplicate catalog entries.",
         "",
         "## Workflow task queues",
         "",

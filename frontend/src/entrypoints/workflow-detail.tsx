@@ -6,7 +6,6 @@ import {
   type CSSProperties,
   type Dispatch,
   type KeyboardEvent,
-  type ReactElement,
   type ReactNode,
   type SetStateAction,
 } from 'react';
@@ -2903,188 +2902,6 @@ async function fetchBridgeSessionResources(apiBase: string, bridgeSessionId: str
     completeness: body.completeness || 'pending',
     groups: Array.isArray(body.groups) ? body.groups : [],
   };
-}
-
-// Follow-up (in-session) retrieval operator diagnostics (MoonMind#3514).
-type FollowUpRetrievalRequest = {
-  evidenceRef?: string;
-  state?: string;
-  classification?: string | null;
-  resultCount?: number;
-  contextBytes?: number;
-  latencyMs?: number | null;
-  truncated?: boolean;
-  contextPackRef?: string | null;
-  delivery?: { state?: string } | null;
-};
-type FollowUpRetrievalCapability = {
-  capabilityId: string;
-  state: string;
-  expiresAt?: number;
-  revokedAt?: number | null;
-  queryCount?: number;
-  maxQueries?: number;
-  activeRequests?: number;
-  maxConcurrency?: number;
-  collections?: string[];
-  policyVersion?: string;
-  overlayPolicy?: string;
-  fallbackAllowed?: boolean;
-  scope?: Record<string, unknown>;
-  requests?: FollowUpRetrievalRequest[];
-};
-export type FollowUpRetrievalDiagnostics = {
-  bridgeSessionId: string;
-  capabilityCount: number;
-  capabilities: FollowUpRetrievalCapability[];
-  aggregate: Record<string, number>;
-};
-
-async function fetchFollowUpRetrievalDiagnostics(
-  apiBase: string,
-  bridgeSessionId: string,
-): Promise<FollowUpRetrievalDiagnostics | null> {
-  const resp = await fetch(
-    joinApiBasePath(
-      apiBase,
-      `/retrieval/bridge-sessions/${encodeURIComponent(bridgeSessionId)}/follow-up-retrieval`,
-    ),
-    { credentials: 'include' },
-  );
-  if (!resp.ok) {
-    if (resp.status === 404) return null;
-    throw buildObservabilityRequestError(resp.status);
-  }
-  const body = (await resp.json()) as Partial<FollowUpRetrievalDiagnostics>;
-  return {
-    bridgeSessionId,
-    capabilityCount: typeof body.capabilityCount === 'number' ? body.capabilityCount : 0,
-    capabilities: Array.isArray(body.capabilities) ? body.capabilities : [],
-    aggregate:
-      body.aggregate && typeof body.aggregate === 'object'
-        ? (body.aggregate as Record<string, number>)
-        : {},
-  };
-}
-
-function formatCapabilityExpiry(capability: FollowUpRetrievalCapability): string {
-  if (capability.state === 'revoked') {
-    return capability.revokedAt
-      ? `revoked ${new Date(capability.revokedAt * 1000).toLocaleString()}`
-      : 'revoked';
-  }
-  if (capability.state === 'expired') {
-    return 'expired';
-  }
-  return capability.expiresAt
-    ? `active until ${new Date(capability.expiresAt * 1000).toLocaleString()}`
-    : 'active';
-}
-
-export function FollowUpRetrievalDiagnosticsSection({
-  diagnostics,
-  isLoading,
-  error,
-}: {
-  diagnostics: FollowUpRetrievalDiagnostics | null;
-  isLoading: boolean;
-  error: unknown;
-}): ReactElement | null {
-  if (error) {
-    return (
-      <div className="small stack" data-testid="omnigent-follow-up-retrieval">
-        <p>Follow-up retrieval diagnostics are unavailable.</p>
-      </div>
-    );
-  }
-  if (isLoading && !diagnostics) {
-    return null;
-  }
-  if (!diagnostics || diagnostics.capabilityCount === 0) {
-    return (
-      <div className="small stack" data-testid="omnigent-follow-up-retrieval">
-        <p>Follow-up retrieval: no in-session retrieval capability issued.</p>
-      </div>
-    );
-  }
-  const aggregate = diagnostics.aggregate ?? {};
-  const metric = (key: string): number => Number(aggregate[key] ?? 0);
-  return (
-    <div
-      className="small stack context-retrieval-diagnostics"
-      data-testid="omnigent-follow-up-retrieval"
-    >
-      <p>
-        Follow-up retrieval: {metric('requestCount')} request
-        {metric('requestCount') === 1 ? '' : 's'} across {diagnostics.capabilityCount}{' '}
-        capabilit{diagnostics.capabilityCount === 1 ? 'y' : 'ies'}
-        {' · '}
-        {metric('succeeded')} ok · {metric('empty')} empty · {metric('denied')} denied ·{' '}
-        {metric('failed')} failed
-      </p>
-      <p>
-        Fallback {metric('fallback')} · truncated {metric('truncated')} · budget-exhausted{' '}
-        {metric('budgetExhausted')} · timed-out {metric('timedOut')} · max latency{' '}
-        {metric('maxLatencyMs')}ms · context {metric('totalContextBytes')} bytes
-      </p>
-      <p>
-        Delivery — delivered {metric('delivered')} · not delivered {metric('notDelivered')} ·
-        unknown {metric('deliveryUnknown')} · cancelled {metric('cancelled')}
-      </p>
-      <p>
-        Capabilities — active {metric('activeCapabilities')} · expired{' '}
-        {metric('expiredCapabilities')} · revoked {metric('revokedCapabilities')}
-      </p>
-      {diagnostics.capabilities.map((capability) => (
-        <div key={capability.capabilityId} className="context-retrieval-capability stack">
-          <p>
-            <code className="text-xs">{capability.capabilityId}</code> · {formatCapabilityExpiry(capability)}
-            {' · '}
-            {Number(capability.queryCount ?? 0)}/{Number(capability.maxQueries ?? 0)} queries
-          </p>
-          {capability.scope ? (
-            <p>
-              Scope:{' '}
-              {Object.entries(capability.scope)
-                .filter(([, value]) => String(value ?? '').trim())
-                .map(([key, value]) => `${key}=${String(value)}`)
-                .join(', ')}
-            </p>
-          ) : null}
-          {Array.isArray(capability.collections) && capability.collections.length ? (
-            <p>
-              Collections: {capability.collections.join(', ')}
-              {capability.overlayPolicy ? ` · overlay ${capability.overlayPolicy}` : ''}
-              {capability.fallbackAllowed ? ' · fallback allowed' : ''}
-            </p>
-          ) : null}
-          {Array.isArray(capability.requests) && capability.requests.length ? (
-            <ul className="stack">
-              {capability.requests.map((request, index) => (
-                <li key={request.evidenceRef ?? `${capability.capabilityId}-${index}`}>
-                  {String(request.state ?? 'unknown')}
-                  {request.classification ? ` (${request.classification})` : ''}
-                  {' · '}
-                  {Number(request.resultCount ?? 0)} results
-                  {request.truncated ? ' · truncated' : ''}
-                  {typeof request.latencyMs === 'number' ? ` · ${request.latencyMs}ms` : ''}
-                  {request.delivery?.state ? ` · delivery ${request.delivery.state}` : ''}
-                  {request.contextPackRef ? (
-                    <>
-                      {' · '}
-                      <code className="text-xs break-all">{request.contextPackRef}</code>
-                    </>
-                  ) : null}
-                </li>
-              ))}
-            </ul>
-          ) : (
-            <p>No follow-up retrieval requests recorded yet.</p>
-          )}
-        </div>
-      ))}
-    </div>
-  );
 }
 
 async function resolveBridgeSessionProjection({
@@ -6410,13 +6227,6 @@ function BridgeSessionLogsPanel({
     },
     retry: false,
   });
-  const followUpRetrievalQuery = useQuery({
-    queryKey: ['omnigent-follow-up-retrieval', bridgeSessionId],
-    queryFn: () => fetchFollowUpRetrievalDiagnostics(apiBase, bridgeSessionId),
-    enabled: Boolean(bridgeSessionId),
-    refetchInterval: isTerminal ? false : SESSION_PROJECTION_POLL_MS,
-    retry: false,
-  });
   const historyRows = useMemo(() => {
     const rows = mapEventsToTimelineRows(eventsQuery.data);
     const envelope = eventsQuery.data && 'terminalEnvelope' in eventsQuery.data
@@ -6598,11 +6408,6 @@ function BridgeSessionLogsPanel({
           ) : null}
         </div>
       ) : null}
-      <FollowUpRetrievalDiagnosticsSection
-        diagnostics={followUpRetrievalQuery.data ?? null}
-        isLoading={followUpRetrievalQuery.isLoading}
-        error={followUpRetrievalQuery.error}
-      />
       <section className="card stack" aria-label="Omnigent runtime identity">
         <h3>Omnigent</h3>
         <dl className="details-grid">

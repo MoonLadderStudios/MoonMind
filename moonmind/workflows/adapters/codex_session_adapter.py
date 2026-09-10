@@ -1702,14 +1702,9 @@ class CodexSessionAdapter(ManagedAgentAdapter):
     ) -> str:
         instruction_ref = str(request.instruction_ref or "").strip()
         if instruction_ref:
-            from moonmind.rag.context_injection import ContextInjectionService
-
-            workspace_path = Path(workspace_path)
-            service = ContextInjectionService()
-            await service.inject_context(
-                request=request,
-                workspace_path=workspace_path,
-            )
+            # MoonLadderStudios/MoonMind#4192: native RAG context injection
+            # is retired with the Manifest/RAG ingestion product. Legacy
+            # instruction requests proceed with the authored instruction.
             return self._append_runtime_note(
                 str(request.instruction_ref or instruction_ref).strip(),
                 runtime_id=binding.runtime_id,

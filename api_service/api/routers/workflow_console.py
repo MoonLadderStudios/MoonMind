@@ -195,18 +195,6 @@ DASHBOARD_DESTINATIONS: tuple[DashboardDestination, ...] = (
         page="skills",
     ),
     DashboardDestination(
-        key="manifests",
-        label="Manifests",
-        icon_key="manifest",
-        canonical_path="/manifests",
-        path_patterns=("/manifests", "/manifests/:manifestName"),
-        navigation_group="operations",
-        page_classification="collection",
-        capability_key="manifests",
-        endpoint_key="manifests",
-        page="manifests",
-    ),
-    DashboardDestination(
         key="omnigent-agents",
         label="Agents",
         icon_key="bot",
@@ -957,9 +945,6 @@ async def _get_temporal_service(
         run_continue_as_new_step_threshold=(
             settings.temporal.run_continue_as_new_step_threshold
         ),
-        manifest_continue_as_new_phase_threshold=(
-            settings.temporal.manifest_continue_as_new_phase_threshold
-        ),
     )
 
 
@@ -1394,71 +1379,6 @@ async def schedule_detail_route(
     )
 
 
-@router.get("/manifests", response_class=HTMLResponse)
-async def manifests_route(
-    request: Request,
-    session: AsyncSession = Depends(get_async_session),
-    _user: User = Depends(get_current_user()),
-) -> HTMLResponse:
-    """Serve the React-powered manifests page."""
-    destination = _dashboard_destination("manifests")
-    return await _render_react_page(
-        request,
-        "workflow-start",
-        destination.canonical_path,
-        data_wide_panel=destination.data_wide_panel,
-        session=session,
-        user=_user,
-    )
-
-
-@router.get("/manifests/new", status_code=307, response_class=RedirectResponse)
-async def task_manifest_submit_route(
-    request: Request,
-    _user: User = Depends(get_current_user()),
-) -> RedirectResponse:
-    """Redirect the legacy manifest submit route into the unified manifests page."""
-    return RedirectResponse(url="/manifests", status_code=307)
-
-
-@router.get("/manifests/{manifest_name}", response_class=HTMLResponse)
-async def task_manifest_detail_route(
-    request: Request,
-    manifest_name: str,
-    session: AsyncSession = Depends(get_async_session),
-    _user: User = Depends(get_current_user()),
-) -> HTMLResponse:
-    """Serve the manifests shell for manifest deep links."""
-    if not _is_safe_detail_segment(manifest_name):
-        _raise_dashboard_route_not_found()
-    destination = _dashboard_destination("manifests")
-    return await _render_react_page(
-        request,
-        destination.page,
-        f"/manifests/{manifest_name}",
-        data_wide_panel=destination.data_wide_panel,
-        session=session,
-        user=_user,
-    )
-
-
-@router.get("/index-health", response_class=HTMLResponse)
-async def index_health_route(
-    request: Request,
-    session: AsyncSession = Depends(get_async_session),
-    _user: User = Depends(get_current_user()),
-) -> HTMLResponse:
-    """Serve the React-powered RAG index health page."""
-    return await _render_react_page(
-        request,
-        "index-health",
-        "/index-health",
-        data_wide_panel=True,
-        session=session,
-        user=_user,
-    )
-
-
 @router.get("/remediations", response_class=HTMLResponse)
 async def remediations_route(
     request: Request,
@@ -1739,7 +1659,6 @@ async def get_dashboard_ui_info(
             "schedules": True,
             "skills": True,
             **_settings_destination_features(settings_permissions),
-            "manifests": True,
             "oauthTerminal": True,
             "remediationCollection": True,
             "omnigentAgents": omnigent_agents_available,
@@ -1763,7 +1682,6 @@ async def get_dashboard_ui_info(
             "schedules": "/api/recurring-workflows",
             "settings": "/api/settings",
             "omnigentPolicies": "/api/omnigent/policies",
-            "manifests": "/api/manifests",
             "remediations": "/api/executions/remediations",
             **(
                 {"omnigentAgents": f"{OMNIGENT_BRIDGE_MOUNT_PATH}/api/agents"}

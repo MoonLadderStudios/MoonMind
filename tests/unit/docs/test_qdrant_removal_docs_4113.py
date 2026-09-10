@@ -5,6 +5,10 @@ vector database. Narrow retired/historical mentions are allowed only with an
 explicit non-active-support framing. Behavior/code removal stays with the
 sibling execution children of #4103; this module guards prose, navigation,
 examples, and UI help.
+
+MoonLadderStudios/MoonMind#4192 (MR5) removed the native Manifest/RAG
+ingestion product outright: the dedicated Manifest guides below are deleted
+(rather than framed), and manifest-only examples are removed.
 """
 
 from __future__ import annotations
@@ -21,8 +25,6 @@ ROADMAP = REPO_ROOT / "docs" / "MoonMindRoadmap.md"
 MEMORY_ARCH = REPO_ROOT / "docs" / "Memory" / "MemoryArchitecture.md"
 MEMORY_RESEARCH = REPO_ROOT / "docs" / "Memory" / "MemoryResearch.md"
 WORKFLOW_RAG = REPO_ROOT / "docs" / "Rag" / "WorkflowRag.md"
-MANIFEST_SYSTEM = REPO_ROOT / "docs" / "Rag" / "LlamaIndexManifestSystem.md"
-MANIFEST_DESIGN = REPO_ROOT / "docs" / "Rag" / "ManifestIngestDesign.md"
 CREATE_PAGE = REPO_ROOT / "docs" / "UI" / "CreatePage.md"
 POLICY_AUTHORITY = REPO_ROOT / "docs" / "Omnigent" / "PolicyAuthority.md"
 WORKER_VECTOR_DOC = REPO_ROOT / "docs" / "ManagedAgents" / "WorkerVectorEmbedding.md"
@@ -37,7 +39,6 @@ ZERO_TOLERANCE_DOCS = [
     ARCHITECTURE,
     ROADMAP,
     MEMORY_ARCH,
-    MANIFEST_DESIGN,
     CREATE_PAGE,
     POLICY_AUTHORITY,
 ]
@@ -47,7 +48,6 @@ ZERO_TOLERANCE_DOCS = [
 FRAMED_DOCS = {
     MEMORY_RESEARCH: "Historical research note",
     WORKFLOW_RAG: "retired",
-    MANIFEST_SYSTEM: "#4113",
 }
 
 
@@ -94,7 +94,7 @@ def test_architecture_boundary_is_vector_free() -> None:
 
 
 def test_no_alternate_vector_product_replaces_qdrant() -> None:
-    checked = [README, ARCHITECTURE, ROADMAP, MEMORY_ARCH, WORKFLOW_RAG, MANIFEST_DESIGN]
+    checked = [README, ARCHITECTURE, ROADMAP, MEMORY_ARCH, WORKFLOW_RAG]
     offenders = {}
     for path in checked:
         hits = [
@@ -108,19 +108,14 @@ def test_no_alternate_vector_product_replaces_qdrant() -> None:
 
 
 def test_examples_require_no_vector_configuration() -> None:
+    # MoonLadderStudios/MoonMind#4192: manifest-only and reader-only example
+    # YAMLs are deleted outright. No example may carry vector configuration.
     yamls = sorted((REPO_ROOT / "examples").glob("*.yaml"))
-    assert yamls, "expected example manifests"
-    offenders = {}
-    for path in yamls:
+    assert not yamls, f"Manifest-only examples must be removed: {yamls}"
+    for path in sorted((REPO_ROOT / "samples").glob("*.yaml")):
         text = _read(path)
-        hits = [
-            line.strip()
-            for line in text.splitlines()
-            if re.search(r"qdrant|vectorStore|embeddings\s*:|QDRANT_", line, re.IGNORECASE)
-        ]
-        if hits:
-            offenders[path.name] = hits
-    assert not offenders, f"Examples still carry vector configuration: {offenders}"
+        assert "qdrant" not in text.lower(), path.name
+        assert "llama" not in text.lower(), path.name
 
 
 def test_eval_baseline_has_no_live_vector_rows() -> None:
@@ -147,3 +142,24 @@ def test_residual_report_exists_with_delete_trigger() -> None:
     text = _read(RESIDUAL_REPORT)
     assert "Archive/delete trigger" in text
     assert "does **not** claim a zero-match sweep" in text
+
+
+def test_dedicated_manifest_guides_are_deleted() -> None:
+    """MR5 (#4192): dedicated Manifest product guides must be gone."""
+    for rel in (
+        "docs/Rag/LlamaIndexManifestSystem.md",
+        "docs/Rag/ManifestIngestDesign.md",
+        "docs/UI/ManifestsPage.md",
+    ):
+        assert not (REPO_ROOT / rel).exists(), rel
+
+
+def test_manifest_only_assets_are_deleted() -> None:
+    """MR5 (#4192): manifest-only schema, samples, and UI entry are gone."""
+    for rel in (
+        "manifest.schema.json",
+        "samples/github_manifest.yaml",
+        "frontend/src/entrypoints/manifests.tsx",
+        "frontend/src/entrypoints/index-health.tsx",
+    ):
+        assert not (REPO_ROOT / rel).exists(), rel

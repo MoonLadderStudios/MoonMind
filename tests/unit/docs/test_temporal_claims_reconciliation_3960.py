@@ -25,6 +25,10 @@ RUN_WF = REPO_ROOT / "moonmind" / "workflows" / "temporal" / "workflows" / "run.
 AGENT_RUN_WF = (
     REPO_ROOT / "moonmind" / "workflows" / "temporal" / "workflows" / "agent_run.py"
 )
+# MoonLadderStudios/MoonMind#4192 retired the native Manifest product: the
+# ManifestIngest workflow module, its registration, and its Activities are
+# removed. Old-release histories may retain the historical type string as
+# replay evidence; the new release never registers, starts, or updates it.
 MANIFEST_WF = (
     REPO_ROOT
     / "moonmind"
@@ -33,6 +37,7 @@ MANIFEST_WF = (
     / "workflows"
     / "manifest_ingest.py"
 )
+RETIRED_MANIFEST_TYPE = "MoonMind.ManifestIngest"
 CLIENT = REPO_ROOT / "moonmind" / "workflows" / "temporal" / "client.py"
 CATALOG = REPO_ROOT / "moonmind" / "workflows" / "temporal" / "activity_catalog.py"
 RUNTIME = REPO_ROOT / "moonmind" / "workflows" / "temporal" / "activity_runtime.py"
@@ -64,10 +69,12 @@ def _normalized(source: str) -> str:
 
 
 def test_pause_resume_are_updates_not_signals_on_all_types() -> None:
-    for path in (RUN_WF, AGENT_RUN_WF, MANIFEST_WF):
+    for path in (RUN_WF, AGENT_RUN_WF):
         names = _update_names(_read(path))
         assert "Pause" in names, f"{path.name} must define a Pause Update"
         assert "Resume" in names, f"{path.name} must define a Resume Update"
+    # The retired ManifestIngest workflow module is gone entirely.
+    assert not MANIFEST_WF.exists(), "retired manifest_ingest.py must be deleted"
 
     doc = _normalized(_read(TYPE_CATALOG))
     assert "### Signal: `Pause` / `Resume`" not in doc
@@ -75,15 +82,16 @@ def test_pause_resume_are_updates_not_signals_on_all_types() -> None:
     for workflow_type in (
         "MoonMind.UserWorkflow",
         "MoonMind.AgentRun",
-        "MoonMind.ManifestIngest",
     ):
         assert workflow_type in doc
+    # The retired type is named only inside its retirement note, never as a
+    # live lifecycle row.
+    assert "11.2 `MoonMind.ManifestIngest` lifecycle (retired)" in _read(TYPE_CATALOG)
 
 
 def test_only_user_workflow_exposes_control_state_query() -> None:
     assert _has_query(_read(RUN_WF), "control_state")
     assert not _has_query(_read(AGENT_RUN_WF), "control_state")
-    assert not _has_query(_read(MANIFEST_WF), "control_state")
 
     doc = _normalized(_read(TYPE_CATALOG))
     assert "control_state" in doc
@@ -91,16 +99,13 @@ def test_only_user_workflow_exposes_control_state_query() -> None:
 
 
 def test_pause_resume_validation_varies_by_workflow_type() -> None:
-    manifest_src = _read(MANIFEST_WF)
-    assert "@pause.validator" not in manifest_src
-    assert "@resume.validator" not in manifest_src
     agent_src = _read(AGENT_RUN_WF)
     assert "@pause.validator" in agent_src
     assert "@resume.validator" in agent_src
 
     doc = _normalized(_read(TYPE_CATALOG))
     assert "validation varying by workflow type" in doc
-    assert "defines none and always accepts" in doc
+    assert "define Update validators" in doc
     # The old conflation must be gone: ACCEPTED stage vs handler completion.
     assert "Accepted means the flag flipped" not in doc
     assert "Temporal `ACCEPTED` only means" in doc

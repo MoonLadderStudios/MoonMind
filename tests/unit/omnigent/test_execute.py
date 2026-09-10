@@ -52,7 +52,7 @@ from moonmind.omnigent.execute import (
     normalize_omnigent_observation,
     run_omnigent_execution,
 )
-from moonmind.rag.context_injection import PromptContextResolution
+from moonmind.omnigent.execute import PromptContextResolution
 from moonmind.schemas.agent_runtime_models import AgentExecutionRequest
 
 
@@ -1950,46 +1950,24 @@ async def test_snapshot_polling_does_not_count_slow_stale_read_as_quiet() -> Non
 
 @pytest.mark.asyncio
 async def test_initial_context_is_persisted_before_first_message_digest(
-    monkeypatch, tmp_path
+    tmp_path,
 ) -> None:
+    """Retired native-RAG posture (MoonLadderStudios/MoonMind#4192).
+
+    First-message preparation no longer runs retrieval injection: the
+    authored message ships unchanged and evidence records the disabled
+    state through the established path.
+    """
     request = _request()
     request.parameters = {"metadata": {}}
     gateway = LocalOmnigentArtifactGateway(root=tmp_path)
     recorded: list[dict[str, Any]] = []
-
-    async def inject_context(self, *, request, workspace_path):
-        request.parameters["metadata"]["moonmind"] = {
-            "latestContextPackRef": "artifact://context/pack.json",
-            "retrievedContextDigest": "sha256:pack",
-            "retrievalQueryDigest": "sha256:query",
-            "retrievalQueryPreview": "Do work",
-            "retrievedContextTransport": "gateway",
-            "retrievedContextItemCount": 2,
-            "retrievedContextSources": ["docs/a.md", "docs/b.md"],
-            "retrievalCollections": ["canonical"],
-            "retrievalScope": {"repository": "org/repo", "run": "corr-1"},
-            "retrievalBudgets": {"tokens": 500, "latency_ms": 1000},
-            "retrievalUsage": {"tokens": 20, "latency_ms": 12},
-            "retrievalOverlay": {"policy": "include", "freshness": "fresh"},
-            "retrievalEmbeddingConfigRef": "sha256:embedding",
-            "retrievalFailureClass": None,
-            "retrievalMode": "semantic",
-            "retrievalContextTruncated": True,
-            "retrievalDurabilityAuthority": "artifact_ref",
-        }
-        framed = "SYSTEM SAFETY NOTICE:\nBEGIN_RETRIEVED_CONTEXT\nuntrusted\nEND_RETRIEVED_CONTEXT\n\nDo work"
-        request.instruction_ref = framed
-        return PromptContextResolution(instruction=framed, items_count=2)
 
     class Store:
         async def record_initial_context(self, key, *, evidence):
             assert key == "idem-1"
             recorded.append(dict(evidence))
 
-    monkeypatch.setattr(
-        "moonmind.rag.context_injection.ContextInjectionService.inject_context",
-        inject_context,
-    )
     message, evidence = await _resolve_initial_context_message(
         request=request,
         first_message={
@@ -2005,18 +1983,12 @@ async def test_initial_context_is_persisted_before_first_message_digest(
         workspace=str(tmp_path),
     )
 
-    assert "SYSTEM SAFETY NOTICE" in _first_message_text(message)
-    assert evidence["contextPackRef"] == "artifact://context/pack.json"
-    assert evidence["state"] == "completed"
-    assert evidence["truncated"] is True
-    assert evidence["contextPackDigest"] == "sha256:pack"
-    assert evidence["queryDigest"] == "sha256:query"
-    assert evidence["collections"] == ["canonical"]
-    assert evidence["scope"] == {"repository": "org/repo", "run": "corr-1"}
-    assert evidence["sources"] == ["docs/a.md", "docs/b.md"]
-    assert evidence["budgets"]["tokens"] == 500
-    assert evidence["embeddingConfigRef"] == "sha256:embedding"
-    assert evidence["firstMessageConsumedContextRef"] is True
+    assert _first_message_text(message).startswith("Do work")
+    assert "SYSTEM SAFETY NOTICE" not in _first_message_text(message)
+    assert evidence["contextPackRef"] is None
+    assert evidence["state"] == "disabled"
+    assert evidence["truncated"] is False
+    assert evidence["firstMessageConsumedContextRef"] is False
     assert evidence["preparedMessageRef"].startswith("artifact://omnigent/")
     prepared_payload = json.dumps(
         message, sort_keys=True, separators=(",", ":")
@@ -2031,30 +2003,19 @@ async def test_initial_context_is_persisted_before_first_message_digest(
 
 @pytest.mark.asyncio
 async def test_initial_context_pack_is_published_through_artifact_gateway(
-    monkeypatch, tmp_path
+    tmp_path,
 ) -> None:
+    """Retired native-RAG posture: no context pack is published.
+
+    MoonLadderStudios/MoonMind#4192 removed native retrieval injection, so
+    first-message preparation never mints a context-pack artifact. The
+    authored message ships unchanged with disabled retrieval evidence.
+    """
     request = _request()
     request.parameters = {"metadata": {}}
-    context_path = tmp_path / "workspace-context.json"
-    context_path.write_text('{"items":[]}\n', encoding="utf-8")
     gateway = LocalOmnigentArtifactGateway(root=tmp_path / "published")
 
-    async def inject_context(self, *, request, workspace_path):
-        request.parameters["metadata"]["moonmind"] = {
-            "latestContextPackRef": "artifacts/context/workspace-context.json",
-            "retrievedContextDigest": "sha256:pack",
-            "retrievedContextItemCount": 0,
-            "retrievalMode": "semantic",
-        }
-        return PromptContextResolution(
-            instruction="Do work", artifact_path=context_path
-        )
-
-    monkeypatch.setattr(
-        "moonmind.rag.context_injection.ContextInjectionService.inject_context",
-        inject_context,
-    )
-    _, evidence = await _resolve_initial_context_message(
+    message, evidence = await _resolve_initial_context_message(
         request=request,
         first_message={
             "type": "message",
@@ -2069,45 +2030,33 @@ async def test_initial_context_pack_is_published_through_artifact_gateway(
         workspace=str(tmp_path),
     )
 
-    assert evidence["contextPackRef"].startswith("artifact://omnigent/")
+    assert _first_message_text(message).startswith("Do work")
+    assert evidence["contextPackRef"] is None
+    assert evidence["state"] == "disabled"
     assert (
-        request.parameters["metadata"]["moonmind"]["retrievalDurabilityAuthority"]
-        == "artifact_gateway"
+        request.parameters["metadata"].get("moonmind", {}).get(
+            "retrievalDurabilityAuthority"
+        )
+        is None
     )
 
 
 @pytest.mark.asyncio
 async def test_required_context_artifact_publication_failure_fails_before_commit(
-    monkeypatch, tmp_path
+    tmp_path,
 ) -> None:
+    """Retired native-RAG posture: required retrieval is unavailable.
+
+    MoonLadderStudios/MoonMind#4192 removed native retrieval injection, so
+    a required initial-context request fails before commit with the retired
+    unavailable contract error instead of an artifact-publication error.
+    """
     request = _request()
     request.parameters = {"metadata": {}, "rag": {"required": True}}
-    context_path = tmp_path / "workspace-context.json"
-    context_path.write_text('{"items":[]}\n', encoding="utf-8")
 
-    async def inject_context(self, *, request, workspace_path):
-        request.parameters["metadata"]["moonmind"] = {
-            "latestContextPackRef": "artifacts/context/workspace-context.json",
-            "retrievedContextDigest": "sha256:pack",
-            "retrievalMode": "semantic",
-        }
-        return PromptContextResolution(
-            instruction="Do work", artifact_path=context_path
-        )
-
-    class FailingGateway(LocalOmnigentArtifactGateway):
-        async def write_text(self, **kwargs):
-            if kwargs.get("link_type") == "input.context-pack":
-                raise OmnigentArtifactError("artifact service unavailable")
-            return await super().write_text(**kwargs)
-
-    monkeypatch.setattr(
-        "moonmind.rag.context_injection.ContextInjectionService.inject_context",
-        inject_context,
-    )
     with pytest.raises(
         OmnigentContractError,
-        match="required initial context artifact publication failed",
+        match="required initial context retrieval is unavailable",
     ):
         await _resolve_initial_context_message(
             request=request,
@@ -2118,7 +2067,9 @@ async def test_required_context_artifact_publication_failure_fails_before_commit
                     "content": [{"type": "input_text", "text": "Do work"}],
                 },
             },
-            artifact_gateway=FailingGateway(root=tmp_path / "published"),
+            artifact_gateway=LocalOmnigentArtifactGateway(
+                root=tmp_path / "published"
+            ),
             run_store=None,
             durable_row=None,
             workspace=str(tmp_path),
@@ -2127,7 +2078,7 @@ async def test_required_context_artifact_publication_failure_fails_before_commit
 
 @pytest.mark.asyncio
 async def test_initial_context_retry_reuses_exact_prepared_message(
-    monkeypatch, tmp_path
+    tmp_path,
 ) -> None:
     request = _request()
     gateway = LocalOmnigentArtifactGateway(root=tmp_path)
@@ -2154,13 +2105,8 @@ async def test_initial_context_retry_reuses_exact_prepared_message(
             }
         }
 
-    async def unexpected_injection(*args, **kwargs):
-        raise AssertionError("retry must not rerun retrieval")
-
-    monkeypatch.setattr(
-        "moonmind.rag.context_injection.ContextInjectionService.inject_context",
-        unexpected_injection,
-    )
+    # Retired native-RAG posture: retries restore the persisted prepared
+    # message without rerunning retrieval (no injection entrypoint remains).
     message, evidence = await _resolve_initial_context_message(
         request=request,
         first_message={
@@ -2243,22 +2189,14 @@ async def test_initial_context_retry_rejects_missing_prepared_message(tmp_path) 
 
 @pytest.mark.asyncio
 async def test_required_initial_context_fails_before_message_commit(
-    monkeypatch, tmp_path
+    tmp_path,
 ) -> None:
     request = _request()
     request.parameters = {"rag": {"required": True}, "metadata": {}}
 
-    async def disabled_context(self, *, request, workspace_path):
-        request.parameters["metadata"]["moonmind"] = {
-            "retrievalMode": "disabled",
-            "retrievalDisabledReason": "retrieval_gateway_unavailable",
-        }
-        return PromptContextResolution(instruction=request.instruction_ref or "")
-
-    monkeypatch.setattr(
-        "moonmind.rag.context_injection.ContextInjectionService.inject_context",
-        disabled_context,
-    )
+    # Retired native-RAG posture (MoonLadderStudios/MoonMind#4192): no
+    # injection entrypoint remains; a required request fails with disabled
+    # retrieval evidence before the message commits.
     with pytest.raises(OmnigentContractError, match="required initial context"):
         await _resolve_initial_context_message(
             request=request,

@@ -201,9 +201,6 @@ async def _get_service(
         run_continue_as_new_wait_cycle_threshold=(
             settings.temporal.run_continue_as_new_wait_cycle_threshold
         ),
-        manifest_continue_as_new_phase_threshold=(
-            settings.temporal.manifest_continue_as_new_phase_threshold
-        ),
     )
 
 @router.get("/callbacks")
