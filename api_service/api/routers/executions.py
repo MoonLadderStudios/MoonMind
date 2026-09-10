@@ -4218,10 +4218,14 @@ def _serialize_execution(
         for k in ("startingBranch", "targetBranch", "defaultBranch", "branch")
     )
     if not starting_branch and has_git_context:
-        default_branch = str(
-            git_payload.get("defaultBranch") or params.get("defaultBranch") or "main"
+        # MoonLadderStudios/MoonMind#4228: use only recorded default-branch
+        # evidence. Never fabricate `main` when no default was recorded; the
+        # detail UI renders that case explicitly as "Not recorded".
+        recorded_default = str(
+            git_payload.get("defaultBranch") or params.get("defaultBranch") or ""
         ).strip()
-        starting_branch = f"{default_branch} (default)"
+        if recorded_default:
+            starting_branch = f"{recorded_default} (default)"
 
     # Precedence: task.git.targetBranch > task.targetBranch > params.targetBranch
     target_branch = str(

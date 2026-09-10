@@ -85,3 +85,13 @@ def test_git_context_without_authored_branch_keeps_default_fallback():
     )
 
     assert _serialize_execution(record).starting_branch == "develop (default)"
+
+
+def test_git_context_without_recorded_default_does_not_fabricate_main():
+    # MoonLadderStudios/MoonMind#4228: missing historical metadata must stay
+    # missing so the UI can render an explicit "Not recorded" state.
+    record = _make_execution_record(
+        parameters={"workflow": {"git": {"repository": "acme/repo"}}}
+    )
+
+    assert _serialize_execution(record).starting_branch is None

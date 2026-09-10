@@ -2242,6 +2242,41 @@ function RepositoryFact({ repository }: { repository: string }) {
   );
 }
 
+export function normalizeStartingBranch(value: unknown): string | null {
+  if (typeof value !== 'string') return null;
+  const trimmed = value.trim();
+  return trimmed ? trimmed : null;
+}
+
+export type WorkflowSourceBranchState = 'branch' | 'not-recorded' | 'not-applicable';
+
+export type WorkflowSourceContext = {
+  repository: string | null;
+  startingBranch: string | null;
+  hasRepository: boolean;
+  startingBranchState: WorkflowSourceBranchState;
+};
+
+// Single normalized source-context authority for Workflow Detail (MoonLadderStudios/MoonMind#4228).
+// Reads only the selected execution's recorded `repository` / `startingBranch`.
+// Never derives from target, generated work, checkpoint, publication, or PR base branches.
+// A recorded "<branch> (default)" value is preserved verbatim as resolved-default evidence;
+// a missing branch on a repository-backed execution is `not-recorded`, never a guessed `main`.
+export function resolveWorkflowSourceContext(execution: {
+  repository?: string | null | undefined;
+  startingBranch?: string | null | undefined;
+} | null | undefined): WorkflowSourceContext {
+  const repository = normalizeStartingBranch(execution?.repository);
+  const startingBranch = normalizeStartingBranch(execution?.startingBranch);
+  const hasRepository = Boolean(repository);
+  const startingBranchState: WorkflowSourceBranchState = startingBranch
+    ? 'branch'
+    : hasRepository
+      ? 'not-recorded'
+      : 'not-applicable';
+  return { repository, startingBranch, hasRepository, startingBranchState };
+}
+
 function renderProviderProfileSummary(
   execution: z.infer<typeof ExecutionDetailSchema>,
   launchProfileId?: string | null,
@@ -9893,6 +9928,7 @@ function WorkflowDetailPageContent({ payload }: { payload: BootPayload }) {
   const historicalModel = modelTierResolution?.resolvedModel?.trim() || execution?.model;
   const historicalEffort = modelTierResolution?.resolvedEffort?.trim() || execution?.effort;
   const historicalProfileId = modelTierResolution?.providerProfileId?.trim() || execution?.profileId;
+  const sourceContext = resolveWorkflowSourceContext(execution);
   return (
     <div className="stack workflow-detail-page">
       <div className="toolbar">
@@ -10028,6 +10064,30 @@ function WorkflowDetailPageContent({ payload }: { payload: BootPayload }) {
                 {instructionsExpanded ? 'Hide Workflow Inputs' : 'Show Workflow Inputs'}
               </button>
             </div>
+            {sourceContext.hasRepository || sourceContext.startingBranch ? (
+              <dl className="td-source-context" aria-label="Workflow source context">
+                {sourceContext.repository ? (
+                  <div className="td-source-context-item">
+                    <dt>Repository</dt>
+                    <dd>
+                      <RepositoryFact repository={sourceContext.repository} />
+                    </dd>
+                  </div>
+                ) : null}
+                <div className="td-source-context-item">
+                  <dt>Starting Branch</dt>
+                  <dd>
+                    {sourceContext.startingBranch ? (
+                      <code className="text-xs break-all" title={sourceContext.startingBranch}>
+                        {sourceContext.startingBranch}
+                      </code>
+                    ) : (
+                      <span className="td-source-context-empty">Not recorded</span>
+                    )}
+                  </dd>
+                </div>
+              </dl>
+            ) : null}
             {instructionsExpanded ? (
               <div id="workflow-inputs-panel" className="td-instructions-panel">
                 {hasTaskInstructions ? (
@@ -10238,9 +10298,9 @@ function WorkflowDetailPageContent({ payload }: { payload: BootPayload }) {
               ) : null}
 
               <FactGroup title="Git & Publish">
-                {execution.repository ? (
+                {sourceContext.repository ? (
                   <Fact label="Repo">
-                    <RepositoryFact repository={execution.repository} />
+                    <RepositoryFact repository={sourceContext.repository} />
                   </Fact>
                 ) : null}
                 {execution.publishMode ? (
@@ -10248,11 +10308,21 @@ function WorkflowDetailPageContent({ payload }: { payload: BootPayload }) {
                     {formatPublishModeLabel(execution.publishMode)}
                   </Fact>
                 ) : null}
-                {execution.startingBranch ? (
+                {sourceContext.startingBranch ? (
                   <Fact label="Starting Branch">
-                    <code className="text-xs break-all">{execution.startingBranch}</code>
+                    <code className="text-xs break-all" title={sourceContext.startingBranch}>
+                      {sourceContext.startingBranch}
+                    </code>
                   </Fact>
-                ) : null}
+                ) : sourceContext.hasRepository ? (
+                  <Fact label="Starting Branch">
+                    <span className="td-source-context-empty">Not recorded</span>
+                  </Fact>
+                ) : (
+                  <Fact label="Starting Branch">
+                    <span className="td-source-context-empty">Not applicable</span>
+                  </Fact>
+                )}
                 {execution.targetBranch ? (
                   <Fact label="Target Branch">
                     <code className="text-xs break-all">{execution.targetBranch}</code>
