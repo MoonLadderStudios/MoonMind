@@ -1,0 +1,6 @@
+{
+  "invariant": "Shell and model probes select the upstream layout present in the exact admitted image. Missing helpers, dependency failures, and signature drift remain build mismatches without trying another implementation.",
+  "modelSource": "exact-host-opencode-cli",
+  "failureCode": "OMNIGENT_HARNESS_BUILD_MISMATCH",
+  "commandExitCodes": [0, 5, 97]
+}
