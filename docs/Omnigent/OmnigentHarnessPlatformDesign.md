@@ -1351,6 +1351,14 @@ PR adoption also requires the requested base branch and confirmed non-draft stat
 A changed or missing remote head rejects reuse before repository or issue mutation.
 New repository work continues through the ordinary publication path.
 
+Publication retries pre-connection transport failures on remote Git reads
+(`fetch` and `ls-remote`) in the same authoritative workspace, with unchanged
+credentials and command inputs. Four attempts with 2, 4, and 8 second delays
+bound recovery before the ordinary failure/checkpoint path takes over. Git's
+unstructured CLI diagnostics are classified only at the publication boundary;
+authentication, TLS, unknown errors, and remote mutations do not receive these
+retries. Success still requires exact remote-head evidence.
+
 ## 21. Native Workflow Chat and controls
 
 Native Workflow Chat continues to use the binding-scoped facade.
