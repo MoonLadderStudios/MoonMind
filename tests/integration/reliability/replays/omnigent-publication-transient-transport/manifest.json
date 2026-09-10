@@ -1,0 +1,13 @@
+{
+  "incidentWorkflowId": "mm:5c182f75-c005-4edc-aa1b-eca086a515c1-2026-09-10T01:30:00Z",
+  "failureShapeId": "omnigent-publication-transient-transport",
+  "boundary": "completed generic Omnigent turn -> repository publication -> workflow publish evidence",
+  "escapedFailure": {
+    "command": "git fetch --no-tags origin +refs/heads/main:refs/remotes/origin/main",
+    "exitCode": 128,
+    "stderr": "fatal: unable to access 'https://github.com/MoonLadderStudios/Tactics.git/': Could not resolve host: github.com\n",
+    "providerErrorCode": "OMNIGENT_GENERIC_DISPATCH_FAILED"
+  },
+  "workspaceOutcome": "two modified tracked files retained; parent captured a failure checkpoint",
+  "cause": "A pre-connection transport failure on the publication base fetch terminated the completed turn without bounded read recovery."
+}

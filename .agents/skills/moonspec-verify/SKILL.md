@@ -320,6 +320,55 @@ test unavailable while the documented delegated capability exists. If that
 capability is missing or rejects the job, preserve its explicit evidence and
 classify the environment according to `AGENTS.md`.
 
+### Discover Docker Test Options
+
+In every verification mode, inspect the repository's testing documentation,
+test scripts, build targets, CI jobs, Dockerfiles, and Compose files for Docker
+build and test paths relevant to the changed area. Follow references from
+`AGENTS.md` and README to the actual testing playbook and entrypoint; a mention
+of CI or an absent local compiler is not enough to classify a check as unavailable.
+Use an applicable testing Skill if it is in the resolved active snapshot at
+`$MOONMIND_ACTIVE_SKILLS_DIR`; outside a managed run, use the host's available
+Skills and repository conventions. If no testing Skill is selected, continue
+discovery from repository documentation and scripts without broadening or
+mutating the active Skill set. Keep repository-specific commands and image
+choices in those sources, not in this verifier.
+
+Distinguish the agent's local tools from its authorized execution substrate.
+In MoonMind, inspect the exposed container tool contract and CLI help, and use
+the repository's managed test entrypoint or
+`moonmind container run --spec <job.json> --request-id <stable-phase-id>`
+with a job specification derived from documented test commands and approved
+image sources. The API-owned Docker Backend supplies the daemon and toolchain;
+neither a local Docker executable nor a daemon socket in the agent is required.
+Outside MoonMind, use documented Docker or Compose test commands when the host
+authorizes direct Docker access. Preserve test isolation, workspace access
+policy, bounded resources, and cleanup in either host. Do not bypass the managed
+boundary, guess image references, provision credentials, or alter deployment
+configuration to make a test runnable.
+
+For generic jobs, persist a stable request ID for the verification phase,
+candidate revision or workspace checkpoint, and workload specification. Reuse
+that ID when retrying the same job after a client timeout or continuation;
+recover the existing job and its terminal evidence instead of creating another
+submission identity. Use a new ID when the candidate, phase, or workload changes.
+
+When an applicable authorized container path exists, attempt the targeted build
+or test and inspect its terminal result and logs. CLI help, a submitted job ID,
+static checks, and a process wrapper's success are not test completion evidence.
+For a missing prerequisite, record the owning service's readiness/admission
+diagnostic or the explicit missing capability, image configuration, or authority
+that prevents submission. A missing local toolchain, an unselected testing Skill,
+or a previous report's environment claim alone does not establish that Docker
+testing is unavailable. Do not repeat an unchanged rejected request; complete
+independent checks and preserve its evidence for the handoff.
+
+Record the discovered entrypoint, execution substrate, exact command, candidate
+revision or workspace checkpoint, terminal job/test result and log/artifact refs,
+or the concrete pre-submission blocker in Test Results and Diagnostics. Complete
+this discovery before using `NOT RUN`, `recoverableInCurrentRuntime: false`,
+`needs_human`, or `blocked` on the grounds that build or test tooling is unavailable.
+
 Use `NOT RUN` with an exact reason when a command requires unavailable credentials, missing services, unsafe side effects, unsupported local tools, or excessive environment setup.
 Use the controlling/advisory split above when interpreting unavailable assets,
 services, credentials, or tooling. Preserve explicitly mandatory prerequisites;

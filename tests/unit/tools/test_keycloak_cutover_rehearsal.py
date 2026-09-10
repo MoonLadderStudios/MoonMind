@@ -494,6 +494,34 @@ def test_survey_reports_no_live_surfaces_after_integrated_removal() -> None:
     assert rehearsal._capability_present("4129-removal")
 
 
+def test_api_retirement_description_is_not_a_live_surface(tmp_path: Path) -> None:
+    source = (
+        'app = FastAPI(title="MoonMind 🌙", description=(\n'
+        '    "Authentication: retired keycloak/default selectors "\n'
+        '    "are rejected at startup."\n'
+        '))\n'
+    )
+    api = tmp_path / "api_service"
+    api.mkdir()
+    (api / "main.py").write_text(source, encoding="utf-8")
+    assert rehearsal.collect_inventory_survey(tmp_path)["keycloak_surfaces"] == []
+    assert rehearsal._capability_present("4129-removal", tmp_path)
+
+
+def test_retirement_description_does_not_hide_executable_surfaces() -> None:
+    for source in (
+        'app = FastAPI(description="retired keycloak"); provider = "keycloak"',
+        'app = FastAPI(title="keycloak", description="retired keycloak")',
+        'app = FastAPI(description=configure("keycloak", "retired"))',
+        'app = FastAPI(description=f"retired {configure(\'keycloak\')}")',
+        'provider = "keycloak"  # retired selector',
+        'if provider == "keycloak":  # legacy\n    mount_routes()',
+        'CREATE DATABASE keycloak; -- retired',
+        'app = FastAPI(description="retired keycloak"',
+    ):
+        assert rehearsal.count_live_keycloak_surfaces(source) == 1, source
+
+
 def test_run_gate_includes_new_hermetic_steps_and_stays_deployment_blocked() -> None:
     results = rehearsal.run_gate()
     by_name = {r.name: r for r in results}
