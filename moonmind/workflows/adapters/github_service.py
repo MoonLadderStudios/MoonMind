@@ -242,12 +242,12 @@ class GitHubService:
                 required_permissions={
                     "Contents": "write",
                     "Pull requests": "write",
+                    "Issues": "write",
                 },
                 optional_permissions={
                     "Workflows": "write",
                     "Commit statuses": "read",
                     "Checks": "read",
-                    "Issues": "read",
                 },
             ),
             "readiness": GitHubPermissionProfile(
@@ -267,7 +267,7 @@ class GitHubService:
                     "Pull requests": "write",
                     "Commit statuses": "read",
                     "Checks": "read",
-                    "Issues": "read",
+                    "Issues": "write",
                 },
                 optional_permissions={"Workflows": "write"},
             ),
