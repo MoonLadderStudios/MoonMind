@@ -24,6 +24,7 @@ fails closed when they are absent.
 from __future__ import annotations
 
 import argparse
+import ast
 import hashlib
 import json
 import re
@@ -342,8 +343,50 @@ def _is_live_keycloak_line(line: str) -> bool:
     return True
 
 
+def _without_api_retirement_description(text: str) -> str:
+    """Exclude literal retirement guidance in FastAPI's documentation metadata.
+
+    Parse the owning expression instead of exempting any string containing
+    "retired": provider selectors, routes, and executable expressions remain
+    live. Mask only the description's exact source span so adjacent code on
+    the same line cannot be hidden by documentation.
+    """
+    try:
+        tree = ast.parse(text)
+    except SyntaxError:
+        return text
+    lines = text.encode("utf-8").splitlines(keepends=True)
+    for node in ast.walk(tree):
+        if not (
+            isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Name)
+            and node.func.id == "FastAPI"
+        ):
+            continue
+        for keyword in node.keywords:
+            value = keyword.value
+            if not (
+                keyword.arg == "description"
+                and isinstance(value, ast.Constant)
+                and isinstance(value.value, str)
+                and RESIDUAL_LINE_PATTERN.search(value.value)
+            ):
+                continue
+            for index in range(value.lineno - 1, value.end_lineno):
+                line = lines[index]
+                start = value.col_offset if index == value.lineno - 1 else 0
+                end = (
+                    value.end_col_offset
+                    if index == value.end_lineno - 1
+                    else len(line.rstrip(b"\r\n"))
+                )
+                lines[index] = line[:start] + b" " * (end - start) + line[end:]
+    return b"".join(lines).decode("utf-8")
+
+
 def count_live_keycloak_surfaces(text: str) -> int:
     """Count live keycloak surface lines, ignoring retirement residuals."""
+    text = _without_api_retirement_description(text)
     return sum(1 for line in text.splitlines() if _is_live_keycloak_line(line))
 
 
