@@ -42,3 +42,14 @@ inside the hermetic reliability-journey budget while still asserting stable
 session/thread/epoch identity across each continuation turn. Finalization faults
 use the shared fail-first injector so checkpoint or publication retries can be
 tested independently from the exactly-once primary agent execution.
+
+`test_verifier_docker_discovery_replay.py` retains the missing-local-compiler
+incident in `replays/verifier-docker-test-discovery/`. It materializes the real
+resolved verifier instructions, replays repository documentation reads, and runs
+the real managed container CLI and HTTP client against scripted service replies.
+The available route must return terminal state, logs, and artifact references;
+the rejected route must preserve the admission diagnostic without resubmission.
+Provider discovery/report actions are fixture inputs, so this is instruction
+projection and tool-boundary coverage, not proof of autonomous model compliance
+or a real compiler/Docker workload. No provider credentials are required, and the
+`reliability_journey` marker includes both cases in required CI when skills change.
