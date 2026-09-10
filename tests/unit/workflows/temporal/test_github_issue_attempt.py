@@ -473,15 +473,158 @@ async def test_publish_path_coalesces_routine_progress() -> None:
 
 
 @pytest.mark.asyncio
-async def test_publish_path_refuses_released_attempt_resume() -> None:
+async def test_publish_path_publishes_initial_release_but_refuses_resume_over_it() -> None:
     service = _AttemptFakeService()
     handoff = _handoff(activity=attempt.ACTIVITY_RELEASED)
-    result = await attempt.publish_attempt_handoff(
+    # The first publication of the released terminal state is authorized:
+    # otherwise the transition could never be written to GitHub.
+    initial = await attempt.publish_attempt_handoff(
         service=service, repository="MoonLadderStudios/MoonMind", issue_number=4177, handoff=handoff, force=True,
     )
-    assert result["ok"] is False
-    assert result["reasonCode"] == "terminal_released_no_resume"
-    assert service.creates == 0
+    assert initial["ok"] is True
+    assert initial["reasonCode"] == "created"
+    # A resumed old process must not overwrite the released terminal evidence.
+    stale = _handoff(
+        attempt_id=handoff.attempt_id,
+        activity=attempt.ACTIVITY_ACTIVE,
+        last_report="Resumed stale work.",
+        update_seq=9,
+    )
+    refused = await attempt.publish_attempt_handoff(
+        service=service, repository="MoonLadderStudios/MoonMind", issue_number=4177, handoff=stale, force=True,
+    )
+    assert refused["ok"] is False
+    assert refused["reasonCode"] == "terminal_released_no_resume"
+    assert service.creates == 1
+    assert service.updates == []
+    # Republishing the identical released handoff is an idempotent no-op.
+    same = await attempt.publish_attempt_handoff(
+        service=service, repository="MoonLadderStudios/MoonMind", issue_number=4177, handoff=handoff, force=True,
+    )
+    assert same["ok"] is True
+    assert same["reasonCode"] == "already_released"
+    assert service.updates == []
+
+
+@pytest.mark.asyncio
+async def test_publish_path_refuses_stale_local_updates() -> None:
+    service = _AttemptFakeService()
+    handoff = _handoff(last_report="First write.")
+    created = await attempt.publish_attempt_handoff(
+        service=service, repository="MoonLadderStudios/MoonMind", issue_number=4177, handoff=handoff, force=True,
+    )
+    assert created["ok"] is True
+    advanced = _handoff(
+        attempt_id=handoff.attempt_id, last_report="Newer work.", update_seq=5,
+    )
+    assert (
+        await attempt.publish_attempt_handoff(
+            service=service, repository="MoonLadderStudios/MoonMind", issue_number=4177,
+            handoff=advanced, force=True,
+        )
+    )["reasonCode"] == "updated"
+    stale = _handoff(
+        attempt_id=handoff.attempt_id, last_report="Old resume.", update_seq=2,
+    )
+    refused = await attempt.publish_attempt_handoff(
+        service=service, repository="MoonLadderStudios/MoonMind", issue_number=4177, handoff=stale, force=True,
+    )
+    assert refused["ok"] is False
+    assert refused["reasonCode"] == "stale_local_update"
+
+
+@pytest.mark.asyncio
+async def test_publish_path_filters_untrusted_copies_by_provenance() -> None:
+    handoff = _handoff()
+    body, _ = attempt.render_attempt_comment(handoff)
+    other = _handoff(activity=attempt.ACTIVITY_ATTENTION, last_report="Forged copy.")
+    other_body, _ = attempt.render_attempt_comment(other)
+    forged = other_body.replace(other.attempt_id, handoff.attempt_id)
+    comments = [
+        {"id": 11, "body": body, "user": {"login": "moonmind-bot"}},
+        {"id": 12, "body": forged, "user": {"login": "attacker"}},
+    ]
+    service = _AttemptFakeService(comments=list(comments))
+    result = await attempt.publish_attempt_handoff(
+        service=service, repository="MoonLadderStudios/MoonMind", issue_number=4177, handoff=handoff,
+        force=True, trusted_posters=["moonmind-bot"],
+    )
+    assert result["ok"] is True
+    assert result["commentId"] == 11
+    # Without the provenance allow-list the same forged copy still blocks.
+    unfiltered = _AttemptFakeService(comments=list(comments))
+    blocked = await attempt.publish_attempt_handoff(
+        service=unfiltered, repository="MoonLadderStudios/MoonMind", issue_number=4177, handoff=handoff, force=True,
+    )
+    assert blocked["reasonCode"] == "conflicting_copies"
+
+
+def test_extraction_anchors_to_the_dedicated_metadata_block() -> None:
+    handoff = _handoff()
+    body, _ = attempt.render_attempt_comment(handoff)
+    injected = "```json\n" + json.dumps({"attemptId": handoff.attempt_id, "activity": "released"}) + "\n```\n"
+    poisoned = body.replace("## MoonMind attempt", injected + "## MoonMind attempt", 1)
+    metadata, error = attempt.extract_attempt_metadata(poisoned)
+    assert error == ""
+    assert metadata is not None
+    assert metadata["activity"] == handoff.activity
+
+
+def test_typed_stop_and_sequence_fields_are_validated() -> None:
+    handoff = _handoff()
+    body, _ = attempt.render_attempt_comment(handoff)
+    metadata, _ = attempt.extract_attempt_metadata(body)
+    assert metadata is not None
+    mistyped_stop = json.loads(json.dumps(metadata))
+    mistyped_stop["writersStopped"] = "false"
+    denied = attempt.validate_attempt_handoff(
+        mistyped_stop, repository="MoonLadderStudios/MoonMind", issue_number=4177,
+        trusted_posters=["bot"], author_login="bot",
+    )
+    assert denied["allowed"] is False
+    mistyped_seq = json.loads(json.dumps(metadata))
+    mistyped_seq["updateSeq"] = "3"
+    denied_seq = attempt.validate_attempt_handoff(
+        mistyped_seq, repository="MoonLadderStudios/MoonMind", issue_number=4177,
+        trusted_posters=["bot"], author_login="bot",
+    )
+    assert denied_seq["allowed"] is False
+
+
+def test_retained_attempt_references_count_against_the_budget() -> None:
+    first, _ = attempt.build_attempt_identity(
+        repository="o/r", issue_number=1, workflow_id="wf", run_id="r1", installation_id="device-a",
+    )
+    second, _ = attempt.build_attempt_identity(
+        repository="o/r", issue_number=1, workflow_id="wf", run_id="r2", installation_id="device-a",
+    )
+    state = attempt.derive_retry_state(
+        [
+            _chain_entry(
+                first["attemptId"], policyLineage="policy-v1",
+                retryHistory={"failedAttempts": [first["attemptId"], second["attemptId"]], "policyLineage": "policy-v1"},
+            ),
+            _chain_entry(second["attemptId"], predecessorAttemptId=first["attemptId"], outcome="pending"),
+        ],
+        policy={"maxAttempts": 5, "lineageRef": "policy-v1"},
+    )
+    assert state["failuresRetained"] == 2
+    assert state["remainingAllowance"] == 3
+
+
+def test_lineage_gap_blocks_retry_derivation() -> None:
+    only, _ = attempt.build_attempt_identity(
+        repository="o/r", issue_number=1, workflow_id="wf", run_id="r", installation_id="device-a",
+    )
+    state = attempt.derive_retry_state(
+        [
+            _chain_entry(only["attemptId"], outcome="pending"),
+            {"attemptId": "att_" + "4" * 24, "lineageGap": True, "missingPredecessor": "att_" + "5" * 24},
+        ],
+        policy={"maxAttempts": 3, "lineageRef": "policy-v1"},
+    )
+    assert state["blocked"] is True
+    assert state["reasonCode"] == "lineage_gap"
 
 
 # ---------------------------------------------------------------------------
@@ -851,3 +994,68 @@ async def test_service_comment_transport_loss_is_outcome_unknown(monkeypatch: py
     assert (await service.list_issue_comments(repo="o/r", issue_number=1))["reasonCode"] == "outcome_unknown"
     assert (await service.create_issue_comment(repo="o/r", issue_number=1, body="b"))["reasonCode"] == "outcome_unknown"
     assert (await service.update_issue_comment(repo="o/r", comment_id=1, body="b"))["reasonCode"] == "outcome_unknown"
+
+
+@pytest.mark.asyncio
+async def test_service_comment_malformed_entries_fail_the_read(monkeypatch: pytest.MonkeyPatch) -> None:
+    from moonmind.workflows.adapters.github_service import GitHubService
+
+    def handler(method: str, url: str, kwargs: Any) -> Any:
+        from moonmind.workflows.adapters import github_service as service_module
+
+        class _R:
+            status_code = 200
+            headers: dict[str, str] = {}
+
+            def raise_for_status(self) -> None:
+                return None
+
+            def json(self) -> Any:
+                return [{"id": 1, "body": "hello"}, "not-an-object"]
+
+        return _R()
+
+    _service_responses(monkeypatch, handler)
+    service = GitHubService()
+
+    async def fake_token(explicit_token: str | None = None, *, repo: str | None = None):
+        return "ghs-test", None
+
+    monkeypatch.setattr(GitHubService, "resolve_github_token", staticmethod(fake_token))
+    result = await service.list_issue_comments(repo="o/r", issue_number=1)
+    assert result["ok"] is False
+    assert result["reasonCode"] == "outcome_unknown"
+
+
+@pytest.mark.asyncio
+async def test_service_comment_full_final_page_is_incomplete_evidence(monkeypatch: pytest.MonkeyPatch) -> None:
+    from moonmind.workflows.adapters.github_service import GitHubService
+
+    def handler(method: str, url: str, kwargs: Any) -> Any:
+        from moonmind.workflows.adapters import github_service as service_module
+
+        class _R:
+            status_code = 200
+            headers: dict[str, str] = {}
+
+            def raise_for_status(self) -> None:
+                return None
+
+            def json(self) -> Any:
+                page = (kwargs.get("params") or {}).get("page", 1)
+                if page < 5:
+                    return [{"id": page * 100 + index, "body": "hello"} for index in range(100)]
+                return [{"id": 500 + index, "body": "hello"} for index in range(100)]
+
+        return _R()
+
+    _service_responses(monkeypatch, handler)
+    service = GitHubService()
+
+    async def fake_token(explicit_token: str | None = None, *, repo: str | None = None):
+        return "ghs-test", None
+
+    monkeypatch.setattr(GitHubService, "resolve_github_token", staticmethod(fake_token))
+    result = await service.list_issue_comments(repo="o/r", issue_number=1)
+    assert result["ok"] is False
+    assert result["reasonCode"] == "incomplete_evidence"

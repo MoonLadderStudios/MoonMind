@@ -2542,7 +2542,10 @@ class GitHubService:
         Bounded to five pages of 100 comments. An unreadable page (transport
         loss, rate limit, or malformed payload) returns ``outcome_unknown``
         instead of an empty list: callers must never interpret unreadable
-        comments as no owner.
+        comments as no owner. A full final page exhausts the bounded budget
+        with newer comments possibly unread, so it returns an explicit
+        ``incomplete_evidence`` failure rather than a truncated list reported
+        as complete.
         """
         token, resolution_error = await self.resolve_github_token(
             github_token,
@@ -2589,10 +2592,24 @@ class GitHubService:
                         "summary": "Issue comment list returned malformed evidence.",
                     }
                 for comment in payload:
-                    if isinstance(comment, dict):
-                        comments.append(comment)
+                    if not isinstance(comment, dict):
+                        return {
+                            "ok": False,
+                            "reasonCode": "outcome_unknown",
+                            "summary": "Issue comment list returned malformed evidence.",
+                        }
+                    comments.append(comment)
                 if len(payload) < 100:
                     break
+                if page == 5:
+                    return {
+                        "ok": False,
+                        "reasonCode": "incomplete_evidence",
+                        "summary": (
+                            "Issue comment listing exhausted the bounded page budget with a full "
+                            "final page; newer comments may remain unread."
+                        ),
+                    }
         return {"ok": True, "reasonCode": "listed", "summary": f"Listed {len(comments)} issue comments.", "comments": comments}
 
     async def create_issue_comment(
