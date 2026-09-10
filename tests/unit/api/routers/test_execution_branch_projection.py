@@ -95,3 +95,40 @@ def test_git_context_without_recorded_default_does_not_fabricate_main():
     )
 
     assert _serialize_execution(record).starting_branch is None
+
+
+def test_canonical_repository_target_projects_source_context():
+    # MoonLadderStudios/MoonMind#4228: the Create page persists repository and
+    # branch only in the structured top-level payload.repository mapping.
+    record = _make_execution_record(
+        parameters={
+            "repository": {
+                "provider": "git",
+                "connectionRef": "repository-connection:git-default",
+                "repository": {"name": "acme/repo"},
+                "branch": {"name": "feature/source-context"},
+            }
+        }
+    )
+
+    result = _serialize_execution(record)
+
+    assert result.repository == "acme/repo"
+    assert result.starting_branch == "feature/source-context"
+
+
+def test_canonical_repository_target_without_branch_projects_repository_only():
+    record = _make_execution_record(
+        parameters={
+            "repository": {
+                "provider": "git",
+                "connectionRef": "repository-connection:git-default",
+                "repository": {"name": "acme/repo"},
+            }
+        }
+    )
+
+    result = _serialize_execution(record)
+
+    assert result.repository == "acme/repo"
+    assert result.starting_branch is None
