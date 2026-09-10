@@ -997,7 +997,8 @@ app = FastAPI(
         "(cookie and/or bearer session, single credential precedence; "
         "legacy application JWTs are rejected as auth_invalid). Session "
         "issuance journeys for accounts/oidc/header are owned by the "
-        "provider-route slices with end-to-end qualification."
+        "provider-route slices. Draft contract text pending #4128 "
+        "qualification."
     ),
     version="0.1.0",
     docs_url="/openapi",
