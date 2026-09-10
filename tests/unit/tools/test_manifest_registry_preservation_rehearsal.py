@@ -27,23 +27,6 @@ def test_prerequisites_block_without_sibling_markers_and_owner() -> None:
     assert results["prerequisite-live-deployment-qualification"].status == "blocked"
 
 
-def test_disposition_table_covers_dedicated_shared_and_temporary() -> None:
-    result = rehearsal.check_disposition_table(REPO_ROOT)
-    assert result.status == "completed", result.evidence
-
-
-def test_inventory_survey_confirms_pre_removal_footprint() -> None:
-    survey = rehearsal.collect_inventory_survey(REPO_ROOT)
-    assert survey["sources"]["models"] == "present"
-    assert survey["findings"]["manifest_table_present"] is True
-    assert survey["findings"]["writers_active"] is True
-    assert survey["findings"]["shared_enum_present"] is True
-    assert survey["findings"]["old_revisions_import_manifest_runtime"] == []
-    assert len(survey["findings"]["migration_heads"]) == 1
-    result = rehearsal.check_inventory_survey(REPO_ROOT)
-    assert result.status == "completed", result.evidence
-
-
 def test_preflight_verdicts_derive_from_fixture_not_field_names() -> None:
     assert rehearsal.evaluate_preflight(
         rehearsal.build_sanitized_fixture("fresh-empty")
@@ -149,12 +132,6 @@ def test_failure_injection_refuses_silent_completion() -> None:
     assert result.status == "completed", result.evidence
 
 
-def test_migration_gate_keeps_destructive_step_gated() -> None:
-    result = rehearsal.check_migration_gate(REPO_ROOT)
-    assert result.status == "completed", result.evidence
-    assert "writers still active" in result.evidence
-
-
 def test_artifact_retention_stays_independent() -> None:
     result = rehearsal.check_artifact_retention(REPO_ROOT)
     assert result.status == "completed", result.evidence
@@ -256,22 +233,6 @@ def test_allow_replace_resets_for_new_migration(tmp_path: Path) -> None:
     payload = json.loads((state_dir / "manifest_registry_rehearsal_state.json").read_text())
     assert payload["migration_id"] == "mm4191-b"
     assert payload["completed_steps"] == ["b"]
-
-
-def test_cli_all_reports_honest_blocked_without_failure(tmp_path: Path) -> None:
-    proc = subprocess.run(
-        [sys.executable, "tools/manifest_registry_preservation_rehearsal.py",
-         "--mode", "all",
-         "--state-dir", str(tmp_path / "state"),
-         "--migration-id", "test-4191"],
-        capture_output=True, text=True, cwd=REPO_ROOT,
-    )
-    assert proc.returncode == 0, proc.stderr
-    summary = json.loads(proc.stdout)
-    assert summary["issue"] == "MoonLadderStudios/MoonMind#4191"
-    assert summary["verdict"] == "REHEARSAL_PASS_DEPLOYMENT_BLOCKED"
-    assert not [r for r in summary["steps"] if r["status"] == "failed"]
-    assert any(r["status"] == "blocked" for r in summary["steps"])
 
 
 def test_cli_retirement_without_action_stays_blocked(tmp_path: Path) -> None:

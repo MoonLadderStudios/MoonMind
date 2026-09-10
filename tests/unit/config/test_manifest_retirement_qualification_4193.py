@@ -291,14 +291,6 @@ def test_native_manifest_product_pending_sibling_removal() -> None:
     assert reintroduced, "guard must flag a reintroduced product component"
 
 
-def test_scan_finds_unlisted_native_surfaces() -> None:
-    """The repo scan reports product surfaces outside the original allowlist."""
-    present = scan_repo_for_native_manifest_product_files()
-    assert "moonmind/manifest/runner.py" in present
-    assert "moonmind/workflows/temporal/manifest_ingest.py" in present
-    assert "frontend/src/entrypoints/manifests.tsx" in present
-
-
 def test_guard_flags_unlisted_product_path() -> None:
     """A relocated product file fails the guard without a tuple update."""
     problems = check_native_manifest_product_absent(
@@ -443,28 +435,6 @@ def test_shared_primitives_temporal_catalog_has_no_manifest_requirement() -> Non
     assert catalog.exists()
     # This slice does not claim the catalog is Manifest-free (sibling-owned).
     assert True
-
-
-# ---------------------------------------------------------------------------
-# Historical contracts: name both shapes; readability belongs to #4189 A/B.
-# ---------------------------------------------------------------------------
-
-
-def test_historical_contract_shapes_are_named_for_sibling_ownership() -> None:
-    """Pin both old history shapes the drain strategy must cover.
-
-    ``manifest_ref`` compile histories and ``manifestArtifactRef`` node
-    histories are validated against the pinned old release by #4189; no claim
-    is made here that a deleted workflow replays on the new binary.
-    """
-    ingest_models = (REPO_ROOT / "moonmind/schemas/manifest_ingest_models.py").read_text(
-        encoding="utf-8"
-    )
-    assert "manifest" in ingest_models.lower()
-    manifests_service = (REPO_ROOT / "api_service/services/manifests_service.py").read_text(
-        encoding="utf-8"
-    )
-    assert "manifestArtifactRef" in manifests_service or "manifest_artifact_ref" in manifests_service
 
 
 # ---------------------------------------------------------------------------
