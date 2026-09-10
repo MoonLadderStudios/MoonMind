@@ -6979,6 +6979,227 @@ async def test_terminal_evidence_activity_publishes_pr_resolver_companion(
     assert published == publish_payload
 
 
+# Copy of artifact ``art_01M264P832WTY8ZFRVH9AX88E3`` written by pr-resolver for
+# ``resolver:pr:4209:head:d71492a5bb89:h:dc64ac4fa7ec2f99:1`` on 2026-09-10.
+_RECORDED_BLOCKED_RESOLVER_RESULT = {
+    "schema_version": 2,
+    "executionRef": (
+        "resolver:pr:4209:head:d71492a5bb89:h:dc64ac4fa7ec2f99:1:"
+        "01a08c2f-2c25-7681-8523-04123231942b:node-1:execution:1"
+    ),
+    "tool": "pr_resolve_finalize",
+    "timestamp": "2026-09-10T17:07:09.681361+00:00",
+    "pr_number": 4209,
+    "pr_url": "https://github.com/MoonLadderStudios/MoonMind/pull/4209",
+    "decision": "blocked",
+    "merge_outcome": "blocked",
+    "mergeAutomationDisposition": "manual_review",
+    "status": "blocked",
+    "attempt": 1,
+    "max_attempts": 1,
+    "escalations": 0,
+    "next_step": "run_full_remediation",
+    "reason": "ci_failures",
+    "final_reason": "ci_failures",
+}
+
+
+def _recorded_resolver_contract() -> dict[str, str]:
+    return {
+        "contractId": "pr_resolver_terminal.v1",
+        "relativePath": "var/pr_resolver/result.json",
+        "expectedSchemaVersion": "moonmind.pr-resolver-result.v1",
+        "executionRef": _RECORDED_BLOCKED_RESOLVER_RESULT["executionRef"],
+    }
+
+
+@pytest.mark.asyncio
+async def test_terminal_evidence_activity_reports_validated_pr_resolver_verdict(
+    tmp_path: Path,
+) -> None:
+    """A blocked verdict is the Skill's answer, not missing evidence (#4222)."""
+
+    workspace = tmp_path / "repo"
+    result_path = workspace / "var" / "pr_resolver" / "result.json"
+    result_path.parent.mkdir(parents=True)
+    result_path.write_text(
+        json.dumps(_RECORDED_BLOCKED_RESOLVER_RESULT), encoding="utf-8"
+    )
+    activities = TemporalAgentRuntimeActivities()
+
+    result = await activities.agent_runtime_evaluate_terminal_evidence(
+        {
+            "workspacePath": str(workspace),
+            "terminalContract": _recorded_resolver_contract(),
+            "result": {
+                "summary": "Omnigent session completed",
+                "metadata": {"normalizedStatus": "completed"},
+            },
+        }
+    )
+
+    assert result.failure_class == "execution_error"
+    assert result.provider_error_code == "PR_RESOLVER_MANUAL_REVIEW"
+    assert result.summary == (
+        "pr-resolver reported status 'blocked'; ci_failures; "
+        "next_step=run_full_remediation"
+    )
+    assert "without required terminal evidence" not in result.summary
+    assert result.metadata["terminalContractOutcome"] == "terminal_failure"
+    assert result.metadata["terminalContractSatisfied"] is False
+    assert result.metadata["terminalContractMissingEvidence"] == []
+    assert result.metadata["terminalContractRecoveryOutcome"] == (
+        "skill_terminal_verdict"
+    )
+    assert result.metadata["mergeAutomationDisposition"] == "manual_review"
+    assert result.metadata["prResolverReason"] == "ci_failures"
+
+
+@pytest.mark.asyncio
+async def test_terminal_evidence_activity_keeps_runtime_failure_summary_over_verdict(
+    tmp_path: Path,
+) -> None:
+    workspace = tmp_path / "repo"
+    result_path = workspace / "var" / "pr_resolver" / "result.json"
+    result_path.parent.mkdir(parents=True)
+    result_path.write_text(
+        json.dumps(_RECORDED_BLOCKED_RESOLVER_RESULT), encoding="utf-8"
+    )
+    activities = TemporalAgentRuntimeActivities()
+
+    result = await activities.agent_runtime_evaluate_terminal_evidence(
+        {
+            "workspacePath": str(workspace),
+            "terminalContract": _recorded_resolver_contract(),
+            "result": {
+                "summary": "Runner disconnected unexpectedly.",
+                "failureClass": "execution_error",
+                "providerErrorCode": "runner_disconnected",
+            },
+        }
+    )
+
+    assert result.summary == "Runner disconnected unexpectedly."
+    assert result.provider_error_code == "runner_disconnected"
+    assert result.metadata["terminalContractRecoveryOutcome"] == (
+        "skill_terminal_verdict"
+    )
+    assert result.metadata["prResolverVerdictSummary"] == (
+        "pr-resolver reported status 'blocked'; ci_failures; "
+        "next_step=run_full_remediation"
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("runtime_failed", [False, True])
+@pytest.mark.parametrize("text", ["x", "\u754c", "\U0001f600"])
+async def test_terminal_evidence_activity_bounds_resolver_verdict_text(
+    tmp_path: Path,
+    runtime_failed: bool,
+    text: str,
+) -> None:
+    workspace = tmp_path / "repo"
+    result_path = workspace / "var" / "pr_resolver" / "result.json"
+    result_path.parent.mkdir(parents=True)
+    payload = {
+        **_RECORDED_BLOCKED_RESOLVER_RESULT,
+        "final_reason": text * 20000,
+        "next_step": text * 20000,
+    }
+    result_path.write_text(json.dumps(payload), encoding="utf-8")
+    activities = TemporalAgentRuntimeActivities()
+    runtime_result = {"summary": "Runtime completed"}
+    if runtime_failed:
+        runtime_result.update(
+            failureClass="execution_error", providerErrorCode="disconnected"
+        )
+    result = await activities.agent_runtime_evaluate_terminal_evidence(
+        {
+            "workspacePath": str(workspace),
+            "terminalContract": _recorded_resolver_contract(),
+            "result": runtime_result,
+        }
+    )
+    assert result.failure_class == "execution_error"
+    assert result.metadata["terminalContractRecoveryOutcome"] == "skill_terminal_verdict"
+    assert len(result.metadata["prResolverReason"].encode("utf-8")) <= 512
+    assert len(result.metadata["prResolverNextStep"].encode("utf-8")) <= 512
+    assert result.metadata["prResolverReason"].endswith("...")
+    assert json.loads(result_path.read_text(encoding="utf-8")) == payload
+    if runtime_failed:
+        assert result.summary == "Runtime completed"
+        assert result.provider_error_code == "disconnected"
+        assert "prResolverVerdictSummary" in result.metadata
+    else:
+        assert result.provider_error_code == "PR_RESOLVER_MANUAL_REVIEW"
+
+
+@pytest.mark.asyncio
+async def test_terminal_evidence_activity_names_missing_pr_resolver_evidence(
+    tmp_path: Path,
+) -> None:
+    workspace = tmp_path / "repo"
+    workspace.mkdir()
+    activities = TemporalAgentRuntimeActivities()
+
+    result = await activities.agent_runtime_evaluate_terminal_evidence(
+        {
+            "workspacePath": str(workspace),
+            "terminalContract": _recorded_resolver_contract(),
+            "result": {"summary": "Omnigent session completed"},
+        }
+    )
+
+    assert result.failure_class == "execution_error"
+    assert result.provider_error_code == "INCOMPLETE_TERMINAL_CONTRACT"
+    assert result.summary == (
+        "Agent completed without required terminal evidence: "
+        "var/pr_resolver/result.json"
+    )
+    assert result.metadata["terminalContractMissingEvidence"] == [
+        "var/pr_resolver/result.json"
+    ]
+    assert result.metadata["terminalContractRecoveryOutcome"] == (
+        "unsupported_or_exhausted"
+    )
+
+
+@pytest.mark.asyncio
+async def test_terminal_evidence_activity_names_stale_pr_resolver_evidence(
+    tmp_path: Path,
+) -> None:
+    workspace = tmp_path / "repo"
+    result_path = workspace / "var" / "pr_resolver" / "result.json"
+    result_path.parent.mkdir(parents=True)
+    result_path.write_text(
+        json.dumps(
+            {
+                **_RECORDED_BLOCKED_RESOLVER_RESULT,
+                "executionRef": "previous-execution",
+            }
+        ),
+        encoding="utf-8",
+    )
+    activities = TemporalAgentRuntimeActivities()
+
+    result = await activities.agent_runtime_evaluate_terminal_evidence(
+        {
+            "workspacePath": str(workspace),
+            "terminalContract": _recorded_resolver_contract(),
+            "result": {"summary": "Omnigent session completed"},
+        }
+    )
+
+    assert result.provider_error_code == "STALE_TERMINAL_EVIDENCE"
+    assert result.summary == (
+        "Agent completed without required terminal evidence: valid terminal evidence"
+    )
+    assert result.metadata["terminalContractRecoveryOutcome"] == (
+        "unsupported_or_exhausted"
+    )
+    assert "prResolverReason" not in result.metadata
+
+
 @pytest.mark.asyncio
 async def test_terminal_evidence_activity_enriches_existing_helper_failure(
     tmp_path: Path,
