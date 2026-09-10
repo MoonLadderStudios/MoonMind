@@ -9,10 +9,12 @@ supported runtime or live deployment is claimed qualified without evidence.
 Matrix-to-evidence mapping (issue required-coverage rows):
 
 - Clean dependencies: fixture negative controls live here
-  (``test_dependency_guard_*``). The real distribution is NOT clean yet:
-  ``test_dependency_removal_pending_sibling_ownership`` records the
-  ``qdrant-client`` residual owned by #4106-#4113. Flip it to assert absence
-  when removal lands; do not claim this row qualified before then.
+  (``test_dependency_guard_*``). MR5 (MoonLadderStudios/MoonMind#4192)
+  removed the manifest-only distributions:
+  ``test_dependency_removal_landed_no_manifest_only_distributions`` asserts
+  ``pyproject.toml`` and ``poetry.lock`` carry no ``qdrant-client``,
+  ``llama-index``, or reader packages. Image-level qualification stays a
+  protected deployment check (see ``test_topology_matrix_gaps_are_explicit``).
 - Topology: ``test_compose_*`` guards the rendered default Compose file, the
   test Compose file, every declared profile, and every documented
   ``--profile``/``COMPOSE_PROFILES`` combination (hermetic YAML render under
@@ -464,16 +466,23 @@ def test_dependency_guard_rejects_transitive_fixture_requirement() -> None:
     )
 
 
-def test_dependency_removal_pending_sibling_ownership() -> None:
-    """Record the real distribution residual owned by #4106-#4113.
+def test_dependency_removal_landed_no_manifest_only_distributions() -> None:
+    """Prove the MR5 dependency removal landed (sibling ownership resolved).
 
-    The release is NOT dependency-clean yet: ``pyproject.toml`` still
-    declares ``qdrant-client``. This test pins that fact so the clean-
-    dependencies row cannot be misreported as qualified. When the sibling
-    removal lands, replace this assertion with an absence check.
+    MoonLadderStudios/MoonMind#4192 removed the native Manifest/RAG product:
+    ``pyproject.toml`` and ``poetry.lock`` must not declare ``qdrant-client``,
+    ``llama-index``, or any reader package. This replaces the retired
+    ``test_dependency_removal_pending_sibling_ownership`` pin, which recorded
+    the ``qdrant-client`` residual owned by #4106-#4113.
     """
     pyproject = (REPO_ROOT / "pyproject.toml").read_text(encoding="utf-8")
-    assert "qdrant-client" in pyproject
+    assert "qdrant-client" not in pyproject
+    assert "llama-index" not in pyproject
+    assert "llama_index" not in pyproject
+    lock = (REPO_ROOT / "poetry.lock").read_text(encoding="utf-8")
+    assert 'name = "qdrant-client"' not in lock
+    assert 'name = "llama-index"' not in lock
+    assert "llama-index-readers-" not in lock
 
 
 # ---------------------------------------------------------------------------
@@ -580,7 +589,7 @@ def test_docs_operations_do_not_advertise_retired_vector_backend() -> None:
     ).exists()
 
 
-@pytest.mark.parametrize("command", [[], ["worker"], ["manifest"], ["container"]])
+@pytest.mark.parametrize("command", [[], ["worker"], ["container"]])
 def test_cli_help_does_not_advertise_retired_vector_backend(command: list[str]) -> None:
     from typer.testing import CliRunner
 
@@ -589,6 +598,19 @@ def test_cli_help_does_not_advertise_retired_vector_backend(command: list[str]) 
     result = CliRunner().invoke(app, [*command, "--help"], color=False)
     assert result.exit_code == 0, result.output
     assert not re.search(r"\b(qdrant|rag)\b", result.output, re.IGNORECASE)
+
+
+def test_cli_help_advertises_no_manifest_command_group() -> None:
+    """MR5 (#4192): the retired manifest command group must be gone entirely."""
+    from typer.testing import CliRunner
+
+    from moonmind.cli import app
+
+    top = CliRunner().invoke(app, ["--help"], color=False)
+    assert top.exit_code == 0, top.output
+    assert "manifest" not in top.output.lower()
+    retired = CliRunner().invoke(app, ["manifest", "--help"], color=False)
+    assert retired.exit_code != 0
 
 
 def test_topology_matrix_gaps_are_explicit() -> None:

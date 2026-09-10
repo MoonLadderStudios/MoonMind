@@ -47,11 +47,6 @@ STATIC_WORKFLOW_REGISTRATIONS = (
         "operator",
     ),
     WorkflowRegistration(
-        "moonmind.workflows.temporal.workflows.manifest_ingest",
-        "MoonMindManifestIngestWorkflow",
-        "product",
-    ),
-    WorkflowRegistration(
         "moonmind.workflows.temporal.workflows.control_stop_continuation",
         "MoonMindControlStopContinuationWorkflow",
         "operator",

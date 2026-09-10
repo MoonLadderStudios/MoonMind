@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Optional
 
 import typer
 
@@ -14,28 +13,26 @@ from moonmind.container_job_cli import (
     run_container_job,
     run_python_tests,
 )
-from moonmind.manifest import manifest_cli
-from moonmind.rag.guardrails import GuardrailError, ensure_rag_ready
-from moonmind.rag.settings import RagRuntimeSettings
 from moonmind.utils.logging import redact_sensitive_text
 
 app = typer.Typer(
     help=(
-        "MoonMind developer utilities (worker, manifest, container). "
+        "MoonMind developer utilities (worker, container). "
         "Application authentication is selected by AUTH_PROVIDER "
         "(accounts, oidc, header, disabled; retired keycloak/default/google/local "
         "selectors are rejected) — see "
         "docs/Security/AuthenticationContracts.md. Container commands run as "
         "machine callers with the MOONMIND_CONTAINER_JOBS_BEARER_TOKEN "
         "family, never as browser login; the removed legacy worker-token "
-        "path is rejected (410 worker_token_deprecated)."
+        "path is rejected (410 worker_token_deprecated). The native "
+        "Manifest/RAG ingestion product was retired "
+        "(MoonLadderStudios/MoonMind#4192): there is no `manifest` command "
+        "group and no retrieval/embedding inspection command."
     )
 )
 worker_app = typer.Typer(help="Worker runtime diagnostics.")
-manifest_app = typer.Typer(help="Manifest schema validation and pipeline commands.")
 container_app = typer.Typer(help="Run work through MoonMind's Docker backend.")
 app.add_typer(worker_app, name="worker")
-app.add_typer(manifest_app, name="manifest")
 app.add_typer(container_app, name="container")
 
 
@@ -121,79 +118,21 @@ def container_python_tests(
     _print_container_job_result(result)
 
 
-@worker_app.command("doctor", help="Verify worker prerequisites (vector-free).")
+@worker_app.command("doctor", help="Verify worker prerequisites.")
 def worker_doctor() -> None:
-    # MoonLadderStudios/MoonMind#4112: native vector backend retired. The
-    # doctor delegates to the vector-free guardrail (optional RetrievalGateway
-    # health probe only; never probes Qdrant) so gateway failures surface as
-    # exit-code failures instead of a false healthy result.
-    settings = RagRuntimeSettings.from_env()
-    try:
-        ensure_rag_ready(settings)
-    except GuardrailError as exc:
-        typer.secho(f"Worker prerequisite check failed: {exc}", fg=typer.colors.RED)
-        raise typer.Exit(code=1) from exc
-    typer.secho("Worker prerequisites satisfied.", fg=typer.colors.GREEN)
+    # MoonLadderStudios/MoonMind#4192: the native Manifest/RAG ingestion
+    # product (including the vector-free manifest pipeline and the RAG
+    # retrieval guardrail) is retired. The doctor reports the static
+    # retirement state instead of probing a retrieval backend.
+    typer.secho(
+        "Worker prerequisites satisfied (native Manifest/RAG ingestion retired).",
+        fg=typer.colors.GREEN,
+    )
 
-# ----- manifest commands -----
-
-@manifest_app.command("validate", help="Validate a manifest YAML against the v0 schema.")
-def manifest_validate(
-    file: Path = typer.Option(..., "-f", "--file", help="Path to manifest YAML."),
-) -> None:
-    result = manifest_cli.run_validate(manifest_path=str(file))
-    for issue in result.issues:
-        color = typer.colors.RED if issue.severity == "ERROR" else typer.colors.YELLOW
-        typer.secho(f"[{issue.severity}] {issue.field}: {issue.message}", fg=color)
-    typer.secho(result.summary(), fg=typer.colors.GREEN if result.valid else typer.colors.RED)
-    if not result.valid:
-        raise typer.Exit(code=1)
-
-@manifest_app.command("plan", help="Dry-run: estimate scope without side effects.")
-def manifest_plan(
-    file: Path = typer.Option(..., "-f", "--file", help="Path to manifest YAML."),
-) -> None:
-    import json as _json
-
-    try:
-        summary = manifest_cli.run_plan(manifest_path=str(file))
-    except manifest_cli.ManifestCliError as exc:
-        typer.secho(f"Error: {exc}", fg=typer.colors.RED)
-        raise typer.Exit(code=1) from exc
-    typer.echo(_json.dumps(summary, indent=2))
-
-@manifest_app.command("run", help="Execute vector-free manifest pipeline: fetch → transform (no embedding/indexing).")
-def manifest_run(
-    file: Path = typer.Option(..., "-f", "--file", help="Path to manifest YAML."),
-) -> None:
-    import json as _json
-
-    try:
-        result = manifest_cli.run_manifest(manifest_path=str(file))
-    except manifest_cli.ManifestCliError as exc:
-        typer.secho(f"Error: {exc}", fg=typer.colors.RED)
-        raise typer.Exit(code=1) from exc
-    typer.echo(_json.dumps(result, indent=2))
-
-@manifest_app.command("evaluate", help="Evaluate recorded/injected results (no live retrieval).")
-def manifest_evaluate(
-    file: Path = typer.Option(..., "-f", "--file", help="Path to manifest YAML."),
-    dataset: Optional[str] = typer.Option(None, "--dataset", help="Filter to specific dataset name."),
-) -> None:
-    import json as _json
-
-    try:
-        result = manifest_cli.run_evaluate(manifest_path=str(file), dataset=dataset)
-    except manifest_cli.ManifestCliError as exc:
-        typer.secho(f"Error: {exc}", fg=typer.colors.RED)
-        raise typer.Exit(code=1) from exc
-    passed = result.get("passed", False)
-    typer.echo(_json.dumps(result, indent=2))
-    if not passed:
-        raise typer.Exit(code=1)
 
 def main() -> None:
     app()
+
 
 if __name__ == "__main__":  # pragma: no cover
     main()

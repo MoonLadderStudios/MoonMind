@@ -221,18 +221,28 @@ def _vector_free_deployment_present(repo_root: Path) -> tuple[bool, str]:
     m = re.search(
         r"qdrant_enabled:\s*bool\s*=\s*Field\((True|False)", settings_text
     )
-    if not m or m.group(1) != "False":
+    if "class QdrantSettings" not in settings_text:
+        # MoonLadderStudios/MoonMind#4192: the retired settings class itself
+        # is removed. Absence is the strongest vector-free marker.
+        pass
+    elif not m or m.group(1) != "False":
         problems.append("QdrantSettings.qdrant_enabled default is not False")
     m2 = re.search(
         r'_get_env\(env,\s*"QDRANT_ENABLED",\s*"(true|false)"\)', rag_settings
     )
-    if not m2 or m2.group(1) != "false":
+    if "RagRuntimeSettings" not in rag_settings and "qdrant" not in rag_settings.lower():
+        # #4192: the native RAG runtime settings module is removed.
+        pass
+    elif not m2 or m2.group(1) != "false":
         problems.append("RagRuntimeSettings QDRANT_ENABLED default is not false")
     m3 = re.search(
         r"vector_store_provider:\s*str\s*=\s*Field\(\s*\n?\s*\"([^\"]+)\"",
         settings_text,
     )
-    if not m3 or m3.group(1) == "qdrant":
+    if "vector_store_provider" not in settings_text:
+        # #4192: the retired vector-store selector field is removed.
+        pass
+    elif not m3 or m3.group(1) == "qdrant":
         problems.append("vector_store_provider default is still qdrant")
     if re.search(r'(?m)^QDRANT_ENABLED="true"', env_template):
         problems.append('.env-template QDRANT_ENABLED="true"')
@@ -253,8 +263,9 @@ def _vector_free_deployment_present(repo_root: Path) -> tuple[bool, str]:
         )
     return True, (
         "compose carries no qdrant service or QDRANT_URL wiring; "
-        "QdrantSettings/RagRuntimeSettings default disabled; "
-        "vector_store_provider default is not qdrant; "
+        "QdrantSettings/RagRuntimeSettings default disabled or retired-absent "
+        "(MoonLadderStudios/MoonMind#4192); "
+        "vector_store_provider default is not qdrant or retired-absent; "
         ".env-template advertises no active Qdrant backend; "
         "no executable native Qdrant wiring found in execution code"
     )
@@ -659,7 +670,13 @@ def collect_build_pins(repo_root: Path = REPO_ROOT) -> dict[str, Any]:
         r"vector_store_provider:\s*str\s*=\s*Field\(\s*\n?\s*\"([^\"]+)\"",
         settings_text,
     )
-    pins["vector_store_provider_default"] = m.group(1) if m else "unknown"
+    if m:
+        pins["vector_store_provider_default"] = m.group(1)
+    elif "vector_store_provider" not in settings_text:
+        # MoonLadderStudios/MoonMind#4192: retired selector removed entirely.
+        pins["vector_store_provider_default"] = "retired"
+    else:
+        pins["vector_store_provider_default"] = "unknown"
     versions_dir = repo_root / "api_service/migrations/versions"
     if versions_dir.exists():
         revisions = sorted(p.name for p in versions_dir.glob("*.py"))

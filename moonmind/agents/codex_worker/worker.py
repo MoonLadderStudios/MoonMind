@@ -72,7 +72,6 @@ from moonmind.jules.runtime import (
     build_runtime_gate_state as build_jules_runtime_gate_state,
 )
 from moonmind.jules.status import JulesStatusClassification, normalize_jules_status
-from moonmind.rag.settings import RagRuntimeSettings
 from moonmind.schemas.jules_models import JulesCreateTaskRequest, JulesGetTaskRequest
 from moonmind.workflows.adapters.jules_client import JulesClient, JulesClientError
 from moonmind.workflows.skills.materializer import (
@@ -3588,36 +3587,18 @@ class CodexWorker:
 
     @staticmethod
     def _rag_capability_metadata() -> dict[str, Any]:
-        """Describe worker retrieval capability for queue events and task context."""
+        """Describe worker retrieval capability for queue events and task context.
 
-        try:
-            settings = RagRuntimeSettings.from_env()
-        except Exception:
-            return {
-                "ragAvailable": False,
-                "ragMode": "unavailable",
-            }
-        if not settings.rag_enabled:
-            return {
-                "ragAvailable": False,
-                "ragMode": "disabled",
-                "ragUnavailableReason": "rag_disabled",
-            }
-        executable, reason = settings.retrieval_execution_reason(os.environ)
-        if not executable:
-            return {
-                "ragAvailable": False,
-                "ragMode": "unavailable",
-                "ragUnavailableReason": reason,
-            }
-        transport = settings.resolved_transport(None)
-        mode = "direct-qdrant" if transport == "direct" else "retrieval-gateway"
-        # MoonLadderStudios/MoonMind#4112 retired the `moonmind rag search`
-        # CLI entry point, so no ragCommand is advertised. Consumers must use
-        # MoonMind-owned retrieval surfaces only.
+        MoonLadderStudios/MoonMind#4192: native retrieval is retired with
+        the Manifest/RAG ingestion product. The capability shape is
+        preserved for queue-event/task-context consumers; availability is
+        always reported as retired.
+        """
+
         return {
-            "ragAvailable": True,
-            "ragMode": mode,
+            "ragAvailable": False,
+            "ragMode": "unavailable",
+            "ragUnavailableReason": "native_retrieval_retired",
         }
 
     @staticmethod

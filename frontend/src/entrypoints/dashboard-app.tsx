@@ -74,8 +74,6 @@ type PageImport = () => Promise<{ default: PageComponent }>;
 
 const PAGE_IMPORTS = {
   artifacts: () => import('./artifacts'),
-  'index-health': () => import('./index-health'),
-  manifests: () => import('./manifests'),
   'omnigent-inventory': () => import('./omnigent-inventory'),
   'oauth-terminal': () => import('./oauth-terminal'),
   remediations: () => import('./remediations'),
@@ -1624,7 +1622,6 @@ function DashboardRouter({ payload }: { payload: BootPayload }) {
       <Route path="/secrets" element={routedDashboardPage} />
       <Route path="/workers" element={routedDashboardPage} />
       <Route path="/oauth-terminal" element={routedDashboardPage} />
-      <Route path="/index-health" element={routedDashboardPage} />
       <Route
         path="*"
         element={

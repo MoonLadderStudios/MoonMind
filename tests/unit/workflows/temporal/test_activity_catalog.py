@@ -22,7 +22,6 @@ from moonmind.workflows.temporal.activity_catalog import (
     AGENT_RUNTIME_TASK_QUEUE,
     TemporalActivityCatalogError,
     build_default_activity_catalog,
-    manifest_ingest_activity_routes,
 )
 from moonmind.workflows.temporal.activity_runtime import (
     _ACTIVITY_HANDLER_ATTRS,
@@ -309,17 +308,17 @@ def test_resolve_explicit_activity_requires_binding_reason():
             )
         )
 
-def test_manifest_ingest_activity_routes_stay_at_activity_queue_boundaries():
-    routes = manifest_ingest_activity_routes(build_default_activity_catalog())
+def test_manifest_ingest_activity_routes_are_retired():
+    # MoonLadderStudios/MoonMind#4192: the native ManifestIngest product is
+    # removed. The catalog must not register manifest activity types.
+    catalog = build_default_activity_catalog()
 
-    assert [route.activity_type for route in routes] == [
-        "manifest.compile",
-        "manifest.write_summary",
-    ]
-    assert [route.task_queue for route in routes] == [
-        ARTIFACTS_TASK_QUEUE,
-        ARTIFACTS_TASK_QUEUE,
-    ]
+    assert "manifest.compile" not in {
+        definition.activity_type for definition in catalog.activities
+    }
+    assert "manifest.write_summary" not in {
+        definition.activity_type for definition in catalog.activities
+    }
 
 
 def test_checkpoint_activity_routes_stay_on_allowed_fleets():

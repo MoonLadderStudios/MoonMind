@@ -764,29 +764,15 @@ class TestClaudeCodePrepareWorkspace:
         assert not (tmp_path / "CLAUDE.md").exists()
 
     @pytest.mark.asyncio
-    @patch("moonmind.rag.context_injection.ContextInjectionService")
-    async def test_injects_context_into_instruction_ref(
+    async def test_prepare_workspace_keeps_authored_instruction(
         self,
-        mock_service_class,
         tmp_path,
     ) -> None:
-        """RAG context still mutates ``request.instruction_ref`` for the prompt."""
-        mock_service = mock_service_class.return_value
-
-        async def _inject_context(*, request, workspace_path):
-            assert workspace_path == tmp_path
-            request.instruction_ref = "Injected retrieval context"
-
-        mock_service.inject_context = AsyncMock(side_effect=_inject_context)
-
+        """Retired injection (#4192) leaves ``request.instruction_ref`` unchanged."""
         request = _make_request(instruction_ref="Original instruction")
         await ClaudeCodeStrategy().prepare_workspace(tmp_path, request)
 
-        mock_service.inject_context.assert_called_once_with(
-            request=request,
-            workspace_path=tmp_path,
-        )
-        assert request.instruction_ref == "Injected retrieval context"
+        assert request.instruction_ref == "Original instruction"
         assert not (tmp_path / "CLAUDE.md").exists()
 
 # ---------------------------------------------------------------------------
@@ -1016,30 +1002,22 @@ class TestCodexCliShapeEnvironment:
 
 class TestCodexCliPrepareWorkspace:
     @pytest.mark.asyncio
-    @patch("moonmind.rag.context_injection.ContextInjectionService")
-    async def test_prepare_workspace_calls_injection(self, mock_service_class, tmp_path) -> None:
-        mock_service = mock_service_class.return_value
-        mock_service.inject_context = AsyncMock()
-        
+    async def test_prepare_workspace_appends_note_without_injection(self, tmp_path) -> None:
+        # MoonLadderStudios/MoonMind#4192: native RAG injection is retired.
+        # Preparation appends the managed runtime note (with the retired
+        # retrieval state) and performs no retrieval.
         s = CodexCliStrategy()
         request = _make_request(instruction_ref="Do work")
         await s.prepare_workspace(workspace_path=tmp_path, request=request)
-        
-        mock_service.inject_context.assert_called_once_with(
-            request=request,
-            workspace_path=tmp_path,
-        )
+
+        assert "Managed Codex CLI note:" in request.instruction_ref
+        assert "native_retrieval_retired" in request.instruction_ref
 
     @pytest.mark.asyncio
-    @patch("moonmind.rag.context_injection.ContextInjectionService")
     async def test_prepare_workspace_appends_managed_runtime_note(
         self,
-        mock_service_class,
         tmp_path,
     ) -> None:
-        mock_service = mock_service_class.return_value
-        mock_service.inject_context = AsyncMock()
-
         request = _make_request(instruction_ref="Do work")
         await CodexCliStrategy().prepare_workspace(
             workspace_path=tmp_path,
@@ -1073,15 +1051,10 @@ class TestCodexCliPrepareWorkspace:
         assert repeated == result
 
     @pytest.mark.asyncio
-    @patch("moonmind.rag.context_injection.ContextInjectionService")
     async def test_prepare_workspace_preserves_instruction_whitespace(
         self,
-        mock_service_class,
         tmp_path,
     ) -> None:
-        mock_service = mock_service_class.return_value
-        mock_service.inject_context = AsyncMock()
-
         request = _make_request(instruction_ref="  Do work  ")
         await CodexCliStrategy().prepare_workspace(
             workspace_path=tmp_path,

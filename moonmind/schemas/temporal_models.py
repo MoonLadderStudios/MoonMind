@@ -53,12 +53,8 @@ SUPPORTED_UPDATE_NAMES = (
     "UpdateInputs",
     "SetTitle",
     "RequestRerun",
-    "UpdateManifest",
-    "SetConcurrency",
     "Pause",
     "Resume",
-    "CancelNodes",
-    "RetryNodes",
     "Cancel",
     "Approve",
 )
@@ -2392,12 +2388,6 @@ class DependencyResolvedSignalPayload(BaseModel):
     failure_category: str | None = Field(None, alias="failureCategory")
     message: str | None = Field(None, alias="message")
 
-from moonmind.schemas.manifest_ingest_models import (
-    ManifestExecutionPolicyModel,
-    ManifestNodeCountsModel,
-    RequestedByModel,
-)
-
 NormalizedIntegrationStatus = Literal[
     "queued",
     "running",
@@ -2637,12 +2627,6 @@ class UpdateExecutionRequest(BaseModel):
     plan_artifact_ref: Optional[str] = Field(None, alias="planArtifactRef")
     parameters_patch: Optional[dict[str, Any]] = Field(None, alias="parametersPatch")
     title: Optional[str] = Field(None, alias="title")
-    new_manifest_artifact_ref: Optional[str] = Field(
-        None, alias="newManifestArtifactRef"
-    )
-    mode: Optional[Literal["REPLACE_FUTURE", "APPEND"]] = Field(None, alias="mode")
-    max_concurrency: Optional[int] = Field(None, alias="maxConcurrency")
-    node_ids: list[str] = Field(default_factory=list, alias="nodeIds")
     idempotency_key: Optional[str] = Field(None, alias="idempotencyKey")
 
 class RecoverFromFailedStepRequest(BaseModel):
@@ -4182,14 +4166,8 @@ class ExecutionModel(BaseModel):
     summary_artifact_ref: Optional[str] = Field(None, alias="summaryArtifactRef")
     run_index_artifact_ref: Optional[str] = Field(None, alias="runIndexArtifactRef")
     checkpoint_artifact_ref: Optional[str] = Field(None, alias="checkpointArtifactRef")
-    requested_by: Optional[RequestedByModel] = Field(None, alias="requestedBy")
-    execution_policy: Optional[ManifestExecutionPolicyModel] = Field(
-        None,
-        alias="executionPolicy",
-    )
     phase: Optional[str] = Field(None, alias="phase")
     paused: Optional[bool] = Field(None, alias="paused")
-    counts: Optional[ManifestNodeCountsModel] = Field(None, alias="counts")
     artifacts_count: int = Field(0, alias="artifactsCount")
     scheduled_for: Optional[datetime] = Field(None, alias="scheduledFor")
     created_at: datetime = Field(..., alias="createdAt")
