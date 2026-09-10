@@ -21,14 +21,13 @@ from sqlalchemy.ext.asyncio import AsyncSession
 import api_service.auth as auth_module
 import api_service.auth_providers as providers_module
 import api_service.services.session_store as session_store_module
-from api_service.auth_providers import get_current_user, get_current_user_optional
 from moonmind.security import omnigent_auth_qualification as qual
 
 
 def _test_config():
-    from moonmind.security.auth_modes_4120 import resolve_moonmind_auth_config
+    import moonmind.security.auth_modes_4120 as auth_modes_4120
 
-    return resolve_moonmind_auth_config(
+    return auth_modes_4120.resolve_moonmind_auth_config(
         mode="accounts",
         cookie_secret=b"4125-cutover-test-secret-32bytes!",
         require_secure_cookies=False,
@@ -151,14 +150,14 @@ def test_production_routing_uses_shared_session_boundary() -> None:
     # Representative user-facing surfaces resolve through the shared boundary.
     assert "/api/artifacts" in mounted
 
-    strict = get_current_user()
-    optional = get_current_user_optional()
+    strict = providers_module.get_current_user()
+    optional = providers_module.get_current_user_optional()
     assert strict.__name__ == "_strict_current_user"
     assert optional.__name__ == "_optional_current_user"
     # Stable shared-boundary identity: routes and overrides share one object,
     # and no per-call cached foreign resolver exists.
-    assert get_current_user() is strict
-    assert get_current_user_optional() is optional
+    assert providers_module.get_current_user() is strict
+    assert providers_module.get_current_user_optional() is optional
     assert not hasattr(providers_module, "_cached_current_user_dependency")
     assert not hasattr(providers_module, "_disabled_auth_test_user")
     # No legacy JWT acceptance remains on the request path.
@@ -191,7 +190,7 @@ async def test_strict_bearer_session_resolves_persisted_user(monkeypatch) -> Non
     )
     session = _db_session_for(user_id, active=True, admin=False)
 
-    user = await get_current_user()(_request(bearer=token), session)
+    user = await providers_module.get_current_user()(_request(bearer=token), session)
 
     assert user.id == user_id
     assert user.is_superuser is False
@@ -209,7 +208,7 @@ async def test_strict_cookie_session_resolves_persisted_user(monkeypatch) -> Non
     )
     session = _db_session_for(user_id, active=True, admin=True)
 
-    user = await get_current_user()(_request(cookie=token), session)
+    user = await providers_module.get_current_user()(_request(cookie=token), session)
 
     assert user.id == user_id
     assert user.is_superuser is True
@@ -225,7 +224,7 @@ async def test_strict_missing_credential_is_auth_required(monkeypatch) -> None:
     session = AsyncMock(spec=AsyncSession)
 
     with pytest.raises(HTTPException) as exc:
-        await get_current_user()(_request(), session)
+        await providers_module.get_current_user()(_request(), session)
 
     assert exc.value.status_code == 401
     assert exc.value.detail == {"code": "auth_required"}
@@ -251,7 +250,7 @@ async def test_strict_legacy_application_jwt_is_rejected(monkeypatch) -> None:
     session = AsyncMock(spec=AsyncSession)
 
     with pytest.raises(HTTPException) as exc:
-        await get_current_user()(_request(bearer=legacy), session)
+        await providers_module.get_current_user()(_request(bearer=legacy), session)
 
     assert exc.value.status_code == 401
     assert exc.value.detail == {"code": "auth_invalid"}
@@ -286,7 +285,7 @@ async def test_strict_conflicting_cookie_and_bearer_is_conflict(
     session = AsyncMock(spec=AsyncSession)
 
     with pytest.raises(HTTPException) as exc:
-        await get_current_user()(
+        await providers_module.get_current_user()(
             _request(bearer=bearer_token, cookie=cookie_token), session
         )
 
@@ -307,7 +306,7 @@ async def test_strict_inactive_persisted_user_is_forbidden(monkeypatch) -> None:
     session = _db_session_for(user_id, active=False, admin=False)
 
     with pytest.raises(HTTPException) as exc:
-        await get_current_user()(_request(bearer=token), session)
+        await providers_module.get_current_user()(_request(bearer=token), session)
 
     assert exc.value.status_code == 403
     assert exc.value.detail == {"code": "inactive"}
@@ -327,7 +326,7 @@ async def test_strict_user_store_outage_is_unavailable(monkeypatch) -> None:
     session.get.side_effect = ConnectionError("db down")
 
     with pytest.raises(HTTPException) as exc:
-        await get_current_user()(_request(bearer=token), session)
+        await providers_module.get_current_user()(_request(bearer=token), session)
 
     assert exc.value.status_code == 503
     assert exc.value.detail == "unavailable"
@@ -347,7 +346,7 @@ async def test_optional_missing_credential_returns_none(monkeypatch) -> None:
     )
     session = AsyncMock(spec=AsyncSession)
 
-    assert await get_current_user_optional()(_request(), session) is None
+    assert await providers_module.get_current_user_optional()(_request(), session) is None
 
 
 @pytest.mark.asyncio
@@ -360,7 +359,7 @@ async def test_optional_invalid_credential_is_not_anonymous(monkeypatch) -> None
     session = AsyncMock(spec=AsyncSession)
 
     with pytest.raises(HTTPException) as exc:
-        await get_current_user_optional()(_request(bearer="bogus"), session)
+        await providers_module.get_current_user_optional()(_request(bearer="bogus"), session)
 
     assert exc.value.status_code == 401
 
