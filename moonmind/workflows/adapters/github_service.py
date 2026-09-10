@@ -2530,6 +2530,180 @@ class GitHubService:
                     "summary": f"Label remove result unknown: {exc.__class__.__name__}.",
                 }
 
+    async def list_issue_comments(
+        self,
+        *,
+        repo: str,
+        issue_number: int,
+        github_token: str | None = None,
+    ) -> dict[str, Any]:
+        """List issue comments for attempt-marker reconciliation.
+
+        Returns ``{"ok": True, "comments": [...]}`` with raw comment payloads
+        (id/body/user/created_at) for the pure reconciliation helpers in
+        ``moonmind.workflows.temporal.github_issue_attempts``. Read errors
+        stop admission instead of inferring no owner.
+        """
+        from moonmind.utils.logging import redact_sensitive_text
+
+        token, resolution_error = await self.resolve_github_token(
+            github_token,
+            repo=repo,
+        )
+        if not token:
+            return {
+                "ok": False,
+                "reasonCode": "auth_unavailable",
+                "summary": resolution_error or self._missing_auth_summary("list issue comments"),
+            }
+        headers = self._github_headers(token)
+        async with httpx.AsyncClient(timeout=self._timeout) as client:
+            try:
+                response = await client.get(
+                    f"https://api.github.com/repos/{repo}/issues/{issue_number}/comments?per_page=100",
+                    headers=headers,
+                )
+                response.raise_for_status()
+                payload = response.json()
+            except httpx.HTTPStatusError as exc:
+                return {
+                    "ok": False,
+                    "reasonCode": "denied" if exc.response.status_code in {401, 403, 404} else "read_failed",
+                    "httpStatus": exc.response.status_code,
+                    "summary": (
+                        f"Issue comment read failed with HTTP {exc.response.status_code} "
+                        f"for {repo}#{issue_number}. {self._github_permission_summary(exc.response)}"
+                    ).strip(),
+                }
+            except (httpx.TransportError, httpx.TimeoutException) as exc:
+                return {
+                    "ok": False,
+                    "reasonCode": "outcome_unknown",
+                    "summary": f"Issue comment read result unknown: {exc.__class__.__name__}.",
+                }
+        if not isinstance(payload, list):
+            return {"ok": False, "reasonCode": "read_failed", "summary": "Issue comment read returned malformed evidence."}
+        comments: list[dict[str, Any]] = []
+        for item in payload:
+            if not isinstance(item, dict):
+                continue
+            user = item.get("user") if isinstance(item.get("user"), dict) else {}
+            comments.append(
+                {
+                    "id": item.get("id"),
+                    "body": redact_sensitive_text(str(item.get("body") or "")),
+                    "poster_login": str((user or {}).get("login") or ""),
+                    "poster_type": str((user or {}).get("type") or ""),
+                    "created_at": str(item.get("created_at") or ""),
+                    "updated_at": str(item.get("updated_at") or ""),
+                }
+            )
+        return {"ok": True, "reasonCode": "listed", "comments": comments, "summary": f"Listed {len(comments)} issue comments."}
+
+    async def create_issue_comment(
+        self,
+        *,
+        repo: str,
+        issue_number: int,
+        body: str,
+        github_token: str | None = None,
+    ) -> dict[str, Any]:
+        """Create one issue comment with outbound redaction applied."""
+        from moonmind.utils.logging import redact_sensitive_text
+
+        token, resolution_error = await self.resolve_github_token(
+            github_token,
+            repo=repo,
+        )
+        if not token:
+            return {
+                "ok": False,
+                "reasonCode": "auth_unavailable",
+                "summary": resolution_error or self._missing_auth_summary("create issue comments"),
+            }
+        cleaned = redact_sensitive_text(str(body or "")).strip()
+        if not cleaned:
+            return {"ok": False, "reasonCode": "empty_body", "summary": "Refusing to publish an empty issue comment."}
+        headers = self._github_headers(token)
+        async with httpx.AsyncClient(timeout=self._timeout) as client:
+            try:
+                response = await client.post(
+                    f"https://api.github.com/repos/{repo}/issues/{issue_number}/comments",
+                    headers=headers,
+                    json={"body": cleaned},
+                )
+                response.raise_for_status()
+                payload = response.json()
+            except httpx.HTTPStatusError as exc:
+                return {
+                    "ok": False,
+                    "reasonCode": "denied" if exc.response.status_code in {401, 403, 404} else "create_failed",
+                    "httpStatus": exc.response.status_code,
+                    "summary": (
+                        f"Issue comment create failed with HTTP {exc.response.status_code}. "
+                        f"{self._github_permission_summary(exc.response)}"
+                    ).strip(),
+                }
+            except (httpx.TransportError, httpx.TimeoutException) as exc:
+                return {
+                    "ok": False,
+                    "reasonCode": "outcome_unknown",
+                    "summary": f"Issue comment create result unknown: {exc.__class__.__name__}. Reconcile by stable attempt marker before retrying.",
+                }
+        comment_id = payload.get("id") if isinstance(payload, dict) else None
+        return {"ok": True, "reasonCode": "created", "commentId": comment_id, "summary": "Created issue comment."}
+
+    async def update_issue_comment(
+        self,
+        *,
+        repo: str,
+        comment_id: int,
+        body: str,
+        github_token: str | None = None,
+    ) -> dict[str, Any]:
+        """Update one issue comment with outbound redaction applied."""
+        from moonmind.utils.logging import redact_sensitive_text
+
+        token, resolution_error = await self.resolve_github_token(
+            github_token,
+            repo=repo,
+        )
+        if not token:
+            return {
+                "ok": False,
+                "reasonCode": "auth_unavailable",
+                "summary": resolution_error or self._missing_auth_summary("update issue comments"),
+            }
+        cleaned = redact_sensitive_text(str(body or "")).strip()
+        if not cleaned:
+            return {"ok": False, "reasonCode": "empty_body", "summary": "Refusing to publish an empty issue comment."}
+        headers = self._github_headers(token)
+        async with httpx.AsyncClient(timeout=self._timeout) as client:
+            try:
+                response = await client.patch(
+                    f"https://api.github.com/repos/{repo}/issues/comments/{comment_id}",
+                    headers=headers,
+                    json={"body": cleaned},
+                )
+                response.raise_for_status()
+                return {"ok": True, "reasonCode": "updated", "commentId": comment_id, "summary": "Updated issue comment."}
+            except httpx.HTTPStatusError as exc:
+                return {
+                    "ok": False,
+                    "reasonCode": "denied" if exc.response.status_code in {401, 403, 404} else "update_failed",
+                    "httpStatus": exc.response.status_code,
+                    "summary": (
+                        f"Issue comment update failed with HTTP {exc.response.status_code}. "
+                        f"{self._github_permission_summary(exc.response)}"
+                    ).strip(),
+                }
+            except (httpx.TransportError, httpx.TimeoutException) as exc:
+                return {
+                    "ok": False,
+                    "reasonCode": "outcome_unknown",
+                    "summary": f"Issue comment update result unknown: {exc.__class__.__name__}. Reconcile by exact read-back before retrying.",
+                }
+
 __all__ = [
     "AutomatedReviewRequestResult",
     "CreatePRResult",
