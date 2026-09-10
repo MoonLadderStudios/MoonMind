@@ -1031,6 +1031,11 @@ services:
       - TEMPORAL_ARTIFACT_S3_ACCESS_KEY_ID=${TEMPORAL_ARTIFACT_S3_ACCESS_KEY_ID:-minioadmin}
       - TEMPORAL_ARTIFACT_S3_SECRET_ACCESS_KEY=${TEMPORAL_ARTIFACT_S3_SECRET_ACCESS_KEY:-minioadmin}
       - MOONMIND_ALLOW_LOCAL_ENCRYPTION_KEY_GENERATION=${MOONMIND_ALLOW_LOCAL_ENCRYPTION_KEY_GENERATION:-1}
+      # Canonical deployment identity shared by all integrations replicas.
+      # When unset, the worker persists one ID on the moonmind_secrets volume
+      # (/app/var/secrets/moonmind-installation-id) and reuses it across
+      # restarts; set it explicitly to pin the identity.
+      - MOONMIND_INSTALLATION_ID=${MOONMIND_INSTALLATION_ID:-}
     env_file:
       - path: .env
         required: false
