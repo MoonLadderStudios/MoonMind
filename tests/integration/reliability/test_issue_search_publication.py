@@ -9,6 +9,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
+from urllib.parse import unquote
 
 import httpx
 import pytest
@@ -98,8 +99,24 @@ async def test_search_publication_recovers_missing_pr_before_status(
             assert operations[0][0] == "repo.create_pr"
             issue.update(json.loads(request.content))
         if request.method == "POST":
-            assert pr_url in json.loads(request.content)["body"]
+            payload = json.loads(request.content)
+            if request.url.path.endswith("/labels"):
+                # Targeted lifecycle label additions apply without replacing
+                # the issue's other labels (design section 8.1).
+                for label in payload.get("labels", []):
+                    if label not in issue["labels"]:
+                        issue["labels"].append(label)
+                return httpx.Response(
+                    200, json=[{"name": name} for name in issue["labels"]]
+                )
+            assert pr_url in payload["body"]
             return httpx.Response(201, json={"id": 1})
+        if request.method == "DELETE":
+            deleted = unquote(request.url.path.rsplit("/", 1)[-1])
+            issue["labels"] = [
+                name for name in issue["labels"] if name != deleted
+            ]
+            return httpx.Response(200, json={})
         result = [issue] if request.url.path.endswith("/issues") else issue
         return httpx.Response(200, json=result)
 
