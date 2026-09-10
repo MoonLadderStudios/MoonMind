@@ -261,7 +261,7 @@ owns this inventory and the interface agreement only — not the cutovers.
 | G-06 | `moonmind/workflows/temporal/activities/omnigent_session_activities.py` (session-activity `github_token` plumbing) | #2615 |
 | G-07 | `moonmind/omnigent/execution_ports.py`, `moonmind/omnigent/profile_bound_execution.py` (Omnigent launch ports) | #2615 |
 | G-08 | `moonmind/omnigent/workspace_publication.py`, `moonmind/publish/service.py` (publication token parameters) | #3938 proposed |
-| G-09 | `moonmind/manifest/adapters.py` (`GithubClient(github_token=token, …)`) | #2615 (manifest pipeline is fan-out adjacent; bound client) |
+| G-09 | moonmind/manifest/adapters.py — RETIRED by MoonLadderStudios/MoonMind#4192 (`GithubClient(github_token=token, …)` was fan-out adjacent; bound client) | #2615 (manifest pipeline retired; no live token site) |
 | G-10 | `api_service/api/routers/workflow_console_view_model.py`, `api_service/api/routers/settings.py`, `api_service/services/settings_catalog.py`, `api_service/db/models.py` (settings/console token fields) | #1090 proposed (Settings wizard, secret attachment, scoped discovery; confirm in review) |
 | G-11 | `moonmind/omnigent/oauth_host_runtime.py` (`start_session`/`_launch_daemon` `github_token: str \| None = None`, `GH_TOKEN` child-env injection) | #2615 (Omnigent host lane: replace explicit-token/env delivery with admitted-issuance acquisition; shares the R-10/R-11 acquisition interface) |
 
@@ -296,7 +296,7 @@ owns this inventory and the interface agreement only — not the cutovers.
 | --- | --- | --- |
 | UI/API create/edit/rerun/presets/schedules | `frontend/src/`, `api_service/api/routers/executions.py`, `api_service/services/omnigent_agent_bootstrap_service.py`, `moonmind/workflows/executions/preset_expansion.py`, `preset_goal_scheduler.py`, `moonmind/omnigent/workspace_intent.py` (single intent compiler for all five surfaces) | #3940 proposed (normal create/detail/results UX, no-key onboarding; confirm in review) |
 | Repository discovery/indexing | Settings discovery via `api_service/api/routers/settings.py`; public-URL entry requires no authenticated discovery (DOC-REQ-004) | #1090 proposed (scoped discovery/probes; confirm in review) |
-| Fan-out | `moonmind/workflows/temporal/workflows/run.py`, `service.py`, `moonmind/manifest/pipeline.py`, `moonmind/services/skill_resolution.py` | #2615 (children resolve own authority or inherit a verified compatible binding, never a raw PAT) |
+| Fan-out | `moonmind/workflows/temporal/workflows/run.py`, `service.py`, moonmind/manifest/pipeline.py — RETIRED by MoonLadderStudios/MoonMind#4192, `moonmind/services/skill_resolution.py` | #2615 (children resolve own authority or inherit a verified compatible binding, never a raw PAT) |
 | Attestation | `moonmind/workflows/temporal/agent_result_payloads.py`, `activities/omnigent_activities.py`, `workflows/omnigent_session.py`, `workflows/container_job.py`, `moonmind/workloads/docker_launcher.py` | #2615 (attestation/cleanup dispatch by authority kind; existing boundaries retained) |
 | Registry pulls | `moonmind/omnigent/bootstrap/image_resolution.py`, `provider_revalidation.py`, `harness_platform/support.py` | #2615 (independent registry auth; source PAT never a GHCR fallback) |
 | Artifact/checkpoint | `moonmind/schemas/managed_checkpoint_models.py`, `moonmind/workflows/temporal/checkpoint_policy.py`, `moonmind/omnigent/authority_chain.py`, `moonmind/omnigent/checkpoints.py` | #3938 proposed (saved-work manifest, capture/restore, save-before-cleanup; confirm in review) |

@@ -2,6 +2,11 @@
 # MoonLadderStudios/MoonMind#4192: llama-index/reader and qdrant-client
 # distributions (plus their exclusive transitives) were removed here by
 # reachability surgery because the sandbox has no network for `poetry lock`.
+# MoonLadderStudios/MoonMind#4201: aiosqlite 0.21.0 was added here manually
+# (package entry + tests extra) because PyPI is unreachable from the sandbox,
+# so `poetry lock --no-update` could not resolve file hashes. The content-hash
+# below was recomputed locally from the current pyproject.toml with Poetry's
+# documented algorithm, but the aiosqlite file hashes are placeholders.
 # Run `poetry lock --no-update` with network access before building images so
 # the content-hash is regenerated; `poetry export` refuses a stale hash.
 
@@ -175,6 +180,23 @@ files = [
 [package.dependencies]
 frozenlist = ">=1.1.0"
 typing-extensions = {version = ">=4.2", markers = "python_version < \"3.13\""}
+
+[[package]]
+name = "aiosqlite"
+version = "0.21.0"
+description = "AsyncIO bridge to the standard sqlite3 module"
+optional = true
+python-versions = ">=3.9"
+groups = ["main"]
+markers = "extra == \"tests\""
+# NOTE (MoonLadderStudios/MoonMind#4201): file hashes below are placeholders
+# (all zeros). Regenerate via `poetry lock --no-update` with network access;
+# `poetry export --without-hashes` (used by api_service/Dockerfile) does not
+# consume them, but `poetry install` with hash verification does.
+files = [
+    {file = "aiosqlite-0.21.0-py3-none-any.whl", hash = "sha256:0000000000000000000000000000000000000000000000000000000000000000"},
+    {file = "aiosqlite-0.21.0.tar.gz", hash = "sha256:0000000000000000000000000000000000000000000000000000000000000000"},
+]
 
 [[package]]
 name = "alembic"
@@ -4571,9 +4593,9 @@ test = ["big-O", "jaraco.functools", "jaraco.itertools", "jaraco.test", "more_it
 type = ["pytest-mypy"]
 
 [extras]
-tests = ["pytest", "pytest-asyncio", "pytest-mock", "pytest-timeout", "pytest-xdist"]
+tests = ["aiosqlite", "pytest", "pytest-asyncio", "pytest-mock", "pytest-timeout", "pytest-xdist"]
 
 [metadata]
 lock-version = "2.1"
 python-versions = ">=3.10,<3.14"
-content-hash = "f05cd2a3beaa8675031971bd3f6549282714eae5fbd2cd5ded4401fca19bcaef"
+content-hash = "5e40a5b814b59e64f862f2fbe0865f71e584cac88d2a8283cf928282abe5f20a"
