@@ -19,8 +19,10 @@ from api_service.db.models import (
     User,
 )
 from api_service.services.omnigent_agent_profile_service import (
+    UpstreamInventoryRefreshError,
     projection_identity,
     projection_readiness,
+    refresh_upstream_inventory,
 )
 from api_service.services.provider_profile_readiness import (
     provider_profile_launch_ready,
@@ -360,14 +362,23 @@ async def resolve_agent_profile_snapshot(
     source = document.get("source") or {}
     upstream_snapshot = version.upstream_snapshot
     if source.get("upstreamId"):
-        projection = await session.get(
-            OmnigentUpstreamAgentProjection,
-            projection_identity(
-                document["endpointRef"],
-                source["upstreamId"],
-                source.get("upstreamVersion"),
-            ),
+        projection_id = projection_identity(
+            document["endpointRef"], source["upstreamId"], source.get("upstreamVersion")
         )
+        projection = await session.get(
+            OmnigentUpstreamAgentProjection, projection_id
+        )
+        if projection_readiness(projection)["freshness"] in {"stale", "missing"}:
+            try:
+                await refresh_upstream_inventory(endpoint_ref=document["endpointRef"])
+            except UpstreamInventoryRefreshError as exc:
+                raise HTTPException(status.HTTP_409_CONFLICT, str(exc)) from exc
+            # Refresh committed in its own session. Re-read the exact pinned
+            # identity instead of accepting the session's stale identity map or
+            # substituting the latest upstream version/profile default.
+            projection = await session.get(
+                OmnigentUpstreamAgentProjection, projection_id, populate_existing=True
+            )
         readiness = projection_readiness(
             projection,
             bridge_mode=(None if is_v2 else document["bridgeMode"]),
