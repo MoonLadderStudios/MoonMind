@@ -2727,18 +2727,18 @@ class TemporalExecutionService:
         title: str | None = None,
         idempotency_key: str | None = None,
     ) -> dict[str, Any]:
+        if update_name in RETIRED_MANIFEST_UPDATE_NAMES:
+            raise TemporalExecutionValidationError(
+                f"Update {update_name} was retired with MoonMind.ManifestIngest "
+                "(MoonLadderStudios/MoonMind#4192) and is no longer supported."
+            )
+
         if update_name not in ALLOWED_UPDATE_NAMES:
             raise TemporalExecutionValidationError(
                 f"Unsupported update name: {update_name}"
             )
 
         record = await self._require_source_execution(workflow_id)
-
-        if update_name in RETIRED_MANIFEST_UPDATE_NAMES:
-            raise TemporalExecutionValidationError(
-                f"Update {update_name} was retired with MoonMind.ManifestIngest "
-                "(MoonLadderStudios/MoonMind#4192) and is no longer supported."
-            )
 
         if (
             record.workflow_type is TemporalWorkflowType.USER_WORKFLOW
