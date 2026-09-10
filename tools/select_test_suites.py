@@ -143,6 +143,8 @@ INTEGRATION_CI_EXACT = {
     "api_service/auth_providers.py",
     "api_service/main.py",
     "api_service/api/routers/worker_auth.py",
+    "api_service/api/routers/advanced_auth_4124.py",
+    "moonmind/security/advanced_identity_4124.py",
     "moonmind/config/settings.py",
     # MoonLadderStudios/MoonMind#4128 (rw-8): frontend transport is part of
     # the same qualification boundary. The generated OpenAPI client and the
