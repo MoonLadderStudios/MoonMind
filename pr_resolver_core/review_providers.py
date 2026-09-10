@@ -73,6 +73,63 @@ def normalize_reviewer_login(login: object) -> str:
     return normalized
 
 
+# Finding severity for the Fix and Review Loop. Only P0/critical and P1/high
+# findings keep the loop going with another remediation + review cycle. A
+# finding that carries only P2/medium-or-below severity ends the loop: it is
+# not actionable and a clean response carrying only such trailing findings
+# still counts as a clean review.
+_HIGH_SEVERITY_FINDING_RE = re.compile(
+    r"\bP\s*[01]\b|\bsev\s*[01]\b|\bcritical\b|\bhigh\b",
+    re.IGNORECASE,
+)
+_LOW_SEVERITY_P_RE = re.compile(
+    r"\bP\s*[2-9]\b|\bsev\s*[2-9]\b",
+    re.IGNORECASE,
+)
+_LOW_SEVERITY_TEXT_RE = re.compile(
+    r"\bseverity\s*[:=\-]\s*(medium|low|minor|nit|info)\b"
+    r"|\bpriority\s*[:=\-]\s*(medium|low|minor|p[2-9])\b"
+    r"|\[(medium|low|minor|nit|info|p[2-9])\]"
+    r"|^(medium|low|minor|nit)\s*[:\-]"
+    r"|\b(medium|low|minor)\s+(severity|priority)\b"
+    r"|\b(severity|priority)\s+(medium|low|minor)\b",
+    re.IGNORECASE | re.MULTILINE,
+)
+_LOW_SEVERITY_BARE_RE = re.compile(
+    r"\bnits?\b",
+    re.IGNORECASE,
+)
+
+
+def has_high_severity_finding(body: object) -> bool:
+    """Return True when *body* carries a P0/critical or P1/high marker."""
+
+    return bool(_HIGH_SEVERITY_FINDING_RE.search(str(body or "")))
+
+
+def has_low_severity_marker(body: object) -> bool:
+    """Return True when *body* carries an explicit P2/medium-or-below marker."""
+
+    text = str(body or "")
+    return bool(
+        _LOW_SEVERITY_P_RE.search(text)
+        or _LOW_SEVERITY_TEXT_RE.search(text)
+        or _LOW_SEVERITY_BARE_RE.search(text)
+    )
+
+
+def is_low_severity_only_finding(body: object) -> bool:
+    """Return True when *body* is explicitly low severity and nothing higher.
+
+    Findings without any severity marker are conservatively treated as
+    requiring review (return False) so unmarked feedback is never silently
+    dropped from the Fix and Review Loop.
+    """
+
+    text = str(body or "")
+    return has_low_severity_marker(text) and not has_high_severity_finding(text)
+
+
 def is_automated_review_provider_login(provider: object, login: object) -> bool:
     record = resolve_automated_review_provider(provider)
     if record is None:
@@ -120,4 +177,16 @@ def is_clean_review_comment(
     )[0].strip()
     body = re.sub(r"^#{1,6}\s+", "", body).replace("**", "")
     body = " ".join(body.split())
-    return body in provider.clean_review_comments
+    if body in provider.clean_review_comments:
+        return True
+    # A clean response carrying only P2/medium-or-below trailing findings is
+    # still a clean review: there is nothing major left, so the Fix and Review
+    # Loop ends instead of requesting another review. Trailing P0/critical or
+    # P1/high findings keep the response non-clean.
+    for clean_phrase in provider.clean_review_comments:
+        normalized_clean = " ".join(str(clean_phrase).split())
+        if body.startswith(normalized_clean):
+            remainder = body[len(normalized_clean):].lstrip(" :.-–—\n\t")
+            if remainder and is_low_severity_only_finding(remainder):
+                return True
+    return False
