@@ -89,6 +89,12 @@ Use the actual operator URL when verifying an update. Preserve these `.env`
 settings across upgrades; changing a fresh-install default must not remove an
 existing installation's access.
 
+The update scripts and deployment runner compare the installed API's published
+ports and access settings with rendered Compose before replacing containers.
+They stop on a change and identify the settings to preserve in `.env` or an
+override. Direct `docker compose up` does not run this preflight; use it for
+intentional access migrations and verify the operator URL afterward.
+
 ### OAuth Workflow
 
 When you already have a subscription with a model provider:

@@ -28,6 +28,10 @@ metadata:
    - quiesce and coherently recreate the agent-runtime worker across changes to
      the live-mounted Skill catalog or its resolver code
    - checkout/reset local `<branch>` to the exact commit captured by that fetch
+   - run the repository's standard-library-only `moonmind/deployment_access.py`
+     deployment preflight against rendered Compose and installed API containers;
+     stop before replacement if bindings or access settings drift, preserving
+     the existing API until its deployment-owned configuration is reconciled
    - optionally `docker compose pull` while the resolver worker remains quiesced
      (unless `noComposePull` is set)
    - recreate the resolver worker only when it still exists in the post-checkout

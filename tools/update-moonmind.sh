@@ -68,6 +68,8 @@ run_compose() {
 
 SERVICES=("$@")
 
+python3 "$ROOT_DIR/moonmind/deployment_access.py" "${COMPOSE_CMD[@]}"
+
 if [[ "$REBUILD" -eq 1 ]]; then
   if [[ ${#BUILD_ARGS[@]} -eq 0 ]]; then
     run_compose build --pull "${SERVICES[@]}"
@@ -77,4 +79,5 @@ if [[ "$REBUILD" -eq 1 ]]; then
 else
   run_compose pull "${SERVICES[@]}"
 fi
+python3 "$ROOT_DIR/moonmind/deployment_access.py" "${COMPOSE_CMD[@]}"
 run_compose up -d --remove-orphans --force-recreate "${SERVICES[@]}"

@@ -751,6 +751,17 @@ The Operations UI must not normally ask the operator to choose the runner image 
 
 ## 12.1 Compose-level verification
 
+Before replacement, the host scripts and deployment runner execute the shared
+`moonmind/deployment_access.py` preflight. It compares rendered Compose with
+installed API containers (including stopped containers) in the selected project.
+Changed published interfaces, ports, authentication mode, trusted ingress, public
+URL, trusted proxies, or CORS origins stop an ordinary update before recreation.
+The operator preserves existing settings in the deployment-owned `.env` or
+override; intentional access migrations are applied separately and verified
+through the operator URL. The preflight never infers ingress authorization or
+prints rendered environment/inspect payloads. Direct Docker Compose commands
+remain an explicit operator path and do not invoke this updater guard.
+
 The system verifies Compose state using:
 
 - `docker compose ps`
