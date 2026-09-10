@@ -51,6 +51,39 @@ def _extract_session_credentials(request: Request) -> tuple[str | None, str | No
     return cookie_token, bearer_token
 
 
+def _enforce_cookie_csrf_origin(request: Request) -> None:
+    """Enforce the CSRF origin boundary for cookie-authenticated requests.
+
+    Delegates to the qualified #4121 ``enforce_csrf_origin`` helper so
+    cookie-authenticated mutations require an ``Origin``/``Referer`` that
+    is same-origin with the configured ``MOONMIND_PUBLIC_BASE_URL``. Safe
+    methods and bearer-only flows pass through inside the helper. When no
+    public base URL is configured the deployment is local-only (see
+    ``api_service.main`` startup classification) and there is no configured
+    origin to check against, so the check is skipped; remote deployments
+    must configure the base URL. Failures map to the §8 HTTP contract.
+    """
+    from moonmind.security.session_authority_4121 import enforce_csrf_origin
+
+    base_url = os.environ.get("MOONMIND_PUBLIC_BASE_URL", "").strip()
+    if not base_url:
+        return
+    try:
+        host = request.headers.get("host")
+        if not host and request.url is not None:
+            host = request.url.hostname
+        enforce_csrf_origin(
+            method=request.method or "GET",
+            cookie_present=True,
+            origin=request.headers.get("origin"),
+            referer=request.headers.get("referer"),
+            host=host,
+            base_url=base_url,
+        )
+    except Exception as exc:
+        raise _session_http_exception(exc)
+
+
 def _session_http_exception(exc: BaseException):
     """Map a session-authority error to the §8 HTTP contract."""
     from moonmind.security.session_authority_4121 import http_status_for_error
@@ -123,6 +156,13 @@ async def _resolve_session_principal(
         # authenticated worker path authorizes below; nothing is swallowed
         # and no session configuration is required to observe absence.
         return None
+    if cookie_token is not None:
+        # Cookie-authenticated requests must clear the CSRF origin boundary
+        # before session validation: no HTTP middleware performs this check,
+        # so a same-site sibling origin could otherwise submit credentialed
+        # mutations with the victim's cookie. Safe methods and bearer-only
+        # flows pass through inside the helper.
+        _enforce_cookie_csrf_origin(request)
     try:
         config = build_moonmind_control_plane_config()
     except HTTPException:
