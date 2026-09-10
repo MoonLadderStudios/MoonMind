@@ -363,6 +363,39 @@ async def test_create_definition_rejects_retired_manifest_ingest(
                     policy={},
                 )
 
+async def test_create_definition_rejects_legacy_manifest_run_kind(
+    tmp_path: Path, mock_temporal_adapter
+) -> None:
+    # MoonLadderStudios/MoonMind#4188: the legacy ``manifest_run`` target-kind
+    # form is the same retired producer as ``MoonMind.ManifestIngest``. It
+    # must surface the actionable retirement error (not a generic
+    # unsupported-type message) and never reach schedule dispatch.
+    async with recurring_db(tmp_path) as session_maker:
+        async with session_maker() as session:
+            service = RecurringWorkflowsService(
+                session, temporal_client_adapter=mock_temporal_adapter
+            )
+            with pytest.raises(
+                RecurringWorkflowValidationError, match="was retired"
+            ):
+                await service.create_definition(
+                    name="Legacy Manifest Plan",
+                    description=None,
+                    enabled=True,
+                    schedule_type="cron",
+                    cron="0 6 * * *",
+                    timezone="UTC",
+                    scope_type="personal",
+                    scope_ref=None,
+                    owner_user_id=uuid4(),
+                    target={
+                        "kind": "manifest_run",
+                        "name": "legacy-manifest",
+                    },
+                    policy={},
+                )
+            mock_temporal_adapter.create_schedule.assert_not_called()
+
 async def test_create_definition_rejects_invalid_policy(tmp_path: Path, mock_temporal_adapter) -> None:
     async with recurring_db(tmp_path) as session_maker:
         async with session_maker() as session:

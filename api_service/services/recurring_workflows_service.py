@@ -249,12 +249,14 @@ def _normalize_target(target_payload: Mapping[str, Any]) -> dict[str, Any]:
     workflow_type = str(
         target.get("workflowType") or target.get("workflow_type") or ""
     ).strip()
-    # MoonLadderStudios/MoonMind#4192: the native ManifestIngest product is
-    # retired. Reject actionably so old authoring surfaces the removal
-    # instead of a generic unsupported-type message. Old-release definitions
-    # stay readable as replay/drain evidence; they are not normalizable for
-    # new schedules.
-    if workflow_type == "MoonMind.ManifestIngest":
+    # MoonLadderStudios/MoonMind#4192 + #4188: the native ManifestIngest product
+    # is retired, including its legacy ``manifest_run`` target-kind form
+    # consumed by scripts/migrate_to_temporal_schedules.py. Reject actionably
+    # so old authoring surfaces the removal instead of a generic
+    # unsupported-type message. Old-release definitions stay readable as
+    # replay/drain evidence; they are not normalizable for new schedules.
+    legacy_kind = str(target.get("kind") or "").strip()
+    if workflow_type == "MoonMind.ManifestIngest" or legacy_kind == "manifest_run":
         raise RecurringWorkflowValidationError(
             "MoonMind.ManifestIngest was retired "
             "(MoonLadderStudios/MoonMind#4192): the new release does not "
@@ -1587,9 +1589,18 @@ class RecurringWorkflowsService:
                         or raw_target.get("workflow_type")
                         or ""
                     ).strip()
+                    # MoonLadderStudios/MoonMind#4188: legacy pre-Temporal
+                    # definitions may carry ``kind: manifest_run`` instead of
+                    # an explicit workflow type. Treat it as the same retired
+                    # producer so it is paused, never (re)created.
+                    raw_kind = str(raw_target.get("kind") or "").strip()
                 except Exception:
                     raw_workflow_type = ""
-                if raw_workflow_type == "MoonMind.ManifestIngest":
+                    raw_kind = ""
+                if (
+                    raw_workflow_type == "MoonMind.ManifestIngest"
+                    or raw_kind == "manifest_run"
+                ):
                     try:
                         await self._adapter.pause_schedule(
                             definition_id=dfn.id
