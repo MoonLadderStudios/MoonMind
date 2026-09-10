@@ -11,6 +11,30 @@ from api_service import main as api_main
 
 
 @pytest.mark.asyncio
+async def test_inventory_maintenance_retries_failure_and_propagates_shutdown(monkeypatch):
+    from api_service.services import omnigent_agent_profile_service as inventory_service
+
+    calls = []
+    delays = []
+
+    async def refresh():
+        calls.append(True)
+        if len(calls) == 1:
+            raise inventory_service.UpstreamInventoryRefreshError("endpoint unavailable")
+        raise asyncio.CancelledError
+
+    async def sleep(delay):
+        delays.append(delay)
+
+    monkeypatch.setattr(inventory_service, "refresh_upstream_inventory", refresh)
+    monkeypatch.setattr(api_main.asyncio, "sleep", sleep)
+    with pytest.raises(asyncio.CancelledError):
+        await api_main._maintain_omnigent_inventory()
+    assert calls == [True, True]
+    assert delays == [120]
+
+
+@pytest.mark.asyncio
 async def test_image_sync_blocks_a_quarantined_opencode_host(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
