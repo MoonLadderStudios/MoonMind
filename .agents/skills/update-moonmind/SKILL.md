@@ -5,9 +5,18 @@ metadata:
   required-capabilities:
     - git
     - docker
+    - python3
 ---
 
 # Update MoonMind Deployment (default: without restarting orchestrator)
+
+## Prerequisites
+
+The host requires Git, Bash 4 or newer, Docker with the Compose V2 plugin, and
+Python 3.10 or newer (`python3`). The access preflight uses only Python's standard
+library; no project virtual environment or Python dependencies are required.
+The script validates Python and Compose before fetching, changing the checkout,
+or stopping services.
 
 ## Inputs
 - `repo` (optional): Path to the MoonMind git repository. Default `.`.
@@ -31,7 +40,9 @@ metadata:
    - run the repository's standard-library-only `moonmind/deployment_access.py`
      deployment preflight against rendered Compose and installed API containers;
      stop before replacement if bindings or access settings drift, preserving
-     the existing API until its deployment-owned configuration is reconciled
+     the existing API until its deployment-owned configuration is reconciled;
+     restore the pre-update checkout before resuming a quiesced worker when the
+     gate fails, and leave that worker stopped if restoring the checkout fails
    - optionally `docker compose pull` while the resolver worker remains quiesced
      (unless `noComposePull` is set)
    - recreate the resolver worker only when it still exists in the post-checkout

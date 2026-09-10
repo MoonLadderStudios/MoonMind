@@ -533,6 +533,9 @@ class HostDockerComposeRunner:
                 self._compose_base_command(project_dir=self._local_dir()),
                 cwd=str(self._local_dir()),
                 env={**os.environ, "MOONMIND_IMAGE": requested_image},
+                services=_compose_up_target_services(command),
+                include_dependencies="--no-deps" not in command,
+                remove_orphans="--remove-orphans" in command,
             )
         except DeploymentAccessError as exc:
             raise ToolFailure(
