@@ -41,12 +41,11 @@ from __future__ import annotations
 import asyncio
 import base64
 import hashlib
-import hmac
 import json
 import logging
 import secrets
 import time
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Mapping, Protocol
 from urllib.parse import urlencode, urlsplit
@@ -130,7 +129,6 @@ MAX_TRANSACTION_TTL_SECONDS = 3600.0
 # ``HS256`` explicitly; the default never does (wrong-algorithm tokens fail
 # closed instead of being accepted through a symmetric fallback).
 DEFAULT_ALLOWED_ALGORITHMS = ("RS256", "ES256")
-HERMETIC_ALLOWED_ALGORITHMS = ("HS256",)
 
 # Substrings that must never appear in a diagnostics payload.
 _TOKEN_MARKERS = ("eyJ", "code_verifier", "refresh_token", "id_token")
@@ -163,10 +161,30 @@ class OIDCProviderConfig:
     allowed_algorithms: tuple[str, ...] = DEFAULT_ALLOWED_ALGORITHMS
     allow_unknown_users: bool = False
     require_mfa: bool = False
+    mfa_acr_values: tuple[str, ...] = ()
 
     def __post_init__(self) -> None:
         if not self.issuer or not self.issuer.strip():
             raise OIDCConfigError("OIDC issuer must be a non-empty URI")
+        # Reject plaintext issuers at startup: discovery over http would let
+        # an on-path attacker replace token/JWKS endpoints and capture the
+        # code, PKCE verifier, and client secret. Only explicit loopback
+        # http is tolerated for hermetic development.
+        from urllib.parse import urlsplit as _urlsplit
+
+        _issuer_parts = _urlsplit(self.issuer.strip())
+        if _issuer_parts.scheme == "https" and _issuer_parts.hostname:
+            pass
+        elif (
+            _issuer_parts.scheme == "http"
+            and _issuer_parts.hostname in ("127.0.0.1", "localhost", "::1")
+        ):
+            pass
+        else:
+            raise OIDCConfigError(
+                "OIDC issuer must be an https URI "
+                "(loopback http only for explicit development)"
+            )
         if not self.client_id or not self.client_id.strip():
             raise OIDCConfigError("OIDC client_id must be non-empty")
         if not self.client_secret:
@@ -244,6 +262,10 @@ def resolve_oidc_provider_config(
         )
     except ValueError as exc:
         raise OIDCConfigError("MOONMIND_OIDC_TIMEOUT_SECONDS must be numeric") from exc
+    _mfa_raw = str(env.get("MOONMIND_OIDC_MFA_ACR_VALUES", "") or "").strip()
+    _mfa_values = tuple(
+        part.strip() for part in _mfa_raw.split(",") if part.strip()
+    )
     return OIDCProviderConfig(
         issuer=issuer,
         client_id=client_id,
@@ -252,6 +274,7 @@ def resolve_oidc_provider_config(
         timeout_seconds=timeout,
         allow_unknown_users=_env_flag(env, "MOONMIND_OIDC_ALLOW_UNKNOWN_USERS"),
         require_mfa=_env_flag(env, "MOONMIND_OIDC_REQUIRE_MFA"),
+        mfa_acr_values=_mfa_values,
     )
 
 
@@ -268,7 +291,12 @@ class OIDCTransport(Protocol):
         raise NotImplementedError
 
     async def post_form(
-        self, url: str, form: dict[str, str], *, timeout_seconds: float
+        self,
+        url: str,
+        form: dict[str, str],
+        *,
+        timeout_seconds: float,
+        auth: tuple[str, str] | None = None,
     ) -> dict[str, Any]:
         raise NotImplementedError
 
@@ -280,6 +308,7 @@ class OIDCMetadata:
     token_endpoint: str
     jwks_uri: str
     end_session_endpoint: str | None = None
+    token_endpoint_auth_method: str = "client_secret_post"
 
 
 def _require_https_url(value: str, *, what: str, allow_loopback_http: bool) -> str:
@@ -338,6 +367,17 @@ class OIDCMetadataCache:
             raise OIDCLoginError(
                 "invalid_metadata", "IdP discovery issuer mismatch; refusing to proceed"
             )
+        _advertised = raw.get("token_endpoint_auth_methods_supported") or []
+        if isinstance(_advertised, str):
+            _advertised = [_advertised]
+        _methods = [str(m).strip() for m in _advertised if str(m).strip()]
+        # Honor the provider's advertised auth method: use basic only when
+        # the provider does not support post. Defaults to post for
+        # backward compatibility with providers that omit the field.
+        if _methods and "client_secret_post" not in _methods and "client_secret_basic" in _methods:
+            _auth_method = "client_secret_basic"
+        else:
+            _auth_method = "client_secret_post"
         metadata = OIDCMetadata(
             issuer=config.issuer,
             authorization_endpoint=_require_https_url(
@@ -364,6 +404,7 @@ class OIDCMetadataCache:
                 if raw.get("end_session_endpoint")
                 else None
             ),
+            token_endpoint_auth_method=_auth_method,
         )
         self._entries[config.issuer] = (now + self._ttl, metadata)
         return metadata
@@ -506,7 +547,21 @@ def build_authorization_url(
         "code_challenge": _pkce_challenge(transaction.code_verifier),
         "code_challenge_method": "S256",
     }
-    return f"{metadata.authorization_endpoint}?{urlencode(params)}"
+    # Preserve provider-supplied query parameters: discovery documents may
+    # legally publish an authorization_endpoint that already contains a
+    # query string (e.g. ?tenant=x). Merging avoids a second `?` that would
+    # nest OAuth parameters inside the existing value and break every login.
+    from urllib.parse import parse_qsl as _parse_qsl
+    from urllib.parse import urlsplit as _split
+    from urllib.parse import urlunsplit as _unsplit
+
+    _parts = _split(metadata.authorization_endpoint)
+    _existing = _parse_qsl(_parts.query, keep_blank_values=True)
+    _merged = _existing + sorted(params.items())
+    _query = urlencode(_merged)
+    return _unsplit(
+        (_parts.scheme, _parts.netloc, _parts.path, _query, _parts.fragment)
+    )
 
 
 class AuthTransactionStore(Protocol):
@@ -530,6 +585,16 @@ class InMemoryAuthTransactionStore:
 
     async def create(self, transaction: AuthorizationTransaction) -> None:
         async with self._lock:
+            # Bounded cleanup: drop expired entries so abandoned logins
+            # cannot grow the store without bound.
+            _now = time.time()
+            _expired = [
+                key
+                for key, entry in self._entries.items()
+                if _now - entry.created_at > self._ttl
+            ]
+            for key in _expired:
+                self._entries.pop(key, None)
             self._entries[transaction.state] = transaction
 
     async def consume(
@@ -574,6 +639,16 @@ class FileBackedAuthTransactionStore:
 
     async def create(self, transaction: AuthorizationTransaction) -> None:
         entries = self._load()
+        _now = time.time()
+        # Bounded cleanup: drop expired entries so abandoned logins cannot
+        # grow the backing file without bound.
+        for key in list(entries.keys()):
+            try:
+                _created = float(entries[key].get("created_at", 0))
+            except Exception:
+                _created = 0.0
+            if _now - _created > self._ttl:
+                entries.pop(key, None)
         entries[transaction.state] = {
             "nonce": transaction.nonce,
             "code_verifier": transaction.code_verifier,
@@ -651,18 +726,38 @@ async def exchange_code_for_tokens(
     """Exchange one authorization code with PKCE at the verified endpoint."""
     if not (code or "").strip():
         raise OIDCTransactionError("missing authorization code")
+    use_basic = (
+        getattr(metadata, "token_endpoint_auth_method", "client_secret_post")
+        == "client_secret_basic"
+    )
     form = {
         "grant_type": "authorization_code",
         "code": code.strip(),
         "redirect_uri": transaction.redirect_uri,
         "client_id": config.client_id,
-        "client_secret": config.client_secret,
         "code_verifier": transaction.code_verifier,
     }
+    auth: tuple[str, str] | None = None
+    if use_basic:
+        # Providers that only support client_secret_basic expect HTTP Basic
+        # authentication; the secret never travels in the form body.
+        auth = (config.client_id, config.client_secret)
+    else:
+        form["client_secret"] = config.client_secret
     try:
-        raw = await transport.post_form(
-            metadata.token_endpoint, form, timeout_seconds=config.timeout_seconds
-        )
+        try:
+            raw = await transport.post_form(
+                metadata.token_endpoint,
+                form,
+                timeout_seconds=config.timeout_seconds,
+                auth=auth,
+            )
+        except TypeError:
+            # Backward compatibility with transports that predate the auth
+            # parameter (hermetic fixtures); they only support post.
+            raw = await transport.post_form(
+                metadata.token_endpoint, form, timeout_seconds=config.timeout_seconds
+            )
     except OIDCLoginError:
         raise
     except Exception as exc:
@@ -703,13 +798,22 @@ def validate_id_token(
     alg = str(header.get("alg", ""))
     if alg not in config.allowed_algorithms:
         raise OIDCClaimError(f"unexpected signing algorithm {alg!r}")
-    kid = str(header.get("kid", ""))
     try:
-        if jwk.get("kty") == "oct":
+        kty = str(jwk.get("kty", ""))
+        if kty == "oct":
             raw_b64 = str(jwk.get("k", ""))
             key_material = base64.urlsafe_b64decode(raw_b64 + "=" * (-len(raw_b64) % 4))
         else:
-            key_material = _jwt.algorithms.RSAAlgorithm.from_jwk(json.dumps(jwk))
+            # Generic JWK conversion handles RSA, EC (ES256), and OKP.
+            # Falls back to RSA-only loader for backward compatibility.
+            try:
+                from jwt import PyJWK as _PyJWK
+
+                key_material = _PyJWK(jwk).key
+            except Exception:
+                key_material = _jwt.algorithms.RSAAlgorithm.from_jwk(json.dumps(jwk))
+    except OIDCClaimError:
+        raise
     except Exception as exc:
         raise OIDCClaimError("unusable signing key") from exc
     try:
@@ -735,7 +839,7 @@ def validate_id_token(
             raise OIDCClaimError("expired identity token")
     except (KeyError, TypeError, ValueError) as exc:
         raise OIDCClaimError("identity token has no usable expiry") from exc
-    if config.require_mfa and not _has_mfa_evidence(claims):
+    if config.require_mfa and not _has_mfa_evidence(claims, config=config):
         raise OIDCMFACutoverBlockedError(
             "deployment requires MFA but the identity token carries no MFA "
             "evidence (acr/amr); refusing cutover until the verified IdP "
@@ -748,15 +852,69 @@ def validate_id_token(
     return claims
 
 
-def _has_mfa_evidence(claims: Mapping[str, Any]) -> bool:
-    acr = str(claims.get("acr", "") or "").lower()
-    if acr and acr not in ("0", "password", "pwd"):
-        return True
+def _has_mfa_evidence(
+    claims: Mapping[str, Any], *, config: OIDCProviderConfig | None = None
+) -> bool:
+    """Recognize MFA evidence only from configured or known MFA values.
+
+    ACR values are provider-specific: a password-only context such as
+    ``acr="1"`` must not pass. When ``MOONMIND_OIDC_MFA_ACR_VALUES`` configures
+    an explicit allowlist, only those exact ACRs pass. Otherwise only
+    recognized MFA markers pass (InCommon silver/gold, explicit ``mfa``
+    substrings, and OASIS MFA context classes). ``amr`` passes only when it
+    contains a recognized second-factor method (otp/totp/hotp, sms, webauthn,
+    fido, biometric, etc.), never any unknown non-password value.
+    """
+    configured = (
+        tuple(v.lower() for v in (config.mfa_acr_values or ()))
+        if config is not None
+        else ()
+    )
+    acr_raw = str(claims.get("acr", "") or "").strip()
+    acr = acr_raw.lower()
+    if acr:
+        if configured:
+            if acr in configured:
+                return True
+        else:
+            # Known MFA indicators; bare numeric/password values fail closed.
+            _mfa_acr_markers = (
+                "mfa",
+                "silver",
+                "gold",
+                "urn:mace:incommon:iap:silver",
+                "urn:mace:incommon:iap:gold",
+                "urn:oasis:names:tc:saml:2.0:ac:classes",
+                "time-synctoken",
+                "mobiletwofactor",
+            )
+            if acr not in ("0", "1", "password", "pwd", "unspecified") and any(
+                marker in acr for marker in _mfa_acr_markers
+            ):
+                return True
     amr = claims.get("amr") or []
-    if isinstance(amr, list) and any(
-        str(v).lower() not in ("pwd", "password", "") for v in amr
-    ):
-        return True
+    if isinstance(amr, list):
+        _mfa_amr = {
+            "mfa",
+            "otp",
+            "totp",
+            "hotp",
+            "sms",
+            "webauthn",
+            "fido",
+            "fido2",
+            "face",
+            "fingerprint",
+            "iris",
+            "voice",
+            "smartcard",
+            "hwk",
+            "swk",
+        }
+        for value in amr:
+            token = str(value or "").strip().lower()
+            if token in _mfa_amr:
+                return True
     return False
 
 
@@ -929,6 +1087,11 @@ class TrustedProxyConfig:
             raise OIDCConfigError(
                 "trusted-header mode requires MOONMIND_TRUSTED_INGRESS=1 with an "
                 "audited ingress path; refusing to trust headers on direct ingress"
+            )
+        if not self.trusted_proxies:
+            raise OIDCConfigError(
+                "trusted-header mode requires a non-empty MOONMIND_TRUSTED_PROXIES "
+                "allowlist; an empty allowlist would trust every direct client"
             )
 
 

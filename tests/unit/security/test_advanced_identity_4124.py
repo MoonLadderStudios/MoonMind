@@ -19,7 +19,6 @@ import base64
 import secrets
 import time
 import uuid
-from pathlib import Path
 
 import jwt
 import pytest

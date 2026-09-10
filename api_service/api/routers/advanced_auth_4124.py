@@ -87,7 +87,12 @@ class HttpxOIDCTransport:
         return raw
 
     async def post_form(
-        self, url: str, form: dict[str, str], *, timeout_seconds: float
+        self,
+        url: str,
+        form: dict[str, str],
+        *,
+        timeout_seconds: float,
+        auth: tuple[str, str] | None = None,
     ) -> dict[str, Any]:
         import httpx
 
@@ -95,7 +100,7 @@ class HttpxOIDCTransport:
             async with httpx.AsyncClient(
                 timeout=timeout_seconds, follow_redirects=False
             ) as client:
-                response = await client.post(url, data=form)
+                response = await client.post(url, data=form, auth=auth)
         except Exception as exc:
             from moonmind.security.advanced_identity_4124 import OIDCUnavailableError
 
@@ -180,10 +185,29 @@ class DbAuthTransactionStore:
         self._ddl = ensure_oidc_transaction_table_sql(self._table)
 
     async def create(self, transaction) -> None:  # type: ignore[no-untyped-def]
+        import time as _time
+
         from api_service.db.base import get_async_session_context
 
         async with get_async_session_context() as session:
             await session.execute(text(self._ddl))
+            # Bounded cleanup: purge expired rows on every creation so
+            # abandoned logins, crawlers, or repeated public hits cannot grow
+            # the table without bound. Expiration uses the same TTL the
+            # consumer enforces.
+            try:
+                from moonmind.security.advanced_identity_4124 import (
+                    DEFAULT_TRANSACTION_TTL_SECONDS as _TTL,
+                )
+
+                _cutoff = float(transaction.created_at) - float(_TTL) - 1.0
+                await session.execute(
+                    text(f"DELETE FROM {self._table} WHERE created_at < :cutoff"),
+                    {"cutoff": _cutoff},
+                )
+            except Exception:
+                # Cleanup is best-effort; the insert below still proceeds.
+                pass
             await session.execute(
                 text(
                     f"INSERT INTO {self._table} "
@@ -280,6 +304,7 @@ def _http_status_for_login_error(exc: BaseException) -> int:
     from moonmind.security.advanced_identity_4124 import (
         EnrollmentRequiredError,
         OIDCMFACutoverBlockedError,
+        OIDCLoginError,
         OIDCUnavailableError,
     )
 
@@ -287,12 +312,35 @@ def _http_status_for_login_error(exc: BaseException) -> int:
         return status.HTTP_503_SERVICE_UNAVAILABLE
     if isinstance(exc, (EnrollmentRequiredError, OIDCMFACutoverBlockedError)):
         return status.HTTP_403_FORBIDDEN
-    return status.HTTP_401_UNAUTHORIZED
+    if isinstance(exc, OIDCLoginError):
+        return status.HTTP_401_UNAUTHORIZED
+    # Database, session-store, driver, or otherwise unclassified failures
+    # are retryable infrastructure errors, never bad credentials.
+    return status.HTTP_503_SERVICE_UNAVAILABLE
 
 
 def _login_error_body(exc: BaseException) -> dict[str, Any]:
+    from moonmind.security.advanced_identity_4124 import OIDCLoginError
+
     code = getattr(exc, "code", "login_failed")
-    return {"code": code, "message": str(exc)}
+    # Controlled OIDC failures carry safe, operator-authored messages.
+    if isinstance(exc, OIDCLoginError):
+        return {"code": code, "message": str(exc)}
+    # Unclassified/infrastructure failures never expose raw diagnostics
+    # (SQL, bound values, hostnames, driver details) to unauthenticated
+    # callers; report a sanitized retryable error instead.
+    safe_code = code if isinstance(code, str) and code else "idp_unavailable"
+    if safe_code not in (
+        "idp_unavailable",
+        "login_failed",
+        "auth_required",
+        "auth_invalid",
+    ):
+        safe_code = "idp_unavailable"
+    return {
+        "code": safe_code,
+        "message": "identity service temporarily unavailable; retry later",
+    }
 
 
 @router.get("/login")
@@ -330,7 +378,24 @@ async def oidc_login(request: Request, return_path: str = "/") -> RedirectRespon
             detail=_login_error_body(exc),
         ) from exc
     emit_advanced_auth_event("success", mode="oidc", reason="login_started")
-    return RedirectResponse(url=target, status_code=302)
+    response = RedirectResponse(url=target, status_code=302)
+    # Bind the transaction to the initiating browser: the callback must
+    # present the same state cookie, otherwise an attacker could start a
+    # login with their own IdP account and lure a victim into consuming it
+    # (login CSRF / account confusion, session installed in victim browser).
+    import os as _os
+
+    _secure = _os.environ.get("MOONMIND_REQUIRE_SECURE_COOKIES", "1") != "0"
+    response.set_cookie(
+        key="moonmind_oidc_state",
+        value=transaction.state,
+        httponly=True,
+        secure=_secure,
+        samesite="lax",
+        path="/api/v1/oidc/callback",
+        max_age=600,
+    )
+    return response
 
 
 @router.get("/callback", response_model=None)
@@ -360,6 +425,16 @@ async def oidc_callback(
             from moonmind.security.advanced_identity_4124 import OIDCLoginError
 
             raise OIDCLoginError("idp_error", "identity provider refused authorization")
+        # Verify browser binding before consuming: the presenting browser
+        # must own the state cookie issued at /login time.
+        from moonmind.security.advanced_identity_4124 import OIDCTransactionError
+
+        _bound = (request.cookies.get("moonmind_oidc_state") or "").strip()
+        if not _bound or _bound != (state or "").strip():
+            raise OIDCTransactionError(
+                "authorization transaction is not bound to this browser; "
+                "refusing login-CSRF replay"
+            )
         transaction = await get_transaction_store(request).consume(state)
         metadata = await _metadata_cache(request).get(config, HttpxOIDCTransport())
         tokens = await exchange_code_for_tokens(
@@ -386,7 +461,7 @@ async def oidc_callback(
         )
         identity = claims_to_validated_identity(claims, issuer=config.issuer)
         user = await _admit_oidc_identity(identity, config)
-        token = await _mint_session_for_user(user, mode="oidc")
+        token = await _mint_session_for_user(user, mode="oidc", identity=identity)
     except HTTPException:
         raise
     except Exception as exc:
@@ -403,6 +478,7 @@ async def oidc_callback(
     )
     response = RedirectResponse(url=transaction.return_path, status_code=302)
     _attach_session_cookie(response, token, mode="oidc")
+    response.delete_cookie(key="moonmind_oidc_state", path="/api/v1/oidc/callback")
     return response
 
 
@@ -487,7 +563,7 @@ async def _admit_oidc_identity(identity, config):  # type: ignore[no-untyped-def
             raise EnrollmentRequiredError(exc.code, str(exc)) from exc
 
 
-async def _mint_session_for_user(user, *, mode: str) -> str:  # type: ignore[no-untyped-def]
+async def _mint_session_for_user(user, *, mode: str, identity=None) -> str:  # type: ignore[no-untyped-def]
     from api_service.auth_providers import build_moonmind_control_plane_config
     from api_service.db.base import get_async_session_context
     from api_service.services.session_store import (
@@ -495,15 +571,9 @@ async def _mint_session_for_user(user, *, mode: str) -> str:  # type: ignore[no-
         DbRevocationStore,
         mint_and_record_session,
     )
-    from moonmind.security import omnigent_auth_qualification as q
 
     config = build_moonmind_control_plane_config(mode=mode)
     async with get_async_session_context() as session:
-        identity = q.ValidatedIdentity(
-            issuer="moonmind-session-mint",
-            subject=str(user.id),
-            email=user.email,
-        )
         # Resolve through the live UUID (the session subject stays the
         # stable MoonMind UUID, never the external subject or email).
         account_store = DbAccountStore(session)
@@ -520,7 +590,7 @@ async def _mint_session_for_user(user, *, mode: str) -> str:  # type: ignore[no-
                 detail={"code": "inactive", "message": "account inactive"},
             )
         token, _ = await mint_and_record_session(
-            await _session_identity_for_user(row),
+            await _session_identity_for_user(row, validated_identity=identity),
             account_store,
             revocation,
             config,
@@ -529,13 +599,17 @@ async def _mint_session_for_user(user, *, mode: str) -> str:  # type: ignore[no-
         return token
 
 
-async def _session_identity_for_user(user):  # type: ignore[no-untyped-def]
+async def _session_identity_for_user(user, validated_identity=None):  # type: ignore[no-untyped-def]
     """Validated identity shape that resolves to the live UUID.
 
-    External identities resolve through their verified (issuer, subject)
-    pair; the mint path re-resolves the same mapping so a concurrent
-    disable/reset bump between admission and mint still fails closed at
-    validation instead of resurrecting authority.
+    When the just-validated ``(issuer, subject)`` is supplied, the mint path
+    re-resolves exactly that pair: removal of the authenticated mapping in
+    the admission-to-mint window fails closed instead of falling back to an
+    unrelated mapping or the email-based accounts fallback. External
+    identities resolve through their verified (issuer, subject) pair; the
+    mint path re-resolves the same mapping so a concurrent disable/reset
+    bump between admission and mint still fails closed at validation
+    instead of resurrecting authority.
     """
 
     from sqlalchemy import select
@@ -544,6 +618,32 @@ async def _session_identity_for_user(user):  # type: ignore[no-untyped-def]
     from api_service.db.models import UserExternalIdentity
     from moonmind.security import omnigent_auth_qualification as q
 
+    if validated_identity is not None:
+        async with get_async_session_context() as session:
+            exact = (
+                await session.execute(
+                    select(UserExternalIdentity).where(
+                        UserExternalIdentity.user_id == user.id,
+                        UserExternalIdentity.issuer
+                        == validated_identity.issuer,
+                        UserExternalIdentity.subject
+                        == validated_identity.subject,
+                    )
+                )
+            ).scalars().first()
+        if exact is None:
+            from fastapi import HTTPException as _HTTP
+
+            raise _HTTP(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail={
+                    "code": "identity_changed",
+                    "message": "authenticated identity no longer mapped; refusing mint",
+                },
+            )
+        return q.ValidatedIdentity(
+            issuer=exact.issuer, subject=exact.subject, email=user.email
+        )
     async with get_async_session_context() as session:
         mappings = (
             await session.execute(
@@ -662,12 +762,21 @@ async def _enforce_logout_csrf(request: Request, control_plane) -> None:  # type
 
 
 async def _revoke_request_session(request: Request, control_plane):  # type: ignore[no-untyped-def]
-    """Revoke the presenting session; returns ``(jti, user_id)``."""
+    """Revoke the presenting session; returns ``(jti, user_id)``.
+
+    The session is fully validated (signature, issuer, audience, purpose,
+    expiry, revocation, principal status) before any revocation or audit.
+    Attacker-crafted JWTs fail closed here and never produce a ``logged_out``
+    response or a ``revocation`` audit event for an arbitrary UUID/JTI.
+    """
 
     import jwt as _jwt
 
     from api_service.db.base import get_async_session_context
-    from api_service.services.session_store import DbRevocationStore
+    from api_service.services.session_store import (
+        DbAccountStore,
+        DbRevocationStore,
+    )
     from moonmind.security import omnigent_auth_qualification as q
 
     token = request.cookies.get(control_plane.cookie_name) or (
@@ -678,32 +787,36 @@ async def _revoke_request_session(request: Request, control_plane):  # type: ign
         from moonmind.security.advanced_identity_4124 import OIDCLoginError
 
         raise OIDCLoginError("auth_required", "no session to log out")
-    try:
-        claims = _jwt.decode(token, options={"verify_signature": False})
-        jti, sub = str(claims.get("jti", "")), str(claims.get("sub", ""))
-    except Exception as exc:
-        from moonmind.security.advanced_identity_4124 import OIDCLoginError
-
-        raise OIDCLoginError("auth_invalid", "unreadable session") from exc
-    if not jti or not sub:
-        from moonmind.security.advanced_identity_4124 import OIDCLoginError
-
-        raise OIDCLoginError("auth_invalid", "session without identity")
-    try:
-        user_uuid = __import__("uuid").UUID(sub)
-    except Exception as exc:
-        from moonmind.security.advanced_identity_4124 import OIDCLoginError
-
-        raise OIDCLoginError("auth_invalid", "session without UUID subject") from exc
     async with get_async_session_context() as session:
+        account_store = DbAccountStore(session)
         store = DbRevocationStore(session)
+        try:
+            account = await q.validate_moonmind_session(
+                token, account_store, store, control_plane
+            )
+        except Exception as exc:
+            from moonmind.security.advanced_identity_4124 import OIDCLoginError
+
+            raise OIDCLoginError("auth_invalid", "invalid session") from exc
+        # Validation passed: extract the verified jti for ownership-checked
+        # revocation. Forged material was already rejected above, so reading
+        # the jti here cannot be influenced by an attacker-crafted JWT.
+        try:
+            verified = _jwt.decode(token, options={"verify_signature": False})
+            jti = str(verified.get("jti", ""))
+        except Exception as exc:
+            from moonmind.security.advanced_identity_4124 import OIDCLoginError
+
+            raise OIDCLoginError("auth_invalid", "session without identity") from exc
+        if not jti:
+            from moonmind.security.advanced_identity_4124 import OIDCLoginError
+
+            raise OIDCLoginError("auth_invalid", "session without identity") from None
+        user_uuid = account.user_id
         # Ownership-checked revoke: a session row owned by another user is
         # never touched through this path.
         await store.revoke_session_for_user(jti, user_uuid, reason="logout")
         await session.commit()
-    # Unknown-jti material fails closed at validation; logout of an
-    # unregistered token still clears the browser cookie below.
-    _ = q.MOONMIND_SESSION_PURPOSE
     return jti, user_uuid
 
 
@@ -718,8 +831,10 @@ def _request_peer_host(request: Request) -> str:
 
 
 def _peer_trusted(peer: str, trusted_proxies: tuple[str, ...]) -> bool:
+    # Fail closed on an empty allowlist: trusting every direct client would
+    # let any caller impersonate any proxy subject.
     if not trusted_proxies:
-        return True
+        return False
     if not peer:
         return False
     lowered = peer.strip().lower()
