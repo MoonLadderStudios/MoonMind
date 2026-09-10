@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import copy
+import re
 from typing import Any, Mapping
 
 from fastapi import HTTPException, status
@@ -294,11 +295,13 @@ async def resolve_agent_profile_snapshot(
     consumer_id: str,
     user: User | None,
     replace_existing_usage: bool = False,
+    persist_usage: bool = True,
 ) -> dict[str, Any]:
     """Validate, persist, and return one launch-authoritative profile snapshot.
 
     The caller must invoke this before committing the consumer so the usage row
-    and authored consumer are one database transaction.
+    and authored consumer are one database transaction. Candidate compilation
+    may set persist_usage=False and publish usage with the final consumer revision.
     """
     profile_id = str(selection.get("profileId") or "").strip()
     if not profile_id:
@@ -564,6 +567,8 @@ async def resolve_agent_profile_snapshot(
         "upstreamSnapshot": upstream_snapshot,
         "validationResult": version.validation_result,
     }
+    if not persist_usage:
+        return snapshot
     usage = await session.scalar(
         select(OmnigentAgentProfileUsage).where(
             OmnigentAgentProfileUsage.consumer_type == consumer_type,
@@ -765,6 +770,151 @@ async def resolve_default_agent_profile_snapshot(
     )
 
 
+async def refresh_schedule_deployment_snapshot(
+    session: AsyncSession,
+    *,
+    parameters: Mapping[str, Any],
+    consumer_id: str,
+    user: User | None,
+) -> dict[str, Any]:
+    """Advance deployment bindings only when the scheduled semantics are equal.
+
+    Image qualification can move catalog and policy versions independently of
+    a long-lived schedule. Verify durable profile/usage lineage and compare
+    every execution boundary before resolving a replacement snapshot. Existing
+    executions keep their original authority.
+    """
+    from api_service.services.omnigent_policies import OmnigentPolicyService
+
+    compiled = copy.deepcopy(dict(parameters))
+    previous = compiled.get("agentProfileSnapshot") or {}
+    document = previous.get("document") or {}
+    if document.get("schemaVersion") != "moonmind.omnigent-agent-profile.v2":
+        return compiled
+    profile_id = previous.get("profileId")
+    profile = await session.get(OmnigentAgentProfile, profile_id)
+    if profile is None or profile.state != "active" or not profile.active_version:
+        raise ValueError("scheduled Agent Profile is not active")
+    if profile.active_version == previous.get("version"):
+        return compiled
+    versions = {}
+    for number in (previous.get("version"), profile.active_version):
+        versions[number] = await session.scalar(
+            select(OmnigentAgentProfileVersion).where(
+                OmnigentAgentProfileVersion.profile_id == profile_id,
+                OmnigentAgentProfileVersion.version == number,
+            )
+        )
+    old, active = versions[previous.get("version")], versions[profile.active_version]
+    usage = await session.scalar(
+        select(OmnigentAgentProfileUsage).where(
+            OmnigentAgentProfileUsage.consumer_type == "schedule",
+            OmnigentAgentProfileUsage.consumer_id == consumer_id,
+        )
+    )
+    if (
+        old is None
+        or active is None
+        or old.digest != previous.get("digest")
+        or usage is None
+        or usage.profile_id != profile_id
+        or usage.version != previous.get("version")
+        or usage.digest != previous.get("digest")
+        or usage.effective_snapshot != previous
+    ):
+        raise ValueError("scheduled Agent Profile snapshot lineage conflicts")
+
+    def semantics(value: Mapping[str, Any]) -> dict[str, Any]:
+        result = copy.deepcopy(dict(value))
+        result.pop("allowedLaunchPolicyRefs", None)
+        result.get("harness", {}).pop("catalogRef", None)
+        source = result.get("source", {})
+        source.pop("upstreamVersion", None)
+        source.pop("upstreamSnapshotDigest", None)
+        return result
+
+    if semantics(old.document) != semantics(active.document):
+        raise ValueError(
+            "scheduled Agent Profile semantics changed; revise the schedule explicitly"
+        )
+    old_upstream = copy.deepcopy(old.upstream_snapshot or {})
+    active_upstream = copy.deepcopy(active.upstream_snapshot or {})
+    old_upstream.pop("version", None)
+    active_upstream.pop("version", None)
+    if old_upstream != active_upstream:
+        raise ValueError(
+            "scheduled upstream agent metadata changed; revise the schedule explicitly"
+        )
+    # Retain the chosen policy identity, including non-default selections.
+    old_ref = str(previous.get("launchPolicyRef") or "")
+    policy_id, separator, _version = old_ref.rpartition("@")
+    candidates = [
+        ref
+        for ref in active.document.get("allowedLaunchPolicyRefs", [])
+        if ref.rpartition("@")[0] == policy_id
+    ]
+    if not separator or len(candidates) != 1:
+        raise ValueError("scheduled launch policy identity is no longer available")
+    new_ref = candidates[0]
+    policies = OmnigentPolicyService(session)
+    # A predecessor may already be superseded. Its immutable document is
+    # comparison evidence; only the replacement grants new runtime authority.
+    old_policy = await policies.snapshot(policy_id, int(_version))
+    new_policy = await policies.resolve_runtime_snapshot(new_ref)
+    boundaries = []
+    for policy in (old_policy, new_policy):
+        boundary = copy.deepcopy(policy["boundaries"])
+        host = boundary.get("host", {})
+        for field in ("serverImageRef", "hostImageRef"):
+            image_ref = host.get(field)
+            if isinstance(image_ref, str) and re.fullmatch(
+                r"[^\s@]+@sha256:[0-9a-f]{64}", image_ref
+            ):
+                # Only the immutable digest may advance. Registry, repository,
+                # and any authored tag remain part of executable source authority.
+                host[field] = (image_ref.rpartition("@")[0], "sha256")
+        boundaries.append(boundary)
+    if boundaries[0] != boundaries[1]:
+        raise ValueError(
+            "scheduled launch policy boundaries changed; revise the schedule explicitly"
+        )
+
+    refreshed = await resolve_agent_profile_snapshot(
+        session,
+        selection={
+            "profileId": profile_id,
+            "version": active.version,
+            "digest": active.digest,
+            "providerProfileRef": previous.get("providerProfileRef"),
+            "launchPolicyRef": new_ref,
+            "overrides": {
+                section: {
+                    key: copy.deepcopy((document.get(section) or {}).get(key))
+                    for key in set(old.document.get(section) or {})
+                    | set(document.get(section) or {})
+                }
+                for section in _OVERRIDABLE_SECTIONS
+                if section in document or section in old.document
+            },
+        },
+        consumer_type="schedule",
+        consumer_id=consumer_id,
+        user=user,
+        persist_usage=False,
+    )
+    if refreshed.get("upstreamSnapshot") != active.upstream_snapshot:
+        raise ValueError(
+            "resolved upstream agent metadata differs from the checked profile version"
+        )
+    result = compile_agent_profile_snapshot_parameters(compiled, snapshot=refreshed)
+    # Schedule authoring resolves these after profile compilation, so the
+    # persisted top-level selections take precedence over profile defaults.
+    for field in ("model", "effort"):
+        if field in compiled:
+            result[field] = compiled[field]
+    return result
+
+
 async def refresh_managed_bootstrap_snapshot(
     session: AsyncSession,
     *,
@@ -888,6 +1038,7 @@ __all__ = [
     "compile_agent_profile_snapshot_parameters",
     "default_launch_policy_ref",
     "refresh_managed_bootstrap_snapshot",
+    "refresh_schedule_deployment_snapshot",
     "resolve_agent_profile_snapshot",
     "resolve_default_agent_profile_snapshot",
 ]

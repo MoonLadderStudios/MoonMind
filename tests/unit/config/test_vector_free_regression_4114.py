@@ -34,10 +34,10 @@ Matrix-to-evidence mapping (issue required-coverage rows):
   framework and replaces no production path with a fake service.
 - Docs/operations: ``test_env_template_*`` and
   ``test_update_script_*`` prove the shipped examples/scripts do not
-  demand or recreate a vector backend. The active-docs/help residual is
-  explicitly pinned by
-  ``test_docs_operations_residual_pending_sibling_ownership`` (owned by
-  #4106-#4113), not claimed qualified here.
+  demand or recreate a vector backend. ``test_docs_operations_*`` verifies
+  the removed worker-vector guide and README advertising, while
+  ``test_cli_help_*`` checks the real generated help. These bounded public
+  surfaces do not establish dependency cleanup or live qualification.
 
 Negative controls (issue requirement 5): every guard below is proven with a
 fixture that reintroduces the retired capability (transitive requirement,
@@ -571,26 +571,24 @@ def test_update_script_does_not_recreate_vector_backend() -> None:
     assert not re.search(r"\bqdrant\b", code, re.IGNORECASE)
 
 
-def test_docs_operations_residual_pending_sibling_ownership() -> None:
-    """Record the active-docs/help residual owned by #4106-#4113.
-
-    The shipped examples/scripts above are vector-free, but active docs and
-    generated CLI help still describe the not-yet-removed Qdrant capability
-    (e.g. ``README.md``, ``docs/ManagedAgents/WorkerVectorEmbedding.md``,
-    ``moonmind/cli.py`` rag help). This test pins that fact so the
-    docs/operations row cannot be misreported as qualified. When the sibling
-    removal lands, replace these assertions with absence checks and update
-    the matrix mapping accordingly; do not edit shipped docs here to claim
-    removal while the code still ships it.
-    """
+def test_docs_operations_do_not_advertise_retired_vector_backend() -> None:
+    """Verify the public documentation surfaces removed by sibling changes."""
     readme = (REPO_ROOT / "README.md").read_text(encoding="utf-8")
-    assert re.search(r"qdrant", readme, re.IGNORECASE)
-    worker_doc = (
+    assert not re.search(r"qdrant", readme, re.IGNORECASE)
+    assert not (
         REPO_ROOT / "docs/ManagedAgents/WorkerVectorEmbedding.md"
-    ).read_text(encoding="utf-8")
-    assert re.search(r"qdrant", worker_doc, re.IGNORECASE)
-    cli = (REPO_ROOT / "moonmind/cli.py").read_text(encoding="utf-8")
-    assert re.search(r"qdrant", cli, re.IGNORECASE)
+    ).exists()
+
+
+@pytest.mark.parametrize("command", [[], ["worker"], ["manifest"], ["container"]])
+def test_cli_help_does_not_advertise_retired_vector_backend(command: list[str]) -> None:
+    from typer.testing import CliRunner
+
+    from moonmind.cli import app
+
+    result = CliRunner().invoke(app, [*command, "--help"], color=False)
+    assert result.exit_code == 0, result.output
+    assert not re.search(r"\b(qdrant|rag)\b", result.output, re.IGNORECASE)
 
 
 def test_topology_matrix_gaps_are_explicit() -> None:
