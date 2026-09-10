@@ -24,6 +24,18 @@ Contract summary:
   versioned metadata block of a provenance-validated comment drives admission
   and retry decisions. Unsupported formats and inconsistent/missing referenced
   history are rejected explicitly rather than inferred as a fresh start.
+* Production consumption (no parallel reimplementation): admission consumes
+  the portable retry budget through ``attempt_evidence_blocks_admission`` in
+  ``github_issue_lifecycle`` (which honors ``linkedAttempts``/``retryPolicy``
+  context via :func:`derive_retry_state`); progress and release publication
+  run through ``attempt_handoff_activities.publish_attempt_progress`` /
+  ``publish_attempt_release``, which supply the production ``GitHubService``,
+  the canonical installation identity, and the caller-owned trusted-poster
+  allow-list. Workflows never call the GitHub comment endpoints for attempt
+  state directly.
+* Operators provision one stable value per deployment as
+  ``MOONMIND_INSTALLATION_ID`` (see ``.env-template``); there are no
+  competing aliases or silent fallbacks.
 """
 
 from __future__ import annotations
@@ -33,7 +45,7 @@ import json
 import os
 import re
 import secrets
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Any, Mapping, Sequence
 
 #: Single supported metadata schema. Unknown versions fail closed.
@@ -53,7 +65,6 @@ MAX_COMMENT_CHARS = 8000
 PROGRESS_COALESCE_SECONDS = 300
 
 #: Per-field bounds applied before the total-size check.
-_MAX_SUMMARY_CHARS = 500
 _MAX_REPORT_CHARS = 500
 _MAX_VERIFICATION_CHARS = 1000
 _MAX_STOP_EVIDENCE_CHARS = 500
@@ -114,6 +125,11 @@ OUTCOMES = frozenset(
         "no-work",
     }
 )
+
+#: Exact machine-block sentinel emitted by :func:`render_attempt_comment`.
+#: Extraction anchors to this sentinel so untrusted report/verification prose
+#: cannot inject a competing JSON fence earlier in the comment body.
+_METADATA_SENTINEL = f"<!-- {ATTEMPT_COMMENT_FORMAT_VERSION} metadata"
 
 _ATTEMPT_ID_RE = re.compile(r"^att_[0-9a-f]{24}$")
 _INSTALLATION_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{2,127}$")
@@ -469,7 +485,13 @@ def _readable_summary(handoff: AttemptHandoff, metadata: Mapping[str, Any]) -> s
         if parts:
             lines.append("Preserved work: " + "; ".join(parts) + ".")
     lines.append(f"Outcome: **{handoff.outcome}**; next action: **{handoff.next_action}**.")
-    if handoff.remaining_requirements:
+    # Render from the already-truncated metadata values: the raw handoff may
+    # carry unbounded requirement text that would push the final body past the
+    # total bound even though the bounded metadata itself fits.
+    _bounded_remaining = metadata.get("remainingRequirements")
+    if isinstance(_bounded_remaining, list) and _bounded_remaining:
+        lines.append("Remaining: " + "; ".join(str(item) for item in _bounded_remaining[:_MAX_REQUIREMENTS]) + ".")
+    elif handoff.remaining_requirements:
         lines.append("Remaining: " + "; ".join(list(handoff.remaining_requirements)[:_MAX_REQUIREMENTS]) + ".")
     if handoff.verification_summary:
         lines.append(f"Verification: {_truncate(handoff.verification_summary, _MAX_VERIFICATION_CHARS)}")
@@ -611,7 +633,14 @@ def extract_attempt_metadata(body: Any) -> tuple[dict[str, Any] | None, str]:
     )
     if not marker_match:
         return None, "unsupported_format: attempt marker is present but malformed"
-    match = re.search(r"```json\s*(\{.*?\})\s*```", text, re.DOTALL)
+    # Anchor to the dedicated machine-block sentinel: free-text fields such as
+    # lastReport or verificationSummary are untrusted and may themselves
+    # contain JSON fences. Only the fence following the exact sentinel is the
+    # authoritative metadata block.
+    sentinel_idx = text.find(_METADATA_SENTINEL)
+    if sentinel_idx == -1:
+        return None, "unsupported_format: attempt marker without the versioned metadata block"
+    match = re.search(r"```json\s*(\{.*?\})\s*```", text[sentinel_idx:], re.DOTALL)
     if not match:
         return None, "unsupported_format: attempt marker without a machine-readable JSON block"
     try:
@@ -682,6 +711,27 @@ def validate_attempt_handoff(
         return _deny("unsupported_format", "Attempt metadata carries an unsupported outcome.")
     if _string(metadata.get("nextAction")) not in NEXT_ACTIONS:
         return _deny("unsupported_format", "Attempt metadata carries an unsupported next action.")
+    # Authority-sensitive fields must carry their declared JSON types.
+    # Coercion after validation (bool("false") is True) would let a
+    # provenance-valid malformed comment flip stop/sequence semantics, so
+    # mistyped fields fail closed here instead of being coerced later.
+    if "writersStopped" in metadata and not isinstance(metadata.get("writersStopped"), bool):
+        return _deny("unsupported_format", "Attempt metadata writersStopped must be a boolean.")
+    if "updateSeq" in metadata and (
+        not isinstance(metadata.get("updateSeq"), int) or isinstance(metadata.get("updateSeq"), bool)
+    ):
+        return _deny("unsupported_format", "Attempt metadata updateSeq must be an integer.")
+    for _collection_key in ("metRequirements", "remainingRequirements"):
+        _collection = metadata.get(_collection_key)
+        if _collection is not None and (
+            not isinstance(_collection, list) or not all(isinstance(item, str) for item in _collection)
+        ):
+            return _deny("unsupported_format", f"Attempt metadata {_collection_key} must be a list of strings.")
+    _retry_shape = metadata.get("retryHistory")
+    if isinstance(_retry_shape, Mapping) and "operatorHold" in _retry_shape and not isinstance(
+        _retry_shape.get("operatorHold"), bool
+    ):
+        return _deny("unsupported_format", "Attempt metadata retryHistory.operatorHold must be a boolean.")
     predecessor = _string(metadata.get("predecessorAttemptId"))
     if predecessor and not _ATTEMPT_ID_RE.fullmatch(predecessor):
         return _deny("invalid_predecessor", f"Predecessor attempt ID {predecessor!r} is malformed.")
@@ -842,6 +892,55 @@ def should_publish_progress(
 # ---------------------------------------------------------------------------
 
 
+def _referenced_attempt_ids(entry: Mapping[str, Any], *keys: str) -> set[str]:
+    """Collect well-formed attempt IDs retained inside one chain entry.
+
+    ``AttemptHandoff`` serializes accumulated ``retryHistory.failedAttempts``
+    and ``retryHistory.noProgressAttempts`` (including in redaction
+    tombstones), so the references an entry carries are part of the portable
+    retry budget, not free text.
+    """
+    refs: set[str] = set()
+    candidates: list[Any] = []
+    for key in keys:
+        candidates.append(entry.get(key))
+    retry_history = entry.get("retryHistory")
+    if isinstance(retry_history, Mapping):
+        for key in keys:
+            candidates.append(retry_history.get(key))
+    for candidate in candidates:
+        if isinstance(candidate, (list, tuple)):
+            for item in candidate:
+                if isinstance(item, str) and _ATTEMPT_ID_RE.fullmatch(item.strip()):
+                    refs.add(item.strip())
+    return refs
+
+
+def _count_retry_evidence(entries: Sequence[Mapping[str, Any]]) -> tuple[int, int]:
+    """Count failures and no-progress signals as a union of direct and retained evidence.
+
+    Direct per-entry outcomes and retained ``failedAttempts`` /
+    ``noProgressAttempts`` references are unioned by attempt ID so a current
+    handoff carrying retained history cannot silently reset the budget, while
+    visible chain entries are never double-counted.
+    """
+    failed_ids: set[str] = set()
+    no_progress_ids: set[str] = set()
+    for index, entry in enumerate(entries):
+        attempt_id = _string(entry.get("attemptId")) or f"__entry_{index}"
+        if _string(entry.get("outcome")) in {"failed", "blocked"} or bool(entry.get("failed")):
+            failed_ids.add(attempt_id)
+        if bool(entry.get("noProgress")):
+            no_progress_ids.add(attempt_id)
+        failed_ids |= _referenced_attempt_ids(entry, "failedAttempts", "failed_attempt_refs", "failedAttemptRefs")
+        no_progress_ids |= _referenced_attempt_ids(
+            entry, "noProgressAttempts", "no_progress_attempt_refs", "noProgressAttemptRefs"
+        )
+    # References that resolve to a visible chain entry already counted above
+    # add no extra allowance either way; the union keeps them counted once.
+    return len(failed_ids), len(no_progress_ids)
+
+
 def derive_retry_state(
     linked_attempts: Sequence[Mapping[str, Any]],
     *,
@@ -866,8 +965,17 @@ def derive_retry_state(
         return _retry_blocked("invalid_policy", "Retry policy maxAttempts is not an integer.")
     expected_lineage = _string(policy.get("lineageRef") or policy.get("lineage_ref"))
     chain: list[Mapping[str, Any]] = [entry for entry in linked_attempts if isinstance(entry, Mapping)]
-    failures = sum(1 for entry in chain if _string(entry.get("outcome")) in {"failed", "blocked"} or bool(entry.get("failed")))
-    no_progress = sum(1 for entry in chain if bool(entry.get("noProgress")))
+    # A lineage gap (successor referencing a missing predecessor) is unknown
+    # prior work, never a clean slate: block automatic recovery explicitly.
+    if any(
+        bool(entry.get("lineageGap")) or _string(entry.get("missingPredecessor"))
+        for entry in chain
+    ):
+        return _retry_blocked(
+            "lineage_gap",
+            "Linked history contains a lineage gap; unknown prior work blocks automatic recovery.",
+        )
+    failures, no_progress = _count_retry_evidence(chain)
     operator_hold = False
     hold_reason = ""
     cooldown_until = ""
@@ -895,11 +1003,7 @@ def derive_retry_state(
         if isinstance(reset, Mapping) and _string(reset.get("resetBy")) and _string(reset.get("resetReason")) and _string(reset.get("resetAt")):
             reset_index = index
     if reset_index >= 0:
-        failures = sum(
-            1 for entry in chain[reset_index + 1 :]
-            if _string(entry.get("outcome")) in {"failed", "blocked"} or bool(entry.get("failed"))
-        )
-        no_progress = sum(1 for entry in chain[reset_index + 1 :] if bool(entry.get("noProgress")))
+        failures, no_progress = _count_retry_evidence(chain[reset_index + 1 :])
         if not any(
             bool(entry.get("operatorHold"))
             or bool(((entry.get("retryHistory") or {}) if isinstance(entry.get("retryHistory"), Mapping) else {}).get("operatorHold"))
@@ -1048,6 +1152,15 @@ def is_terminal_released(handoff: AttemptHandoff) -> bool:
 # ---------------------------------------------------------------------------
 
 
+def _comment_poster_login(comment: Any) -> str:
+    """Return the normalized GitHub login that authored one listed comment."""
+    if not isinstance(comment, Mapping):
+        return ""
+    user = comment.get("user")
+    login = user.get("login") if isinstance(user, Mapping) else None
+    return str(login or "").strip().lower()
+
+
 async def publish_attempt_handoff(
     *,
     service: Any,
@@ -1057,6 +1170,9 @@ async def publish_attempt_handoff(
     last_publish_ts: float | None = None,
     now_ts: float | None = None,
     force: bool = False,
+    trusted_posters: Sequence[str] | None = None,
+    prior_activity: str | None = None,
+    prior_outcome: str | None = None,
 ) -> dict[str, Any]:
     """Create or update the attempt's own comment through the trusted adapter.
 
@@ -1066,16 +1182,19 @@ async def publish_attempt_handoff(
     overwrite another attempt's comment. A lost create/update response
     surfaces ``outcome_unknown`` with a reconcile-by-marker instruction
     instead of blindly repeating effects.
+
+    ``trusted_posters`` is the caller-supplied provenance allow-list: when
+    provided, only comments authored by those logins participate in
+    reconciliation, so a copied machine marker from any other poster can
+    neither force ``conflicting_copies`` nor steer the write decision. A
+    released handoff may always perform its initial publication (creation);
+    the no-more-writes rule applies once the remote comment is already
+    released or names a successor. Stale local updates (local ``updateSeq``
+    at/below the published remote seq with divergent content) are refused
+    instead of overwriting newer terminal evidence.
     """
     import time as _time
 
-    if is_terminal_released(handoff):
-        return {
-            "ok": False,
-            "reasonCode": "terminal_released_no_resume",
-            "summary": "Released attempts perform no further issue-state or PR writes.",
-            "commentId": None,
-        }
     shape_error = _validate_handoff_shapes(handoff)
     if shape_error:
         return {"ok": False, "reasonCode": "invalid_handoff", "summary": shape_error, "commentId": None}
@@ -1090,21 +1209,17 @@ async def publish_attempt_handoff(
     if render_error:
         code = "comment_blocked_by_scan" if "outbound scan" in render_error else "comment_render_failed"
         return {"ok": False, "reasonCode": code, "summary": render_error, "commentId": None}
+    trusted: set[str] | None = None
+    if trusted_posters is not None:
+        trusted = {str(login).strip().lower() for login in trusted_posters if str(login).strip()}
+        if not trusted:
+            return {
+                "ok": False,
+                "reasonCode": "invalid_trusted_posters",
+                "summary": "trusted_posters must be a non-empty allow-list of GitHub logins.",
+                "commentId": None,
+            }
     current_ts = float(now_ts) if now_ts is not None else _time.time()
-    activity_changed = bool(force)
-    if not should_publish_progress(
-        last_publish_ts=last_publish_ts,
-        now_ts=current_ts,
-        activity_changed=activity_changed,
-        outcome_changed=False,
-        force=force,
-    ):
-        return {
-            "ok": True,
-            "reasonCode": "coalesced",
-            "summary": "Routine progress coalesced within the bounded rate limit; no GitHub write performed.",
-            "commentId": None,
-        }
     listed = await service.list_issue_comments(repo=repository, issue_number=issue_number)
     if not listed.get("ok"):
         if listed.get("reasonCode") == "outcome_unknown":
@@ -1123,6 +1238,15 @@ async def publish_attempt_handoff(
     comments = listed.get("comments") or []
     if not isinstance(comments, list):
         return {"ok": False, "reasonCode": "malformed_list", "summary": "Issue comment listing returned malformed evidence.", "commentId": None}
+    ignored_untrusted = 0
+    if trusted is not None:
+        provenanced: list[Any] = []
+        for comment in comments:
+            if isinstance(comment, Mapping) and _comment_poster_login(comment) in trusted:
+                provenanced.append(comment)
+            elif isinstance(comment, Mapping):
+                ignored_untrusted += 1
+        comments = provenanced
     decision = reconcile_attempt_comments(comments, attempt_id=handoff.attempt_id)
     if decision["action"] == "attention":
         return {
@@ -1131,18 +1255,105 @@ async def publish_attempt_handoff(
             "summary": decision["summary"],
             "commentId": None,
         }
+    local_meta, _ = extract_attempt_metadata(body)
+    local_digest = _metadata_digest(local_meta) if local_meta is not None else ""
     if decision["action"] == "update":
         assert decision["commentId"] is not None
+        remote_body = ""
+        for comment in comments:
+            if not isinstance(comment, Mapping):
+                continue
+            try:
+                candidate_id = int(comment.get("id"))  # type: ignore[arg-type]
+            except (TypeError, ValueError):
+                continue
+            if candidate_id == int(decision["commentId"]):
+                remote_body = str(comment.get("body") or "")
+                break
+        remote_meta, remote_error = extract_attempt_metadata(remote_body)
+        if remote_meta is None:
+            return {
+                "ok": False,
+                "reasonCode": "malformed_remote" if remote_error else "outcome_unknown",
+                "summary": remote_error or "Own attempt comment is unreadable; no overwrite is authorized.",
+                "commentId": decision["commentId"],
+            }
+        remote_digest = _metadata_digest(remote_meta)
+        remote_seq = remote_meta.get("updateSeq")
+        if not isinstance(remote_seq, int) or isinstance(remote_seq, bool):
+            return {
+                "ok": False,
+                "reasonCode": "malformed_remote",
+                "summary": "Own attempt comment carries a mistyped updateSeq; no overwrite is authorized.",
+                "commentId": decision["commentId"],
+            }
+        if _string(remote_meta.get("activity")) == ACTIVITY_RELEASED:
+            if remote_digest == local_digest:
+                return {
+                    "ok": True,
+                    "reasonCode": "already_released",
+                    "summary": f"Attempt comment {decision['commentId']} is already released; no further write performed.",
+                    "commentId": decision["commentId"],
+                }
+            return {
+                "ok": False,
+                "reasonCode": "terminal_released_no_resume",
+                "summary": "Remote attempt comment is already released; a resumed process must not overwrite terminal evidence.",
+                "commentId": decision["commentId"],
+            }
+        if _string(remote_meta.get("successorAttemptId")) and remote_digest != local_digest:
+            return {
+                "ok": False,
+                "reasonCode": "successor_recorded",
+                "summary": "Remote attempt comment names a successor; a resumed process must not overwrite superseded state.",
+                "commentId": decision["commentId"],
+            }
+        if remote_digest != local_digest and is_stale_local_update(
+            local_seq=handoff.update_seq, remote_seq=int(remote_seq)
+        ):
+            return {
+                "ok": False,
+                "reasonCode": "stale_local_update",
+                "summary": (
+                    f"Local updateSeq {handoff.update_seq} does not advance published remote seq {remote_seq}; "
+                    "a resumed old process must not overwrite newer remote state."
+                ),
+                "commentId": decision["commentId"],
+            }
+        if prior_activity is not None:
+            activity_changed = bool(force) or (prior_activity != handoff.activity)
+        else:
+            activity_changed = bool(force) or (_string(remote_meta.get("activity")) != handoff.activity)
+        if prior_outcome is not None:
+            outcome_changed = prior_outcome != handoff.outcome
+        else:
+            outcome_changed = _string(remote_meta.get("outcome")) != handoff.outcome
+        if not should_publish_progress(
+            last_publish_ts=last_publish_ts,
+            now_ts=current_ts,
+            activity_changed=activity_changed,
+            outcome_changed=outcome_changed,
+            force=force,
+        ):
+            return {
+                "ok": True,
+                "reasonCode": "coalesced",
+                "summary": "Routine progress coalesced within the bounded rate limit; no GitHub write performed.",
+                "commentId": None,
+            }
         updated = await service.update_issue_comment(
             repo=repository,
             comment_id=int(decision["commentId"]),
             body=body,
         )
         if updated.get("ok"):
+            summary = f"Updated attempt comment {decision['commentId']}."
+            if ignored_untrusted:
+                summary += f" Ignored {ignored_untrusted} untrusted same-marker copies."
             return {
                 "ok": True,
                 "reasonCode": "updated",
-                "summary": f"Updated attempt comment {decision['commentId']}.",
+                "summary": summary,
                 "commentId": decision["commentId"],
             }
         if updated.get("reasonCode") == "outcome_unknown":
@@ -1158,12 +1369,35 @@ async def publish_attempt_handoff(
             "summary": str(updated.get("summary") or "Comment update failed."),
             "commentId": decision["commentId"],
         }
+    # Create path: initial publication (including the first released terminal
+    # state) is always authorized; only routine re-publication coalesces.
+    if prior_activity is not None:
+        create_activity_changed = bool(force) or (prior_activity != handoff.activity)
+    else:
+        create_activity_changed = bool(force)
+    create_outcome_changed = (prior_outcome != handoff.outcome) if prior_outcome is not None else False
+    if not should_publish_progress(
+        last_publish_ts=last_publish_ts,
+        now_ts=current_ts,
+        activity_changed=create_activity_changed,
+        outcome_changed=create_outcome_changed,
+        force=force,
+    ):
+        return {
+            "ok": True,
+            "reasonCode": "coalesced",
+            "summary": "Routine progress coalesced within the bounded rate limit; no GitHub write performed.",
+            "commentId": None,
+        }
     created = await service.create_issue_comment(repo=repository, issue_number=issue_number, body=body)
     if created.get("ok"):
+        summary = f"Created attempt comment {created.get('commentId')}."
+        if ignored_untrusted:
+            summary += f" Ignored {ignored_untrusted} untrusted same-marker copies."
         return {
             "ok": True,
             "reasonCode": "created",
-            "summary": f"Created attempt comment {created.get('commentId')}.",
+            "summary": summary,
             "commentId": created.get("commentId"),
         }
     if created.get("reasonCode") == "outcome_unknown":
