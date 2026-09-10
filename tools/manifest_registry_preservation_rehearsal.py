@@ -338,12 +338,15 @@ def check_disposition_table(repo_root: Path = REPO_ROOT) -> StepResult:
             "A field name alone is not proof that data is disposable; each row needs an owner.",
         )
     models = _read_text(repo_root / "api_service/db/models.py") or ""
-    code = _code_text(models)
+    # The retired registry schema remains authoritative in migration ancestry,
+    # while shared historical fields must still exist in the current models.
+    initial = repo_root / "api_service/migrations/versions/0b8e4befb8e5_initial_clean_migration.py"
+    code = _code_text(_read_text(initial) or "")
     absent_dedicated = [col for col in DEDICATED_REGISTRY_COLUMNS if col not in code]
     if absent_dedicated:
         return StepResult(
             "disposition-table", "failed",
-            "Disposition disagrees with code: dedicated registry columns absent from models.py: "
+            "Disposition disagrees with code: dedicated registry columns absent from initial migration: "
             + ", ".join(absent_dedicated) + ".",
         )
     absent_shared = [m for m in SHARED_RETAINED_MARKERS if m not in models]
@@ -377,12 +380,18 @@ def collect_inventory_survey(repo_root: Path = REPO_ROOT) -> dict[str, Any]:
         "manifest_sync_service": sync_svc,
         "manifests_router": router,
         "temporal_service": service_py,
+        "registry_retirement_migration": repo_root / "api_service/migrations/versions/376_drop_manifest_registry_4192.py",
     }.items():
         text = _read_text(path)
-        survey["sources"][key] = "present" if text is not None else "missing"
+        if text is not None:
+            survey["sources"][key] = "present"
+        elif path in (manifests_svc, sync_svc, router) and not path.exists():
+            survey["sources"][key] = "retired-absent"
+        else:
+            survey["sources"][key] = "missing"
     models = _read_text(models_path) or ""
     models_code = _code_text(models)
-    survey["findings"]["manifest_table_present"] = '__tablename__ = "manifest"' in models_code
+    survey["findings"]["manifest_table_model_present"] = '__tablename__ = "manifest"' in models_code
     survey["findings"]["manifest_record_present"] = "class ManifestRecord" in models_code
     svc_text = _read_text(manifests_svc) or ""
     sync_text = _read_text(sync_svc) or ""
@@ -459,7 +468,7 @@ def _migration_heads(repo_root: Path) -> list[str]:
 
 
 def check_inventory_survey(repo_root: Path = REPO_ROOT) -> StepResult:
-    """Verify the survey matches the expected pre-removal checkout state."""
+    """Verify retired source surfaces and retained historical authority (not live data)."""
     survey = collect_inventory_survey(repo_root)
     missing = [k for k, v in survey["sources"].items() if v == "missing"]
     if missing:
@@ -468,22 +477,26 @@ def check_inventory_survey(repo_root: Path = REPO_ROOT) -> StepResult:
             "Inventory survey unavailable; unreadable sources: " + ", ".join(missing) + ".",
         )
     findings = survey["findings"]
-    if not findings.get("manifest_table_present"):
+    remaining = [
+        key for key in ("manifests_service", "manifest_sync_service", "manifests_router")
+        if survey["sources"][key] != "retired-absent"
+    ]
+    remaining.extend(
+        key for key in (
+            "manifest_table_model_present", "manifest_record_present",
+            "writers_active", "worker_callback_present",
+        ) if findings.get(key)
+    )
+    if remaining:
         return StepResult(
             "inventory-survey", "failed",
-            "Survey disagrees with pre-removal baseline: manifest table marker absent from models.py. "
-            "Removal-plan source/scope no longer matches the checkout.",
+            "Incomplete registry retirement; native source surfaces remain: "
+            + ", ".join(remaining) + ".",
         )
-    if not findings.get("writers_active"):
+    if not findings.get("shared_enum_present") or not findings.get("shared_manifest_ref_present"):
         return StepResult(
             "inventory-survey", "failed",
-            "Survey finds no active registry writers, but the removal plan expects active writers pre-drain. "
-            "Either the inventory probe is stale or writers were removed without this runbook.",
-        )
-    if not findings.get("shared_enum_present"):
-        return StepResult(
-            "inventory-survey", "failed",
-            "Shared MoonMind.ManifestIngest type string absent; generic historical evidence already broken.",
+            "Shared MoonMind.ManifestIngest type or manifest_ref absent; historical evidence broken.",
         )
     if findings.get("old_revisions_import_manifest_runtime"):
         return StepResult(
@@ -500,9 +513,10 @@ def check_inventory_survey(repo_root: Path = REPO_ROOT) -> StepResult:
         )
     return StepResult(
         "inventory-survey", "completed",
-        "Pre-removal footprint confirmed: manifest table + active writers/callback present, "
-        f"shared ManifestIngest history present, migration chain self-contained with single head {heads[0]}. "
-        "Destructive application therefore stays gated (writers not stopped).",
+        "Retired registry model, writer services and callback router absent from checkout; "
+        f"shared ManifestIngest history retained, migration chain self-contained with single head {heads[0]}. "
+        "Source absence does not establish live database state or deployment drain; "
+        "preservation and owner authorization remain separate prerequisites.",
     )
 
 
@@ -1023,36 +1037,18 @@ def check_failure_injection() -> StepResult:
 # -- Migration gate -----------------------------------------------------------------
 
 def check_migration_gate(repo_root: Path = REPO_ROOT) -> StepResult:
-    """Verify upgrade-to-head works and the destructive step stays gated."""
-    survey = collect_inventory_survey(repo_root)
-    heads = survey["findings"].get("migration_heads") or []
-    if len(heads) != 1:
-        return StepResult(
-            "migration-gate", "failed",
-            f"Migration graph must have exactly one head; found: {', '.join(heads)}.",
-        )
-    if survey["findings"].get("old_revisions_import_manifest_runtime"):
-        return StepResult(
-            "migration-gate", "failed",
-            "Migration chain imports removed runtime modules; fresh migration to head would break.",
-        )
-    if not survey["findings"].get("manifest_table_present"):
-        return StepResult(
-            "migration-gate", "failed",
-            "Manifest table already absent while writers may remain; upgrade path unclear.",
-        )
-    if not survey["findings"].get("writers_active"):
-        return StepResult(
-            "migration-gate", "blocked",
-            "Writers already stopped in checkout; destructive migration needs #4188 drain evidence before proceeding.",
-        )
+    """Check the retired source graph without claiming a live upgrade or authorization."""
+    inventory = check_inventory_survey(repo_root)
+    if inventory.status != "completed":
+        return StepResult("migration-gate", inventory.status, inventory.evidence)
+    heads = _migration_heads(repo_root)
     return StepResult(
         "migration-gate", "completed",
-        f"Migration graph check to head {heads[0]} passes without importing removed Manifest runtime modules "
-        "(chain self-contained, ancestry kept; live-database fresh migration and "
-        "populated upgrade are not exercised here, so this is a graph check only); "
-        "existing-database upgrade removing registry ownership "
-        "stays gated on stopped writers + verified preservation + owner authorization (writers still active).",
+        f"Migration graph check to head {heads[0]} passes with registry retirement "
+        "present and no surviving registry source surfaces (graph check only). "
+        "Live-database fresh migration, populated upgrade, writer drain and preservation "
+        "are not exercised here; deployment qualification and owner authorization remain blocked "
+        "until separately evidenced.",
     )
 
 

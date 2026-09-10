@@ -2693,6 +2693,96 @@ async def test_standalone_omnigent_resolver_rejects_unowned_continuation_without
     assert expected["parentState"] == "failed"
 
 
+@pytest.mark.parametrize("pre_flattened_history", [False, True])
+async def test_recorded_pr_resolver_verdict_crosses_terminal_authority_without_retry(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    pre_flattened_history: bool,
+) -> None:
+    """Replay #4221/#4222 from raw Skill evidence through both authority owners."""
+
+    replay_id = "pr-resolver-validated-verdict-retry"
+    manifest = load_replay(replay_id, "manifest.json")
+    expected = load_replay(replay_id, "expected-outcome.json")
+    workspace = tmp_path / "repo"
+    contract = manifest["request"]["terminalContract"]
+    evidence_path = workspace / contract["relativePath"]
+    evidence_path.parent.mkdir(parents=True)
+    evidence_path.write_text(
+        json.dumps(load_replay(replay_id, "terminal-evidence.json")),
+        encoding="utf-8",
+    )
+    request = AgentExecutionRequest.model_validate(
+        {
+            **manifest["request"],
+            "workspaceSpec": {"workspacePath": str(workspace)},
+        }
+    )
+    provider_result = AgentRunResult.model_validate(manifest["providerResult"])
+    assert provider_result.failure_class is None
+    assert not any(key.startswith("terminalContract") for key in provider_result.metadata)
+    activities = TemporalAgentRuntimeActivities()
+    activity_calls: list[str] = []
+
+    async def execute_activity(name: str, payload: dict, **kwargs: object) -> dict:
+        activity_calls.append(name)
+        assert name == "agent_runtime.evaluate_terminal_evidence"
+        route = agent_run_module.DEFAULT_ACTIVITY_CATALOG.resolve_activity(name)
+        assert kwargs["task_queue"] == route.task_queue
+        assert payload["workspaceOwnerWorkflowId"] == request.correlation_id
+        assert payload["workspaceOwnerStepExecutionId"] == request.idempotency_key
+        assert payload["terminalContract"]["executionRef"] == contract["executionRef"]
+        # Exercise the actual Activity entrypoint with the worker-bound JSON
+        # invocation shape, never a synthesized terminal-contract verdict.
+        evaluated = await activities.agent_runtime_evaluate_terminal_evidence(
+            json.loads(json.dumps(payload))
+        )
+        return json.loads(evaluated.model_dump_json(by_alias=True))
+
+    monkeypatch.setattr(agent_run_module, "execute_typed_activity", execute_activity)
+    monkeypatch.setattr(
+        run_workflow_module.workflow,
+        "patched",
+        lambda patch: not (
+            pre_flattened_history
+            and patch
+            == run_workflow_module.RUN_TERMINAL_CONTRACT_RETRY_FLATTENED_OUTPUTS_PATCH
+        ),
+    )
+    result = await MoonMindAgentRun()._evaluate_terminal_contract(
+        request=request, result=provider_result
+    )
+    assert activity_calls == ["agent_runtime.evaluate_terminal_evidence"] * expected[
+        "evaluationActivityCalls"
+    ]
+    assert result.failure_class == expected["failureClass"]
+    assert result.provider_error_code == expected["providerErrorCode"]
+    assert result.summary == expected["summary"]
+    assert result.metadata["terminalContractOutcome"] == expected[
+        "terminalContractOutcome"
+    ]
+    assert result.metadata["terminalContractRecoveryOutcome"] == expected[
+        "terminalContractRecoveryOutcome"
+    ]
+    assert result.metadata["terminalContractMissingEvidence"] == []
+    assert "terminalContractContinuationCount" not in result.metadata
+
+    parent = MoonMindRunWorkflow()
+    # Preserve the child workflow serialization boundary before projection.
+    step_result = parent._map_agent_run_result(
+        AgentRunResult.model_validate_json(result.model_dump_json(by_alias=True))
+    )
+    assert step_result["status"] == "FAILED"
+    assert "metadata" not in step_result["outputs"]
+    assert step_result["outputs"]["prResolverReason"] == "ci_failures"
+    assert step_result["outputs"]["summary"] == expected["summary"]
+    retryable = parent._activity_result_retryable(
+        step_result, failure_message="execution_error", tool_type="agent_runtime"
+    )
+    expected_key = "preFlattenedRetryable" if pre_flattened_history else "currentRetryable"
+    assert retryable is expected[expected_key]
+
+
 async def test_omnigent_merge_resolver_recompiles_child_plan_before_launch(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

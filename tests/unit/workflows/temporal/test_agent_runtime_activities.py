@@ -7091,6 +7091,50 @@ async def test_terminal_evidence_activity_keeps_runtime_failure_summary_over_ver
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("runtime_failed", [False, True])
+@pytest.mark.parametrize("text", ["x", "\u754c", "\U0001f600"])
+async def test_terminal_evidence_activity_bounds_resolver_verdict_text(
+    tmp_path: Path,
+    runtime_failed: bool,
+    text: str,
+) -> None:
+    workspace = tmp_path / "repo"
+    result_path = workspace / "var" / "pr_resolver" / "result.json"
+    result_path.parent.mkdir(parents=True)
+    payload = {
+        **_RECORDED_BLOCKED_RESOLVER_RESULT,
+        "final_reason": text * 20000,
+        "next_step": text * 20000,
+    }
+    result_path.write_text(json.dumps(payload), encoding="utf-8")
+    activities = TemporalAgentRuntimeActivities()
+    runtime_result = {"summary": "Runtime completed"}
+    if runtime_failed:
+        runtime_result.update(
+            failureClass="execution_error", providerErrorCode="disconnected"
+        )
+    result = await activities.agent_runtime_evaluate_terminal_evidence(
+        {
+            "workspacePath": str(workspace),
+            "terminalContract": _recorded_resolver_contract(),
+            "result": runtime_result,
+        }
+    )
+    assert result.failure_class == "execution_error"
+    assert result.metadata["terminalContractRecoveryOutcome"] == "skill_terminal_verdict"
+    assert len(result.metadata["prResolverReason"].encode("utf-8")) <= 512
+    assert len(result.metadata["prResolverNextStep"].encode("utf-8")) <= 512
+    assert result.metadata["prResolverReason"].endswith("...")
+    assert json.loads(result_path.read_text(encoding="utf-8")) == payload
+    if runtime_failed:
+        assert result.summary == "Runtime completed"
+        assert result.provider_error_code == "disconnected"
+        assert "prResolverVerdictSummary" in result.metadata
+    else:
+        assert result.provider_error_code == "PR_RESOLVER_MANUAL_REVIEW"
+
+
+@pytest.mark.asyncio
 async def test_terminal_evidence_activity_names_missing_pr_resolver_evidence(
     tmp_path: Path,
 ) -> None:

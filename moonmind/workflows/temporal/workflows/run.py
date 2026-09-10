@@ -14727,6 +14727,8 @@ class MoonMindRunWorkflow:
             if (
                 terminal_contract_outcome == "terminal_failure"
                 and merge_automation_disposition in {"manual_review", "failed"}
+                and terminal_fields.get("terminalContractRecoveryOutcome")
+                == "skill_terminal_verdict"
             ):
                 return False
             if (

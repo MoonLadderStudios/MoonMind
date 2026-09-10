@@ -108,10 +108,16 @@ PR_RESOLVER_VERDICT_FAILURE_CODES = frozenset(
 )
 
 
-def _first_stripped_text(*values: Any) -> str:
+def _first_compact_verdict_text(*values: Any) -> str:
     for value in values:
         candidate = str(value or "").strip()
         if candidate:
+            # Verdicts can contain raw exception text. Keep the full value in
+            # the terminal-evidence artifact and bound each projected field,
+            # including Unicode, before AgentRunResult metadata validation.
+            encoded = candidate.encode("utf-8")
+            if len(encoded) > 512:
+                return encoded[:509].decode("utf-8", errors="ignore") + "..."
             return candidate
     return ""
 
@@ -126,18 +132,18 @@ def _pr_resolver_verdict_metadata(payload: Mapping[str, Any]) -> dict[str, Any]:
     final = payload.get("final")
     final_payload = dict(final) if isinstance(final, Mapping) else {}
     verdict: dict[str, Any] = {}
-    status = _first_stripped_text(
+    status = _first_compact_verdict_text(
         payload.get("status"),
         payload.get("merge_outcome"),
         final_payload.get("status"),
     )
-    reason = _first_stripped_text(
+    reason = _first_compact_verdict_text(
         payload.get("final_reason"),
         payload.get("reason"),
         final_payload.get("final_reason"),
         final_payload.get("reason"),
     )
-    next_step = _first_stripped_text(
+    next_step = _first_compact_verdict_text(
         payload.get("next_step"),
         payload.get("nextStep"),
         final_payload.get("next_step"),
