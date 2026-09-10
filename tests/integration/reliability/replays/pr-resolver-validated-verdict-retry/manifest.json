@@ -1,0 +1,29 @@
+{
+  "failureShapeId": "pr-resolver-validated-verdict-retry",
+  "incidentWorkflowId": "resolver:pr:4209:head:d71492a5bb89:h:dc64ac4fa7ec2f99:1",
+  "incidentEvidenceRef": "art_01M264P832WTY8ZFRVH9AX88E3",
+  "issues": [
+    4221,
+    4222
+  ],
+  "boundary": "workspace terminal evidence -> agent_runtime.evaluate_terminal_evidence -> MoonMind.AgentRun -> MoonMindRunWorkflow retry classification",
+  "request": {
+    "agentKind": "external",
+    "agentId": "omnigent",
+    "correlationId": "resolver:pr:4209:head:d71492a5bb89:h:dc64ac4fa7ec2f99:1",
+    "idempotencyKey": "resolver:pr:4209:head:d71492a5bb89:h:dc64ac4fa7ec2f99:1:01a08c2f-2c25-7681-8523-04123231942b:node-1:execution:1",
+    "terminalContract": {
+      "contractId": "pr_resolver_terminal.v1",
+      "relativePath": "var/pr_resolver/result.json",
+      "expectedSchemaVersion": "moonmind.pr-resolver-result.v1",
+      "executionRef": "resolver:pr:4209:head:d71492a5bb89:h:dc64ac4fa7ec2f99:1:01a08c2f-2c25-7681-8523-04123231942b:node-1:execution:1"
+    }
+  },
+  "providerResult": {
+    "summary": "Omnigent session completed",
+    "metadata": {
+      "normalizedStatus": "completed"
+    }
+  },
+  "invariant": "Validated Skill verdicts retain their blocker across the real evaluation Activity and child-result projection; the current parent does not retry, while the pre-flattened patch branch retains its historical retry decision."
+}

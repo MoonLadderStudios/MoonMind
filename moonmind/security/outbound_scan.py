@@ -82,6 +82,27 @@ _PRIVATE_KEY_PATTERN = re.compile(
     r"(?is)-----BEGIN [A-Z ]*PRIVATE KEY-----.*?-----END [A-Z ]*PRIVATE KEY-----"
 )
 
+# Redaction sentinels emitted by moonmind.utils.logging.redact_sensitive_text
+# (``[REDACTED]``, ``[REDACTED_PRIVATE_KEY]``, ``[REDACTED_AUTHORIZATION]``,
+# ``[REDACTED_AUTH_PATH]``). A credential-shaped match whose value is exactly
+# one of these sentinels carries no secret and must not block publication of
+# an already-redacted comment.
+_REDACTED_SENTINEL_VALUE_PATTERN = re.compile(
+    r"^\[REDACTED(?:_[A-Z0-9]+)?\]$", re.IGNORECASE
+)
+
+
+def _credential_value_is_redacted_sentinel(match_text: str) -> bool:
+    """Return True when a credential match value is only a redaction sentinel."""
+    separator = max(match_text.rfind("="), match_text.rfind(":"))
+    value = match_text[separator + 1 :].strip() if separator != -1 else ""
+    if len(value) >= 2 and (
+        (value.startswith('"') and value.endswith('"'))
+        or (value.startswith("'") and value.endswith("'"))
+    ):
+        value = value[1:-1].strip()
+    return bool(_REDACTED_SENTINEL_VALUE_PATTERN.match(value))
+
 
 def resolve_high_security_mode(
     explicit: bool | None = None,
@@ -217,6 +238,11 @@ def _scan_text_for_findings(text: str, *, location: str) -> list[OutboundFinding
         ("credential", _SECRET_ASSIGNMENT_PATTERN),
     ):
         for match in pattern.finditer(text):
+            if (
+                category == "credential"
+                and _credential_value_is_redacted_sentinel(match.group(0))
+            ):
+                continue
             redacted_preview = redact_sensitive_text(match.group(0))
             findings.append(
                 OutboundFinding(

@@ -47,6 +47,7 @@ from api_service.api.routers.container_jobs import router as container_jobs_rout
 from api_service.api.routers.mcp_tools import router as mcp_tools_router
 from api_service.api.routers.jira_browser import router as jira_browser_router
 from api_service.api.routers.oauth_sessions import router as oauth_sessions_router
+from api_service.api.routers.advanced_auth_4124 import router as advanced_auth_4124_router
 from api_service.api.routers.profile import router as profile_router
 from api_service.api.routers.recurring_workflows import (
     router as recurring_workflows_router,
@@ -895,6 +896,28 @@ async def _initialize_oidc_provider(app: FastAPI):
         )
     except Exception as exc:
         raise RuntimeError(f"Invalid MoonMind control-plane auth config: {exc}") from exc
+    # Advanced modes fail fast on missing explicit configuration (#4124):
+    # `oidc` needs issuer/client/callback material, `header` needs the
+    # explicitly trusted ingress plus its identity namespace. This keeps a
+    # half-configured deployment from serving an unauthenticated fallback.
+    if production_mode == "oidc":
+        try:
+            from moonmind.security.advanced_identity_4124 import (
+                resolve_oidc_provider_config,
+            )
+
+            resolve_oidc_provider_config()
+        except Exception as exc:
+            raise RuntimeError(f"Invalid generic OIDC configuration: {exc}") from exc
+    elif production_mode == "header":
+        try:
+            from moonmind.security.advanced_identity_4124 import (
+                resolve_trusted_proxy_config,
+            )
+
+            resolve_trusted_proxy_config()
+        except Exception as exc:
+            raise RuntimeError(f"Invalid trusted-proxy configuration: {exc}") from exc
     # Disabled-mode exposure at the deployment boundary.
     try:
         validate_publish_binding(
@@ -1154,6 +1177,10 @@ app.include_router(workflows_router)
 app.include_router(provider_profiles_router, prefix="/api/v1")
 app.include_router(omnigent_agent_profiles_router)
 app.include_router(oauth_sessions_router, prefix="/api/v1")
+# Generic OIDC login/callback/logout for `oidc` mode plus the trusted-header
+# request identity for `header` mode (#4124). Mounted under /api/v1/oidc —
+# never /api/v1/auth/*, which stays unmounted per the #4129 removal manifest.
+app.include_router(advanced_auth_4124_router)
 app.include_router(secrets_router, prefix="/api/v1/secrets")
 app.include_router(settings_router, prefix="/api/v1")
 app.include_router(proxy_router, prefix="/api/v1")

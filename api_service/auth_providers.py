@@ -352,6 +352,46 @@ async def get_default_user_from_db(
         raise HTTPException(status_code=500, detail="Default user not found")
     return user
 
+async def _validate_oidc_cookie_user(request, session) -> User:
+    """Validate the MoonMind OIDC session cookie through shared authority.
+
+    Used by every protected endpoint in ``oidc`` mode so the browser cookie
+    minted by ``/api/v1/oidc/callback`` authenticates workflows, settings,
+    secrets, and other routes — not only the login router.
+    """
+    control_plane = build_moonmind_control_plane_config(mode="oidc")
+    token = request.cookies.get(control_plane.cookie_name) or (
+        (request.headers.get("authorization", "") or "").removeprefix("Bearer ").strip()
+        or None
+    )
+    if not token:
+        raise HTTPException(status_code=401, detail="auth_required")
+    from api_service.services.session_store import (
+        DbAccountStore,
+        DbRevocationStore,
+    )
+    from moonmind.security import omnigent_auth_qualification as _q
+
+    account_store = DbAccountStore(session)
+    revocation = DbRevocationStore(session)
+    try:
+        account = await _q.validate_moonmind_session(
+            token, account_store, revocation, control_plane
+        )
+    except HTTPException:
+        raise
+    except Exception as exc:
+        # Distinguish infrastructure outage (503) from bad credentials (401).
+        from moonmind.security.omnigent_auth_qualification import UnavailableError
+
+        if isinstance(exc, UnavailableError):
+            raise HTTPException(status_code=503, detail="unavailable") from exc
+        raise HTTPException(status_code=401, detail="auth_invalid") from exc
+    user = await session.get(User, account.user_id)
+    if user is None or not user.is_active:
+        raise HTTPException(status_code=401, detail="auth_invalid")
+    return user
+
 
 def get_current_user():
     """Return the shared strict principal dependency.
@@ -360,7 +400,46 @@ def get_current_user():
     cached foreign resolver) so route registration and test dependency
     overrides share one identity while the production mode is still
     evaluated per request inside the dependency.
+
+    ``oidc`` and ``header`` modes dispatch to the qualified #4124
+    dependencies so the generic OIDC session cookie and the trusted-proxy
+    identity honor the same principal as their login/diagnostic flows.
+    All other modes resolve through the #4125 strict session authority
+    (``_strict_current_user``), which evaluates the production mode per
+    request and fails closed without legacy JWT acceptance.
     """
+    from moonmind.security.auth_modes_4120 import get_request_production_mode
+
+    _mode = get_request_production_mode()
+    if _mode == "oidc":
+        # OIDC mode authenticates the MoonMind session cookie minted by the
+        # #4124 callback through the shared #4119/#4121 authority, so normal
+        # API routes honor the same principal as the login flow instead of
+        # requiring a legacy bearer token.
+        from fastapi import Depends as _Depends
+        from fastapi import Request as _Req
+        from api_service.db.base import get_async_session as _GetAsyncSession
+
+        async def _oidc_dependency(
+            request: _Req, session=_Depends(_GetAsyncSession)
+        ):
+            return await _validate_oidc_cookie_user(request, session)
+
+        return _oidc_dependency
+    if _mode == "header":
+        # Trusted-header mode authenticates every protected endpoint through
+        # the same explicitly trusted ingress + #4119 mapping as the
+        # diagnostic route, never only that route.
+        from fastapi import Request as _Req2
+
+        async def _header_dependency(request: _Req2):
+            from api_service.api.routers.advanced_auth_4124 import (
+                get_trusted_proxy_user as _proxy_user,
+            )
+
+            return await _proxy_user(request)
+
+        return _header_dependency
     return _strict_current_user
 
 
