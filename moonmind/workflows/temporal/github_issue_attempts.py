@@ -89,7 +89,9 @@ def resolve_installation_id(
     raise ValueError(
         "No stable installation identity is configured; set MOONMIND_INSTALLATION_ID "
         "(documented alias MOONMIND_DEPLOYMENT_ID) to a value that differs across "
-        "deployments and persists through restart/retry."
+        "deployments and persists through restart/retry. The default Compose path "
+        "exposes MOONMIND_INSTALLATION_ID/MOONMIND_DEPLOYMENT_ID from .env-template "
+        "into worker environments."
     )
 
 
@@ -593,14 +595,22 @@ def _is_trusted_poster(
     return str(poster_type or "").strip().lower() in {"bot", "user", "organization"}
 
 
-_GITHUB_PR_RE = re.compile(r"^https://github\.com/[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+/pull/[1-9]\d*$")
+_GITHUB_PR_RE = re.compile(r"^https://github\.com/([A-Za-z0-9_.-]+)/([A-Za-z0-9_.-]+)/pull/[1-9]\d*$")
 _GITHUB_BRANCH_RE = re.compile(r"^[A-Za-z0-9_.-][A-Za-z0-9_.\-/]{0,199}$")
 _SHA_RE = re.compile(r"^[0-9a-f]{7,64}$")
 
 
 def _check_github_references(handoff: AttemptHandoff) -> str:
-    if handoff.pr_url and not _GITHUB_PR_RE.fullmatch(handoff.pr_url):
-        return f"Referenced PR URL is not a valid GitHub PR: {handoff.pr_url[:80]}."
+    if handoff.pr_url:
+        match = _GITHUB_PR_RE.fullmatch(handoff.pr_url.strip())
+        if not match:
+            return f"Referenced PR URL is not a valid GitHub PR: {handoff.pr_url[:80]}."
+        url_repo = f"{match.group(1)}/{match.group(2)}".lower()
+        if url_repo != handoff.repository.strip().lower():
+            return (
+                f"Referenced PR URL binds {match.group(1)}/{match.group(2)}, "
+                f"not {handoff.repository}."
+            )
     for label, value in (("prHeadSha", handoff.pr_head_sha), ("savedSha", handoff.saved_sha)):
         if value and not _SHA_RE.fullmatch(value.strip().lower()):
             return f"Referenced {label} is not a valid commit SHA."
@@ -874,6 +884,30 @@ def _parse_epoch(value: Any) -> float | None:
     return parsed.timestamp()
 
 
+def _deduplicate_handoffs(
+    lineage: Sequence[AttemptHandoff],
+) -> tuple[list[AttemptHandoff], bool]:
+    """Deduplicate by logical attempt ID.
+
+    Returns ``(unique, has_conflict)``. Identical same-ID copies are one
+    logical attempt per the marker-reconciliation contract; divergent copies
+    with the same ID are malformed history that must surface as attention
+    rather than consuming multiple retry slots.
+    """
+    seen: dict[str, AttemptHandoff] = {}
+    seen_serialized: dict[str, str] = {}
+    has_conflict = False
+    for item in lineage:
+        key = item.attempt_id
+        serialized = json.dumps(item.to_dict(), sort_keys=True, separators=(",", ":"))
+        if key not in seen:
+            seen[key] = item
+            seen_serialized[key] = serialized
+        elif seen_serialized[key] != serialized:
+            has_conflict = True
+    return list(seen.values()), has_conflict
+
+
 def collect_retry_history(
     handoffs: Sequence[AttemptHandoff],
     *,
@@ -892,7 +926,14 @@ def collect_retry_history(
     """
     active = policy or RetryPolicy()
     now = time.time() if now_epoch is None else float(now_epoch)
-    lineage = [item for item in handoffs if isinstance(item, AttemptHandoff)]
+    raw_lineage = [item for item in handoffs if isinstance(item, AttemptHandoff)]
+    lineage, has_conflict = _deduplicate_handoffs(raw_lineage)
+    if has_conflict:
+        return RetryDecision(
+            allowed=False, code=RETRY_MISSING_LINEAGE,
+            detail="Conflicting duplicate attempt IDs observed; attention required.",
+            failed_attempts=len(lineage),
+        )
     if not lineage:
         remaining = max(0, int(active.max_attempts) - 1)
         return RetryDecision(
@@ -920,11 +961,16 @@ def collect_retry_history(
         # generation only when it carries author and reason.
         resets = [item for item in lineage if item.reset_generation == current_generation]
         if any(item.reset_author and item.reset_reason for item in resets):
+            gen_failed = len(resets)
+            gen_no_progress = sum(
+                1 for item in resets
+                if not _preserved_work_summary(item) or _preserved_work_summary(item) == "none"
+            )
             return RetryDecision(
                 allowed=True, code=RETRY_RESET_AUTHORIZED,
                 detail=f"Authorized reset to generation {current_generation} by {resets[0].reset_author}.",
-                remaining_allowance=max(0, int(active.max_attempts) - 1),
-                failed_attempts=0, no_progress_count=0,
+                remaining_allowance=max(0, int(active.max_attempts) - gen_failed),
+                failed_attempts=gen_failed, no_progress_count=gen_no_progress,
             )
         return RetryDecision(
             allowed=False, code=RETRY_MISSING_LINEAGE,
@@ -1001,13 +1047,37 @@ class ReleaseEvaluation:
         return {"released": self.released, "code": self.code, "detail": self.detail}
 
 
+def _label_outcome_verified(label_outcome_observed: str) -> bool:
+    """Return True when the label outcome carries structured read-back evidence.
+
+    Free prose such as ``labels reconciled`` is not proof: the value must name
+    the label transition and the authenticated observation that confirmed it
+    (mutation/read-back boundary), e.g.
+    ``label:status: recovery-needed:added:observed:o/r#4177``. Callers must
+    supply the read-back evidence; this pure helper only validates its shape.
+    """
+    text = str(label_outcome_observed or "").strip().lower()
+    if not text:
+        return False
+    has_label = "label" in text
+    has_transition = any(
+        token in text for token in ("added", "removed", "present", "absent", "set to", "->")
+    )
+    has_observation = any(
+        token in text for token in ("observed", "confirmed", "verified", "read-back", "readback")
+    )
+    return has_label and has_transition and has_observation
+
+
 def evaluate_release(handoff: AttemptHandoff) -> ReleaseEvaluation:
     """Decide whether a terminal comment records a completed release.
 
     The terminal comment may record the intended next disposition before
     label changes (``proposedDisposition``), but ``released`` requires
     confirmed stopped writers, resolved mutations, verified preservation or
-    explicit no-work evidence, and the observed label outcome.
+    explicit no-work evidence, and structured label read-back evidence from
+    the GitHub mutation/read-back boundary (see
+    :func:`_label_outcome_verified`).
     """
     if handoff.activity == ACTIVITY_RELEASED or handoff.released:
         if not handoff.writers_stopped:
@@ -1017,8 +1087,8 @@ def evaluate_release(handoff: AttemptHandoff) -> ReleaseEvaluation:
         preserved = _preserved_work_summary(handoff) != "none"
         if preserved and not handoff.preservation_verified:
             return ReleaseEvaluation(released=False, code=RELEASE_BLOCKED_PRESERVATION, detail="Preserved work is not verified.")
-        if not handoff.label_outcome_observed:
-            return ReleaseEvaluation(released=False, code=RELEASE_BLOCKED_LABELS, detail="Intended label transition was not observed.")
+        if not _label_outcome_verified(handoff.label_outcome_observed):
+            return ReleaseEvaluation(released=False, code=RELEASE_BLOCKED_LABELS, detail="Intended label transition lacks structured mutation/read-back evidence.")
         return ReleaseEvaluation(released=True, code=RELEASE_RELEASED, detail="Release is complete: writers stopped, mutations settled, preservation verified, label outcome observed.")
     return ReleaseEvaluation(
         released=False, code=RELEASE_PROPOSED,
@@ -1104,6 +1174,51 @@ UPDATE_MODE_ANNOUNCE = "announce"
 UPDATE_MODE_PROGRESS = "progress"
 UPDATE_MODE_TERMINAL = "terminal"
 KNOWN_UPDATE_MODES = frozenset({UPDATE_MODE_ANNOUNCE, UPDATE_MODE_PROGRESS, UPDATE_MODE_TERMINAL})
+
+#: Production tool binding for :func:`publish_attempt_handoff`. Workflows and
+#: Activities invoke the handoff lifecycle through this contract via the
+#: trusted ``GitHubService`` boundary (``mm.tool.execute``-compatible):
+#: admission calls :func:`announce_attempt`, routine work calls
+#: :func:`publish_progress`, and finalization calls :func:`publish_terminal`.
+#: The module stays deterministic and side-effect-free; all GitHub reads and
+#: writes run inside :func:`publish_attempt_handoff` through the injected
+#: service factory.
+TOOL_NAME = "github_issue_attempt_handoff.publish"
+ACTIVITY_TYPE = "github.issue_attempt.publish_handoff"
+REQUIRED_CAPABILITIES = ("github", "temporal-activity")
+
+
+async def announce_attempt(
+    inputs: Mapping[str, Any],
+    context: Mapping[str, Any] | None = None,
+    *,
+    github_service_factory: Any = None,
+) -> Any:
+    """Announce a new attempt at the admission boundary."""
+    merged = {**dict(inputs or {}), "updateMode": UPDATE_MODE_ANNOUNCE}
+    return await publish_attempt_handoff(merged, context, github_service_factory=github_service_factory)
+
+
+async def publish_progress(
+    inputs: Mapping[str, Any],
+    context: Mapping[str, Any] | None = None,
+    *,
+    github_service_factory: Any = None,
+) -> Any:
+    """Publish a progress update at the progress boundary (own comment only)."""
+    merged = {**dict(inputs or {}), "updateMode": UPDATE_MODE_PROGRESS}
+    return await publish_attempt_handoff(merged, context, github_service_factory=github_service_factory)
+
+
+async def publish_terminal(
+    inputs: Mapping[str, Any],
+    context: Mapping[str, Any] | None = None,
+    *,
+    github_service_factory: Any = None,
+) -> Any:
+    """Publish a terminal handoff at the finalization boundary."""
+    merged = {**dict(inputs or {}), "updateMode": UPDATE_MODE_TERMINAL}
+    return await publish_attempt_handoff(merged, context, github_service_factory=github_service_factory)
 
 
 def _string_input(inputs: Mapping[str, Any], *names: str) -> str:
@@ -1194,6 +1309,82 @@ def _handoff_from_inputs(
         or str(base.get("labelOutcomeObserved") or ""),
         workflow_link=_string_input(inputs, "workflowLink", "workflow_link") or str(base.get("workflowLink") or ""),
     )
+
+
+_ACTIVE_CONTENTION_ACTIVITIES = frozenset(
+    {ACTIVITY_PREPARING, ACTIVITY_ACTIVE, ACTIVITY_AWAITING_REVIEW, ACTIVITY_RELEASING}
+)
+
+
+def _active_attempt_contention(
+    *,
+    lineage: Sequence[AttemptHandoff],
+    attempt_id: str,
+    inputs: Mapping[str, Any],
+) -> str | None:
+    """Return a contention summary when another attempt is still active.
+
+    A new announcement while another writer is preparing/active/awaiting-review/
+    releasing would create competing shared mutations. Continuations that name
+    the active attempt as their predecessor are allowed; unrelated new IDs are
+    rejected so the advisory ownership check stops competing writers.
+    """
+    active = [
+        item for item in lineage
+        if isinstance(item, AttemptHandoff)
+        and item.attempt_id != attempt_id
+        and item.activity in _ACTIVE_CONTENTION_ACTIVITIES
+    ]
+    if not active:
+        return None
+    predecessor = _string_input(inputs, "predecessorAttemptId", "predecessor_attempt_id")
+    if not predecessor:
+        base = inputs.get("handoff")
+        if isinstance(base, Mapping):
+            predecessor = str(
+                base.get("predecessorAttemptId") or base.get("predecessor_attempt_id") or ""
+            ).strip()
+    active_ids = {item.attempt_id for item in active}
+    if predecessor and predecessor in active_ids:
+        return None
+    latest = active[-1]
+    return (
+        f"Another attempt {latest.attempt_id} is {latest.activity}; "
+        "resolve or link it as predecessor before announcing a competing attempt."
+    )
+
+
+def _apply_policy_cooldown(
+    handoff: AttemptHandoff,
+    *,
+    policy: RetryPolicy | None,
+    inputs: Mapping[str, Any],
+    mode_outcome: str,
+) -> AttemptHandoff:
+    """Persist the configured cooldown deadline at the failure boundary.
+
+    ``RetryPolicy.cooldown_seconds`` is enforced by deriving ``cooldownUntil``
+    when a terminal update records a failure outcome without an explicit
+    deadline, so the next reconstruction honors the policy even when callers
+    omit the optional field. Successful releases never set a cooldown.
+    """
+    if handoff.cooldown_until:
+        return handoff
+    if handoff.released or handoff.activity == ACTIVITY_RELEASED:
+        return handoff
+    if not (policy is not None and int(policy.cooldown_seconds) > 0):
+        return handoff
+    if not str(mode_outcome or "").strip():
+        return handoff
+    now_raw = inputs.get("nowEpoch", inputs.get("now_epoch"))
+    try:
+        now_value = float(now_raw) if now_raw not in (None, "") else time.time()
+    except (TypeError, ValueError):
+        now_value = time.time()
+    deadline = now_value + float(int(policy.cooldown_seconds))
+    from dataclasses import replace
+
+    return replace(handoff, cooldown_until=str(deadline))
 
 
 async def reconstruct_retry_from_comments(
@@ -1339,13 +1530,45 @@ async def publish_attempt_handoff(
         repository=repository, issue_number=issue_number, comments=comments,
         trusted_poster_logins=trusted_posters or None, policy=policy,
     )
+    if reconstruction.get("attention"):
+        first = reconstruction["attention"][0] if isinstance(reconstruction["attention"], list) else {}
+        detail = str((first or {}).get("detail") or "ambiguous remote evidence")
+        code = str((first or {}).get("code") or "attention")
+        return ToolResult(status="FAILED", outputs={"issueRef": issue_ref, "attemptId": attempt_id, "decision": "blocked", "reasonCode": "attention_required", "retry": reconstruction.get("retry"), "summary": f"Refusing admission for {issue_ref}: comment reconstruction reports attention ({code}): {detail}"})
     lineage = [AttemptHandoff.from_dict(item) for item in reconstruction["handoffs"]]
     retry = collect_retry_history(lineage, policy=policy)
+    # Progress/terminal modes update only this attempt's own comment. Resolve
+    # the owned remote comment before rendering so partial updates preserve
+    # durable fields instead of clearing them.
+    observed_handoff: AttemptHandoff | None = None
+    own_comment: Mapping[str, Any] | None = None
+    own_comment_id = 0
+    if mode in {UPDATE_MODE_PROGRESS, UPDATE_MODE_TERMINAL}:
+        own_comment = select_own_comment(attempt_id=attempt_id, comments=comments)
+        if own_comment is None:
+            return ToolResult(status="FAILED", outputs={"issueRef": issue_ref, "attemptId": attempt_id, "decision": "blocked", "reasonCode": "own_comment_missing", "retry": retry.to_dict(), "summary": f"No comment carries attempt {attempt_id}; announce before updating, and never overwrite another attempt's comment."})
+        try:
+            own_comment_id = int(own_comment.get("id") or 0)
+        except (TypeError, ValueError):
+            own_comment_id = 0
+        if not own_comment_id:
+            return ToolResult(status="FAILED", outputs={"issueRef": issue_ref, "attemptId": attempt_id, "decision": "blocked", "reasonCode": "own_comment_missing", "summary": f"Own comment for {attempt_id} has no stable comment ID."})
+        observed_handoff, _ = try_parse_comment_body(own_comment.get("body"))
     try:
+        effective_inputs = dict(inputs)
+        if observed_handoff is not None:
+            explicit_base = inputs.get("handoff")
+            explicit_dict = dict(explicit_base) if isinstance(explicit_base, Mapping) else {}
+            merged_base = {**observed_handoff.to_dict(), **explicit_dict}
+            effective_inputs["handoff"] = merged_base
         handoff = _handoff_from_inputs(
-            inputs=inputs, repository=repository, issue_number=issue_number,
+            inputs=effective_inputs, repository=repository, issue_number=issue_number,
             attempt_id=attempt_id, deployment_id=identity.installation_id, retry=retry,
         )
+        if mode == UPDATE_MODE_TERMINAL and not handoff.released:
+            handoff = _apply_policy_cooldown(
+                handoff, policy=policy, inputs=inputs, mode_outcome=handoff.outcome,
+            )
     except ValueError as exc:
         return ToolResult(status="FAILED", outputs={"issueRef": issue_ref, "attemptId": attempt_id, "decision": "blocked", "reasonCode": "invalid_handoff", "summary": redacted_error_summary(str(exc))})
     # The release gate applies to the observed remote state, not the
@@ -1359,8 +1582,14 @@ async def publish_attempt_handoff(
     if reconciliation.outcome == RECONCILE_CONFLICT:
         return ToolResult(status="FAILED", outputs={"issueRef": issue_ref, "attemptId": attempt_id, "decision": "attention", "reasonCode": "conflicting_copies", "retry": retry.to_dict(), "summary": reconciliation.detail})
     if mode == UPDATE_MODE_ANNOUNCE:
-        if reconciliation.outcome == RECONCILE_CREATE and retry.code == RETRY_HOLD:
-            return ToolResult(status="FAILED", outputs={"issueRef": issue_ref, "attemptId": attempt_id, "decision": "blocked", "reasonCode": "operator_hold", "retry": retry.to_dict(), "summary": f"Refusing a new attempt for {issue_ref} while an operator hold is active; resolve the hold before announcing."})
+        if reconciliation.outcome == RECONCILE_CREATE and not retry.allowed:
+            return ToolResult(status="FAILED", outputs={"issueRef": issue_ref, "attemptId": attempt_id, "decision": "blocked", "reasonCode": retry.code, "retry": retry.to_dict(), "summary": f"Refusing a new attempt for {issue_ref}: retry decision {retry.code}: {retry.detail}"})
+        if reconciliation.outcome == RECONCILE_CREATE:
+            contention = _active_attempt_contention(
+                lineage=lineage, attempt_id=attempt_id, inputs=inputs,
+            )
+            if contention is not None:
+                return ToolResult(status="FAILED", outputs={"issueRef": issue_ref, "attemptId": attempt_id, "decision": "blocked", "reasonCode": "attempt_active", "retry": retry.to_dict(), "summary": contention})
         if reconciliation.outcome in {RECONCILE_REUSE, RECONCILE_DUPLICATE_SAME}:
             existing, _ = try_parse_comment_body(
                 next((comment.get("body") for comment in comments
@@ -1381,16 +1610,13 @@ async def publish_attempt_handoff(
             return ToolResult(status="FAILED", outputs={"issueRef": issue_ref, "attemptId": attempt_id, "decision": "blocked", "reasonCode": str(created.get("reasonCode") or "comment_create_failed"), "retry": retry.to_dict(), "summary": str(created.get("summary"))})
         return ToolResult(status="COMPLETED", outputs={"issueRef": issue_ref, "attemptId": attempt_id, "decision": "announced", "commentId": created.get("commentId"), "retry": retry.to_dict(), "release": evaluate_release(handoff).to_dict(), "summary": f"Announced attempt {attempt_id} on {issue_ref}."})
     # Progress and terminal modes update only this attempt's own comment.
-    own = select_own_comment(attempt_id=attempt_id, comments=comments)
-    if own is None:
+    # The owned comment was already resolved before rendering so partial
+    # updates preserve durable fields.
+    own = own_comment
+    own_id = own_comment_id
+    observed = observed_handoff
+    if own is None or not own_id:
         return ToolResult(status="FAILED", outputs={"issueRef": issue_ref, "attemptId": attempt_id, "decision": "blocked", "reasonCode": "own_comment_missing", "retry": retry.to_dict(), "summary": f"No comment carries attempt {attempt_id}; announce before updating, and never overwrite another attempt's comment."})
-    try:
-        own_id = int(own.get("id") or 0)
-    except (TypeError, ValueError):
-        own_id = 0
-    if not own_id:
-        return ToolResult(status="FAILED", outputs={"issueRef": issue_ref, "attemptId": attempt_id, "decision": "blocked", "reasonCode": "own_comment_missing", "summary": f"Own comment for {attempt_id} has no stable comment ID."})
-    observed, _ = try_parse_comment_body(own.get("body"))
     if observed is not None and not terminal_attempt_may_write(observed):
         return ToolResult(status="FAILED", outputs={"issueRef": issue_ref, "attemptId": attempt_id, "decision": "blocked", "reasonCode": "already_released", "commentId": own_id, "release": evaluate_release(observed).to_dict(), "summary": f"Attempt {attempt_id} is already released or held; no further writes."})
     if mode == UPDATE_MODE_PROGRESS:
@@ -1492,6 +1718,12 @@ __all__ = [
     "UPDATE_MODE_PROGRESS",
     "UPDATE_MODE_TERMINAL",
     "KNOWN_UPDATE_MODES",
+    "TOOL_NAME",
+    "ACTIVITY_TYPE",
+    "REQUIRED_CAPABILITIES",
+    "announce_attempt",
+    "publish_progress",
+    "publish_terminal",
     "reconstruct_retry_from_comments",
     "publish_attempt_handoff",
 ]

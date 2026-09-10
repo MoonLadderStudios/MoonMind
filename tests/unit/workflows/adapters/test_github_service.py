@@ -549,6 +549,8 @@ def test_github_permission_profiles_define_required_modes():
     assert profiles["indexing"].required_permissions == {"Contents": "read"}
     assert profiles["publish"].required_permissions["Contents"] == "write"
     assert profiles["publish"].required_permissions["Pull requests"] == "write"
+    assert profiles["publish"].required_permissions["Issues"] == "write"
+    assert profiles["full_pr_automation"].required_permissions["Issues"] == "write"
     assert profiles["readiness"].required_permissions["Pull requests"] == "read"
     assert profiles["readiness"].required_permissions["Checks"] == "read"
     assert profiles["readiness"].required_permissions["Commit statuses"] == "read"
@@ -564,6 +566,7 @@ async def test_probe_github_token_targets_repo_and_reports_publish_checklist(mon
         side_effect=[
             _mock_get_response(200, {"full_name": "owner/repo"}),
             _mock_get_response(200, {"name": "main"}),
+            _mock_get_response(200, []),
             _mock_get_response(200, []),
         ]
     )
@@ -585,6 +588,7 @@ async def test_probe_github_token_targets_repo_and_reports_publish_checklist(mon
         "https://api.github.com/repos/owner/repo",
         "https://api.github.com/repos/owner/repo/branches/main",
         "https://api.github.com/repos/owner/repo/pulls?per_page=1",
+        "https://api.github.com/repos/owner/repo/issues?per_page=1",
     ]
     checklist = {
         item["permission"]: item for item in result["permissionChecklist"]
@@ -593,6 +597,8 @@ async def test_probe_github_token_targets_repo_and_reports_publish_checklist(mon
     assert checklist["Contents"]["status"] == "verified_read_access"
     assert checklist["Pull requests"]["level"] == "write"
     assert checklist["Pull requests"]["status"] == "verified_read_access"
+    assert checklist["Issues"]["level"] == "write"
+    assert checklist["Issues"]["status"] == "verified_read_access"
     assert checklist["Checks"]["status"] == "not_checked"
     assert any("resource owner" in item for item in result["limitations"])
     assert any("GitHub App" in item for item in result["limitations"])

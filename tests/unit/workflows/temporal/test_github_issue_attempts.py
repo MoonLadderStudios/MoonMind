@@ -243,12 +243,17 @@ def test_proposed_release_is_not_released_until_gates_hold() -> None:
     released = _handoff(activity=attempts.ACTIVITY_RELEASED, released=True, writers_stopped=True,
                         mutations_settled=True, preservation_verified=False,
                         saved_branch="moonmind/save", saved_sha="b" * 40,
-                        label_outcome_observed="status: recovery-needed added")
+                        label_outcome_observed="label:status: recovery-needed:added:observed:o/r#4177")
     assert attempts.evaluate_release(released).code == attempts.RELEASE_BLOCKED_PRESERVATION
     assert attempts.terminal_attempt_may_write(released) is False
+    # Free prose without mutation/read-back evidence never completes release.
+    prose_only = _handoff(activity=attempts.ACTIVITY_RELEASED, released=True, writers_stopped=True,
+                          mutations_settled=True, preservation_verified=True,
+                          label_outcome_observed="labels reconciled")
+    assert attempts.evaluate_release(prose_only).code == attempts.RELEASE_BLOCKED_LABELS
     complete = _handoff(activity=attempts.ACTIVITY_RELEASED, released=True, writers_stopped=True,
                         mutations_settled=True, preservation_verified=True,
-                        label_outcome_observed="labels reconciled")
+                        label_outcome_observed="label:status: recovery-needed:added:observed:o/r#4177")
     assert attempts.evaluate_release(complete).released is True
     assert attempts.terminal_attempt_may_write(complete) is False
     active = _handoff(activity=attempts.ACTIVITY_ACTIVE)
@@ -411,7 +416,7 @@ async def test_terminal_release_gate_and_redaction_on_publish_path() -> None:
     assert terminal.outputs["release"]["code"] == attempts.RELEASE_PROPOSED
     released_inputs = _inputs(attemptId=attempt_id, updateMode="terminal", activity=attempts.ACTIVITY_RELEASED,
                               released=True, writersStopped=True, mutationsSettled=True,
-                              preservationVerified=True, labelOutcomeObserved="recovery-needed added")
+                              preservationVerified=True, labelOutcomeObserved="label:status: recovery-needed:added:observed:o/r#4177")
     released = await attempts.publish_attempt_handoff(released_inputs, {}, github_service_factory=lambda: service)
     assert released.outputs["release"]["released"] is True
     # A reconnecting old process performs no further writes once released.
@@ -445,3 +450,111 @@ def test_missing_referenced_history_never_infers_fresh_start() -> None:
     assert "fresh start" in validation.detail
     decision = attempts.collect_retry_history([], policy=attempts.RetryPolicy(max_attempts=3))
     assert decision.code == attempts.RETRY_OK and decision.remaining_allowance == 2
+
+
+def test_cross_repository_pr_reference_is_rejected() -> None:
+    handoff = _handoff(pr_url="https://github.com/other/project/pull/1")
+    validation = attempts.validate_attempt_comment(
+        body=attempts.render_comment_body(handoff), repository="o/r", issue_number=4177,
+        poster_login="moonmind-bot", poster_type="Bot", trusted_poster_logins=["moonmind-bot"],
+    )
+    assert validation.code == attempts.VALIDATION_REF
+    assert "not o/r" in validation.detail
+
+
+def test_duplicate_attempt_ids_count_once_and_conflicts_need_attention() -> None:
+    base = _handoff()
+    identical = attempts.AttemptHandoff(**{**base.__dict__})
+    decision = attempts.collect_retry_history(
+        [base, identical], policy=attempts.RetryPolicy(max_attempts=3))
+    assert decision.failed_attempts == 1 and decision.remaining_allowance == 2
+    divergent = attempts.AttemptHandoff(
+        **{**base.__dict__, "last_report": "forked content"})
+    conflict = attempts.collect_retry_history(
+        [base, divergent], policy=attempts.RetryPolicy(max_attempts=3))
+    assert conflict.allowed is False and conflict.code == attempts.RETRY_MISSING_LINEAGE
+
+
+def test_reset_generation_counts_existing_attempts() -> None:
+    reset = _handoff(reset_generation=1, reset_author="operator", reset_reason="audited retry reset")
+    decision = attempts.collect_retry_history(
+        [_handoff(), reset], policy=attempts.RetryPolicy(max_attempts=3))
+    assert (decision.allowed, decision.code) == (True, attempts.RETRY_RESET_AUTHORIZED)
+    assert decision.failed_attempts == 1 and decision.remaining_allowance == 2
+
+
+def test_tool_binding_exposes_admission_progress_and_finalization() -> None:
+    assert attempts.TOOL_NAME == "github_issue_attempt_handoff.publish"
+    assert attempts.ACTIVITY_TYPE == "github.issue_attempt.publish_handoff"
+    assert "github" in attempts.REQUIRED_CAPABILITIES
+    assert callable(attempts.announce_attempt)
+    assert callable(attempts.publish_progress)
+    assert callable(attempts.publish_terminal)
+
+
+@pytest.mark.asyncio
+async def test_announce_rejects_disallowed_retry_and_active_contention() -> None:
+    service = _AttemptFakeService()
+    first = await attempts.publish_attempt_handoff(
+        _inputs(), {}, github_service_factory=lambda: service)
+    assert first.status == "COMPLETED"
+    # Exhaustion blocks a new announcement: one prior attempt under maxAttempts=1.
+    exhausted_inputs = _inputs(
+        workflowId="wf-9", runId="run-9",
+        predecessorAttemptId=first.outputs["attemptId"],
+        retryPolicy={"policyId": "default", "maxAttempts": 1},
+    )
+    blocked = await attempts.publish_attempt_handoff(
+        exhausted_inputs, {}, github_service_factory=lambda: service)
+    assert blocked.status == "FAILED"
+    assert blocked.outputs["reasonCode"] == attempts.RETRY_EXHAUSTED
+    # A fresh service with one active attempt blocks an unrelated announcement.
+    fresh = _AttemptFakeService()
+    first_fresh = await attempts.publish_attempt_handoff(
+        _inputs(), {}, github_service_factory=lambda: fresh)
+    assert first_fresh.status == "COMPLETED"
+    contender = await attempts.publish_attempt_handoff(
+        _inputs(workflowId="wf-other", runId="run-other"),
+        {}, github_service_factory=lambda: fresh)
+    assert contender.status == "FAILED"
+    assert contender.outputs["reasonCode"] == "attempt_active"
+    # A continuation naming the active attempt as predecessor is allowed.
+    continuation = await attempts.publish_attempt_handoff(
+        _inputs(workflowId="wf-other", runId="run-other",
+                predecessorAttemptId=first_fresh.outputs["attemptId"]),
+        {}, github_service_factory=lambda: fresh)
+    assert continuation.status == "COMPLETED"
+
+
+@pytest.mark.asyncio
+async def test_progress_preserves_observed_durable_fields() -> None:
+    service = _AttemptFakeService()
+    announced = await attempts.publish_attempt_handoff(
+        _inputs(savedBranch="moonmind/save", savedSha="c" * 40),
+        {}, github_service_factory=lambda: service)
+    attempt_id = announced.outputs["attemptId"]
+    progressed = await attempts.publish_attempt_handoff(
+        _inputs(attemptId=attempt_id, updateMode="progress", lastReport="half done",
+                lastUpdateEpoch=0.0, nowEpoch=10000.0),
+        {}, github_service_factory=lambda: service)
+    assert progressed.outputs["decision"] == "published"
+    parsed = attempts.parse_comment_body(service.comments[0]["body"])
+    assert parsed.last_report == "half done"
+    assert parsed.saved_branch == "moonmind/save"
+    assert parsed.saved_sha == "c" * 40
+
+
+@pytest.mark.asyncio
+async def test_terminal_failure_persists_policy_cooldown() -> None:
+    service = _AttemptFakeService()
+    announced = await attempts.publish_attempt_handoff(
+        _inputs(), {}, github_service_factory=lambda: service)
+    attempt_id = announced.outputs["attemptId"]
+    terminal = await attempts.publish_attempt_handoff(
+        _inputs(attemptId=attempt_id, updateMode="terminal", outcome="failed-tests",
+                nowEpoch=2000000000.0,
+                retryPolicy={"policyId": "default", "maxAttempts": 3, "cooldownSeconds": 3600}),
+        {}, github_service_factory=lambda: service)
+    assert terminal.status == "COMPLETED"
+    parsed = attempts.parse_comment_body(service.comments[0]["body"])
+    assert parsed.cooldown_until == str(2000000000.0 + 3600)
