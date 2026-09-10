@@ -1,0 +1,10 @@
+{
+  "incidentWorkflowId": "mm:10c01da8-b14f-46d5-942f-02d3f1c76860",
+  "activityType": "integration.omnigent.profile_bound_execute",
+  "failureStage": "exact_host_opencode_shell_attestation",
+  "failureCode": "OMNIGENT_HARNESS_BUILD_MISMATCH",
+  "hostVersion": "0.12.0",
+  "hostImageRef": "ghcr.io/moonladderstudios/omnigent-host-moonmind@sha256:e287a238b538629b33287fa9a305a689bc76c043feb5e60ee437fd5df916eebb",
+  "failureShape": "The admitted 0.12 host passed build attestation but probes imported the 0.13-only omnigent.harnesses namespace. No agent session started.",
+  "layouts": ["0.12", "0.13"]
+}

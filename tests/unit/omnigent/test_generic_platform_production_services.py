@@ -6,7 +6,7 @@ import json
 import os
 import subprocess
 import sys
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, datetime
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
@@ -251,30 +251,26 @@ async def test_exact_host_opencode_probe_composes_both_environment_builders() ->
         "-c",
     ]
     assert "from omnigent.host.connect import _build_runner_env" in argv[5]
-    assert (
-        "from omnigent.harnesses.opencode_native.app_server import filtered_server_env"
-        in argv[5]
-    )
-    assert "omnigent.opencode_native_app_server" not in argv[5]
+    assert "opencode_app_server.filtered_server_env" in argv[5]
     assert "moonmind-context" in argv[5]
     assert "env=runner_env" in argv[5]
     assert argv[6:] == ["gh", "auth", "status", "--hostname", "github.com"]
     assert kwargs == {"timeout_seconds": 30.0, "check": False}
 
 
-def _upstream_helper_layout(root: Path, *, drift: str | None = None) -> None:
-    """Write a minimal package mirroring the Omnigent >=0.13.0 helper layout.
+def _upstream_helper_layout(
+    root: Path, *, drift: str | None = None, layout: str = "0.13"
+) -> None:
+    """Write a minimal package mirroring an admitted Omnigent helper layout.
 
     ``drift`` renames one helper the way an upstream release could, so the
     probe wrapper's typed substrate failure can be exercised for real.
     """
 
-    for package in (
-        "omnigent",
-        "omnigent/host",
-        "omnigent/harnesses",
-        "omnigent/harnesses/opencode_native",
-    ):
+    packages = ["omnigent", "omnigent/host"]
+    if layout == "0.13":
+        packages.extend(["omnigent/harnesses", "omnigent/harnesses/opencode_native"])
+    for package in packages:
         (root / package).mkdir(parents=True, exist_ok=True)
         (root / package / "__init__.py").write_text("", encoding="utf-8")
     runner_builder = (
@@ -289,11 +285,18 @@ def _upstream_helper_layout(root: Path, *, drift: str | None = None) -> None:
         encoding="utf-8",
     )
     filter_name = "filtered_serve_env" if drift == "opencode" else "filtered_server_env"
-    (root / "omnigent" / "harnesses" / "opencode_native" / "app_server.py").write_text(
+    app_server = root / (
+        "omnigent/harnesses/opencode_native/app_server.py"
+        if layout == "0.13"
+        else "omnigent/opencode_native_app_server.py"
+    )
+    app_server.write_text(
         "import os\n"
         f"def {filter_name}(*, bridge_dir, auth_secret, extra_env=None):\n"
         "    return {key: value for key, value in os.environ.items() "
-        "if key in ('PATH', 'HOME')}\n",
+        "if key in ('PATH', 'HOME')}\n"
+        "def list_opencode_cli_model_options():\n"
+        f"    return [{{'id': 'replay/model', 'layout': {layout!r}}}]\n",
         encoding="utf-8",
     )
 
@@ -353,8 +356,10 @@ async def test_exact_host_runner_probe_source_runs_against_upstream_layout(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("layout", ["0.12", "0.13"])
 async def test_exact_host_opencode_probe_source_fails_typed_on_upstream_helper_drift(
     tmp_path: Path,
+    layout: str,
 ) -> None:
     probe_source = await _capture_probe_source(
         lambda backend: _run_exact_host_opencode_command(
@@ -364,7 +369,7 @@ async def test_exact_host_opencode_probe_source_fails_typed_on_upstream_helper_d
     env = {"PATH": os.environ["PATH"], "HOME": str(tmp_path)}
 
     drifted = tmp_path / "drifted"
-    _upstream_helper_layout(drifted, drift="opencode")
+    _upstream_helper_layout(drifted, drift="opencode", layout=layout)
     result = subprocess.run(
         [sys.executable, "-c", probe_source, "true"],
         cwd=drifted,
@@ -373,13 +378,13 @@ async def test_exact_host_opencode_probe_source_fails_typed_on_upstream_helper_d
         text=True,
     )
     assert result.returncode == 97
-    assert "moonmind-attestation-substrate-unavailable: ImportError" in result.stderr
+    assert "moonmind-attestation-substrate-unavailable: AttributeError" in result.stderr
     assert "filtered_server_env" in result.stderr
 
     # With the upstream helpers present, a missing MoonMind context shim is a
     # launch-contract failure on the probed path, never a substrate fault.
     current = tmp_path / "current"
-    _upstream_helper_layout(current)
+    _upstream_helper_layout(current, layout=layout)
     result = subprocess.run(
         [sys.executable, "-c", probe_source, "true"],
         cwd=current,
