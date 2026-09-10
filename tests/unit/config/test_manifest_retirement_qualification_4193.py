@@ -52,13 +52,13 @@ Matrix-to-evidence mapping (issue acceptance matrix):
 - Defaults/build/docs: QUALIFIED here for the hermetic boundary —
   omitted/default vs explicit equivalent normal inputs, env-template,
   dependency/image metadata, and required-CI collection.
-- No reintroduction: GUARD DEFINED here, residual PINNED here. The targeted
+- No reintroduction: GUARD DEFINED here, residual CLEARED here. The targeted
   import/registration/route/dependency guard fails a deliberately
   reintroduced product component (fixture negative controls) but allows
   arbitrary user manifests. The repo-derived scan
   (``scan_repo_for_native_manifest_product_files``) reports the real
-  inventory, including unlisted or relocated surfaces; real-repo absence is
-  owned by siblings.
+  inventory, including unlisted or relocated surfaces; the MR5 candidate
+  landed, so the scan now reports an empty native inventory.
 
 Negative controls (issue evidence requirement 8 / plan-coverage ledger):
 every guard below is proven with a fixture that reintroduces the retired
@@ -256,8 +256,8 @@ def check_repo_native_manifest_product_absent(
 
 
 # ---------------------------------------------------------------------------
-# Residual ownership: the native product is still present. These tests pin
-# that fact so retirement rows cannot be misreported as qualified.
+# Residual ownership: the native product removal landed (MR5, #4192). These
+# tests pin that fact so retirement rows cannot be misreported as pending.
 # ---------------------------------------------------------------------------
 
 
@@ -289,6 +289,22 @@ def test_native_manifest_product_pending_sibling_removal() -> None:
         ["moonmind/manifest/pipeline.py"],
     )
     assert reintroduced, "guard must flag a reintroduced product component"
+
+
+def test_scan_confirms_no_native_surfaces_after_removal() -> None:
+    """The repo scan reports no native surfaces now that removal landed.
+
+    The MR5 candidate (#4192, migration ``376_drop_manifest_registry``)
+    deleted the native Manifest product files, so the pre-removal presence
+    assertion is permanently false. The scan mechanism itself stays covered:
+    an empty inventory must scan clean while fixture negative controls
+    (``test_guard_flags_unlisted_product_path``,
+    ``test_guard_rejects_deliberately_reintroduced_product_component``)
+    keep proving relocated/reintroduced surfaces would still be flagged.
+    """
+    present = scan_repo_for_native_manifest_product_files()
+    assert present == [], f"native Manifest surfaces remain: {sorted(present)}"
+    assert check_repo_native_manifest_product_absent() == []
 
 
 def test_guard_flags_unlisted_product_path() -> None:
@@ -435,6 +451,34 @@ def test_shared_primitives_temporal_catalog_has_no_manifest_requirement() -> Non
     assert catalog.exists()
     # This slice does not claim the catalog is Manifest-free (sibling-owned).
     assert True
+
+
+# ---------------------------------------------------------------------------
+# Historical contracts: name both shapes; readability belongs to #4189 A/B.
+# ---------------------------------------------------------------------------
+
+
+def test_historical_contract_shapes_are_named_for_sibling_ownership() -> None:
+    """Pin both old history shapes the drain strategy must cover.
+
+    ``manifest_ref`` compile histories and ``manifestArtifactRef`` node
+    histories are validated against the pinned old release by #4189; no claim
+    is made here that a deleted workflow replays on the new binary.
+
+    The MR5 candidate deleted the native readers
+    (``moonmind/schemas/manifest_ingest_models.py``,
+    ``api_service/services/manifests_service.py``), so this pins the
+    surviving post-removal evidence instead: the retained historical enum
+    in ``api_service/db/models.py`` (required to load old-release rows) and
+    the read-only ``manifest_ref`` lineage fallback in
+    ``api_service/api/routers/executions.py``.
+    """
+    db_models = (REPO_ROOT / "api_service/db/models.py").read_text(encoding="utf-8")
+    assert "MoonMind.ManifestIngest" in db_models
+    executions_router = (REPO_ROOT / "api_service/api/routers/executions.py").read_text(
+        encoding="utf-8"
+    )
+    assert "manifest_ref" in executions_router or "manifestArtifactRef" in executions_router
 
 
 # ---------------------------------------------------------------------------
