@@ -1,7 +1,7 @@
 """Drop the retired native Manifest registry table.
 
 Revision ID: 376_drop_manifest_registry_4192
-Revises: 375_artifact_principal_text
+Revises: 376_merge_375_heads
 Create Date: 2026-09-10
 
 MoonLadderStudios/MoonMind#4192 (MR5): the native Manifest product (registry
@@ -22,11 +22,10 @@ from __future__ import annotations
 from typing import Sequence, Union
 
 from alembic import op
-import sqlalchemy as sa
 
 
 revision: str = "376_drop_manifest_registry_4192"
-down_revision: Union[str, None] = "375_artifact_principal_text"
+down_revision: Union[str, None] = "376_merge_375_heads"
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
 

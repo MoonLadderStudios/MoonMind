@@ -52,7 +52,7 @@ from moonmind.omnigent.execute import (
     normalize_omnigent_observation,
     run_omnigent_execution,
 )
-from moonmind.rag.context_injection import PromptContextResolution
+from moonmind.omnigent.execute import PromptContextResolution
 from moonmind.schemas.agent_runtime_models import AgentExecutionRequest
 
 

@@ -27,7 +27,7 @@ from api_service.api.routers.omnigent_bridge import (
     _require_bridge_enabled,
     workflow_chat_router,
 )
-from api_service.api.routers.retrieval_gateway import get_capability_registry
+from api_service.api.routers.omnigent_bridge import get_capability_registry
 from api_service.auth_providers import get_current_user
 from moonmind.omnigent import native_ui_compat as compat
 from moonmind.omnigent.bridge_config import HOST_PROTOCOL_MODE_PROXY
