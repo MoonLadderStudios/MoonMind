@@ -71,9 +71,13 @@ SCHEDULE_TARGET_FOLLOW_QUALIFIED_DEFAULT = "follow_qualified_default"
 _SCHEDULE_TARGET_UPDATE_POLICIES = frozenset(
     {SCHEDULE_TARGET_PINNED, SCHEDULE_TARGET_FOLLOW_QUALIFIED_DEFAULT}
 )
+# MoonLadderStudios/MoonMind#4192: the native ManifestIngest product is
+# retired. MoonMind.ManifestIngest is intentionally absent from the live
+# recurring catalog: new recurring targets carrying it are rejected
+# actionably in _normalize_target below. Old-release definitions stay
+# readable as replay/drain evidence; they are not schedulable for new work.
 _SUPPORTED_RECURRING_WORKFLOW_TYPES = (
     "MoonMind.UserWorkflow",
-    "MoonMind.ManifestIngest",
 )
 
 class RecurringWorkflowValidationError(ValueError):
@@ -245,6 +249,17 @@ def _normalize_target(target_payload: Mapping[str, Any]) -> dict[str, Any]:
     workflow_type = str(
         target.get("workflowType") or target.get("workflow_type") or ""
     ).strip()
+    # MoonLadderStudios/MoonMind#4192: the native ManifestIngest product is
+    # retired. Reject actionably so old authoring surfaces the removal
+    # instead of a generic unsupported-type message. Old-release definitions
+    # stay readable as replay/drain evidence; they are not normalizable for
+    # new schedules.
+    if workflow_type == "MoonMind.ManifestIngest":
+        raise RecurringWorkflowValidationError(
+            "MoonMind.ManifestIngest was retired "
+            "(MoonLadderStudios/MoonMind#4192): the new release does not "
+            "register or launch manifest ingest workflows."
+        )
     if workflow_type not in _SUPPORTED_RECURRING_WORKFLOW_TYPES:
         raise RecurringWorkflowValidationError(
             "target.workflowType must be one of: "
@@ -277,37 +292,6 @@ def _normalize_target(target_payload: Mapping[str, Any]) -> dict[str, Any]:
         for alias in aliases:
             if alias != camel_key:
                 target.pop(alias, None)
-
-    if workflow_type == "MoonMind.ManifestIngest":
-        manifest_ref = str(
-            _first_mapping_value(
-                target,
-                ("manifestArtifactRef", "manifest_ref", "manifest_artifact_ref"),
-            )
-            or ""
-        ).strip()
-        if not manifest_ref:
-            raise RecurringWorkflowValidationError(
-                "target.manifestArtifactRef is required for MoonMind.ManifestIngest"
-            )
-        target["manifestArtifactRef"] = manifest_ref
-        target.pop("manifest_ref", None)
-        target.pop("manifest_artifact_ref", None)
-        options = target.get("options")
-        if options is None:
-            options = target["initialParameters"].get("options")
-        if options is None:
-            options = {}
-        if not isinstance(options, Mapping):
-            raise RecurringWorkflowValidationError(
-                "target.options must be an object when provided"
-            )
-        target["options"] = dict(options)
-        action = target.get("action")
-        if action is None:
-            action = target["initialParameters"].get("action")
-        if action is not None:
-            target["action"] = str(action).strip() or "apply"
 
     return target
 
@@ -543,14 +527,15 @@ class RecurringWorkflowsService:
         target_payload: Mapping[str, Any],
     ) -> tuple[str, dict[str, Any]]:
         workflow_type = str(target_payload["workflowType"])
+        # MoonLadderStudios/MoonMind#4192: retired product. Targets are
+        # rejected in _normalize_target before dispatch; this guard keeps
+        # direct callers from scheduling ManifestIngest work.
         if workflow_type == "MoonMind.ManifestIngest":
-            return workflow_type, {
-                "workflow_type": workflow_type,
-                "manifest_ref": str(target_payload["manifestArtifactRef"]),
-                "action": str(target_payload.get("action") or "apply").strip()
-                or "apply",
-                "options": dict(target_payload.get("options") or {}),
-            }
+            raise RecurringWorkflowValidationError(
+                "MoonMind.ManifestIngest was retired "
+                "(MoonLadderStudios/MoonMind#4192): the new release does not "
+                "register or launch manifest ingest workflows."
+            )
 
         initial_parameters = dict(target_payload.get("initialParameters") or {})
         system_payload = initial_parameters.get("system")

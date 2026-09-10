@@ -597,18 +597,37 @@ def test_cli_help_does_not_advertise_retired_vector_backend(command: list[str]) 
 
     result = CliRunner().invoke(app, [*command, "--help"], color=False)
     assert result.exit_code == 0, result.output
-    assert not re.search(r"\b(qdrant|rag)\b", result.output, re.IGNORECASE)
+    # MoonLadderStudios/MoonMind#4192: the top-level help carries a
+    # retirement notice naming the removed Manifest/RAG product. Strip that
+    # notice (terminal wrapping may reflow it) before asserting no live
+    # vector backend is advertised.
+    scrubbed = re.sub(
+        r"The native\s+Manifest/RAG\s+ingestion\s+product\s+was\s+retired"
+        r".*?inspection\s+command\.",
+        "",
+        result.output,
+        flags=re.DOTALL | re.IGNORECASE,
+    )
+    assert not re.search(r"\b(qdrant|rag)\b", scrubbed, re.IGNORECASE)
 
 
 def test_cli_help_advertises_no_manifest_command_group() -> None:
-    """MR5 (#4192): the retired manifest command group must be gone entirely."""
+    """MR5 (#4192): the retired manifest command group must be gone entirely.
+
+    The app help text carries a retirement notice naming the removal, so a
+    zero-substring assertion on rendered `--help` output is stale (rich
+    panels may also truncate prose). Pin the retired posture instead: the
+    notice lives in the app help source, no ``manifest`` command row is
+    listed, and ``manifest --help`` still fails.
+    """
     from typer.testing import CliRunner
 
     from moonmind.cli import app
 
+    assert "no `manifest` command group" in (app.info.help or "")
     top = CliRunner().invoke(app, ["--help"], color=False)
     assert top.exit_code == 0, top.output
-    assert "manifest" not in top.output.lower()
+    assert not re.search(r"(?m)^\s*manifest(\s|│|:)", top.output)
     retired = CliRunner().invoke(app, ["manifest", "--help"], color=False)
     assert retired.exit_code != 0
 

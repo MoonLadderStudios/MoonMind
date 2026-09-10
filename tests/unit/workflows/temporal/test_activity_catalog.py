@@ -382,7 +382,11 @@ def test_product_projection_policy_covers_actual_registered_classes():
     names = {workflow._Definition.must_from_class(cls).name for cls in classes}
     scopes = workflow_projection_scopes()
     assert set(scopes) == names
-    assert {name for name in names if scopes[name] == "product"} == {"MoonMind.UserWorkflow", "MoonMind.ManifestIngest"}
+    # MoonLadderStudios/MoonMind#4192: the native ManifestIngest product is
+    # retired. MoonMind.UserWorkflow is the only product-scope workflow;
+    # ManifestIngest rows stay readable as old-release replay/drain evidence
+    # but are never registered or launched by the new release.
+    assert {name for name in names if scopes[name] == "product"} == {"MoonMind.UserWorkflow"}
     for name in names:
         if scopes[name] == "product":
             require_product_projection(name)
