@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import asyncio
 import hashlib
+import logging
 import os
 import re
 from collections.abc import Mapping
@@ -38,6 +40,15 @@ from moonmind.workflows.temporal.runtime.workspace_locators import (
 
 _DEFAULT_PUBLISH_GIT_USER_NAME = "MoonMind Worker"
 _DEFAULT_PUBLISH_GIT_USER_EMAIL = "moonmind-worker@users.noreply.github.com"
+_LOGGER = logging.getLogger(__name__)
+_REMOTE_READ_ATTEMPTS = 4
+# Git collapses libcurl errors into exit 128 and exposes no typed transport
+# status. Classify only its anchored pre-connection diagnostic at this CLI
+# boundary; unknown, authentication, TLS, and repository errors fail closed.
+_PRE_CONNECTION_FAILURE = re.compile(
+    r"\Afatal: unable to access '[^'\n]+': "
+    r"(?:Could not resolve (?:host|proxy): [^\n]+|Failed to connect to [^\n]+)\s*\Z"
+)
 
 
 class OmnigentWorkspacePublicationService:
@@ -181,6 +192,7 @@ class OmnigentWorkspacePublicationService:
         ) -> SimpleNamespace:
             del cwd
             authored = [str(part) for part in command]
+            remote_read = authored[:2] in (["git", "fetch"], ["git", "ls-remote"])
             if authored and authored[0] == "git":
                 authored[1:1] = [
                     "-c",
@@ -192,11 +204,30 @@ class OmnigentWorkspacePublicationService:
                 token,
                 base_env=(dict(env) if env is not None else command_env),
             )
-            code, stdout, stderr = await self._run(
-                *authored,
-                env=selected_env,
-                check=False,
-            )
+            # Retry the read in place, never the agent turn or publication as a
+            # whole. Pushes and local mutations retain their existing authority.
+            for attempt in range(1, _REMOTE_READ_ATTEMPTS + 1):
+                code, stdout, stderr = await self._run(
+                    *authored,
+                    env=selected_env,
+                    check=False,
+                )
+                if (
+                    code != 128
+                    or not remote_read
+                    or not _PRE_CONNECTION_FAILURE.fullmatch(stderr.strip())
+                    or attempt == _REMOTE_READ_ATTEMPTS
+                ):
+                    break
+                delay = 2**attempt
+                _LOGGER.warning(
+                    "Repository publication remote read transport failure; "
+                    "retrying attempt %s/%s in %ss",
+                    attempt + 1,
+                    _REMOTE_READ_ATTEMPTS,
+                    delay,
+                )
+                await asyncio.sleep(delay)
             if check and code != 0:
                 detail = redact_sensitive_text(stderr or stdout or "git failed")
                 raise HarnessPlatformError(
