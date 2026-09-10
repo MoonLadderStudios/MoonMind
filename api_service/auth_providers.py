@@ -432,7 +432,7 @@ def get_current_user():
         # diagnostic route, never only that route.
         from fastapi import Request as _Req2
 
-        async def _header_dependency(request: _Req2):
+        async def _header_dependency(request: _Req2, _session=None):
             from api_service.api.routers.advanced_auth_4124 import (
                 get_trusted_proxy_user as _proxy_user,
             )
