@@ -6,7 +6,6 @@ import {
   type CSSProperties,
   type Dispatch,
   type KeyboardEvent,
-  type ReactElement,
   type ReactNode,
   type SetStateAction,
 } from 'react';
