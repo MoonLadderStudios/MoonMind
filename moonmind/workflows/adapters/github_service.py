@@ -2297,6 +2297,239 @@ class GitHubService:
             }
         )
 
+    # -- issue lifecycle label boundary -----------------------------------
+
+    async def check_issue_label_readiness(
+        self,
+        *,
+        repo: str,
+        issue_number: int,
+        required_labels: list[str],
+        github_token: str | None = None,
+    ) -> dict[str, Any]:
+        """Check label existence and effective issue permissions before claiming work.
+
+        Reuses the repository label path: missing canonical labels are reported
+        with an actionable readiness failure instead of being silently treated
+        as a successful claim. Never broadens credentials.
+        """
+        token, resolution_error = await self.resolve_github_token(
+            github_token,
+            repo=repo,
+        )
+        if not token:
+            return {
+                "ready": False,
+                "reasonCode": "auth_unavailable",
+                "summary": resolution_error or self._missing_auth_summary("check issue labels"),
+            }
+        headers = self._github_headers(token)
+        async with httpx.AsyncClient(timeout=self._timeout) as client:
+            try:
+                issue_response = await client.get(
+                    f"https://api.github.com/repos/{repo}/issues/{issue_number}",
+                    headers=headers,
+                )
+                issue_response.raise_for_status()
+            except httpx.HTTPStatusError as exc:
+                return {
+                    "ready": False,
+                    "reasonCode": "denied" if exc.response.status_code in {403, 404} else "read_failed",
+                    "httpStatus": exc.response.status_code,
+                    "summary": (
+                        f"Issue read failed with HTTP {exc.response.status_code} "
+                        f"for {repo}#{issue_number}. {self._github_permission_summary(exc.response)}"
+                    ).strip(),
+                }
+            except (httpx.TransportError, httpx.TimeoutException) as exc:
+                return {
+                    "ready": False,
+                    "reasonCode": "outcome_unknown",
+                    "summary": f"Issue read result unknown: {exc.__class__.__name__}.",
+                }
+            missing: list[str] = []
+            for label in required_labels:
+                try:
+                    label_response = await client.get(
+                        f"https://api.github.com/repos/{repo}/labels/{label}",
+                        headers=headers,
+                    )
+                    label_response.raise_for_status()
+                except httpx.HTTPStatusError as exc:
+                    if exc.response.status_code == 404:
+                        missing.append(label)
+                    else:
+                        return {
+                            "ready": False,
+                            "reasonCode": "denied" if exc.response.status_code == 403 else "read_failed",
+                            "httpStatus": exc.response.status_code,
+                            "summary": (
+                                f"Label check failed with HTTP {exc.response.status_code} "
+                                f"for {label}. {self._github_permission_summary(exc.response)}"
+                            ).strip(),
+                        }
+                except (httpx.TransportError, httpx.TimeoutException) as exc:
+                    return {
+                        "ready": False,
+                        "reasonCode": "outcome_unknown",
+                        "summary": f"Label check result unknown: {exc.__class__.__name__}.",
+                    }
+        if missing:
+            return {
+                "ready": False,
+                "reasonCode": "missing_labels",
+                "missingLabels": missing,
+                "summary": (
+                    "Required lifecycle labels are missing in "
+                    f"{repo}: {', '.join(missing)}. Create them with authorized "
+                    "scope before claiming work."
+                ),
+            }
+        return {"ready": True, "reasonCode": "ready", "summary": "Issue labels and permissions are ready."}
+
+    async def ensure_lifecycle_label(
+        self,
+        *,
+        repo: str,
+        label: str,
+        color: str = "0e8a16",
+        github_token: str | None = None,
+    ) -> dict[str, Any]:
+        """Create one missing canonical label with authorized scope only."""
+        token, resolution_error = await self.resolve_github_token(
+            github_token,
+            repo=repo,
+        )
+        if not token:
+            return {
+                "ready": False,
+                "reasonCode": "auth_unavailable",
+                "summary": resolution_error or self._missing_auth_summary("create issue labels"),
+            }
+        headers = self._github_headers(token)
+        async with httpx.AsyncClient(timeout=self._timeout) as client:
+            try:
+                response = await client.post(
+                    f"https://api.github.com/repos/{repo}/labels",
+                    headers=headers,
+                    json={"name": label, "color": color},
+                )
+                response.raise_for_status()
+                return {"ready": True, "reasonCode": "created", "summary": f"Created label {label} in {repo}."}
+            except httpx.HTTPStatusError as exc:
+                if exc.response.status_code == 422:
+                    return {"ready": True, "reasonCode": "already_exists", "summary": f"Label {label} already exists in {repo}."}
+                return {
+                    "ready": False,
+                    "reasonCode": "denied" if exc.response.status_code in {401, 403, 404} else "create_failed",
+                    "httpStatus": exc.response.status_code,
+                    "summary": (
+                        f"Label creation failed with HTTP {exc.response.status_code} "
+                        f"for {label}. {self._github_permission_summary(exc.response)}"
+                    ).strip(),
+                }
+            except (httpx.TransportError, httpx.TimeoutException) as exc:
+                return {
+                    "ready": False,
+                    "reasonCode": "outcome_unknown",
+                    "summary": f"Label creation result unknown: {exc.__class__.__name__}.",
+                }
+
+    async def add_issue_labels(
+        self,
+        *,
+        repo: str,
+        issue_number: int,
+        labels: list[str],
+        github_token: str | None = None,
+    ) -> dict[str, Any]:
+        """Add labels without replacing the complete issue label set."""
+        if not labels:
+            return {"ok": True, "reasonCode": "noop", "summary": "No labels to add."}
+        token, resolution_error = await self.resolve_github_token(
+            github_token,
+            repo=repo,
+        )
+        if not token:
+            return {
+                "ok": False,
+                "reasonCode": "auth_unavailable",
+                "summary": resolution_error or self._missing_auth_summary("add issue labels"),
+            }
+        headers = self._github_headers(token)
+        async with httpx.AsyncClient(timeout=self._timeout) as client:
+            try:
+                response = await client.post(
+                    f"https://api.github.com/repos/{repo}/issues/{issue_number}/labels",
+                    headers=headers,
+                    json={"labels": labels},
+                )
+                response.raise_for_status()
+                return {"ok": True, "reasonCode": "added", "summary": f"Added {', '.join(labels)}.", "labels": response.json()}
+            except httpx.HTTPStatusError as exc:
+                return {
+                    "ok": False,
+                    "reasonCode": "denied" if exc.response.status_code in {401, 403, 404} else "add_failed",
+                    "httpStatus": exc.response.status_code,
+                    "summary": (
+                        f"Label add failed with HTTP {exc.response.status_code}. "
+                        f"{self._github_permission_summary(exc.response)}"
+                    ).strip(),
+                }
+            except (httpx.TransportError, httpx.TimeoutException) as exc:
+                return {
+                    "ok": False,
+                    "reasonCode": "outcome_unknown",
+                    "summary": f"Label add result unknown: {exc.__class__.__name__}.",
+                }
+
+    async def remove_issue_label(
+        self,
+        *,
+        repo: str,
+        issue_number: int,
+        label: str,
+        github_token: str | None = None,
+    ) -> dict[str, Any]:
+        """Remove one label without touching unrelated labels."""
+        token, resolution_error = await self.resolve_github_token(
+            github_token,
+            repo=repo,
+        )
+        if not token:
+            return {
+                "ok": False,
+                "reasonCode": "auth_unavailable",
+                "summary": resolution_error or self._missing_auth_summary("remove issue labels"),
+            }
+        headers = self._github_headers(token)
+        async with httpx.AsyncClient(timeout=self._timeout) as client:
+            try:
+                response = await client.delete(
+                    f"https://api.github.com/repos/{repo}/issues/{issue_number}/labels/{label}",
+                    headers=headers,
+                )
+                response.raise_for_status()
+                return {"ok": True, "reasonCode": "removed", "summary": f"Removed {label}."}
+            except httpx.HTTPStatusError as exc:
+                if exc.response.status_code == 404:
+                    return {"ok": True, "reasonCode": "already_absent", "summary": f"Label {label} already absent."}
+                return {
+                    "ok": False,
+                    "reasonCode": "denied" if exc.response.status_code in {401, 403} else "remove_failed",
+                    "httpStatus": exc.response.status_code,
+                    "summary": (
+                        f"Label remove failed with HTTP {exc.response.status_code}. "
+                        f"{self._github_permission_summary(exc.response)}"
+                    ).strip(),
+                }
+            except (httpx.TransportError, httpx.TimeoutException) as exc:
+                return {
+                    "ok": False,
+                    "reasonCode": "outcome_unknown",
+                    "summary": f"Label remove result unknown: {exc.__class__.__name__}.",
+                }
+
 __all__ = [
     "AutomatedReviewRequestResult",
     "CreatePRResult",

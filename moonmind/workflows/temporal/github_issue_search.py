@@ -11,6 +11,12 @@ import httpx
 from markdown_it import MarkdownIt
 
 from moonmind.workflows.adapters.github_service import GitHubService
+from moonmind.workflows.temporal.github_issue_lifecycle import (
+    ELIGIBLE_SETTLED_STATES,
+    SETTLED_RECOVERY_NEEDED,
+    attempt_evidence_blocks_admission,
+    interpret_issue,
+)
 
 
 @dataclass
@@ -209,7 +215,13 @@ _IN_PROGRESS_LABELS = frozenset(
 
 
 def has_in_progress_status(issue: Mapping[str, Any]) -> bool:
-    """Return True when the issue already carries an in-progress status label."""
+    """Return True when the issue already carries an in-progress status label.
+
+    Conservative retained-history input: exact canonical ``status: in-progress``
+    and historical alias spellings all count as in-progress so old selectors
+    never silently reselect them. New admission logic lives in
+    :func:`is_lifecycle_selectable_candidate`.
+    """
     labels = issue.get("labels")
     if not isinstance(labels, list):
         return False
@@ -225,17 +237,72 @@ def has_in_progress_status(issue: Mapping[str, Any]) -> bool:
     return False
 
 
+def is_lifecycle_selectable_candidate(
+    issue: Mapping[str, Any],
+    attempt_context: Mapping[str, Any] | None = None,
+) -> bool:
+    """Return True when the shared lifecycle policy admits the candidate.
+
+    Only Available (fresh) and Recovery-needed (continuation) settled states
+    are selectable, and supplied unresolved active-attempt evidence always
+    blocks admission even when the in-progress label is missing.
+    """
+    labels = issue.get("labels")
+    if isinstance(labels, list):
+        names: list[Any] = []
+        for label in labels:
+            names.append(label.get("name") if isinstance(label, Mapping) else label)
+    else:
+        names = []
+    interpretation = interpret_issue(
+        {"state": issue.get("state", "open"), "labels": names}
+    )
+    if interpretation.settled not in ELIGIBLE_SETTLED_STATES:
+        return False
+    if attempt_evidence_blocks_admission(attempt_context):
+        return False
+    return True
+
+
+def _recovery_handoff_usable(handoff: Mapping[str, Any] | None) -> bool:
+    """Return True when supplied handoff evidence can drive a continuation."""
+    if not isinstance(handoff, Mapping):
+        return False
+
+    def _truthy(value: Any) -> bool:
+        if value is True:
+            return True
+        if isinstance(value, str):
+            return bool(value.strip())
+        if isinstance(value, Mapping):
+            return bool(value)
+        return False
+
+    stopped = handoff.get("predecessor_stopped", handoff.get("predecessorStopped"))
+    usable = handoff.get("handoff_usable", handoff.get("handoffUsable"))
+    return _truthy(stopped) and _truthy(usable)
+
+
 async def resolve_issue(
     *,
     repository: str,
     query: str,
     github_service: GitHubService,
     blockers_from_issue: Callable[[Mapping[str, Any]], Awaitable[list[dict[str, Any]]]],
+    attempt_evidence_resolver: Callable[[Mapping[str, Any]], Awaitable[Mapping[str, Any] | None]] | None = None,
+    recovery_handoff: Mapping[str, Any] | None = None,
 ) -> tuple[int | None, dict[str, Any]]:
     """Select the best search match, or first unblocked open issue, within 500 rows.
 
-    The default selector skips issues already marked with an in-progress status
-    label so concurrent work is not selected twice.
+    The default selector admits only Available and Recovery-needed lifecycle
+    states and skips issues already marked with an in-progress status label so
+    concurrent work is not selected twice. Supplied unresolved active-attempt
+    evidence blocks admission even when the label is missing.
+
+    A Recovery-needed candidate additionally requires usable handoff evidence
+    (``predecessor_stopped`` plus ``handoff_usable``): without it the later
+    start transition denies the continuation deterministically, so the scan
+    passes the candidate over instead of returning it.
     """
 
     if not re.fullmatch(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+", repository):
@@ -320,6 +387,19 @@ async def resolve_issue(
                 normalized["labels"] = [label["name"] for label in labels]
                 if has_in_progress_status(normalized):
                     continue
+                if not is_lifecycle_selectable_candidate(normalized):
+                    continue
+                if (
+                    interpret_issue(
+                        {"state": "open", "labels": normalized["labels"]}
+                    ).settled == SETTLED_RECOVERY_NEEDED
+                    and not _recovery_handoff_usable(recovery_handoff)
+                ):
+                    continue
+                if attempt_evidence_resolver is not None:
+                    attempt_context = await attempt_evidence_resolver(normalized)
+                    if attempt_evidence_blocks_admission(attempt_context):
+                        continue
                 if not query and await blockers_from_issue(normalized):
                     continue
                 return candidate["number"], evidence
