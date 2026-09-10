@@ -24,13 +24,15 @@ if [[ "${1:-}" == "-h" || "${1:-}" == "--help" ]]; then
   exit 0
 fi
 
+if ! command -v python3 >/dev/null 2>&1 || \
+  ! python3 -c 'import sys; sys.exit(sys.version_info < (3, 10))'; then
+  echo "Error: Python 3.10 or newer is required on the host for deployment access checks; install python3 before updating." >&2
+  exit 1
+fi
 if command -v docker >/dev/null 2>&1 && docker compose version >/dev/null 2>&1; then
   COMPOSE_CMD=(docker compose)
-elif command -v docker-compose >/dev/null 2>&1; then
-  COMPOSE_CMD=(docker-compose)
 else
-  echo "Error: docker compose CLI is not available." >&2
-  echo "Install Docker with Compose V2 plugin or legacy docker-compose." >&2
+  echo "Error: Docker Compose V2 is required; install the Docker Compose plugin before updating." >&2
   exit 1
 fi
 
@@ -67,6 +69,12 @@ run_compose() {
 }
 
 SERVICES=("$@")
+ACCESS_ARGS=()
+for service in "${SERVICES[@]}"; do
+  ACCESS_ARGS+=(--service "$service")
+done
+
+python3 "$ROOT_DIR/moonmind/deployment_access.py" "${ACCESS_ARGS[@]}" -- "${COMPOSE_CMD[@]}"
 
 if [[ "$REBUILD" -eq 1 ]]; then
   if [[ ${#BUILD_ARGS[@]} -eq 0 ]]; then
@@ -77,4 +85,5 @@ if [[ "$REBUILD" -eq 1 ]]; then
 else
   run_compose pull "${SERVICES[@]}"
 fi
+python3 "$ROOT_DIR/moonmind/deployment_access.py" "${ACCESS_ARGS[@]}" -- "${COMPOSE_CMD[@]}"
 run_compose up -d --remove-orphans --force-recreate "${SERVICES[@]}"
