@@ -2,10 +2,17 @@
 
 import json
 import os
+import subprocess
+import sys
+from pathlib import Path
 
 import pytest
 
-from moonmind.deployment_access import DeploymentAccessError, validate_access
+from moonmind.deployment_access import (
+    DeploymentAccessError,
+    check_compose_access,
+    validate_access,
+)
 from moonmind.workflows.skills.deployment_execution import HostDockerComposeRunner
 from moonmind.workflows.skills.tool_plan_contracts import ToolFailure
 
@@ -34,6 +41,7 @@ def installed(host="192.0.2.10"):
                 }
             },
             "Config": {"Env": ["AUTH_PROVIDER=disabled", "MOONMIND_TRUSTED_INGRESS=1"]},
+            "NetworkSettings": {"Networks": {"moonmind-test-access_default": {}}},
         }
     ]
 
@@ -94,13 +102,17 @@ def test_unpublished_api_behind_proxy():
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("preserved", [True, False])
+@pytest.mark.parametrize("target", [None, "api", "postgres", "client"])
+@pytest.mark.parametrize("entrypoint", ["worker", "cli"])
 async def test_worker_runner_blocks_before_real_up_subprocess(
-    tmp_path, monkeypatch, preserved
+    tmp_path, monkeypatch, preserved, target, entrypoint
 ):
     # The public runner invocation uses real subprocesses and the same gate as
     # host scripts. Only the Docker daemon is replaced; no deployment is touched.
     (tmp_path / "docker-compose.yaml").write_text("services: {}\n")
     proposed = candidate("192.0.2.10" if preserved else "127.0.0.1")
+    proposed["services"]["postgres"] = {"image": "postgres:test"}
+    proposed["services"]["client"] = {"image": "client:test", "depends_on": {"api": {}}}
     fixture = tmp_path / "fixture.json"
     fixture.write_text(json.dumps({"candidate": proposed, "installed": installed()}))
     fake_bin = tmp_path / "bin"
@@ -131,10 +143,31 @@ else:
     runner = HostDockerComposeRunner(
         project_dir=str(tmp_path), project_name="moonmind-test-access"
     )
-    if preserved:
+    allowed = preserved or target == "postgres"
+    targets = (target,) if target else ()
+    if entrypoint == "cli":
+        command = [
+            sys.executable,
+            str(Path(__file__).resolve().parents[2] / "moonmind/deployment_access.py"),
+        ]
+        if target:
+            command.extend(["--service", target])
+        result = subprocess.run(
+            [*command, "--", "docker", "compose"],
+            cwd=tmp_path,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        assert (result.returncode == 0) == allowed
+        if not allowed:
+            assert "published interfaces/ports" in result.stderr
+        assert not marker.exists()
+        return
+    if allowed:
         result = await runner.up(
             stack="moonmind",
-            command=("docker", "compose", "up", "-d", "api"),
+            command=("docker", "compose", "up", "-d", *targets),
             requested_image="moonmind:test",
         )
         assert result["exitCode"] == 0
@@ -143,8 +176,96 @@ else:
         with pytest.raises(ToolFailure) as exc:
             await runner.up(
                 stack="moonmind",
-                command=("docker", "compose", "up", "-d", "api"),
+                command=("docker", "compose", "up", "-d", *targets),
                 requested_image="moonmind:test",
             )
         assert exc.value.error_code == "DEPLOYMENT_ACCESS_CHANGED"
         assert not marker.exists()
+
+
+@pytest.mark.parametrize("published", [True, False])
+def test_ingress_network_name_survives_compose_key_rename(published):
+    old = installed()
+    proposed = candidate()
+    if not published:
+        old[0]["HostConfig"]["PortBindings"] = None
+        proposed["services"]["api"]["ports"] = []
+    old[0]["NetworkSettings"]["Networks"] = {"operator-ingress": {}}
+    proposed["services"]["api"]["networks"] = {"renamed-key": None}
+    proposed["networks"] = {
+        "renamed-key": {"name": "operator-ingress", "external": True}
+    }
+    validate_access(proposed, old)
+    proposed["networks"]["renamed-key"]["name"] = "different-ingress"
+    with pytest.raises(DeploymentAccessError, match="API network attachments"):
+        validate_access(proposed, old)
+    proposed["services"]["api"].pop("networks")
+    with pytest.raises(DeploymentAccessError, match="API network attachments"):
+        validate_access(proposed, old)
+
+
+@pytest.mark.parametrize(
+    "name", ["OIDC_ISSUER_URL", "OIDC_CLIENT_ID", "OIDC_CLIENT_SECRET"]
+)
+@pytest.mark.parametrize("replacement", [None, "changed-sensitive-value"])
+def test_oidc_login_inputs_cannot_change_silently(name, replacement):
+    old = installed()
+    old[0]["Config"]["Env"] = [
+        "AUTH_PROVIDER=oidc",
+        "MOONMIND_TRUSTED_INGRESS=1",
+        f"{name}=original-sensitive-value",
+    ]
+    proposed = candidate()
+    proposed["services"]["api"]["environment"].update(
+        {"AUTH_PROVIDER": "oidc", name: "original-sensitive-value"}
+    )
+    validate_access(proposed, old)
+    proposed["services"]["api"]["environment"][name] = replacement
+    with pytest.raises(DeploymentAccessError) as exc:
+        validate_access(proposed, old)
+    assert name in str(exc.value)
+    assert "sensitive-value" not in str(exc.value)
+
+
+def test_unrelated_service_still_protects_orphaned_api(tmp_path, monkeypatch):
+    proposed = candidate()
+    proposed["services"] = {"postgres": {}}
+    calls = []
+
+    def run(command, **kwargs):
+        calls.append(command)
+        if "config" in command:
+            payload = proposed
+        elif "ps" in command:
+            return subprocess.CompletedProcess(command, 0, "installed-api", "")
+        else:
+            payload = installed()
+        return subprocess.CompletedProcess(command, 0, json.dumps(payload), "")
+
+    monkeypatch.setattr(subprocess, "run", run)
+    with pytest.raises(DeploymentAccessError, match="removes the installed API"):
+        check_compose_access(
+            ["docker", "compose"], services=["postgres"], remove_orphans=True
+        )
+    calls.clear()
+    check_compose_access(
+        ["docker", "compose"], services=["postgres"], remove_orphans=False
+    )
+    assert len(calls) == 1
+
+
+def test_no_deps_does_not_gate_untouched_api(monkeypatch):
+    proposed = candidate()
+    proposed["services"]["client"] = {"depends_on": {"api": {}}}
+    calls = []
+
+    def run(command, **kwargs):
+        calls.append(command)
+        assert "config" in command
+        return subprocess.CompletedProcess(command, 0, json.dumps(proposed), "")
+
+    monkeypatch.setattr(subprocess, "run", run)
+    check_compose_access(
+        ["docker", "compose"], services=["client"], include_dependencies=False
+    )
+    assert len(calls) == 1

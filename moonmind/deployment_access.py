@@ -6,6 +6,7 @@ Never prints rendered environment variables or Docker inspect payloads.
 
 from __future__ import annotations
 
+import argparse
 import json
 import os
 import subprocess
@@ -31,6 +32,43 @@ def _bindings(rows: Sequence[tuple[str, str, str]]) -> set[tuple[str, str, str]]
     # Empty HostIp means Docker chooses the published interfaces. Keep it
     # distinct from an explicit IPv4 bind: collapsing them can drop IPv6.
     return {(host or "*", port, target) for host, port, target in rows}
+
+
+def _candidate_networks(candidate: Mapping) -> set[str]:
+    api = candidate["services"]["api"]
+    if api.get("network_mode"):
+        return {api["network_mode"]}
+    return {
+        candidate.get("networks", {}).get(key, {}).get("name")
+        or f"{candidate['name']}_{key}"
+        for key in (api.get("networks") or {"default": None})
+    }
+
+
+def _reconciles_api(
+    candidate: Mapping,
+    services: Sequence[str],
+    *,
+    include_dependencies: bool,
+    remove_orphans: bool,
+) -> bool:
+    configured = candidate["services"]
+    if "api" not in configured:
+        return remove_orphans
+    if not services:
+        return True
+    pending = list(services)
+    visited: set[str] = set()
+    while pending:
+        service = pending.pop()
+        if service == "api":
+            return True
+        if service in visited:
+            continue
+        visited.add(service)
+        if include_dependencies:
+            pending.extend(configured[service].get("depends_on") or {})
+    return False
 
 
 def validate_access(candidate: Mapping, containers: Sequence[Mapping]) -> None:
@@ -63,11 +101,17 @@ def validate_access(candidate: Mapping, containers: Sequence[Mapping]) -> None:
         changed = []
         if previous != proposed:
             changed.append("published interfaces/ports")
+        previous_networks = set(container["NetworkSettings"]["Networks"])
+        if not previous_networks <= _candidate_networks(candidate):
+            changed.append("API network attachments")
         old_env = dict(
             entry.split("=", 1) for entry in (container["Config"]["Env"] or [])
         )
         new_env = api.get("environment") or {}
-        for name in ACCESS_SETTINGS:
+        settings = ACCESS_SETTINGS
+        if "oidc" in {old_env.get("AUTH_PROVIDER"), new_env.get("AUTH_PROVIDER")}:
+            settings += ("OIDC_ISSUER_URL", "OIDC_CLIENT_ID", "OIDC_CLIENT_SECRET")
+        for name in settings:
             if (old_env.get(name) or "") != (new_env.get(name) or ""):
                 changed.append(name)
         if changed:
@@ -85,6 +129,9 @@ def check_compose_access(
     *,
     cwd: str | None = None,
     env: Mapping[str, str] | None = None,
+    services: Sequence[str] = (),
+    include_dependencies: bool = True,
+    remove_orphans: bool = True,
 ) -> None:
     """Inspect the same Docker context and Compose inputs used by the updater."""
 
@@ -114,6 +161,13 @@ def check_compose_access(
         project = candidate["name"]
         if not isinstance(project, str) or not project.strip():
             raise ValueError("Missing Compose project identity")
+        if not _reconciles_api(
+            candidate,
+            services,
+            include_dependencies=include_dependencies,
+            remove_orphans=remove_orphans,
+        ):
+            return
         ids = run(
             [
                 "docker",
@@ -140,8 +194,17 @@ def check_compose_access(
 
 
 if __name__ == "__main__":
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--service", action="append", default=[])
+    parser.add_argument("compose", nargs=argparse.REMAINDER)
+    args = parser.parse_args()
+    compose = args.compose[1:] if args.compose[:1] == ["--"] else args.compose
     try:
-        check_compose_access(sys.argv[1:] or ["docker", "compose"], env=os.environ)
+        check_compose_access(
+            compose or ["docker", "compose"],
+            env=os.environ,
+            services=args.service,
+        )
     except DeploymentAccessError as exc:
         print(str(exc), file=sys.stderr)
         sys.exit(1)

@@ -132,10 +132,20 @@ async def test_rendered_binding_matches_production_startup(
                 }
             },
             "Config": {"Env": [f"{key}={value}" for key, value in environment.items()]},
+            "NetworkSettings": {
+                "Networks": {
+                    json.loads(rendered.stdout)["networks"][key]["name"]: {}
+                    for key in api["networks"]
+                }
+            },
         }
     ]
     candidate = json.loads(rendered.stdout)
     validate_access(candidate, previous)
+    previous[0]["NetworkSettings"]["Networks"]["operator-proxy-ingress"] = {}
+    with pytest.raises(DeploymentAccessError, match="API network attachments"):
+        validate_access(candidate, previous)
+    del previous[0]["NetworkSettings"]["Networks"]["operator-proxy-ingress"]
     if expected_host == "127.0.0.1":
         # Replay the actual unpinned-install cutover, using the real newly
         # rendered local default rather than a synthetic replacement config.

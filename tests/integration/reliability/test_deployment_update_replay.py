@@ -123,6 +123,7 @@ if command == "pull":
     save_state(state)
     raise SystemExit(0)
 
+state["orphanRemovalRequested"] = state.get("orphanRemovalRequested", False) or "--remove-orphans" in tail
 up_services = selected_services(tail)
 if "init-db" in up_services:
     config = json.loads(Path(args[args.index("-f") + 1]).read_text())
@@ -340,7 +341,7 @@ async def test_deployment_update_reconciles_non_image_infrastructure(
     state = json.loads(state_path.read_text(encoding="utf-8"))
     assert result.status == "COMPLETED"
     assert result.outputs["status"] == "SUCCEEDED"
-    assert state["accessPreflightCalls"] >= 1
+    assert bool(state.get("accessPreflightCalls", 0)) == state["orphanRemovalRequested"]
     assert state["composeConfigCalls"] >= 4
     assert state["pullServices"] == expected["pullServices"] + (
         ["init-db"] if windows_replay else []
