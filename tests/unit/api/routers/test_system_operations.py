@@ -15,7 +15,7 @@ from api_service.api.routers.system_operations import (
     _get_temporal_execution_service,
     router,
 )
-from api_service.auth_providers import get_current_user
+from api_service.auth_providers import get_current_user, get_current_user_optional
 from api_service.db.base import get_async_session
 from api_service.db.models import Base
 from moonmind.config.settings import settings
@@ -89,8 +89,12 @@ def _override_user(
         for route in router.routes
         if route.dependant is not None
         for dep in route.dependant.dependencies
-        if getattr(dep.call, "__name__", "") == "_current_user_fallback"
-    } or {get_current_user()}
+        if getattr(dep.call, "__name__", "") in {
+            "_current_user_fallback",
+            "_strict_current_user",
+            "_optional_current_user",
+        }
+    } or {get_current_user(), get_current_user_optional()}
     for dependency in dependencies:
         app.dependency_overrides[dependency] = lambda user=user: user
 

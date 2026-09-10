@@ -9,7 +9,7 @@ from fastapi import APIRouter, WebSocket, WebSocketDisconnect, Query, Depends, H
 from sqlalchemy.ext.asyncio import AsyncSession
 from api_service.db.base import get_async_session
 from api_service.db.models import OAuthSessionStatus, User, ManagedAgentOAuthSession
-from api_service.auth import get_jwt_strategy, get_user_manager, UserManager
+from api_service.auth import UserManager, get_user_manager
 import docker
 
 logger = logging.getLogger(__name__)
@@ -24,12 +24,72 @@ _ATTACHABLE_STATUSES = {
 
 async def get_current_user_ws(
     token: str = Query(...),
-    user_manager: UserManager = Depends(get_user_manager)
+    user_manager: UserManager | None = Depends(get_user_manager),
+    db: AsyncSession = Depends(get_async_session),
 ) -> User:
-    strategy = get_jwt_strategy()
-    user = await strategy.read_token(token, user_manager)
-    if not user or not user.is_active:
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid token")
+    """Resolve the WebSocket principal through the qualified session authority.
+
+    ``token`` carries a MoonMind session token (the same material accepted
+    as a cookie or bearer credential on HTTP routes). Legacy
+    application-JWT material fails closed as ``auth_invalid``; stream
+    re-authorization honors the same revocation/generation bound as HTTP.
+    ``user_manager`` is retained as an ignored dependency so existing
+    callers keep working; resolution no longer reads legacy JWTs.
+    """
+    _ = user_manager
+    from moonmind.security.session_authority_4121 import (
+        http_status_for_error,
+        resolve_session_user,
+    )
+
+    from api_service.auth_providers import build_moonmind_control_plane_config
+    from api_service.services.session_store import (
+        DbAccountStore,
+        DbRevocationStore,
+    )
+
+    presented = (token or "").strip() or None
+    if presented is None:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail={"code": "auth_required"},
+        )
+    try:
+        config = build_moonmind_control_plane_config()
+        account = await resolve_session_user(
+            cookie_token=None,
+            bearer_token=presented,
+            account_store=DbAccountStore(db),
+            revocation=DbRevocationStore(db),
+            config=config,
+        )
+    except HTTPException:
+        raise
+    except Exception as exc:
+        status_code, code = http_status_for_error(exc)
+        raise HTTPException(status_code=status_code, detail={"code": code})
+    if account is None:  # pragma: no cover - strict boundary never returns None
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail={"code": "auth_required"},
+        )
+    try:
+        user = await db.get(User, account.user_id)
+    except Exception as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail={"code": "unavailable"},
+        ) from exc
+    if user is None:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail={"code": "auth_invalid"},
+        )
+    if not user.is_active:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail={"code": "inactive"},
+        )
     return user
 
 def _session_is_expired(session: ManagedAgentOAuthSession) -> bool:
@@ -103,7 +163,7 @@ async def terminal_websocket(
     db: AsyncSession = Depends(get_async_session),
 ):
     try:
-        user = await get_current_user_ws(token, user_manager)
+        user = await get_current_user_ws(token, user_manager, db)
     except Exception:
         await websocket.close(code=status.WS_1008_POLICY_VIOLATION)
         return

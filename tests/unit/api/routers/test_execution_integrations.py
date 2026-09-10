@@ -11,7 +11,7 @@ from sqlalchemy.orm import sessionmaker
 from api_service.api.routers import (
     execution_integrations as execution_integrations_router,
 )
-from api_service.auth_providers import get_current_user
+from api_service.auth_providers import get_current_user, get_current_user_optional
 from api_service.db import base as db_base
 from api_service.db.models import Base
 from api_service.main import app
@@ -19,6 +19,7 @@ from moonmind.config.settings import settings
 from moonmind.workflows.temporal.client import WorkflowStartResult
 
 CURRENT_USER_DEP = get_current_user()
+CURRENT_USER_OPTIONAL_DEP = get_current_user_optional()
 
 # ---------------------------------------------------------------------------
 # Module-scoped shared database fixture
@@ -137,9 +138,11 @@ async def _create_monitored_execution(
 
 def _shared_client(shared_user_id):
     """Return an async ASGI context manager with auth override applied."""
-    app.dependency_overrides[CURRENT_USER_DEP] = lambda: SimpleNamespace(
-        id=shared_user_id, is_superuser=False
-    )
+    user = SimpleNamespace(id=shared_user_id, is_superuser=False)
+    # Create/execution routes resolve through the optional boundary; the
+    # strict boundary covers the rest. Override both explicitly (#4125).
+    app.dependency_overrides[CURRENT_USER_DEP] = lambda: user
+    app.dependency_overrides[CURRENT_USER_OPTIONAL_DEP] = lambda: user
     return AsyncClient(transport=ASGITransport(app=app), base_url="http://testserver")
 
 # ---------------------------------------------------------------------------

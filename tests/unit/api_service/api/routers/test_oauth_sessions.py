@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import uuid
+from types import SimpleNamespace
 from datetime import datetime, timedelta, timezone
 
 import pytest
@@ -12,6 +13,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 from sqlalchemy.future import select
 from sqlalchemy.orm import sessionmaker
 
+from api_service.auth_providers import get_current_user
 from api_service.db import base as db_base
 from api_service.db.models import (
     Base,
@@ -66,6 +68,33 @@ def _module_db(tmp_path_factory):
 def client_app(_module_db) -> AsyncClient:
     return AsyncClient(transport=ASGITransport(app=app), base_url="http://testserver")
 
+
+# Fixed explicit test principal for the shared auth boundary (#4125).
+# Production no longer mints environment-driven test identities; ownership
+# seeds below use this UUID instead of the retired ``id=None`` stub.
+TEST_PRINCIPAL_ID = "11111111-2222-4333-8444-555555555555"
+
+
+@pytest.fixture(autouse=True)
+def _default_oauth_test_principal():
+    """Install the explicit test principal for OAuth route-logic tests."""
+    user = SimpleNamespace(
+        id=uuid.UUID(TEST_PRINCIPAL_ID),
+        email="oauth-tests@example.com",
+        is_active=True,
+        is_superuser=True,
+    )
+    missing = object()
+    previous = app.dependency_overrides.get(get_current_user(), missing)
+    app.dependency_overrides[get_current_user()] = lambda user=user: user
+    try:
+        yield user
+    finally:
+        if previous is missing:
+            app.dependency_overrides.pop(get_current_user(), None)
+        else:
+            app.dependency_overrides[get_current_user()] = previous
+
 def _oauth_payload(profile_id: str) -> dict[str, object]:
     return {
         "runtime_id": "codex_cli",
@@ -93,7 +122,7 @@ async def test_create_oauth_session_expires_stale_active_before_conflict_check(
             runtime_id="codex_cli",
             profile_id=stale_profile_id,
             status=OAuthSessionStatus.PENDING,
-            requested_by_user_id="None",
+            requested_by_user_id="11111111-2222-4333-8444-555555555555",
             created_at=datetime.now(timezone.utc) - timedelta(minutes=80),
         )
         session.add(stale)
@@ -309,7 +338,7 @@ async def test_reconnect_oauth_session_preserves_terminal_transport(
                 volume_mount_path="/home/app/.codex",
                 session_transport="moonmind_pty_ws",
                 status=OAuthSessionStatus.FAILED,
-                requested_by_user_id="None",
+                requested_by_user_id="11111111-2222-4333-8444-555555555555",
                 metadata_json={"provider_id": "openai"},
             )
         )
@@ -351,7 +380,7 @@ async def test_oauth_session_response_redacts_secret_like_failure_reason(
                 volume_ref="codex_auth_volume",
                 volume_mount_path="/home/app/.codex",
                 status=OAuthSessionStatus.FAILED,
-                requested_by_user_id="None",
+                requested_by_user_id="11111111-2222-4333-8444-555555555555",
                 failure_reason=f"token={raw_secret} in /home/app/.codex/auth.json",
             )
         )
@@ -401,7 +430,7 @@ async def test_oauth_session_response_includes_safe_provider_profile_summary(
                 volume_mount_path="/home/app/.codex",
                 account_label="codex account",
                 status=OAuthSessionStatus.FAILED,
-                requested_by_user_id="None",
+                requested_by_user_id="11111111-2222-4333-8444-555555555555",
                 failure_reason=f"token={raw_secret} in /home/app/.codex/auth.json",
             )
         )
@@ -462,7 +491,7 @@ async def test_oauth_session_response_omits_profile_summary_for_other_owner(
                 volume_ref="codex_auth_volume",
                 volume_mount_path="/home/app/.codex",
                 status=OAuthSessionStatus.SUCCEEDED,
-                requested_by_user_id="None",
+                requested_by_user_id="11111111-2222-4333-8444-555555555555",
             )
         )
         await session.commit()
@@ -561,7 +590,7 @@ async def test_create_oauth_session_resumes_non_stale_active_for_same_user(
             runtime_id="codex_cli",
             profile_id=profile_id,
             status=OAuthSessionStatus.PENDING,
-            requested_by_user_id="None",
+            requested_by_user_id="11111111-2222-4333-8444-555555555555",
             created_at=datetime.now(timezone.utc) - timedelta(minutes=5),
         )
         session.add(active)
@@ -612,7 +641,7 @@ async def test_create_oauth_session_resumes_newest_active_for_same_user(
                     runtime_id="codex_cli",
                     profile_id=profile_id,
                     status=OAuthSessionStatus.AWAITING_USER,
-                    requested_by_user_id="None",
+                    requested_by_user_id="11111111-2222-4333-8444-555555555555",
                     created_at=now - timedelta(minutes=10),
                 ),
                 ManagedAgentOAuthSession(
@@ -620,7 +649,7 @@ async def test_create_oauth_session_resumes_newest_active_for_same_user(
                     runtime_id="codex_cli",
                     profile_id=profile_id,
                     status=OAuthSessionStatus.AWAITING_USER,
-                    requested_by_user_id="None",
+                    requested_by_user_id="11111111-2222-4333-8444-555555555555",
                     created_at=now - timedelta(minutes=5),
                 ),
             ]
@@ -662,7 +691,7 @@ async def test_create_oauth_session_rejects_duplicate_connected_pty(
                 profile_id=profile_id,
                 status=OAuthSessionStatus.AWAITING_USER,
                 session_transport="moonmind_pty_ws",
-                requested_by_user_id="None",
+                requested_by_user_id="11111111-2222-4333-8444-555555555555",
                 connected_at=datetime.now(timezone.utc),
                 created_at=datetime.now(timezone.utc) - timedelta(minutes=5),
             )
@@ -697,7 +726,7 @@ async def test_create_oauth_session_replaces_active_row_without_running_workflow
                 runtime_id="codex_cli",
                 profile_id=profile_id,
                 status=OAuthSessionStatus.PENDING,
-                requested_by_user_id="None",
+                requested_by_user_id="11111111-2222-4333-8444-555555555555",
                 created_at=datetime.now(timezone.utc) - timedelta(minutes=5),
             )
         )
@@ -825,7 +854,7 @@ async def test_oauth_terminal_attach_returns_one_time_websocket_token(
                 volume_ref="codex_auth_volume",
                 volume_mount_path="/home/app/.codex",
                 status=OAuthSessionStatus.AWAITING_USER,
-                requested_by_user_id="None",
+                requested_by_user_id="11111111-2222-4333-8444-555555555555",
                 terminal_session_id="term_oas_terminalattach1",
                 terminal_bridge_id="br_oas_terminalattach1",
             )
@@ -868,7 +897,7 @@ async def test_oauth_terminal_attach_rejects_existing_pty_connection(
                 profile_id="claude-connected-terminal",
                 status=OAuthSessionStatus.AWAITING_USER,
                 session_transport="moonmind_pty_ws",
-                requested_by_user_id="None",
+                requested_by_user_id="11111111-2222-4333-8444-555555555555",
                 terminal_session_id="term_oas_terminalconnected1",
                 terminal_bridge_id="br_oas_terminalconnected1",
                 connected_at=datetime.now(timezone.utc),
@@ -899,7 +928,7 @@ async def test_claude_oauth_terminal_attach_allows_awaiting_user_with_hash_only_
                 volume_ref="claude_auth_volume",
                 volume_mount_path="/home/app/.claude",
                 status=OAuthSessionStatus.AWAITING_USER,
-                requested_by_user_id="None",
+                requested_by_user_id="11111111-2222-4333-8444-555555555555",
                 terminal_session_id="term_oas_claudepaste01",
                 terminal_bridge_id="br_oas_claudepaste01",
                 expires_at=datetime.now(timezone.utc) + timedelta(minutes=10),
@@ -943,7 +972,7 @@ async def test_oauth_terminal_attach_rejects_expired_session(
                 volume_ref="codex_auth_volume",
                 volume_mount_path="/home/app/.codex",
                 status=OAuthSessionStatus.AWAITING_USER,
-                requested_by_user_id="None",
+                requested_by_user_id="11111111-2222-4333-8444-555555555555",
                 terminal_session_id="term_oas_terminalexpired1",
                 terminal_bridge_id="br_oas_terminalexpired1",
                 expires_at=datetime.now(timezone.utc) - timedelta(seconds=1),
@@ -988,7 +1017,7 @@ async def test_oauth_terminal_message_handler_proxies_to_pty_with_safe_metadata(
     bridge = TerminalBridgeConnection(
         session_id="oas_terminalwspty1",
         terminal_bridge_id="br_oas_terminalwspty1",
-        owner_user_id="None",
+        owner_user_id="11111111-2222-4333-8444-555555555555",
     )
     pty = InMemoryPtyAdapter()
     websocket = _FakeWebSocket()
@@ -1042,7 +1071,7 @@ async def test_oauth_terminal_message_handler_closes_on_pty_write_failure() -> N
     bridge = TerminalBridgeConnection(
         session_id="oas_terminalwsbroken1",
         terminal_bridge_id="br_oas_terminalwsbroken1",
-        owner_user_id="None",
+        owner_user_id="11111111-2222-4333-8444-555555555555",
     )
     websocket = _FakeWebSocket()
 
@@ -1075,7 +1104,7 @@ async def test_oauth_terminal_message_handler_rejects_generic_exec_frame() -> No
     bridge = TerminalBridgeConnection(
         session_id="oas_terminalwsreject1",
         terminal_bridge_id="br_oas_terminalwsreject1",
-        owner_user_id="None",
+        owner_user_id="11111111-2222-4333-8444-555555555555",
     )
     websocket = _FakeWebSocket()
 
@@ -1122,7 +1151,7 @@ async def test_finalize_oauth_session_rejects_failed_volume_verification(
                 volume_ref="codex_auth_volume",
                 volume_mount_path="/home/app/.codex",
                 status=OAuthSessionStatus.AWAITING_USER,
-                requested_by_user_id="None",
+                requested_by_user_id="11111111-2222-4333-8444-555555555555",
                 account_label="codex account",
             )
         )
@@ -1256,7 +1285,7 @@ async def test_finalize_oauth_session_registers_oauth_home_codex_profile(
                 volume_ref="codex_auth_volume",
                 volume_mount_path="/home/app/.codex",
                 status=OAuthSessionStatus.AWAITING_USER,
-                requested_by_user_id="None",
+                requested_by_user_id="11111111-2222-4333-8444-555555555555",
                 account_label="codex account",
                 metadata_json={
                     "provider_id": "openai",
@@ -1353,7 +1382,7 @@ async def test_finalize_oauth_session_returns_projection_after_verifying_and_reg
                 volume_ref="codex_auth_volume",
                 volume_mount_path="/home/app/.codex",
                 status=OAuthSessionStatus.AWAITING_USER,
-                requested_by_user_id="None",
+                requested_by_user_id="11111111-2222-4333-8444-555555555555",
                 account_label="codex account",
                 metadata_json={
                     "provider_id": "openai",
@@ -1473,7 +1502,7 @@ async def test_finalize_oauth_session_is_idempotent_for_succeeded_session(
                 volume_ref="codex_auth_volume",
                 volume_mount_path="/home/app/.codex",
                 status=OAuthSessionStatus.SUCCEEDED,
-                requested_by_user_id="None",
+                requested_by_user_id="11111111-2222-4333-8444-555555555555",
                 account_label="codex account",
             )
         )
@@ -1511,7 +1540,7 @@ async def test_finalize_oauth_session_is_idempotent_for_registering_profile_sess
                 volume_ref="codex_auth_volume",
                 volume_mount_path="/home/app/.codex",
                 status=OAuthSessionStatus.REGISTERING_PROFILE,
-                requested_by_user_id="None",
+                requested_by_user_id="11111111-2222-4333-8444-555555555555",
                 account_label="codex account",
                 metadata_json={
                     "provider_id": "openai",
@@ -1587,7 +1616,7 @@ async def test_finalize_oauth_session_rejects_expired_and_superseded_without_pro
                     volume_ref="codex_auth_volume",
                     volume_mount_path="/home/app/.codex",
                     status=OAuthSessionStatus.AWAITING_USER,
-                    requested_by_user_id="None",
+                    requested_by_user_id="11111111-2222-4333-8444-555555555555",
                     expires_at=datetime.now(timezone.utc) - timedelta(minutes=1),
                 ),
                 ManagedAgentOAuthSession(
@@ -1597,7 +1626,7 @@ async def test_finalize_oauth_session_rejects_expired_and_superseded_without_pro
                     volume_ref="codex_auth_volume",
                     volume_mount_path="/home/app/.codex",
                     status=OAuthSessionStatus.AWAITING_USER,
-                    requested_by_user_id="None",
+                    requested_by_user_id="11111111-2222-4333-8444-555555555555",
                     created_at=datetime.now(timezone.utc) - timedelta(minutes=5),
                 ),
                 ManagedAgentOAuthSession(
@@ -1607,7 +1636,7 @@ async def test_finalize_oauth_session_rejects_expired_and_superseded_without_pro
                     volume_ref="codex_auth_volume",
                     volume_mount_path="/home/app/.codex",
                     status=OAuthSessionStatus.BRIDGE_READY,
-                    requested_by_user_id="None",
+                    requested_by_user_id="11111111-2222-4333-8444-555555555555",
                     created_at=datetime.now(timezone.utc),
                 ),
             ]
@@ -1658,7 +1687,7 @@ async def test_finalize_oauth_session_registers_claude_oauth_profile(
                 volume_ref="claude_auth_volume",
                 volume_mount_path="/home/app/.claude",
                 status=OAuthSessionStatus.AWAITING_USER,
-                requested_by_user_id="None",
+                requested_by_user_id="11111111-2222-4333-8444-555555555555",
                 account_label="Claude Anthropic OAuth",
                 metadata_json={
                     "provider_id": "anthropic",
@@ -1952,7 +1981,7 @@ async def test_claude_oauth_terminal_websocket_rejects_replayed_attach_token(
                 volume_ref="claude_auth_volume",
                 volume_mount_path="/home/app/.claude",
                 status=OAuthSessionStatus.AWAITING_USER,
-                requested_by_user_id="None",
+                requested_by_user_id="11111111-2222-4333-8444-555555555555",
                 terminal_session_id="term_oas_claudewsreplay1",
                 terminal_bridge_id="br_oas_claudewsreplay1",
                 container_name="moonmind_auth_oas_claudewsreplay1",
@@ -2017,7 +2046,7 @@ async def test_oauth_terminal_websocket_rejects_connection_established_after_att
                 profile_id="claude_anthropic_ws_connected",
                 status=OAuthSessionStatus.AWAITING_USER,
                 session_transport="moonmind_pty_ws",
-                requested_by_user_id="None",
+                requested_by_user_id="11111111-2222-4333-8444-555555555555",
                 terminal_session_id="term_oas_claudewsalreadyconnected1",
                 terminal_bridge_id="br_oas_claudewsalreadyconnected1",
                 container_name="moonmind_auth_oas_claudewsalreadyconnected1",
@@ -2103,7 +2132,7 @@ async def test_finalize_failed_verification_disables_existing_profile(
                 volume_ref="codex_auth_volume",
                 volume_mount_path="/home/app/.codex",
                 status=OAuthSessionStatus.AWAITING_USER,
-                requested_by_user_id="None",
+                requested_by_user_id="11111111-2222-4333-8444-555555555555",
                 account_label="codex account",
             )
         )
@@ -2172,7 +2201,7 @@ async def test_finalize_success_stamps_oauth_home_overrides_and_readiness(
                 volume_ref="claude_auth_volume",
                 volume_mount_path="/home/app/.claude",
                 status=OAuthSessionStatus.AWAITING_USER,
-                requested_by_user_id="None",
+                requested_by_user_id="11111111-2222-4333-8444-555555555555",
                 account_label="claude account",
                 metadata_json={
                     "provider_id": "anthropic",

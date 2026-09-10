@@ -926,9 +926,10 @@ def _resolve_user_dependency_overrides() -> list[Callable[..., object]]:
             call = dependency.call
             if call is None:
                 continue
-            if call.__name__ == "_current_user_fallback" or call.__name__.startswith(
-                "current_"
-            ):
+            if call.__name__ in {
+                "_strict_current_user",
+                "_optional_current_user",
+            } or call.__name__.startswith("current_"):
                 dependencies.append(call)
 
     if not dependencies:
