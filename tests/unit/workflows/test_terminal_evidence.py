@@ -473,7 +473,14 @@ def test_pr_resolver_terminal_rejects_unsuccessful_dispositions(
     result_path.parent.mkdir(parents=True)
     result_path.write_text(
         json.dumps(
-            {"mergeAutomationDisposition": disposition, "executionRef": "step-1"}
+            {
+                "mergeAutomationDisposition": disposition,
+                "executionRef": "step-1",
+                "status": "blocked",
+                "reason": "ci_failures",
+                "final_reason": "ci_failures",
+                "next_step": "run_full_remediation",
+            }
         ),
         encoding="utf-8",
     )
@@ -487,7 +494,37 @@ def test_pr_resolver_terminal_rejects_unsuccessful_dispositions(
     result = evaluate_terminal_evidence(contract, workspace_path=str(tmp_path))
 
     assert result.satisfied is False
+    assert result.outcome == "terminal_failure"
     assert result.failure_code == failure_code
+    assert result.missing_evidence == ()
+    # The Skill's validated verdict travels with the evaluation so the runtime
+    # can report the blocker rather than "valid terminal evidence".
+    assert result.metadata["prResolverStatus"] == "blocked"
+    assert result.metadata["prResolverReason"] == "ci_failures"
+    assert result.metadata["prResolverNextStep"] == "run_full_remediation"
+
+
+def test_pr_resolver_verdict_metadata_is_absent_when_the_skill_wrote_none(
+    tmp_path: Path,
+) -> None:
+    result_path = tmp_path / "var/pr_resolver/result.json"
+    result_path.parent.mkdir(parents=True)
+    result_path.write_text(
+        json.dumps(
+            {"mergeAutomationDisposition": "manual_review", "executionRef": "step-1"}
+        ),
+        encoding="utf-8",
+    )
+    contract = {
+        "contractId": "pr_resolver_terminal.v1",
+        "relativePath": "var/pr_resolver/result.json",
+        "executionRef": "step-1",
+    }
+
+    result = evaluate_terminal_evidence(contract, workspace_path=str(tmp_path))
+
+    assert result.failure_code == "PR_RESOLVER_MANUAL_REVIEW"
+    assert not any(key.startswith("prResolver") for key in result.metadata)
 
 
 def test_pr_resolver_terminal_classifies_reenter_gate_as_continuation(tmp_path: Path) -> None:

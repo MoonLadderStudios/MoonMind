@@ -113,6 +113,7 @@ from moonmind.workflows.adapters.managed_agent_adapter import (
     ManagedProfileLaunchContext,
     build_managed_profile_launch_context,
     managed_run_status_metadata,
+    pr_resolver_verdict_summary,
 )
 from moonmind.utils.logging import SecretRedactor, redact_sensitive_payload, redact_sensitive_text
 from moonmind.utils.metrics import get_metrics_emitter
@@ -11623,6 +11624,7 @@ class TemporalAgentRuntimeActivities:
     ) -> AgentRunResult:
         """Apply an execution-bound terminal contract above provider adapters."""
         from moonmind.workflows.terminal_evidence import (
+            PR_RESOLVER_VERDICT_FAILURE_CODES,
             evaluate_terminal_evidence,
             resolve_terminal_evidence_source,
         )
@@ -11865,13 +11867,47 @@ class TemporalAgentRuntimeActivities:
                 }
             )
 
+        skill_terminal_verdict = (
+            evaluation.outcome == "terminal_failure"
+            and metadata["terminalContractId"] == "pr_resolver_terminal.v1"
+            and evaluation.failure_code in PR_RESOLVER_VERDICT_FAILURE_CODES
+        )
         metadata.update(
             {
                 "terminalContractSatisfied": False,
                 "terminalContractMissingEvidence": list(evaluation.missing_evidence),
-                "terminalContractRecoveryOutcome": "unsupported_or_exhausted",
+                "terminalContractRecoveryOutcome": (
+                    "skill_terminal_verdict"
+                    if skill_terminal_verdict
+                    else "unsupported_or_exhausted"
+                ),
             }
         )
+        if skill_terminal_verdict:
+            # The Skill wrote a validated blocked/failed verdict. Report that
+            # verdict; there is no missing evidence to continue or repair.
+            verdict_summary = pr_resolver_verdict_summary(
+                status=str(
+                    metadata.get("prResolverStatus")
+                    or metadata.get("mergeAutomationDisposition")
+                    or ""
+                ),
+                reason=str(metadata.get("prResolverReason") or ""),
+                next_step=str(metadata.get("prResolverNextStep") or ""),
+            )
+            update: dict[str, Any] = {
+                "provider_error_code": result.provider_error_code
+                or evaluation.failure_code,
+                "metadata": metadata,
+            }
+            if result.failure_class is None:
+                update["failure_class"] = "execution_error"
+                update["summary"] = verdict_summary
+            else:
+                # An earlier runtime failure keeps its own summary; the verdict
+                # remains readable in metadata.
+                metadata["prResolverVerdictSummary"] = verdict_summary
+            return _validated_result(update)
         missing = ", ".join(evaluation.missing_evidence) or "valid terminal evidence"
         terminal_failure_message = str(
             metadata.get("terminalFailureMessage") or ""
