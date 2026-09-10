@@ -60,6 +60,7 @@ import ipaddress
 import os
 import re
 import secrets
+import tempfile
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Mapping
@@ -574,11 +575,12 @@ def resolve_session_secret(
       owner, never silent regeneration).
     - Omitted values load the durable key at ``key_path`` when present, so
       restarts and concurrent replicas share one intended generation.
-    - Omitted values with no durable key generate exactly one key using
-      atomic ``O_CREAT | O_EXCL`` creation: concurrent bootstrap losers read
-      back the winner's key instead of minting incompatible per-process
-      keys. Remote production (``for_remote_production=True``) never
-      generates implicitly; it requires explicit operator material.
+    - Omitted values with no durable key publish a fully written private
+      file using an atomic, non-overwriting hard link. Concurrent bootstrap
+      losers read back the winner's complete key instead of minting
+      incompatible per-process keys. Remote production
+      (``for_remote_production=True``) never generates implicitly; it
+      requires explicit operator material.
     - Runtime-host, worker, and repository credentials are never consulted;
       only the explicit MoonMind secret and the deployment-owned key file
       are inputs.
@@ -634,43 +636,35 @@ def resolve_session_secret(
             f"No MoonMind session secret is available at {path} and implicit "
             "generation is disabled for this context. Failing closed."
         )
-    # Fresh local path: exactly-one-wins generation with atomic create.
+    # The authoritative path must never expose an empty or partially written
+    # key. Write privately first, then atomically publish exactly one winner.
     generated = secrets.token_bytes(_MIN_SECRET_BYTES)
+    temporary_name: str | None = None
     try:
         path.parent.mkdir(parents=True, exist_ok=True)
-        fd = os.open(str(path), os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
-    except FileExistsError:
-        # A concurrent replica won the race; use its durable generation.
-        try:
-            stored = path.read_bytes()
-        except OSError as exc:
-            raise AuthModeError(
-                f"Concurrent session-key bootstrap lost the creation race and "
-                f"could not read the winner's key at {path}: {exc}."
-            ) from exc
-        candidate = _durable_key_bytes(stored)
-        if candidate is None:
-            raise AuthModeError(
-                f"The concurrently created MoonMind session key at {path} is "
-                "incomplete; failing closed rather than minting a second key."
-            )
-        return candidate
-    except OSError as exc:
-        raise AuthModeError(
-            f"Unable to persist the MoonMind session key at {path}: {exc}."
-        ) from exc
-    try:
+        fd, temporary_name = tempfile.mkstemp(prefix=f".{path.name}.", dir=path.parent)
         with os.fdopen(fd, "wb") as handle:
             handle.write(generated)
+            handle.flush()
+            os.fsync(handle.fileno())
+        try:
+            os.link(temporary_name, path)
+        except FileExistsError:
+            # Another replica published first. Reuse the canonical reader;
+            # never replace or silently regenerate the winning generation.
+            return resolve_session_secret(key_path=path, allow_generate=False)
     except OSError as exc:
         raise AuthModeError(
             f"Unable to persist the MoonMind session key at {path}: {exc}."
         ) from exc
-    try:
-        os.chmod(str(path), 0o600)
-    except OSError:
-        # Best-effort hardening; key material is already persisted above.
-        pass
+    finally:
+        if temporary_name is not None:
+            try:
+                os.unlink(temporary_name)
+            except OSError:
+                # A private temporary-file cleanup failure must not invalidate
+                # an already published, authoritative key.
+                pass
     return generated
 
 

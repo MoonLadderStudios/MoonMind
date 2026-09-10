@@ -584,6 +584,7 @@ async def test_product_boundary_uses_profile_catalog_build_identity(
     """
 
     build_identity = "sha256:" + "b" * 64
+    monkeypatch.setenv("OMNIGENT_BUILD_DIGEST", build_identity)
     implementation_digest = "sha256:" + "c" * 64
     authority_catalog = create_catalog_snapshot(
         endpointRef="default",
@@ -719,8 +720,7 @@ async def test_product_boundary_uses_profile_catalog_build_identity(
 
     envelope = result.envelope
     if catalog_access == "schedule_refresh":
-        from uuid import uuid4
-
+        from api_service.db.models import RecurringWorkflowDefinition
         from api_service.services.recurring_workflows_service import (
             RecurringWorkflowsService,
         )
@@ -734,6 +734,7 @@ async def test_product_boundary_uses_profile_catalog_build_identity(
         )
         await db_session.flush()
         parameters = {
+            "agentProfileSnapshot": snapshot,
             "targetRuntime": "omnigent",
             "model": "example/model",
             "publishMode": "none",
@@ -743,9 +744,12 @@ async def test_product_boundary_uses_profile_catalog_build_identity(
             ),
         }
         target = {"initialParameters": parameters, "agentProfileSnapshot": snapshot}
-        definition = SimpleNamespace(
-            id=uuid4(), owner_user_id=None, version=1, target=target,
+        definition = RecurringWorkflowDefinition(
+            name="Catalog authority replay", cron="0 * * * *", timezone="UTC",
+            owner_user_id=None, version=1, target=target,
         )
+        db_session.add(definition)
+        await db_session.flush()
         schedules = RecurringWorkflowsService(db_session, artifact_service=artifacts)
         assert await schedules._refresh_omnigent_execution_plan_target(
             definition,

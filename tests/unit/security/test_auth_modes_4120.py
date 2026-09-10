@@ -187,6 +187,91 @@ def test_remote_production_requires_explicit_material(tmp_path):
         )
 
 
+@pytest.mark.parametrize("explicit_path", [False, True])
+def test_bootstrap_never_exposes_an_incomplete_key(
+    tmp_path, monkeypatch, explicit_path
+):
+    """A reader arriving while another replica writes sees one complete key."""
+    import threading
+
+    path = tmp_path / "session-key"
+    monkeypatch.setenv("MOONMIND_SESSION_KEY_PATH", str(path))
+    kwargs = {"key_path": path} if explicit_path else {}
+    writer_ready = threading.Event()
+    release_writer = threading.Event()
+    results = []
+    errors = []
+    original_fdopen = m.os.fdopen
+
+    def pause_writer(fd, *args, **kw):
+        handle = original_fdopen(fd, *args, **kw)
+        if threading.current_thread() is writer:
+            writer_ready.set()
+            if not release_writer.wait(timeout=10):
+                handle.close()
+                raise TimeoutError("reader did not release bootstrap writer")
+        return handle
+
+    def resolve_first():
+        try:
+            results.append(m.resolve_session_secret(**kwargs))
+        except Exception as exc:
+            errors.append(exc)
+
+    writer = threading.Thread(target=resolve_first)
+    monkeypatch.setattr(m.os, "fdopen", pause_writer)
+    writer.start()
+    try:
+        assert writer_ready.wait(timeout=10)
+        observed = m.resolve_session_secret(**kwargs)
+    finally:
+        release_writer.set()
+        writer.join(timeout=10)
+    assert not writer.is_alive()
+    assert not errors
+    assert results == [observed]
+    assert path.read_bytes() == observed
+    assert len(observed) >= 32
+    assert list(tmp_path.iterdir()) == [path]
+
+
+@pytest.mark.parametrize("stored", [b"", b"short"])
+def test_existing_incomplete_session_key_is_never_replaced(tmp_path, stored):
+    path = tmp_path / "session-key"
+    path.write_bytes(stored)
+    with pytest.raises(m.AuthModeError, match="incomplete"):
+        m.resolve_session_secret(key_path=path)
+    assert path.read_bytes() == stored
+
+
+@pytest.mark.parametrize("operation", ["fsync", "link"])
+def test_bootstrap_write_failure_never_publishes_a_key(
+    tmp_path, monkeypatch, operation
+):
+    path = tmp_path / "session-key"
+
+    def fail_storage(*args):
+        raise OSError("injected storage failure")
+
+    monkeypatch.setattr(m.os, operation, fail_storage)
+    with pytest.raises(m.AuthModeError, match="Unable to persist"):
+        m.resolve_session_secret(key_path=path)
+    assert not path.exists()
+    assert list(tmp_path.iterdir()) == []
+
+
+def test_bootstrap_cleanup_failure_preserves_published_key(tmp_path, monkeypatch):
+    path = tmp_path / "session-key"
+
+    def fail_cleanup(*args):
+        raise OSError("injected cleanup failure")
+
+    monkeypatch.setattr(m.os, "unlink", fail_cleanup)
+    winner = m.resolve_session_secret(key_path=path)
+    assert path.read_bytes() == winner
+    assert m.resolve_session_secret(key_path=path, allow_generate=False) == winner
+
+
 # ---------------------------------------------------------------------------
 # 5. Disabled-mode exposure at the deployment boundary
 # ---------------------------------------------------------------------------
