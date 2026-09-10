@@ -365,6 +365,82 @@ async def test_optional_invalid_credential_is_not_anonymous(monkeypatch) -> None
 
 
 # ---------------------------------------------------------------------------
+# Cookie CSRF origin boundary on unsafe methods
+# ---------------------------------------------------------------------------
+
+
+def _mutating_request(
+    *, cookie: str | None = None, origin: str | None = None
+) -> Request:
+    from moonmind.security.session_authority_4121 import MOONMIND_DEV_COOKIE
+
+    headers: list[tuple[bytes, bytes]] = [
+        (b"host", b"app.example.test"),
+    ]
+    if cookie is not None:
+        headers.append((b"cookie", f"{MOONMIND_DEV_COOKIE}={cookie}".encode()))
+    if origin is not None:
+        headers.append((b"origin", origin.encode()))
+    scope = {
+        "type": "http",
+        "method": "POST",
+        "path": "/",
+        "headers": headers,
+        "query_string": b"",
+        "server": ("app.example.test", 443),
+        "scheme": "https",
+    }
+    return Request(scope)
+
+
+@pytest.mark.asyncio
+async def test_strict_cookie_mutation_without_csrf_origin_is_rejected(
+    monkeypatch,
+) -> None:
+    config = _test_config()
+    store, revocation, _, identity = _enrolled()
+    _wire_session_boundary(
+        monkeypatch, store=store, revocation=revocation, config=config
+    )
+    monkeypatch.setenv("MOONMIND_PUBLIC_BASE_URL", "https://app.example.test")
+    token, _ = await qual.mint_moonmind_session(
+        identity, store, config, revocation=revocation
+    )
+    session = AsyncMock(spec=AsyncSession)
+
+    with pytest.raises(HTTPException) as exc:
+        await providers_module.get_current_user()(
+            _mutating_request(cookie=token), session
+        )
+
+    assert exc.value.status_code == 401
+    assert exc.value.detail == {"code": "auth_invalid"}
+
+
+@pytest.mark.asyncio
+async def test_strict_cookie_mutation_with_valid_origin_resolves(
+    monkeypatch,
+) -> None:
+    config = _test_config()
+    store, revocation, user_id, identity = _enrolled()
+    _wire_session_boundary(
+        monkeypatch, store=store, revocation=revocation, config=config
+    )
+    monkeypatch.setenv("MOONMIND_PUBLIC_BASE_URL", "https://app.example.test")
+    token, _ = await qual.mint_moonmind_session(
+        identity, store, config, revocation=revocation
+    )
+    session = _db_session_for(user_id, active=True, admin=False)
+
+    user = await providers_module.get_current_user()(
+        _mutating_request(cookie=token, origin="https://app.example.test"),
+        session,
+    )
+
+    assert user.id == user_id
+
+
+# ---------------------------------------------------------------------------
 # WebSocket principal resolution honors the same authority
 # ---------------------------------------------------------------------------
 

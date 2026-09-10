@@ -196,7 +196,62 @@ async def terminal_websocket(
         await websocket.close(code=status.WS_1008_POLICY_VIOLATION, reason=str(exc))
         return
     await _mark_terminal_connection(db, session, connected=True)
-    
+
+    # Active-stream re-authorization (#4121 req 7): the handshake token must
+    # be rechecked against the live account/revocation stores at least every
+    # five minutes so logout, disable, or administrative revocation
+    # terminates the terminal within the revocation bound instead of leaving
+    # it usable until the client disconnects.
+    reauth_failed = asyncio.Event()
+
+    async def _reauthorize_terminal_stream() -> None:
+        from moonmind.security.session_authority_4121 import (
+            SESSION_REVOCATION_INTERVAL_SECONDS,
+            reauthorize_stream_token,
+        )
+
+        from api_service.auth_providers import (
+            build_moonmind_control_plane_config,
+        )
+        from api_service.services.session_store import (
+            DbAccountStore,
+            DbRevocationStore,
+        )
+
+        while True:
+            await asyncio.sleep(SESSION_REVOCATION_INTERVAL_SECONDS)
+            try:
+                config = build_moonmind_control_plane_config()
+                await reauthorize_stream_token(
+                    token,
+                    account_store=DbAccountStore(db),
+                    revocation=DbRevocationStore(db),
+                    config=config,
+                )
+                live_user = await db.get(User, user.id)
+                if live_user is None or not live_user.is_active:
+                    raise ValueError("terminal principal is no longer active")
+            except Exception:
+                logger.info(
+                    "auth_event mode=stream reason=reauth_failed session_id=%s",
+                    session_id,
+                )
+                reauth_failed.set()
+                try:
+                    await websocket.close(
+                        code=status.WS_1008_POLICY_VIOLATION,
+                        reason="Session re-authorization failed",
+                    )
+                except Exception:
+                    logger.debug(
+                        "Terminal reauth close failed for session %s",
+                        session_id,
+                        exc_info=True,
+                    )
+                return
+
+    reauth_task = asyncio.create_task(_reauthorize_terminal_stream())
+
     try:
         client = docker.from_env()
         try:
@@ -204,6 +259,7 @@ async def terminal_websocket(
         except docker.errors.NotFound:
             await websocket.send_text(f"Terminal session {session_id} is not ready or has expired.\r\n")
             await websocket.close(code=1000)
+            reauth_task.cancel()
             return
 
         # Start a sh process attached to PTY
@@ -272,8 +328,12 @@ async def terminal_websocket(
                         break
 
         done, pending = await asyncio.wait(
-            [asyncio.create_task(_read_from_docker()), asyncio.create_task(_read_from_ws())],
-            return_when=asyncio.FIRST_COMPLETED
+            [
+                asyncio.create_task(_read_from_docker()),
+                asyncio.create_task(_read_from_ws()),
+                reauth_task,
+            ],
+            return_when=asyncio.FIRST_COMPLETED,
         )
         for task in pending:
             task.cancel()
@@ -283,6 +343,8 @@ async def terminal_websocket(
     except Exception as e:
         logger.error(f"WebSocket error: {e}", exc_info=True)
     finally:
+        if not reauth_task.done():
+            reauth_task.cancel()
         try:
             await _mark_terminal_connection(db, session, connected=False)
         except Exception:
