@@ -1,0 +1,9 @@
+{
+  "imageSourceRef": "sample-native-tests",
+  "command": ["./tools/run_automation.sh", "--suite", "native-smoke"],
+  "workdir": "/workspace",
+  "networkMode": "none",
+  "resources": {"cpuMillis": 1000, "memoryMiB": 512, "pids": 64},
+  "timeoutSeconds": 60,
+  "outputs": [{"name": "automation-report", "relativePath": "artifacts/automation.xml"}]
+}

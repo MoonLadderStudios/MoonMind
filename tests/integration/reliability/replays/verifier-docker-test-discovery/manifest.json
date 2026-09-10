@@ -1,0 +1,56 @@
+{
+  "incidentWorkflowId": "mm:5c182f75-c005-4edc-aa1b-eca086a515c1-2026-09-10T04:30:00Z",
+  "failureShape": "Verifier declares required automation unavailable after a missing local compiler without attempting the repository-documented container path",
+  "boundary": "resolved verification instructions to managed container CLI submission and returned terminal evidence",
+  "runtimeId": "codex_cli",
+  "selectedSkills": [
+    "moonspec-verify"
+  ],
+  "candidateCheckpoint": "candidate-01",
+  "compiler": "sample-native-compiler",
+  "providerReadActions": [
+    "AGENTS.md",
+    "README.md",
+    "docs/testing.md",
+    "tools/automation-job.json"
+  ],
+  "requiredInstructionFragments": [
+    "continue discovery from repository documentation and scripts",
+    "neither a local Docker executable nor a daemon socket in the agent is required",
+    "attempt the targeted build or test and inspect its terminal result and logs",
+    "record the owning service's readiness/admission diagnostic",
+    "Complete this discovery before using `NOT RUN`",
+    "--request-id <stable-phase-id>",
+    "persist a stable request ID for the verification phase, candidate revision or workspace checkpoint, and workload specification",
+    "Reuse that ID when retrying the same job after a client timeout or continuation",
+    "Use a new ID when the candidate, phase, or workload changes"
+  ],
+  "cases": {
+    "available": {
+      "serviceStates": [
+        "queued",
+        "running",
+        "succeeded"
+      ],
+      "requiredToolEvidence": [
+        "native-smoke: 3 passed",
+        "succeeded",
+        "exitCode=0",
+        "artifact:automation-logs",
+        "artifact:automation-report"
+      ],
+      "providerReport": "PASS: native-smoke at candidate-01; terminal succeeded, exitCode=0; artifact:automation-logs; artifact:automation-report"
+    },
+    "rejected": {
+      "admissionStatus": 403,
+      "admissionDiagnostic": "image_source_unavailable: sample-native-tests is not configured by the deployment owner",
+      "requiredToolEvidence": [
+        "container.submit",
+        "HTTP 403",
+        "image_source_unavailable: sample-native-tests is not configured by the deployment owner"
+      ],
+      "providerReport": "NOT RUN: native-smoke at candidate-01; container.submit HTTP 403; image_source_unavailable: sample-native-tests is not configured by the deployment owner"
+    }
+  },
+  "limits": "The provider's discovery and report actions and service responses are scripted. This replay proves instruction delivery and real CLI/HTTP evidence handling, not autonomous model compliance or a real Docker workload."
+}
