@@ -639,7 +639,7 @@ async def test_failure_stage_after_merge_closed_without_rebuy(monkeypatch) -> No
 
 @pytest.mark.asyncio
 async def test_activity_close_unknown_stays_pending(monkeypatch) -> None:
-    service = _FakeService(fail_close="unknown")
+    service = _FakeService(issue_labels=["status: code-review"], fail_close="unknown")
     monkeypatch.setattr(acts, "_fetch_issue", _issue_reader(service))
     result = await acts.finalize_failed_attempt(
         **_base_kwargs(
@@ -659,7 +659,7 @@ async def test_activity_close_unknown_stays_pending(monkeypatch) -> None:
 
 @pytest.mark.asyncio
 async def test_activity_close_denied_never_false_release(monkeypatch) -> None:
-    service = _FakeService(fail_close="denied")
+    service = _FakeService(issue_labels=["status: code-review"], fail_close="denied")
     monkeypatch.setattr(acts, "_fetch_issue", _issue_reader(service))
     result = await acts.finalize_failed_attempt(
         **_base_kwargs(
