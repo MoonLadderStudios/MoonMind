@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import re
-from collections.abc import Awaitable, Callable, Mapping
+from collections.abc import Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -295,6 +295,11 @@ async def resolve_issue(
     blockers_from_issue: Callable[[Mapping[str, Any]], Awaitable[list[dict[str, Any]]]],
     attempt_evidence_resolver: Callable[[Mapping[str, Any]], Awaitable[Mapping[str, Any] | None]] | None = None,
     recovery_handoff: Mapping[str, Any] | None = None,
+    attempt_context: Mapping[str, Any] | None = None,
+    pr_identities: Sequence[Mapping[str, Any]] | None = None,
+    retry_policy: Mapping[str, Any] | None = None,
+    reads_complete: Mapping[str, Any] | None = None,
+    active_attempt_comments: Sequence[Mapping[str, Any]] | None = None,
 ) -> tuple[int | None, dict[str, Any]]:
     """Select the best search match, or first unblocked open issue, within 500 rows.
 
@@ -307,6 +312,17 @@ async def resolve_issue(
     (``predecessor_stopped`` plus ``handoff_usable``): without it the later
     start transition denies the continuation deterministically, so the scan
     passes the candidate over instead of returning it.
+
+    Every surviving candidate additionally passes the one shared exact-issue
+    admission boundary used by explicit/orchestration/continuation paths
+    (issue #4178) with its pinned repository/issue identity. Per-candidate
+    attempt evidence comes from ``attempt_evidence_resolver`` when supplied,
+    otherwise from the caller-supplied ``attempt_context``; the remaining
+    Req-1 bundle entries (blockers on the fallback-scan path, PR identities,
+    retry policy, read completeness, validated attempt comments) are threaded
+    through when the caller supplies them. Incomplete pagination or failed
+    reads remain unknown evidence upstream of this function and never an
+    empty owner set.
     """
 
     if not re.fullmatch(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+", repository):
@@ -401,22 +417,34 @@ async def resolve_issue(
                 ):
                     continue
                 if attempt_evidence_resolver is not None:
-                    attempt_context = await attempt_evidence_resolver(normalized)
-                    if attempt_evidence_blocks_admission(attempt_context):
+                    candidate_attempt_context: Mapping[str, Any] | None = await attempt_evidence_resolver(normalized)
+                    if attempt_evidence_blocks_admission(candidate_attempt_context):
                         continue
-                    # Same shared exact-issue admission boundary as explicit /
-                    # orchestration / continuation paths (issue #4178): the
-                    # search entrypoint admits with its pinned identity.
-                    shared = admit_for_entrypoint(
-                        ENTRYPOINT_SEARCH,
-                        repository=repository,
-                        issue_number=int(candidate["number"]),
-                        issue={"state": "open", "labels": normalized["labels"]},
-                        attempt_context=attempt_context,
-                    )
-                    if not shared.allowed:
-                        continue
-                if not query and await blockers_from_issue(normalized):
+                else:
+                    candidate_attempt_context = attempt_context
+                # Same shared exact-issue admission boundary as explicit /
+                # orchestration / continuation paths (issue #4178): the
+                # search entrypoint admits with its pinned identity. The
+                # fallback-scan path already resolves trusted blocker
+                # evidence per candidate; reuse that read for admission.
+                candidate_blockers: list[dict[str, Any]] | None = None
+                if not query:
+                    candidate_blockers = await blockers_from_issue(normalized)
+                shared = admit_for_entrypoint(
+                    ENTRYPOINT_SEARCH,
+                    repository=repository,
+                    issue_number=int(candidate["number"]),
+                    issue={"state": "open", "labels": normalized["labels"]},
+                    attempt_context=candidate_attempt_context,
+                    blockers=candidate_blockers,
+                    pr_identities=pr_identities,
+                    retry_policy=retry_policy,
+                    reads_complete=reads_complete,
+                    active_attempt_comments=active_attempt_comments,
+                )
+                if not shared.allowed:
+                    continue
+                if not query and candidate_blockers:
                     continue
                 return candidate["number"], evidence
             if len(candidates) < 100:
