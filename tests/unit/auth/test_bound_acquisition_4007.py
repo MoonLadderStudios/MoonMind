@@ -36,6 +36,7 @@ from moonmind.auth.bound_acquisition import (
     FakeExpiringAdapter,
     PatAdapter,
     SelectionSnapshot,
+    SharedRenewalStore,
     binding_digest_for,
     make_bound_client,
     safe_error_dto,
@@ -277,12 +278,20 @@ def test_scratch_never_enters_acquisition() -> None:
     assert exc_info.value.code == "BOUND_SCRATCH_EXCLUDED"
 
 
-def test_anonymous_snapshot_makes_zero_secret_queries() -> None:
+async def test_anonymous_snapshot_makes_zero_secret_queries(monkeypatch) -> None:
     calls: list[str] = []
 
-    async def _must_not_query(_ref: str) -> str:  # pragma: no cover - must not run
+    async def _must_not_query(_ref: str) -> str:
         calls.append(_ref)
         raise AssertionError("anonymous path queried a credential backend")
+
+    # Inject the forbidden backend into the discovery seams the anonymous
+    # path could plausibly touch.  The exercised selection + acquire path
+    # below must complete (or fail closed for anonymous acquire) without
+    # invoking any of them.
+    from moonmind.auth import github_credentials as gc
+
+    monkeypatch.setattr(gc, "_resolve_secret_ref", _must_not_query)
 
     snapshot = select_repository_authority(
         access_mode=AccessMode.ANONYMOUS,
@@ -306,8 +315,23 @@ def test_anonymous_snapshot_makes_zero_secret_queries() -> None:
             requested_operations=["write"],
             policy_revision=2,
         )
+    # Anonymous snapshots carry no credential to acquire: the acquirer
+    # rejects before touching any issuer or revision reader, even when the
+    # only available backend is the forbidden one.
+    forbidden_issuer = PatAdapter("db://FORBIDDEN", _must_not_query)
+
+    async def _must_not_read(_connection_id: str) -> ActiveRevision:  # pragma: no cover
+        raise AssertionError("anonymous acquire read revision authority")
+
+    acquirer = BoundCredentialAcquirer(
+        revision_reader=_must_not_read,
+        issuer_for=lambda _kind: forbidden_issuer,
+    )
+    with pytest.raises(BoundAccessError):
+        await acquirer.acquire(
+            AcquisitionRequest(snapshot=snapshot, execution_owner="exec:anon")
+        )
     assert calls == []
-    _ = _must_not_query
 
 
 def test_failed_source_never_becomes_anonymous() -> None:
@@ -498,14 +522,40 @@ async def test_adapter_contract_matrix(adapter_kind: str) -> None:
     assert client.connection_id == "conn-matrix"
 
 
-async def test_two_process_renewal_is_single_flight() -> None:
-    conn = _connection("conn-race")
+def _issuer_and_counter(adapter_kind: str, *, release: asyncio.Event | None = None):
+    """Build the real adapter for one matrix leg plus its issuance counter."""
+    if adapter_kind == "pat":
+        calls: list[str] = []
+
+        async def _backend(_ref: str) -> str:
+            calls.append(_ref)
+            if release is not None:
+                await release.wait()
+            return "matrix-pat-token"
+
+        issuer = PatAdapter("db://MATRIX_PAT", _backend, expected_scope="read,write")
+        return issuer, lambda: len(calls)
     adapter = FakeExpiringAdapter(scope="read,write", ttl_seconds=60.0)
+    if release is not None:
+        inner = adapter
+
+        async def _slow_expiring(binding: BindingMetadata):
+            await release.wait()
+            return await inner(binding)
+
+        return _slow_expiring, lambda: adapter.issues
+    return adapter, lambda: adapter.issues
+
+
+@pytest.mark.parametrize("adapter_kind", ["pat", "expiring"])
+async def test_two_process_renewal_is_single_flight(adapter_kind: str) -> None:
+    conn = _connection("conn-race")
+    issuer, issue_count = _issuer_and_counter(adapter_kind)
     cache = BoundCredentialCache()
     reader_calls: list[str] = []
     acquirer = BoundCredentialAcquirer(
-        revision_reader=_reader(conn, adapter_kind="expiring", calls=reader_calls),
-        issuer_for=lambda _kind: adapter,
+        revision_reader=_reader(conn, adapter_kind=adapter_kind, calls=reader_calls),
+        issuer_for=lambda _kind: issuer,
         cache=cache,
     )
     snapshot = _snapshot_for(conn)
@@ -514,23 +564,136 @@ async def test_two_process_renewal_is_single_flight() -> None:
         acquirer.acquire(AcquisitionRequest(snapshot=snapshot, execution_owner=owner)),
         acquirer.acquire(AcquisitionRequest(snapshot=snapshot, execution_owner=owner)),
     )
-    assert adapter.issues == 1
+    assert issue_count() == 1
     assert first.binding.issuance_id == second.binding.issuance_id
+    assert first.binding.adapter_kind == adapter_kind
 
 
-async def test_canceled_waiter_does_not_invalidate_credential() -> None:
+async def test_shared_store_two_thread_renewal_is_single_flight() -> None:
+    """Genuine cross-worker single-flight through one shared store (R5).
+
+    Two threads run independent event loops, caches, and acquirers sharing a
+    single SharedRenewalStore.  Only one issuance may occur; the follower
+    observes the shared publication instead of re-issuing.  No database lock
+    is held during issuance — only the short-lived lease timestamp.
+    """
+
+    import threading
+
+    conn = _connection("conn-shared-race")
+    shared = SharedRenewalStore(lease_seconds=30.0)
+    adapter = FakeExpiringAdapter(scope="read,write", ttl_seconds=60.0)
+    barrier = threading.Barrier(2)
+    results: dict[str, object] = {}
+    errors: list[BaseException] = []
+
+    def _worker(tag: str) -> None:
+        import asyncio as _aio
+
+        async def _run() -> None:
+            cache = BoundCredentialCache(shared=shared)
+            acquirer = BoundCredentialAcquirer(
+                revision_reader=_reader(conn, adapter_kind="expiring"),
+                issuer_for=lambda _kind: adapter,
+                cache=cache,
+            )
+            snapshot = _snapshot_for(conn)
+            barrier.wait(timeout=10)
+            acquired = await acquirer.acquire(
+                AcquisitionRequest(snapshot=snapshot, execution_owner="exec:shared-t")
+            )
+            results[tag] = acquired
+
+        try:
+            _aio.run(_run())
+        except BaseException as exc:  # noqa: BLE001 - recorded for assertion
+            errors.append(exc)
+
+    threads = [threading.Thread(target=_worker, args=(f"w{i}",)) for i in range(2)]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join(timeout=30)
+    assert not errors, f"worker errors: {errors!r}"
+    assert adapter.issues == 1, f"expected single issuance, got {adapter.issues}"
+    first = results["w0"]
+    second = results["w1"]
+    assert isinstance(first, object) and isinstance(second, object)
+    # Both workers hold the same authority: identical digest and material.
+    assert first.binding.binding_digest == second.binding.binding_digest  # type: ignore[attr-defined]
+    seen_first: list[bytes] = []
+    seen_second: list[bytes] = []
+    first.credential.use_now(seen_first.append)  # type: ignore[attr-defined]
+    second.credential.use_now(seen_second.append)  # type: ignore[attr-defined]
+    assert seen_first[0] == seen_second[0]
+
+
+async def test_shared_generation_fencing_rejects_stale_publisher() -> None:
+    shared = SharedRenewalStore()
+    key = BoundCredentialCache.renewal_key_for(
+        endpoint="https://github.com",
+        connection_revision=2,
+        credential_revision=3,
+        route_id="id:https://github.com#repo-id-1",
+        operations=["read"],
+        execution_owner="exec:g",
+    )
+    first_gen = shared.next_generation(key)
+    second_gen = shared.next_generation(key)
+    assert second_gen == first_gen + 1
+    assert shared.publish(
+        key,
+        binding=_snapshot_for(_connection("conn-g")).model_dump  # placeholder
+        if False
+        else _acquire_binding_for_test(),
+        material=b"newer",
+        generation=second_gen,
+    )
+    # A stale generation cannot overwrite the newer publication.
+    assert not shared.publish(
+        key,
+        binding=_acquire_binding_for_test(),
+        material=b"stale",
+        generation=first_gen,
+    )
+    published = shared.get(key)
+    assert published is not None and published[1] == b"newer"
+
+
+def _acquire_binding_for_test() -> BindingMetadata:
+    conn = _connection("conn-g")
+    snapshot = _snapshot_for(conn)
+    return BindingMetadata(
+        bindingDigest="binding:test",
+        connectionId=snapshot.connection_id,
+        endpoint=snapshot.endpoint,
+        routeId=snapshot.route_id,
+        role=snapshot.role,
+        operations=snapshot.operations,
+        policyRevision=snapshot.policy_revision,
+        connectionRevision=2,
+        credentialRevision=3,
+        principalRef=snapshot.principal_ref,
+        scopeType=snapshot.scope_type,
+        scopeRef=snapshot.scope_ref,
+        operationId="op:test",
+        issuanceId="iss:test",
+        generation=2,
+        adapterKind="expiring",
+    )
+
+
+@pytest.mark.parametrize("adapter_kind", ["pat", "expiring"])
+async def test_canceled_waiter_does_not_invalidate_credential(adapter_kind: str) -> None:
     conn = _connection("conn-cancel")
     release = asyncio.Event()
-
-    async def _slow_issuer(_binding: BindingMetadata):
-        from moonmind.auth.bound_acquisition import Issuance
-
-        await release.wait()
-        return Issuance(identity="installation:i", scope="read,write", expires_at=None, material=b"slow-token")
+    issuer, _ = _issuer_and_counter(adapter_kind, release=release)
 
     cache = BoundCredentialCache()
     acquirer = BoundCredentialAcquirer(
-        revision_reader=_reader(conn), issuer_for=lambda _kind: _slow_issuer, cache=cache
+        revision_reader=_reader(conn, adapter_kind=adapter_kind),
+        issuer_for=lambda _kind: issuer,
+        cache=cache,
     )
     snapshot = _snapshot_for(conn)
     owner = "exec:cancel"
@@ -548,6 +711,7 @@ async def test_canceled_waiter_does_not_invalidate_credential() -> None:
     release.set()
     done = await leader
     assert done.binding.connection_id == "conn-cancel"
+    assert done.binding.adapter_kind == adapter_kind
     # A later consumer still gets the valid credential from the cache.
     again = await acquirer.acquire(
         AcquisitionRequest(snapshot=snapshot, execution_owner=owner)
@@ -555,14 +719,17 @@ async def test_canceled_waiter_does_not_invalidate_credential() -> None:
     assert again.cache_hit
 
 
-async def test_issuer_timeout_and_scope_mismatch() -> None:
+@pytest.mark.parametrize("adapter_kind", ["pat", "expiring"])
+async def test_issuer_timeout_and_scope_mismatch(adapter_kind: str) -> None:
     conn = _connection("conn-issuer")
 
     async def _timeout(_binding: BindingMetadata):
         raise TimeoutError("provider hung")
 
     acquirer = BoundCredentialAcquirer(
-        revision_reader=_reader(conn), issuer_for=lambda _kind: _timeout, max_attempts=2
+        revision_reader=_reader(conn, adapter_kind=adapter_kind),
+        issuer_for=lambda _kind: _timeout,
+        max_attempts=2,
     )
     with pytest.raises(BoundAccessError) as exc_info:
         await acquirer.acquire(
@@ -570,10 +737,15 @@ async def test_issuer_timeout_and_scope_mismatch() -> None:
         )
     assert exc_info.value.code == "BOUND_ISSUER_FAILED"
 
-    adapter = FakeExpiringAdapter(scope="read", ttl_seconds=60.0, deny_scope="")
+    if adapter_kind == "pat":
+        narrow: FakeExpiringAdapter | PatAdapter = PatAdapter(
+            "db://NARROW", lambda _r: "narrow-pat-token", expected_scope="read"
+        )
+    else:
+        narrow = FakeExpiringAdapter(scope="read", ttl_seconds=60.0, deny_scope="")
     acquirer2 = BoundCredentialAcquirer(
-        revision_reader=_reader(conn, adapter_kind="expiring"),
-        issuer_for=lambda _kind: adapter,
+        revision_reader=_reader(conn, adapter_kind=adapter_kind),
+        issuer_for=lambda _kind: narrow,
     )
     with pytest.raises(BoundAccessError):
         await acquirer2.acquire(
@@ -581,13 +753,14 @@ async def test_issuer_timeout_and_scope_mismatch() -> None:
         )
 
 
-async def test_state_survives_restart_with_same_identity() -> None:
+@pytest.mark.parametrize("adapter_kind", ["pat", "expiring"])
+async def test_state_survives_restart_with_same_identity(adapter_kind: str) -> None:
     conn = _connection("conn-restart")
-    adapter = FakeExpiringAdapter(scope="read,write", ttl_seconds=60.0)
+    issuer, issue_count = _issuer_and_counter(adapter_kind)
     cache = BoundCredentialCache()
     acquirer = BoundCredentialAcquirer(
-        revision_reader=_reader(conn, adapter_kind="expiring"),
-        issuer_for=lambda _kind: adapter,
+        revision_reader=_reader(conn, adapter_kind=adapter_kind),
+        issuer_for=lambda _kind: issuer,
         cache=cache,
     )
     snapshot = _snapshot_for(conn)
@@ -595,17 +768,121 @@ async def test_state_survives_restart_with_same_identity() -> None:
         AcquisitionRequest(snapshot=snapshot, execution_owner="exec:r")
     )
     # New acquirer instance over the same durable cache/identity: cache hit.
+    issuer2, _ = _issuer_and_counter(adapter_kind) if False else (issuer, None)
     acquirer2 = BoundCredentialAcquirer(
-        revision_reader=_reader(conn, adapter_kind="expiring"),
-        issuer_for=lambda _kind: adapter,
+        revision_reader=_reader(conn, adapter_kind=adapter_kind),
+        issuer_for=lambda _kind: issuer2,
         cache=cache,
     )
     second = await acquirer2.acquire(
         AcquisitionRequest(snapshot=snapshot, execution_owner="exec:r")
     )
     assert second.cache_hit
-    assert adapter.issues == 1
+    assert issue_count() == 1
     assert first.binding.binding_digest == second.binding.binding_digest
+    assert second.binding.adapter_kind == adapter_kind
+
+
+async def test_lost_ack_reconciles_duplicate_without_exactly_once() -> None:
+    """Lost acknowledgment binds the duplicate instead of blindly re-issuing (R6)."""
+
+    conn = _connection("conn-lost-ack")
+    adapter = FakeExpiringAdapter(scope="read,write", ttl_seconds=60.0)
+    calls = {"issued": 0}
+
+    async def _flaky_issuer(binding: BindingMetadata):
+        calls["issued"] += 1
+        if calls["issued"] == 1:
+            # Server issued, caller observed a transport failure (lost ack).
+            adapter.issues += 1
+            raise TimeoutError("ack lost after server-side issuance")
+        return await adapter(binding)
+
+    acquirer = BoundCredentialAcquirer(
+        revision_reader=_reader(conn, adapter_kind="expiring"),
+        issuer_for=lambda _kind: _flaky_issuer,
+        # Caller-owned reconcile protocol: the flaky wrapper hides the
+        # adapter's own hook, so the adapter's reconciler is injected
+        # explicitly (production issuers expose it on the issuer itself).
+        duplicate_reconciler=adapter.reconcile_duplicate,
+        max_attempts=3,
+    )
+    acquired = await acquirer.acquire(
+        AcquisitionRequest(snapshot=_snapshot_for(conn), execution_owner="exec:lost")
+    )
+    # The reconciler was consulted exactly once; exactly-once issuance is
+    # still not promised (server issued once + reconcile bound the duplicate).
+    assert adapter.reconciliations == 1
+    assert acquired.binding.adapter_kind == "expiring"
+    seen: list[bytes] = []
+    acquired.credential.use_now(seen.append)
+    assert seen[0].startswith(b"fake-expiring:")
+    assert b"reconciled" in seen[0]
+
+
+async def test_lost_ack_auto_reconciler_on_issuer() -> None:
+    """An issuer exposing reconcile_duplicate is consulted without injection."""
+
+    conn = _connection("conn-lost-auto")
+
+    class _FlakyExpiring(FakeExpiringAdapter):
+        def __init__(self) -> None:
+            super().__init__(scope="read,write", ttl_seconds=60.0)
+            self.calls = 0
+
+        async def __call__(self, binding: BindingMetadata):
+            self.calls += 1
+            if self.calls == 1:
+                self.issues += 1
+                raise TimeoutError("ack lost after server-side issuance")
+            return await super().__call__(binding)
+
+    adapter = _FlakyExpiring()
+    acquirer = BoundCredentialAcquirer(
+        revision_reader=_reader(conn, adapter_kind="expiring"),
+        issuer_for=lambda _kind: adapter,
+        max_attempts=3,
+    )
+    acquired = await acquirer.acquire(
+        AcquisitionRequest(snapshot=_snapshot_for(conn), execution_owner="exec:auto")
+    )
+    assert adapter.reconciliations == 1
+    seen: list[bytes] = []
+    acquired.credential.use_now(seen.append)
+    assert b"reconciled" in seen[0]
+
+
+async def test_lost_ack_without_reconciler_retries_explicitly() -> None:
+    """No reconcile hook means bounded retry re-issues (never silent fallback)."""
+
+    conn = _connection("conn-lost-retry")
+    attempts = {"count": 0}
+
+    async def _once_then_ok(_binding: BindingMetadata):
+        from moonmind.auth.bound_acquisition import Issuance
+
+        attempts["count"] += 1
+        if attempts["count"] == 1:
+            raise TimeoutError("transient provider failure")
+        return Issuance(
+            identity="installation:retry",
+            scope="read,write",
+            expires_at=None,
+            material=b"retry-token",
+        )
+
+    acquirer = BoundCredentialAcquirer(
+        revision_reader=_reader(conn),
+        issuer_for=lambda _kind: _once_then_ok,
+        max_attempts=2,
+    )
+    acquired = await acquirer.acquire(
+        AcquisitionRequest(snapshot=_snapshot_for(conn), execution_owner="exec:retry")
+    )
+    assert attempts["count"] == 2
+    seen: list[bytes] = []
+    acquired.credential.use_now(seen.append)
+    assert seen[0] == b"retry-token"
 
 
 # --- A5: revocation races -----------------------------------------------------
