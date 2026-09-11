@@ -16643,6 +16643,10 @@ class MoonMindRunWorkflow:
                 execution_result
             )
             if deferral_reason is not None:
+                if self._has_required_failed_finalization():
+                    # A required after-execution checkpoint already failed:
+                    # keep the authoritative failure instead of deferring.
+                    return
                 self._publish_status = "not_required"
                 self._publish_reason = deferral_reason
                 return
@@ -16793,6 +16797,19 @@ class MoonMindRunWorkflow:
                 )
         return None
 
+    def _has_required_failed_finalization(self) -> bool:
+        for row in self._step_ledger_rows:
+            if not isinstance(row, dict):
+                continue
+            outcome = row.get("finalizationOutcome")
+            if (
+                isinstance(outcome, Mapping)
+                and outcome.get("status") == "failed"
+                and outcome.get("criticality") == "required"
+            ):
+                return True
+        return False
+
     def _record_publication_deferred_finalization(
         self,
         logical_step_id: str,
@@ -16804,6 +16821,16 @@ class MoonMindRunWorkflow:
         if not isinstance(row, dict):
             return
         previous = row.get("finalizationOutcome")
+        if (
+            isinstance(previous, Mapping)
+            and previous.get("status") == "failed"
+            and previous.get("criticality") == "required"
+        ):
+            # A required checkpoint or publication failure is authoritative:
+            # a later validated continuation must not replace it with a
+            # recoverability-only deferral, otherwise the real failure is
+            # masked as success.
+            return
         retry_count = 0
         if isinstance(previous, Mapping):
             try:
@@ -16875,6 +16902,8 @@ class MoonMindRunWorkflow:
                     )
                 )
                 if deferral_reason is not None:
+                    if self._has_required_failed_finalization():
+                        return
                     self._publish_status = "not_required"
                     self._publish_reason = deferral_reason
                     return
