@@ -156,99 +156,176 @@ async def test_resolve_github_token_for_launch_uses_canonical_workflow_env(
 
     assert out == "workflow-token"
 
+def _clear_ghcr_deployment_env(monkeypatch: pytest.MonkeyPatch) -> None:
+    for var in (
+        "GHCR_PULL_USER",
+        "GHCR_PULL_TOKEN",
+        "MOONMIND_GHCR_PULL_USER_SECRET_REF",
+        "MOONMIND_GHCR_PULL_TOKEN_SECRET_REF",
+        "WORKFLOW_GHCR_PULL_USER_SECRET_REF",
+        "WORKFLOW_GHCR_PULL_TOKEN_SECRET_REF",
+    ):
+        monkeypatch.delenv(var, raising=False)
+
+
+def _stub_empty_ghcr_store(monkeypatch: pytest.MonkeyPatch) -> None:
+    session = _FakeLookupSession()
+    monkeypatch.setattr(
+        "api_service.db.base.async_session_maker", _FakeSessionMaker(session)
+    )
+
+
+def _forbid_source_token_resolution(monkeypatch: pytest.MonkeyPatch) -> None:
+    async def _unexpected_github_token(*_args: object, **_kwargs: object) -> str:
+        raise AssertionError("source GitHub token resolution must not run")
+
+    async def _unexpected_managed_token(*_args: object, **_kwargs: object) -> str:
+        raise AssertionError("managed source token lookup must not run")
+
+    monkeypatch.setattr(
+        "moonmind.workflows.temporal.runtime.managed_api_key_resolve.resolve_github_token_for_launch",
+        _unexpected_github_token,
+    )
+    monkeypatch.setattr(
+        "moonmind.workflows.temporal.runtime.managed_api_key_resolve.resolve_managed_github_token_from_store",
+        _unexpected_managed_token,
+    )
+
+
 async def test_resolve_ghcr_pull_credentials_requires_complete_env_pair(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.delenv("GHCR_PULL_USER", raising=False)
-    monkeypatch.delenv("GHCR_PULL_TOKEN", raising=False)
+    _clear_ghcr_deployment_env(monkeypatch)
+    monkeypatch.setenv("GHCR_PULL_USER", "pull-user")
 
     with pytest.raises(ValueError, match="requires both user and token"):
-        await resolve_ghcr_pull_credentials_for_launch(
-            {"GHCR_PULL_USER": "pull-user"}
-        )
+        await resolve_ghcr_pull_credentials_for_launch()
+
+    _clear_ghcr_deployment_env(monkeypatch)
+    monkeypatch.setenv("GHCR_PULL_TOKEN", "pull-token")
 
     with pytest.raises(ValueError, match="requires both user and token"):
-        await resolve_ghcr_pull_credentials_for_launch(
-            {"GHCR_PULL_TOKEN": "pull-token"}
-        )
+        await resolve_ghcr_pull_credentials_for_launch()
 
 async def test_resolve_ghcr_pull_credentials_uses_complete_env_pair(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.delenv("GHCR_PULL_USER", raising=False)
-    monkeypatch.delenv("GHCR_PULL_TOKEN", raising=False)
+    _clear_ghcr_deployment_env(monkeypatch)
+    monkeypatch.setenv("GHCR_PULL_USER", " pull-user ")
+    monkeypatch.setenv("GHCR_PULL_TOKEN", " pull-token ")
 
-    assert await resolve_ghcr_pull_credentials_for_launch(
-        {
-            "GHCR_PULL_USER": " pull-user ",
-            "GHCR_PULL_TOKEN": " pull-token ",
-        }
-    ) == ("pull-user", "pull-token")
-
-async def test_resolve_ghcr_pull_credentials_uses_github_token_when_pair_absent(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    monkeypatch.delenv("GHCR_PULL_USER", raising=False)
-    monkeypatch.delenv("GHCR_PULL_TOKEN", raising=False)
-
-    async def _fake_github_login(_token: str) -> str:
-        return "github-user"
-
-    monkeypatch.setattr(
-        "moonmind.workflows.temporal.runtime.managed_api_key_resolve."
-        "_resolve_github_login_for_token",
-        _fake_github_login,
+    assert await resolve_ghcr_pull_credentials_for_launch() == (
+        "pull-user",
+        "pull-token",
     )
 
-    assert await resolve_ghcr_pull_credentials_for_launch(
-        {"GITHUB_TOKEN": "github-token"}
-    ) == ("github-user", "github-token")
-
-async def test_resolve_ghcr_pull_credentials_requires_complete_pair_before_github_fallback(
+async def test_resolve_ghcr_pull_credentials_never_converts_source_pat(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.delenv("GHCR_PULL_USER", raising=False)
-    monkeypatch.delenv("GHCR_PULL_TOKEN", raising=False)
+    # MoonLadderStudios/MoonMind#4012: a source PAT must never become pull
+    # credentials, with or without an explicit registry identity elsewhere.
+    _clear_ghcr_deployment_env(monkeypatch)
+    _stub_empty_ghcr_store(monkeypatch)
+    _forbid_source_token_resolution(monkeypatch)
+    monkeypatch.setenv("GITHUB_TOKEN", "github-token")
 
-    async def _unexpected_github_login(_token: str) -> str:
-        raise AssertionError("GitHub fallback should not run")
+    assert await resolve_ghcr_pull_credentials_for_launch() is None
 
-    monkeypatch.setattr(
-        "moonmind.workflows.temporal.runtime.managed_api_key_resolve."
-        "_resolve_github_login_for_token",
-        _unexpected_github_login,
-    )
+
+async def test_resolve_ghcr_pull_credentials_ignores_launch_environment_plaintext(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Agent-authored launch fields are not accepted as registry authentication:
+    # the resolver takes no launch mapping, so smuggled GHCR_PULL_* values
+    # cannot be supplied. Deployment env empty => anonymous None.
+    import inspect
+
+    _clear_ghcr_deployment_env(monkeypatch)
+    _stub_empty_ghcr_store(monkeypatch)
+    _forbid_source_token_resolution(monkeypatch)
+
+    assert list(
+        inspect.signature(resolve_ghcr_pull_credentials_for_launch).parameters
+    ) == []
+    assert await resolve_ghcr_pull_credentials_for_launch() is None
+
+async def test_resolve_ghcr_pull_credentials_requires_complete_pair_without_source_fallback(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _clear_ghcr_deployment_env(monkeypatch)
+    monkeypatch.setenv("GHCR_PULL_USER", "pull-user")
+    _forbid_source_token_resolution(monkeypatch)
 
     with pytest.raises(ValueError, match="requires both user and token"):
-        await resolve_ghcr_pull_credentials_for_launch(
-            {
-                "GHCR_PULL_USER": "pull-user",
-                "GITHUB_TOKEN": "github-token",
-            }
-        )
+        await resolve_ghcr_pull_credentials_for_launch()
 
 async def test_resolve_ghcr_pull_credentials_requires_complete_managed_secret_pair(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.delenv("GHCR_PULL_USER", raising=False)
-    monkeypatch.delenv("GHCR_PULL_TOKEN", raising=False)
+    _clear_ghcr_deployment_env(monkeypatch)
     session = _FakeLookupSession(values={"GHCR_PULL_USER": "pull-user"})
     session_maker = _FakeSessionMaker(session)
     monkeypatch.setattr("api_service.db.base.async_session_maker", session_maker)
-
-    async def _unexpected_github_login(_token: str) -> str:
-        raise AssertionError("GitHub fallback should not run")
-
-    monkeypatch.setattr(
-        "moonmind.workflows.temporal.runtime.managed_api_key_resolve."
-        "_resolve_github_login_for_token",
-        _unexpected_github_login,
-    )
+    _forbid_source_token_resolution(monkeypatch)
 
     with pytest.raises(ValueError, match="requires both user and token managed secrets"):
-        await resolve_ghcr_pull_credentials_for_launch(
-            {"GITHUB_TOKEN": "github-token"}
-        )
+        await resolve_ghcr_pull_credentials_for_launch()
+
+async def test_resolve_ghcr_pull_credentials_store_outage_fails_closed(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # A managed-store outage is a registry-boundary failure, never an invitation
+    # to try source auth, another identity, or an anonymous downgrade.
+    _clear_ghcr_deployment_env(monkeypatch)
+    session = _FakeLookupSession(errors={"GHCR_PULL_USER": RuntimeError("db down")})
+    monkeypatch.setattr(
+        "api_service.db.base.async_session_maker", _FakeSessionMaker(session)
+    )
+    _forbid_source_token_resolution(monkeypatch)
+
+    with pytest.raises(ValueError, match="store is unavailable"):
+        await resolve_ghcr_pull_credentials_for_launch()
+
+async def test_resolve_ghcr_pull_credentials_uses_secret_ref_pair(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _clear_ghcr_deployment_env(monkeypatch)
+    monkeypatch.setenv("MY_GHCR_PULL_USER", " ref-user ")
+    monkeypatch.setenv("MY_GHCR_PULL_TOKEN", " ref-token ")
+    monkeypatch.setenv("MOONMIND_GHCR_PULL_USER_SECRET_REF", "MY_GHCR_PULL_USER")
+    monkeypatch.setenv("MOONMIND_GHCR_PULL_TOKEN_SECRET_REF", "MY_GHCR_PULL_TOKEN")
+
+    assert await resolve_ghcr_pull_credentials_for_launch() == (
+        "ref-user",
+        "ref-token",
+    )
+
+async def test_resolve_ghcr_pull_credentials_requires_complete_secret_ref_pair(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _clear_ghcr_deployment_env(monkeypatch)
+    monkeypatch.setenv("MOONMIND_GHCR_PULL_USER_SECRET_REF", "MY_GHCR_PULL_USER")
+
+    with pytest.raises(ValueError, match="requires both user and token secret refs"):
+        await resolve_ghcr_pull_credentials_for_launch()
+
+async def test_resolve_ghcr_pull_credentials_public_anonymous_returns_none(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Omitted configuration is the public-anonymous path: no credentials, no
+    # source lookup, no username probing.
+    _clear_ghcr_deployment_env(monkeypatch)
+    _stub_empty_ghcr_store(monkeypatch)
+    _forbid_source_token_resolution(monkeypatch)
+
+    assert await resolve_ghcr_pull_credentials_for_launch() is None
+
+async def test_ghcr_pull_credentials_bound_to_ghcr_registry() -> None:
+    from moonmind.workflows.temporal.runtime.managed_api_key_resolve import (
+        GHCR_REGISTRY,
+    )
+
+    assert GHCR_REGISTRY == "ghcr.io"
 
 async def test_shape_launch_github_auth_environment_uses_ambient_token_before_store(
     monkeypatch: pytest.MonkeyPatch,
