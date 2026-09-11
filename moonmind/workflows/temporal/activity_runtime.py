@@ -10827,6 +10827,42 @@ class TemporalAgentRuntimeActivities:
                 summary["omnigentStuckStateSweepFailed"] = 1
             else:
                 summary["omnigentStuckState"] = stuck_result.to_dict()
+        # MoonLadderStudios/MoonMind#4226: surface Temporal schedule health
+        # from the same operational reconcile tick. Schedule descriptions are
+        # injected (never fetched here) so the decision stays pure and
+        # testable; failures are auxiliary and must not overwrite primary
+        # reattachment success.
+        try:
+            from moonmind.workflows.temporal.schedule_health import (
+                evaluate_reconcile_schedules,
+            )
+
+            raw_descriptions = action_payload.get("scheduleDescriptions")
+            if isinstance(raw_descriptions, Mapping):
+                raw_previous = action_payload.get("scheduleSkippedPrevious")
+                raw_alerted = action_payload.get("scheduleSkippedLastAlerted")
+                schedule_health = evaluate_reconcile_schedules(
+                    schedule_descriptions=raw_descriptions,
+                    previous_counters=(
+                        raw_previous if isinstance(raw_previous, Mapping) else {}
+                    ),
+                    last_alerted=(
+                        raw_alerted if isinstance(raw_alerted, Mapping) else {}
+                    ),
+                )
+                summary["scheduleHealth"] = schedule_health
+                if schedule_health.get("diagnostics"):
+                    summary["scheduleSkippedOverlapDiagnostics"] = (
+                        schedule_health["diagnostics"]
+                    )
+                summary["scheduleSkippedCurrent"] = schedule_health.get(
+                    "currentCounters", {}
+                )
+        except Exception:
+            logger.warning(
+                "Schedule SkippedOverlap evaluation failed during reconcile",
+                exc_info=True,
+            )
         return summary
 
     async def agent_runtime_cleanup_managed_runtime_files(

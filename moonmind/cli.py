@@ -101,7 +101,12 @@ def container_run(
     "python-tests",
     help=(
         "Run Python unit tests in the active managed workspace through a durable "
-        "container job."
+        "container job. The CLI waits a bounded interval "
+        "(--timeout-seconds plus a 120s terminal-read grace) for the job to "
+        "reach a terminal state instead of waiting indefinitely; a stuck "
+        "`moonmind container python-tests` call inside an idle Omnigent host "
+        "(MoonLadderStudios/MoonMind#4226) therefore surfaces as a CLI error "
+        "rather than a silent hang."
     ),
 )
 def container_python_tests(
