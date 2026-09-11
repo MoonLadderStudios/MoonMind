@@ -11,6 +11,10 @@ import httpx
 from markdown_it import MarkdownIt
 
 from moonmind.workflows.adapters.github_service import GitHubService
+from moonmind.workflows.temporal.github_issue_admission import (
+    ENTRYPOINT_SEARCH,
+    admit_for_entrypoint,
+)
 from moonmind.workflows.temporal.github_issue_lifecycle import (
     ELIGIBLE_SETTLED_STATES,
     SETTLED_RECOVERY_NEEDED,
@@ -399,6 +403,18 @@ async def resolve_issue(
                 if attempt_evidence_resolver is not None:
                     attempt_context = await attempt_evidence_resolver(normalized)
                     if attempt_evidence_blocks_admission(attempt_context):
+                        continue
+                    # Same shared exact-issue admission boundary as explicit /
+                    # orchestration / continuation paths (issue #4178): the
+                    # search entrypoint admits with its pinned identity.
+                    shared = admit_for_entrypoint(
+                        ENTRYPOINT_SEARCH,
+                        repository=repository,
+                        issue_number=int(candidate["number"]),
+                        issue={"state": "open", "labels": normalized["labels"]},
+                        attempt_context=attempt_context,
+                    )
+                    if not shared.allowed:
                         continue
                 if not query and await blockers_from_issue(normalized):
                     continue
