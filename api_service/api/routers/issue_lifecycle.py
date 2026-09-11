@@ -236,8 +236,8 @@ async def validate_operator_action(
         return {"allowed": False, "verdict": field_error, "decision": None}
     try:
         decision, comment = _build_allowed_decision(payload=payload, user=user)
-    except ValueError as exc:
-        return {"allowed": False, "verdict": {"allowed": False, "code": "invalid_disposition", "message": str(exc)}, "decision": None}
+    except ValueError:
+        return {"allowed": False, "verdict": {"allowed": False, "code": "invalid_disposition", "message": "Invalid decision fields for this action."}, "decision": None}
     return {"allowed": True, "verdict": verdict, "decision": decision, "comment": comment}
 
 
@@ -284,8 +284,8 @@ async def submit_operator_action(
         return {"allowed": False, "verdict": field_error, "decision": None, "publication": None}
     try:
         decision, comment = _build_allowed_decision(payload=payload, user=user)
-    except ValueError as exc:
-        return {"allowed": False, "verdict": {"allowed": False, "code": "invalid_disposition", "message": str(exc)}, "decision": None, "publication": None}
+    except ValueError:
+        return {"allowed": False, "verdict": {"allowed": False, "code": "invalid_disposition", "message": "Invalid decision fields for this action."}, "decision": None, "publication": None}
     if verdict.get("duplicate"):
         return {
             "allowed": True,
