@@ -44,6 +44,7 @@ def issue(number=4025, **overrides):
         "body": "Reconcile advertised routes and bounded polling recovery.",
         "html_url": f"https://github.com/{REPOSITORY}/issues/{number}",
         "labels": [{"name": "bug"}],
+        "user": {"id": 111, "login": "search-user"},
         **overrides,
     }
 
@@ -57,6 +58,10 @@ def activity_boundary(monkeypatch):
 
     def handler(request):
         requests.append(request)
+        if request.url.path == "/user":
+            return httpx.Response(
+                200, json={"id": 111, "login": "search-user", "type": "user"}
+            )
         if "/comments" in request.url.path:
             # Live comment readability gate expects a GitHub comment list.
             # GET returns the list; POST creates one comment.
@@ -626,8 +631,9 @@ async def test_scan_reuses_prerequisite_evidence_across_all_500_candidates(
     )
     assert result.status == "COMPLETED"
     assert result.outputs["searchEvidence"]["candidatesExamined"] == 500
-    # +5 for live comment readability (1 GET) + advisory claim (2 POSTs + 2 re-reads).
-    assert len(activity_boundary.requests) == 5 + 11 + 1 + 5
+    # +1 for the credential-bound identity lookup, +5 for live comment
+    # readability (1 GET) + advisory claim (2 POSTs + 2 re-reads).
+    assert len(activity_boundary.requests) == 1 + 5 + 11 + 1 + 5
 
 
 @pytest.mark.asyncio
@@ -648,7 +654,7 @@ async def test_scan_stops_before_exceeding_aggregate_prerequisite_budget(
     )
     assert result.status == "FAILED"
     assert "100-request prerequisite lookup budget" in result.outputs["error"]
-    assert len(activity_boundary.requests) == 1 + 100
+    assert len(activity_boundary.requests) == 1 + 1 + 100
     assert all(request.method == "GET" for request in activity_boundary.requests)
 
 
@@ -668,8 +674,9 @@ async def test_selected_issue_confirmation_refreshes_cached_prerequisite_state(
     )
     assert result.status == "FAILED"
     assert "changed or could not be confirmed" in result.outputs["error"]
-    # +1 for live comment readability GET before confirmation re-read.
-    assert len(activity_boundary.requests) == 4 + 1
+    # +1 for the credential-bound identity lookup +1 for live comment
+    # readability GET before confirmation re-read.
+    assert len(activity_boundary.requests) == 1 + 4 + 1
 
 
 @pytest.mark.asyncio
@@ -687,8 +694,9 @@ async def test_maximum_prerequisite_list_has_fresh_confirmation_budget(
         "github.load_issue_preset_brief", {"repository": REPOSITORY, "issueSearch": ""}
     )
     assert result.status == "COMPLETED"
-    # +5 for live comment readability + advisory claim.
-    assert len(activity_boundary.requests) == 1 + 100 + 1 + 100 + 5
+    # +1 for the credential-bound identity lookup +5 for live comment
+    # readability + advisory claim.
+    assert len(activity_boundary.requests) == 1 + 1 + 100 + 1 + 100 + 5
 
 
 @pytest.mark.asyncio
@@ -719,8 +727,9 @@ async def test_prerequisite_cache_preserves_cross_repository_identity(
     )
     assert result.status == "COMPLETED"
     assert result.outputs["searchEvidence"]["candidatesExamined"] == 3
-    # +5 for live comment readability + advisory claim.
-    assert len(activity_boundary.requests) == 5 + 5
+    # +1 for the credential-bound identity lookup +5 for live comment
+    # readability + advisory claim.
+    assert len(activity_boundary.requests) == 1 + 5 + 5
 
 
 @pytest.mark.asyncio
@@ -820,11 +829,19 @@ async def test_default_preset_resolves_and_preserves_issue_across_agent_steps(
     result = await activity_boundary.execute(tool["id"], tool["inputs"])
     assert result.status == "COMPLETED"
     assert result.outputs["issue"]["number"] == 4025
-    assert result.outputs["searchEvidence"] == {
-        "fallbackScanning": True,
-        "pagesExamined": 1,
-        "candidatesExamined": 1,
+    assert result.outputs["searchEvidence"]["fallbackScanning"] is True
+    assert result.outputs["searchEvidence"]["pagesExamined"] == 1
+    assert result.outputs["searchEvidence"]["candidatesExamined"] == 1
+    assert result.outputs["searchEvidence"]["authorScope"] == "authenticated_user"
+    assert result.outputs["searchEvidence"]["authenticatedUser"] == {
+        "id": 111,
+        "login": "search-user",
     }
+    assert result.outputs["searchEvidence"]["selectedIssueAuthor"] == {
+        "id": 111,
+        "login": "search-user",
+    }
+    assert result.outputs["searchEvidence"]["authorMismatchesSkipped"] == 0
     workflow = MoonMindRunWorkflow()
     workflow._record_trusted_issue_context(result.outputs)
     previous = workflow._merge_trusted_issue_context(
@@ -939,9 +956,14 @@ async def test_query_search_and_previous_explicit_issue_payload(activity_boundar
         {"repository": REPOSITORY, "issueSearch": "dashboard"},
     )
     assert result.status == "COMPLETED"
+    search_requests = [
+        request
+        for request in activity_boundary.requests
+        if request.url.path == "/search/issues"
+    ]
     assert (
-        activity_boundary.requests[0].url.params["q"]
-        == f"dashboard repo:{REPOSITORY} is:issue is:open"
+        search_requests[0].url.params["q"]
+        == f"(dashboard) author:search-user repo:{REPOSITORY} is:issue is:open"
     )
     activity_boundary.requests.clear()
     # Req-2 claim mutates the mocked issue labels; reset to Available for the
