@@ -49,7 +49,6 @@ from moonmind.workflows.temporal.github_issue_admission import (
     child_attempt_context,
     contender_quiesce_decision,
     persist_admission_identity,
-    recandidate_after_abandon,
     revalidate_for_mutation,
     should_stop_on_resume,
 )
@@ -4647,6 +4646,22 @@ async def load_github_issue_preset_brief(
                 "issueNumber": issue_number,
             },
         )
+    live_comments = await _github_live_comments_readable(
+        repository=repository,
+        issue_number=issue_number,
+        github_service_factory=github_service_factory,
+    )
+    if live_comments is not None and not live_comments.get("ok"):
+        return ToolResult(
+            status="FAILED",
+            outputs={
+                "error": str(live_comments.get("summary") or "Issue comment evidence unreadable."),
+                "repository": repository,
+                "issueNumber": issue_number,
+                "reasonCode": "read_failure",
+                "decision": "blocked",
+            },
+        )
     try:
         selected_blockers = (
             await _resolved_github_blockers(
@@ -4654,7 +4669,7 @@ async def load_github_issue_preset_brief(
                 repository=repository,
                 github_service=github_service_factory(),
             )
-            if search_evidence and not _string(inputs.get("issueSearch"))
+            if search_evidence
             else []
         )
     except ValueError as exc:
@@ -4662,9 +4677,17 @@ async def load_github_issue_preset_brief(
     if search_evidence and (
         not is_complete_open_issue(issue_data, repository)
         or issue_data["number"] != issue_number
-        or (not _string(inputs.get("issueSearch")) and selected_blockers)
+        or selected_blockers
         or has_in_progress_status(issue_data)
         or not is_lifecycle_selectable_candidate(issue_data)
+        or not _github_shared_admission_decision(
+            inputs=inputs,
+            context=_context,
+            repository=repository,
+            issue_number=issue_number,
+            issue=issue_data,
+            search_selected=True,
+        ).allowed
     ):
         return ToolResult(
             status="FAILED",
@@ -5630,7 +5653,13 @@ def _github_status_attempt_context(
     inputs: Mapping[str, Any],
     context: Mapping[str, Any] | None,
 ) -> dict[str, Any]:
-    """Collect supplied validated attempt context for admission decisions."""
+    """Collect supplied validated attempt context for admission decisions.
+
+    Forwards the top-level ``linkedAttempts`` history into the retry
+    admission context so exhausted failures, cooldowns, lineage gaps, and
+    operator holds supplied there reach ``derive_retry_state`` instead of
+    being admitted as fresh.
+    """
     collected: dict[str, Any] = {}
     for source in (inputs, _mapping((context or {}).get("previousOutputs")), context or {}):
         if not isinstance(source, Mapping):
@@ -5642,6 +5671,8 @@ def _github_status_attempt_context(
             "unresolved_active_attempt",
             "attemptContext",
             "attempt_context",
+            "linkedAttempts",
+            "linked_attempts",
         ):
             if key in source:
                 value = source.get(key)
@@ -5649,6 +5680,11 @@ def _github_status_attempt_context(
                     collected.update(dict(value))
                 else:
                     collected[key] = value
+        nested = source.get("attemptContext", source.get("attempt_context"))
+        if isinstance(nested, Mapping):
+            for key in ("linkedAttempts", "linked_attempts"):
+                if key in nested and key not in collected:
+                    collected[key] = nested.get(key)
     return collected
 
 
@@ -5806,6 +5842,43 @@ def _github_admission_bundle(
     return bundle
 
 
+async def _github_live_comments_readable(
+    *,
+    repository: str,
+    issue_number: int,
+    github_service_factory: Callable[[], GitHubService] = GitHubService,
+) -> dict[str, Any] | None:
+    """Verify live issue-comment readability at the Activity boundary.
+
+    Returns None when readability cannot be checked (no list method or no
+    credential); callers keep the existing trusted-channel behavior in that
+    case. Otherwise returns {ok, reasonCode, summary}: unreadable or
+    incompletely paginated evidence must block admission as unknown rather
+    than being interpreted as an empty owner set.
+    """
+    try:
+        service = github_service_factory()
+    except Exception:
+        return None
+    if not hasattr(service, "list_issue_comments"):
+        return None
+    try:
+        listed = await service.list_issue_comments(repo=repository, issue_number=issue_number)
+    except Exception as exc:
+        return {"ok": False, "reasonCode": "outcome_unknown",
+                "summary": f"Issue comment list result unknown: {exc}."}
+    if not isinstance(listed, Mapping):
+        return {"ok": False, "reasonCode": "outcome_unknown",
+                "summary": "Issue comment list returned malformed evidence."}
+    if listed.get("ok"):
+        return {"ok": True, "reasonCode": "listed", "summary": str(listed.get("summary") or "listed")}
+    code = str(listed.get("reasonCode") or "list_failed")
+    if code in {"auth_unavailable", "denied"}:
+        return None
+    return {"ok": False, "reasonCode": code,
+            "summary": str(listed.get("summary") or "Issue comment listing failed.")}
+
+
 def _github_shared_admission_decision(
     *,
     inputs: Mapping[str, Any],
@@ -5865,12 +5938,15 @@ def _github_admission_claim_and_identity(
         ) or _string(
             _mapping(inputs.get("previousOutputs")).get("attemptId")
         )
+    handoff = _github_brief_recovery_handoff(inputs, context)
     claim = announce_before_assessment(
         settled=settled,
         repository=repository,
         issue_number=issue_number,
         attempt_id=own_attempt_id or f"pending-{repository}#{issue_number}",
         current_labels=list(current_labels or []),
+        predecessor_stopped=handoff.get("predecessor_stopped"),
+        handoff_usable=handoff.get("handoff_usable"),
     )
     persisted = persist_admission_identity(
         {
@@ -6069,6 +6145,8 @@ async def _execute_brief_admission_claim(
                 try:
                     reread_settled = interpret_issue(reread_issue).settled
                 except Exception:
+                    # Keep the pre-write settled value: a failed
+                    # reinterpretation must not mask the remove failure.
                     pass
             return {
                 "executed": True,
@@ -6106,6 +6184,22 @@ async def _execute_brief_admission_claim(
         reread_settled = interpret_issue(reread_issue).settled
     except Exception:
         reread_settled = settled
+    if reread_settled != "in_progress":
+        return {
+            "executed": True,
+            "blocked": True,
+            "reasonCode": "claim_not_confirmed",
+            "summary": (
+                f"Advisory claim for {issue_ref} applied {applied} but the re-read "
+                f"settled as {reread_settled!r}; the in-progress claim was not "
+                "confirmed, so work does not launch."
+            ),
+            "issueRef": issue_ref,
+            "appliedActions": applied,
+            "rereadLabels": reread_issue.get("labels"),
+            "rereadSettled": reread_settled,
+            "rereadOk": True,
+        }
     return {
         "executed": True,
         "blocked": False,
@@ -7001,6 +7095,24 @@ async def update_github_issue_status(
     )
     if issue_data is None:
         return ToolResult(status="FAILED", outputs={"issueRef": issue_ref, "summary": error or "GitHub issue update fetch failed."})
+    live_comments = await _github_live_comments_readable(
+        repository=repository,
+        issue_number=issue_number,
+        github_service_factory=github_service_factory,
+    )
+    if live_comments is not None and not live_comments.get("ok"):
+        return ToolResult(
+            status="FAILED",
+            outputs={
+                "issueRef": issue_ref,
+                "decision": "blocked",
+                "reasonCode": "read_failure",
+                "summary": (
+                    f"Skipped GitHub issue update for {issue_ref}: {live_comments.get('summary')}; "
+                    "unknown comment evidence blocks admission."
+                ),
+            },
+        )
     issue = _github_issue_payload(issue_data, repository)
     current_labels = [str(label) for label in issue.get("labels") or []]
     interpretation = interpret_issue({"state": issue.get("state", "open"), "labels": current_labels})
@@ -7151,6 +7263,27 @@ async def update_github_issue_status(
             "read_failure",
             "closed_terminal",
         }:
+            if (
+                shared_admission.reason_code == "manual_in_progress_without_trusted_owner"
+                and interpretation.settled == "in_progress"
+                and own_attempt_id
+            ):
+                # The pre-assessment brief already applied in-progress for this
+                # same workflow attempt; the redundant start transition is
+                # idempotent rather than a manual claim by another owner.
+                return ToolResult(
+                    status="COMPLETED",
+                    outputs={
+                        "issueRef": issue_ref,
+                        "decision": "already_applied",
+                        "lifecycleSettled": interpretation.settled,
+                        "reasonCode": "already_applied",
+                        "summary": (
+                            f"GitHub issue update for {issue_ref} already applied: "
+                            "in-progress claim from this attempt is present."
+                        ),
+                    },
+                )
             return ToolResult(
                 status="FAILED",
                 outputs={

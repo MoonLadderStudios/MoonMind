@@ -104,11 +104,11 @@ def test_unknown_entrypoint_and_unpinned_identity_block() -> None:
 def test_search_and_explicit_use_same_interpretation() -> None:
     # Real workflow call shape: search selector + explicit admission agree.
     issue = {"state": "open", "labels": ["bug"], "number": 1}
-    assert is_lifecycle_selectable_candidate({"state": "open", "labels": ["bug"]}) is True
+    assert is_lifecycle_selectable_candidate(issue) is True
     for entrypoint in (ENTRYPOINT_SEARCH, ENTRYPOINT_EXPLICIT):
         decision = admit_for_entrypoint(
             entrypoint, repository="o/r", issue_number=1,
-            issue={"state": "open", "labels": ["bug"]},
+            issue=issue,
         )
         assert decision.allowed is True
 
@@ -209,8 +209,16 @@ def test_announce_before_assessment_plans_in_progress() -> None:
     recovery = announce_before_assessment(
         settled="recovery_needed", repository="o/r", issue_number=1,
         attempt_id="att_" + "d" * 24, current_labels=["status: recovery-needed"],
+        predecessor_stopped=True, handoff_usable=True,
     )
     assert recovery["planned"] is True
+
+    recovery_missing = announce_before_assessment(
+        settled="recovery_needed", repository="o/r", issue_number=1,
+        attempt_id="att_" + "d" * 24, current_labels=["status: recovery-needed"],
+    )
+    assert recovery_missing["planned"] is False
+    assert recovery_missing["reasonCode"] == "recovery_handoff_missing"
 
     ineligible = announce_before_assessment(
         settled="in_progress", repository="o/r", issue_number=1,
