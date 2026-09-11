@@ -3146,6 +3146,94 @@ class TemporalArtifactPin(Base):
     )
 
 
+class TemporalArtifactUseClaim(Base):
+    """Operation-scoped retention protection for one restore/publish/download.
+
+    Unlike the single replace-one operator pin, many independent use claims
+    may protect the same artifact at once. Releasing one claim never erases
+    another claim or an operator pin. Each claim carries a bounded owner, a
+    caller-supplied request identity (idempotency across retries), an
+    operation kind, and an expiry so a background failure or stale cleanup
+    cannot pin data forever.
+    """
+
+    __tablename__ = "temporal_artifact_use_claims"
+    __table_args__ = (
+        UniqueConstraint(
+            "artifact_id",
+            "owner_principal",
+            "request_id",
+            name="uq_temporal_artifact_use_claims_owner_request",
+        ),
+        Index(
+            "ix_temporal_artifact_use_claims_artifact_id",
+            "artifact_id",
+        ),
+        Index(
+            "ix_temporal_artifact_use_claims_expires_at",
+            "expires_at",
+        ),
+    )
+
+    id: Mapped[UUID] = mapped_column(Uuid, primary_key=True, default=uuid4)
+    artifact_id: Mapped[str] = mapped_column(
+        String(64),
+        ForeignKey("temporal_artifacts.artifact_id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    owner_principal: Mapped[str] = mapped_column(Text, nullable=False)
+    request_id: Mapped[str] = mapped_column(String(255), nullable=False)
+    operation_kind: Mapped[str] = mapped_column(String(64), nullable=False)
+    expires_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=func.now(),
+    )
+
+    artifact: Mapped[TemporalArtifact] = relationship("TemporalArtifact")
+
+
+class TemporalArtifactDeletionIntent(Base):
+    """Bounded recoverable intent for one artifact's DB/object-store delete.
+
+    Persisted before object-store deletion so absent objects, failed deletes,
+    lost acknowledgments, failed DB commits, and sweeper restarts converge
+    through reconciliation instead of reporting false available/deleted
+    results. One row per artifact; cleared only after the tombstone commits.
+    """
+
+    __tablename__ = "temporal_artifact_deletion_intents"
+    __table_args__ = (
+        Index(
+            "ix_temporal_artifact_deletion_intents_created_at",
+            "created_at",
+        ),
+    )
+
+    artifact_id: Mapped[str] = mapped_column(
+        String(64),
+        ForeignKey("temporal_artifacts.artifact_id", ondelete="CASCADE"),
+        primary_key=True,
+    )
+    initiated_by_principal: Mapped[str] = mapped_column(Text, nullable=False)
+    attempts: Mapped[int] = mapped_column(nullable=False, default=0)
+    last_error: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=func.now(),
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=func.now(),
+    )
+
+
 class WorkflowRun(Base):
     """Top-level record per Spec workflow execution."""
 
