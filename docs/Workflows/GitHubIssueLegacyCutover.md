@@ -8,11 +8,11 @@
 **Audience:** Workflow, preset, GitHub adapter, recovery, and dashboard contributors and operators  
 **Authority:** Conservative reconciliation of pre-lifecycle GitHub issues onto the label-based state machine, retained-history behavior, and coordinated multi-device release. The state machine itself is owned by [GitHub Issue Status State Machine Design](GitHubIssueStatusStateMachineDesign.md). Existing execution, checkpoint, publishing, and merge contracts retain their respective authority.  
 **Owning Surface:** Trusted GitHub issue operations and workflow terminal/reconciliation boundaries  
-**Related Implementation:** `moonmind/workflows/temporal/github_issue_legacy_cutover.py`, `moonmind/workflows/temporal/github_issue_lifecycle.py`, `moonmind/workflows/temporal/github_issue_reconciliation.py`, and `tests/unit/workflows/temporal/test_github_issue_legacy_cutover_4184.py`.
+**Related Implementation:** `moonmind/workflows/temporal/github_issue_legacy_cutover.py`, `moonmind/workflows/temporal/activities/github_issue_legacy_cutover_activities.py` (`github_issue.assess_legacy`, `github_issue.plan_legacy_repair`), `moonmind/workflows/temporal/github_issue_lifecycle.py`, `moonmind/workflows/temporal/github_issue_reconciliation.py`, and `tests/unit/workflows/temporal/test_github_issue_legacy_cutover_4184.py` plus `test_github_issue_legacy_cutover_wiring_4184.py`.
 
 **Related Docs:** [GitHub Issue Status State Machine Design](GitHubIssueStatusStateMachineDesign.md), [Workflow Presets System](WorkflowPresetsSystem.md), [Workflow Publishing](WorkflowPublishing.md), [Checkpoint Branch System](CheckpointBranchSystem.md), [Workflow Remediation](WorkflowRemediation.md), and [PR Merge Automation](PrMergeAutomation.md).
 
-This document defines desired behavior, not implemented or deployment-tested capability. Implementation tracking and rollout notes belong in issues or temporary execution artifacts, not this design.
+The cutover decision layer, its activity bindings (`github_issue.assess_legacy`, `github_issue.plan_legacy_repair`), and its unit plus emission-path/replay coverage are implemented as cited above. Post-integration provider and three-device qualification is reported separately; implementation alone does not claim deployed compliance. Rollout notes belong in issues or temporary execution artifacts, not this design.
 
 ## 1. Surviving policy
 
