@@ -665,6 +665,12 @@ RUN_WORKFLOW_PUBLISH_OUTCOME_PATCH = "run-workflow-publish-outcome-v1"
 # has eliminated those histories.
 RUN_WORKFLOW_NESTED_PROPOSE_TASKS_PATCH = "run-workflow-nested-propose-tasks"
 RUN_CANONICAL_NO_COMMIT_OUTCOME_PATCH = "run-canonical-no-commit-outcome-v1"
+# Search-and-implement shares the implement no-commit outcome only for
+# histories that record this marker. Older search histories without it keep
+# their recorded skipped/failed publication path during replay.
+RUN_CANONICAL_NO_COMMIT_SEARCH_PRESET_PATCH = (
+    "run-canonical-no-commit-search-preset-v1"
+)
 RUN_UNGATED_CONTINUATION_DISPOSITION_PATCH = "run-ungated-continuation-disposition-v1"
 RUN_GATED_STEP_CONTINUATION_PATCH = "run-gated-step-continuation-v1"
 # Expose the workflow-owned continuation capability to the portable Skill at
@@ -1612,6 +1618,7 @@ class MoonMindRunWorkflow:
         self._publish_context: dict[str, Any] = {}
         self._canonical_git_repository_projection_enabled: bool = False
         self._canonical_no_commit_outcome_enabled: bool = False
+        self._canonical_no_commit_search_preset_enabled: bool = False
         self._authoritative_publish_outcome_enabled: bool = False
         self._publish_repair_attempts: int = 0
         self._operator_summary: Optional[str] = None
@@ -11066,6 +11073,9 @@ class MoonMindRunWorkflow:
         self._canonical_no_commit_outcome_enabled = workflow.patched(
             RUN_CANONICAL_NO_COMMIT_OUTCOME_PATCH
         )
+        self._canonical_no_commit_search_preset_enabled = workflow.patched(
+            RUN_CANONICAL_NO_COMMIT_SEARCH_PRESET_PATCH
+        )
         self._authoritative_publish_outcome_enabled = workflow.patched(
             RUN_AUTHORITATIVE_PUBLISH_OUTCOME_PATCH
         )
@@ -18059,10 +18069,14 @@ class MoonMindRunWorkflow:
         task_payload = self._mapping_value(parameters, "workflow")
         if not task_payload:
             task_payload = self._mapping_value(parameters, "task")
-        return bool(
-            self._task_applied_template_slugs(parameters, task_payload)
-            & _CANONICAL_NO_COMMIT_TASK_PRESETS
-        )
+        slugs = self._task_applied_template_slugs(parameters, task_payload)
+        if "github-issue-implement" in slugs:
+            return True
+        if "github-issue-search-and-implement" in slugs:
+            # Replay gate: histories that started before this preset was
+            # admitted keep their recorded skipped/failed path.
+            return bool(self._canonical_no_commit_search_preset_enabled)
+        return bool(slugs & _CANONICAL_NO_COMMIT_TASK_PRESETS)
 
     def _task_skill_names(
         self,

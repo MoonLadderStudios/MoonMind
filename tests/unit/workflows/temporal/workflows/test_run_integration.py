@@ -2176,6 +2176,7 @@ def test_github_issue_search_and_implement_no_commit_finalizes_as_no_commit(
     """
 
     mock_run_workflow._canonical_no_commit_outcome_enabled = True
+    mock_run_workflow._canonical_no_commit_search_preset_enabled = True
     parameters = {
         "publishMode": "pr",
         "workflow": {
@@ -2213,6 +2214,41 @@ def test_github_issue_search_and_implement_no_commit_finalizes_as_no_commit(
     assert "No pull request was required" in message
     assert "no publishable diff was produced" not in message
     assert publish_failure is False
+
+
+def test_github_issue_search_and_implement_no_commit_keeps_legacy_failed_path(
+    mock_run_workflow: MoonMindRunWorkflow,
+) -> None:
+    """Pre-patch search histories replay to their recorded failure.
+
+    Old `github-issue-search-and-implement` runs without
+    `run-canonical-no-commit-search-preset-v1` keep `skipped`/failed for
+    `push_status=no_commits` so replay stays deterministic.
+    """
+
+    mock_run_workflow._canonical_no_commit_outcome_enabled = True
+    mock_run_workflow._canonical_no_commit_search_preset_enabled = False
+    parameters = {
+        "publishMode": "pr",
+        "workflow": {
+            "appliedStepTemplates": [
+                {"slug": "github-issue-search-and-implement", "version": "1.0.0"},
+            ],
+        },
+    }
+
+    mock_run_workflow._record_publish_result(
+        parameters=parameters,
+        execution_result={"outputs": {"push_status": "no_commits"}},
+    )
+
+    assert mock_run_workflow._publish_status == "skipped"
+    status, message, publish_failure = mock_run_workflow._determine_publish_completion(
+        parameters=parameters
+    )
+    assert status == "failed"
+    assert "no publishable diff was produced" in message
+    assert publish_failure is True
 
 
 @pytest.mark.asyncio
