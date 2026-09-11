@@ -4496,7 +4496,7 @@ def _github_issue_payload(data: Mapping[str, Any], repository: str) -> dict[str,
         number = int(str(number_raw).strip())
     except (TypeError, ValueError):
         number = 0
-    return {
+    payload: dict[str, Any] = {
         "repository": repository,
         "number": number,
         "title": _string(data.get("title")),
@@ -4505,6 +4505,14 @@ def _github_issue_payload(data: Mapping[str, Any], repository: str) -> dict[str,
         "state": _string(data.get("state")),
         "labels": normalized_labels,
     }
+    user = data.get("user")
+    if isinstance(user, Mapping):
+        user_id = user.get("id")
+        login = user.get("login")
+        if type(user_id) is int and isinstance(login, str) and login.strip():
+            payload["user"] = {"id": user_id, "login": login.strip()}
+            payload["author"] = {"id": user_id, "login": login.strip()}
+    return payload
 
 
 async def _fetch_github_issue(
@@ -4637,6 +4645,34 @@ def _github_brief_prior_work_pr(
     return ""
 
 
+def _parse_include_all_authors(inputs: Mapping[str, Any]) -> bool | ToolResult:
+    """Strictly parse the all-authors opt-in; omitted input means False.
+
+    Only actual booleans are accepted. Stringified values such as "true" /
+    "false", integers, null, arrays, or objects are rejected rather than
+    coerced with truthiness.
+    """
+    if "includeAllAuthors" in inputs:
+        raw = inputs.get("includeAllAuthors")
+    elif "include_all_authors" in inputs:
+        raw = inputs.get("include_all_authors")
+    else:
+        return False
+    if type(raw) is bool:
+        return raw
+    return ToolResult(
+        status="FAILED",
+        outputs={
+            "error": (
+                "includeAllAuthors must be a boolean value; "
+                'omit it for the default self-authored search or use true/false.'
+            ),
+            "reasonCode": "invalid_author_scope_input",
+            "field": "includeAllAuthors",
+        },
+    )
+
+
 async def load_github_issue_preset_brief(
     inputs: Mapping[str, Any],
     _context: Mapping[str, Any] | None = None,
@@ -4648,6 +4684,9 @@ async def load_github_issue_preset_brief(
     search_evidence: dict[str, Any] = {}
     prerequisite_lookup = PrerequisiteLookup()
     recovery_handoff: dict[str, Any] = _github_brief_recovery_handoff(inputs, _context)
+    include_all_authors = _parse_include_all_authors(inputs)
+    if isinstance(include_all_authors, ToolResult):
+        return include_all_authors
 
     async def blockers_for_issue(issue: Mapping[str, Any]) -> list[dict[str, Any]]:
         return await _resolved_github_blockers(
@@ -4693,6 +4732,7 @@ async def load_github_issue_preset_brief(
                 writers_settled=_recandidate.get("writers_settled")
                 if _recandidate.get("present")
                 else None,
+                include_all_authors=bool(include_all_authors),
             )
         except ValueError as exc:
             return ToolResult(status="FAILED", outputs={"error": str(exc)})
@@ -4745,6 +4785,39 @@ async def load_github_issue_preset_brief(
         )
     except ValueError as exc:
         return ToolResult(status="FAILED", outputs={"error": str(exc)})
+    # Fresh-detail author revalidation happens before the trusted brief /
+    # admission handoff so a wrong-author or unverifiable candidate is never
+    # announced, labeled, or dispatched. Explicit issue-number paths keep
+    # their existing behavior and are not self-scoped.
+    if search_evidence and not include_all_authors:
+        fresh_author = issue_data.get("user") if isinstance(issue_data, Mapping) else None
+        if not isinstance(fresh_author, Mapping) or type(fresh_author.get("id")) is not int:
+            return ToolResult(
+                status="FAILED",
+                outputs={
+                    **search_evidence,
+                    "error": (
+                        "Selected GitHub issue author could not be verified from fresh "
+                        "issue detail."
+                    ),
+                    "reasonCode": "invalid_author_evidence",
+                },
+            )
+        expected = _mapping(
+            _mapping(search_evidence.get("searchEvidence")).get("authenticatedUser")
+        )
+        if expected and fresh_author.get("id") != expected.get("id"):
+            return ToolResult(
+                status="FAILED",
+                outputs={
+                    **search_evidence,
+                    "error": (
+                        "Selected GitHub issue was not created by the authenticated "
+                        "search account."
+                    ),
+                    "reasonCode": "author_mismatch",
+                },
+            )
     if search_evidence and (
         not is_complete_open_issue(issue_data, repository)
         or issue_data["number"] != issue_number
