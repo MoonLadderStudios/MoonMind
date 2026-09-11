@@ -130,6 +130,7 @@ def run_command(
     max_attempts=3,
     initial_delay_seconds=1.0,
     max_delay_seconds=8.0,
+    paginated=False,
 ):
     resolved_cmd = _resolve_command(cmd)
     env = _build_subprocess_env()
@@ -161,13 +162,30 @@ def run_command(
                     file=sys.stderr,
                 )
                 sys.exit(1)
-            if output.strip() == "":
+            if output.strip() == "" and not paginated:
                 return {}
+            if paginated:
+                # gh --paginate emits consecutive JSON arrays, including on the
+                # distribution-provided CLI. Do not require the newer --slurp.
+                decoder = json.JSONDecoder()
+                records = []
+                remaining = output.strip()
+                if not remaining:
+                    raise ValueError("empty paginated response")
+                while remaining:
+                    page, end = decoder.raw_decode(remaining)
+                    if not isinstance(page, list) or any(
+                        not isinstance(item, dict) for item in page
+                    ):
+                        raise ValueError("expected an array of records on every page")
+                    records.extend(page)
+                    remaining = remaining[end:].strip()
+                return records
             return json.loads(output)
         except FileNotFoundError:
             print(f"Command not found: {resolved_cmd[0]}", file=sys.stderr)
             sys.exit(1)
-        except json.JSONDecodeError:
+        except ValueError:
             print(
                 f"Command returned invalid JSON: {' '.join(resolved_cmd)}",
                 file=sys.stderr,
@@ -751,77 +769,35 @@ def _fetch_head_commit_timestamp(*, pr_repo: str | None, head_sha: str) -> datet
     return None
 
 
-def _fetch_pull_request_reviews(*, pr_repo: str | None, pr_number: object) -> list[dict]:
-    repo = str(pr_repo or "").strip()
-    number = str(pr_number or "").strip()
-    if not repo or not number:
-        return []
-    payload = run_command_optional(
-        [
-            "gh",
-            "api",
-            "--paginate",
-            "--slurp",
-            f"repos/{repo}/pulls/{number}/reviews?per_page=100",
-        ]
+def _fetch_review_collection(endpoint: str) -> list[dict]:
+    """Read every page or fail with the actual collection error.
+
+    Missing review evidence must never be converted into a pending review.
+    The same contract applies to review and reaction completion evidence.
+    """
+    return run_command(
+        ["gh", "api", "--paginate", endpoint],
+        "Unable to collect automated review evidence; repair GitHub access or tooling and retry.",
+        paginated=True,
     )
-    if not isinstance(payload, list):
-        return []
-    return [
-        item
-        for page in payload
-        if isinstance(page, list)
-        for item in page
-        if isinstance(item, dict)
-    ]
+
+
+def _fetch_pull_request_reviews(*, pr_repo: str | None, pr_number: object) -> list[dict]:
+    return _fetch_review_collection(
+        f"repos/{pr_repo}/pulls/{pr_number}/reviews?per_page=100"
+    )
 
 
 def _fetch_comment_reactions(*, pr_repo: str | None, comment_id: object) -> list[dict]:
-    repo = str(pr_repo or "").strip()
-    identifier = str(comment_id or "").strip()
-    if not repo or not identifier:
-        return []
-    payload = run_command_optional(
-        [
-            "gh",
-            "api",
-            "--paginate",
-            "--slurp",
-            f"repos/{repo}/issues/comments/{identifier}/reactions?per_page=100",
-        ]
+    return _fetch_review_collection(
+        f"repos/{pr_repo}/issues/comments/{comment_id}/reactions?per_page=100"
     )
-    if not isinstance(payload, list):
-        return []
-    return [
-        item
-        for page in payload
-        if isinstance(page, list)
-        for item in page
-        if isinstance(item, dict)
-    ]
 
 
 def _fetch_pr_reactions(*, pr_repo: str | None, pr_number: object) -> list[dict]:
-    if not pr_repo or not pr_number:
-        return []
-    payload = run_command_optional(
-        [
-            "gh",
-            "api",
-            "--paginate",
-            "--slurp",
-            f"repos/{pr_repo}/issues/{pr_number}/reactions?per_page=100",
-        ]
+    return _fetch_review_collection(
+        f"repos/{pr_repo}/issues/{pr_number}/reactions?per_page=100"
     )
-    if not isinstance(payload, list):
-        return []
-    return [
-        item
-        for page in payload
-        if isinstance(page, list)
-        for item in page
-        if isinstance(item, dict)
-    ]
 
 
 def build_automated_review_evidence(

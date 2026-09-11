@@ -3910,6 +3910,12 @@ def _serialize_execution_list_item(record) -> ExecutionListItemModel:
         title=title,
         status=dashboard_status,
         dashboard_status=dashboard_status,
+        completion_disposition=(
+            "gated_continuation"
+            if state_value == "completed"
+            and memo.get("completionDisposition") == "gated_continuation"
+            else None
+        ),
         state=state_value,
         raw_state=raw_state,
         temporal_status=temporal_status,
@@ -4392,6 +4398,12 @@ def _serialize_execution(
         task_instructions=_derive_full_workflow_instructions(task_payload),
         status=dashboard_status,
         dashboard_status=dashboard_status,
+        completion_disposition=(
+            "gated_continuation"
+            if state_value == "completed"
+            and memo.get("completionDisposition") == "gated_continuation"
+            else None
+        ),
         state=state_value,
         raw_state=raw_state,
         temporal_status=temporal_status,

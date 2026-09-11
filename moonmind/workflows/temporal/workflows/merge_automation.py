@@ -1467,6 +1467,33 @@ class MoonMindMergeAutomationWorkflow:
                                 summary="pr-resolver returned an invalid gated continuation.",
                                 blocker_kind="resolver_continuation_invalid",
                             )
+                        if (
+                            workflow.patched("merge-automation-bound-reenter-progress-v1")
+                            and self._review_loop_active()
+                        ):
+                            continuation = resolver_result.get("gatedContinuation") or {}
+                            signature = continuation.get("progressSignature")
+                            # Older payloads have no signature: an unchanged
+                            # head/reason still cannot claim objective progress.
+                            signature = signature or (
+                                f"{self._input.pull_request.head_sha}|"
+                                f"{continuation.get('reason', '')}"
+                            )
+                            made_progress = self._register_progress_signature(signature)
+                            if (
+                                not made_progress
+                                and self._no_progress_cycles
+                                >= self._review_loop_config().max_consecutive_no_progress_cycles
+                            ):
+                                return await self._blocked_review_summary(
+                                    summary=(
+                                        "Resolver continuation budget exhausted: "
+                                        "the same head and outstanding work repeatedly "
+                                        "returned to the gate. Inspect the resolver "
+                                        "evidence and repair its blocker before retrying."
+                                    ),
+                                    blocker_kind="review_loop_no_progress",
+                                )
                         if expire_at is not None and continuation_deadline >= expire_at:
                             self._status = STATE_EXPIRED
                             self._summary = (
