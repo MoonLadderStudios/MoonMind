@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 from moonmind.workflows.temporal.assessment_verdict import (
-    infer_verdict_from_requirements,
     normalize_assessment_payload,
     normalize_verdict,
     verdict_from_mapping,
@@ -27,6 +26,18 @@ def test_verdict_from_text_recovers_assistant_verdict() -> None:
     assert verdict_from_text("no verdict here") == ""
 
 
+def test_verdict_from_text_recovers_github_refs() -> None:
+    assert (
+        verdict_from_text(
+            "Assessment complete for MoonLadderStudios/MoonMind#4175: FULLY_IMPLEMENTED"
+        )
+        == "FULLY_IMPLEMENTED"
+    )
+    assert verdict_from_text("Assessment complete for #4175: NOT_IMPLEMENTED") == (
+        "NOT_IMPLEMENTED"
+    )
+
+
 def test_verdict_from_mapping_checks_aliases() -> None:
     assert (
         verdict_from_mapping({"assessmentVerdict": "NOT_IMPLEMENTED"})
@@ -36,24 +47,18 @@ def test_verdict_from_mapping_checks_aliases() -> None:
     assert verdict_from_mapping({}) == ""
 
 
-def test_infer_all_met_implies_fully() -> None:
-    verdict, _ = infer_verdict_from_requirements(
-        [{"status": "met"}, {"status": "met"}],
-        summary="Epic fully implemented",
+def test_requirements_alone_never_imply_completion() -> None:
+    # Skill authority: unanimous met requirements without an explicit verdict
+    # must NOT manufacture FULLY_IMPLEMENTED natively. The portable assessment
+    # Skill owns completion decisions; native only recovers explicit statements.
+    verdict, provenance, _ = normalize_assessment_payload(
+        {
+            "summary": "Epic fully implemented",
+            "requirements": [{"status": "met"}, {"status": "met"}],
+        }
     )
-    assert verdict == "FULLY_IMPLEMENTED"
-
-
-def test_infer_mixed_implies_partially_safe_bias() -> None:
-    verdict, _ = infer_verdict_from_requirements(
-        [{"status": "met"}, {"status": "not_met"}]
-    )
-    assert verdict == "PARTIALLY_IMPLEMENTED"
-
-
-def test_infer_empty_unavailable() -> None:
-    assert infer_verdict_from_requirements([])[0] == ""
-    assert infer_verdict_from_requirements(None)[0] == ""  # type: ignore[arg-type]
+    assert verdict == ""
+    assert provenance == "unavailable"
 
 
 def test_normalize_payload_prefers_declared() -> None:
@@ -63,16 +68,13 @@ def test_normalize_payload_prefers_declared() -> None:
     assert (verdict, provenance) == ("BLOCKED", "declared")
 
 
-def test_normalize_payload_recovers_requirements() -> None:
+def test_normalize_payload_recovers_explicit_text() -> None:
     verdict, provenance, _ = normalize_assessment_payload(
-        {
-            "summary": "Epic fully implemented",
-            "requirements": [{"status": "met"}, {"status": "met"}],
-        }
+        {"summary": "## Verdict: PARTIALLY_IMPLEMENTED"},
     )
     assert (verdict, provenance) == (
-        "FULLY_IMPLEMENTED",
-        "requirements_inferred",
+        "PARTIALLY_IMPLEMENTED",
+        "text_recovered",
     )
 
 

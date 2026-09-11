@@ -5452,10 +5452,11 @@ async def test_check_jira_blockers_resolves_and_forwards_artifact_ref() -> None:
 
 @pytest.mark.asyncio
 async def test_update_jira_issue_status_prefers_in_payload_verdict_over_ref() -> None:
-    # The compact in-payload verdict is the fast path; the artifact must not be
-    # read when a verdict is already present in previousOutputs.
+    # Durable artifact wins over stale compact projections. When both are
+    # present and conflict, the ref is read and preferred so a stale
+    # FULLY_IMPLEMENTED cannot override durable NOT/BLOCKED and skip work.
     artifact_service = _FakeAssessmentArtifactService(
-        {"art_assessment_5": {"verdict": "NOT_IMPLEMENTED"}}
+        {"art_assessment_5": {"verdict": "BLOCKED"}}
     )
     service = _FakeJiraService()
 
@@ -5473,10 +5474,10 @@ async def test_update_jira_issue_status_prefers_in_payload_verdict_over_ref() ->
         jira_service_factory=lambda: service,
     )
 
-    assert result.status == "COMPLETED"
-    assert result.outputs["decision"] == "skipped"
-    assert result.outputs["assessmentVerdict"] == "FULLY_IMPLEMENTED"
-    assert artifact_service.read_calls == []
+    assert result.status == "FAILED"
+    assert result.outputs["decision"] == "blocked"
+    assert result.outputs["assessmentVerdict"] == "BLOCKED"
+    assert artifact_service.read_calls == ["art_assessment_5"]
 
 
 @pytest.mark.asyncio
@@ -5632,16 +5633,16 @@ async def test_update_github_issue_status_unavailable_names_ref_for_remediation(
 
 @pytest.mark.asyncio
 async def test_update_github_issue_status_recovers_missing_verdict_from_requirements() -> None:
-    # Resilient fallback for mm:12352fc2: verdict key omitted but agent's own
-    # requirements are unanimously met. Trust semantic intent over syntactic
-    # field presence instead of failing the run.
+    # Native syntactic recovery only: explicit verdict text in the payload is
+    # recovered, but unanimous requirements alone never imply completion
+    # (owned by the portable assessment Skill).
     artifact_service = _FakeAssessmentArtifactService(
         {
             "art_recoverable": {
                 "issue_provider": "github",
                 "issue_ref": "MoonLadderStudios/MoonMind#4175",
                 "mode": "main",
-                "summary": "Epic fully implemented on main",
+                "summary": "## Verdict: FULLY_IMPLEMENTED",
                 "requirements": [
                     {"id": "a", "status": "met"},
                     {"id": "b", "status": "met"},
@@ -5666,4 +5667,34 @@ async def test_update_github_issue_status_recovers_missing_verdict_from_requirem
     assert result.status == "COMPLETED"
     assert result.outputs["decision"] == "skipped"
     assert result.outputs["assessmentVerdict"] == "FULLY_IMPLEMENTED"
+
+
+@pytest.mark.asyncio
+async def test_update_github_issue_status_prefers_durable_ref_over_compact() -> None:
+    # Stale compact projections must not override the durable artifact. When
+    # both are present and conflict, the durable ref wins.
+    artifact_service = _FakeAssessmentArtifactService(
+        {"art_durable": {"verdict": "BLOCKED"}}
+    )
+    service = _FakeGitHubService()
+
+    result = await update_github_issue_status(
+        {
+            "repository": "MoonLadderStudios/MoonMind",
+            "issueNumber": 1067,
+            "mode": "start",
+            "assessmentArtifactPath": "artifacts/missing-assessment.json",
+            "assessmentArtifactRef": "art_durable",
+            "previousOutputs": {
+                "assessmentVerdict": "FULLY_IMPLEMENTED",
+                "assessmentArtifactRef": "art_durable",
+            },
+        },
+        {"temporal_artifact_service": artifact_service},
+        github_service_factory=lambda: service,
+    )
+
+    assert result.status == "FAILED"
+    assert result.outputs["decision"] == "blocked"
+    assert result.outputs["assessmentVerdict"] == "BLOCKED"
     assert service.token_requests == []
