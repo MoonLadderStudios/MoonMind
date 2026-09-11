@@ -6947,6 +6947,13 @@ class MoonMindAgentRun:
                                     type="UnsupportedStatus",
                                     non_retryable=True,
                                 ) from exc
+                            # Executing-worker code revision rides the activity
+                            # result (determinism-safe: pure data flow from the
+                            # activity payload, MoonLadderStudios/MoonMind#4224).
+                            worker_code_revision = handle_dict.get(
+                                "workerCodeRevision",
+                                handle_dict.get("worker_code_revision", "unknown"),
+                            )
                             handle = AgentRunHandle(
                                 runId=handle_dict["external_id"],
                                 agentKind="external",
@@ -6958,7 +6965,9 @@ class MoonMindAgentRun:
                                     "normalizedStatus": normalized_for_metadata,
                                     "externalUrl": handle_dict.get("url"),
                                     "callbackSupported": handle_dict.get("callback_supported", False),
-                                }
+                                    "workerCodeRevision": worker_code_revision,
+                                },
+                                workerCodeRevision=worker_code_revision,
                             )
                         else:
                             handle = AgentRunHandle(**handle_dict) if isinstance(handle_dict, dict) else handle_dict

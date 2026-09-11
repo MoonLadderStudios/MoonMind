@@ -608,7 +608,11 @@ async def test_agent_runtime_launch_binds_workflow_id_to_task_run_before_launch(
         "mm:workflow-123",
         "6f8b6bf7-6e0c-4d71-9b08-18d489f17a8d",
     )
-    assert result == {"status": "launching"}
+    assert result["status"] == "launching"
+    # The executing worker stamps its startup code identity for post-incident
+    # analysis (MoonLadderStudios/MoonMind#4224).
+    assert isinstance(result.get("workerCodeRevision"), str)
+    assert result["workerCodeRevision"]
 
 @pytest.mark.asyncio
 async def test_agent_runtime_launch_accepts_legacy_file_templates_payload():
@@ -647,7 +651,11 @@ async def test_agent_runtime_launch_accepts_legacy_file_templates_payload():
 
     result = await activities.agent_runtime_launch(payload)
 
-    assert result == {"status": "launching"}
+    assert result["status"] == "launching"
+    # The executing worker stamps its startup code identity for post-incident
+    # analysis (MoonLadderStudios/MoonMind#4224).
+    assert isinstance(result.get("workerCodeRevision"), str)
+    assert result["workerCodeRevision"]
     profile = mock_launcher.launch.await_args.kwargs["profile"]
     assert profile.file_templates[0].path == "{{runtime_support_dir}}/codex-home/config.toml"
     assert profile.file_templates[0].content_template == 'model = "qwen"\n'
@@ -693,7 +701,11 @@ async def test_agent_runtime_launch_defers_support_cleanup_until_fetch_result():
     }
 
     result = await activities.agent_runtime_launch(payload)
-    assert result == {"status": "launching"}
+    assert result["status"] == "launching"
+    # The executing worker stamps its startup code identity for post-incident
+    # analysis (MoonLadderStudios/MoonMind#4224).
+    assert isinstance(result.get("workerCodeRevision"), str)
+    assert result["workerCodeRevision"]
 
     assert len(activities._supervision_tasks) == 1
     [task] = list(activities._supervision_tasks)

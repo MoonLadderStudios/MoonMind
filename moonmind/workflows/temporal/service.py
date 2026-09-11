@@ -595,6 +595,37 @@ class TemporalExecutionService:
         payload = result.scalar_one_or_none()
         return bool(isinstance(payload, Mapping) and payload.get("workersPaused"))
 
+    async def _enforce_worker_code_freshness(self) -> None:
+        """Refuse new UserWorkflows when only stale workers serve the queue.
+
+        Probes the configured worker ``/readyz`` endpoints and compares each
+        worker's startup-recorded code identity with the checkout revision on
+        disk (MoonLadderStudios/MoonMind#4224). Raises
+        :class:`TemporalExecutionValidationError` with ``reasonCode=stale_code``
+        when every known worker is stale. Fail-open when no readiness endpoint
+        is configured or reachable.
+        """
+
+        from moonmind.workflows.temporal.worker_code_identity import (
+            WorkerCodeAdmissionError,
+            collect_worker_code_freshness,
+            enforce_worker_code_admission,
+            readiness_urls_from_env,
+        )
+
+        urls = readiness_urls_from_env()
+        if not urls:
+            return
+        freshness = await asyncio.to_thread(collect_worker_code_freshness, urls)
+        try:
+            enforce_worker_code_admission(freshness)
+        except Exception as exc:
+            if isinstance(exc, WorkerCodeAdmissionError):
+                raise TemporalExecutionValidationError(str(exc)) from exc
+            logger.warning(
+                "Worker code freshness gate degraded: %s", exc
+            )
+
     async def send_quiesce_pause_signal(self, **kwargs):
         return await self._client_adapter.send_batch_pause_update(**kwargs)
 
@@ -2011,6 +2042,13 @@ class TemporalExecutionService:
             owner_type=owner_type,
         )
         if workflow_type_enum is TemporalWorkflowType.USER_WORKFLOW:
+            # Stale-code admission gate (MoonLadderStudios/MoonMind#4224): do
+            # not admit new UserWorkflows on a task queue served only by stale
+            # workers. Fail-open when no worker readiness endpoint is
+            # configured or reachable — the unknown state stays visible in the
+            # readiness detail instead of wedging admissions on a monitoring
+            # outage.
+            await self._enforce_worker_code_freshness()
             skill_validation = await validate_skill_step_inputs(
                 initial_parameters=initial_parameters,
                 session=self._session,
@@ -2192,6 +2230,14 @@ class TemporalExecutionService:
             "titleSource": title_result.source,
             "titleConfidence": title_result.confidence,
         }
+        # Admitting-authority code revision (MoonLadderStudios/MoonMind#4224):
+        # post-incident analysis can tell which revision admitted the run; the
+        # executing worker stamps its own revision in AgentRun metadata.
+        from moonmind.workflows.temporal.worker_code_identity import (
+            current_worker_code_revision,
+        )
+
+        memo["workerCodeRevision"] = current_worker_code_revision()
         if input_artifact_ref:
             memo["input_ref"] = input_artifact_ref
         if manifest_artifact_ref:
