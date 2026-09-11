@@ -15,6 +15,8 @@ attempt. The turn-start watchdog must fire within
 from __future__ import annotations
 
 import asyncio
+import json
+from pathlib import Path
 from typing import Any
 
 import pytest
@@ -24,6 +26,17 @@ from moonmind.omnigent.execute import (
     _MarkedTurnStartWatchdog,
     _await_marked_turn_terminal,
 )
+
+_FIXTURE_PATH = (
+    Path(__file__).resolve().parent
+    / "fixtures"
+    / "omnigent_4226_incident_replay.json"
+)
+
+
+def _load_incident_fixture() -> dict[str, Any]:
+    with _FIXTURE_PATH.open(encoding="utf-8") as handle:
+        return json.load(handle)
 
 MARKER_4226 = (
     "MoonMind-Omnigent-Run:\n"
@@ -156,3 +169,56 @@ def test_4226_heartbeat_carries_start_budget_while_pending() -> None:
         assert fields["turnStartWaitSeconds"] is not None
     finally:
         loop.close()
+
+
+@pytest.mark.asyncio
+async def test_4226_incident_fixture_replay_fails_within_start_budget() -> None:
+    """Replay the checked-in 05:00Z incident fixture, not synthesized constants.
+
+    The fixture (``fixtures/omnigent_4226_incident_replay.json``) is built
+    from the closest durable evidence of the 2026-09-10 05:00Z child
+    (``...:05:094d273f``, events 95-97): the last activity heartbeat
+    (``eventsCaptured=1776``, ``turnEverActive=false``, stale
+    ``turnTerminalResponseIds`` from attempt 1) and the live session
+    snapshot (``status=idle``, no ``active_response_id``, nothing after
+    this attempt's marker). Raw child history was unavailable (worker
+    containers recreated at 18:14Z), as documented in the fixture's
+    provenance field.
+    """
+
+    fixture = _load_incident_fixture()
+    assert fixture["incident"]["issue"] == "MoonLadderStudios/MoonMind#4226"
+    marker = str(fixture["marker"])
+    snapshot = fixture["sessionSnapshot"]
+    assert snapshot["status"] == "idle"
+    assert snapshot["active_response_id"] is None
+    assert fixture["heartbeat"]["eventsCaptured"] == 1776
+    assert fixture["heartbeat"]["turnEverActive"] is False
+
+    loop = asyncio.get_running_loop()
+    watchdog = _MarkedTurnStartWatchdog(loop=loop, timeout_seconds=0.05)
+    watchdog.restore_terminal_response_ids(
+        list(fixture["staleTurnTerminalResponseIds"])
+    )
+
+    class Client:
+        async def get_session(self, _session_id: str) -> dict[str, Any]:
+            return snapshot
+
+    started = loop.time()
+    with pytest.raises(OmnigentTurnNotStartedError) as excinfo:
+        await _await_marked_turn_terminal(
+            client=Client(),  # type: ignore[arg-type]
+            session_id=str(fixture["incident"]["omnigentSessionId"]),
+            marker=marker,
+            event_count=int(fixture["heartbeat"]["eventsCaptured"]),
+            terminal_status="completed",
+            timeout_seconds=30.0,
+            interval_seconds=0.001,
+            turn_start_timeout_seconds=0.05,
+            start_watchdog=watchdog,
+        )
+    assert loop.time() - started < 5.0
+    assert excinfo.value.code == "OMNIGENT_CURRENT_TURN_NOT_STARTED"
+    assert excinfo.value.waited_seconds is not None
+    assert excinfo.value.waited_seconds >= 0.05
