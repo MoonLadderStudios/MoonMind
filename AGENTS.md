@@ -14,6 +14,7 @@ Read relevant documents in the following order before implementing tasks:
 ## MoonMind Principles
 
 - **Orchestrate, don't recreate agents.** MoonMind coordinates provider-maintained agents through standard interfaces and runtime adapters; core orchestration consumes canonical contracts and compact metadata, not provider internals.
+- **Recover before failing.** Before failing, MoonMind should attempt recovery using agentic intelligence unless doing so would violate the workflow's intent.
 - **Security is built into the substrate.** Runtime, credential, filesystem, Docker, network, publish, and approval boundaries are enforced by policy and fail fast with actionable errors when unauthorized, untrusted, or ambiguous.
 - **Temporal owns durable orchestration.** Workflow code stays deterministic and side-effect-free; side effects run in Activities or external services, with compact non-sensitive payloads and replay/in-flight compatibility where histories or persisted payloads cross a change boundary.
 - **Artifacts are durable evidence.** Large prompts, logs, diagnostics, generated files, provider bundles, and session summaries live as artifacts or artifact refs; dashboards and summaries are projections, not second sources of truth.
