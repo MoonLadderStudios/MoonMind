@@ -66,6 +66,9 @@ from moonmind.schemas.saved_work_models import (
     snapshot_capture_generation,
     verify_captured_artifact_evidence,
 )
+from moonmind.schemas.saved_work_retention import (
+    validate_saved_work_dependency_entries as _validate_saved_work_dependency_entries,
+)
 from moonmind.schemas.temporal_activity_models import (
     AcceptedRepositoryEvidence,
     AgentRuntimeCancelInput,
@@ -6648,6 +6651,24 @@ class TemporalAgentRuntimeActivities:
         # immutable manifest/reference set. An upload without a committed
         # usable manifest remains an incomplete capture for the
         # finalization/retention owners to reconcile.
+        # Gate the production commit on the bounded dependency validator:
+        # malformed, unbounded, or duplicate references fail the capture
+        # here instead of persisting an unretainable manifest.
+        # The baseline itself is a git ref (verified at restore via
+        # ``git cat-file -e``); artifact-ID dependency authorization and
+        # cycle checks run in the retention service validator, and every
+        # capture artifact carries its execution link for retention
+        # traversal.
+        try:
+            _validate_saved_work_dependency_entries(
+                saved_work.get("dependencies")
+            )
+        except ValueError as exc:
+            raise temporal_exceptions.ApplicationError(
+                f"saved-work manifest dependencies are not committable: {exc}",
+                type="CHECKPOINT_CAPTURE_INCOMPLETE",
+                non_retryable=True,
+            ) from exc
         commit = commit_saved_work_manifest(
             {**saved_work, "manifestDigest": saved_work_digest},
             required_refs_available={
