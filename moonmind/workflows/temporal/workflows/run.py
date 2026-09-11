@@ -13723,84 +13723,104 @@ class MoonMindRunWorkflow:
                 self._update_memo()
                 break
             publish_status_before = self._publish_status
-            remediation_checkpoint_required = (
-                workflow.patched(RUN_WORKFLOW_OWNED_REMEDIATION_HEAD_PATCH)
-                and self._remediation_loop_spec is not None
-                and (
-                    workflow_owned_remediation_head
-                    or self._moonspec_step_role(node) == "moonspec-verification-gate"
-                )
-            )
-            if remediation_checkpoint_required:
-                prepublication_checkpoint_failed = (
-                    await self._record_prepublication_checkpoint(
-                        node_id,
-                        publish_mode=publish_mode,
-                        updated_at=workflow.now(),
-                        required_for_remediation=True,
-                    )
-                )
-            else:
-                # Preserve the historical internal invocation shape for replayed
-                # paths and test/runtime adapters that predate remediation-owned
-                # checkpoint admission.
-                prepublication_checkpoint_failed = (
-                    await self._record_prepublication_checkpoint(
-                        node_id,
-                        publish_mode=publish_mode,
-                        updated_at=workflow.now(),
-                    )
-                )
-            if prepublication_checkpoint_failed:
-                break
-            if workflow_owned_remediation_head:
-                self._advance_remediation_workspace_head(
-                    node=node,
-                    node_inputs=node_inputs,
-                    execution_result=execution_result,
-                    step_execution_id=(
-                        f"{workflow.info().workflow_id}:{workflow.info().run_id}:"
-                        f"{node_id}:execution:{self._step_execution_for(node_id) or 1}"
-                    ),
-                )
-            publication_raised = False
-            try:
-                await self._record_publish_result_from_execution(
-                    parameters=parameters,
-                    execution_result=execution_result,
-                )
-            except Exception as exc:
-                if not workflow.patched(RUN_DURABLE_FINALIZATION_OUTCOME_PATCH):
-                    raise
-                self._record_publication_finalization_failure(
-                    node_id,
-                    exc=exc,
-                    updated_at=workflow.now(),
-                )
-                publication_raised = True
-            if (
-                not publication_raised
-                and self._publish_status == "failed"
-                and publish_status_before != "failed"
-                and workflow.patched(RUN_DURABLE_FINALIZATION_OUTCOME_PATCH)
-            ):
-                self._record_publication_finalization_failure(
-                    node_id,
-                    exc=RuntimeError(self._publish_reason or "Publish failed"),
-                    updated_at=workflow.now(),
-                )
+            terminal_deferred_reason: str | None = None
             if self._patched_or_false_outside_workflow(
                 RUN_DEFER_PUBLICATION_ON_TERMINAL_CONTINUATION_PATCH
             ):
-                deferred_reason = self._terminal_publication_deferred_reason(
+                terminal_deferred_reason = self._terminal_publication_deferred_reason(
                     self._effective_result_outputs(execution_result)
                 ) or self._stored_terminal_publication_deferred_reason()
-                if deferred_reason is not None:
-                    self._apply_deferred_publication(
-                        reason=deferred_reason,
-                        logical_step_id=node_id,
+            if terminal_deferred_reason is not None:
+                # An accepted terminal handoff publishes nothing: record the
+                # deferred outcome before any pre-publication checkpoint so a
+                # required checkpoint failure cannot mask the handoff as
+                # FINALIZATION_CHECKPOINT_FAILED.
+                self._apply_deferred_publication(
+                    reason=terminal_deferred_reason,
+                    logical_step_id=node_id,
+                    updated_at=workflow.now(),
+                )
+                prepublication_checkpoint_failed = False
+                publication_raised = False
+            else:
+                remediation_checkpoint_required = (
+                    workflow.patched(RUN_WORKFLOW_OWNED_REMEDIATION_HEAD_PATCH)
+                    and self._remediation_loop_spec is not None
+                    and (
+                        workflow_owned_remediation_head
+                        or self._moonspec_step_role(node) == "moonspec-verification-gate"
+                    )
+                )
+                if remediation_checkpoint_required:
+                    prepublication_checkpoint_failed = (
+                        await self._record_prepublication_checkpoint(
+                            node_id,
+                            publish_mode=publish_mode,
+                            updated_at=workflow.now(),
+                            required_for_remediation=True,
+                        )
+                    )
+                else:
+                    # Preserve the historical internal invocation shape for replayed
+                    # paths and test/runtime adapters that predate remediation-owned
+                    # checkpoint admission.
+                    prepublication_checkpoint_failed = (
+                        await self._record_prepublication_checkpoint(
+                            node_id,
+                            publish_mode=publish_mode,
+                            updated_at=workflow.now(),
+                        )
+                    )
+                if prepublication_checkpoint_failed:
+                    break
+                if workflow_owned_remediation_head:
+                    self._advance_remediation_workspace_head(
+                        node=node,
+                        node_inputs=node_inputs,
+                        execution_result=execution_result,
+                        step_execution_id=(
+                            f"{workflow.info().workflow_id}:{workflow.info().run_id}:"
+                            f"{node_id}:execution:{self._step_execution_for(node_id) or 1}"
+                        ),
+                    )
+                publication_raised = False
+                try:
+                    await self._record_publish_result_from_execution(
+                        parameters=parameters,
+                        execution_result=execution_result,
+                    )
+                except Exception as exc:
+                    if not workflow.patched(RUN_DURABLE_FINALIZATION_OUTCOME_PATCH):
+                        raise
+                    self._record_publication_finalization_failure(
+                        node_id,
+                        exc=exc,
                         updated_at=workflow.now(),
                     )
+                    publication_raised = True
+                if (
+                    not publication_raised
+                    and self._publish_status == "failed"
+                    and publish_status_before != "failed"
+                    and workflow.patched(RUN_DURABLE_FINALIZATION_OUTCOME_PATCH)
+                ):
+                    self._record_publication_finalization_failure(
+                        node_id,
+                        exc=RuntimeError(self._publish_reason or "Publish failed"),
+                        updated_at=workflow.now(),
+                    )
+                if self._patched_or_false_outside_workflow(
+                    RUN_DEFER_PUBLICATION_ON_TERMINAL_CONTINUATION_PATCH
+                ):
+                    deferred_reason = self._terminal_publication_deferred_reason(
+                        self._effective_result_outputs(execution_result)
+                    ) or self._stored_terminal_publication_deferred_reason()
+                    if deferred_reason is not None:
+                        self._apply_deferred_publication(
+                            reason=deferred_reason,
+                            logical_step_id=node_id,
+                            updated_at=workflow.now(),
+                        )
             if workflow.patched(RUN_MOONSPEC_VERIFY_PUBLICATION_GATE_PATCH):
                 outputs_for_gate = self._get_from_result(execution_result, "outputs")
                 if isinstance(
@@ -16709,8 +16729,12 @@ class MoonMindRunWorkflow:
         Derived from the flattened terminal-contract evaluation fields
         (``terminalContractOutcome`` / ``terminalContractRecoveryOutcome`` /
         ``mergeAutomationDisposition``), never from the skill name. A
-        ``continuation_requested`` outcome (``reenter_gate``/``request_review``)
-        or a validated ``manual_review``/``failed`` verdict
+        ``continuation_requested`` outcome defers publication only for an
+        accepted handoff (``durable_parent_handoff`` recovery plus an allowed
+        continuation disposition ``reenter_gate``/``request_review``); rejected
+        or unowned continuations (``continuation_rejected_*``) and reserved
+        fields arriving through a direct executable must fail closed. A
+        validated ``manual_review``/``failed`` verdict
         (``skill_terminal_verdict``) legitimately publishes nothing.
         """
 
@@ -16741,6 +16765,11 @@ class MoonMindRunWorkflow:
             else ""
         )
         if outcome == "continuation_requested":
+            if (
+                recovery != "durable_parent_handoff"
+                or disposition not in {"reenter_gate", "request_review"}
+            ):
+                return None
             label = disposition or "continuation"
             return (
                 f"publication deferred to gate owner for {label} terminal "
@@ -16812,9 +16841,9 @@ class MoonMindRunWorkflow:
                     else:
                         raise
                 row["finalizationOutcome"] = {
-                    "status": "not_required",
+                    "status": "unsupported",
                     "phase": "publication",
-                    "criticality": "not_required",
+                    "criticality": "unsupported",
                     "failureCode": None,
                     "terminalFailureCode": None,
                     "retryCount": 0,

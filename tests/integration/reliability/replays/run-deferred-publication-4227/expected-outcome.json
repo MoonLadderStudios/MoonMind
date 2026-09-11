@@ -1,0 +1,15 @@
+{
+  "publishStatus": "not_required",
+  "publishReasonContains": ["reenter_gate", "continuation_requested"],
+  "ledgerFinalizationOutcome": {
+    "status": "unsupported",
+    "phase": "publication",
+    "criticality": "unsupported",
+    "retryCount": 0,
+    "failureCode": null
+  },
+  "completionFailed": false,
+  "rejectedContinuationDefers": false,
+  "mergedWithoutEvidenceFails": true,
+  "prePatchReplayKeepsRecordedFailure": true
+}
