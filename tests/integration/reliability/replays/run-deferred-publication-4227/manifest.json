@@ -1,0 +1,36 @@
+{
+  "failureShapeId": "run-deferred-publication-4227",
+  "incident": "MoonLadderStudios/MoonMind#4227",
+  "historyShape": "execution_to_finalization",
+  "patchMarkers": [
+    "run-defer-publication-on-terminal-continuation-v1"
+  ],
+  "recordedHistory": {
+    "executionResult": {
+      "outputs": {
+        "summary": "Workflow completed an authoritative durable continuation handoff to merge automation.",
+        "mergeAutomationDisposition": "reenter_gate",
+        "terminalContractId": "pr_resolver_terminal.v1",
+        "terminalContractOutcome": "continuation_requested",
+        "terminalContractExecutionRef": "resolver:pr:4207:head:0b64408a897f:h:1360697d01305a39:1",
+        "terminalContractRecoveryOutcome": "durable_parent_handoff",
+        "gatedContinuation": {
+          "schemaVersion": "gated-continuation/v1",
+          "gateType": "merge_automation",
+          "action": "reenter_gate",
+          "reason": "ci_signal_degraded",
+          "retryAfterSeconds": 60
+        },
+        "headSha": "0b64408a897f"
+      }
+    },
+    "rejectedContinuation": {
+      "outputs": {
+        "mergeAutomationDisposition": "reenter_gate",
+        "terminalContractOutcome": "continuation_requested",
+        "terminalContractRecoveryOutcome": "continuation_rejected_unowned"
+      }
+    }
+  },
+  "prePatchRecordedFailure": "FINALIZATION_PUBLICATION_FAILED/auto_publish_evidence_missing"
+}
