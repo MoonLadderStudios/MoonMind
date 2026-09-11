@@ -204,6 +204,19 @@ async def expand_preset_for_child_run(
             for item in authored_presets
         ]
     task_payload["steps"] = list(expanded_steps)
+    # MoonLadderStudios/MoonMind#4099: preserve the opt-in title-enrichment
+    # declaration in the admitted definition/plan snapshot so the workflow can
+    # connect the accepted resolver result to the shared title transition.
+    # Metadata-only: never touches identity, plan steps, branches, or
+    # publication behavior, and rerun-plan digests ignore this key.
+    expanded_enrichment = expanded.get("titleEnrichment") or expanded.get(
+        "title_enrichment"
+    )
+    if (
+        isinstance(expanded_enrichment, Mapping)
+        and expanded_enrichment.get("enabled") is True
+    ):
+        task_payload["titleEnrichment"] = dict(expanded_enrichment)
     expanded_publish = (
         expanded.get("publish") if isinstance(expanded, Mapping) else None
     )

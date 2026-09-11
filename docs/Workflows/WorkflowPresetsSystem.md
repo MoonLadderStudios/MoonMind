@@ -313,6 +313,21 @@ The retired `workflow.default_publish_mode` and environment aliases are not fall
 
 A read-only assessment included within implementation remains read-only without disabling publication of the implementation's cumulative candidate. A workflow with both its own repository deliverable and fan-out declares both responsibilities rather than using coordinator status to suppress its output.
 
+## Workflow-Level Title Enrichment Metadata
+
+Presets that resolve their target issue at runtime (rather than at authoring time) may declare the opt-in `titleEnrichment` annotation. The workflow owns the single shared title transition used by both manual `SetTitle` renames and automatic enrichment; the annotation only connects an accepted typed resolver result to that transition. It never renames the preset or schedule, changes workflow/run identity, rewrites the plan, retargets repository work, or changes branches, checkpoints, artifacts, commits, or publication behavior.
+
+```yaml
+annotations:
+  titleEnrichment:
+    enabled: true
+    provider: github
+    sourceTool: github.load_issue_preset_brief
+    targetStyle: base-colon-hash
+```
+
+Catalog expansion preserves the declaration in the admitted plan snapshot, populating the frozen `presetTitle`/`presetSlug` from the pinned preset. Creation uses the declared preset title as the frozen base label (pending selection shows it unchanged; an explicit caller title still wins and stays protected). The workflow renders the full display title from the frozen base label and the accepted issue identity (`<base>: #<number>`), leaves the base title unchanged while selection is pending or when no issue is selected, protects explicit user titles (including same-text renames, which flip provenance to explicit), evaluates eligibility at the authoritative mutation point with a revision guard, and keeps duplicate results idempotent. The only preset opting in today is `github-issue-search-and-implement`.
+
 ## Built-in Batch and Resolver Contracts
 
 The detailed policy matrix is in [Workflow Publishing, section 6](WorkflowPublishing.md#6-built-in-behavior-matrix). Catalog expansion must cover all of the following, not just the two presets named Batch:
