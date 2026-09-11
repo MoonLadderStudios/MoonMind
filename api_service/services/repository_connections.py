@@ -19,7 +19,7 @@ from __future__ import annotations
 from collections.abc import Mapping
 from typing import Any, Callable, Sequence
 
-from sqlalchemy import delete, select
+from sqlalchemy import delete, select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -42,6 +42,7 @@ from moonmind.workflows.executions.repository_contract import (
     authorize_connection_use,
     normalize_endpoint,
     normalize_scope,
+    scope_key_for,
     validate_endpoint_retarget,
     validate_scoped_connection_for_write,
 )
@@ -69,8 +70,38 @@ def _forbidden_secret_shapes(config: Mapping[str, Any]) -> str | None:
     return None
 
 
+def _reject_secret_extras(config: Mapping[str, Any]) -> None:
+    """Enforce the metadata-only allowlist: refs carry no extra payload.
+
+    The key denylist below cannot enumerate every field name a raw secret
+    could hide under (``accessToken``, ``apiKey``, ``value``, ...), so any
+    non-empty ``extra`` mapping is rejected outright: a SecretRef is exactly
+    ``provider`` + ``key``, and App refs carry only their identities.
+    """
+
+    stack: list[Any] = [config]
+    while stack:
+        item = stack.pop()
+        if isinstance(item, Mapping):
+            for key, value in item.items():
+                if (
+                    str(key).strip().lower() == "extra"
+                    and isinstance(value, Mapping)
+                    and len(value) > 0
+                ):
+                    raise RepositoryRouteError(
+                        REPOSITORY_DENIED,
+                        "credential configuration must be metadata-only "
+                        "(provider/key refs carry no extra payload)",
+                    )
+                stack.append(value)
+        elif isinstance(item, (list, tuple)):
+            stack.extend(item)
+
+
 def _credential_config(connection: RepositoryConnection) -> dict[str, Any]:
     config = connection.credential.model_dump(by_alias=True, mode="json")
+    _reject_secret_extras(config)
     offending = _forbidden_secret_shapes(config)
     if offending:
         raise RepositoryRouteError(
@@ -78,6 +109,40 @@ def _credential_config(connection: RepositoryConnection) -> dict[str, Any]:
             "credential configuration must be metadata-only (SecretRef/App refs)",
         )
     return config
+
+
+def _check_credential_revision(
+    *,
+    stored_config: Mapping[str, Any],
+    stored_revision: int,
+    new_config: Mapping[str, Any],
+    new_revision: int,
+    endpoint_changed: bool,
+) -> None:
+    """Fence credential changes with an atomic monotonic revision advance.
+
+    Bindings and capability evidence keyed by ``credential_revision`` must
+    keep resolving the credential material they admitted: a changed
+    configuration (or a retargeted endpoint) requires exactly one revision
+    advance, while an ordinary policy edit must leave the revision
+    untouched.  Anything else is a policy conflict, never a silent
+    re-keying.
+    """
+
+    cred_changed = dict(new_config) != dict(stored_config)
+    if cred_changed or endpoint_changed:
+        if new_revision != stored_revision + 1:
+            raise RepositoryRouteError(
+                REPOSITORY_POLICY_CONFLICT,
+                "credential or endpoint change requires exactly one "
+                "credential-revision advance",
+            )
+    elif new_revision != stored_revision:
+        raise RepositoryRouteError(
+            REPOSITORY_POLICY_CONFLICT,
+            "credential revision must not change without a credential "
+            "or endpoint change",
+        )
 
 
 def _record_to_connection(record: RepositoryConnectionRecord) -> RepositoryConnection:
@@ -89,23 +154,28 @@ def _record_to_connection(record: RepositoryConnectionRecord) -> RepositoryConne
     }
     if record.scope_ref is not None:
         ownership["scopeRef"] = record.scope_ref
-    return RepositoryConnection.model_validate(
-        {
-            "schemaVersion": "moonmind.repository-connection.v1",
-            "id": record.connection_id,
-            "provider": record.provider,
-            "displayName": record.display_name,
-            "endpointRef": record.endpoint_ref,
-            "allowedOperations": list(record.allowed_operations or []),
-            "clientPolicy": dict(record.client_policy or {}),
-            "credential": credential,
-            "lifecycle": record.lifecycle,
-            "policyRevision": record.policy_revision,
-            "credentialRevision": record.credential_revision,
-            "ownership": ownership,
-            "hostingService": record.hosting_service,
-        }
-    )
+    payload: dict[str, Any] = {
+        "schemaVersion": "moonmind.repository-connection.v1",
+        "id": record.connection_id,
+        "provider": record.provider,
+        "displayName": record.display_name,
+        "endpointRef": record.endpoint_ref,
+        "allowedOperations": list(record.allowed_operations or []),
+        "clientPolicy": dict(record.client_policy or {}),
+        "credential": credential,
+        "lifecycle": record.lifecycle,
+        "policyRevision": record.policy_revision,
+        "credentialRevision": record.credential_revision,
+        "ownership": ownership,
+        "hostingService": record.hosting_service,
+    }
+    # Lore policy survives the persistent round-trip instead of being
+    # silently dropped on restart, update, or snapshot export.
+    if record.projection_policy is not None:
+        payload["projection"] = dict(record.projection_policy)
+    if record.merge_coordinator_policy is not None:
+        payload["mergeCoordinator"] = dict(record.merge_coordinator_policy)
+    return RepositoryConnection.model_validate(payload)
 
 
 def _repo_key_for(identity: RepositoryIdentity) -> str:
@@ -217,6 +287,47 @@ class RepositoryConnectionService:
         )
         return connection
 
+    async def _lock_record(
+        self, connection_id: str
+    ) -> RepositoryConnectionRecord | None:
+        """Re-read the connection row holding a write lock where supported.
+
+        Assignment/default/retarget mutations serialize against concurrent
+        removers through this parent-row lock on PostgreSQL (SELECT ... FOR
+        UPDATE).  SQLite serializes writers at the database level and does
+        not support FOR UPDATE, so the plain re-read applies there; the
+        revision guards and uniqueness constraints still fail closed on
+        conflict.
+        """
+
+        stmt = select(RepositoryConnectionRecord).where(
+            RepositoryConnectionRecord.connection_id == connection_id
+        )
+        bind = self._session.get_bind()
+        dialect_name = getattr(getattr(bind, "dialect", None), "name", "") or ""
+        if dialect_name not in {"", "sqlite"}:
+            stmt = stmt.with_for_update()
+        return (await self._session.execute(stmt)).scalar_one_or_none()
+
+    @staticmethod
+    def _stored_assignment(
+        row: RepositoryConnectionAssignment, *, endpoint: str
+    ) -> RepositoryAssignment:
+        """Return the persisted assignment, never the newly submitted one."""
+
+        return RepositoryAssignment(
+            connectionId=row.connection_id,
+            identity=RepositoryIdentity(
+                endpoint=endpoint,
+                providerRepoId=row.provider_repo_id,
+                canonicalRemote=row.canonical_remote,
+                displayName=row.display_name,
+            ),
+            operations=tuple(row.operations or ()),
+            revision=row.revision,
+            verified=row.verified,
+        )
+
     # -- connections ------------------------------------------------------
 
     async def create_connection(
@@ -235,6 +346,12 @@ class RepositoryConnectionService:
             connection.ownership.scope_type,  # type: ignore[union-attr]
             connection.ownership.scope_ref,  # type: ignore[union-attr]
         )
+        # A workspace-scoped principal must not mint system connections and
+        # make the credential usable across workspace scopes.
+        if scope_t == "system" and principal_scope[0] != "system":
+            raise RepositoryRouteError(
+                REPOSITORY_DENIED, "system connections require a system principal"
+            )
         if await self._replayed_action(
             request_id=request_id, action="connection.create",
             connection_id=connection.id,
@@ -244,6 +361,14 @@ class RepositoryConnectionService:
                 raise RepositoryRouteError(
                     REPOSITORY_ROUTE_CONFLICT, "request identity already used"
                 )
+            # Request identities are idempotency keys, not bearer
+            # authorization: apply the normal creation admission before
+            # returning the replayed record.
+            if (
+                principal_ref.strip() != existing.owner_ref.strip()
+                and principal_scope[0] != "system"
+            ):
+                raise RepositoryRouteError(REPOSITORY_DENIED, "creation not admitted")
             return _record_to_connection(existing)
         if connection.ownership is not None and (
             principal_ref.strip() != connection.ownership.owner_ref.strip()
@@ -273,6 +398,16 @@ class RepositoryConnectionService:
                 by_alias=True, mode="json"
             ),
             credential_config=_credential_config(connection),
+            projection_policy=(
+                connection.projection.model_dump(by_alias=True, mode="json")
+                if connection.projection is not None
+                else None
+            ),
+            merge_coordinator_policy=(
+                connection.merge_coordinator.model_dump(by_alias=True, mode="json")
+                if connection.merge_coordinator is not None
+                else None
+            ),
             lifecycle=connection.lifecycle,
             policy_revision=connection.policy_revision,
             credential_revision=connection.credential_revision,
@@ -325,8 +460,16 @@ class RepositoryConnectionService:
                 raise RepositoryRouteError(
                     REPOSITORY_ROUTE_CONFLICT, "request identity already used"
                 )
+            # Request identities are idempotency keys, not bearer
+            # authorization: re-authorize before returning replayed data.
+            self._check_use(
+                record=record,
+                principal_ref=principal_ref,
+                principal_scope=principal_scope,
+                action="edit",
+            )
             return _record_to_connection(record)
-        record = await self._get_record(connection.id)
+        record = await self._lock_record(connection.id)
         if record is None or record.tombstone:
             raise RepositoryRouteError(REPOSITORY_SETUP_REQUIRED, "connection not found")
         self._check_use(
@@ -347,48 +490,99 @@ class RepositoryConnectionService:
             explicit_revision_path=explicit_endpoint_revision
             or record.endpoint_normalized == normalize_endpoint(connection.endpoint_ref),
         )
-        if normalize_endpoint(connection.endpoint_ref) != record.endpoint_normalized and (
-            connection.credential_revision == record.credential_revision
-        ):
-            raise RepositoryRouteError(
-                REPOSITORY_POLICY_CONFLICT,
-                "endpoint change requires a credential revision",
-            )
         endpoint_normalized = normalize_endpoint(connection.endpoint_ref)
-        record.display_name = connection.display_name
-        record.provider = connection.provider
-        record.hosting_service = connection.hosting_service or ""
-        record.endpoint_normalized = endpoint_normalized
-        record.endpoint_ref = connection.endpoint_ref
-        record.trust_bundle_ref = connection.trust_bundle_ref
-        record.allowed_operations = list(connection.allowed_operations)
-        record.client_policy = connection.client_policy.model_dump(
-            by_alias=True, mode="json"
+        endpoint_changed = endpoint_normalized != record.endpoint_normalized
+        new_credential_config = _credential_config(connection)
+        _check_credential_revision(
+            stored_config=dict(record.credential_config or {}),
+            stored_revision=record.credential_revision,
+            new_config=new_credential_config,
+            new_revision=connection.credential_revision,
+            endpoint_changed=endpoint_changed,
         )
-        record.credential_config = _credential_config(connection)
-        record.lifecycle = connection.lifecycle
-        record.policy_revision = record.policy_revision + 1
-        record.credential_revision = connection.credential_revision
+        new_policy_revision = record.policy_revision + 1
         if connection.ownership is not None:
             scope_t, scope_n = normalize_scope(
                 connection.ownership.scope_type, connection.ownership.scope_ref
             )
-            record.owner_ref = connection.ownership.owner_ref.strip()
-            record.scope_type = scope_t
-            record.scope_ref = scope_n
-            record.allowed_principal_refs = list(
-                connection.ownership.allowed_principal_refs
+            owner_ref = connection.ownership.owner_ref.strip()
+            allowed_refs = list(connection.ownership.allowed_principal_refs)
+        else:
+            scope_t, scope_n = record.scope_type, record.scope_ref
+            owner_ref = record.owner_ref
+            allowed_refs = list(record.allowed_principal_refs or [])
+        if endpoint_changed:
+            # Verified assignments and defaults are keyed to the old
+            # endpoint; leaving them would select the retargeted credential
+            # across endpoint authorities, so they are invalidated in the
+            # same transaction (defaults first for referential order).
+            await self._session.execute(
+                delete(RepositoryRouteDefault).where(
+                    RepositoryRouteDefault.connection_id == connection.id
+                )
+            )
+            await self._session.execute(
+                delete(RepositoryConnectionAssignment).where(
+                    RepositoryConnectionAssignment.connection_id == connection.id
+                )
             )
         await self._audit(
             request_id=request_id,
             actor_ref=actor_ref,
             action="connection.update",
             connection_id=connection.id,
-            scope_type=record.scope_type,
-            scope_ref=record.scope_ref,
-            policy_revision=record.policy_revision,
+            scope_type=scope_t,
+            scope_ref=scope_n,
+            policy_revision=new_policy_revision,
             detail={"expected_revision": expected_policy_revision},
         )
+        # Compare-and-set on the revision read above: two sessions that both
+        # passed the in-memory comparison cannot both commit, so concurrent
+        # edits produce the documented conflict instead of lost updates.
+        updated = await self._session.execute(
+            update(RepositoryConnectionRecord)
+            .where(
+                RepositoryConnectionRecord.connection_id == connection.id,
+                RepositoryConnectionRecord.policy_revision == record.policy_revision,
+                RepositoryConnectionRecord.tombstone.is_(False),
+            )
+            .values(
+                display_name=connection.display_name,
+                provider=connection.provider,
+                hosting_service=connection.hosting_service or "",
+                endpoint_normalized=endpoint_normalized,
+                endpoint_ref=connection.endpoint_ref,
+                trust_bundle_ref=connection.trust_bundle_ref,
+                allowed_operations=list(connection.allowed_operations),
+                client_policy=connection.client_policy.model_dump(
+                    by_alias=True, mode="json"
+                ),
+                credential_config=new_credential_config,
+                projection_policy=(
+                    connection.projection.model_dump(by_alias=True, mode="json")
+                    if connection.projection is not None
+                    else None
+                ),
+                merge_coordinator_policy=(
+                    connection.merge_coordinator.model_dump(by_alias=True, mode="json")
+                    if connection.merge_coordinator is not None
+                    else None
+                ),
+                lifecycle=connection.lifecycle,
+                policy_revision=new_policy_revision,
+                credential_revision=connection.credential_revision,
+                owner_ref=owner_ref,
+                scope_type=scope_t,
+                scope_ref=scope_n,
+                allowed_principal_refs=allowed_refs,
+            )
+        )
+        if updated.rowcount != 1:
+            await self._session.rollback()
+            raise RepositoryRouteError(
+                REPOSITORY_POLICY_CONFLICT,
+                "concurrent policy change; retry with the current revision",
+            )
         try:
             await self._session.commit()
         except IntegrityError as exc:
@@ -419,6 +613,12 @@ class RepositoryConnectionService:
                 raise RepositoryRouteError(
                     REPOSITORY_ROUTE_CONFLICT, "request identity already used"
                 )
+            self._check_use(
+                record=record,
+                principal_ref=principal_ref,
+                principal_scope=principal_scope,
+                action="disable",
+            )
             return _record_to_connection(record)
         record = await self._get_record(connection_id)
         if record is None or record.tombstone:
@@ -452,14 +652,35 @@ class RepositoryConnectionService:
         request_id: str,
         principal_ref: str,
         principal_scope: tuple[str, str | None],
-        has_active_bindings: Callable[[str], bool] | None = None,
+        has_active_bindings: Callable[[str], bool],
     ) -> None:
-        """Delete only with no active bindings; tombstone blocks ID reuse."""
+        """Delete only with no active bindings; tombstone blocks ID reuse.
 
+        The binding authority check is mandatory: deletion without
+        consulting the owning execution/binding authority would tombstone a
+        connection while admitted work still depends on its credential, so a
+        missing check fails closed instead of silently proceeding.
+        """
+
+        if has_active_bindings is None:
+            raise RepositoryRouteError(
+                REPOSITORY_SETUP_REQUIRED, "binding authority unavailable"
+            )
         if await self._replayed_action(
             request_id=request_id, action="connection.delete",
             connection_id=connection_id,
         ):
+            record = await self._get_record(connection_id)
+            # No connection data is returned here; a retry against an
+            # already-tombstoned record stays successful, while a live
+            # record still requires delete authority.
+            if record is not None and not record.tombstone:
+                self._check_use(
+                    record=record,
+                    principal_ref=principal_ref,
+                    principal_scope=principal_scope,
+                    action="delete",
+                )
             return
         record = await self._get_record(connection_id)
         if record is None or record.tombstone:
@@ -470,7 +691,7 @@ class RepositoryConnectionService:
             principal_scope=principal_scope,
             action="delete",
         )
-        if has_active_bindings is not None and has_active_bindings(connection_id):
+        if has_active_bindings(connection_id):
             raise RepositoryRouteError(
                 REPOSITORY_ROUTE_CONFLICT, "active bindings block deletion"
             )
@@ -527,8 +748,41 @@ class RepositoryConnectionService:
             request_id=request_id, action="assignment.set",
             connection_id=assignment.connection_id,
         ):
-            return assignment
-        record = await self._get_record(assignment.connection_id)
+            record = await self._get_record(assignment.connection_id)
+            if record is None:
+                raise RepositoryRouteError(
+                    REPOSITORY_ROUTE_CONFLICT, "request identity already used"
+                )
+            self._check_use(
+                record=record,
+                principal_ref=principal_ref,
+                principal_scope=principal_scope,
+                action="attach",
+            )
+            # Return the persisted assignment, never the newly submitted
+            # one: a reused request identity for a different repository or
+            # operation set must not grant authority that does not exist.
+            endpoint_normalized = normalize_endpoint(assignment.identity.endpoint)
+            stored = (
+                await self._session.execute(
+                    select(RepositoryConnectionAssignment).where(
+                        RepositoryConnectionAssignment.connection_id
+                        == assignment.connection_id,
+                        RepositoryConnectionAssignment.endpoint_normalized
+                        == endpoint_normalized,
+                        RepositoryConnectionAssignment.repo_key
+                        == _repo_key_for(assignment.identity),
+                    )
+                )
+            ).scalar_one_or_none()
+            if stored is None:
+                raise RepositoryRouteError(
+                    REPOSITORY_ROUTE_CONFLICT, "request identity already used"
+                )
+            return self._stored_assignment(
+                stored, endpoint=assignment.identity.endpoint
+            )
+        record = await self._lock_record(assignment.connection_id)
         if record is None or record.tombstone:
             raise RepositoryRouteError(REPOSITORY_SETUP_REQUIRED, "connection not found")
         self._check_use(
@@ -568,13 +822,33 @@ class RepositoryConnectionService:
             self._session.add(
                 _assignment_to_row(assignment, endpoint_normalized=endpoint_normalized)
             )
+            stored_revision = assignment.revision
         else:
-            existing.provider_repo_id = assignment.identity.provider_repo_id
-            existing.canonical_remote = assignment.identity.canonical_remote
-            existing.display_name = assignment.identity.display_name
-            existing.operations = list(assignment.operations)
-            existing.revision = existing.revision + 1
-            existing.verified = assignment.verified
+            # Compare-and-set on the submitted revision: concurrent editors
+            # of the same row conflict instead of silently restoring
+            # operations the other edit removed.
+            replaced = await self._session.execute(
+                update(RepositoryConnectionAssignment)
+                .where(
+                    RepositoryConnectionAssignment.id == existing.id,
+                    RepositoryConnectionAssignment.revision == assignment.revision,
+                )
+                .values(
+                    provider_repo_id=assignment.identity.provider_repo_id,
+                    canonical_remote=assignment.identity.canonical_remote,
+                    display_name=assignment.identity.display_name,
+                    operations=list(assignment.operations),
+                    revision=assignment.revision + 1,
+                    verified=assignment.verified,
+                )
+            )
+            if replaced.rowcount != 1:
+                await self._session.rollback()
+                raise RepositoryRouteError(
+                    REPOSITORY_POLICY_CONFLICT,
+                    "concurrent assignment change; retry with the current revision",
+                )
+            stored_revision = assignment.revision + 1
         await self._audit(
             request_id=request_id,
             actor_ref=actor_ref,
@@ -583,7 +857,10 @@ class RepositoryConnectionService:
             scope_type=record.scope_type,
             scope_ref=record.scope_ref,
             policy_revision=record.policy_revision,
-            detail={"repo_key": _repo_key_for(assignment.identity)},
+            detail={
+                "repo_key": _repo_key_for(assignment.identity),
+                "revision": stored_revision,
+            },
         )
         try:
             await self._session.commit()
@@ -592,7 +869,7 @@ class RepositoryConnectionService:
             raise RepositoryConnectionConflict(
                 REPOSITORY_ROUTE_CONFLICT, "assignment conflict"
             ) from exc
-        return assignment
+        return assignment.model_copy(update={"revision": stored_revision})
 
     async def remove_assignment(
         self,
@@ -610,8 +887,16 @@ class RepositoryConnectionService:
             request_id=request_id, action="assignment.remove",
             connection_id=connection_id,
         ):
+            record = await self._get_record(connection_id)
+            if record is not None and not record.tombstone:
+                self._check_use(
+                    record=record,
+                    principal_ref=principal_ref,
+                    principal_scope=principal_scope,
+                    action="detach",
+                )
             return
-        record = await self._get_record(connection_id)
+        record = await self._lock_record(connection_id)
         if record is None or record.tombstone:
             raise RepositoryRouteError(REPOSITORY_SETUP_REQUIRED, "connection not found")
         self._check_use(
@@ -622,20 +907,22 @@ class RepositoryConnectionService:
         )
         endpoint_normalized = normalize_endpoint(identity.endpoint)
         repo_key = _repo_key_for(identity)
+        # A removed assignment must not leave a dangling default binding:
+        # defaults are removed first for referential order, in the same
+        # transaction as the assignment delete.
+        await self._session.execute(
+            delete(RepositoryRouteDefault).where(
+                RepositoryRouteDefault.connection_id == connection_id,
+                RepositoryRouteDefault.endpoint_normalized == endpoint_normalized,
+                RepositoryRouteDefault.repo_key == repo_key,
+            )
+        )
         await self._session.execute(
             delete(RepositoryConnectionAssignment).where(
                 RepositoryConnectionAssignment.connection_id == connection_id,
                 RepositoryConnectionAssignment.endpoint_normalized
                 == endpoint_normalized,
                 RepositoryConnectionAssignment.repo_key == repo_key,
-            )
-        )
-        # A removed assignment must not leave a dangling default binding.
-        await self._session.execute(
-            delete(RepositoryRouteDefault).where(
-                RepositoryRouteDefault.connection_id == connection_id,
-                RepositoryRouteDefault.endpoint_normalized == endpoint_normalized,
-                RepositoryRouteDefault.repo_key == repo_key,
             )
         )
         await self._audit(
@@ -671,6 +958,14 @@ class RepositoryConnectionService:
             request_id=request_id, action="route_default.set",
             connection_id=connection_id,
         ):
+            record = await self._get_record(connection_id)
+            if record is not None and not record.tombstone:
+                self._check_use(
+                    record=record,
+                    principal_ref=principal_ref,
+                    principal_scope=principal_scope,
+                    action="edit",
+                )
             return
         bundle = ",".join(
             sorted(
@@ -686,7 +981,20 @@ class RepositoryConnectionService:
                 REPOSITORY_SETUP_REQUIRED, "empty capability bundle"
             )
         norm_scope_t, norm_scope_n = normalize_scope(scope_type, scope_ref)
-        record = await self._get_record(connection_id)
+        # The connection use-check alone never authorizes the requested
+        # default scope: a principal admitted to a shared connection must
+        # not plant defaults for another workspace (or system) scope.
+        if principal_scope[0] != "system":
+            p_scope_t, p_scope_n = normalize_scope(
+                principal_scope[0], principal_scope[1]
+            )
+            if (norm_scope_t, norm_scope_n) != (p_scope_t, p_scope_n):
+                raise RepositoryRouteError(
+                    REPOSITORY_DENIED,
+                    "route default scope must match the principal scope",
+                )
+        scope_key = scope_key_for(scope_type, scope_ref)
+        record = await self._lock_record(connection_id)
         if record is None or record.tombstone:
             raise RepositoryRouteError(REPOSITORY_SETUP_REQUIRED, "connection not found")
         self._check_use(
@@ -716,8 +1024,7 @@ class RepositoryConnectionService:
         existing = (
             await self._session.execute(
                 select(RepositoryRouteDefault).where(
-                    RepositoryRouteDefault.scope_type == norm_scope_t,
-                    RepositoryRouteDefault.scope_ref == norm_scope_n,
+                    RepositoryRouteDefault.scope_key == scope_key,
                     RepositoryRouteDefault.endpoint_normalized == endpoint_normalized,
                     RepositoryRouteDefault.repo_key == repo_key,
                     RepositoryRouteDefault.capability_bundle == bundle,
@@ -729,6 +1036,7 @@ class RepositoryConnectionService:
                 RepositoryRouteDefault(
                     scope_type=norm_scope_t,
                     scope_ref=norm_scope_n,
+                    scope_key=scope_key,
                     endpoint_normalized=endpoint_normalized,
                     repo_key=repo_key,
                     capability_bundle=bundle,
@@ -751,6 +1059,26 @@ class RepositoryConnectionService:
             policy_revision=record.policy_revision,
             detail={"repo_key": repo_key, "bundle": bundle},
         )
+        # Re-validate the assignment in the same transaction immediately
+        # before commit: a concurrent remover that committed after the first
+        # read (and after the parent-row lock on backends without row
+        # locking) must turn this into a refusal, never a dangling default.
+        assignment = (
+            await self._session.execute(
+                select(RepositoryConnectionAssignment).where(
+                    RepositoryConnectionAssignment.connection_id == connection_id,
+                    RepositoryConnectionAssignment.endpoint_normalized
+                    == endpoint_normalized,
+                    RepositoryConnectionAssignment.repo_key == repo_key,
+                )
+            )
+        ).scalar_one_or_none()
+        if assignment is None or not assignment.verified:
+            await self._session.rollback()
+            raise RepositoryRouteError(
+                REPOSITORY_ROUTE_CONFLICT,
+                "assignment changed while committing the default",
+            )
         try:
             await self._session.commit()
         except IntegrityError as exc:

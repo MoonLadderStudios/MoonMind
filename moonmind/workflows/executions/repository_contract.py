@@ -32,7 +32,9 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import re
+import tempfile
 from collections.abc import Awaitable, Callable, Mapping, Sequence
 from datetime import datetime, timezone
 from pathlib import Path
@@ -488,13 +490,10 @@ def reconcile_default_git_connection(
 def persist_repository_connection(connection: RepositoryConnection, path: Path) -> None:
     """Atomically reconcile one deployment-owned connection record."""
 
-    path.parent.mkdir(parents=True, exist_ok=True)
-    temporary = path.with_suffix(path.suffix + ".tmp")
-    temporary.write_text(
+    _atomic_write_text(
+        path,
         json.dumps(connection.model_dump(by_alias=True, mode="json"), sort_keys=True),
-        encoding="utf-8",
     )
-    temporary.replace(path)
 
 
 def load_repository_connection(path: Path, connection_ref: str) -> RepositoryConnection:
@@ -928,7 +927,11 @@ def normalize_endpoint(endpoint: str) -> str:
         raise RepositoryRouteError(REPOSITORY_SETUP_REQUIRED, "unsupported endpoint")
     if parsed.username or parsed.password:
         raise RepositoryRouteError(REPOSITORY_DENIED, "endpoint must not embed credentials")
-    port = f":{parsed.port}" if parsed.port not in (None, 80, 443) else ""
+    # Strip only the default port for the selected scheme: http://host:443 and
+    # https://host:80 are distinct network authorities and must not compare
+    # equal to their unqualified forms.
+    default_port = {"http": 80, "https": 443}.get(scheme)
+    port = f":{parsed.port}" if parsed.port not in (None, default_port) else ""
     path = parsed.path.rstrip("/")
     return f"{scheme}://{host}{port}{path}".rstrip("/")
 
@@ -976,10 +979,34 @@ def validate_scoped_connection_for_write(connection: RepositoryConnection) -> No
         raise RepositoryRouteError(
             REPOSITORY_SETUP_REQUIRED, "scoped connections require hostingService"
         )
-    if connection.provider == "git" and connection.hosting_service == "lore":
-        raise RepositoryRouteError(REPOSITORY_DENIED, "git provider cannot use lore hosting")
-    if connection.provider == "lore" and connection.hosting_service == "github":
-        raise RepositoryRouteError(REPOSITORY_DENIED, "lore provider cannot use github hosting")
+    # Legacy ambient resolution is read-only history: new scoped writes must
+    # name the PAT or installation owned by the connection (typed SecretRef
+    # or App reference), never resolve ambient credentials.
+    if connection.credential.source == "github_resolver":
+        raise RepositoryRouteError(
+            REPOSITORY_DENIED,
+            "scoped writes require a typed SecretRef or App credential",
+        )
+    # Complete provider x hosting-service x credential matrix (rejecting only
+    # two combinations admits mismatched adapters, e.g. lore+generic_git or a
+    # GitHub App credential on a generic-Git host).
+    if connection.provider == "git":
+        if connection.hosting_service not in {"github", "generic_git"}:
+            raise RepositoryRouteError(
+                REPOSITORY_DENIED, "git provider requires github or generic_git hosting"
+            )
+        if (
+            connection.credential.source == "github_app"
+            and connection.hosting_service != "github"
+        ):
+            raise RepositoryRouteError(
+                REPOSITORY_DENIED, "GitHub App credentials require github hosting"
+            )
+    else:  # provider == "lore"
+        if connection.hosting_service != "lore":
+            raise RepositoryRouteError(
+                REPOSITORY_DENIED, "lore provider requires lore hosting"
+            )
     # Credential revision, connection-policy revision, and concrete issuance
     # are distinct: both revisions must advance independently and neither may
     # be zero.  Secret bodies are never persisted here (metadata-only: only
@@ -1017,6 +1044,20 @@ def default_scope_for(
     return normalize_scope(scope_type, scope_ref)
 
 
+def scope_key_for(scope_type: str, scope_ref: str | None) -> str:
+    """Return the non-null uniqueness key for a scope.
+
+    System scope normalizes ``scope_ref`` to ``None``, and NULLs compare
+    distinct in unique indexes on both SQLite and PostgreSQL, so the route
+    default uniqueness constraint keys on this non-null value instead.
+    """
+
+    scope_t, scope_n = normalize_scope(scope_type, scope_ref)
+    if scope_n is None:
+        return scope_t
+    return f"{scope_t}:{scope_n}"
+
+
 def authorize_connection_use(
     *,
     principal_ref: str,
@@ -1030,13 +1071,28 @@ def authorize_connection_use(
     ``has_secret_possession`` (knowing a SecretRef) never grants use
     authority; it is accepted only to document that the check was considered
     and ignored.
+
+    Use/discovery authority (``use``, ``discover``) is granted to admitted
+    principals on active connections.  Policy-changing actions (everything
+    else: ``edit``, ``attach``, ``detach``, ``disable``, ``delete``, ...) are
+    administrative and additionally require the connection owner or an
+    admitted system principal; the admission list still applies, so a
+    stranger with system scope administers nothing.  Disabled connections
+    stay unavailable for acquisition and attachment, but their owner (or an
+    admitted system principal) may still perform the administrative actions
+    needed to clean up or reactivate them instead of leaving the record
+    permanently stranded.  Deleted connections admit nothing.
     """
 
     _ = has_secret_possession  # possession is explicitly not authority
-    if connection.lifecycle != "active":
-        raise RepositoryRouteError(REPOSITORY_DENIED, "connection is not active")
+    normalized_action = action.strip().lower()
+    if connection.lifecycle == "deleted":
+        raise RepositoryRouteError(REPOSITORY_DENIED, "connection is deleted")
     if connection.ownership is None:
         raise RepositoryRouteError(REPOSITORY_SETUP_REQUIRED, "connection has no ownership")
+    is_admin_action = normalized_action not in {"use", "discover"}
+    if connection.lifecycle != "active" and not is_admin_action:
+        raise RepositoryRouteError(REPOSITORY_DENIED, "connection is not active")
     conn_scope = normalize_scope(
         connection.ownership.scope_type, connection.ownership.scope_ref
     )
@@ -1051,6 +1107,14 @@ def authorize_connection_use(
         raise RepositoryRouteError(REPOSITORY_DENIED, "principal is not admitted")
     if not principal_ref.strip() or not action.strip():
         raise RepositoryRouteError(REPOSITORY_DENIED, "principal/action required")
+    if is_admin_action and (
+        principal_ref.strip() != connection.ownership.owner_ref.strip()
+        and p_scope_t != "system"
+    ):
+        raise RepositoryRouteError(
+            REPOSITORY_DENIED,
+            "administrative action requires owner or system authority",
+        )
 
 
 def admit_scoped_route(
@@ -1227,13 +1291,65 @@ def build_connection_audit_record(
 
 
 def route_diagnostic(code: str, *, authorized_for_details: bool) -> str:
-    """Render safe conflict/denial diagnostics without metadata leakage."""
+    """Render safe conflict/denial diagnostics without metadata leakage.
+
+    Every route-state diagnostic derived from protected connection metadata
+    maps to the same non-enumerating denial for unauthorized callers, so
+    codes like AMBIGUOUS cannot reveal how many connections match a target.
+    Only the local snapshot-file condition (stale/unavailable, identical for
+    all callers) passes through unchanged.
+    """
 
     if authorized_for_details:
         return code
-    if code in {REPOSITORY_DENIED, REPOSITORY_SETUP_REQUIRED}:
-        return REPOSITORY_DENIED
-    return code
+    if code == REPOSITORY_STALE_SNAPSHOT:
+        return code
+    return REPOSITORY_DENIED
+
+
+def _snapshot_envelope(
+    connections: Sequence[RepositoryConnection], *, revision: int, produced_at: str
+) -> dict[str, Any]:
+    """Canonical snapshot envelope covered by the digest (excluding digest)."""
+
+    return {
+        "schemaVersion": CONNECTION_SNAPSHOT_SCHEMA_VERSION,
+        "producer": CONNECTION_SNAPSHOT_PRODUCER,
+        "revision": revision,
+        "producedAt": produced_at,
+        "connections": [c.model_dump(by_alias=True, mode="json") for c in connections],
+    }
+
+
+def _snapshot_digest(envelope: Mapping[str, Any]) -> str:
+    return hashlib.sha256(
+        json.dumps(envelope, sort_keys=True).encode("utf-8")
+    ).hexdigest()
+
+
+def _atomic_write_text(path: Path, text: str) -> None:
+    """Write through a unique temp file, then atomically replace the target.
+
+    Concurrent publishers to the same path must never share one ``.tmp``
+    pathname: each writer fsyncs its own unique file before replacing.
+    """
+
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fd, temporary = tempfile.mkstemp(
+        dir=str(path.parent), prefix=path.name + ".", suffix=".tmp"
+    )
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as handle:
+            handle.write(text)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(temporary, path)
+    except BaseException:
+        try:
+            os.unlink(temporary)
+        except OSError:
+            pass
+        raise
 
 
 def publish_connection_snapshot(
@@ -1241,25 +1357,22 @@ def publish_connection_snapshot(
 ) -> RepositoryConnectionSnapshot:
     """Atomically publish a versioned read-only snapshot (DB writer only)."""
 
-    payload = [c.model_dump(by_alias=True, mode="json") for c in connections]
-    digest = hashlib.sha256(
-        json.dumps(payload, sort_keys=True).encode("utf-8")
-    ).hexdigest()
+    produced_at = datetime.now(timezone.utc).isoformat()
+    envelope = _snapshot_envelope(
+        connections, revision=revision, produced_at=produced_at
+    )
     snapshot = RepositoryConnectionSnapshot(
         schemaVersion=CONNECTION_SNAPSHOT_SCHEMA_VERSION,
         producer=CONNECTION_SNAPSHOT_PRODUCER,
         revision=revision,
-        digest=digest,
-        producedAt=datetime.now(timezone.utc).isoformat(),
+        digest=_snapshot_digest(envelope),
+        producedAt=produced_at,
         connections=tuple(connections),
     )
-    path.parent.mkdir(parents=True, exist_ok=True)
-    temporary = path.with_suffix(path.suffix + ".tmp")
-    temporary.write_text(
+    _atomic_write_text(
+        path,
         json.dumps(snapshot.model_dump(by_alias=True, mode="json"), sort_keys=True),
-        encoding="utf-8",
     )
-    temporary.replace(path)
     return snapshot
 
 
@@ -1281,11 +1394,16 @@ def load_connection_snapshot(
         raise RepositoryRouteError(
             REPOSITORY_STALE_SNAPSHOT, "connection snapshot is unavailable"
         ) from exc
-    payload = [
-        c.model_dump(by_alias=True, mode="json") for c in snapshot.connections
-    ]
-    digest = hashlib.sha256(json.dumps(payload, sort_keys=True).encode("utf-8")).hexdigest()
-    if digest != snapshot.digest:
+    if snapshot.producer != CONNECTION_SNAPSHOT_PRODUCER:
+        raise RepositoryRouteError(
+            REPOSITORY_STALE_SNAPSHOT, "snapshot producer is not recognized"
+        )
+    envelope = _snapshot_envelope(
+        snapshot.connections,
+        revision=snapshot.revision,
+        produced_at=snapshot.produced_at,
+    )
+    if _snapshot_digest(envelope) != snapshot.digest:
         raise RepositoryRouteError(REPOSITORY_STALE_SNAPSHOT, "snapshot digest mismatch")
     if snapshot.revision < minimum_revision and not allow_stale:
         raise RepositoryRouteError(
@@ -1354,6 +1472,7 @@ __all__ = [
     "resolve_default_git_credential",
     "route_diagnostic",
     "route_key_for",
+    "scope_key_for",
     "validate_connection_and_client",
     "validate_endpoint_retarget",
     "validate_scoped_connection_for_write",
