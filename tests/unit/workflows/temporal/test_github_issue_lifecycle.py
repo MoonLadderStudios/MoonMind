@@ -141,9 +141,17 @@ def test_closed_disposition_never_reports_success() -> None:
         # Idempotent close retry reconciles an already-closed issue.
         ("closed", "to_closed", {"completion_verified": True}, "retry", True, "allowed"),
         ("closed", "to_closed", {}, "retry", False, "missing_guard"),
+        # Idempotent code-review retry reconciles to already_applied instead
+        # of failing the workflow: already in review with verified PR
+        # evidence is success. All other unlisted pairs still need an
+        # explicit decision; there is no reason-only release to Available.
+        ("code_review", "to_code_review",
+         {"gates_satisfied": True, "pr_url_verified": "https://github.com/o/r/pull/1"}, "publish", True, "allowed"),
+        ("code_review", "to_code_review", {"gates_satisfied": True}, "publish", False, "missing_guard"),
+        ("code_review", "to_code_review",
+         {"gates_satisfied": True, "pr_url_verified": "https://github.com/o/r/pull/1"}, "", False, "missing_guard"),
         # Unsupported transitions require an explicit authority decision.
         ("available", "to_recovery_needed", {"admission_passed": True}, "x", False, "unsupported_transition"),
-        ("code_review", "to_code_review", {"gates_satisfied": True}, "x", False, "unsupported_transition"),
         # Terminal and blocked states deny new transitions.
         ("closed", "to_in_progress", {"admission_passed": True}, "x", False, "closed_terminal"),
         ("blocked_mixed", "to_in_progress", {"admission_passed": True}, "x", False, "reconciliation_required"),
@@ -473,6 +481,40 @@ async def test_code_review_adds_before_removing_in_progress(monkeypatch: pytest.
     assert service.operations[:2] == [("add", "status: code-review"), ("remove", "status: in-progress")]
     assert "bug" in result.outputs["confirmedLabels"]
     assert "status: in-progress" not in result.outputs["confirmedLabels"]
+
+
+@pytest.mark.asyncio
+async def test_finalize_when_already_in_code_review_is_already_applied(monkeypatch: pytest.MonkeyPatch, tmp_path) -> None:
+    """Losing contender finalizes after winner already labeled code-review.
+
+    Regression for mm:12352fc2-44cb-4f82-8dbd-9283d0fa8f63: second verified PR
+    must reconcile to COMPLETED already_applied with its PR link commented,
+    not FAILED unsupported_transition that FAIL_FASTs the workflow.
+    """
+    service = _LifecycleFakeService(initial_labels=["bug", "status: code-review"])
+    _install(monkeypatch, service)
+    pr_artifact = tmp_path / "pr.json"
+    pr_artifact.write_text(
+        '{"pullRequestUrl": "https://github.com/MoonLadderStudios/MoonMind/pull/4233"}', encoding="utf-8")
+    verify_artifact = tmp_path / "verify.json"
+    verify_artifact.write_text('{"verdict": "FULLY_IMPLEMENTED"}', encoding="utf-8")
+    result = await update_github_issue_status(
+        {"repository": "MoonLadderStudios/MoonMind", "issueNumber": 4176,
+         "mode": "finalize_after_pr_or_done",
+         "pullRequestArtifactPath": str(pr_artifact),
+         "verificationArtifactPath": str(verify_artifact)},
+        github_service_factory=lambda: service,
+    )
+    assert result.status == "COMPLETED"
+    assert result.outputs["mutationOutcome"] == "already_applied"
+    assert result.outputs["lifecycleSettled"] == "code_review"
+    # No label mutation: already in desired state.
+    assert service.operations == []
+    # Second PR is still linked for the review journey.
+    assert "comment" in result.outputs["appliedActions"]
+    assert "status: code-review" in result.outputs["confirmedLabels"]
+    # Contention is explicit: both PRs stay visible, review owner decides.
+    assert any("already in code-review" in w for w in result.outputs.get("warnings", []))
 
 
 @pytest.mark.asyncio
