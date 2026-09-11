@@ -318,3 +318,55 @@ def test_deferred_publication_does_not_spend_finalization_retry(
     assert outcome["retryCount"] == 0
     assert outcome.get("failureCode") != FINALIZATION_PUBLICATION_FAILED
     assert deferred_workflow._publish_status == "not_required"
+
+
+def test_deferred_handoff_preserves_required_finalization_failure(
+    deferred_workflow: MoonMindRunWorkflow,
+) -> None:
+    """A required checkpoint failure survives a later validated continuation."""
+
+    deferred_workflow._step_ledger_rows = [
+        {
+            "logicalStepId": "resolve-pr",
+            "finalizationOutcome": {
+                "status": "failed",
+                "phase": "after_execution_checkpoint",
+                "criticality": "required",
+                "failureCode": "FINALIZATION_CHECKPOINT_FAILED",
+                "terminalFailureCode": "FINALIZATION_RETRY_EXHAUSTED",
+                "retryCount": 1,
+                "message": "Execution succeeded; finalization failed during the "
+                "after-execution checkpoint.",
+                "updatedAt": datetime.now(timezone.utc).isoformat(),
+            },
+        }
+    ]
+    deferred_workflow._rebuild_step_ledger_index()
+    deferred_workflow._publish_status = "failed"
+    deferred_workflow._publish_reason = (
+        "Execution succeeded; finalization failed during the "
+        "after-execution checkpoint."
+    )
+
+    deferred_workflow._record_auto_publish_result(
+        {"outputs": _reenter_gate_outputs()},
+    )
+    assert deferred_workflow._publish_status == "failed"
+
+    deferred_workflow._apply_deferred_publication(
+        reason="publication deferred to gate owner for reenter_gate terminal "
+        "(continuation_requested)",
+        logical_step_id="resolve-pr",
+    )
+    row = deferred_workflow._step_ledger_row_for("resolve-pr")
+    assert row is not None
+    outcome = row["finalizationOutcome"]
+    assert outcome["status"] == "failed"
+    assert outcome["criticality"] == "required"
+    assert outcome["phase"] == "after_execution_checkpoint"
+
+    status, _message, failed = deferred_workflow._determine_publish_completion(
+        parameters={"publishMode": "auto"},
+    )
+    assert status == "failed"
+    assert failed is True
