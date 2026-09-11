@@ -110,6 +110,9 @@ async def proxy_pass_through(
 
         headers = _strip(headers, proxy_header=_proxy_header)
     except Exception:
+        # Defense-in-depth only: the explicit pops above already removed
+        # the identity header and runtime credentials, so a helper-import
+        # failure must not break proxy forwarding.
         pass
     
     header_key = config["auth_header_key"]
