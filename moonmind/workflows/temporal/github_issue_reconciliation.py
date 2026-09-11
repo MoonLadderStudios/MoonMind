@@ -1174,6 +1174,28 @@ def merge_scan_results(
     }
 
 
+def admission_context_from_scan(scan: Mapping[str, Any] | None) -> dict[str, Any]:
+    """Build the shared-admission gate context from one reconciler scan.
+
+    Activity boundaries thread this mapping into the candidate
+    ``attempt_context`` consumed by ``github_issue_lifecycle``,
+    ``github_issue_search``, and ``story_output_tools``: a partial/unknown
+    scan (``admissionAllowed: False``) then blocks Search, Implement, and
+    continuation admission until the next successful reconciliation run.
+    A complete scan returns an explicitly allowing context.
+    """
+    allowed = bool((scan or {}).get("admissionAllowed")) if isinstance(scan, Mapping) else False
+    # An absent scan is not a clean repository: fail closed.
+    return {"reconciliationAdmissionAllowed": allowed}
+
+
+def reconciliation_blocks_admission(scan: Mapping[str, Any] | None) -> bool:
+    """Return True when *scan* must stop new admission/shared mutations."""
+    if not isinstance(scan, Mapping):
+        return True
+    return not bool(scan.get("admissionAllowed"))
+
+
 # ---------------------------------------------------------------------------
 # Req 7: supported default maintenance path + actionable readiness
 # ---------------------------------------------------------------------------
@@ -1184,12 +1206,15 @@ def default_reconciliation_schedule() -> dict[str, Any]:
 
     Registered through the existing Temporal scheduling/readiness
     mechanisms (the ``MoonMind.GitHubIssueReconcile`` workflow type and
-    the ``github_issue.reconcile_handoffs`` activity binding). Routine
+    the ``github_issue.reconcile_handoffs`` activity binding) via
+    ``TemporalClient.ensure_github_issue_reconcile_schedule``. Routine
     correctness does not depend on a hidden enable flag: the descriptor
     is enabled and unpaused by default, with explicit overlap/skip and
     bounded catchup so duplicate observations stay bounded.
     """
     return {
+        "scheduleId": "mm-operational:github-issue-reconcile",
+        "workflowIdBase": "mm-operational:github-issue-reconcile",
         "workflowType": "MoonMind.GitHubIssueReconcile",
         "activityType": "github_issue.reconcile_handoffs",
         "cron": DEFAULT_RECONCILIATION_CRON,
@@ -1198,6 +1223,7 @@ def default_reconciliation_schedule() -> dict[str, Any]:
         "catchupMode": DEFAULT_RECONCILIATION_CATCHUP_MODE,
         "enabled": True,
         "paused": False,
+        "ensureMethod": "ensure_github_issue_reconcile_schedule",
         "summary": (
             "Default hourly bounded reconciliation through the existing "
             "Temporal workflow/activity boundary; no hidden enable flag and "
@@ -1338,6 +1364,8 @@ __all__ = [
     "drop_pending_effect",
     "pending_effects_for_issue",
     "merge_scan_results",
+    "admission_context_from_scan",
+    "reconciliation_blocks_admission",
     "default_reconciliation_schedule",
     "check_reconciliation_readiness",
     "build_reconciliation_diagnostics",

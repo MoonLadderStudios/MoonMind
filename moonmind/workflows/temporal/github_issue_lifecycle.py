@@ -306,8 +306,34 @@ def attempt_evidence_blocks_admission(attempt_context: Mapping[str, Any] | None)
     the decision: exhausted budgets, operator holds, lineage gaps, and
     simultaneous-race approximations all block automatic admission rather
     than starting fresh.
+
+    When the context carries the reconciler's admission gate
+    (``reconciliationAdmissionAllowed: False`` or ``reconciliationBlocked:
+    True``, built by ``github_issue_reconciliation.admission_context_from_scan``
+    from the persisted last scan), an incomplete or failed reconciliation
+    scan blocks new admission until the next successful run. Activity
+    boundaries thread the persisted scan into the candidate context with one
+    ``admission_context_from_scan`` call; Search, Implement, and continuation
+    all route through this function so the gate is enforced on every shared
+    admission path.
     """
     context = attempt_context or {}
+    for key in (
+        "reconciliationAdmissionAllowed",
+        "reconciliation_admission_allowed",
+        "reconciliation_admissionAllowed",
+    ):
+        if key in context:
+            value = context.get(key)
+            if value is False or (isinstance(value, str) and value.strip().lower() in {"0", "false", "no"}):
+                return True
+    for key in (
+        "reconciliationBlocked",
+        "reconciliation_blocked",
+    ):
+        value = context.get(key)
+        if value is True or (isinstance(value, str) and value.strip().lower() in {"1", "true", "yes"}):
+            return True
     for key in (
         "hasUnresolvedActiveAttempt",
         "has_unresolved_active_attempt",

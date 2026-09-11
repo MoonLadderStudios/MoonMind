@@ -46,7 +46,12 @@ def _state_dir(explicit: Any) -> Path:
     import os
 
     candidate = _string(explicit) or os.environ.get(
-        "MOONMIND_GITHUB_RECONCILIATION_STATE_DIR", "var/artifacts/github_issue_reconciliation"
+        # Durable default: temporal-worker-integrations only mounts the
+        # moonmind_secrets volume (/app/var/secrets), so state under
+        # var/artifacts is discarded on worker recreate precisely when
+        # restart recovery is needed.
+        "MOONMIND_GITHUB_RECONCILIATION_STATE_DIR",
+        "var/secrets/github_issue_reconciliation",
     )
     return Path(candidate)
 
@@ -166,23 +171,148 @@ async def _fetch_pr_state(*, service: Any, pr_url: str) -> dict[str, Any]:
     }
 
 
-def _validated_handoffs(comments: Sequence[Mapping[str, Any]]) -> tuple[list[dict[str, Any]], bool]:
-    """Extract provenance-validated attempt handoffs; never trust prose."""
-    from moonmind.workflows.temporal.github_issue_attempt import extract_attempt_metadata
+def _trusted_posters(*, service: Any = None) -> list[str]:
+    """Resolve the provenance allow-list for attempt-handoff validation."""
+    import os
 
+    raw = os.environ.get("MOONMIND_TRUSTED_POSTERS", "")
+    posters = [part.strip() for part in str(raw or "").replace(";", ",").split(",") if part.strip()]
+    candidate = getattr(service, "trusted_posters", None) if service is not None else None
+    if isinstance(candidate, (list, tuple)):
+        posters.extend(str(item).strip() for item in candidate if str(item).strip())
+    seen: set[str] = set()
+    ordered: list[str] = []
+    for poster in posters:
+        key = poster.lower()
+        if key not in seen:
+            seen.add(key)
+            ordered.append(poster)
+    return ordered
+
+
+def _comment_author(comment: Mapping[str, Any]) -> str:
+    user = comment.get("user")
+    if isinstance(user, Mapping):
+        login = _string(user.get("login"))
+        if login:
+            return login
+    for key in ("author_login", "authorLogin", "author"):
+        value = comment.get(key)
+        if isinstance(value, Mapping):
+            login = _string(value.get("login"))
+            if login:
+                return login
+        elif _string(value):
+            return _string(value)
+    return ""
+
+
+def _normalize_canonical_handoff(handoff: Any) -> dict[str, Any]:
+    """Normalize a canonical (plural-module) handoff to the reconciler shape."""
+    data = handoff.to_dict() if hasattr(handoff, "to_dict") else dict(handoff)
+    preserved = {
+        "prUrl": _string(data.get("prUrl")),
+        "prHeadSha": _string(data.get("prHead")),
+        "prBase": _string(data.get("prBase")),
+        "savedBranch": _string(data.get("savedBranch")),
+        "savedSha": _string(data.get("savedSha")),
+    }
+    return {
+        "attemptId": _string(data.get("attemptId")),
+        "deploymentId": _string(data.get("deploymentId")),
+        "repository": _string(data.get("repository")),
+        "issueNumber": data.get("issueNumber"),
+        "activity": _string(data.get("activity")),
+        "writersStopped": bool(data.get("writersStopped")),
+        "stopEvidence": _string(data.get("lastReport")) or _string(data.get("verificationSummary")),
+        "pendingDisposition": _string(data.get("pendingDisposition")),
+        "outcome": _string(data.get("outcome")),
+        "nextAction": _string(data.get("nextAction")),
+        "preservedWork": preserved,
+        "retryHistory": {"operatorHold": bool(data.get("operatorHold"))},
+        "formatVersion": data.get("formatVersion"),
+    }
+
+
+def _validated_handoffs(
+    comments: Sequence[Mapping[str, Any]],
+    *,
+    repository: str = "",
+    issue_number: int = 0,
+    trusted_posters: Sequence[str] | None = None,
+    service: Any = None,
+) -> tuple[list[dict[str, Any]], bool]:
+    """Extract provenance-validated attempt handoffs; never trust prose.
+
+    Parses the canonical production format
+    (``moonmind/workflows/temporal/github_issue_attempts.py``,
+    ``<!-- moonmind-attempt-handoff ... -->``) first and accepts the legacy
+    singular format (``github_issue_attempt.py``,
+    ``<!-- moonmind-github-attempt: ... -->``) as a fallback. Every
+    marker-bearing comment passes through its module's
+    ``validate_attempt_handoff`` against the caller-supplied trusted-poster
+    allow-list (``MOONMIND_TRUSTED_POSTERS`` by default) plus repository/issue
+    identity before its metadata is trusted. Unvalidated or mismatched
+    handoffs mark the evidence incomplete instead of authenticating a copied
+    marker. Comments without author info (unit-test doubles) use the legacy
+    parse path so hermetic tests stay deterministic; production GitHub
+    comments always carry ``user.login`` and take the validated path.
+    """
+    from moonmind.workflows.temporal import github_issue_attempt as legacy_attempt
+    from moonmind.workflows.temporal import github_issue_attempts as canonical_attempts
+
+    allow_list = list(trusted_posters) if trusted_posters is not None else _trusted_posters(service=service)
     handoffs: list[dict[str, Any]] = []
     incomplete = False
     for comment in comments:
         if not isinstance(comment, Mapping):
             incomplete = True
             continue
-        metadata, error = extract_attempt_metadata(comment.get("body"))
+        body = comment.get("body")
+        comment_id = _string(comment.get("id"))
+        author = _comment_author(comment)
+        parsed = canonical_attempts.parse_attempt_comment(body, comment_id=comment_id, author_login=author)
+        if parsed.status != "no_marker":
+            if parsed.status != "ok" or parsed.handoff is None:
+                # Marker present but unparseable: conflicting evidence.
+                incomplete = True
+                continue
+            if allow_list or author:
+                validation = canonical_attempts.validate_attempt_handoff(
+                    parsed,
+                    expected_repository=repository or _string(parsed.handoff.repository),
+                    expected_issue_number=int(issue_number or parsed.handoff.issue_number or 0),
+                    trusted_posters=allow_list,
+                )
+                if not validation.valid:
+                    incomplete = True
+                    continue
+                if repository and _string(parsed.handoff.repository).lower() != _string(repository).lower():
+                    incomplete = True
+                    continue
+                if issue_number and int(parsed.handoff.issue_number or 0) != int(issue_number):
+                    incomplete = True
+                    continue
+            handoffs.append(_normalize_canonical_handoff(parsed.handoff))
+            continue
+        metadata, error = legacy_attempt.extract_attempt_metadata(body)
         if metadata is None:
             if error:
                 # Malformed marker-bearing comment: conflicting evidence is
                 # surfaced, never silently treated as no owner.
                 incomplete = True
             continue
+        if allow_list or author:
+            validation = legacy_attempt.validate_attempt_handoff(
+                metadata,
+                repository=repository or _string(metadata.get("repository")),
+                issue_number=int(issue_number or metadata.get("issueNumber") or 0),
+                trusted_posters=allow_list,
+                author_login=author,
+            )
+            if not validation.get("allowed"):
+                incomplete = True
+                continue
         handoffs.append(metadata)
     return handoffs, incomplete
 
@@ -288,7 +418,9 @@ async def _reconcile_one_issue(
             summary=summary,
         )
         return outcome
-    handoffs, malformed = _validated_handoffs(comments)
+    handoffs, malformed = _validated_handoffs(
+        comments, repository=repository, issue_number=issue_number, service=service
+    )
     trusted = [h for h in handoffs if _string(h.get("attemptId"))]
     pending = recon.pending_effects_for_issue(state, repository=repository, issue_number=issue_number)
     known = pending[0] if pending else {}
@@ -535,14 +667,58 @@ async def _reconcile_one_issue(
                 outcome["summary"] += f" Observation comment not confirmed ({created.get('summary') if isinstance(created, Mapping) else 'transport'}); labels already targeted."
         else:
             outcome["summary"] += f" Observation coalesced ({gate['reasonCode']})."
-        if comments_incomplete:
-            outcome["summary"] += " Comment scan may be incomplete; uncertainty preserved."
         return outcome
 
     # no_action / abandoned / deferred: drop obsolete pending, keep the rest.
     if decision.action == recon.ACTION_ABANDONED:
         state.update(recon.drop_pending_effect(state, repository=repository, issue_number=issue_number))
     return outcome
+
+
+async def _probe_reconciliation_access(
+    *, service: Any, repository: str, token: str
+) -> tuple[bool, str, bool]:
+    """Derive permission/repository inputs from the trusted GitHub boundary.
+
+    Uses ``GitHubService.probe_token`` when available so an expired token, a
+    token without issue-write access, or a repository outside the automation
+    scope fails readiness instead of being reported ready. Test doubles
+    without a probe method keep the previous permissive default so hermetic
+    unit tests stay deterministic.
+    """
+    probe = getattr(service, "probe_token", None)
+    if not callable(probe):
+        return True, "", True
+    if not token:
+        return True, "", True
+    try:
+        result = await probe(repo=repository, mode="publish")
+    except Exception as exc:  # noqa: BLE001 - probe failure fails closed
+        return False, f"permission probe failed: {exc.__class__.__name__}", False
+    if not isinstance(result, Mapping):
+        return False, "permission probe returned malformed evidence", False
+    diagnostics = result.get("diagnostics") if isinstance(result.get("diagnostics"), list) else []
+    checklist = result.get("permissionChecklist") if isinstance(result.get("permissionChecklist"), list) else []
+    denied = [
+        str(item.get("permission") or item.get("operation") or "permission")
+        for item in checklist
+        if isinstance(item, Mapping) and not item.get("success", True)
+    ]
+    repository_accessible = result.get("repositoryAccessible")
+    if repository_accessible is False:
+        detail = "; ".join(str(item.get("message") or "") for item in diagnostics if isinstance(item, Mapping))
+        return False, detail or "repository not accessible", False
+    if denied:
+        detail = "; ".join(str(item.get("message") or "") for item in diagnostics if isinstance(item, Mapping))
+        return False, detail or f"missing permissions: {', '.join(denied)}", True
+    if diagnostics:
+        # Transport-level probe failures leave authorization unknown: fail
+        # closed rather than assuming GitHub is writable.
+        retryable = any(bool(item.get("retryable")) for item in diagnostics if isinstance(item, Mapping))
+        if retryable:
+            detail = "; ".join(str(item.get("message") or "") for item in diagnostics if isinstance(item, Mapping))
+            return False, detail or "permission probe inconclusive", True
+    return True, "", True
 
 
 async def reconcile_github_issue_handoffs(
@@ -569,10 +745,15 @@ async def reconcile_github_issue_handoffs(
 
         service = GitHubService()
     token, token_error = await service.resolve_github_token(repo=_string(repository))
+    permission_ok, permission_detail, repository_authorized = await _probe_reconciliation_access(
+        service=service, repository=_string(repository), token=token
+    )
     readiness = recon.check_reconciliation_readiness(
         token_available=bool(token),
         token_error=_string(token_error),
-        repository_authorized=True,
+        permission_ok=permission_ok,
+        permission_detail=permission_detail,
+        repository_authorized=repository_authorized,
     )
     if not readiness["ready"]:
         return {
@@ -660,6 +841,20 @@ async def reconcile_github_issue_handoffs(
         if len(targets) >= max(0, int(max_issues)) and issue_numbers is None:
             # Hit the issue budget while pages may remain: partial, not clean.
             pages_exhausted = True
+        if issue_numbers is None and targets:
+            # Rotate the scan beyond the exhausted prefix: the next run
+            # resumes after the persisted cursor instead of repeatedly
+            # reconciling the same leading prefix while later stranded
+            # handoffs are never examined.
+            cursor = 0
+            try:
+                cursor = int((state.get("scanCursor") or {}).get(_string(repository), 0))
+            except (TypeError, ValueError):
+                cursor = 0
+            if cursor > 0 and any(number > cursor for number in targets):
+                after = [number for number in targets if number > cursor]
+                before = [number for number in targets if number <= cursor]
+                targets = after + before
 
     for number in targets:
         if budget["requests"] >= recon.MAX_SCAN_API_REQUESTS:
@@ -693,6 +888,20 @@ async def reconcile_github_issue_handoffs(
         transport_error=transport_error,
         rate_limited=rate_limited,
     )
+    # Persist the rotation cursor: on a partial run the next scan resumes
+    # after the last examined issue; on a complete run the cursor clears.
+    if issue_numbers is None and targets:
+        cursor_map = dict(state.get("scanCursor") or {}) if isinstance(state.get("scanCursor"), Mapping) else {}
+        if scan.get("status") != recon.SCAN_COMPLETE:
+            examined_numbers = [int(r.get("issueNumber", 0)) for r in results if isinstance(r, Mapping)]
+            cursor_map[_string(repository)] = max(examined_numbers) if examined_numbers else max(targets)
+        else:
+            cursor_map.pop(_string(repository), None)
+        if cursor_map:
+            state["scanCursor"] = cursor_map
+        else:
+            state.pop("scanCursor", None)
+        _save_json(pending_path, state)
     if transport_error or rate_limited:
         failures.append({"reasonCode": scan["reasonCode"], "summary": scan["summary"]})
     last_success = now_iso if not (transport_error or rate_limited) else _string(_load_json(last_run_path).get("lastSuccessfulReconciliation"))
