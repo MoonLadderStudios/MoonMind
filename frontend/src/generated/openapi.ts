@@ -4399,6 +4399,46 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/github/branches/resolve": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Resolve Dashboard Github Branch
+         * @description Resolve one exact branch name without scanning suggestion pages.
+         */
+        get: operations["resolve_dashboard_github_branch_api_github_branches_resolve_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/github/branches/metadata": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Dashboard Github Branch Metadata
+         * @description Resolve only default-branch metadata so form init never enumerates branches.
+         */
+        get: operations["get_dashboard_github_branch_metadata_api_github_branches_metadata_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/github/branches": {
         parameters: {
             query?: never;
@@ -4408,7 +4448,7 @@ export interface paths {
         };
         /**
          * List Dashboard Github Branches
-         * @description List GitHub branches through MoonMind so browsers never call GitHub directly.
+         * @description List one bounded page of GitHub branches through MoonMind.
          */
         get: operations["list_dashboard_github_branches_api_github_branches_get"];
         put?: never;
@@ -6853,7 +6893,7 @@ export interface components {
         };
         /**
          * DashboardBranchListResponse
-         * @description Dashboard response containing branch options for one repository.
+         * @description Dashboard response containing bounded branch suggestions for one repository.
          */
         DashboardBranchListResponse: {
             /** Items */
@@ -6862,6 +6902,21 @@ export interface components {
             error?: string | null;
             /** Defaultbranch */
             defaultBranch?: string | null;
+            /**
+             * Hasmore
+             * @default false
+             */
+            hasMore: boolean;
+        };
+        /**
+         * DashboardBranchMetadataResponse
+         * @description Metadata-only branch response so form init never enumerates branches.
+         */
+        DashboardBranchMetadataResponse: {
+            /** Defaultbranch */
+            defaultBranch?: string | null;
+            /** Error */
+            error?: string | null;
         };
         /**
          * DashboardBranchOption
@@ -6883,6 +6938,28 @@ export interface components {
              * @description Branch option source
              */
             source: string;
+        };
+        /**
+         * DashboardBranchResolveResponse
+         * @description Exact-name branch resolution independent of suggestion pages.
+         */
+        DashboardBranchResolveResponse: {
+            /**
+             * Found
+             * @default false
+             */
+            found: boolean;
+            /** Branch */
+            branch?: string | null;
+            /** Defaultbranch */
+            defaultBranch?: string | null;
+            /** Error */
+            error?: string | null;
+            /**
+             * Inconclusive
+             * @default true
+             */
+            inconclusive: boolean;
         };
         /**
          * DashboardIssueListResponse
@@ -23181,10 +23258,75 @@ export interface operations {
             };
         };
     };
+    resolve_dashboard_github_branch_api_github_branches_resolve_get: {
+        parameters: {
+            query: {
+                repository: string;
+                branch: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DashboardBranchResolveResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_dashboard_github_branch_metadata_api_github_branches_metadata_get: {
+        parameters: {
+            query: {
+                repository: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DashboardBranchMetadataResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     list_dashboard_github_branches_api_github_branches_get: {
         parameters: {
             query: {
                 repository: string;
+                q?: string;
+                limit?: number;
             };
             header?: never;
             path?: never;
