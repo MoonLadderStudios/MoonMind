@@ -422,15 +422,16 @@ def test_portable_review_fetch_reads_all_pages(
     fn = snapshot_module[fetcher]
     calls = []
 
-    def gh(cmd):
+    def gh(cmd, *args, **kwargs):
         calls.append(cmd)
-        return [[{"id": n} for n in range(100)], [{"id": 101}]]
+        assert kwargs["paginated"] is True
+        return [{"id": n} for n in range(100)] + [{"id": 101}]
 
-    monkeypatch.setitem(fn.__globals__, "run_command_optional", gh)
+    monkeypatch.setitem(fn.__globals__, "run_command", gh)
     records = fn(pr_repo="owner/repo", **kwargs)
     assert records[-1] == {"id": 101}
     assert len(records) == 101
-    assert "--paginate" in calls[0] and "--slurp" in calls[0]
+    assert "--paginate" in calls[0] and "--slurp" not in calls[0]
 
 
 def test_historical_resolver_keeps_recorded_remediation_order():
@@ -732,3 +733,125 @@ def test_terminal_evidence_precedes_pending_review(field, reason, conflicted):
     decision = classify_snapshot(snapshot)
     assert decision.action == ResolverAction.STOP_MANUAL_REVIEW
     assert decision.reason_code == reason
+
+
+@pytest.mark.parametrize("output", ['[]\n[{"id": 2}]', '[{"id": 1}]\n[]'])
+def test_review_collection_decodes_gh_paginated_stream(
+    snapshot_module, monkeypatch, output
+):
+    from types import SimpleNamespace
+
+    run = snapshot_module["run_command"]
+    monkeypatch.setattr(
+        run.__globals__["subprocess"],
+        "run",
+        lambda *a, **kw: SimpleNamespace(returncode=0, stdout=output, stderr=""),
+    )
+    assert snapshot_module["_fetch_pull_request_reviews"](
+        pr_repo="owner/repo", pr_number=833
+    )
+
+
+@pytest.mark.parametrize(
+    "output", ["", "{}", "[null]", '[{"id": 1}]\n[', '[{"id": 1}] garbage']
+)
+def test_review_collection_rejects_missing_or_partial_evidence(
+    snapshot_module, monkeypatch, output
+):
+    from types import SimpleNamespace
+
+    run = snapshot_module["run_command"]
+    monkeypatch.setattr(
+        run.__globals__["subprocess"],
+        "run",
+        lambda *a, **kw: SimpleNamespace(returncode=0, stdout=output, stderr=""),
+    )
+    with pytest.raises(SystemExit):
+        snapshot_module["_fetch_pull_request_reviews"](
+            pr_repo="owner/repo", pr_number=833
+        )
+
+
+@pytest.mark.parametrize(
+    "error",
+    ["unknown flag: --slurp", "HTTP 401: Bad credentials", "HTTP 429: rate limit"],
+)
+def test_review_collection_preserves_command_failure(
+    snapshot_module, monkeypatch, capsys, error
+):
+    from types import SimpleNamespace
+
+    run = snapshot_module["run_command"]
+    monkeypatch.setattr(
+        run.__globals__["subprocess"],
+        "run",
+        lambda *a, **kw: SimpleNamespace(returncode=1, stdout="", stderr=error),
+    )
+    monkeypatch.setattr(run.__globals__["time"], "sleep", lambda _: None)
+    with pytest.raises(SystemExit):
+        snapshot_module["_fetch_pull_request_reviews"](
+            pr_repo="owner/repo", pr_number=833
+        )
+    assert error in capsys.readouterr().err
+
+
+def test_pr833_completed_review_replay_through_cli_collection(
+    snapshot_module, tmp_path, monkeypatch
+):
+    """Replay the escaped CLI boundary: old gh rejects --slurp; review is complete."""
+    import sys
+
+    fixture = json.loads(
+        (REPO_ROOT / "tests/fixtures/pr_resolver/review_wait_833.json").read_text()
+    )
+    gh = tmp_path / "gh"
+    gh.write_text(
+        f"#!{sys.executable}\n"
+        + "import json, sys\n"
+        + "if '--slurp' in sys.argv: sys.exit('unknown flag: --slurp')\n"
+        + f"print(json.dumps([])); print(json.dumps({fixture['reviews']!r}))\n"
+    )
+    gh.chmod(0o755)
+    monkeypatch.setenv("PATH", str(tmp_path))
+    evidence = _evidence(
+        snapshot_module,
+        reviews=None,
+        comments=fixture["comments"],
+        head_sha=fixture["headSha"],
+        head_committed_at=datetime.fromisoformat(fixture["headCommittedAt"]),
+    )
+    assert evidence["freshReviewForHead"] is True
+    assert evidence["requestPending"] is False
+    snapshot = normalize_portable_snapshot(
+        _snapshot(
+            automatedReview=evidence,
+            commentsSummary={
+                "includeBotReviewComments": True,
+                "hasActionableComments": True,
+                "actionableCommentIds": [3984847667],
+            },
+        )
+    )
+    assert classify_snapshot(snapshot).reason_code == "actionable_comments"
+
+
+def test_review_collection_with_installed_gh():
+    """Use real gh against an isolated HTTP fixture, including Link pagination."""
+    import shutil
+    import subprocess
+    import sys
+
+    if not shutil.which("gh"):
+        pytest.skip("GitHub CLI is absent; the hermetic CLI replay remains required")
+    completed = subprocess.run(
+        [
+            sys.executable,
+            str(REPO_ROOT / "tests/fixtures/pr_resolver/review_collection_probe.py"),
+        ],
+        cwd=REPO_ROOT,
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
+    assert completed.returncode == 0, completed.stderr
+    assert '"freshReviewForHead": true' in completed.stdout

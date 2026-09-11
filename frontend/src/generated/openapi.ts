@@ -7602,6 +7602,8 @@ export interface components {
              * @enum {string}
              */
             status: "queued" | "running" | "awaiting_action" | "waiting" | "completed" | "failed" | "canceled";
+            /** Completiondisposition */
+            completionDisposition?: "gated_continuation" | null;
             /**
              * Dashboardstatus
              * @enum {string}
@@ -7983,6 +7985,8 @@ export interface components {
              * @enum {string}
              */
             status: "queued" | "running" | "awaiting_action" | "waiting" | "completed" | "failed" | "canceled";
+            /** Completiondisposition */
+            completionDisposition?: "gated_continuation" | null;
             /**
              * Dashboardstatus
              * @enum {string}

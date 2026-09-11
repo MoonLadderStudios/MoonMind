@@ -1,7 +1,7 @@
 import { render, screen } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
-import { ExecutionStatusPill, StepExecutionStatusPill } from './ExecutionStatusPill';
+import { ExecutionStatusPill, StepExecutionStatusPill, WorkflowLifecycleStatusPill } from './ExecutionStatusPill';
 
 describe('ExecutionStatusPill', () => {
   afterEach(() => {
@@ -62,4 +62,15 @@ describe('ExecutionStatusPill', () => {
     expect(screen.getByText('Succeeded').className).toContain('status-completed');
     expect(warn).not.toHaveBeenCalled();
   });
+});
+
+
+it('shows a terminal continuation as handed off, preserving failures and ordinary completion', () => {
+  const { rerender } = render(<WorkflowLifecycleStatusPill status="completed" completionDisposition="gated_continuation" />);
+  expect(screen.getByText('Handed off').className).toContain('status-neutral');
+  expect(screen.queryByText('Completed')).toBeNull();
+  rerender(<WorkflowLifecycleStatusPill status="failed" completionDisposition="gated_continuation" />);
+  expect(screen.getByText('Failed')).toBeTruthy();
+  rerender(<WorkflowLifecycleStatusPill status="completed" />);
+  expect(screen.getByText('Completed')).toBeTruthy();
 });
