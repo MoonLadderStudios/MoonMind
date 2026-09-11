@@ -15,12 +15,27 @@ from __future__ import annotations
 
 import pytest
 
+from moonmind.workflows.skills.tool_dispatcher import (
+    ToolActivityDispatcher,
+    execute_tool_activity,
+)
+from moonmind.workflows.skills.tool_plan_contracts import parse_tool_definition
+from moonmind.workflows.skills.tool_registry import ToolRegistrySnapshot
+from moonmind.workflows.temporal import story_output_tools as story_tools
+from moonmind.workflows.temporal.activity_runtime import (
+    _default_registry_skill_payload,
+)
 from moonmind.workflows.temporal.github_issue_lifecycle import interpret_issue
-from moonmind.workflows.temporal.story_output_tools import update_github_issue_status
+from moonmind.workflows.temporal.story_output_tools import (
+    GITHUB_UPDATE_ISSUE_STATUS_TOOL_NAME,
+    register_story_output_tool_handlers,
+    update_github_issue_status,
+)
 from tests.integration.reliability.helpers import load_replay
 from tests.unit.workflows.temporal.test_github_issue_lifecycle import (
     _install,
     _LifecycleFakeService,
+    _LifecycleHttpClient,
 )
 
 pytestmark = [
@@ -93,3 +108,88 @@ async def test_replay_branches_without_and_with_pr(
     assert [op for op in service.operations if op[0] == "remove"] == []
     assert expected["withPrSteersToAttention"] is True
     assert expected["attentionAddsOnly"] is True
+
+
+@pytest.mark.asyncio
+async def test_replay_with_pr_through_tool_activity_boundary(
+    monkeypatch: pytest.MonkeyPatch, tmp_path
+) -> None:
+    """Exercise the recorded with-PR steering through the production tool-activity boundary.
+
+    The direct-call replay above proves the tool logic; this boundary replay
+    proves activity-result propagation for the same recorded history: the
+    dispatcher-registered ``github.update_issue_status`` skill (the handler the
+    Temporal worker invokes via ``mm.tool.execute``) returns the promised
+    COMPLETED/degraded terminal outcome with the PR handoff comment applied.
+    """
+
+    manifest = load_replay(REPLAY_ID, "manifest.json")
+    expected = load_replay(REPLAY_ID, "expected-outcome.json")
+    recorded = manifest["recordedHistory"]
+    observed = recorded["observedIssue"]
+
+    service = _LifecycleFakeService(initial_labels=list(observed["labels"]))
+    _install(monkeypatch, service)
+    monkeypatch.setattr(
+        story_tools, "GitHubService", lambda *args, **kwargs: service
+    )
+
+    dispatcher = ToolActivityDispatcher()
+    register_story_output_tool_handlers(dispatcher)
+    assert GITHUB_UPDATE_ISSUE_STATUS_TOOL_NAME in dispatcher._skill_handlers
+
+    snapshot = ToolRegistrySnapshot(
+        digest="reg:sha256:finalize-mixed-labels-4225",
+        artifact_ref="art:sha256:finalize-mixed-labels-4225",
+        skills=(
+            parse_tool_definition(
+                _default_registry_skill_payload(
+                    name=GITHUB_UPDATE_ISSUE_STATUS_TOOL_NAME
+                )
+            ),
+        ),
+    )
+
+    pr_artifact = tmp_path / "pr-4210-boundary.json"
+    pr_artifact.write_text(
+        f'{{"pullRequestUrl": "{recorded["step08"]["outputs"]["pullRequestUrl"]}"}}',
+        encoding="utf-8",
+    )
+    result = await execute_tool_activity(
+        invocation_payload={
+            "id": "finalize-after-pr",
+            "tool": {
+                "type": "skill",
+                "name": GITHUB_UPDATE_ISSUE_STATUS_TOOL_NAME,
+            },
+            "inputs": {
+                "repository": "MoonLadderStudios/MoonMind",
+                "issueNumber": observed["number"],
+                "mode": "finalize_after_pr_or_done",
+                "pullRequestArtifactPath": str(pr_artifact),
+                "requireVerification": False,
+            },
+        },
+        registry_snapshot=snapshot,
+        dispatcher=dispatcher,
+        context={
+            "namespace": "default",
+            "workflow_id": "mm:replay-finalize-mixed-4225",
+            "run_id": "run-4225-replay",
+            "node_id": "finalize-after-pr",
+        },
+    )
+    assert result.status == "COMPLETED"
+    assert result.outputs["decision"] == expected["attentionDecision"]
+    assert result.outputs["degraded"] is expected["attentionDegraded"]
+    assert result.outputs["transition"]["toTarget"] == expected["attentionTransition"]
+    assert result.outputs["reasonCode"] == "reconciliation_required"
+    assert result.outputs["pullRequestUrl"].endswith("/pull/4210")
+    assert ("add", "status: needs-attention") in service.operations
+    assert [op for op in service.operations if op[0] == "remove"] == []
+    assert "comment" in result.outputs["appliedActions"]
+    assert result.outputs["sideEffect"]["operation"] == "github.issue.update"
+    posted_bodies = [
+        str(kwargs.get("json") or "") for _url, kwargs in _LifecycleHttpClient.posts
+    ]
+    assert any("/pull/4210" in body for body in posted_bodies)
