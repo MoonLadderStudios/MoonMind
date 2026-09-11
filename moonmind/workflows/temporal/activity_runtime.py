@@ -6772,6 +6772,14 @@ class TemporalAgentRuntimeActivities:
             await self._report_task_run_binding(workflow_id, record_run_id)
 
         response = record.model_dump(mode="json")
+        from moonmind.workflows.temporal.worker_code_identity import (
+            current_worker_code_revision,
+        )
+
+        # Executing-worker code revision (MoonLadderStudios/MoonMind#4224): the
+        # AgentRun workflow persists this in run metadata for post-incident
+        # analysis of which revision executed the step.
+        response["workerCodeRevision"] = current_worker_code_revision()
         if request.terminal_contract is not None:
             response["terminalContract"] = request.terminal_contract.model_dump(
                 mode="json", by_alias=True
@@ -11329,12 +11337,17 @@ class TemporalAgentRuntimeActivities:
             activity.heartbeat(f"Checking status for run_id {run_id}")
 
         record = self._run_store.load(run_id)
+        from moonmind.workflows.temporal.worker_code_identity import (
+            current_worker_code_revision,
+        )
+
         if record is None:
             status = AgentRunStatus(
                 runId=run_id,
                 agentKind="managed",
                 agentId=agent_id,
                 status="running",
+                workerCodeRevision=current_worker_code_revision(),
             )
             return status
 
@@ -11344,6 +11357,7 @@ class TemporalAgentRuntimeActivities:
             agentId=record.agent_id or agent_id,
             status=record.status,
             metadata=managed_run_status_metadata(record),
+            workerCodeRevision=current_worker_code_revision(),
         )
         return status
 
