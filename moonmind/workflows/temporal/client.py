@@ -769,7 +769,17 @@ class TemporalClientAdapter:
         schedule = Schedule(
             action=ScheduleActionStartWorkflow(
                 "MoonMind.ManagedSessionReconcile",
-                {},
+                # Self-monitoring input for #4226 schedule health: the
+                # reconcile activity describes these schedule IDs itself at
+                # the activity boundary and durably tracks SkippedOverlap
+                # counters/streaks across ticks. The reconcile schedule
+                # itself uses OverlapPolicy=Skip, so its own growth proves
+                # the operational sweeper is starving.
+                {
+                    "scheduleIdsToWatch": [
+                        MANAGED_SESSION_RECONCILE_SCHEDULE_ID,
+                    ]
+                },
                 id=MANAGED_SESSION_RECONCILE_WORKFLOW_ID_BASE,
                 task_queue=self._get_task_queue(),
                 typed_search_attributes=_build_typed_search_attributes(

@@ -258,21 +258,23 @@ class _DescribeAdapter4226:
 async def test_reconcile_activity_describes_and_persists_without_injection(
     tmp_path, monkeypatch
 ) -> None:
-    """Activity boundary: a production `{}` tick self-describes and persists.
+    """Activity boundary: a production tick self-describes and persists.
 
-    The first tick only establishes the baseline (no alert); the second
-    tick observes growth through the durable state file and raises exactly
-    one diagnostic without any injected schedule payload.
+    The scheduler carries its own ID in ``scheduleIdsToWatch``; the first
+    tick only establishes the baseline (no alert) while the second tick
+    observes growth through the durable state file and raises exactly one
+    diagnostic without any injected schedule payload.
     """
 
     state_path = tmp_path / "schedule_health_state.json"
     monkeypatch.setenv("MOONMIND_SCHEDULE_HEALTH_STATE_PATH", str(state_path))
+    watch = {"scheduleIdsToWatch": ["mm-operational:managed-session-reconcile"]}
 
     first = TemporalAgentRuntimeActivities(
         session_controller=_ReconcileController4226(),  # type: ignore[arg-type]
         client_adapter=_DescribeAdapter4226(43),
     )
-    baseline = await first.agent_runtime_reconcile_managed_sessions({})
+    baseline = await first.agent_runtime_reconcile_managed_sessions(watch)
     assert baseline["managedSessionRecordsReconciled"] == 1
     assert "scheduleSkippedOverlapDiagnostics" not in baseline
     assert state_path.exists()
@@ -281,7 +283,7 @@ async def test_reconcile_activity_describes_and_persists_without_injection(
         session_controller=_ReconcileController4226(),  # type: ignore[arg-type]
         client_adapter=_DescribeAdapter4226(49),
     )
-    alerted = await second.agent_runtime_reconcile_managed_sessions({})
+    alerted = await second.agent_runtime_reconcile_managed_sessions(watch)
     assert alerted["managedSessionRecordsReconciled"] == 1
     diagnostics = alerted["scheduleSkippedOverlapDiagnostics"]
     assert len(diagnostics) == 1
