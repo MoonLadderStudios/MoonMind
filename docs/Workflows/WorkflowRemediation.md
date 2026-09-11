@@ -414,6 +414,8 @@ Reject invisible/missing targets without leaking existence. Preserve pinned iden
 
 An already-released lease or absent container is a verified no-op only when the owning subsystem proves the relevant identity and disposition. A failed lookup is unknown. Force termination is never a generic fallback. If the remediator fails, persist what was delivered, what still requires verification/cleanup, and how the existing reconciler can resume it without another mutation.
 
+Ambiguous legacy lifecycle evidence (contradictory history, unknown status formats, private-only work, multiple competing PRs, manual labels with no trusted handoff) stays blocked for an explicit operator decision under the shared cutover authorization rules; it is never silently repaired. Reopened issues are reassessed from current evidence; see [GitHub Issue Legacy Cutover](GitHubIssueLegacyCutover.md).
+
 ## 17. Recommended v1
 
 Manual creation, pinned targets, artifact-first context, bounded evidence tools, `observe_only` / `approval_gated`, a small **actually qualified** action subset, exclusive mutation authority, independent verification, and full audit form the minimum useful product.

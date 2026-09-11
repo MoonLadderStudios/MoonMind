@@ -2,13 +2,13 @@
 
 **Document Class:** Canonical declarative  
 **Viewpoint:** System / Feature Design View  
-**Status:** Proposed  
+**Status:** Proposed (legacy cutover §12 implemented; remainder desired behavior)  
 **Owners:** MoonMind Platform + Workflow Runtime + GitHub Integration  
 **Updated:** 2026-09-09  
 **Audience:** Workflow, preset, GitHub adapter, recovery, and dashboard contributors and operators  
 **Authority:** GitHub issue lifecycle labels, selection eligibility, attempt handoffs, and cross-deployment recovery behavior. Existing execution, checkpoint, publishing, and merge contracts retain their respective authority.  
 **Owning Surface:** Trusted GitHub issue operations and workflow terminal/reconciliation boundaries  
-**Related Implementation:** `moonmind/workflows/temporal/github_issue_search.py`, `moonmind/workflows/temporal/story_output_tools.py`, `moonmind/workflows/adapters/github_service.py`, and `api_service/data/presets/github-issue-*.yaml`.
+**Related Implementation:** `moonmind/workflows/temporal/github_issue_lifecycle.py`, `moonmind/workflows/temporal/github_issue_legacy_cutover.py`, `moonmind/workflows/temporal/activities/github_issue_legacy_cutover_activities.py`, `moonmind/workflows/temporal/github_issue_search.py`, `moonmind/workflows/temporal/story_output_tools.py`, `moonmind/workflows/adapters/github_service.py`, and `api_service/data/presets/github-issue-*.yaml`. Legacy reconciliation behavior is specified in [GitHub Issue Legacy Cutover](GitHubIssueLegacyCutover.md).
 
 **Related Docs:** [Workflow Presets System](WorkflowPresetsSystem.md), [Workflow Publishing](WorkflowPublishing.md), [Checkpoint Branch System](CheckpointBranchSystem.md), [Workflow Remediation](WorkflowRemediation.md), [Step Executions and Checkpointing](../Steps/StepExecutionsAndCheckpointing.md), and [PR Merge Automation](PrMergeAutomation.md).
 
@@ -268,6 +268,10 @@ Recovery needed exists because the next attempt must adopt previous work. Needs 
 Labels alone do not hold deployment identity or recovery evidence, so attempt comments supply the minimum portable handoff. They do not become a separate coordination branch or database. Existing PRs and checkpoint mechanisms hold the code itself.
 
 Automatic takeover on silence, per-device lock labels, forced partial-PR merges, and timestamp-based winner selection are excluded. The simplicity tradeoff is deliberate: useful cross-device recovery and visible uncertainty, without pretending the GitHub label API is an exclusive lock.
+
+## 12. Legacy cutover implementation status
+
+The conservative legacy reconciliation cutover for this state machine is implemented (not merely desired): the decision layer lives in `moonmind/workflows/temporal/github_issue_legacy_cutover.py` under the single surviving policy owner (`github_issue_lifecycle`), and is reachable through the existing `github_issue.assess_legacy` / `github_issue.plan_legacy_repair` activity bindings instead of a new coordination service. Bounded read-only assessment, shared-guard repair planning, retained-history drainage, mixed-deployment qualification, and upgrade/rollback fixtures are covered by `test_github_issue_legacy_cutover_4184.py` and `test_github_issue_legacy_cutover_wiring_4184.py`, including an emission-path proof that new executions never write obsolete shapes. Full cutover behavior is specified in [GitHub Issue Legacy Cutover](GitHubIssueLegacyCutover.md). Post-integration provider and three-device qualification remains separately reported; source implementation alone does not claim deployed compliance.
 
 ## References
 

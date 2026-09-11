@@ -1038,6 +1038,14 @@ _ACTIVITY_HANDLER_ATTRS: dict[str, tuple[str, str]] = {
         "integrations",
         "github_issue_reconcile_handoffs",
     ),
+    "github_issue.assess_legacy": (
+        "integrations",
+        "github_issue_assess_legacy",
+    ),
+    "github_issue.plan_legacy_repair": (
+        "integrations",
+        "github_issue_plan_legacy_repair",
+    ),
     "pr_resolver.resolve_selector": (
         "integrations",
         "pr_resolver_resolve_selector",
@@ -5192,6 +5200,121 @@ class TemporalIntegrationActivities:
         return {
             "status": "succeeded" if result.get("ok") else "failed",
             "repository": repository,
+            **result,
+        }
+
+    async def github_issue_assess_legacy(self, payload, /, **kwargs):
+        """Assess one issue's legacy evidence through the bounded cutover path.
+
+        Durable counterpart to ad-hoc inspection: trusted callers pass
+        ``repository`` plus ``issueNumber`` and receive the bounded
+        read-only :func:`assess_legacy_issue` report with exact evidence,
+        known/unknown ownership, and suggested actions. Read-only: no
+        GitHub state is mutated. Only ``repository`` and ``issueNumber``
+        are required; ``prs``/``checkpoints``/``issueFlags`` optionally
+        narrow the already-read supplemental evidence.
+        """
+        from moonmind.workflows.temporal.activities.github_issue_legacy_cutover_activities import (
+            assess_legacy_cutover_issue,
+        )
+
+        if not isinstance(payload, Mapping):
+            raise TemporalActivityRuntimeError(
+                "github_issue.assess_legacy requires an object"
+            )
+        config = payload.get("legacyCutover")
+        if not isinstance(config, Mapping):
+            config = payload
+
+        def _first(*keys: str) -> Any:
+            for key in keys:
+                if key in config and config[key] is not None:
+                    return config[key]
+            return None
+
+        repository = str(_first("repository", "repo") or "").strip()
+        try:
+            issue_number = int(_first("issueNumber", "issue_number") or 0)
+        except (TypeError, ValueError):
+            issue_number = 0
+        if not repository or issue_number <= 0:
+            raise TemporalActivityRuntimeError(
+                "github_issue.assess_legacy requires repository and issueNumber"
+            )
+        raw_prs = _first("prs", "pullRequests")
+        prs = list(raw_prs) if isinstance(raw_prs, (list, tuple)) else []
+        raw_checkpoints = _first("checkpoints")
+        checkpoints = list(raw_checkpoints) if isinstance(raw_checkpoints, (list, tuple)) else []
+        raw_flags = _first("issueFlags", "issue_flags")
+        issue_flags = dict(raw_flags) if isinstance(raw_flags, Mapping) else {}
+        raw_posters = _first("trustedPosters", "trusted_posters")
+        trusted_posters = list(raw_posters) if isinstance(raw_posters, (list, tuple)) else None
+        result = await assess_legacy_cutover_issue(
+            repository=repository,
+            issue_number=issue_number,
+            prs=prs,
+            checkpoints=checkpoints,
+            issue_flags=issue_flags,
+            trusted_posters=trusted_posters,
+        )
+        return {
+            "status": "succeeded" if result.get("ok") else "failed",
+            "repository": repository,
+            "issueNumber": issue_number,
+            **result,
+        }
+
+    async def github_issue_plan_legacy_repair(self, payload, /, **kwargs):
+        """Plan one legacy repair through the shared authorization guards.
+
+        Pure planning boundary: callers pass a prior ``assessment`` report
+        (as produced by ``github_issue.assess_legacy``) plus the transition
+        target and evidence, and receive the guarded repair plan for the
+        existing finalization/reconciliation writers. Performs no GitHub
+        writes itself; ambiguous evidence stays blocked without an
+        explicit operator decision.
+        """
+        from moonmind.workflows.temporal.activities.github_issue_legacy_cutover_activities import (
+            plan_legacy_cutover_repair,
+        )
+
+        if not isinstance(payload, Mapping):
+            raise TemporalActivityRuntimeError(
+                "github_issue.plan_legacy_repair requires an object"
+            )
+        config = payload.get("legacyCutover")
+        if not isinstance(config, Mapping):
+            config = payload
+
+        def _first(*keys: str) -> Any:
+            for key in keys:
+                if key in config and config[key] is not None:
+                    return config[key]
+            return None
+
+        def _block(*keys: str) -> dict[str, Any]:
+            for key in keys:
+                value = config.get(key)
+                if isinstance(value, Mapping):
+                    return dict(value)
+            return {}
+
+        assessment = _block("assessment")
+        if not assessment:
+            raise TemporalActivityRuntimeError(
+                "github_issue.plan_legacy_repair requires assessment"
+            )
+        result = await plan_legacy_cutover_repair(
+            assessment=assessment,
+            from_settled=str(_first("fromSettled", "from_settled") or ""),
+            to_target=str(_first("toTarget", "to_target") or ""),
+            evidence=_block("evidence"),
+            reason=str(_first("reason") or ""),
+            operator_decision=_block("operatorDecision", "operator_decision"),
+            conclusively_stopped=bool(_first("conclusivelyStopped", "conclusively_stopped")),
+        )
+        return {
+            "status": "succeeded" if result.get("allowed") else "failed",
             **result,
         }
 
