@@ -943,11 +943,19 @@ def test_retry_reuses_exact_input_without_duplicate_delivery() -> None:
 
 
 def test_capability_sources_issue_no_retired_tool_descriptor() -> None:
-    """Capability-manifest sources carry no retired tool descriptor or cred."""
+    """Capability-manifest sources carry no retired tool descriptor or cred.
+
+    Only actual tool-manifest issuers are scanned for descriptor leaks here.
+    ``api_service/retrieval_capabilities.py`` is drain-only authority
+    (MoonLadderStudios/MoonMind#4107), not a manifest issuer: ``issue()``
+    always raises ``retired`` and no token or host manifest is ever minted,
+    so its fail-closed ``followUpRetrieval`` retirement hint is operator
+    guidance, not an issued descriptor. Its drain behavior is owned
+    behaviorally by ``tests/unit/api/test_retrieval_capabilities.py``.
+    """
     candidates = [
         REPO_ROOT / "moonmind/omnigent/effective_capabilities.py",
         REPO_ROOT / "moonmind/omnigent/harness_platform/capabilities.py",
-        REPO_ROOT / "api_service/retrieval_capabilities.py",
     ]
     checked = 0
     for path in candidates:
@@ -955,15 +963,21 @@ def test_capability_sources_issue_no_retired_tool_descriptor() -> None:
             continue
         checked += 1
         text = path.read_text(encoding="utf-8")
-        assert check_tool_manifest_vector_free([text]) == [] or (
-            "qdrant" not in text.lower()
-            and "followUpRetrieval" not in text
-            and "follow_up_retrieval" not in text
-        ), f"capability source {path} leaks retired tool descriptor"
+        assert check_tool_manifest_vector_free([text]) == [], (
+            f"capability source {path} leaks retired tool descriptor"
+        )
         assert not re.search(r"qdrant_search", text, re.IGNORECASE), (
             f"capability source {path} issues retired qdrant_search tool"
         )
     assert checked, "expected capability-manifest sources to enumerate"
+    drain_path = REPO_ROOT / "api_service/retrieval_capabilities.py"
+    drain_text = drain_path.read_text(encoding="utf-8")
+    assert not re.search(r"qdrant_search", drain_text, re.IGNORECASE), (
+        f"drain-only registry {drain_path} issues retired qdrant_search tool"
+    )
+    assert "qdrant" not in drain_text.lower(), (
+        f"drain-only registry {drain_path} wires retired Qdrant credential"
+    )
 
 
 # ---------------------------------------------------------------------------
