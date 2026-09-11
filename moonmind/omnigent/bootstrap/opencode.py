@@ -186,6 +186,30 @@ def resolve_model_by_display(
     return alias
 
 
+def resolve_bootstrap_model(
+    display: str,
+    available_models: list[dict[str, Any]] | None = None,
+) -> dict[str, str]:
+    """Resolve one bootstrap model through the coordinated first-result path.
+
+    MoonLadderStudios/MoonMind#4021 req-1/req-3: the credentialless
+    ``opencode/*`` route never resolves pre-validation. A qualified
+    ``opencode/<model>`` request requires the exact observed catalog and an
+    exact qualified-ID match via :func:`resolve_model_exact`; otherwise it
+    fails closed with an actionable error instead of silently substituting.
+    Display aliases remain valid only for the keyed ``opencode-go`` route and
+    for historical/display loading, never for credentialless execution
+    selection.
+    """
+    text = display.strip()
+    if "/" in text and text.split("/", 1)[0].strip() == "opencode":
+        # Credentialless route: exact catalog match is mandatory, even when
+        # the alias table happens to contain the seeded ID. This gates the
+        # obsolete pre-validation display path for this route.
+        return resolve_model_exact(text, available_models)
+    return resolve_model_by_display(display, available_models)
+
+
 def validate_effort(effort: str, available_efforts: list[str] | None = None) -> str:
     normalized = effort.strip().lower()
     allowed = {"minimal", "low", "medium", "high", "xhigh"}

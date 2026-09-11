@@ -27,6 +27,11 @@ FREE_PROVIDER_ID = "opencode"
 FREE_MATERIALIZER_REF = "none@1"
 FREE_ROUTE_PREFIX = "opencode/"
 SELECTION_POLICY_VERSION = "free-model-selection.v1"
+# Terms version the current Settings/policy authority records acceptance for.
+# Bump only with an explicit operator-facing policy change; a version change
+# blocks new admission until the operator re-accepts, and never rewrites an
+# active attempt (MoonLadderStudios/MoonMind#4021 req-4/req-5).
+ZEN_FREE_TERMS_VERSION = "zen-terms.v3"
 
 NO_ELIGIBLE_FREE_MODEL_CODE = "no_eligible_free_model"
 
@@ -291,6 +296,224 @@ def freeze_attempt(
     )
 
 
+def zen_free_data_use_decision_from_settings(
+    env: Mapping[str, Any] | None = None,
+) -> DataUseDecision | None:
+    """Build the Zen free-route DataUseDecision from the existing authority.
+
+    MoonLadderStudios/MoonMind#4021 req-4: reuse the existing Settings/policy
+    authority (``OPENCODE_ACCEPT_CONTRIBUTOR_DATA_USE`` via
+    :func:`moonmind.omnigent.settings.opencode_contributor_data_use_accepted`),
+    not a marketplace or a new consent subsystem. Only an explicit accepted
+    decision for the exact :data:`ZEN_FREE_TERMS_VERSION` authorizes; existing
+    usage, a connected flag, or an automatically seeded profile is never
+    consent and therefore never consulted here.
+    """
+    from moonmind.omnigent.settings import opencode_contributor_data_use_accepted
+
+    try:
+        accepted = bool(opencode_contributor_data_use_accepted(env=env))
+    except ValueError:
+        return None
+    if not accepted:
+        return None
+    return DataUseDecision(
+        policy_version=ZEN_FREE_TERMS_VERSION,
+        accepted=True,
+        accepted_by="operator-settings",
+    )
+
+
+def build_eligibility_input(
+    *,
+    qualified_id: str,
+    catalog_ids: list[str],
+    pricing: Mapping[str, Any] | None,
+    inapplicable_dimensions: tuple[str, ...] = (),
+    requires_subscription_or_key: bool = False,
+    capabilities: tuple[str, ...] = (),
+    supported_efforts: tuple[str, ...] = (),
+    requested_effort: str = "xhigh",
+    terms_version: str = ZEN_FREE_TERMS_VERSION,
+    terms_require_approval: bool = True,
+    data_use_decision: DataUseDecision | None = None,
+) -> EligibilityInput:
+    """Build an EligibilityInput from the live exact-host catalog boundary.
+
+    ``catalog_ids`` is the exact observed catalog (qualified IDs). Presence in
+    it sets ``in_catalog``; nothing else (name matching, list-request success,
+    installed binaries) qualifies. Callers supply trusted pricing/terms
+    evidence alongside; omitted pricing dimensions stay unknown, never free.
+    """
+    wanted = qualified_id.strip()
+    return EligibilityInput(
+        qualified_id=wanted,
+        provider_id=wanted.split("/", 1)[0] if "/" in wanted else FREE_PROVIDER_ID,
+        materializer_ref=FREE_MATERIALIZER_REF,
+        in_catalog=wanted in catalog_ids,
+        pricing=pricing,
+        inapplicable_dimensions=inapplicable_dimensions,
+        requires_subscription_or_key=requires_subscription_or_key,
+        capabilities=capabilities,
+        supported_efforts=supported_efforts,
+        requested_effort=requested_effort,
+        terms_version=terms_version,
+        terms_require_approval=terms_require_approval,
+        data_use_decision=data_use_decision,
+    )
+
+
+def rank_approved_candidates(
+    candidates: Mapping[str, EligibilityInput],
+    *,
+    catalog_order: list[str],
+) -> tuple[str | None, dict[str, str]]:
+    """Rank a small approved set only after the data-use policy authorizes it.
+
+    Each candidate already carries its own exact-terms decision; a candidate
+    whose terms are unaccepted for its exact version is skipped with its
+    privacy reason preserved. Returns (selected_id, blocked_reasons). No
+    speculative quality ranking: deterministic catalog order decides.
+    """
+    blocked: dict[str, str] = {}
+    for qualified_id in catalog_order:
+        candidate = candidates.get(qualified_id)
+        if candidate is None:
+            blocked = {"availability": f"no_evidence:{qualified_id}"}
+            continue
+        verdict = evaluate_eligibility(candidate)
+        if verdict.eligible:
+            return qualified_id, {}
+        blocked = verdict.reasons
+    return None, blocked
+
+
+def attach_frozen_attempt_to_resolved(
+    resolved: Any,
+    frozen: FrozenFreeModelAttempt,
+) -> Any:
+    """Persist the frozen bundle with the admitted attempt (no rewrite).
+
+    Returns a copy of the given ``BootstrapResolved`` carrying
+    ``freeModelAttempt``. Discovery refresh creates a new frozen bundle for a
+    new attempt; it never mutates the active attempt in place.
+    """
+    payload = frozen.as_dict()
+    if hasattr(resolved, "model_copy"):
+        return resolved.model_copy(update={"free_model_attempt": payload})
+    if isinstance(resolved, dict):
+        updated = dict(resolved)
+        updated["freeModelAttempt"] = payload
+        return updated
+    raise TypeError("resolved must be a BootstrapResolved or mapping")
+
+
+def frozen_attempt_from_resolved(resolved: Any) -> FrozenFreeModelAttempt | None:
+    """Recover the frozen bundle persisted with an attempt, if any."""
+    payload: Any = None
+    if hasattr(resolved, "free_model_attempt"):
+        payload = getattr(resolved, "free_model_attempt")
+    elif isinstance(resolved, Mapping):
+        payload = resolved.get("freeModelAttempt", resolved.get("free_model_attempt"))
+    if not isinstance(payload, Mapping):
+        return None
+    try:
+        return FrozenFreeModelAttempt(
+            model_id=str(payload.get("modelId") or ""),
+            route=str(payload.get("route") or FREE_ROUTE_PREFIX.rstrip("/")),
+            materializer_ref=str(payload.get("materializerRef") or FREE_MATERIALIZER_REF),
+            catalog_digest=str(payload.get("catalogDigest") or ""),
+            pricing_digest=str(payload.get("pricingDigest") or ""),
+            data_use_version=str(payload.get("dataUseVersion") or ""),
+            selection_policy_version=str(
+                payload.get("selectionPolicyVersion") or SELECTION_POLICY_VERSION
+            ),
+            observed_at=str(payload.get("observedAt") or ""),
+        )
+    except (TypeError, ValueError):
+        return None
+
+
+def recheck_frozen_attempt(
+    frozen: FrozenFreeModelAttempt,
+    *,
+    catalog: Any,
+    pricing: Mapping[str, Any] | None,
+    data_use_version: str,
+    selection_policy_version: str = SELECTION_POLICY_VERSION,
+) -> tuple[bool, str]:
+    """Authoritative recheck before a new model send or renewed attempt.
+
+    Compares the live catalog/pricing/data-use/policy evidence against the
+    frozen bundle without rewriting active inputs. Returns (current, reason):
+    current True means the frozen attempt is still authoritative; False names
+    the expired/changed axis so the caller can fail safely or start an
+    explicitly authorized new attempt preserving saved work. Never swaps
+    provider/model inside a billed request.
+    """
+    catalog_payload = catalog if isinstance(catalog, Mapping) else {"catalog": catalog}
+    pricing_payload = dict(pricing or {})
+    if frozen.selection_policy_version != selection_policy_version:
+        return False, "selection_policy_changed:" + selection_policy_version
+    if frozen.data_use_version != data_use_version:
+        return False, "privacy:terms_changed:" + data_use_version
+    if frozen.catalog_digest != _evidence_digest(
+        catalog_payload if isinstance(catalog_payload, Mapping) else {"v": str(catalog_payload)}
+    ):
+        return False, "availability:catalog_changed"
+    if frozen.pricing_digest != _evidence_digest(pricing_payload):
+        return False, "pricing:evidence_changed"
+    return True, "current"
+
+
+def build_live_qualification_record(
+    *,
+    qualified_id: str,
+    host_image_ref: str,
+    runtime_pack_ref: str,
+    materializer_ref: str = FREE_MATERIALIZER_REF,
+    pricing_evidence: Mapping[str, Any] | None = None,
+    data_use_version: str = ZEN_FREE_TERMS_VERSION,
+    data_use_authorized: bool = False,
+    catalog_max_age_hours: float | None = None,
+    probe_timeout_seconds: float = 60.0,
+    max_probe_attempts: int = 1,
+    blocked_cases: tuple[str, ...] = (),
+    unexecuted_cases: tuple[str, ...] = (),
+    observed_at: str | None = None,
+) -> dict[str, Any]:
+    """Build the bounded, non-sensitive live-qualification record shape.
+
+    MoonLadderStudios/MoonMind#4021 req-7: protected live qualification is
+    explicitly authorized, non-sensitive, and budgeted. This helper records
+    the exact model/image/runtime/materializer, pricing/privacy evidence
+    references, request bounds (lease/probe/budget), and blocked/unexecuted
+    cases truthfully. It performs no network or inference calls; hermetic
+    tests use it with inline fixtures only.
+    """
+    return {
+        "schemaVersion": "moonmind.free-model-live-qualification/v1",
+        "modelId": qualified_id,
+        "route": FREE_ROUTE_PREFIX.rstrip("/"),
+        "materializerRef": materializer_ref,
+        "hostImageRef": host_image_ref,
+        "runtimePackRef": runtime_pack_ref,
+        "pricingEvidence": dict(pricing_evidence or {}),
+        "dataUseVersion": data_use_version,
+        "dataUseAuthorized": bool(data_use_authorized),
+        "selectionPolicyVersion": SELECTION_POLICY_VERSION,
+        "bounds": {
+            "catalogMaxAgeHours": catalog_max_age_hours,
+            "probeTimeoutSeconds": probe_timeout_seconds,
+            "maxProbeAttempts": max_probe_attempts,
+            "singleFlight": True,
+        },
+        "blockedCases": list(blocked_cases),
+        "unexecutedCases": list(unexecuted_cases),
+        "observedAt": observed_at or datetime.now(UTC).isoformat(),
+    }
+
+
 def format_no_eligible_free_model(reasons: Mapping[str, str]) -> dict[str, Any]:
     """Expose the no_eligible_free_model signal with separate reason axes."""
     ordered = {k: reasons[k] for k in ("availability", "pricing", "capability", "privacy") if k in reasons}
@@ -392,6 +615,7 @@ __all__ = [
     "PRICING_DIMENSIONS",
     "REQUIRED_TOOLS",
     "SELECTION_POLICY_VERSION",
+    "ZEN_FREE_TERMS_VERSION",
     "DataUseDecision",
     "EligibilityInput",
     "EligibilityVerdict",
@@ -399,11 +623,18 @@ __all__ = [
     "FrozenFreeModelAttempt",
     "NoEligibleFreeModelError",
     "PricingVerdict",
+    "attach_frozen_attempt_to_resolved",
+    "build_eligibility_input",
+    "build_live_qualification_record",
     "evaluate_data_use",
     "evaluate_eligibility",
     "evaluate_pricing",
     "format_no_eligible_free_model",
     "freeze_attempt",
+    "frozen_attempt_from_resolved",
     "parse_cost_value",
+    "rank_approved_candidates",
+    "recheck_frozen_attempt",
     "resolve_free_default_model",
+    "zen_free_data_use_decision_from_settings",
 ]

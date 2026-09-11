@@ -323,6 +323,19 @@ _REASONS: dict[str, tuple[str, str]] = {
         "Connect and validate a compatible OAuth Provider Profile for the selected execution target.",
         "/settings#provider-profiles",
     ),
+    # MoonLadderStudios/MoonMind#4021 req-5/req-8: the credentialless
+    # opencode-zen-free route surfaces eligibility with separate
+    # availability/pricing/capability/privacy reasons through the normal
+    # Runtime/Profile UI, with a clear reason and an explicit valid
+    # alternative. Provider/host capacity stays a wait state (see
+    # omnigent_capacity_wait / profile_capacity_unavailable) that never
+    # requalifies a model or selects a paid fallback.
+    "no_eligible_free_model": (
+        "No credentialless OpenCode model is currently eligible. Review the "
+        "availability, pricing, capability, and privacy detail, then choose an "
+        "explicit valid alternative.",
+        "/settings#provider-profiles",
+    ),
     "execution_profile_unavailable": (
         "Enable a compatible Omnigent execution profile.",
         "/settings#omnigent",
@@ -422,6 +435,27 @@ _REASONS: dict[str, tuple[str, str]] = {
 def _reason(code: str) -> GateReason:
     message, href = _REASONS[code]
     return GateReason(code=code, message=message, remediationHref=href)
+
+
+def free_model_gate_reason(reasons: dict[str, str]) -> GateReason:
+    """Build the catalog gate reason for the no_eligible_free_model signal.
+
+    MoonLadderStudios/MoonMind#4021 req-5/acc-6: availability, pricing,
+    capability, and privacy axes stay separate in the message so the normal
+    Runtime/Profile UI can show why the credentialless default is blocked
+    and which explicit valid alternative to choose. Capacity pressure is
+    never reported here: saturated capacity uses omnigent_capacity_wait /
+    profile_capacity_unavailable as a wait state, never a paid fallback.
+    """
+    ordered = {k: reasons[k] for k in ("availability", "pricing", "capability", "privacy") if k in reasons}
+    ordered.update({k: v for k, v in reasons.items() if k not in ordered})
+    detail = ", ".join(f"{axis}={value}" for axis, value in ordered.items()) or "unknown"
+    base = _reason("no_eligible_free_model")
+    return GateReason(
+        code=base.code,
+        message=f"{base.message} Detail: {detail}.",
+        remediationHref=base.remediation_href,
+    )
 
 
 def _valid_server_url(value: str) -> bool:

@@ -21,8 +21,9 @@ from moonmind.omnigent.bootstrap.models import (
 from moonmind.omnigent.bootstrap.opencode import (
     DEFAULT_OPENCODE_MODEL_DISPLAY,
     DEFAULT_OPENCODE_QUALIFIED,
-    resolve_model_by_display,
+    resolve_bootstrap_model,
     validate_effort,
+    validate_effort_for_model,
 )
 from moonmind.omnigent.bootstrap.store import (
     load_bootstrap_record,
@@ -46,7 +47,11 @@ def _resolve_profile_model_effort(profile: Any) -> tuple[str, str]:
         require_launch_ready=False,
     )
     model = str(resolved.model or "").strip()
-    effort = validate_effort(str(resolved.effort or "xhigh").strip())
+    raw_effort = str(resolved.effort or "xhigh").strip()
+    # MoonLadderStudios/MoonMind#4021 req-3: validate effort against the
+    # selected model's actual supported values, never the seeded default.
+    # Unknown models fall back to the generic set inside the helper.
+    effort = validate_effort_for_model(raw_effort, model) if model else validate_effort(raw_effort)
     return model, effort
 
 
@@ -91,8 +96,9 @@ class BootstrapController:
                 "Contributor data-use acknowledgement is required for Muse Spark 1.3 Contributor"
             )
 
-        # Validate effort
-        eff = validate_effort(eff)
+        # Validate effort against the selected model's actual values
+        # (MoonLadderStudios/MoonMind#4021 req-3); unknown models use generic.
+        eff = validate_effort_for_model(eff, display) if display else validate_effort(eff)
 
         # Load or create record
         record = await self.get_state()
@@ -705,9 +711,14 @@ class BootstrapController:
                         "or set OMNIGENT_OPENCODE_HOST_IMAGE_REF to a digest-pinned image."
                     )
             # Update record resolved
-            # Resolve model by friendly name (without live catalog for now, will validate later)
+            # Resolve model for image selection. Credentialless opencode/*
+            # qualified IDs never resolve pre-validation: resolve_bootstrap_model
+            # fails closed without the exact observed catalog, while friendly
+            # display aliases remain valid here for image resolution only.
+            # Execution qualification still requires the exact catalog (step 7
+            # of OpenCodeHost §8) via resolve_model_exact before launch.
             try:
-                model_info = resolve_model_by_display(display)
+                model_info = resolve_bootstrap_model(display)
             except ValueError as exc:
                 record = record.model_copy(
                     update={
@@ -720,6 +731,8 @@ class BootstrapController:
 
             qualified = model_info["qualifiedId"]
             provider_model = model_info["providerModelId"]
+            # Effort uses the selected model's actual supported values.
+            eff = validate_effort_for_model(eff, qualified)
             resolved_model = BootstrapResolved(
                 modelId=provider_model,
                 qualifiedModelId=qualified,
