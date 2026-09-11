@@ -91,7 +91,11 @@ class TestArtifactAuthorizationBoundaries:
         tmp_path: Path,
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
-        """Service principals (service:*) bypass ownership checks for reads."""
+        """Post-#4017: bare service principals cannot bypass ownership.
+
+        A bare ``service:`` principal without an admitted scope is denied
+        even for reads; carrying the owner's admitted scope succeeds.
+        """
         monkeypatch.setattr(settings.oidc, "AUTH_PROVIDER", "oidc")
         async with _db(tmp_path) as maker:
             async with maker() as session:
@@ -110,9 +114,18 @@ class TestArtifactAuthorizationBoundaries:
                     content_type="text/plain",
                 )
 
+                with pytest.raises(
+                    TemporalArtifactAuthorizationError, match="cannot read"
+                ):
+                    await service.read(
+                        artifact_id=artifact.artifact_id,
+                        principal="service:lifecycle",
+                    )
+
                 _artifact, payload = await service.read(
                     artifact_id=artifact.artifact_id,
                     principal="service:lifecycle",
+                    admitted_principal="owner@example.com",
                 )
                 assert payload == b"owner-data"
 

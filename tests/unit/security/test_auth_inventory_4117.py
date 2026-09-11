@@ -144,10 +144,20 @@ def test_enabled_mode_owner_passes_non_owner_fails(monkeypatch):
 
 
 def test_enabled_mode_service_principal_passes_owner_checks(monkeypatch):
+    # Post-#4017: a bare service principal is never a generic read
+    # permission; service-to-service reads must carry the admitted
+    # user/execution scope explicitly. Mutation still permits service
+    # principals acting on any owner's row.
     monkeypatch.setattr(settings.oidc, "AUTH_PROVIDER", "accounts")
     service = _service()
     artifact = _artifact_owned_by(OWNER_PRINCIPAL)
-    service._assert_read_access(artifact, principal=SERVICE_PRINCIPAL)
+    with pytest.raises(artifact_module.TemporalArtifactAuthorizationError):
+        service._assert_read_access(artifact, principal=SERVICE_PRINCIPAL)
+    service._assert_read_access(
+        artifact,
+        principal=SERVICE_PRINCIPAL,
+        admitted_principal=OWNER_PRINCIPAL,
+    )
     service._assert_mutation_access(artifact, principal=SERVICE_PRINCIPAL)
 
 

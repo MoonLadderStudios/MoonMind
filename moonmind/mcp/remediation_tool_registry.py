@@ -71,6 +71,7 @@ class RemediationActionRequest(BaseModel):
 class RemediationToolExecutionContext:
     service: RemediationEvidenceToolService
     principal: str
+    admitted_principal: str | None = None
 
 
 class RemediationToolRegistry:
@@ -161,6 +162,7 @@ class RemediationToolRegistry:
             include_content=request.include_content,
             max_content_bytes=request.max_content_bytes,
             principal=context.principal,
+            admitted_principal=context.admitted_principal,
         )
         return asdict(result)
 
@@ -173,6 +175,7 @@ class RemediationToolRegistry:
             cursor=request.cursor,
             tail_lines=request.tail_lines,
             principal=context.principal,
+            admitted_principal=context.admitted_principal,
         )
         return asdict(result)
 
@@ -185,6 +188,7 @@ class RemediationToolRegistry:
             agent_run_id=request.agent_run_id,
             from_sequence=request.from_sequence,
             principal=context.principal,
+            admitted_principal=context.admitted_principal,
         )
         return asdict(result) if is_dataclass(result) else result
 
@@ -198,6 +202,7 @@ class RemediationToolRegistry:
             include_content=request.include_content,
             max_content_bytes=request.max_content_bytes,
             principal=context.principal,
+            admitted_principal=context.admitted_principal,
         )
         return asdict(result)
 
@@ -214,6 +219,7 @@ class RemediationToolRegistry:
             approval_binding=request.approval_binding,
             approval_ref=request.approval_ref,
             principal=context.principal,
+            admitted_principal=context.admitted_principal,
         )
 
 
