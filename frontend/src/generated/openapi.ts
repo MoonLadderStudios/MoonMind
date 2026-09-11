@@ -4399,7 +4399,7 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/github/branches": {
+    "/api/github/branches/resolve": {
         parameters: {
             query?: never;
             header?: never;
@@ -4407,10 +4407,10 @@ export interface paths {
             cookie?: never;
         };
         /**
-         * List Dashboard Github Branches
-         * @description List one bounded page of GitHub branches through MoonMind.
+         * Resolve Dashboard Github Branch
+         * @description Resolve one exact branch name without scanning suggestion pages.
          */
-        get: operations["list_dashboard_github_branches_api_github_branches_get"];
+        get: operations["resolve_dashboard_github_branch_api_github_branches_resolve_get"];
         put?: never;
         post?: never;
         delete?: never;
@@ -4439,7 +4439,7 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/github/branches/resolve": {
+    "/api/github/branches": {
         parameters: {
             query?: never;
             header?: never;
@@ -4447,10 +4447,10 @@ export interface paths {
             cookie?: never;
         };
         /**
-         * Resolve Dashboard Github Branch
-         * @description Resolve one exact branch name without scanning suggestion pages.
+         * List Dashboard Github Branches
+         * @description List one bounded page of GitHub branches through MoonMind.
          */
-        get: operations["resolve_dashboard_github_branch_api_github_branches_resolve_get"];
+        get: operations["list_dashboard_github_branches_api_github_branches_get"];
         put?: never;
         post?: never;
         delete?: never;
@@ -6822,8 +6822,11 @@ export interface components {
             error?: string | null;
             /** Defaultbranch */
             defaultBranch?: string | null;
-            /** Hasmore */
-            hasMore?: boolean;
+            /**
+             * Hasmore
+             * @default false
+             */
+            hasMore: boolean;
         };
         /**
          * DashboardBranchMetadataResponse
@@ -6861,16 +6864,22 @@ export interface components {
          * @description Exact-name branch resolution independent of suggestion pages.
          */
         DashboardBranchResolveResponse: {
-            /** Found */
-            found?: boolean;
+            /**
+             * Found
+             * @default false
+             */
+            found: boolean;
             /** Branch */
             branch?: string | null;
             /** Defaultbranch */
             defaultBranch?: string | null;
             /** Error */
             error?: string | null;
-            /** Inconclusive */
-            inconclusive?: boolean;
+            /**
+             * Inconclusive
+             * @default true
+             */
+            inconclusive: boolean;
         };
         /**
          * DashboardIssueListResponse
