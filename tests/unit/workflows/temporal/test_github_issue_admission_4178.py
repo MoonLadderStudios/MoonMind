@@ -398,6 +398,13 @@ class _AdmissionHttpClient:
 
     issue_payload: dict[str, Any] = {}
     search_payload: dict[str, Any] = {}
+    # Authenticated search account for the self-only author scope default
+    # (issue #4257). Search candidates below carry this author.
+    user_payload: dict[str, Any] = {
+        "id": 9001,
+        "login": "admission-searcher",
+        "type": "User",
+    }
 
     def __init__(self, *args: Any, **kwargs: Any) -> None:
         pass
@@ -409,6 +416,8 @@ class _AdmissionHttpClient:
         return None
 
     async def get(self, url: str, **kwargs: Any):
+        if url.rstrip("/").endswith("/user"):
+            return _AdmissionFakeHttpResponse(dict(type(self).user_payload))
         if "search/issues" in url:
             return _AdmissionFakeHttpResponse(dict(type(self).search_payload))
         return _AdmissionFakeHttpResponse(dict(type(self).issue_payload))
@@ -579,6 +588,7 @@ async def test_search_admission_runs_without_resolver(monkeypatch: pytest.Monkey
             "body": "body",
             "html_url": f"https://github.com/o/r/issues/{number}",
             "state": "open",
+            "user": {"id": 9001, "login": "admission-searcher"},
             "labels": [{"name": label} for label in labels],
         }
 
@@ -750,6 +760,7 @@ async def test_search_query_path_forwards_read_failure_bundle(
             "body": "body",
             "html_url": f"https://github.com/o/r/issues/{number}",
             "state": "open",
+            "user": {"id": 9001, "login": "admission-searcher"},
             "labels": [],
         }
 
@@ -1100,6 +1111,7 @@ async def test_query_path_blocked_candidate_skipped_end_to_end(
             "body": "body",
             "html_url": f"https://github.com/o/r/issues/{number}",
             "state": "open",
+            "user": {"id": 9001, "login": "admission-searcher"},
             "labels": [],
         }
 
@@ -1139,6 +1151,7 @@ async def test_recandidate_allowed_positive_through_resolve_issue(
             "body": "body",
             "html_url": f"https://github.com/o/r/issues/{number}",
             "state": "open",
+            "user": {"id": 9001, "login": "admission-searcher"},
             "labels": [],
         }
 

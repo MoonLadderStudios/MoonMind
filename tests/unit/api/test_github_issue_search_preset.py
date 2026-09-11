@@ -43,9 +43,13 @@ def issue(number=4025, **overrides):
         "title": "Dashboard update stream",
         "body": "Reconcile advertised routes and bounded polling recovery.",
         "html_url": f"https://github.com/{REPOSITORY}/issues/{number}",
+        "user": {"id": 4257001, "login": "issue-searcher"},
         "labels": [{"name": "bug"}],
         **overrides,
     }
+
+
+SEARCH_IDENTITY = {"id": 4257001, "login": "issue-searcher", "type": "User"}
 
 
 @pytest.fixture
@@ -57,6 +61,8 @@ def activity_boundary(monkeypatch):
 
     def handler(request):
         requests.append(request)
+        if request.url.path.rstrip("/").endswith("/user"):
+            return httpx.Response(200, json=dict(SEARCH_IDENTITY))
         if "/comments" in request.url.path:
             # Live comment readability gate expects a GitHub comment list.
             # GET returns the list; POST creates one comment.
@@ -719,8 +725,9 @@ async def test_prerequisite_cache_preserves_cross_repository_identity(
     )
     assert result.status == "COMPLETED"
     assert result.outputs["searchEvidence"]["candidatesExamined"] == 3
-    # +5 for live comment readability + advisory claim.
-    assert len(activity_boundary.requests) == 5 + 5
+    # +5 for live comment readability + advisory claim, plus the single
+    # credential-bound identity lookup for the self-only default.
+    assert len(activity_boundary.requests) == 5 + 5 + 1
 
 
 @pytest.mark.asyncio
@@ -824,6 +831,10 @@ async def test_default_preset_resolves_and_preserves_issue_across_agent_steps(
         "fallbackScanning": True,
         "pagesExamined": 1,
         "candidatesExamined": 1,
+        "authorScope": "authenticated_user",
+        "authorMismatchesSkipped": 0,
+        "authenticatedUser": {"id": 4257001, "login": "issue-searcher"},
+        "selectedIssueAuthor": {"id": 4257001, "login": "issue-searcher"},
     }
     workflow = MoonMindRunWorkflow()
     workflow._record_trusted_issue_context(result.outputs)
@@ -939,9 +950,15 @@ async def test_query_search_and_previous_explicit_issue_payload(activity_boundar
         {"repository": REPOSITORY, "issueSearch": "dashboard"},
     )
     assert result.status == "COMPLETED"
+    search_requests = [
+        request
+        for request in activity_boundary.requests
+        if request.url.path == "/search/issues"
+    ]
+    assert len(search_requests) == 1
     assert (
-        activity_boundary.requests[0].url.params["q"]
-        == f"dashboard repo:{REPOSITORY} is:issue is:open"
+        search_requests[0].url.params["q"]
+        == f"dashboard author:issue-searcher repo:{REPOSITORY} is:issue is:open"
     )
     activity_boundary.requests.clear()
     # Req-2 claim mutates the mocked issue labels; reset to Available for the
