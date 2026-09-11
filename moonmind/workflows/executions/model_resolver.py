@@ -38,6 +38,7 @@ __all__ = [
     "provider_profile_version",
     "resolve_effective_model",
     "resolve_model_effort",
+    "resolve_opencode_effort",
 ]
 
 # legacy_run contract — the model_source value "task_override" is persisted in
@@ -216,7 +217,7 @@ def resolve_model_effort(
         return _with_preview_mismatch(
             ResolvedModelEffort(
                 model=model,
-                effort=effort,
+                effort=resolve_opencode_effort(model, effort),
                 requested_model_tier=requested_tier,
                 effective_model_tier=None,
                 tier_label=None,
@@ -264,7 +265,7 @@ def resolve_model_effort(
         return _with_preview_mismatch(
             ResolvedModelEffort(
                 model=model,
-                effort=effort,
+                effort=resolve_opencode_effort(model, effort),
                 requested_model_tier=requested_tier,
                 effective_model_tier=effective_tier,
                 tier_label=tier_label,
@@ -298,7 +299,7 @@ def resolve_model_effort(
     return _with_preview_mismatch(
         ResolvedModelEffort(
             model=model,
-            effort=effort,
+            effort=resolve_opencode_effort(model, effort),
             requested_model_tier=requested_tier,
             effective_model_tier=None,
             tier_label=None,
@@ -341,6 +342,21 @@ def coerce_effort_for_model(model: str | None, effort: str | None) -> str | None
         from moonmind.omnigent.bootstrap.opencode import validate_effort  # type: ignore[no-redef]
 
         return validate_effort(cleaned_effort)
+
+
+def resolve_opencode_effort(model: str | None, effort: str | None) -> str | None:
+    """Enforce per-model effort for the credentialless OpenCode route.
+
+    MoonLadderStudios/MoonMind#4021 req-3: the seeded ``xhigh`` default must
+    not be assumed for every model. Models on the ``opencode/`` route resolve
+    effort against the selected model's actual supported values via
+    :func:`coerce_effort_for_model` and fail closed with an actionable error
+    instead of silently substituting. All other runtimes keep their existing
+    pass-through behavior unchanged.
+    """
+    if effort is None or not str(model or "").strip().startswith("opencode/"):
+        return effort
+    return coerce_effort_for_model(model, effort)
 
 
 def _clean(value: Any | None) -> str | None:

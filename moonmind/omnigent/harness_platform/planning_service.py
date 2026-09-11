@@ -53,6 +53,11 @@ from moonmind.omnigent.harness_platform.stores import (
     ExecutionPlanUsageIdentity,
     OmnigentExecutionPlanUsageStore,
 )
+from moonmind.omnigent.bootstrap.free_model_eligibility import (
+    FREE_PROFILE_ID,
+    NO_ELIGIBLE_FREE_MODEL_CODE,
+    zen_free_route_blocked_reason,
+)
 from moonmind.schemas.agent_runtime_models import AgentExecutionRequest
 from moonmind.workflows.executions.model_resolver import resolve_model_effort
 
@@ -739,6 +744,23 @@ class OmnigentExecutionPlanningService:
         if not qualified.startswith(f"{provider.provider_id}/"):
             raise HarnessPlatformError(
                 "selected model does not belong to the Provider Profile route",
+                code=HarnessPlatformFailure.OMNIGENT_MODEL_UNAVAILABLE,
+            )
+        blocked_reason = zen_free_route_blocked_reason(
+            str(getattr(provider, "provider_id", "") or "")
+        )
+        if blocked_reason is not None:
+            # MoonLadderStudios/MoonMind#4021 req-4: the credentialless free
+            # route needs the recorded per-policy-version authorization from
+            # the existing Settings authority. Default deployments accept, so
+            # they observe no change; an explicit operator decline blocks new
+            # admission with a precise privacy reason instead of silently
+            # proceeding or substituting a paid fallback.
+            raise HarnessPlatformError(
+                f"the credentialless {FREE_PROFILE_ID} default is blocked "
+                f"({NO_ELIGIBLE_FREE_MODEL_CODE}: {blocked_reason}). Re-accept "
+                "contributor data use in Settings or choose an explicit valid "
+                "alternative.",
                 code=HarnessPlatformFailure.OMNIGENT_MODEL_UNAVAILABLE,
             )
         effort = str(resolved.effort or "").strip() or None

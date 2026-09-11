@@ -1,0 +1,57 @@
+{
+  "entries": [
+    {
+      "compatibilityGeneration": "omnigent-generic-host/1",
+      "deploymentId": "local-default",
+      "effectiveLaunchSnapshotDigest": "sha256:25b2a0b7b27c30de5fd32e5bf737e49a263dd6663bc69490e4411916df8e02a1",
+      "evidenceIssuer": "moonmind-deployment-bootstrap@1",
+      "evidenceRefs": {
+        "readRun": "artifact:read-run"
+      },
+      "expiresAt": "2026-10-11T14:13:51.092578Z",
+      "featureGeneration": "omnigent-session-v1",
+      "generatedAt": "2026-09-11T14:13:51.092578Z",
+      "hostImageRef": "ghcr.io/example/omnigent-host@sha256:7777777777777777777777777777777777777777777777777777777777777777",
+      "model": {
+        "effort": "xhigh",
+        "qualifiedId": "example/model"
+      },
+      "policySnapshotDigest": "sha256:41a2496c2456d5b92543b5bd99ad81b08d190d8e6e9086751e01ed3b41737eb8",
+      "provider": {
+        "credentialGeneration": 1,
+        "profileRef": "provider-opencode-native"
+      },
+      "replayCompatibilityVersion": "v1",
+      "results": {
+        "readQualification": "passed"
+      },
+      "rollbackPolicyVersion": "moonmind.omnigent-session-supervisor-rollback/v1",
+      "schemaVersion": "moonmind.omnigent-deployment-execution-evidence/v1",
+      "signature": {
+        "algorithm": "hmac-sha256",
+        "keyId": "moonmind-deployment-evidence-v1",
+        "value": "5f46b067aac61789e6e038b0d0b995f57099bdc14575325730eaca433e17fa05"
+      },
+      "supportCombinationKey": "omnigent-support:sha256:75aa8aa595e517c9a6a43ce766575cfe11d0dd92d58790e92f17fc198fc1f0cf",
+      "supportIdentity": {
+        "agentSourceRef": "agent-source:sha256:7ec3f751ea6480a88a8d6e96377102cb15fe1ab72a350c321232e51b7cb981bf",
+        "architecture": "linux/amd64",
+        "executionRealizerRef": "generic-omnigent-host@1",
+        "harnessImplementationRef": "omnigent-harness-implementation:sha256:1ba00c4fb60e4015cb576e93a61c4f767e30f716a8838eb53cbfc80ddf6f9429",
+        "hostClassRef": "omnigent-opencode@1",
+        "launchPolicyRef": "omnigent-on-demand@1",
+        "materializerRefs": [
+          "opencode-auth-json@1"
+        ],
+        "modelConfigDigest": "sha256:ef6977f562a0a5c282129a7125359bf3fa3cba5972aa9f79334e890627da9dfe",
+        "omnigentHostBuildRef": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "omnigentServerBuildRef": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "providerCompatibilityClass": "opencode-native.primary-model",
+        "requiredCapabilitiesDigest": "sha256:4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945",
+        "vendorRuntimeRefs": [
+          "opencode@1.18.11#sha256:7777777777777777777777777777777777777777777777777777777777777777"
+        ]
+      }
+    }
+  ]
+}

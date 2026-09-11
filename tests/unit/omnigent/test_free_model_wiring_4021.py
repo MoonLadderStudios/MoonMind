@@ -15,6 +15,8 @@ from api_service.api.routers.omnigent_catalog import (
     free_model_gate_reason,
 )
 from moonmind.omnigent.bootstrap.free_model_eligibility import (
+    FREE_PROVIDER_ID,
+    NO_ELIGIBLE_FREE_MODEL_CODE,
     ZEN_FREE_TERMS_VERSION,
     DataUseDecision,
     EligibilityInput,
@@ -29,6 +31,7 @@ from moonmind.omnigent.bootstrap.free_model_eligibility import (
     recheck_frozen_attempt,
     resolve_free_default_model,
     zen_free_data_use_decision_from_settings,
+    zen_free_route_blocked_reason,
 )
 from moonmind.omnigent.bootstrap.models import BootstrapResolved
 from moonmind.omnigent.bootstrap.opencode import (
@@ -36,7 +39,11 @@ from moonmind.omnigent.bootstrap.opencode import (
     resolve_bootstrap_model,
     resolve_model_exact,
 )
-from moonmind.workflows.executions.model_resolver import coerce_effort_for_model
+from moonmind.workflows.executions.model_resolver import (
+    coerce_effort_for_model,
+    resolve_model_effort,
+    resolve_opencode_effort,
+)
 
 ZERO_PRICING = {
     "request": 0,
@@ -229,6 +236,114 @@ def test_frozen_attempt_persists_and_rechecks_without_rewrite() -> None:
         default_policy_authorizes_auto=True,
     )
     assert selected == ZEN_FREE_QUALIFIED
+
+
+def test_production_resolver_coerces_opencode_effort() -> None:
+    """The real resolve_model_effort path enforces per-model effort upstream.
+
+    MoonLadderStudios/MoonMind#4021 req-3: plan/launch consumers share
+    resolve_model_effort, so the opencode/ route fails closed on unsupported
+    effort there instead of assuming the seeded default. Other runtimes keep
+    pass-through behavior.
+    """
+    from types import SimpleNamespace
+
+    def _profile(**overrides: object) -> SimpleNamespace:
+        values: dict[str, object] = {
+            "runtime_id": "opencode",
+            "provider_id": FREE_PROVIDER_ID,
+            "default_model": ZEN_FREE_QUALIFIED,
+            "default_effort": "xhigh",
+        }
+        values.update(overrides)
+        return SimpleNamespace(**values)
+
+    resolved = resolve_model_effort(
+        runtime_id="opencode",
+        profile=_profile(),
+        require_launch_ready=False,
+    )
+    assert resolved.model == ZEN_FREE_QUALIFIED
+    assert resolved.effort == "xhigh"
+
+    with pytest.raises(ValueError):
+        resolve_model_effort(
+            runtime_id="opencode",
+            profile=_profile(),
+            requested_effort="ultra",
+            require_launch_ready=False,
+        )
+
+    # Explicit helper scoping: opencode/ coerces, other routes pass through.
+    assert resolve_opencode_effort(ZEN_FREE_QUALIFIED, "xhigh") == "xhigh"
+    assert resolve_opencode_effort(ZEN_FREE_QUALIFIED, None) is None
+    assert resolve_opencode_effort("other-provider/some-model", "ultra") == "ultra"
+    assert resolve_opencode_effort(None, "xhigh") == "xhigh"
+
+
+def test_production_gate_blocks_only_declined_free_route() -> None:
+    """The Settings-sourced gate is exact-version and free-route scoped."""
+    # Default deployments accept: no block for either route.
+    assert zen_free_route_blocked_reason("opencode", env={}) is None
+    # The keyed route is never gated by the free-route decision.
+    assert (
+        zen_free_route_blocked_reason(
+            "opencode-go", env={"OPENCODE_ACCEPT_CONTRIBUTOR_DATA_USE": "false"}
+        )
+        is None
+    )
+    assert zen_free_route_blocked_reason("other", env={}) is None
+    # An explicit operator decline blocks the free route with the exact
+    # per-version privacy reason.
+    blocked = zen_free_route_blocked_reason(
+        "opencode", env={"OPENCODE_ACCEPT_CONTRIBUTOR_DATA_USE": "false"}
+    )
+    assert blocked == "privacy:unaccepted_terms:" + ZEN_FREE_TERMS_VERSION
+
+
+def test_planning_admission_blocks_declined_free_route(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Plan-time admission enforces the free-route authorization (req-4)."""
+    from types import SimpleNamespace
+
+    from moonmind.omnigent.harness_platform.failures import HarnessPlatformError
+    from moonmind.omnigent.harness_platform.planning_service import (
+        OmnigentExecutionPlanningService,
+    )
+    from moonmind.schemas.agent_runtime_models import AgentExecutionRequest
+
+    service = SimpleNamespace(_deployment_default_model="")
+    provider = SimpleNamespace(
+        runtime_id="opencode",
+        provider_id=FREE_PROVIDER_ID,
+        default_model=ZEN_FREE_QUALIFIED,
+        default_effort="xhigh",
+    )
+
+    def _request() -> AgentExecutionRequest:
+        return AgentExecutionRequest(
+            agentKind="external",
+            agentId="omnigent",
+            correlationId="corr-1",
+            idempotencyKey="idem-1",
+        )
+
+    monkeypatch.delenv("OPENCODE_ACCEPT_CONTRIBUTOR_DATA_USE", raising=False)
+    qualified, effort, route = OmnigentExecutionPlanningService._resolve_model(
+        service, _request(), None, provider
+    )
+    assert qualified == ZEN_FREE_QUALIFIED
+    assert effort == "xhigh"
+    assert route == FREE_PROVIDER_ID
+
+    monkeypatch.setenv("OPENCODE_ACCEPT_CONTRIBUTOR_DATA_USE", "false")
+    with pytest.raises(HarnessPlatformError) as excinfo:
+        OmnigentExecutionPlanningService._resolve_model(
+            service, _request(), None, provider
+        )
+    assert NO_ELIGIBLE_FREE_MODEL_CODE in str(excinfo.value)
+    assert "privacy:unaccepted_terms:" in str(excinfo.value)
 
 
 def test_catalog_no_eligible_signal_and_capacity_wait_state() -> None:
