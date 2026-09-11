@@ -619,6 +619,7 @@ async def test_explicit_load_honors_entrypoint_and_bundle(
     """Direct loads route orchestration/continuation identities via the same boundary."""
     service = _AdmissionFakeService(labels=[])
     _install_admission_http(monkeypatch)
+    _install_dynamic_issue_fetch(monkeypatch, service, 4178)
     _AdmissionHttpClient.issue_payload = _admission_issue_payload(4178, [])
     result = await story_tools.load_github_issue_preset_brief(
         {
@@ -667,6 +668,7 @@ async def test_brief_load_plans_claim_and_persists_identity(
     """Req 2+3 are wired: the brief plans the advisory claim and pins identity."""
     service = _AdmissionFakeService(labels=[])
     _install_admission_http(monkeypatch)
+    _install_dynamic_issue_fetch(monkeypatch, service, 4178)
     _AdmissionHttpClient.issue_payload = _admission_issue_payload(4178, [])
     result = await story_tools.load_github_issue_preset_brief(
         {
@@ -696,6 +698,7 @@ async def test_brief_entrypoint_inference_continuation_retry_orchestration(
     """Acceptance A: continuation/retry/orchestration reach the same boundary."""
     service = _AdmissionFakeService(labels=[])
     _install_admission_http(monkeypatch)
+    _install_dynamic_issue_fetch(monkeypatch, service, 4178)
     _AdmissionHttpClient.issue_payload = _admission_issue_payload(4178, [])
 
     continued = await story_tools.load_github_issue_preset_brief(
@@ -710,6 +713,11 @@ async def test_brief_entrypoint_inference_continuation_retry_orchestration(
     assert continued.status == "COMPLETED"
     assert continued.outputs["admissionEntrypoint"] == ENTRYPOINT_CONTINUATION
 
+    # Each brief applies the in-progress claim; reset the fake issue state so
+    # subsequent entrypoint admissions start from Available like an isolated
+    # issue rather than observing the prior call's claim.
+    service.labels = []
+    service.operations = []
     retried = await story_tools.load_github_issue_preset_brief(
         {"repository": "o/r", "issueNumber": 4178, "retryOf": "att_" + "c" * 24},
         github_service_factory=lambda: service,
@@ -717,6 +725,8 @@ async def test_brief_entrypoint_inference_continuation_retry_orchestration(
     assert retried.status == "COMPLETED"
     assert retried.outputs["admissionEntrypoint"] == ENTRYPOINT_RETRY
 
+    service.labels = []
+    service.operations = []
     orchestrated = await story_tools.load_github_issue_preset_brief(
         {"repository": "o/r", "issueNumber": 4178, "orchestrationRunId": "orch-1"},
         github_service_factory=lambda: service,
