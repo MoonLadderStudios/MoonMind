@@ -17315,7 +17315,13 @@ class MoonMindRunWorkflow:
         )
         if merge_automation_head_sha:
             self._merge_automation_head_sha = merge_automation_head_sha
-        self._record_pr_resolver_verdict_context(outputs)
+        # Guard the verdict-state mutation behind the propagation patch so
+        # histories recorded before run-pr-resolver-verdict-propagation-v1
+        # replay without emitting different memo/finalization arguments.
+        if self._patched_or_false_outside_workflow(
+            RUN_PR_RESOLVER_VERDICT_PROPAGATION_PATCH
+        ):
+            self._record_pr_resolver_verdict_context(outputs)
 
         publish_branch = self._coerce_text(
             outputs.get("push_branch") or outputs.get("branch"),

@@ -297,6 +297,28 @@ async def test_blocked_ci_failures_runs_one_remediation_then_stops_on_repeat(
     skill_args = remediation_payload["initial_parameters"]["task"]["skill"]["args"]
     assert skill_args["remainingWorkPath"] == "art_01M264P832WTY8ZFRVH9AX88E3"
     assert skill_args["finalReason"] == "ci_failures"
+    # Materializable verifier refs use the artifact:// scheme for the runtime.
+    assert (
+        skill_args["gateResultRef"] == "artifact://art_01M264P832WTY8ZFRVH9AX88E3"
+    )
+    assert (
+        skill_args["remainingWorkRef"] == "artifact://art_01M264P832WTY8ZFRVH9AX88E3"
+    )
+    assert (
+        remediation_payload["initial_parameters"]["gateResultRef"]
+        == "artifact://art_01M264P832WTY8ZFRVH9AX88E3"
+    )
+    assert (
+        remediation_payload["initial_parameters"]["remainingWorkRef"]
+        == "artifact://art_01M264P832WTY8ZFRVH9AX88E3"
+    )
+    # The remediation child runs in the authoritative PR-head workspace with
+    # a workflow-owned publication handoff.
+    workspace_spec = remediation_payload["initial_parameters"]["workspaceSpec"]
+    assert workspace_spec["repository"] == "MoonLadderStudios/MoonMind"
+    assert workspace_spec["branch"] == "feature"
+    assert workspace_spec["targetBranch"] == "feature"
+    assert remediation_payload["initial_parameters"]["publishMode"] == "auto"
     # Per-cycle record lists head/reason/nextStep and the stop reason.
     cycles = result["resolverVerdictCycles"]
     assert len(cycles) == 2
@@ -419,3 +441,48 @@ def test_run_workflow_projects_pr_resolver_verdict_for_owning_gate(
     )
     assert workflow._merge_automation_disposition == "manual_review"
     assert workflow._merge_automation_head_sha == HEAD_1
+
+
+def test_remediation_artifact_ref_normalization() -> None:
+    workflow_obj = MoonMindMergeAutomationWorkflow()
+    assert (
+        workflow_obj._normalize_remediation_artifact_ref(
+            "art_01M264P832WTY8ZFRVH9AX88E3"
+        )
+        == "artifact://art_01M264P832WTY8ZFRVH9AX88E3"
+    )
+    assert (
+        workflow_obj._normalize_remediation_artifact_ref(
+            "artifact://art_01M264P832WTY8ZFRVH9AX88E3"
+        )
+        == "artifact://art_01M264P832WTY8ZFRVH9AX88E3"
+    )
+    assert workflow_obj._normalize_remediation_artifact_ref("") == ""
+    assert workflow_obj._normalize_remediation_artifact_ref(None) == ""
+
+
+def test_run_workflow_skips_verdict_mutation_without_patch(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        run_workflow_module.workflow, "patched", lambda _patch_id: False
+    )
+    workflow = run_workflow_module.MoonMindRunWorkflow()
+    outputs = {
+        "mergeAutomationDisposition": "manual_review",
+        "terminalContractId": "pr_resolver_terminal.v1",
+        "prResolverStatus": "blocked",
+        "prResolverReason": "ci_failures",
+        "prResolverNextStep": "run_full_remediation",
+        "terminalContractEvidenceRef": "art_01M264P832WTY8ZFRVH9AX88E3",
+        "headSha": HEAD_1,
+    }
+    workflow._record_execution_context(
+        node_id="node-1", execution_result={"outputs": outputs}
+    )
+    # Old histories replay without the new verdict-state mutation.
+    assert workflow._pr_resolver_status is None
+    assert workflow._pr_resolver_reason is None
+    assert workflow._pr_resolver_next_step is None
+    assert workflow._terminal_contract_evidence_ref is None
+    assert "prResolverStatus" not in workflow._publish_context
