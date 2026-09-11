@@ -1079,15 +1079,17 @@ services:
       - control-plane-network
     restart: unless-stopped
 
-  # MoonLadderStudios/MoonMind#4115: the native Qdrant service is retired and
-  # intentionally absent from the vector-free release (no live or optional
-  # native Qdrant backend, no compatibility profile). The previous image was
-  # qdrant/qdrant:v1.17.1 with qdrant-storage:/qdrant/storage. Removing this
-  # YAML definition does not stop a running pre-cutover orphan: exact-container
-  # retirement is an explicit operator action with ownership checks (see
-  # docs/tmp/QdrantCutoverRunbook-4115.md). The qdrant-storage volume below is
-  # retained through the recovery window; its eventual deletion is a separate
-  # exact-resource operator action, never automatic.
+  # MoonLadderStudios/MoonMind#4110: the native Qdrant service and its
+  # qdrant-storage volume declaration are removed from the vector-free
+  # release (no live or optional native Qdrant backend, no compatibility
+  # profile). The previous image was qdrant/qdrant:v1.17.1 with
+  # qdrant-storage:/qdrant/storage. Removing this YAML definition does not
+  # stop a running pre-cutover orphan nor delete pre-cutover host data:
+  # exact-container retirement is an explicit operator action with ownership
+  # checks (see docs/tmp/QdrantCutoverRunbook-4115.md), and the pre-cutover
+  # volume persists as an unmanaged host orphan through the #4115
+  # recovery window; its eventual deletion is a separate exact-resource
+  # operator action, never automatic.
 
   omnigent-runtime-bootstrap:
     image: ${MOONMIND_IMAGE:-ghcr.io/moonladderstudios/moonmind:latest}
@@ -1630,12 +1632,13 @@ services:
     restart: unless-stopped
 
 volumes:
-  # MoonLadderStudios/MoonMind#4115: retained through the explicit
-  # recovery/retention window after the Qdrant service removal above. Never
-  # deleted by a normal upgrade; eventual deletion is a separate
-  # exact-resource operator action after export/restore verification.
+  # MoonLadderStudios/MoonMind#4110: the native Qdrant volume declaration is
+  # removed with the Qdrant service (no qdrant-storage declaration, mount, or
+  # product support remains). Pre-cutover operator data persists on the host
+  # as an unmanaged orphan outside this file through the #4115
+  # recovery/retention window; eventual deletion is a separate exact-resource
+  # operator action after export/restore verification, never automatic.
   # Distinct from moonmind_retrieval_state (classified by #4107).
-  qdrant-storage:
   omnigent-host-state:
   omnigent-host-claude-state:
   omnigent-host-claude-home:

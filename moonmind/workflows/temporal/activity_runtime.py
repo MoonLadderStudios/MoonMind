@@ -1030,6 +1030,10 @@ _ACTIVITY_HANDLER_ATTRS: dict[str, tuple[str, str]] = {
         "integrations",
         "merge_automation_complete_post_merge_github",
     ),
+    "github_issue.finalize_failed_attempt": (
+        "integrations",
+        "github_issue_finalize_failed_attempt",
+    ),
     "pr_resolver.resolve_selector": (
         "integrations",
         "pr_resolver_resolve_selector",
@@ -5050,6 +5054,84 @@ class TemporalIntegrationActivities:
         return {
             "status": "succeeded" if succeeded else "failed",
             "required": required,
+            "repository": repository,
+            "issueNumber": issue_number,
+            **outputs,
+        }
+
+    async def github_issue_finalize_failed_attempt(self, payload, /, **kwargs):
+        """Finalize a failed/canceled controlling issue attempt (durable entrypoint).
+
+        Durable counterpart to the ``github.finalize_failed_attempt`` skill
+        tool: the controlling terminal path (failed or canceled exits that
+        never reach the success-path status update) schedules
+        ``github_issue.finalize_failed_attempt`` instead of relying on an
+        agent to invoke the skill. Input keys mirror the tool inputs; only
+        ``repository`` and ``issueNumber`` are required.
+        """
+        from moonmind.workflows.temporal.story_output_tools import (
+            finalize_github_issue_failed_attempt,
+        )
+
+        if not isinstance(payload, Mapping):
+            raise TemporalActivityRuntimeError(
+                "github_issue.finalize_failed_attempt requires an object"
+            )
+        config = payload.get("failedAttemptFinalization")
+        if not isinstance(config, Mapping):
+            config = payload
+
+        def _first(*keys: str) -> Any:
+            for key in keys:
+                if key in config and config[key] is not None:
+                    return config[key]
+            return None
+
+        def _block(*keys: str) -> dict[str, Any]:
+            for key in keys:
+                value = config.get(key)
+                if isinstance(value, Mapping):
+                    return dict(value)
+            return {}
+
+        repository = str(
+            _first("repository", "repo") or ""
+        ).strip()
+        try:
+            issue_number = int(_first("issueNumber", "issue_number") or 0)
+        except (TypeError, ValueError):
+            issue_number = 0
+        if not repository or issue_number <= 0:
+            raise TemporalActivityRuntimeError(
+                "github_issue.finalize_failed_attempt requires repository and issueNumber"
+            )
+        result = await finalize_github_issue_failed_attempt(
+            {
+                "repository": repository,
+                "issueNumber": issue_number,
+                "executionEvent": _first("executionEvent", "execution_event", "controllingOutcome", "controlling_outcome", "outcome", "status"),
+                "fromSettled": _first("fromSettled", "from_settled") or "in_progress",
+                "currentLabels": _first("currentLabels", "current_labels"),
+                "writerEvidence": _block("writerEvidence", "writer_evidence"),
+                "mutationEvidence": _block("mutationEvidence", "mutation_evidence"),
+                "preservationEvidence": _block("preservationEvidence", "preservation_evidence"),
+                "dispositionEvidence": _block("dispositionEvidence", "disposition_evidence"),
+                "attemptId": _first("attemptId", "attempt_id"),
+                "primaryOutcome": _first("primaryOutcome", "primary_outcome"),
+                "metRequirements": _first("metRequirements", "met_requirements"),
+                "remainingRequirements": _first("remainingRequirements", "remaining_requirements"),
+                "retryHistory": _first("retryHistory", "retry_history"),
+                "nextAction": _first("nextAction", "next_action"),
+                "reason": _first("reason"),
+                "completionMode": _first("completionMode", "completion_mode") or "pr_only_handoff",
+                "reviewOwnerEnded": _first("reviewOwnerEnded", "review_owner_ended"),
+                "cancellationHold": _first("cancellationHold", "cancellation_hold"),
+            }
+        )
+        outputs = dict(result.outputs)
+        succeeded = result.status == "COMPLETED" and outputs.get("released") is True
+        return {
+            "status": "succeeded" if succeeded else "failed",
             "repository": repository,
             "issueNumber": issue_number,
             **outputs,
