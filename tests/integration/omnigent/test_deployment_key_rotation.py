@@ -82,7 +82,10 @@ async def test_environment_key_rotation_reaches_runtime_authority(
         AsyncMock(return_value="omnigent-opencode-default@1"),
     )
     qualification = AsyncMock(
-        return_value={"supportCombinationKey": "test-support-combination"}
+        side_effect=lambda **kwargs: (
+            {"supportCombinationKey": "test-support-combination"},
+            kwargs["record"],
+        )
     )
     monkeypatch.setattr(controller, "_qualify_and_publish", qualification)
 
