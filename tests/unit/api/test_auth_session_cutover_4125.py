@@ -143,7 +143,27 @@ def test_production_routing_uses_shared_session_boundary() -> None:
     assert len(mounted) > 50, f"route expansion found too few paths: {len(mounted)}"
     assert "/auth/jwt/login" not in mounted
     assert "/auth/jwt/logout" not in mounted
-    assert not any(path.startswith("/api/v1/auth") for path in mounted)
+    # #4124 advanced-identity journeys (generic OIDC + trusted proxy) mount
+    # under /api/v1/auth/* through the shared session boundary; every other
+    # /api/v1/auth/* path remains legacy surface and must stay unmounted.
+    from api_service.api.routers.auth_advanced_4124 import (
+        router as advanced_auth_router,
+    )
+
+    allowed_auth_routes = {
+        route.path
+        for route in advanced_auth_router.routes
+        if isinstance(getattr(route, "path", None), str)
+    }
+    assert allowed_auth_routes, "expected #4124 auth journeys to declare routes"
+    unexpected_auth_routes = {
+        path
+        for path in mounted
+        if path.startswith("/api/v1/auth") and path not in allowed_auth_routes
+    }
+    assert not unexpected_auth_routes, (
+        f"legacy /api/v1/auth routes mounted: {sorted(unexpected_auth_routes)}"
+    )
     assert not any(path.startswith("/auth/register") for path in mounted)
     # Needed User/profile capabilities stay mounted through the new boundary.
     assert any(path.endswith("/me") for path in mounted), sorted(mounted)[:10]
