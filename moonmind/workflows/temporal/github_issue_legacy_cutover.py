@@ -68,6 +68,7 @@ from dataclasses import dataclass, field
 from typing import Any, Mapping, Sequence
 
 from moonmind.workflows.temporal import github_issue_attempt as _attempt
+from moonmind.workflows.temporal import github_issue_attempts as _canonical_attempt
 from moonmind.workflows.temporal import github_issue_lifecycle as lifecycle
 
 #: Single surviving policy owner for every issue-status reader/writer.
@@ -210,6 +211,89 @@ def _comment_texts(comments: Sequence[Mapping[str, Any]] | None) -> list[str]:
     return out
 
 
+def _canonical_record(
+    *,
+    repository: str,
+    issue_number: int,
+    body: str,
+    author: str,
+    trusted_posters: Sequence[str],
+) -> tuple[str, dict[str, Any] | None]:
+    """Try the canonical production handoff format first.
+
+    Returns (outcome, record) where outcome is "validated", "unsupported",
+    or "no_marker" (caller falls through to the legacy singular format).
+    The canonical format written by ``github_issue_attempts`` is authoritative;
+    the singular ``github_issue_attempt`` format is retained only for actual
+    legacy comments.
+    """
+    try:
+        parsed = _canonical_attempt.parse_attempt_comment(
+            body, author_login=author
+        )
+    except Exception:  # noqa: BLE001 - a parse crash is never clean evidence
+        return "unsupported", {
+            "metadata": {},
+            "author": author,
+            "decision": {
+                "allowed": False,
+                "reasonCode": "invalid_metadata",
+                "summary": "Canonical attempt handoff is unparseable; rejected rather than inferred.",
+            },
+        }
+    if parsed.status == "no_marker":
+        return "no_marker", None
+    if parsed.status == "ok" and parsed.handoff is not None:
+        try:
+            validation = _canonical_attempt.validate_attempt_handoff(
+                parsed,
+                expected_repository=repository,
+                expected_issue_number=int(issue_number),
+                trusted_posters=list(trusted_posters),
+            )
+        except Exception:  # noqa: BLE001 - validation crash fails closed
+            return "unsupported", {
+                "metadata": {},
+                "author": author,
+                "decision": {
+                    "allowed": False,
+                    "reasonCode": "invalid_metadata",
+                    "summary": "Canonical attempt validation is inconclusive; rejected rather than inferred.",
+                },
+            }
+        metadata = dict(parsed.handoff.to_dict())
+        decision = {
+            "allowed": bool(validation.valid),
+            "reasonCode": str(validation.reason_code or "unusable"),
+            "summary": str(validation.summary or "Canonical attempt handoff validated."),
+        }
+        record = {"metadata": metadata, "author": author, "decision": decision}
+        return ("validated" if validation.valid else "unsupported"), record
+    # Marker present but the machine block is missing, malformed, versioned
+    # differently, or inconsistent: explicit unsupported evidence, never clean.
+    reason = str(getattr(parsed, "reason_code", None) or parsed.status or "invalid_metadata")
+    if reason not in {"unsupported_version", "missing_metadata", "invalid_metadata", "inconsistent_metadata",
+                      "invalid_marker", "unparseable"}:
+        reason = "invalid_metadata"
+    code = "unsupported_version" if reason == "unsupported_version" else reason
+    metadata: dict[str, Any] = {}
+    handoff = getattr(parsed, "handoff", None)
+    if handoff is not None and hasattr(handoff, "to_dict"):
+        try:
+            metadata = dict(handoff.to_dict())
+        except Exception:  # noqa: BLE001 - keep the rejection, drop the payload
+            metadata = {}
+    return "unsupported", {
+        "metadata": metadata,
+        "author": author,
+        "decision": {
+            "allowed": False,
+            "reasonCode": code,
+            "summary": str(getattr(parsed, "summary", None) or "Canonical attempt handoff is unusable; rejected rather than inferred."),
+        },
+    }
+
+
 def _parse_validated_attempts(
     *,
     repository: str,
@@ -227,6 +311,19 @@ def _parse_validated_attempts(
         body = str(comment.get("body") or "")
         author = str(comment.get("author_login", comment.get("author") or ""))
         if not body:
+            continue
+        outcome, record = _canonical_record(
+            repository=repository,
+            issue_number=issue_number,
+            body=body,
+            author=author,
+            trusted_posters=list(trusted_posters),
+        )
+        if outcome in {"validated", "unsupported"} and record is not None:
+            if outcome == "validated":
+                validated.append(record)
+            else:
+                unsupported.append(record)
             continue
         metadata, _error = _attempt.extract_attempt_metadata(body)
         if metadata is None:
@@ -313,8 +410,10 @@ def assess_legacy_issue(
     """
     issue_mapping = dict(issue or {})
     comment_list = list(comments or [])[:MAX_COMMENTS_ASSESSED]
-    pr_list = list(prs or [])[:MAX_PRS_ASSESSED]
+    raw_prs = list(prs or [])
+    pr_list = raw_prs[:MAX_PRS_ASSESSED]
     comments_truncated = isinstance(comments, Sequence) and not isinstance(comments, (str, bytes)) and len(list(comments or [])) > MAX_COMMENTS_ASSESSED
+    prs_truncated = isinstance(prs, Sequence) and not isinstance(prs, (str, bytes)) and len(raw_prs) > MAX_PRS_ASSESSED
     interpretation = lifecycle.interpret_issue(issue_mapping)
     findings: list[LegacyFinding] = []
     preserved = ["human labels", "old comments", "useful PRs", "retained attempt history"]
@@ -330,6 +429,22 @@ def assess_legacy_issue(
         trusted_posters=list(trusted_posters),
     )
     known_owner = validated[-1]["metadata"].get("deploymentId") if validated else ""
+    if len(validated) >= 2:
+        owners = {str(record["metadata"].get("deploymentId") or "") for record in validated}
+        owners.discard("")
+        unresolved = [
+            record for record in validated
+            if not record["metadata"].get("writersStopped")
+        ]
+        unresolved_owners = {str(record["metadata"].get("deploymentId") or "") for record in unresolved}
+        unresolved_owners.discard("")
+        if len(owners) > 1 and len(unresolved_owners) > 1:
+            _add(
+                FINDING_CONTRADICTORY_HISTORY,
+                f"Multiple unresolved validated attempts from distinct deployments ({sorted(unresolved_owners)}); competing ownership requires reconciliation, not last-comment-wins.",
+                "unknown",
+                ACTION_REQUEST_OPERATOR,
+            )
 
     if interpretation.settled == lifecycle.SETTLED_BLOCKED_OPEN_DONE:
         _add(FINDING_OPEN_DONE, "Open issue carries status: done; inconsistent, not available.", "unknown", ACTION_RECONCILE_LABELS)
@@ -383,7 +498,7 @@ def assess_legacy_issue(
                     str(record["metadata"].get("deploymentId") or "unknown"),
                     ACTION_REQUEST_OPERATOR,
                 )
-    if not validated and not unsupported and not generic_starts and not comment_list:
+    if not validated and not unsupported and not generic_starts:
         _add(
             FINDING_MISSING_HISTORY,
             "No observable attempt comments. Absent metadata does not prove no work exists; treat as no observable history.",
@@ -443,11 +558,14 @@ def assess_legacy_issue(
                 str(last.get("deploymentId") or "unknown"),
                 ACTION_HOLD_RELEASE,
             )
-    complete = not comments_truncated and len(findings) < MAX_FINDINGS
+    complete = not comments_truncated and not prs_truncated and len(findings) < MAX_FINDINGS
     note = "Assessment examined all supplied evidence."
     if comments_truncated:
         complete = False
         note = f"Comment history exceeded the {MAX_COMMENTS_ASSESSED}-comment bound; result is partial, never a clean repository."
+    elif prs_truncated:
+        complete = False
+        note = f"Linked PR history exceeded the {MAX_PRS_ASSESSED}-PR bound; result is partial, never a clean repository."
     elif len(findings) >= MAX_FINDINGS:
         complete = False
         note = f"Finding budget ({MAX_FINDINGS}) exhausted; remaining evidence deferred to the next bounded run."
@@ -469,6 +587,53 @@ def assess_legacy_issue(
 CONCLUSIVELY_STOPPED_DISPOSITIONS = frozenset({"completed", "stopped_confirmed", "abandoned_authorized"})
 
 
+def _is_verified_operator_decision(decision: Mapping[str, Any]) -> bool:
+    """Return True only for an authenticated operator record, never a bare boolean.
+
+    The owning API boundary records decisions via
+    ``github_issue_recovery_surface.record_operator_decision`` (schema
+    ``moonmind.github_issue_operator_decision.v1``) with an authenticated
+    operator identity, action, and reason. A caller-supplied
+    ``{"authorized_resolution": True}`` alone manufactures lifecycle
+    authorization without that provenance and must not grant authority.
+    """
+    if not bool(decision.get("authorized_resolution")):
+        return False
+    operator_id = (
+        decision.get("operator")
+        or decision.get("authorized_by")
+        or decision.get("operator_login")
+    )
+    if isinstance(operator_id, Mapping):
+        operator_id = (
+            operator_id.get("id")
+            or operator_id.get("login")
+            or operator_id.get("email")
+        )
+    action = decision.get("action") or decision.get("authorized_action")
+    reason_text = decision.get("reason")
+    schema_ok = (
+        str(decision.get("schema") or "")
+        == "moonmind.github_issue_operator_decision.v1"
+    )
+    ref_ok = any(
+        str(decision.get(key) or "").strip()
+        for key in (
+            "approval_reference",
+            "decision_record_id",
+            "record_id",
+            "decision_id",
+            "approval_id",
+        )
+    )
+    return bool(
+        str(operator_id or "").strip()
+        and str(action or "").strip()
+        and str(reason_text or "").strip()
+        and (schema_ok or ref_ok)
+    )
+
+
 def plan_legacy_repair(
     *,
     assessment: LegacyAssessment,
@@ -482,13 +647,34 @@ def plan_legacy_repair(
     """Plan one legacy repair through the shared transition guards.
 
     Ambiguous cases (unknown owner, contradictory history, unknown
-    formats, private-only work, multiple PRs) stay blocked without an
-    explicit ``operator_decision`` carrying ``authorized_resolution``.
+    formats, private-only work, multiple PRs) stay blocked without a
+    verified ``operator_decision`` record from the owning API boundary.
+    A bare ``{"authorized_resolution": True}`` boolean never grants
+    authority. Incomplete assessments stay blocked until the missing
+    evidence is read. The repair origin is derived from the assessment:
+    ``from_settled`` must equal ``assessment.settled``. Transitions that
+    contradict the assessment's suggested actions stay blocked.
     Human labels, old comments, useful PRs, and retained attempt history
     are listed as preserved; this function never deletes them.
     Reopened issues must arrive with a fresh ``assessment``; old labels
     are never resurrected here.
     """
+    if not assessment.complete:
+        return {
+            "allowed": False,
+            "reasonCode": "incomplete_assessment",
+            "summary": "Assessment is incomplete (truncated evidence or exhausted finding budget); reread the missing evidence before planning a repair.",
+            "preserved": list(assessment.preserved),
+            "transition": None,
+        }
+    if str(from_settled or "") != str(assessment.settled or ""):
+        return {
+            "allowed": False,
+            "reasonCode": "settled_mismatch",
+            "summary": f"Repair origin {from_settled!r} disagrees with assessed state {assessment.settled!r}; derive the origin from the assessment before evaluating transition evidence.",
+            "preserved": list(assessment.preserved),
+            "transition": None,
+        }
     ambiguous = {
         FINDING_CONTRADICTORY_HISTORY,
         FINDING_UNKNOWN_STATUS,
@@ -499,18 +685,75 @@ def plan_legacy_repair(
     }
     needs_operator = any(finding.finding in ambiguous for finding in assessment.findings)
     decision = dict(operator_decision or {})
-    if needs_operator and not decision.get("authorized_resolution"):
+    claims_authority = bool(decision.get("authorized_resolution"))
+    verified_operator = _is_verified_operator_decision(decision)
+    if claims_authority and not verified_operator:
+        return {
+            "allowed": False,
+            "reasonCode": "operator_verification_required",
+            "summary": "Operator resolution claims lifecycle authority without a verified decision record (authenticated operator, action, reason, and schema/approval reference); refusing to manufacture authorization from a boolean.",
+            "preserved": list(assessment.preserved),
+            "transition": None,
+        }
+    if needs_operator and not verified_operator:
         return {
             "allowed": False,
             "reasonCode": "operator_decision_required",
-            "summary": "Ambiguous legacy evidence stays blocked for an explicit operator decision; no repair planned.",
+            "summary": "Ambiguous legacy evidence stays blocked for an explicit verified operator decision; no repair planned.",
+            "preserved": list(assessment.preserved),
+            "transition": None,
+        }
+    suggested = {finding.suggested_action for finding in assessment.findings}
+    blocking_new_admission = {
+        ACTION_ASSESS_PRIOR_WORK,
+        ACTION_CONTINUE_PR,
+        ACTION_VERIFY_COMPLETION,
+        ACTION_HOLD_RELEASE,
+        ACTION_RECONCILE_LABELS,
+        ACTION_ADOPT_WITH_LINEAGE,
+        ACTION_DRAIN_PENDING,
+    }
+    if (
+        str(from_settled or "") == lifecycle.SETTLED_AVAILABLE
+        and str(to_target or "") == lifecycle.TO_IN_PROGRESS
+        and bool(suggested & blocking_new_admission)
+        and not verified_operator
+    ):
+        return {
+            "allowed": False,
+            "reasonCode": "action_mismatch",
+            "summary": "Assessment requires a different next action (assess prior work, continue/finish the existing PR, verify completion, hold release, or reconcile state); a fresh available -> in_progress admission would contradict its own evidence.",
+            "preserved": list(assessment.preserved),
+            "transition": None,
+        }
+    if (
+        str(to_target or "") == lifecycle.TO_IN_PROGRESS
+        and ACTION_HOLD_RELEASE in suggested
+        and not verified_operator
+    ):
+        return {
+            "allowed": False,
+            "reasonCode": "action_mismatch",
+            "summary": "Latest validated attempt has not recorded a terminal release; hold release until conclusive stop/mutation evidence or a verified operator decision.",
             "preserved": list(assessment.preserved),
             "transition": None,
         }
     merged_evidence = dict(evidence or {})
-    if decision.get("authorized_resolution"):
+    if verified_operator:
         merged_evidence.setdefault("authorized_resolution", True)
-        merged_evidence.setdefault("preserved_work_disposition", decision.get("preserved_work_disposition") or "recorded")
+        disposition = (
+            decision.get("preserved_work_disposition")
+            or decision.get("work_disposition")
+        )
+        if not str(disposition or "").strip():
+            return {
+                "allowed": False,
+                "reasonCode": "operator_verification_required",
+                "summary": "Verified operator decision names no preserved-work disposition; refusing to manufacture a default disposition.",
+                "preserved": list(assessment.preserved),
+                "transition": None,
+            }
+        merged_evidence.setdefault("preserved_work_disposition", disposition)
     verdict = lifecycle.plan_transition(
         from_settled=from_settled, to_target=to_target, evidence=merged_evidence, reason=reason
     )
@@ -658,8 +901,8 @@ def evaluate_mixed_deployment(devices: Sequence[Mapping[str, Any]] | None) -> di
             reasons.append(
                 f"Device {device.get('installationId') or 'unknown'} still runs a nonparticipating old claimer/publisher; pause/drain it before claiming cross-device support."
             )
-        if device.get("defaultsReconciled") is False:
-            reasons.append(f"Device {device.get('installationId') or 'unknown'} has unreconciled operational defaults.")
+        if device.get("defaultsReconciled") is not True:
+            reasons.append(f"Device {device.get('installationId') or 'unknown'} has unreconciled operational defaults (affirmative reconciliation required).")
     if reasons:
         return {"qualified": False, "reasonCode": "unqualified_mixed", "summary": MIXED_UNQUALIFIED_SUMMARY, "reasons": reasons, "devices": seen}
     return {"qualified": True, "reasonCode": "all_conform", "summary": "All participating devices conform; coordinated support may be claimed.", "reasons": [], "devices": seen}

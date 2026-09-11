@@ -177,7 +177,11 @@ def test_assessment_is_bounded_and_repeatable() -> None:
 
 def test_conclusively_stopped_repair_uses_shared_guards_and_preserves() -> None:
     body = _handoff_body(writers_stopped=True)
-    assessment = _assess(comments=[{"body": body, "author_login": "moonmind-bot"}])
+    assessment = _assess(
+        issue={"state": "open", "labels": ["status: in-progress"]},
+        comments=[{"body": body, "author_login": "moonmind-bot"}],
+    )
+    assert assessment.settled == lifecycle.SETTLED_IN_PROGRESS
     repair = cutover.plan_legacy_repair(
         assessment=assessment,
         from_settled=lifecycle.SETTLED_IN_PROGRESS,
@@ -257,3 +261,146 @@ def test_upgrade_rollback_fixtures_preserve_everything() -> None:
     assert held["rolledBack"] is True
     assert held["preservedLabels"] == ["bug", "status: in-progress"]
     assert held["settingsUnchanged"] is True
+
+
+def test_canonical_handoff_format_is_parsed_first() -> None:
+    from moonmind.workflows.temporal import github_issue_attempts as canonical
+
+    handoff = canonical.build_attempt_handoff(
+        attempt_id="canon-1",
+        deployment_id="deploy-canon",
+        repository=REPO,
+        issue_number=ISSUE,
+        activity="active",
+    )
+    body = canonical.render_attempt_comment(handoff)
+    assessment = _assess(comments=[{"body": body, "author_login": "moonmind-bot"}])
+    assert assessment.complete is True
+    assert cutover.FINDING_MISSING_HISTORY not in _finding_codes(assessment)
+    assert assessment.findings, "canonical handoff must be recognized, not reported as manual/unknown"
+
+
+def test_ordinary_discussion_without_handoff_reports_missing_history() -> None:
+    assessment = _assess(
+        comments=[{"body": "Looks good, thanks for the update!", "author_login": "someone"}]
+    )
+    assert cutover.FINDING_MISSING_HISTORY in _finding_codes(assessment)
+
+
+def test_incomplete_assessment_refuses_repair() -> None:
+    comments = [{"body": f"note {i}", "author_login": "someone"} for i in range(cutover.MAX_COMMENTS_ASSESSED + 2)]
+    assessment = _assess(comments=comments)
+    assert assessment.complete is False
+    repair = cutover.plan_legacy_repair(
+        assessment=assessment,
+        from_settled=assessment.settled,
+        to_target=lifecycle.TO_IN_PROGRESS,
+        evidence={"admission_passed": True, "prior_work_inspected": True},
+        reason="should stay blocked",
+    )
+    assert repair["allowed"] is False
+    assert repair["reasonCode"] == "incomplete_assessment"
+
+
+def test_repair_origin_must_match_assessment() -> None:
+    body = _handoff_body(writers_stopped=True)
+    assessment = _assess(
+        issue={"state": "open", "labels": ["status: in-progress"]},
+        comments=[{"body": body, "author_login": "moonmind-bot"}],
+    )
+    assert assessment.settled == lifecycle.SETTLED_IN_PROGRESS
+    repair = cutover.plan_legacy_repair(
+        assessment=assessment,
+        from_settled=lifecycle.SETTLED_AVAILABLE,
+        to_target=lifecycle.TO_IN_PROGRESS,
+        evidence={"admission_passed": True, "prior_work_inspected": True},
+        reason="mismatched origin",
+    )
+    assert repair["allowed"] is False
+    assert repair["reasonCode"] == "settled_mismatch"
+
+
+def test_multiple_validated_attempts_require_reconciliation() -> None:
+    from moonmind.workflows.temporal import github_issue_attempts as canonical
+
+    first = canonical.build_attempt_handoff(
+        attempt_id="canon-a",
+        deployment_id="deploy-a",
+        repository=REPO,
+        issue_number=ISSUE,
+        activity="active",
+    )
+    second = canonical.build_attempt_handoff(
+        attempt_id="canon-b",
+        deployment_id="deploy-b",
+        repository=REPO,
+        issue_number=ISSUE,
+        activity="active",
+    )
+    assessment = _assess(
+        issue={"state": "open", "labels": ["status: in-progress"]},
+        comments=[
+            {"body": canonical.render_attempt_comment(first), "author_login": "moonmind-bot"},
+            {"body": canonical.render_attempt_comment(second), "author_login": "moonmind-bot"},
+        ],
+    )
+    assert cutover.FINDING_CONTRADICTORY_HISTORY in _finding_codes(assessment)
+    repair = cutover.plan_legacy_repair(
+        assessment=assessment,
+        from_settled=assessment.settled,
+        to_target=lifecycle.TO_RECOVERY_NEEDED,
+        evidence={"writers_stopped": True, "handoff_published": "handoff-1"},
+        reason="must stay blocked",
+    )
+    assert repair["allowed"] is False
+    assert repair["reasonCode"] == "operator_decision_required"
+
+
+def test_missing_defaults_reconciliation_is_unqualified() -> None:
+    result = cutover.evaluate_mixed_deployment(
+        [{"installationId": "a", "codeVersion": "v2"}]
+    )
+    assert result["qualified"] is False
+    assert any("reconciliation" in reason for reason in result["reasons"])
+
+
+def test_partial_pr_blocks_fresh_admission() -> None:
+    assessment = _assess(
+        prs=[{"url": "https://github.com/o/r/pull/7", "state": "open", "head_sha": "b" * 40}],
+    )
+    assert cutover.FINDING_PARTIAL_PR in _finding_codes(assessment)
+    repair = cutover.plan_legacy_repair(
+        assessment=assessment,
+        from_settled=assessment.settled,
+        to_target=lifecycle.TO_IN_PROGRESS,
+        evidence={"admission_passed": True, "prior_work_inspected": True},
+        reason="fresh admission contradicts continue_pr",
+    )
+    assert repair["allowed"] is False
+    assert repair["reasonCode"] == "action_mismatch"
+
+
+def test_bare_boolean_operator_decision_grants_no_authority() -> None:
+    body = _handoff_body()
+    assessment = _assess(
+        issue={"state": "open", "labels": ["status: in-progress"]},
+        comments=[{"body": body, "author_login": "impostor"}],
+    )
+    assert cutover.FINDING_CONTRADICTORY_HISTORY in _finding_codes(assessment)
+    repair = cutover.plan_legacy_repair(
+        assessment=assessment,
+        from_settled=assessment.settled,
+        to_target=lifecycle.TO_RECOVERY_NEEDED,
+        evidence={"writers_stopped": True, "handoff_published": "handoff-1"},
+        reason="bare boolean must not authorize",
+        operator_decision={"authorized_resolution": True},
+    )
+    assert repair["allowed"] is False
+    assert repair["reasonCode"] == "operator_verification_required"
+
+
+def test_pr_overflow_is_partial_never_clean() -> None:
+    prs = [{"url": f"https://github.com/o/r/pull/{i}", "state": "closed", "head_sha": "b" * 40} for i in range(cutover.MAX_PRS_ASSESSED + 5)]
+    assessment = _assess(prs=prs)
+    assert assessment.complete is False
+    assert "PR" in assessment.completeness_note
