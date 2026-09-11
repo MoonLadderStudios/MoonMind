@@ -184,6 +184,16 @@ A dependency may offer a verified candidate as a proposed starting point. It doe
 
 Repository, branch, and target lookups are keyed to the principal, source/connection identity, repository, and relevant query. Out-of-order responses are discarded after any source change. Changing context invalidates incompatible selected PRs, cached branch options, previews, and generated bindings while preserving recoverable task input. A PR URL naming a different repository cannot silently switch the selected authority.
 
+### Text-first branch input
+
+Authored branch text is authoritative user input. Autocomplete is optional assistance: typing and pasting update the draft immediately, suggestions never overwrite the text or move focus, and submission reads the latest authored value rather than the last suggestion response.
+
+- Form initialization and repository changes resolve only small default-branch metadata. The client never enumerates the whole branch collection automatically.
+- Empty-input suggestions show the verified repository default first, then a small user-scoped recently-used list for that repository (recorded from accepted submissions, bounded, deduplicated with case preserved), capped at 20 visible suggestions.
+- Typed search is debounced and served as one bounded page per operation with an explicit partial-list notice when more pages exist. One continuation action fetches one page; remaining pages are never drained automatically.
+- A pasted or typed exact name is validated by an independent exact-name lookup, never by membership in the bounded suggestion page. The picker distinguishes not-checked, checking, found, definitively absent, and inconclusive (unavailable, denied, rate-limited, or unknown repository) outcomes. Only a definitive absence under a successfully authorized lookup reports the name as missing, and lookup failure never blocks authoring or submission: the authoritative backend validation still applies at submit time.
+- Explicit clearing stays cleared: late default-branch or lookup responses cannot restore a cleared value or validate a newer draft.
+
 ## Publishing Control
 
 There is one selector for the authored workflow/batch policy:

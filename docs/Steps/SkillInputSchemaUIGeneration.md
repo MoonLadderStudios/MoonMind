@@ -156,6 +156,8 @@ For required `oneOf`/`anyOf`, render a usable discriminator when variants have c
 
 The shared local widget registry contains text, textarea, markdown, number, checkbox, select, multi-select, JSON, Jira/GitHub issue, repository/branch, profile/model, and file-reference components. No remote components, arbitrary React identifiers, scripts, executable expressions, or unapproved schema fetches are allowed.
 
+Schema-generated branch fields share the workflow-level text-first branch behavior: free-text entry is always allowed, suggestions are the same bounded default-plus-recent list capped at 20, and an exact name outside the suggestion page stays submittable subject to backend admission. Suggestion membership is never used as validation evidence for these fields either.
+
 `uiSchema` controls safe placeholders, ordering, grouping, optional advanced disclosure, and registered presentation choices. It cannot change validation, defaults that confer authority, context-binding ownership, or publication policy.
 
 ## Authoritative Context Binding

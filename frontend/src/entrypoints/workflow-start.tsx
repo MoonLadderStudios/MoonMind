@@ -132,6 +132,95 @@ const HIDDEN_PRESET_INPUT_KEYS: Record<string, Set<string>> = {
 };
 const LAST_REPOSITORY_OPTION_PREFERENCE_KEY =
   "moonmind.workflow-start.last-repository-option";
+// Text-first branch picker (MoonLadderStudios/MoonMind#4054). Authored text is
+// authoritative user input; autocomplete is optional assistance that must never
+// overwrite it. Suggestions are bounded, debounced, and capped; exact-name
+// validation runs independently of suggestion membership.
+const BRANCH_SUGGESTION_LIMIT = 20;
+const BRANCH_SEARCH_DEBOUNCE_MS = 250;
+const BRANCH_RECENT_HISTORY_MAX = 10;
+const BRANCH_RECENT_HISTORY_KEY_PREFIX =
+  "moonmind.workflow-start.recent-branches.";
+
+export const BRANCH_TEXT_FIRST_LIMITS = {
+  suggestionLimit: BRANCH_SUGGESTION_LIMIT,
+  searchDebounceMs: BRANCH_SEARCH_DEBOUNCE_MS,
+  recentHistoryMax: BRANCH_RECENT_HISTORY_MAX,
+};
+
+export function branchRecentHistoryKey(repository: string): string {
+  return `${BRANCH_RECENT_HISTORY_KEY_PREFIX}${repository.trim().toLowerCase()}`;
+}
+
+export function readRecentBranches(repository: string): string[] {
+  if (!String(repository || "").trim()) {
+    return [];
+  }
+  try {
+    const raw = window.localStorage.getItem(
+      branchRecentHistoryKey(repository),
+    );
+    if (!raw) {
+      return [];
+    }
+    const parsed: unknown = JSON.parse(raw);
+    if (!Array.isArray(parsed)) {
+      return [];
+    }
+    const seen = new Set<string>();
+    const recent: string[] = [];
+    for (const entry of parsed) {
+      const name = String(entry || "").trim();
+      if (!name || seen.has(name)) {
+        continue;
+      }
+      seen.add(name);
+      recent.push(name);
+      if (recent.length >= BRANCH_RECENT_HISTORY_MAX) {
+        break;
+      }
+    }
+    return recent;
+  } catch {
+    return [];
+  }
+}
+
+export function writeRecentBranch(repository: string, branch: string): void {
+  const normalizedBranch = String(branch || "").trim();
+  const normalizedRepository = String(repository || "").trim();
+  if (!normalizedBranch || !normalizedRepository) {
+    return;
+  }
+  try {
+    const storageKey = branchRecentHistoryKey(normalizedRepository);
+    const existing = readRecentBranches(normalizedRepository).filter(
+      (name) => name !== normalizedBranch,
+    );
+    const next = [normalizedBranch, ...existing].slice(
+      0,
+      BRANCH_RECENT_HISTORY_MAX,
+    );
+    window.localStorage.setItem(storageKey, JSON.stringify(next));
+  } catch {
+    // Recent-branch history is advisory only; storage failures must never
+    // block authoring.
+  }
+}
+
+function useDebouncedValue(value: string, delayMs: number): string {
+  const [debounced, setDebounced] = useState(value);
+  useEffect(() => {
+    const timer = window.setTimeout(() => {
+      setDebounced(value);
+    }, delayMs);
+    return () => {
+      window.clearTimeout(timer);
+    };
+  }, [value, delayMs]);
+  return debounced;
+}
+
 const JIRA_LAST_PROJECT_SESSION_KEY =
   "moonmind.workflow-start.jira.last-project-key";
 const JIRA_LAST_BOARD_SESSION_KEY =
@@ -325,6 +414,8 @@ interface DashboardConfig {
     };
     github?: {
       branches?: string;
+      branchResolve?: string;
+      branchMetadata?: string;
       issues?: string;
     };
     jira?: {
@@ -950,6 +1041,27 @@ interface BranchListResponse {
   }>;
   error?: string | null;
   defaultBranch?: string | null;
+  hasMore?: boolean | null;
+}
+
+type BranchResolutionOutcome =
+  | "not-checked"
+  | "checking"
+  | "found"
+  | "absent"
+  | "inconclusive";
+
+interface BranchResolveResponse {
+  found?: boolean | null;
+  branch?: string | null;
+  defaultBranch?: string | null;
+  error?: string | null;
+  inconclusive?: boolean | null;
+}
+
+interface BranchMetadataResponse {
+  defaultBranch?: string | null;
+  error?: string | null;
 }
 
 export function resolveDefaultProviderProfileId(
@@ -1426,11 +1538,35 @@ function configuredTemporalUpdateUrl(
   return interpolatePath(updateTemplate, { workflowId });
 }
 
-function configuredBranchLookupUrl(
+export function configuredBranchLookupUrl(
   branchTemplate: string,
   repository: string,
+  options: { query?: string; limit?: number } = {},
 ): string {
-  return interpolatePath(branchTemplate, { repository });
+  const base = interpolatePath(branchTemplate, { repository });
+  const limit =
+    typeof options.limit === "number" && Number.isFinite(options.limit)
+      ? Math.max(1, Math.min(BRANCH_SUGGESTION_LIMIT, Math.floor(options.limit)))
+      : BRANCH_SUGGESTION_LIMIT;
+  return withQueryParams(base, {
+    q: String(options.query || "").trim() || undefined,
+    limit: String(limit),
+  });
+}
+
+export function configuredBranchResolveUrl(
+  resolveTemplate: string,
+  repository: string,
+  branch: string,
+): string {
+  return interpolatePath(resolveTemplate, { repository, branch });
+}
+
+function configuredBranchMetadataUrl(
+  metadataTemplate: string,
+  repository: string,
+): string {
+  return interpolatePath(metadataTemplate, { repository });
 }
 
 function configuredArtifactDownloadUrl(
@@ -4826,10 +4962,13 @@ async function responseErrorMessage(
 async function readBranchOptions(
   branchLookupEndpoint: string,
   repository: string,
-): Promise<{ items: BranchOption[]; defaultBranch: string }> {
+  options: { query?: string; limit?: number; signal?: AbortSignal } = {},
+): Promise<{ items: BranchOption[]; defaultBranch: string; hasMore: boolean }> {
   const response = await fetch(
-    configuredBranchLookupUrl(branchLookupEndpoint, repository),
-    { headers: { Accept: "application/json" } },
+    configuredBranchLookupUrl(branchLookupEndpoint, repository, options),
+    options.signal
+      ? { headers: { Accept: "application/json" }, signal: options.signal }
+      : { headers: { Accept: "application/json" } },
   );
   if (!response.ok) {
     throw new Error(
@@ -4856,7 +4995,68 @@ async function readBranchOptions(
   return {
     items,
     defaultBranch: String(payload.defaultBranch || "").trim(),
+    hasMore: payload.hasMore === true,
   };
+}
+
+async function readBranchResolve(
+  resolveEndpoint: string,
+  repository: string,
+  branch: string,
+  signal?: AbortSignal,
+): Promise<{ found: boolean; branch: string; inconclusive: boolean }> {
+  const response = await fetch(
+    configuredBranchResolveUrl(resolveEndpoint, repository, branch),
+    signal
+      ? { headers: { Accept: "application/json" }, signal }
+      : { headers: { Accept: "application/json" } },
+  );
+  if (!response.ok) {
+    throw new Error(
+      await responseErrorMessage(response, "Failed to verify branch."),
+    );
+  }
+  const payload = (await response.json()) as BranchResolveResponse;
+  if (typeof payload.found !== "boolean") {
+    // Older or unexpected payloads carry no exact evidence; treat them as
+    // inconclusive so authoring is never blocked by a missing field.
+    return { found: false, branch: "", inconclusive: true };
+  }
+  if (payload.error) {
+    throw new Error(payload.error);
+  }
+  const resolved = String(payload.branch || "").trim();
+  if (payload.found && (!resolved || resolved !== branch.trim())) {
+    return { found: false, branch: "", inconclusive: true };
+  }
+  return {
+    found: payload.found,
+    branch: payload.found ? resolved : "",
+    inconclusive: payload.inconclusive === true,
+  };
+}
+
+async function readBranchMetadata(
+  metadataEndpoint: string,
+  repository: string,
+  signal?: AbortSignal,
+): Promise<{ defaultBranch: string }> {
+  const response = await fetch(
+    configuredBranchMetadataUrl(metadataEndpoint, repository),
+    signal
+      ? { headers: { Accept: "application/json" }, signal }
+      : { headers: { Accept: "application/json" } },
+  );
+  if (!response.ok) {
+    throw new Error(
+      await responseErrorMessage(response, "Failed to load branches."),
+    );
+  }
+  const payload = (await response.json()) as BranchMetadataResponse;
+  if (payload.error) {
+    throw new Error(payload.error);
+  }
+  return { defaultBranch: String(payload.defaultBranch || "").trim() };
 }
 
 function localJiraErrorMessage(error: unknown, fallback: string): string {
@@ -8709,6 +8909,12 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
   const branchLookupEndpoint = normalizeMoonMindApiPath(
     dashboardConfig.sources?.github?.branches,
   );
+  const branchResolveEndpoint = normalizeMoonMindApiPath(
+    dashboardConfig.sources?.github?.branchResolve,
+  );
+  const branchMetadataEndpoint = normalizeMoonMindApiPath(
+    dashboardConfig.sources?.github?.branchMetadata,
+  );
   const submittedRepository = repository.trim();
   const selectedRepositoryForBranchLookup =
     submittedRepository || defaultRepository;
@@ -8717,41 +8923,152 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
   )
     ? selectedRepositoryForBranchLookup.trim()
     : "";
+  // Authored text stays synchronous and authoritative. Only the remote
+  // suggestion search is debounced; the input, paste handling, and submission
+  // always read the latest authored value.
+  const debouncedBranchSearch = useDebouncedValue(
+    branch.trim(),
+    BRANCH_SEARCH_DEBOUNCE_MS,
+  );
   const branchOptionsQuery = useQuery({
     ...configQueryDefaults,
-    queryKey: ["workflow-start", "github-branches", branchLookupRepository],
+    queryKey: [
+      "workflow-start",
+      "github-branches",
+      branchLookupRepository,
+      debouncedBranchSearch,
+    ],
     enabled: Boolean(branchLookupEndpoint && branchLookupRepository),
-    queryFn: async () =>
-      readBranchOptions(branchLookupEndpoint || "", branchLookupRepository),
+    queryFn: async ({ signal }) =>
+      readBranchOptions(branchLookupEndpoint || "", branchLookupRepository, {
+        query: debouncedBranchSearch,
+        limit: BRANCH_SUGGESTION_LIMIT,
+        signal,
+      }),
+  });
+  // Small metadata-only fallback so default-branch evidence survives an
+  // unrelated suggestion failure without re-enumerating branches.
+  const branchMetadataQuery = useQuery({
+    ...configQueryDefaults,
+    queryKey: [
+      "workflow-start",
+      "github-branch-metadata",
+      branchLookupRepository,
+    ],
+    enabled: Boolean(
+      branchMetadataEndpoint &&
+        branchLookupRepository &&
+        branchOptionsQuery.isError,
+    ),
+    retry: false,
+    queryFn: async ({ signal }) =>
+      readBranchMetadata(
+        branchMetadataEndpoint || "",
+        branchLookupRepository,
+        signal,
+      ),
   });
   const branchOptions = useMemo(() => {
-    const items = branchOptionsQuery.data?.items || [];
+    const serverItems = branchOptionsQuery.data?.items || [];
+    const fallbackDefault = String(
+      branchOptionsQuery.data?.defaultBranch || "",
+    ).trim();
+    const recent = readRecentBranches(branchLookupRepository);
+    const merged: BranchOption[] = [];
     const seen = new Set<string>();
-    return items.filter((item) => {
-      const key = item.value;
-      if (!key || seen.has(key)) {
-        return false;
+    const push = (item: BranchOption) => {
+      if (!item.value || seen.has(item.value)) {
+        return;
       }
-      seen.add(key);
-      return true;
-    });
-  }, [branchOptionsQuery.data]);
+      seen.add(item.value);
+      merged.push(item);
+    };
+    if (fallbackDefault) {
+      push({
+        value: fallbackDefault,
+        label: fallbackDefault,
+        source: "default",
+      });
+    }
+    for (const name of recent) {
+      push({ value: name, label: name, source: "recent" });
+    }
+    for (const item of serverItems) {
+      push(item);
+    }
+    // Mounted options stay bounded even after repeated paging or history
+    // growth; older branches remain submittable via exact lookup below.
+    return merged.slice(0, BRANCH_SUGGESTION_LIMIT);
+  }, [branchOptionsQuery.data, branchLookupRepository]);
   const defaultBranch = useMemo(() => {
-    const value = String(branchOptionsQuery.data?.defaultBranch || "").trim();
+    const value = String(
+      branchOptionsQuery.data?.defaultBranch ||
+        branchMetadataQuery.data?.defaultBranch ||
+        "",
+    ).trim();
     return value;
-  }, [branchOptionsQuery.data?.defaultBranch]);
+  }, [
+    branchOptionsQuery.data?.defaultBranch,
+    branchMetadataQuery.data?.defaultBranch,
+  ]);
   const effectiveBranch =
     branch.trim() ||
     (!branchTouched && pageMode.mode === "create" && submittedRepository
       ? defaultBranch
       : "");
-  const selectedBranchIsStale = Boolean(
-    branch.trim() &&
-      branchOptionsQuery.isSuccess &&
-      !(branchOptionsQuery.data?.items || []).some(
-        (item) => item.value === branch.trim(),
+  // Exact-name evidence is independent of suggestion membership: a branch
+  // outside the first bounded page must stay selectable without a stale
+  // warning. The query key carries the full request identity (repository and
+  // exact name) so late or out-of-order responses can never validate the
+  // wrong draft. The lookup follows the same debounce as suggestion search so
+  // a paste schedules one lookup and typing does not fan out one request per
+  // keystroke.
+  const trimmedBranchForResolve = debouncedBranchSearch;
+  const branchResolveQuery = useQuery({
+    ...configQueryDefaults,
+    staleTime: 60_000,
+    queryKey: [
+      "workflow-start",
+      "github-branch-resolve",
+      branchLookupRepository,
+      trimmedBranchForResolve,
+    ],
+    enabled: Boolean(
+      branchResolveEndpoint &&
+        branchLookupRepository &&
+        trimmedBranchForResolve,
+    ),
+    retry: false,
+    queryFn: async ({ signal }) =>
+      readBranchResolve(
+        branchResolveEndpoint || "",
+        branchLookupRepository,
+        trimmedBranchForResolve,
+        signal,
       ),
-  );
+  });
+  const branchResolutionOutcome: BranchResolutionOutcome = (() => {
+    if (!trimmedBranchForResolve || !branchResolveEndpoint) {
+      return "not-checked";
+    }
+    if (
+      branchResolveQuery.isLoading ||
+      branchResolveQuery.isFetching ||
+      branchResolveQuery.isPending
+    ) {
+      return "checking";
+    }
+    if (branchResolveQuery.isSuccess && branchResolveQuery.data) {
+      if (branchResolveQuery.data.found) {
+        return "found";
+      }
+      if (branchResolveQuery.data.inconclusive) {
+        return "inconclusive";
+      }
+      return "absent";
+    }
+    return "inconclusive";
+  })();
   const branchControlDisabled =
     !selectedRepositoryForBranchLookup.trim() ||
     !branchLookupEndpoint ||
@@ -8773,17 +9090,38 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
       return "";
     }
     if (branchOptionsQuery.isError) {
+      // Lookup availability is reported separately from input validity: a
+      // failed suggestion fetch never implies the authored branch is wrong.
+      if (defaultBranch) {
+        return "Branch suggestions are unavailable. You can still type a branch name.";
+      }
       const error = branchOptionsQuery.error;
       return error instanceof Error ? error.message : "Failed to load branches.";
     }
-    if (selectedBranchIsStale) {
-      return "Selected branch is not in the latest list for this repository.";
+    if (
+      branchResolutionOutcome === "absent" &&
+      trimmedBranchForResolve === branch.trim() &&
+      branch.trim()
+    ) {
+      return `No branch named "${trimmedBranchForResolve}" was found in this repository. You can still submit it for backend validation.`;
+    }
+    if (
+      branchOptionsQuery.isSuccess &&
+      branchOptionsQuery.data?.hasMore === true &&
+      debouncedBranchSearch
+    ) {
+      // The suggestion list is one bounded page, never a complete crawl:
+      // say so instead of implying these are all the matches.
+      return `Showing the first ${branchOptions.length} suggestions. Type to narrow the list or paste the exact branch name.`;
     }
     if (branchOptionsQuery.isSuccess && branchOptions.length === 0) {
-      return "No branches returned for this repository.";
+      return "No branches returned for this repository. Type a branch name.";
     }
     return "";
   })();
+  const branchStatusIsError = Boolean(
+    branchOptionsQuery.isError && !defaultBranch,
+  );
   const handleRepositoryChange = (value: string) => {
     setRepository(value);
     setRepositoryTouched(true);
@@ -11950,6 +12288,11 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
           "Workflow was started but no redirect path was returned.",
         );
       }
+      // Record explicit accepted submissions as honest user-scoped recency.
+      // Intermediate keystrokes are never recorded.
+      if (normalizedRepository && effectiveBranch) {
+        writeRecentBranch(normalizedRepository, effectiveBranch);
+      }
       navigateTo(redirectPath);
       didNavigateAfterCreate = true;
     } catch (error) {
@@ -14631,7 +14974,7 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
           {branchStatusMessage ? (
             <p
               className={
-                branchOptionsQuery.isError || selectedBranchIsStale
+                branchStatusIsError
                   ? "queue-authoring-controls-status notice error"
                   : "queue-authoring-controls-status small"
               }
