@@ -6,16 +6,11 @@ from typing import Any
 import pytest
 
 import moonmind.workflows.temporal.workflows.agent_run as agent_run_module
-from moonmind.workflows.temporal.workflows.agent_run import (
-    OMNIGENT_PROFILE_BOUND_REMAINING_BUDGET_PATCH_ID,
-    MoonMindAgentRun,
-    profile_bound_retry_start_to_close_seconds,
-)
 
 
 def test_retry_inherits_remaining_budget_not_fresh_window() -> None:
     # A 6h first attempt that failed after 10 minutes leaves ~5h50m.
-    retry_stc = profile_bound_retry_start_to_close_seconds(
+    retry_stc = agent_run_module.profile_bound_retry_start_to_close_seconds(
         first_stc_seconds=21600,
         elapsed_seconds=600.0,
     )
@@ -26,7 +21,7 @@ def test_retry_inherits_remaining_budget_not_fresh_window() -> None:
 def test_attempt_two_cannot_exceed_parent_remaining_schedule_to_close() -> None:
     first_stc = 21600
     for elapsed in (0.0, 600.0, 18000.0, 21599.0, 99999.0):
-        retry_stc = profile_bound_retry_start_to_close_seconds(
+        retry_stc = agent_run_module.profile_bound_retry_start_to_close_seconds(
             first_stc_seconds=first_stc,
             elapsed_seconds=elapsed,
         )
@@ -40,7 +35,7 @@ def test_attempt_two_cannot_exceed_parent_remaining_schedule_to_close() -> None:
 
 def test_exhausted_budget_collapses_to_minimum_probe() -> None:
     assert (
-        profile_bound_retry_start_to_close_seconds(
+        agent_run_module.profile_bound_retry_start_to_close_seconds(
             first_stc_seconds=3600,
             elapsed_seconds=7200.0,
         )
@@ -50,7 +45,7 @@ def test_exhausted_budget_collapses_to_minimum_probe() -> None:
 
 def test_remaining_budget_patch_id_is_stable() -> None:
     assert (
-        OMNIGENT_PROFILE_BOUND_REMAINING_BUDGET_PATCH_ID
+        agent_run_module.OMNIGENT_PROFILE_BOUND_REMAINING_BUDGET_PATCH_ID
         == "agent-run-omnigent-profile-bound-remaining-budget-v1"
     )
 
@@ -97,7 +92,7 @@ async def test_attempt_two_receives_remaining_budget_through_lane(
             raise RuntimeError("attempt 1 transport failure")
         return ({"ok": True}, None)
 
-    run = MoonMindAgentRun()
+    run = agent_run_module.MoonMindAgentRun()
     monkeypatch.setattr(
         run, "_execute_omnigent_with_admitted_capacity", _fake_execute
     )
@@ -116,7 +111,7 @@ async def test_attempt_two_receives_remaining_budget_through_lane(
     assert admitted_at is None
     assert stc_calls == [
         21600,
-        profile_bound_retry_start_to_close_seconds(
+        agent_run_module.profile_bound_retry_start_to_close_seconds(
             first_stc_seconds=21600,
             elapsed_seconds=600.0,
         ),
