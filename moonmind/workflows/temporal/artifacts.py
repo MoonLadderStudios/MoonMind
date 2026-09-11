@@ -1745,12 +1745,6 @@ class TemporalArtifactService:
             # data-safety state, not an authentication decision. The trusted
             # preview path reads through an explicit internal bypass instead.
             return False
-        if is_disabled_local_mode():
-            # Consistent with the read/mutation gates: without
-            # authentication any principal string is self-asserted, so the
-            # raw gate cannot enforce ownership here either. Authenticated
-            # deployments still enforce the owner/admitted/linked policy.
-            return True
         if (
             artifact.redaction_level
             is not db_models.TemporalArtifactRedactionLevel.RESTRICTED
