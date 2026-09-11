@@ -33,6 +33,9 @@ from api_service.db import models as db_models
 from moonmind.config.settings import settings
 from moonmind.security.auth_modes_4120 import is_disabled_local_mode
 from moonmind.core.artifacts import assert_model_agnostic_metadata
+from moonmind.schemas.saved_work_models import (
+    assert_complete_payload_matches as _assert_saved_work_complete_matches,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -1745,6 +1748,22 @@ class TemporalArtifactService:
         if artifact.status is db_models.TemporalArtifactStatus.DELETED:
             raise TemporalArtifactStateError("artifact is deleted")
         if artifact.status is db_models.TemporalArtifactStatus.COMPLETE:
+            # A reused COMPLETE artifact is only proof for the current capture
+            # when the newly supplied payload matches the stored result.
+            # Same request + same immutable candidate may reuse it; a
+            # conflicting candidate must fail (or start an explicitly new
+            # attempt) rather than bind different bytes to one claimed
+            # manifest (#4015 impl-05).
+            digest, actual_size = self._compute_digest_and_size(payload)
+            try:
+                _assert_saved_work_complete_matches(
+                    stored_digest=artifact.sha256,
+                    stored_size=artifact.size_bytes,
+                    new_digest=digest,
+                    new_size=actual_size,
+                )
+            except ValueError as exc:
+                raise TemporalArtifactStateError(str(exc)) from exc
             return artifact
 
         if artifact.upload_mode is db_models.TemporalArtifactUploadMode.MULTIPART:
@@ -1846,6 +1865,16 @@ class TemporalArtifactService:
                 content_type=content_type,
             )
         if artifact.status is db_models.TemporalArtifactStatus.COMPLETE:
+            digest, actual_size = self._compute_digest_and_size(payload)
+            try:
+                _assert_saved_work_complete_matches(
+                    stored_digest=artifact.sha256,
+                    stored_size=artifact.size_bytes,
+                    new_digest=digest,
+                    new_size=actual_size,
+                )
+            except ValueError as exc:
+                raise TemporalArtifactStateError(str(exc)) from exc
             return artifact
         if artifact.status is db_models.TemporalArtifactStatus.DELETED:
             raise TemporalArtifactStateError("artifact is deleted")
@@ -1944,11 +1973,31 @@ class TemporalArtifactService:
         artifact_id: str,
         principal: str,
         parts: list[dict[str, Any]] | None = None,
+        expected_sha256: str | None = None,
+        expected_size_bytes: int | None = None,
     ) -> db_models.TemporalArtifact:
         artifact = await self._repository.get_artifact(artifact_id)
         self._assert_mutation_access(artifact, principal=principal)
 
         if artifact.status is db_models.TemporalArtifactStatus.COMPLETE:
+            # Idempotent completion without new bytes reuses the stored
+            # result. When the caller names the candidate it expects, verify
+            # it so a reused COMPLETE artifact cannot bind different bytes
+            # to the caller's manifest (#4015 impl-05).
+            if expected_sha256 is not None or expected_size_bytes is not None:
+                try:
+                    _assert_saved_work_complete_matches(
+                        stored_digest=artifact.sha256,
+                        stored_size=artifact.size_bytes,
+                        new_digest=expected_sha256 or artifact.sha256 or "",
+                        new_size=(
+                            expected_size_bytes
+                            if expected_size_bytes is not None
+                            else artifact.size_bytes or 0
+                        ),
+                    )
+                except ValueError as exc:
+                    raise TemporalArtifactStateError(str(exc)) from exc
             return artifact
         if artifact.status is db_models.TemporalArtifactStatus.DELETED:
             raise TemporalArtifactStateError("artifact is deleted")
