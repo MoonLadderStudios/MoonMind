@@ -561,9 +561,7 @@ async def test_execution_notify_completion_scans_unredacted_webhook_payload(
 
     def mutating_redact(payload: Any) -> Any:
         if isinstance(payload, dict):
-            result = payload.get("result")
-            if isinstance(result, dict):
-                result["summary"] = "summary=[REDACTED]"
+            payload["summary"] = "summary=[REDACTED]"
         return payload
 
     def fake_scan(event: Any, *, surface: str) -> str | None:
