@@ -345,3 +345,192 @@ def test_finalize_only_for_merged_discovery() -> None:
     )
     assert result.trusted is True
     assert result.existing_work.next_action == NEXT_FINALIZE_ONLY
+
+
+# -- Codex review follow-ups (PR #4240) --------------------------------------
+
+
+def test_unknown_basis_is_rejected_fail_closed() -> None:
+    for basis in ("issue_reference", "branch_name_match", "", "github_read"):
+        result = _discover(candidate_basis=basis)
+        assert result.trusted is False
+        assert result.reason_code == "insufficient_evidence"
+        assert result.existing_work is None
+
+
+def test_next_actions_use_canonical_handoff_vocabulary() -> None:
+    from moonmind.workflows.temporal.github_issue_attempt import NEXT_ACTIONS
+    from moonmind.workflows.temporal import github_issue_continuation as cont
+
+    for name in (
+        "NEXT_CONTINUE_SAME_PR",
+        "NEXT_VERIFY_ONLY",
+        "NEXT_FINALIZE_ONLY",
+        "NEXT_CREATE_PR_FROM_SAVED",
+        "NEXT_FRESH_IMPLEMENT",
+        "NEXT_NEEDS_ATTENTION",
+        "NEXT_OWNER_RECOVERY",
+        "NEXT_BLOCKED",
+    ):
+        assert getattr(cont, name) in NEXT_ACTIONS, name
+
+
+def test_saved_branch_only_routes_to_saved_continuation() -> None:
+    from moonmind.workflows.temporal.github_issue_continuation import (
+        NEXT_CREATE_PR_FROM_SAVED,
+    )
+
+    result = _discover(
+        lineage_pr_url="",
+        lineage_saved_branch="ckpt-4180",
+        lineage_saved_sha="def456",
+        github_pr=None,
+    )
+    assert result.trusted is True
+    assert result.reason_code == "saved_branch_only"
+    assert result.existing_work is not None
+    assert result.existing_work.next_action == NEXT_CREATE_PR_FROM_SAVED
+    assert result.existing_work.head_branch == "ckpt-4180"
+    assert result.existing_work.head_sha == "def456"
+
+
+def test_complete_and_verified_routes_to_finalize_only() -> None:
+    work = _discover().existing_work
+    routing = route_continuation(
+        work, implementation_complete=True, verification_current=True
+    )
+    assert routing.next_action == NEXT_FINALIZE_ONLY
+    assert routing.workspace_revision == "abc123"
+    assert routing.must_not_duplicate_pr is True
+
+
+def test_direct_read_missing_head_sha_requires_attention() -> None:
+    pr = _open_pr()
+    del pr["head"]["sha"]
+    result = _discover(github_pr=pr)
+    assert result.trusted is False
+    assert result.reason_code == "github_unavailable"
+
+
+def test_direct_read_missing_head_ref_requires_attention() -> None:
+    pr = _open_pr()
+    del pr["head"]["ref"]
+    result = _discover(github_pr=pr)
+    assert result.trusted is False
+    assert result.reason_code == "github_unavailable"
+
+
+def test_unknown_scalar_scope_authorizes_nothing() -> None:
+    out = check_publication_scope(scope="typo", requested=["push", "pr", "merge"])
+    assert out.allowed == []
+    assert out.qualified_local_save is True
+
+
+def test_lost_creation_rejects_wrong_fork_repo() -> None:
+    out = resolve_lost_pr_creation(
+        intended_head="feat-4180",
+        intended_base="main",
+        intended_head_repo="MoonLadderStudios/MoonMind",
+        observed_prs=[
+            {"number": 42, "head": {"ref": "feat-4180",
+                                    "repo": {"full_name": "someone-else/MoonMind"}},
+             "base": {"ref": "main"}}
+        ],
+        publication_record_saved=True,
+    )
+    assert out.outcome == "no_match"
+    assert out.pr_number is None
+
+
+def test_lost_creation_adopts_matching_repo_and_sha() -> None:
+    out = resolve_lost_pr_creation(
+        intended_head="feat-4180",
+        intended_base="main",
+        intended_head_repo="MoonLadderStudios/MoonMind",
+        intended_head_sha="abc123",
+        observed_prs=[
+            {"number": 42,
+             "head": {"ref": "feat-4180", "sha": "abc123",
+                      "repo": {"full_name": "MoonLadderStudios/MoonMind"}},
+             "base": {"ref": "main"}}
+        ],
+        publication_record_saved=True,
+    )
+    assert out.outcome == "adopt_existing"
+    assert out.pr_number == 42
+
+
+def test_lost_creation_rejects_sha_mismatch() -> None:
+    out = resolve_lost_pr_creation(
+        intended_head="feat-4180",
+        intended_base="main",
+        intended_head_sha="abc123",
+        observed_prs=[
+            {"number": 42, "head": {"ref": "feat-4180", "sha": "different"},
+             "base": {"ref": "main"}}
+        ],
+        publication_record_saved=True,
+    )
+    assert out.outcome == "no_match"
+    assert out.pr_number is None
+
+
+def test_plan_issue_continuation_routes_open_pr() -> None:
+    from moonmind.workflows.temporal.github_issue_continuation import (
+        plan_issue_continuation,
+    )
+
+    planned = plan_issue_continuation(
+        repository="MoonLadderStudios/MoonMind",
+        issue_number=4180,
+        lineage_validated=True,
+        lineage_pr_url="https://github.com/MoonLadderStudios/MoonMind/pull/42",
+        lineage_pr_head="feat-4180",
+        lineage_pr_base="main",
+        lineage_saved_branch="ckpt-4180",
+        lineage_saved_sha="def456",
+        github_pr=_open_pr(),
+    )
+    assert planned["discovery"]["trusted"] is True
+    assert planned["routing"] is not None
+    assert planned["routing"]["nextAction"] == "continue-implementation"
+    assert planned["routing"]["workspaceRevision"] == "abc123"
+
+
+def test_plan_issue_continuation_saved_only_needs_no_same_pr_routing() -> None:
+    from moonmind.workflows.temporal.github_issue_continuation import (
+        plan_issue_continuation,
+    )
+
+    planned = plan_issue_continuation(
+        repository="MoonLadderStudios/MoonMind",
+        issue_number=4180,
+        lineage_validated=True,
+        lineage_pr_url="",
+        lineage_saved_branch="ckpt-4180",
+        lineage_saved_sha="def456",
+        github_pr=None,
+    )
+    assert planned["discovery"]["trusted"] is True
+    assert planned["discovery"]["reasonCode"] == "saved_branch_only"
+    assert planned["routing"] is None
+
+
+def test_lifecycle_preserved_work_continuation_uses_boundary() -> None:
+    from moonmind.workflows.temporal.github_issue_lifecycle import (
+        preserved_work_continuation,
+    )
+
+    planned = preserved_work_continuation(
+        repository="MoonLadderStudios/MoonMind",
+        issue_number=4180,
+        lineage_validated=True,
+        lineage_pr_url="https://github.com/MoonLadderStudios/MoonMind/pull/42",
+        lineage_pr_head="feat-4180",
+        lineage_pr_base="main",
+        lineage_saved_branch="ckpt-4180",
+        lineage_saved_sha="def456",
+        github_pr=_open_pr(),
+    )
+    assert planned["discovery"]["trusted"] is True
+    assert planned["routing"]["nextAction"] == "continue-implementation"
