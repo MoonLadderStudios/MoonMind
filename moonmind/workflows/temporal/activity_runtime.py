@@ -8777,22 +8777,115 @@ class TemporalAgentRuntimeActivities:
             try:
                 payload = json.loads(path.read_text(encoding="utf-8"))
             except (OSError, json.JSONDecodeError):
-                logger.warning(
-                    "Assessment verdict artifact could not be read as JSON: %s",
-                    assessment_path,
-                    exc_info=True,
+                failure_class = str(
+                    result_dict.get("failureClass")
+                    or result_dict.get("failure_class")
+                    or ""
+                ).strip()
+                if failure_class:
+                    logger.warning(
+                        "Assessment verdict artifact could not be read as JSON: %s",
+                        assessment_path,
+                        exc_info=True,
+                    )
+                    return {}
+                raise TemporalActivityRuntimeError(
+                    "Declared assessment verdict artifact could not be read as JSON: "
+                    f"{assessment_path}. The assessment step must write a JSON object "
+                    "with keys issue_provider, issue_ref, issue_url, verdict, branch, "
+                    "base_ref, mode, summary, and requirements."
                 )
-                return {}
             if not isinstance(payload, Mapping):
-                logger.warning(
-                    "Assessment verdict artifact payload must be a JSON object: %s",
-                    assessment_path,
+                failure_class = str(
+                    result_dict.get("failureClass")
+                    or result_dict.get("failure_class")
+                    or ""
+                ).strip()
+                if failure_class:
+                    logger.warning(
+                        "Assessment verdict artifact payload must be a JSON object: %s",
+                        assessment_path,
+                    )
+                    return {}
+                raise TemporalActivityRuntimeError(
+                    "Assessment verdict artifact payload must be a JSON object: "
+                    f"{assessment_path}. The assessment step must write a JSON object "
+                    "with keys issue_provider, issue_ref, issue_url, verdict, branch, "
+                    "base_ref, mode, summary, and requirements."
                 )
-                return {}
+            normalized_payload = dict(payload)
+            try:
+                from moonmind.workflows.temporal.assessment_verdict import (
+                    normalize_assessment_payload,
+                )
+            except Exception:  # pragma: no cover - import guard
+                normalize_assessment_payload = None  # type: ignore[assignment]
+            if normalize_assessment_payload is not None:
+                assistant_hint = ""
+                if isinstance(metadata, Mapping):
+                    for _key in (
+                        "assistantText",
+                        "lastAssistantText",
+                        "assistant_text",
+                    ):
+                        _val = metadata.get(_key)
+                        if isinstance(_val, str) and _val.strip():
+                            assistant_hint = _val
+                            break
+                verdict_value, verdict_provenance, verdict_evidence = (
+                    normalize_assessment_payload(
+                        payload,
+                        assistant_text=assistant_hint,
+                    )
+                )
+                if verdict_value and verdict_provenance != "declared":
+                    normalized_payload = dict(payload)
+                    normalized_payload["verdict"] = verdict_value
+                    normalized_payload["verdictProvenance"] = verdict_provenance
+                    normalized_payload["verdictEvidence"] = verdict_evidence
+                    logger.warning(
+                        "Assessment verdict artifact %s missing declared verdict; "
+                        "normalized via %s (%s)",
+                        assessment_path,
+                        verdict_provenance,
+                        verdict_evidence,
+                    )
+            else:
+                verdict_value = str(payload.get("verdict") or "").strip().upper()
+                if verdict_value not in {
+                    "FULLY_IMPLEMENTED",
+                    "PARTIALLY_IMPLEMENTED",
+                    "NOT_IMPLEMENTED",
+                    "BLOCKED",
+                }:
+                    verdict_value = ""
+            if not verdict_value:
+                failure_class = str(
+                    result_dict.get("failureClass")
+                    or result_dict.get("failure_class")
+                    or ""
+                ).strip()
+                if failure_class:
+                    logger.warning(
+                        "Assessment verdict artifact has no recoverable verdict %s; "
+                        "preserving original agent failure (%s)",
+                        assessment_path,
+                        failure_class,
+                    )
+                    return {}
+                raise TemporalActivityRuntimeError(
+                    "Declared assessment verdict artifact has no recoverable "
+                    f"verdict: {assessment_path}. The assessment step must write "
+                    "verdict as exactly one of FULLY_IMPLEMENTED, "
+                    "PARTIALLY_IMPLEMENTED, NOT_IMPLEMENTED, or BLOCKED, or "
+                    "provide an explicit verdict statement (for example "
+                    "'## Verdict: FULLY_IMPLEMENTED') so the normalizer can "
+                    "recover it. Requirement statuses alone never imply completion."
+                )
             verdict_ref = await _write_json_artifact(
                 self._artifact_service,
                 principal="system:agent_runtime",
-                payload=dict(payload),
+                payload=dict(normalized_payload),
                 execution_ref=_execution_ref("output.assessment_verdict"),
                 metadata_json={
                     "name": "assessment-verdict.json",
@@ -8826,14 +8919,8 @@ class TemporalAgentRuntimeActivities:
             }
             # Compact structured verdict rides previousOutputs as a fast path for
             # adjacent steps; the ref is the durable, bridge-compatible channel.
-            verdict = str(payload.get("verdict") or "").strip().upper()
-            if verdict in {
-                "FULLY_IMPLEMENTED",
-                "PARTIALLY_IMPLEMENTED",
-                "NOT_IMPLEMENTED",
-                "BLOCKED",
-            }:
-                published["assessmentVerdict"] = verdict
+            # verdict_value was validated above, so it is always present here.
+            published["assessmentVerdict"] = verdict_value
             return published
 
         async def _publish_issue_brief_artifact() -> dict[str, Any]:
