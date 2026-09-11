@@ -555,6 +555,13 @@ async def test_requalification_follows_the_current_default_provider_profile(
         credential_source=ProviderCredentialSource.SECRET_REF,
         runtime_materialization_mode=RuntimeMaterializationMode.COMPOSITE,
         secret_refs={"opencode_api_key": "db://opencode-go-default-api-key"},
+        clear_env_keys=[
+            "OPENCODE_AUTH_CONTENT",
+            "OPENCODE_CONFIG",
+            "OPENCODE_CONFIG_CONTENT",
+            "OPENAI_API_KEY",
+            "ANTHROPIC_API_KEY",
+        ],
         default_model="opencode-go/muse-spark-1.2-contributor",
         default_effort="xhigh",
     )
@@ -566,6 +573,14 @@ async def test_requalification_follows_the_current_default_provider_profile(
         credential_source=ProviderCredentialSource.NONE,
         runtime_materialization_mode=RuntimeMaterializationMode.COMPOSITE,
         secret_refs={},
+        clear_env_keys=[
+            "OPENCODE_API_KEY",
+            "OPENCODE_AUTH_CONTENT",
+            "OPENCODE_CONFIG",
+            "OPENCODE_CONFIG_CONTENT",
+            "OPENAI_API_KEY",
+            "ANTHROPIC_API_KEY",
+        ],
         default_model="opencode/muse-spark-1.2-contributor-free",
         default_effort="xhigh",
     )
@@ -816,6 +831,14 @@ async def test_credentialless_default_initializes_deployment_qualification(
         credential_source=ProviderCredentialSource.NONE,
         runtime_materialization_mode=RuntimeMaterializationMode.COMPOSITE,
         secret_refs={},
+        clear_env_keys=[
+            "OPENCODE_API_KEY",
+            "OPENCODE_AUTH_CONTENT",
+            "OPENCODE_CONFIG",
+            "OPENCODE_CONFIG_CONTENT",
+            "OPENAI_API_KEY",
+            "ANTHROPIC_API_KEY",
+        ],
         command_behavior={
             "auth_readiness": {
                 "connected": True,
