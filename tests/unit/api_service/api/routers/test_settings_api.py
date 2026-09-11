@@ -109,6 +109,35 @@ def settings_user_override():
         app.dependency_overrides.pop(SETTINGS_USER_DEP, None)
 
 
+@pytest.fixture(autouse=True)
+def _default_settings_test_principal():
+    """Explicit test principal for the shared auth boundary (#4125).
+
+    Production no longer mints environment-driven test identities, so
+    route-logic tests run under this explicit superuser double. Tests
+    that need a different identity keep working: their own
+    ``settings_user_override(...)`` call runs after this fixture and wins.
+    """
+    user = SimpleNamespace(
+        id=uuid4(),
+        email="settings-tests@example.com",
+        is_active=True,
+        is_superuser=True,
+        settings_permissions=set(),
+        workspace_id=None,
+    )
+    missing = object()
+    previous = app.dependency_overrides.get(SETTINGS_USER_DEP, missing)
+    app.dependency_overrides[SETTINGS_USER_DEP] = lambda: user
+    try:
+        yield user
+    finally:
+        if previous is missing:
+            app.dependency_overrides.pop(SETTINGS_USER_DEP, None)
+        else:
+            app.dependency_overrides[SETTINGS_USER_DEP] = previous
+
+
 @pytest.mark.asyncio
 async def test_settings_catalog_endpoint_returns_grouped_descriptors():
     async with AsyncClient(

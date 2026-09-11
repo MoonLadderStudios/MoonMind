@@ -24,7 +24,6 @@ from api_service.services.deployment_operations import (
     resolve_current_deployment_image,
 )
 from moonmind.config.settings import settings
-from moonmind.security.auth_modes_4120 import is_disabled_local_mode
 from moonmind.utils.build_info import resolve_moonmind_build_id
 from moonmind.workflows.executions.routing import TemporalSubmitDisabledError
 from moonmind.workflows.temporal import (
@@ -194,8 +193,9 @@ def _get_temporal_execution_service(
 
 
 def _require_admin(user: User) -> None:
-    if is_disabled_local_mode():
-        return
+    # Authorization is checked after identity resolution in every mode:
+    # the disabled local principal resolves with is_superuser, so no
+    # mode-based bypass exists here.
     if bool(getattr(user, "is_superuser", False)):
         return
     raise HTTPException(

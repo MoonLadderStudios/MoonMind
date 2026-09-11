@@ -14,7 +14,7 @@ from fastapi.testclient import TestClient
 from starlette.routing import NoMatchFound
 
 import api_service.api.routers.executions as executions_module
-from api_service.auth_providers import get_current_user
+from api_service.auth_providers import get_current_user, get_current_user_optional
 from api_service.db.base import get_async_session
 
 BANNED_EXECUTION_RESPONSE_KEYS = {
@@ -60,10 +60,17 @@ def _override_user_dependencies(app: FastAPI, *, is_superuser: bool) -> MagicMoc
     mock_user.id = "user-123"
     mock_user.is_superuser = is_superuser
     app.dependency_overrides[get_current_user()] = lambda: mock_user
+    # Optional-boundary routes (e.g. describe) resolve through the shared
+    # optional dependency; override it too so tests exercise route logic.
+    app.dependency_overrides[get_current_user_optional()] = lambda: mock_user
     for route in _iter_test_routes(app.routes):
         if hasattr(route, "dependant"):
             for dep in route.dependant.dependencies:
-                if dep.call.__name__ == "_current_user_fallback":
+                if dep.call.__name__ in {
+                    "_current_user_fallback",
+                    "_strict_current_user",
+                    "_optional_current_user",
+                }:
                     app.dependency_overrides[dep.call] = lambda: mock_user
     return mock_user
 

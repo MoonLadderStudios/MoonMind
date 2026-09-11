@@ -9,7 +9,7 @@ from fastapi import APIRouter, WebSocket, WebSocketDisconnect, Query, Depends, H
 from sqlalchemy.ext.asyncio import AsyncSession
 from api_service.db.base import get_async_session
 from api_service.db.models import OAuthSessionStatus, User, ManagedAgentOAuthSession
-from api_service.auth import get_jwt_strategy, get_user_manager, UserManager
+from api_service.auth import UserManager, get_user_manager
 import docker
 
 logger = logging.getLogger(__name__)
@@ -24,12 +24,72 @@ _ATTACHABLE_STATUSES = {
 
 async def get_current_user_ws(
     token: str = Query(...),
-    user_manager: UserManager = Depends(get_user_manager)
+    user_manager: UserManager | None = Depends(get_user_manager),
+    db: AsyncSession = Depends(get_async_session),
 ) -> User:
-    strategy = get_jwt_strategy()
-    user = await strategy.read_token(token, user_manager)
-    if not user or not user.is_active:
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid token")
+    """Resolve the WebSocket principal through the qualified session authority.
+
+    ``token`` carries a MoonMind session token (the same material accepted
+    as a cookie or bearer credential on HTTP routes). Legacy
+    application-JWT material fails closed as ``auth_invalid``; stream
+    re-authorization honors the same revocation/generation bound as HTTP.
+    ``user_manager`` is retained as an ignored dependency so existing
+    callers keep working; resolution no longer reads legacy JWTs.
+    """
+    _ = user_manager
+    from moonmind.security.session_authority_4121 import (
+        http_status_for_error,
+        resolve_session_user,
+    )
+
+    from api_service.auth_providers import build_moonmind_control_plane_config
+    from api_service.services.session_store import (
+        DbAccountStore,
+        DbRevocationStore,
+    )
+
+    presented = (token or "").strip() or None
+    if presented is None:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail={"code": "auth_required"},
+        )
+    try:
+        config = build_moonmind_control_plane_config()
+        account = await resolve_session_user(
+            cookie_token=None,
+            bearer_token=presented,
+            account_store=DbAccountStore(db),
+            revocation=DbRevocationStore(db),
+            config=config,
+        )
+    except HTTPException:
+        raise
+    except Exception as exc:
+        status_code, code = http_status_for_error(exc)
+        raise HTTPException(status_code=status_code, detail={"code": code})
+    if account is None:  # pragma: no cover - strict boundary never returns None
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail={"code": "auth_required"},
+        )
+    try:
+        user = await db.get(User, account.user_id)
+    except Exception as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail={"code": "unavailable"},
+        ) from exc
+    if user is None:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail={"code": "auth_invalid"},
+        )
+    if not user.is_active:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail={"code": "inactive"},
+        )
     return user
 
 def _session_is_expired(session: ManagedAgentOAuthSession) -> bool:
@@ -103,7 +163,7 @@ async def terminal_websocket(
     db: AsyncSession = Depends(get_async_session),
 ):
     try:
-        user = await get_current_user_ws(token, user_manager)
+        user = await get_current_user_ws(token, user_manager, db)
     except Exception:
         await websocket.close(code=status.WS_1008_POLICY_VIOLATION)
         return
@@ -136,7 +196,62 @@ async def terminal_websocket(
         await websocket.close(code=status.WS_1008_POLICY_VIOLATION, reason=str(exc))
         return
     await _mark_terminal_connection(db, session, connected=True)
-    
+
+    # Active-stream re-authorization (#4121 req 7): the handshake token must
+    # be rechecked against the live account/revocation stores at least every
+    # five minutes so logout, disable, or administrative revocation
+    # terminates the terminal within the revocation bound instead of leaving
+    # it usable until the client disconnects.
+    reauth_failed = asyncio.Event()
+
+    async def _reauthorize_terminal_stream() -> None:
+        from moonmind.security.session_authority_4121 import (
+            SESSION_REVOCATION_INTERVAL_SECONDS,
+            reauthorize_stream_token,
+        )
+
+        from api_service.auth_providers import (
+            build_moonmind_control_plane_config,
+        )
+        from api_service.services.session_store import (
+            DbAccountStore,
+            DbRevocationStore,
+        )
+
+        while True:
+            await asyncio.sleep(SESSION_REVOCATION_INTERVAL_SECONDS)
+            try:
+                config = build_moonmind_control_plane_config()
+                await reauthorize_stream_token(
+                    token,
+                    account_store=DbAccountStore(db),
+                    revocation=DbRevocationStore(db),
+                    config=config,
+                )
+                live_user = await db.get(User, user.id)
+                if live_user is None or not live_user.is_active:
+                    raise ValueError("terminal principal is no longer active")
+            except Exception:
+                logger.info(
+                    "auth_event mode=stream reason=reauth_failed session_id=%s",
+                    session_id,
+                )
+                reauth_failed.set()
+                try:
+                    await websocket.close(
+                        code=status.WS_1008_POLICY_VIOLATION,
+                        reason="Session re-authorization failed",
+                    )
+                except Exception:
+                    logger.debug(
+                        "Terminal reauth close failed for session %s",
+                        session_id,
+                        exc_info=True,
+                    )
+                return
+
+    reauth_task = asyncio.create_task(_reauthorize_terminal_stream())
+
     try:
         client = docker.from_env()
         try:
@@ -144,6 +259,7 @@ async def terminal_websocket(
         except docker.errors.NotFound:
             await websocket.send_text(f"Terminal session {session_id} is not ready or has expired.\r\n")
             await websocket.close(code=1000)
+            reauth_task.cancel()
             return
 
         # Start a sh process attached to PTY
@@ -212,8 +328,12 @@ async def terminal_websocket(
                         break
 
         done, pending = await asyncio.wait(
-            [asyncio.create_task(_read_from_docker()), asyncio.create_task(_read_from_ws())],
-            return_when=asyncio.FIRST_COMPLETED
+            [
+                asyncio.create_task(_read_from_docker()),
+                asyncio.create_task(_read_from_ws()),
+                reauth_task,
+            ],
+            return_when=asyncio.FIRST_COMPLETED,
         )
         for task in pending:
             task.cancel()
@@ -223,6 +343,8 @@ async def terminal_websocket(
     except Exception as e:
         logger.error(f"WebSocket error: {e}", exc_info=True)
     finally:
+        if not reauth_task.done():
+            reauth_task.cancel()
         try:
             await _mark_terminal_connection(db, session, connected=False)
         except Exception:

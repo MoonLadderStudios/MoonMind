@@ -5,7 +5,6 @@ import pytest
 from fastapi import HTTPException
 from sqlalchemy.ext.asyncio import AsyncSession
 
-import api_service.auth_providers as auth_providers
 from api_service.auth_providers import get_current_user, get_default_user_from_db
 from api_service.db.models import User
 from moonmind.config.settings import settings
@@ -43,25 +42,22 @@ async def test_get_default_user_invalid_id(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_disabled_mode_missing_identity_fails_closed_without_stub(monkeypatch):
-    """#4120: missing identity/DB data in local mode never mints a stub admin."""
+    """#4120/#4125: missing identity/DB data in local mode never mints a stub admin."""
+    import moonmind.security.auth_modes_4120 as auth_modes
+    from fastapi import Request
+
     user_id = str(uuid.uuid4())
+    monkeypatch.setattr(auth_modes, "_ACTIVE_PRODUCTION_MODE", None)
     monkeypatch.setattr(settings.oidc, "AUTH_PROVIDER", "disabled")
     monkeypatch.setattr(settings.oidc, "DEFAULT_USER_ID", user_id)
-    monkeypatch.setattr(settings.workflow, "test_mode", False)
-    monkeypatch.delenv("PYTEST_CURRENT_TEST", raising=False)
-    monkeypatch.delenv("MOONMIND_DISABLE_DEFAULT_USER_DB_LOOKUP", raising=False)
-    monkeypatch.setattr(auth_providers, "_cached_current_user_dependency", None)
 
-    async def _boom(*args, **kwargs):
-        raise ConnectionError("db down")
-
-    import api_service.db.base as db_base
-
-    monkeypatch.setattr(db_base, "get_async_session_context", _boom)
+    mock_session = AsyncMock(spec=AsyncSession)
+    mock_session.get.side_effect = ConnectionError("db down")
+    scope = {"type": "http", "headers": [], "query_string": b""}
+    request = Request(scope)
 
     dependency = get_current_user()
     with pytest.raises(HTTPException) as exc:
-        await dependency()
+        await dependency(request, mock_session)
     assert exc.value.status_code == 503
     assert exc.value.detail in ("unavailable", "setup_required")
-    monkeypatch.setattr(auth_providers, "_cached_current_user_dependency", None)

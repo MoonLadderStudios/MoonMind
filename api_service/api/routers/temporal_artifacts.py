@@ -10,11 +10,9 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from fastapi.responses import FileResponse, StreamingResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from api_service.auth import _DEFAULT_USER_ID
 from api_service.auth_providers import get_current_user_optional
 from api_service.db.base import get_async_session
 from api_service.db.models import User
-from moonmind.config.settings import settings
 from moonmind.security.auth_modes_4120 import is_disabled_local_mode
 from moonmind.schemas.temporal_artifact_models import (
     ArtifactCollectionResponse,
@@ -200,15 +198,23 @@ async def _get_temporal_artifact_service(
 async def _resolve_principal(
     user: Optional[User] = Depends(get_current_user_optional()),
 ) -> str:
+    # Authenticated accounts/oidc/header modes never take the disabled
+    # path: the mode gate above is the only disabled branch, so those
+    # modes cannot be reinterpreted as local single-user access.
     if is_disabled_local_mode():
         user_id = getattr(user, "id", None)
-        return str(user_id or settings.oidc.DEFAULT_USER_ID or _DEFAULT_USER_ID)
+        if user_id is None:
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail="unavailable",
+            )
+        return str(user_id)
 
     if user is None or getattr(user, "id", None) is None:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail={
-                "code": "authentication_required",
+                "code": "auth_required",
                 "message": "Authentication is required for artifact operations.",
             },
         )

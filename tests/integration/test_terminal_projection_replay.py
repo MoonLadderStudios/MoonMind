@@ -128,7 +128,10 @@ async def test_terminal_describe_repairs_metadata_skew(
         for dependency in getattr(
             getattr(route, "dependant", None), "dependencies", ()
         ):
-            if getattr(dependency.call, "__name__", "") == "_current_user_fallback":
+            if getattr(dependency.call, "__name__", "") in {
+                "_strict_current_user",
+                "_optional_current_user",
+            }:
                 app.dependency_overrides[dependency.call] = lambda: user
     monkeypatch.setattr(settings.temporal, "temporal_authoritative_read_enabled", True)
     async with httpx.AsyncClient(
