@@ -633,7 +633,8 @@ async def test_scan_reuses_prerequisite_evidence_across_all_500_candidates(
     assert result.status == "COMPLETED"
     assert result.outputs["searchEvidence"]["candidatesExamined"] == 500
     # +5 for live comment readability (1 GET) + advisory claim (2 POSTs + 2 re-reads).
-    assert len(activity_boundary.requests) == 5 + 11 + 1 + 5
+    # +1 for the credential-bound GET /user identity lookup (self-only default).
+    assert len(activity_boundary.requests) == 5 + 11 + 1 + 5 + 1
 
 
 @pytest.mark.asyncio
@@ -654,7 +655,8 @@ async def test_scan_stops_before_exceeding_aggregate_prerequisite_budget(
     )
     assert result.status == "FAILED"
     assert "100-request prerequisite lookup budget" in result.outputs["error"]
-    assert len(activity_boundary.requests) == 1 + 100
+    # +1 for the credential-bound GET /user identity lookup (self-only default).
+    assert len(activity_boundary.requests) == 1 + 100 + 1
     assert all(request.method == "GET" for request in activity_boundary.requests)
 
 
@@ -675,7 +677,8 @@ async def test_selected_issue_confirmation_refreshes_cached_prerequisite_state(
     assert result.status == "FAILED"
     assert "changed or could not be confirmed" in result.outputs["error"]
     # +1 for live comment readability GET before confirmation re-read.
-    assert len(activity_boundary.requests) == 4 + 1
+    # +1 for the credential-bound GET /user identity lookup (self-only default).
+    assert len(activity_boundary.requests) == 4 + 1 + 1
 
 
 @pytest.mark.asyncio
@@ -694,7 +697,8 @@ async def test_maximum_prerequisite_list_has_fresh_confirmation_budget(
     )
     assert result.status == "COMPLETED"
     # +5 for live comment readability + advisory claim.
-    assert len(activity_boundary.requests) == 1 + 100 + 1 + 100 + 5
+    # +1 for the credential-bound GET /user identity lookup (self-only default).
+    assert len(activity_boundary.requests) == 1 + 100 + 1 + 100 + 5 + 1
 
 
 @pytest.mark.asyncio

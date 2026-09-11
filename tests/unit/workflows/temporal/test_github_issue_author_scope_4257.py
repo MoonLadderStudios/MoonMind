@@ -125,11 +125,46 @@ class _ScopeResponse:
 
 
 class _ScopeService:
+    def __init__(self, labels: list[str] | None = None) -> None:
+        self.labels = list(labels) if labels is not None else []
+        self.operations: list[tuple[str, str]] = []
+
     async def resolve_github_token(self, *, repo: str | None = None, **kwargs: Any):
         return "scope-token", None
 
     def _github_headers(self, token: str) -> dict[str, str]:
         return GitHubService._github_headers(token)
+
+    async def check_issue_label_readiness(self, *, repo: str, issue_number: int,
+                                          required_labels: list[str], github_token: str | None = None):
+        return {"ready": True, "reasonCode": "ready", "summary": "ready"}
+
+    async def add_issue_labels(self, *, repo: str, issue_number: int,
+                               labels: list[str], github_token: str | None = None):
+        for label in labels:
+            self.operations.append(("add", label))
+            self.labels.append(label)
+        # The loader re-reads through the HTTP boundary, so mirror the
+        # write into the shared fake detail (as the real GitHub API would).
+        detail = _ScopeHttpClient.detail
+        if isinstance(detail, dict):
+            current = detail.setdefault("labels", [])
+            for label in labels:
+                if {"name": label} not in current:
+                    current.append({"name": label})
+        return {"ok": True, "reasonCode": "added", "summary": "added"}
+
+    async def remove_issue_label(self, *, repo: str, issue_number: int,
+                                 label: str, github_token: str | None = None):
+        self.operations.append(("remove", label))
+        self.labels = [existing for existing in self.labels if existing != label]
+        detail = _ScopeHttpClient.detail
+        if isinstance(detail, dict):
+            detail["labels"] = [
+                entry for entry in detail.get("labels", [])
+                if not (isinstance(entry, dict) and entry.get("name") == label)
+            ]
+        return {"ok": True, "reasonCode": "removed", "summary": "removed"}
 
 
 @pytest.fixture
@@ -654,3 +689,70 @@ async def test_loader_explicit_issue_number_ignores_author_scope(scope_boundary)
     assert result.status == "COMPLETED"
     assert result.outputs["issue"]["number"] == 11
     assert result.outputs["issue"]["author"]["id"] == OTHER_ID
+
+
+# -- R7: cutover compat (drain-and-replace, rollback ordering) ------------------
+
+
+@pytest.mark.asyncio
+async def test_stale_worker_dropped_scope_fails_closed_to_self_only(scope_boundary):
+    """An old worker that drops the unknown scope field fails closed.
+
+    Fresh inputs without a recorded scope choice (what a stale worker
+    forwards) must enforce self-only selection, never all-author.
+    """
+    own = make_issue(12)
+    scope_boundary.search_items = [own]
+    scope_boundary.detail = dict(own)
+
+    result = await story_tools.load_github_issue_preset_brief(
+        {"repository": REPO, "issueSearch": "task"},
+        github_service_factory=lambda: _ScopeService(),
+    )
+
+    assert result.status == "COMPLETED"
+    assert result.outputs["searchEvidence"]["authorScope"] == "authenticated_user"
+    assert result.outputs["issue"]["author"]["id"] == IDENTITY["id"]
+
+
+@pytest.mark.asyncio
+async def test_recorded_opt_in_reapplies_deterministically_on_retry(scope_boundary):
+    """Reset/retry of a recorded all-author execution re-applies opt-in.
+
+    Inputs carrying a recorded ``True`` (no recurrence provenance, as on a
+    manual reset) must run the all-author search deterministically instead
+    of stopping for refresh or reverting to self-only.
+    """
+    other = make_issue(11, author_id=OTHER_ID, author_login=OTHER_LOGIN)
+    scope_boundary.search_items = [other]
+    scope_boundary.detail = dict(other)
+
+    result = await story_tools.load_github_issue_preset_brief(
+        _loader_inputs(includeAllAuthors=True),
+        github_service_factory=lambda: _ScopeService(),
+    )
+
+    assert result.status == "COMPLETED"
+    assert result.outputs["searchEvidence"]["authorScope"] == "all"
+    assert result.outputs["issue"]["number"] == 11
+
+
+def test_reset_without_recurrence_uses_fresh_default():
+    """Resets/retries without recurrence provenance are fresh invocations.
+
+    They materialize the self-only default without a refresh block; only
+    pre-change frozen *scheduled* plans (recurrence provenance without a
+    recorded choice) stop for refresh.
+    """
+    from moonmind.workflows.temporal.story_output_tools import (
+        _parse_issue_search_author_scope,
+    )
+
+    assert _parse_issue_search_author_scope({}, None) == (False, None)
+    assert _parse_issue_search_author_scope({}, {"namespace": "default"}) == (
+        False,
+        None,
+    )
+    assert _parse_issue_search_author_scope(
+        {}, {"workflow": {"appliedStepTemplates": []}}
+    ) == (False, None)

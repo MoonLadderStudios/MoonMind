@@ -62,6 +62,7 @@ def test_seed_has_no_new_ordinary_inputs_and_no_second_recovery_preset():
     seed = yaml.safe_load(_seed_text())
     assert sorted(i["name"] for i in seed["inputs"]) == [
         "constraints",
+        "include_all_authors",
         "issue_search",
         "repository",
         "run_verify",
