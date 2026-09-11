@@ -55,7 +55,7 @@ from collections import OrderedDict
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from enum import StrEnum
-from typing import Any, Awaitable, Callable, Mapping, Protocol, Sequence
+from typing import Any, Awaitable, Callable, Protocol, Sequence
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
@@ -237,6 +237,14 @@ def select_repository_authority(
             raise BoundAccessError(BOUND_DISABLED, "named connection is not active")
         if explicit_assignment is not None:
             assignment = explicit_assignment
+            if not getattr(assignment, "verified", True):
+                raise BoundAccessError(
+                    BOUND_DENIED, "explicit assignment is not verified"
+                )
+            if getattr(assignment, "broad_rule", False):
+                raise BoundAccessError(
+                    BOUND_DENIED, "explicit broad assignment needs explicit grant"
+                )
             if assignment.connection_id != connection.id:
                 raise BoundAccessError(
                     BOUND_DENIED, "explicit assignment names another connection"
@@ -278,6 +286,13 @@ def select_repository_authority(
         )
 
     # Routed: one eligible route/default under #4005's rules.
+    # Fail closed on conflicting explicit authority: a routed request must not
+    # carry an authored connection/assignment; ambiguous intent never silently
+    # changes credential authority.
+    if explicit_connection is not None or explicit_assignment is not None:
+        raise BoundAccessError(
+            BOUND_AMBIGUOUS, "routed access must not carry explicit authority"
+        )
     selected = admit_scoped_route(
         identity=identity,
         requested_operations=requested,
@@ -363,6 +378,7 @@ class BindingMetadata(BaseModel):
     adapter_kind: str = Field(alias="adapterKind", min_length=1)
     access_mode: AccessMode = Field(default=AccessMode.EXPLICIT, alias="accessMode")
     expires_at: str | None = Field(None, alias="expiresAt")
+    execution_owner: str = Field(default="", alias="executionOwner")
 
 
 class BoundErrorDTO(BaseModel):
@@ -623,6 +639,15 @@ class SharedRenewalStore:
     leader publishes the resulting metadata + material bytes; followers poll
     for that publication instead of re-issuing.
 
+    This in-memory implementation holds raw material bytes only for the life
+    of the process and never persists them.  A durable production backing
+    MUST NOT persist raw bearer bytes: it must resolve material through the
+    managed Secrets boundary (opaque issuance reference + secret-store read)
+    and persist only metadata + reference.  ``BoundCredentialCache.publish``
+    therefore sends raw bytes only to this in-memory store; external durable
+    backends receive metadata with empty material and followers compete for
+    leadership instead of reading bearer bytes from durable storage.
+
     Production wiring should back this same boundary with an existing durable
     lease/advisory primitive (same pattern family as the pg advisory /
     host-lease coordination elsewhere in the repo).  This in-memory
@@ -713,19 +738,24 @@ class SharedRenewalStore:
 class RenewalCoordinator(Protocol):
     """Minimal durable single-flight surface a production backend can implement."""
 
-    def try_claim(self, key: tuple[Any, ...], *, owner_id: str) -> bool: ...
-    def release_claim(self, key: tuple[Any, ...], *, owner_id: str) -> None: ...
+    def try_claim(self, key: tuple[Any, ...], *, owner_id: str) -> bool:
+        """Claim renewal leadership; implemented by the durable backend."""
+        raise NotImplementedError
+
+    def release_claim(self, key: tuple[Any, ...], *, owner_id: str) -> None:
+        """Release renewal leadership; implemented by the durable backend."""
+        raise NotImplementedError
 
 
 class BoundCredentialCache:
     """Bounded cache keyed by the full renewal identity (R5).
 
-    Key: (endpoint, connection revision, credential revision, admitted
-    route/scope, execution/use owner).  Never keyed by user, model, or
-    connection display name alone.  Renewal coordination is single-flight per
-    key with a finite owner lease and generation check; no database locks are
-    held during network issuance, and cancellation of one waiter never
-    invalidates another consumer's valid credential.
+    Key: (endpoint, connection revision, credential revision, policy
+    revision, role, admitted route/scope, execution/use owner).  Never keyed
+    by user, model, or connection display name alone.  Renewal coordination
+    is single-flight per key with a finite owner lease and generation check;
+    no database locks are held during network issuance, and cancellation of
+    one waiter never invalidates another consumer's valid credential.
 
     Pass a shared :class:`SharedRenewalStore` (or any object with its
     ``try_claim`` / ``release_claim`` surface plus ``get`` / ``publish`` /
@@ -756,6 +786,8 @@ class BoundCredentialCache:
         endpoint: str,
         connection_revision: int,
         credential_revision: int,
+        policy_revision: int,
+        role: str,
         route_id: str,
         operations: Sequence[str],
         execution_owner: str,
@@ -764,6 +796,8 @@ class BoundCredentialCache:
             normalize_endpoint(endpoint),
             int(connection_revision),
             int(credential_revision),
+            int(policy_revision),
+            (role or "").strip().lower(),
             route_id,
             tuple(sorted(str(op).strip().lower() for op in operations if str(op).strip())),
             (execution_owner or "").strip(),
@@ -776,6 +810,7 @@ class BoundCredentialCache:
             try:
                 return int(self._shared.next_generation(key))
             except Exception:
+                # Shared generation is best-effort; fall back to local monotonic counter.
                 pass
         current = self._local_generations.get(key, 0) + 1
         self._local_generations[key] = current
@@ -832,17 +867,31 @@ class BoundCredentialCache:
                 evicted.credential.clear()
         if self._shared is not None and hasattr(self._shared, "publish"):
             try:
-                shared_ok = self._shared.publish(
-                    key,
-                    binding=entry.binding,
-                    material=entry.credential.use_now(bytes),
-                    generation=generation,
-                )
+                if isinstance(self._shared, SharedRenewalStore):
+                    shared_ok = self._shared.publish(
+                        key,
+                        binding=entry.binding,
+                        material=entry.credential.use_now(bytes),
+                        generation=generation,
+                    )
+                else:
+                    # External durable backends must not receive raw bearer
+                    # bytes: publish metadata only so bearer material stays in
+                    # the managed Secrets boundary. Followers then compete
+                    # for leadership instead of reading secrets from storage.
+                    shared_ok = self._shared.publish(
+                        key,
+                        binding=entry.binding,
+                        material=b"",
+                        generation=generation,
+                    )
                 if not shared_ok:
                     return False
             except BoundAccessError:
                 raise
             except Exception:
+                # Shared publication is best-effort; the local entry remains
+                # authoritative so a shared-store outage never blocks issuance.
                 pass
         return True
 
@@ -870,7 +919,12 @@ class BoundCredentialCache:
                 try:
                     claimed = self._shared.try_claim(key, owner_id=owner_id)
                 except Exception:
-                    claimed = True
+                    # Fail closed on coordination outage: every worker
+                    # becoming a leader would stampede issuance. Surface as
+                    # unavailable so callers retry instead of issuing unbounded.
+                    raise BoundAccessError(
+                        BOUND_UNAVAILABLE, "shared coordination unavailable"
+                    )
                 if not claimed:
                     return False, None
             loop = asyncio.get_running_loop()
@@ -925,6 +979,7 @@ class BoundCredentialCache:
             try:
                 self._shared.release_claim(key, owner_id=owner_id)
             except Exception:
+                # Lease release is best-effort; expiry bounds a leaked claim.
                 pass
 
     async def settle_inflight(
@@ -936,11 +991,15 @@ class BoundCredentialCache:
         error: BaseException | None = None,
     ) -> None:
         async with self._guard:
+            recorded_owner, _ = self._inflight_owner.get(key, ("", 0.0))
+            # Only the currently recorded owner may remove or resolve a
+            # flight: an expired leader must not settle its successor.
+            if recorded_owner and recorded_owner != owner_id:
+                return
             future = self._inflight.pop(key, None)
             self._inflight_owner.pop(key, None)
-            current_owner = True  # settle only our own flight; lease-takeover
-            _ = (owner_id, current_owner)
             if future is None or future.done():
+                # Nothing to settle; still release our shared lease below.
                 pass
             elif error is not None:
                 future.set_exception(error)
@@ -962,6 +1021,7 @@ class BoundCredentialCache:
             try:
                 self._shared.invalidate(key)
             except Exception:
+                # Shared invalidation is best-effort; local clear already bounds reuse.
                 pass
 
 
@@ -1006,6 +1066,7 @@ class BoundCredentialAcquirer:
         max_attempts: int = 3,
         duplicate_reconciler: DuplicateReconciler | None = None,
         shared_wait_seconds: float = 30.0,
+        issuance_recorder: Callable[[BindingMetadata, Issuance], Any] | None = None,
     ) -> None:
         self._revision_reader = revision_reader
         self._issuer_for = issuer_for
@@ -1015,6 +1076,7 @@ class BoundCredentialAcquirer:
         self._max_attempts = max(1, int(max_attempts))
         self._duplicate_reconciler = duplicate_reconciler
         self._shared_wait = max(0.2, float(shared_wait_seconds))
+        self._issuance_recorder = issuance_recorder
 
     def _reconciler_for(self, issuer: Any) -> DuplicateReconciler | None:
         """Normalize any reconcile hook to ``(binding, previous_id)``.
@@ -1033,12 +1095,30 @@ class BoundCredentialAcquirer:
         if candidate is None:
             return None
 
+        # Determine the supported call shape once via signature inspection so
+        # a correctly shaped two-argument reconciler that raises TypeError
+        # internally is never invoked a second time with a different shape
+        # (which could repeat a provider side effect).
+        try:
+            import inspect as _inspect
+
+            try:
+                sig = _inspect.signature(candidate)
+                params = list(sig.parameters.values())
+                accepts_binding = len(params) >= 2 or any(
+                    p.kind == _inspect.Parameter.VAR_POSITIONAL for p in params
+                )
+            except (TypeError, ValueError):
+                accepts_binding = True
+        except Exception:
+            accepts_binding = True
+
         async def _normalized(
             binding: BindingMetadata, previous_issuance_id: str
         ) -> Issuance | None:
-            try:
+            if accepts_binding:
                 result = candidate(binding, previous_issuance_id)  # type: ignore[operator]
-            except TypeError:
+            else:
                 result = candidate(previous_issuance_id=previous_issuance_id)  # type: ignore[call-arg]
             return await _await_if_needed(result)
 
@@ -1064,25 +1144,57 @@ class BoundCredentialAcquirer:
             not isinstance(recheck, ActiveRevision)
             or recheck.status != "active"
             or recheck.credential_revision != active.credential_revision
+            or recheck.connection_revision != active.connection_revision
             or recheck.policy_revision != active.policy_revision
         ):
             raise BoundAccessError(
                 BOUND_REVOKED,
                 "binding revoked or rotated during issuance; discarding",
             )
+        # Copy issuance expiry into the binding so cache hits can expire
+        # without retaining the raw material elsewhere.
+        effective_binding = binding
+        if issuance.expires_at is not None:
+            effective_binding = binding.model_copy(
+                update={"expiresAt": issuance.expires_at.isoformat()}
+            )
+        # Persist issuance evidence before exposing material: a crash after
+        # return must leave an authoritative audit record.
+        if self._issuance_recorder is not None:
+            await _await_if_needed(
+                self._issuance_recorder(effective_binding, issuance)
+            )
         credential = EphemeralCredential(issuance.material)
         entry = _CacheEntry(
-            binding=binding, credential=credential, generation=binding.generation
+            binding=effective_binding,
+            credential=credential,
+            generation=effective_binding.generation,
         )
         published = await self._cache.publish(
-            key, entry, generation=binding.generation
+            key, entry, generation=effective_binding.generation
         )
         if not published:
-            # A newer generation won concurrently; use ours directly
-            # without polluting the cache.
-            pass
+            # A newer generation won concurrently; discard the losing
+            # issuance and bind the shared winner instead of exposing stale
+            # material. The local losing copy never enters the cache.
+            entry.credential.clear()
+            self._cache.invalidate(key)
+            winner = await self._cache.get(key)
+            if winner is not None and not winner.credential.cleared:
+                await self._cache.settle_inflight(
+                    key, owner_id=leader_id, entry=winner
+                )
+                return AcquiredCredential(
+                    binding=winner.binding,
+                    credential=EphemeralCredential(
+                        winner.credential.use_now(bytes)
+                    ),
+                )
+            raise BoundAccessError(
+                BOUND_ISSUER_FAILED, "lost generation fencing; retry"
+            )
         await self._cache.settle_inflight(key, owner_id=leader_id, entry=entry)
-        return AcquiredCredential(binding=binding, credential=credential)
+        return AcquiredCredential(binding=effective_binding, credential=credential)
 
     def _binding_for(
         self, request: AcquisitionRequest, *, active: ActiveRevision, generation: int
@@ -1116,6 +1228,7 @@ class BoundCredentialAcquirer:
             generation=generation,
             adapterKind=active.adapter_kind,
             accessMode=snapshot.access_mode,
+            executionOwner=(request.execution_owner or "").strip(),
         )
 
     def _renewal_key(
@@ -1125,6 +1238,8 @@ class BoundCredentialAcquirer:
             endpoint=snapshot.endpoint,
             connection_revision=active.connection_revision,
             credential_revision=active.credential_revision,
+            policy_revision=snapshot.policy_revision,
+            role=snapshot.role,
             route_id=snapshot.route_id,
             operations=snapshot.operations,
             execution_owner=owner,
@@ -1136,6 +1251,19 @@ class BoundCredentialAcquirer:
         now = datetime.now(timezone.utc)
         effective = issuance.expires_at - timedelta(seconds=self._margin + self._skew)
         return effective > now
+
+    def _binding_expired(self, binding: BindingMetadata) -> bool:
+        """True when a cached binding carries an expired issuance."""
+        if not binding.expires_at:
+            return False
+        try:
+            expires = datetime.fromisoformat(binding.expires_at)
+            if expires.tzinfo is None:
+                expires = expires.replace(tzinfo=timezone.utc)
+        except ValueError:
+            return True
+        effective = expires - timedelta(seconds=self._margin + self._skew)
+        return effective <= datetime.now(timezone.utc)
 
     def _verify_issuance(
         self, *, issuance: Issuance, binding: BindingMetadata
@@ -1187,6 +1315,10 @@ class BoundCredentialAcquirer:
                 BOUND_STALE_REVISION,
                 "admitted credential revision is stale; re-admit the attempt",
             )
+        if active.connection_revision != snapshot.connection_policy_revision:
+            raise BoundAccessError(
+                BOUND_STALE_REVISION, "connection revision changed; re-admit the attempt"
+            )
         if active.policy_revision != snapshot.policy_revision:
             raise BoundAccessError(
                 BOUND_STALE_REVISION, "policy revision changed; re-admit the attempt"
@@ -1196,12 +1328,27 @@ class BoundCredentialAcquirer:
         cached = await self._cache.get(key)
         if cached is not None:
             # Cached entries already passed post-issuance verification for the
-            # identical renewal identity; revalidate liveness only.
-            if cached.binding.credential_revision != active.credential_revision:
+            # identical renewal identity; revalidate revisions and expiry.
+            if (
+                cached.binding.credential_revision != active.credential_revision
+                or cached.binding.connection_revision != active.connection_revision
+                or cached.binding.policy_revision != snapshot.policy_revision
+            ):
+                self._cache.invalidate(key)
+            elif self._binding_expired(cached.binding):
                 self._cache.invalidate(key)
             else:
+                # Preserve the current operation identity: the cached binding
+                # carries the first request's operation_id, so re-attribute
+                # telemetry/client construction to this operation.
+                binding = cached.binding.model_copy(
+                    update={"operationId": request.operation_id}
+                )
+                credential = EphemeralCredential(
+                    cached.credential.use_now(bytes)
+                )
                 return AcquiredCredential(
-                    binding=cached.binding, credential=cached.credential, cache_hit=True
+                    binding=binding, credential=credential, cache_hit=True
                 )
 
         # A default change cannot reroute an admitted attempt: the key above
@@ -1224,8 +1371,14 @@ class BoundCredentialAcquirer:
                     raise BoundAccessError(
                         BOUND_UNAVAILABLE, "shared renewal produced no credential"
                     )
+                # Copy material per consumer so release_use() for one call
+                # never clears a credential still held by another call.
                 return AcquiredCredential(
-                    binding=entry.binding, credential=entry.credential, cache_hit=True
+                    binding=entry.binding.model_copy(
+                        update={"operationId": request.operation_id}
+                    ),
+                    credential=EphemeralCredential(entry.credential.use_now(bytes)),
+                    cache_hit=True,
                 )
             # Cross-worker follower: a shared-store leader holds the lease.
             # Await its publication instead of stampeding a second issuance.
@@ -1240,8 +1393,12 @@ class BoundCredentialAcquirer:
                         BOUND_UNAVAILABLE, "shared renewal produced no credential"
                     )
                 return AcquiredCredential(
-                    binding=shared_entry.binding,
-                    credential=shared_entry.credential,
+                    binding=shared_entry.binding.model_copy(
+                        update={"operationId": request.operation_id}
+                    ),
+                    credential=EphemeralCredential(
+                        shared_entry.credential.use_now(bytes)
+                    ),
                     cache_hit=True,
                 )
             # Recheck the local cache (leader may have published locally
@@ -1250,8 +1407,12 @@ class BoundCredentialAcquirer:
             cached_retry = await self._cache.get(key)
             if cached_retry is not None:
                 return AcquiredCredential(
-                    binding=cached_retry.binding,
-                    credential=cached_retry.credential,
+                    binding=cached_retry.binding.model_copy(
+                        update={"operationId": request.operation_id}
+                    ),
+                    credential=EphemeralCredential(
+                        cached_retry.credential.use_now(bytes)
+                    ),
                     cache_hit=True,
                 )
             is_leader, waiter = await self._cache.join_or_lead(
@@ -1271,7 +1432,11 @@ class BoundCredentialAcquirer:
                         BOUND_UNAVAILABLE, "shared renewal produced no credential"
                     )
                 return AcquiredCredential(
-                    binding=entry.binding, credential=entry.credential, cache_hit=True
+                    binding=entry.binding.model_copy(
+                        update={"operationId": request.operation_id}
+                    ),
+                    credential=EphemeralCredential(entry.credential.use_now(bytes)),
+                    cache_hit=True,
                 )
 
         # Leader path: no cache/database lock is held during network issuance;
@@ -1287,6 +1452,16 @@ class BoundCredentialAcquirer:
             try:
                 issuance = await _await_if_needed(issuer(binding))
             except asyncio.CancelledError:
+                # Settle our flight so local followers are not blocked
+                # forever, then release only our claim and re-raise.
+                await self._cache.settle_inflight(
+                    key,
+                    owner_id=leader_id,
+                    entry=None,
+                    error=BoundAccessError(
+                        BOUND_UNAVAILABLE, "renewal leader cancelled"
+                    ),
+                )
                 raise
             except BoundAccessError as exc:
                 last_error = exc
@@ -1347,6 +1522,14 @@ class BoundCredentialAcquirer:
                     issuance=issuance,
                 )
             except asyncio.CancelledError:
+                await self._cache.settle_inflight(
+                    key,
+                    owner_id=leader_id,
+                    entry=None,
+                    error=BoundAccessError(
+                        BOUND_UNAVAILABLE, "renewal leader cancelled"
+                    ),
+                )
                 raise
             except BoundAccessError as exc:
                 last_error = exc
@@ -1378,6 +1561,8 @@ class BoundCredentialAcquirer:
             endpoint=binding.endpoint,
             connection_revision=binding.connection_revision,
             credential_revision=binding.credential_revision,
+            policy_revision=binding.policy_revision,
+            role=binding.role,
             route_id=binding.route_id,
             operations=binding.operations,
             execution_owner=owner,
@@ -1413,8 +1598,9 @@ class BoundCredentialAcquirer:
     def release_use(self, acquired: AcquiredCredential) -> None:
         """Release one use/generation without revoking shared issuance (R7).
 
-        Only local material belonging to this generation is cleared when no
-        other cache entry references it.  Provider-side revocation and
+        Each acquisition holds a private ``EphemeralCredential`` copy, so
+        clearing here never clears a credential still held by another
+        concurrent call or the cached entry.  Provider-side revocation and
         connection disable are separate explicit operations below; a run
         completing never revokes a long-lived PAT.
         """
@@ -1463,12 +1649,16 @@ def make_bound_client(
 
     Validates binding ownership, role, operations, and revisions.  The digest
     is treated as an identifier only: a guessed handle without matching
-    principal/policy/operation context is rejected.
+    principal/policy/operation context is rejected.  The binding records the
+    acquiring execution owner and the handle is non-transferable: only that
+    owner may use it.
     """
 
     owner = (execution_owner or "").strip()
     if not owner or not authenticate_execution(owner):
         raise BoundAccessError(BOUND_DENIED, "requesting execution is not authenticated")
+    if (binding.execution_owner or "").strip() != owner:
+        raise BoundAccessError(BOUND_DENIED, "binding owned by another execution")
     if expected_principal and expected_principal.strip() != binding.principal_ref:
         raise BoundAccessError(BOUND_DENIED, "binding principal mismatch")
     if expected_policy_revision is not None and (
@@ -1507,9 +1697,24 @@ def verify_repository_identity_through_selection(
 
 
 def safe_error_dto(exc: BoundAccessError, *, binding: BindingMetadata | None = None) -> BoundErrorDTO:
+    # Never copy issuer-supplied messages verbatim: an injected issuer may
+    # embed provider responses or credential fragments in BoundAccessError.
+    # Project to a code-keyed safe message plus metadata only.
+    safe_messages = {
+        BOUND_SELECTION_REQUIRED: "selection required",
+        BOUND_AMBIGUOUS: "ambiguous authority",
+        BOUND_DENIED: "access denied",
+        BOUND_UNAVAILABLE: "credential unavailable",
+        BOUND_REVOKED: "credential revoked",
+        BOUND_DISABLED: "connection disabled",
+        BOUND_SCOPE_MISMATCH: "scope mismatch",
+        BOUND_STALE_REVISION: "stale revision",
+        BOUND_ISSUER_FAILED: "issuer failed",
+        BOUND_SCRATCH_EXCLUDED: "scratch excluded",
+    }
     return BoundErrorDTO(
         code=exc.code,
-        message=str(exc),
+        message=f"{exc.code}: {safe_messages.get(exc.code, 'request failed')}",
         bindingDigest=binding.binding_digest if binding else None,
         connectionId=binding.connection_id if binding else None,
         operationId=binding.operation_id if binding else None,

@@ -606,7 +606,7 @@ async def test_shared_store_two_thread_renewal_is_single_flight() -> None:
 
         try:
             _aio.run(_run())
-        except BaseException as exc:  # noqa: BLE001 - recorded for assertion
+        except Exception as exc:  # Worker failures are assertion inputs, not control flow.
             errors.append(exc)
 
     threads = [threading.Thread(target=_worker, args=(f"w{i}",)) for i in range(2)]
@@ -634,6 +634,8 @@ async def test_shared_generation_fencing_rejects_stale_publisher() -> None:
         endpoint="https://github.com",
         connection_revision=2,
         credential_revision=3,
+        policy_revision=2,
+        role="publisher",
         route_id="id:https://github.com#repo-id-1",
         operations=["read"],
         execution_owner="exec:g",
@@ -643,9 +645,7 @@ async def test_shared_generation_fencing_rejects_stale_publisher() -> None:
     assert second_gen == first_gen + 1
     assert shared.publish(
         key,
-        binding=_snapshot_for(_connection("conn-g")).model_dump  # placeholder
-        if False
-        else _acquire_binding_for_test(),
+        binding=_acquire_binding_for_test(),
         material=b"newer",
         generation=second_gen,
     )
@@ -680,6 +680,7 @@ def _acquire_binding_for_test() -> BindingMetadata:
         issuanceId="iss:test",
         generation=2,
         adapterKind="expiring",
+        executionOwner="exec:g",
     )
 
 
@@ -707,7 +708,7 @@ async def test_canceled_waiter_does_not_invalidate_credential(adapter_kind: str)
     await asyncio.sleep(0)
     waiter.cancel()
     with pytest.raises(asyncio.CancelledError):
-        await waiter
+        _ = await waiter
     release.set()
     done = await leader
     assert done.binding.connection_id == "conn-cancel"
@@ -768,7 +769,7 @@ async def test_state_survives_restart_with_same_identity(adapter_kind: str) -> N
         AcquisitionRequest(snapshot=snapshot, execution_owner="exec:r")
     )
     # New acquirer instance over the same durable cache/identity: cache hit.
-    issuer2, _ = _issuer_and_counter(adapter_kind) if False else (issuer, None)
+    issuer2 = issuer
     acquirer2 = BoundCredentialAcquirer(
         revision_reader=_reader(conn, adapter_kind=adapter_kind),
         issuer_for=lambda _kind: issuer2,
@@ -1156,6 +1157,8 @@ async def test_cache_key_includes_full_renewal_identity() -> None:
         endpoint="https://github.com",
         connection_revision=2,
         credential_revision=3,
+        policy_revision=2,
+        role="publisher",
         route_id="id:https://github.com#repo-id-1",
         operations=["read", "write"],
         execution_owner="exec:1",
@@ -1166,6 +1169,13 @@ async def test_cache_key_includes_full_renewal_identity() -> None:
     )
     assert key != BoundCredentialCache.renewal_key_for(
         **{**base, "credential_revision": 4}
+    )
+    # Policy authority is part of the renewal identity.
+    assert key != BoundCredentialCache.renewal_key_for(
+        **{**base, "policy_revision": 3}
+    )
+    assert key != BoundCredentialCache.renewal_key_for(
+        **{**base, "role": "reader"}
     )
     # Display-name-only differences do not alias: route identity is in the key.
     assert key != BoundCredentialCache.renewal_key_for(
