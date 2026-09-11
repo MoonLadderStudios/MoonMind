@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import re
-from collections.abc import Awaitable, Callable, Mapping
+from collections.abc import Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -11,6 +11,11 @@ import httpx
 from markdown_it import MarkdownIt
 
 from moonmind.workflows.adapters.github_service import GitHubService
+from moonmind.workflows.temporal.github_issue_admission import (
+    ENTRYPOINT_SEARCH,
+    admit_for_entrypoint,
+    recandidate_after_abandon,
+)
 from moonmind.workflows.temporal.github_issue_lifecycle import (
     ELIGIBLE_SETTLED_STATES,
     SETTLED_RECOVERY_NEEDED,
@@ -291,6 +296,13 @@ async def resolve_issue(
     blockers_from_issue: Callable[[Mapping[str, Any]], Awaitable[list[dict[str, Any]]]],
     attempt_evidence_resolver: Callable[[Mapping[str, Any]], Awaitable[Mapping[str, Any] | None]] | None = None,
     recovery_handoff: Mapping[str, Any] | None = None,
+    attempt_context: Mapping[str, Any] | None = None,
+    pr_identities: Sequence[Mapping[str, Any]] | None = None,
+    retry_policy: Mapping[str, Any] | None = None,
+    reads_complete: Mapping[str, Any] | None = None,
+    active_attempt_comments: Sequence[Mapping[str, Any]] | None = None,
+    own_announcement_abandoned: bool | None = None,
+    writers_settled: bool | None = None,
 ) -> tuple[int | None, dict[str, Any]]:
     """Select the best search match, or first unblocked open issue, within 500 rows.
 
@@ -303,12 +315,42 @@ async def resolve_issue(
     (``predecessor_stopped`` plus ``handoff_usable``): without it the later
     start transition denies the continuation deterministically, so the scan
     passes the candidate over instead of returning it.
+
+    Every surviving candidate additionally passes the one shared exact-issue
+    admission boundary used by explicit/orchestration/continuation paths
+    (issue #4178) with its pinned repository/issue identity. Per-candidate
+    attempt evidence comes from ``attempt_evidence_resolver`` when supplied,
+    otherwise from the caller-supplied ``attempt_context``; the remaining
+    Req-1 bundle entries (blockers on the fallback-scan path, PR identities,
+    retry policy, read completeness, validated attempt comments) are threaded
+    through when the caller supplies them. Incomplete pagination or failed
+    reads remain unknown evidence upstream of this function and never an
+    empty owner set.
     """
 
     if not re.fullmatch(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+", repository):
         raise ValueError(
             "GitHub issue search requires an explicit owner/repository scope."
         )
+    # Req 4 recandidate gate (issue #4178): a search may consider another
+    # candidate only after its own abandoned announcement and writers are
+    # conclusively settled. Ordinary first selections pass no signals and
+    # proceed; a present-but-unsettled recandidate context blocks selection
+    # rather than silently scanning on.
+    if own_announcement_abandoned is not None or writers_settled is not None:
+        gate = recandidate_after_abandon(
+            own_announcement_abandoned=bool(own_announcement_abandoned),
+            writers_settled=bool(writers_settled),
+        )
+        if not gate["allowed"]:
+            return None, {
+                "searchEvidence": {
+                    "fallbackScanning": not query,
+                    "pagesExamined": 0,
+                    "candidatesExamined": 0,
+                },
+                "error": gate["summary"],
+            }
     evidence: dict[str, Any] = {
         "searchEvidence": {
             "fallbackScanning": not query,
@@ -397,10 +439,36 @@ async def resolve_issue(
                 ):
                     continue
                 if attempt_evidence_resolver is not None:
-                    attempt_context = await attempt_evidence_resolver(normalized)
-                    if attempt_evidence_blocks_admission(attempt_context):
+                    candidate_attempt_context: Mapping[str, Any] | None = await attempt_evidence_resolver(normalized)
+                    if attempt_evidence_blocks_admission(candidate_attempt_context):
                         continue
-                if not query and await blockers_from_issue(normalized):
+                else:
+                    candidate_attempt_context = attempt_context
+                # Same shared exact-issue admission boundary as explicit /
+                # orchestration / continuation paths (issue #4178): the
+                # search entrypoint admits with its pinned identity plus the
+                # full Req-1 bundle. Trusted blocker evidence is resolved per
+                # candidate and threaded into the admit decision itself (not a
+                # post-hoc skip): a blocked candidate is denied as
+                # blocked_prerequisite on both the query and fallback paths.
+                candidate_blockers: list[dict[str, Any]] | None = await blockers_from_issue(
+                    normalized
+                )
+                shared = admit_for_entrypoint(
+                    ENTRYPOINT_SEARCH,
+                    repository=repository,
+                    issue_number=int(candidate["number"]),
+                    issue={"state": "open", "labels": normalized["labels"]},
+                    attempt_context=candidate_attempt_context,
+                    blockers=candidate_blockers,
+                    pr_identities=pr_identities,
+                    retry_policy=retry_policy,
+                    reads_complete=reads_complete,
+                    active_attempt_comments=active_attempt_comments,
+                )
+                if not shared.allowed:
+                    continue
+                if candidate_blockers:
                     continue
                 return candidate["number"], evidence
             if len(candidates) < 100:
