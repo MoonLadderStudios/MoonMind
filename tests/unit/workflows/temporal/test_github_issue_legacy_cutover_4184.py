@@ -274,10 +274,13 @@ def test_canonical_handoff_format_is_parsed_first() -> None:
         activity="active",
     )
     body = canonical.render_attempt_comment(handoff)
-    assessment = _assess(comments=[{"body": body, "author_login": "moonmind-bot"}])
+    assessment = _assess(
+        issue={"state": "open", "labels": ["status: in-progress"]},
+        comments=[{"body": body, "author_login": "moonmind-bot"}],
+    )
     assert assessment.complete is True
     assert cutover.FINDING_MISSING_HISTORY not in _finding_codes(assessment)
-    assert assessment.findings, "canonical handoff must be recognized, not reported as manual/unknown"
+    assert cutover.FINDING_MANUAL_STATUS not in _finding_codes(assessment)
 
 
 def test_ordinary_discussion_without_handoff_reports_missing_history() -> None:
