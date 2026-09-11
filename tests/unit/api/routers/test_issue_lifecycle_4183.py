@@ -29,11 +29,13 @@ def _regular_user() -> SimpleNamespace:
     return SimpleNamespace(id="user-1", email="user@example.com", is_superuser=False)
 
 
-def _client(user: SimpleNamespace | None) -> TestClient:
+def _client(user: SimpleNamespace | None, github_service: object | None = None) -> TestClient:
     app = FastAPI()
     app.include_router(issue_lifecycle_router.router)
     if user is not None:
         app.dependency_overrides[get_current_user()] = lambda: user
+    if github_service is not None:
+        app.dependency_overrides[issue_lifecycle_router.get_github_service] = lambda: github_service
     return TestClient(app, raise_server_exceptions=False)
 
 
@@ -183,3 +185,112 @@ def test_validate_replays_duplicate_idempotency_keys_without_effects() -> None:
     payload = response.json()
     assert payload["allowed"] is True
     assert payload["verdict"]["code"] == "duplicate_idempotent_replay"
+
+
+class _FakeGithubService:
+    def __init__(self, result: dict | None = None) -> None:
+        self.calls: list[dict] = []
+        self.result = result or {"ok": True, "reasonCode": "created", "summary": "Created issue comment 1.", "commentId": 1}
+
+    async def create_issue_comment(self, *, repo: str, issue_number: int, body: str) -> dict:
+        self.calls.append({"repo": repo, "issue_number": issue_number, "body": body})
+        return dict(self.result)
+
+
+def test_submit_hold_publishes_decision_comment_through_github_boundary() -> None:
+    fake = _FakeGithubService()
+    client = _client(_regular_user(), github_service=fake)
+    response = client.post(
+        "/api/v1/executions/issue-lifecycle/actions/submit",
+        json={
+            "action": "hold_processing",
+            "repository": REPO,
+            "issue_number": ISSUE_NUMBER,
+            "request": {"idempotency_key": "submit-hold-1"},
+            "live_issue": _issue("status: in-progress"),
+            "reason": "operator pause",
+        },
+    )
+    assert response.status_code == 200, response.text
+    payload = response.json()
+    assert payload["allowed"] is True
+    assert payload["decision"]["operator"] == "user-1"
+    assert payload["decision"]["hold_released"] is False
+    assert "Decision record" in payload["comment"]
+    publication = payload["publication"]
+    assert publication["attempted"] is True
+    assert publication["published"] is True
+    assert publication["status"] == "published"
+    assert publication["commentId"] == 1
+    assert len(fake.calls) == 1
+    assert fake.calls[0]["repo"] == REPO
+    assert fake.calls[0]["issue_number"] == ISSUE_NUMBER
+    assert "Next action" in fake.calls[0]["body"]
+
+
+def test_submit_rejects_missing_live_evidence_as_unknown_not_success() -> None:
+    fake = _FakeGithubService()
+    client = _client(_regular_user(), github_service=fake)
+    response = client.post(
+        "/api/v1/executions/issue-lifecycle/actions/submit",
+        json={
+            "action": "acknowledge_incident",
+            "repository": REPO,
+            "issue_number": ISSUE_NUMBER,
+            "request": {"idempotency_key": "submit-outage-1"},
+            "reason": "seen during outage",
+        },
+    )
+    assert response.status_code == 200, response.text
+    payload = response.json()
+    # Missing live evidence is submit-rejected as github_unavailable (honest
+    # pending/unknown, never a false successful remote update) and nothing
+    # is published.
+    assert payload["allowed"] is False
+    assert payload["verdict"]["code"] == "github_unavailable"
+    assert fake.calls == []
+
+
+def test_submit_suppresses_publication_on_duplicate_replay() -> None:
+    fake = _FakeGithubService()
+    client = _client(_regular_user(), github_service=fake)
+    response = client.post(
+        "/api/v1/executions/issue-lifecycle/actions/submit",
+        json={
+            "action": "acknowledge_incident",
+            "repository": REPO,
+            "issue_number": ISSUE_NUMBER,
+            "request": {"idempotency_key": "submit-dup-1"},
+            "live_issue": _issue("status: needs-attention"),
+            "seen_idempotency_keys": ["submit-dup-1"],
+            "reason": "seen",
+        },
+    )
+    assert response.status_code == 200, response.text
+    payload = response.json()
+    assert payload["allowed"] is True
+    assert payload["verdict"]["code"] == "duplicate_idempotent_replay"
+    assert payload["publication"]["status"] == "duplicate_suppressed"
+    assert fake.calls == []
+
+
+def test_submit_reports_pending_on_unknown_publication_result() -> None:
+    fake = _FakeGithubService(result={"ok": False, "reasonCode": "outcome_unknown", "summary": "lost response"})
+    client = _client(_regular_user(), github_service=fake)
+    response = client.post(
+        "/api/v1/executions/issue-lifecycle/actions/submit",
+        json={
+            "action": "hold_processing",
+            "repository": REPO,
+            "issue_number": ISSUE_NUMBER,
+            "request": {"idempotency_key": "submit-unknown-1"},
+            "live_issue": _issue("status: in-progress"),
+            "reason": "operator pause",
+        },
+    )
+    assert response.status_code == 200, response.text
+    payload = response.json()
+    assert payload["allowed"] is True
+    assert payload["publication"]["published"] is False
+    assert payload["publication"]["status"] == "pending"
+    assert payload["publication"]["reason"] == "outcome_unknown"
