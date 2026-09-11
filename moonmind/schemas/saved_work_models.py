@@ -86,6 +86,34 @@ _RUNTIME_CREDENTIAL_PATH_HINTS: tuple[str, ...] = (
     "managed_runs/",
 )
 
+# Redaction sentinels emitted by ``moonmind.utils.logging.redact_sensitive_text``
+# (``[REDACTED]``, ``[REDACTED_PRIVATE_KEY]``, ...). An assignment-shaped
+# match whose value is exactly one of these sentinels carries no secret and
+# must not fail checkpoint capture of an already-redacted tree. Mirrors the
+# exemption in ``moonmind.security.outbound_scan``.
+_REDACTED_SENTINEL_VALUE_PATTERN = re.compile(
+    r"^\[REDACTED(?:_[A-Z0-9]+)?\]$", re.IGNORECASE
+)
+
+
+def _credential_match_is_benign(match_text: str) -> bool:
+    """Return True when an assignment-shaped match carries no secret material."""
+    separator = max(match_text.rfind("="), match_text.rfind(":"))
+    value = match_text[separator + 1 :].strip() if separator != -1 else ""
+    quoted = len(value) >= 2 and (
+        (value.startswith('"') and value.endswith('"'))
+        or (value.startswith("'") and value.endswith("'"))
+    )
+    inner = value[1:-1].strip() if quoted else value
+    if _REDACTED_SENTINEL_VALUE_PATTERN.match(inner):
+        return True
+    if not quoted and ("(" in value or ")" in value):
+        # Credential-handling code such as ``token = str(explicit_token)``
+        # is a call expression, not a credential value. Bare secret values
+        # (tokens, base64, hex) never contain parentheses.
+        return True
+    return False
+
 
 def resolve_saved_work_format_profile(
     *,
@@ -468,8 +496,11 @@ def parse_git_diff_raw_to_deltas(
 
 def _export_findings_in_text(text: str, location: str) -> int:
     findings = 0
-    for pattern in _CREDENTIAL_PATTERNS:
-        findings += len(pattern.findall(text))
+    for index, pattern in enumerate(_CREDENTIAL_PATTERNS):
+        for match in pattern.finditer(text):
+            if index == 0 and _credential_match_is_benign(match.group(0)):
+                continue
+            findings += 1
     for hint in _RUNTIME_CREDENTIAL_PATH_HINTS:
         if hint in location:
             findings += 1
@@ -477,14 +508,23 @@ def _export_findings_in_text(text: str, location: str) -> int:
     return findings
 
 
+# Bytes of overlap retained between streamed scan windows. Any single secret
+# construct no longer than this overlap is fully contained in at least one
+# window even when it spans a chunk boundary. 8 KiB covers the largest
+# supported construct (a multi-kilobyte PEM private-key block) with margin,
+# while staying negligible next to the multi-megabyte spool chunk size.
+_SCAN_CHUNK_OVERLAP_BYTES = 8 * 1024
+
+
 def scan_saved_work_export_stream(
     chunks: Sequence[bytes] | Any, *, export_digest: str, location: str
 ) -> dict[str, Any]:
     """Stream confidentiality/secret controls over exported bytes in chunks.
 
-    Chunk windows overlap by 256 bytes so credential-shaped content spanning
-    a chunk boundary is still detected without holding the whole export in
-    memory. Same evidence contract as :func:`scan_saved_work_export`.
+    Chunk windows overlap by ``_SCAN_CHUNK_OVERLAP_BYTES`` so
+    credential-shaped content spanning a chunk boundary is still detected
+    without holding the whole export in memory. Same evidence contract as
+    :func:`scan_saved_work_export`.
     """
     findings = 0
     decodable = True
@@ -498,7 +538,7 @@ def scan_saved_work_export_stream(
         findings += _export_findings_in_text(
             window.decode("utf-8", errors="ignore"), location
         )
-        tail = window[-256:]
+        tail = window[-_SCAN_CHUNK_OVERLAP_BYTES:]
     if findings:
         return {
             "disposition": "blocked",
