@@ -51,6 +51,10 @@ def extract_skipped_overlap(description: Any) -> int | None:
                 "skipped_overlap",
                 "numSkippedOverlap",
                 "num_skipped_overlap",
+                # Temporal Python SDK ScheduleDescription.info field and its
+                # serialized camel-case form.
+                "numActionsSkippedOverlap",
+                "num_actions_skipped_overlap",
             ):
                 if key in info:
                     candidates.append(info[key])
@@ -70,6 +74,10 @@ def extract_skipped_overlap(description: Any) -> int | None:
                 "skippedOverlap",
                 "num_skipped_overlap",
                 "numSkippedOverlap",
+                # Temporal Python SDK ScheduleDescription.info field and its
+                # serialized camel-case form.
+                "num_actions_skipped_overlap",
+                "numActionsSkippedOverlap",
             ):
                 value = getattr(info, attr, None)
                 if value is not None:

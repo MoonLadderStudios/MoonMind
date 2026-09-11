@@ -34,6 +34,28 @@ def test_extract_skipped_overlap_supports_dict_and_object_shapes() -> None:
     assert extract_skipped_overlap(Description()) == 7
 
 
+def test_extract_skipped_overlap_supports_temporal_sdk_field_names() -> None:
+    # The pinned Temporal Python SDK exposes the counter on
+    # ScheduleDescription.info as num_actions_skipped_overlap (serialized
+    # camel-case form numActionsSkippedOverlap); either spelling must read.
+    assert (
+        extract_skipped_overlap({"info": {"num_actions_skipped_overlap": 12}})
+        == 12
+    )
+    assert (
+        extract_skipped_overlap({"info": {"numActionsSkippedOverlap": 13}})
+        == 13
+    )
+
+    class SdkInfo:
+        num_actions_skipped_overlap = 14
+
+    class SdkDescription:
+        info = SdkInfo()
+
+    assert extract_skipped_overlap(SdkDescription()) == 14
+
+
 def test_growing_skipped_overlap_produces_one_diagnostic() -> None:
     outcome = evaluate_schedule_skipped_overlap(
         schedule_id="mm-schedule:abc",

@@ -252,14 +252,16 @@ def profile_bound_retry_start_to_close_seconds(
     first_stc_seconds: int,
     elapsed_seconds: float,
     minimum_seconds: int = PROFILE_BOUND_RETRY_MINIMUM_SECONDS,
-) -> int:
+) -> int | None:
     """Return the StartToClose budget for the second profile-bound attempt.
 
     MoonLadderStudios/MoonMind#4226: the retry inherits the parent's
     remaining ScheduleToClose budget instead of a fresh full window, so a
     dead first attempt cannot cost another full 6h. The result is clamped
-    to at least ``minimum_seconds`` so a late failure still gets one
-    bounded probe rather than a zero-second activity.
+    to at least ``minimum_seconds`` while budget remains. When the first
+    attempt already consumed the whole budget (``remaining <= 0``), this
+    returns ``None`` so the caller propagates the original failure instead
+    of launching a probe after the lane's execution authority expired.
     """
 
     try:
@@ -273,6 +275,8 @@ def profile_bound_retry_start_to_close_seconds(
     if elapsed < 0:
         elapsed = 0.0
     remaining = first - int(elapsed)
+    if remaining <= 0:
+        return None
     return max(int(minimum_seconds), remaining)
 OMNIGENT_SESSION_SUPERVISOR_PATCH_ID = (
     "agent-run-omnigent-session-supervisor-v1"
@@ -4421,6 +4425,12 @@ class MoonMindAgentRun:
                 first_stc_seconds=stc_seconds,
                 elapsed_seconds=elapsed,
             )
+            if retry_stc is None:
+                # The first attempt consumed the whole budget: propagate the
+                # original failure so the run records a timeout instead of
+                # mutating the provider or repository after the lane's
+                # execution authority expired.
+                raise
             # One bounded continuation: attempt 2 inherits the remaining
             # budget computed above (equal to the full window when the
             # first attempt failed before the clock advanced).
