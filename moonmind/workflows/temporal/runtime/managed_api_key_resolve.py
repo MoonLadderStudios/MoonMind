@@ -160,11 +160,7 @@ async def _resolve_managed_ghcr_pull_pair() -> tuple[str | None, str | None]:
     return first
 
 
-async def resolve_ghcr_pull_credentials_for_launch(
-    environment: Mapping[str, str] | None = None,
-    *,
-    github_credential: Any | None = None,
-) -> tuple[str, str] | None:
+async def resolve_ghcr_pull_credentials_for_launch() -> tuple[str, str] | None:
     """Resolve deployment-scoped GHCR pull credentials for launch boundaries.
 
     MoonLadderStudios/MoonMind#4012: source repository/model credentials are
@@ -180,8 +176,9 @@ async def resolve_ghcr_pull_credentials_for_launch(
     - managed sessions: DinD sidecar (``docker:27``-style stock image) plus
       session images, launched via ``DockerCodexManagedSessionController``
       against the deployment Docker backend; image selection is deployment
-      configuration, auth source is this helper (explicit pair) or ambient
-      daemon config for public images only.
+      configuration, auth source is this helper via per-launch ephemeral
+      ``DOCKER_CONFIG`` (explicit pair) or an empty ephemeral config for
+      public-anonymous acquisition with no ambient fallback.
     - generic/profile-bound Omnigent: server/host images resolved to
       digest-pinned refs by ``moonmind/omnigent/bootstrap/image_resolution.py``
       (``_resolve_via_docker_pull`` / ``_image_build_identity``) via bare
@@ -217,11 +214,11 @@ async def resolve_ghcr_pull_credentials_for_launch(
     ``ValueError`` at the registry boundary. ``None`` is never a signal to try
     another identity.
 
-    The ``environment`` launch mapping and ``github_credential`` descriptor are
-    accepted for signature compatibility but are never consulted for registry
-    secrets: agent-authored launch fields, source PATs, and GitHub actor
-    lookups are not registry authentication. SecretRef *names* are read from
-    the deployment process environment only, never from the launch mapping.
+    Agent-authored launch fields, source PATs, and GitHub actor lookups are
+    not registry authentication and are not accepted here: this resolver takes
+    no launch mapping or credential descriptor. SecretRef *names* are read
+    from the deployment process environment only, never from a launch
+    mapping.
 
     Public defaults: images that are publicly readable are acquired
     anonymously (``None``) with no model/source credential, no managed-secret
@@ -239,9 +236,6 @@ async def resolve_ghcr_pull_credentials_for_launch(
     it in workflow history, logs, labels, argv, inspectable runtime env,
     heartbeats, error payloads, plans, or durable metadata.
     """
-
-    _ = environment
-    _ = github_credential
 
     user_ref = str(
         os.environ.get("MOONMIND_GHCR_PULL_USER_SECRET_REF")

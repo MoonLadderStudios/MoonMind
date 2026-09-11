@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import base64
 import hashlib
 import json
 import logging
@@ -12,6 +13,7 @@ import re
 import shlex
 import shutil
 import stat
+import tempfile
 import time
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -59,6 +61,8 @@ from moonmind.workflows.codex_session_timeouts import (
 )
 from moonmind.workflows.skills.workspace_links import cleanup_moonmind_skill_projections
 from moonmind.workflows.temporal.runtime.managed_api_key_resolve import (
+    GHCR_REGISTRY,
+    resolve_ghcr_pull_credentials_for_launch,
     resolve_github_token_for_launch,
 )
 
@@ -910,6 +914,61 @@ class DockerCodexManagedSessionController:
                 docker_config_dir,
                 exc_info=True,
             )
+
+    @staticmethod
+    def _ghcr_image_needs_isolated_config(image_ref: str) -> bool:
+        """Return whether a session image must bypass ambient Docker auth."""
+
+        return str(image_ref or "").strip().lower().startswith(
+            f"{GHCR_REGISTRY.lower()}/"
+        )
+
+    @staticmethod
+    def _materialize_ghcr_pull_config(
+        creds: tuple[str, str] | None,
+    ) -> str:
+        """Write an ephemeral Docker config dir for a GHCR session pull.
+
+        Explicit ``(user, token)`` pairs are materialized as a ``ghcr.io``
+        ``auth`` entry; ``None`` (public-anonymous) materializes an empty
+        ``auths`` object so ambient logins cannot authenticate the pull.
+        The directory is ``0700`` and ``config.json`` is ``0600``; it must
+        never be mounted into the agent container.
+        """
+
+        config_dir = tempfile.mkdtemp(prefix="moonmind-ghcr-pull-")
+        os.chmod(config_dir, stat.S_IRWXU)
+        if creds is not None:
+            user, token = creds
+            raw = f"{user}:{token}".encode()
+            auth_value = base64.b64encode(raw).decode("ascii")
+            config = {"auths": {GHCR_REGISTRY: {"auth": auth_value}}}
+        else:
+            config = {"auths": {}}
+        config_path = Path(config_dir) / "config.json"
+        fd = os.open(
+            config_path,
+            os.O_WRONLY | os.O_CREAT | os.O_TRUNC,
+            stat.S_IRUSR | stat.S_IWUSR,
+        )
+        try:
+            os.fchmod(fd, stat.S_IRUSR | stat.S_IWUSR)
+            with os.fdopen(fd, "w", encoding="utf-8") as handle:
+                json.dump(config, handle)
+        except Exception:
+            try:
+                os.close(fd)
+            except OSError:
+                pass
+            shutil.rmtree(config_dir, ignore_errors=True)
+            raise
+        return config_dir
+
+    @staticmethod
+    def _remove_ghcr_pull_config(config_dir: str | None) -> None:
+        if not config_dir:
+            return
+        shutil.rmtree(config_dir, ignore_errors=True)
 
     def _validate_launch_request(self, request: LaunchCodexManagedSessionRequest) -> None:
         self._validate_workspace_path(request.workspace_path, field_name="workspacePath")
@@ -2643,6 +2702,21 @@ class DockerCodexManagedSessionController:
             self._sidecar_agent_container_name(request.session_id),
             ignore_failure=True,
         )
+        # MoonLadderStudios/MoonMind#4012: GHCR session images never use
+        # ambient Docker auth or source PATs. Resolve the deployment-scoped
+        # GHCR pair and run this launch with an ephemeral DOCKER_CONFIG:
+        # explicit creds for private images, an empty config for
+        # public-anonymous acquisition. Non-GHCR images keep the existing
+        # backend behavior.
+        ghcr_config_dir: str | None = None
+        if self._ghcr_image_needs_isolated_config(request.image_ref):
+            try:
+                ghcr_creds = await resolve_ghcr_pull_credentials_for_launch()
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:
+                raise RuntimeError(str(exc)) from exc
+            ghcr_config_dir = self._materialize_ghcr_pull_config(ghcr_creds)
         run_command = [
             self._docker_binary,
             "run",
@@ -2676,6 +2750,7 @@ class DockerCodexManagedSessionController:
             github_broker_started = "GIT_CONFIG_GLOBAL" in session_environment
         except Exception:
             await self._github_auth_brokers.stop(request.session_id)
+            self._remove_ghcr_pull_config(ghcr_config_dir)
             raise
         docker_network = self._network_name or _managed_session_docker_network(
             session_environment
@@ -2737,11 +2812,19 @@ class DockerCodexManagedSessionController:
             if github_broker_started:
                 await self._github_auth_brokers.stop(request.session_id)
 
+        # DOCKER_CONFIG isolates registry auth for this `docker run` only;
+        # it is host-side launch state, never added to session_environment.
+        docker_run_extra_env: dict[str, str] | None = None
+        if ghcr_config_dir:
+            docker_run_extra_env = dict(container_secret_environment or {})
+            docker_run_extra_env["DOCKER_CONFIG"] = ghcr_config_dir
+        elif container_secret_environment:
+            docker_run_extra_env = dict(container_secret_environment)
         try:
             try:
                 stdout, _stderr = await self._run(
                     run_command,
-                    extra_env=container_secret_environment or None,
+                    extra_env=docker_run_extra_env,
                 )
             except RuntimeError as exc:
                 if not self._docker_name_conflict(exc, container_name):
@@ -2749,7 +2832,7 @@ class DockerCodexManagedSessionController:
                 await self._remove_container(container_name, ignore_failure=True)
                 stdout, _stderr = await self._run(
                     run_command,
-                    extra_env=container_secret_environment or None,
+                    extra_env=docker_run_extra_env,
                 )
             container_id = stdout.strip()
             if not container_id:
@@ -2760,6 +2843,12 @@ class DockerCodexManagedSessionController:
         except Exception:
             await _cleanup_failed_launch(container_id or container_name)
             raise
+        finally:
+            # The ephemeral GHCR config is only needed for the pull embedded
+            # in `docker run`; remove it before the session is usable so no
+            # registry credential lingers on the host beyond launch.
+            self._remove_ghcr_pull_config(ghcr_config_dir)
+            ghcr_config_dir = None
         try:
             await self._wait_ready(container_id=container_id)
             container_job_capability_metadata = {
