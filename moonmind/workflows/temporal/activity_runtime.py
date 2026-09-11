@@ -10898,11 +10898,13 @@ class TemporalAgentRuntimeActivities:
         # MoonLadderStudios/MoonMind#4226: surface Temporal schedule health
         # from the same operational reconcile tick. Schedule descriptions are
         # injected when the scheduler supplies them; otherwise the activity
-        # describes the watched schedules itself at this authorized activity
-        # boundary (workflows stay deterministic) and durably tracks
-        # counters/streaks in a best-effort state file so the production
-        # `{}` tick still observes SkippedOverlap growth. Failures are
-        # auxiliary and must not overwrite primary reattachment success.
+        # describes the explicitly watched schedules itself at this
+        # authorized activity boundary (workflows stay deterministic) and
+        # durably tracks counters/streaks in a best-effort state file. The
+        # production reconcile schedule carries its own ID in
+        # `scheduleIdsToWatch` so its SkippedOverlap growth is observed.
+        # Failures are auxiliary and must not overwrite primary reattachment
+        # success.
         try:
             from moonmind.workflows.temporal.schedule_health import (
                 evaluate_reconcile_schedules,
@@ -10915,18 +10917,17 @@ class TemporalAgentRuntimeActivities:
                 else {}
             )
             if not descriptions:
+                # Explicit opt-in only: describe the watched schedules when
+                # the scheduler asks for it via `scheduleIdsToWatch` (the
+                # production reconcile schedule carries its own ID). Plain
+                # `{}` ticks with no reachable Temporal server leave the
+                # bounded reattach summary untouched.
                 watched = action_payload.get("scheduleIdsToWatch")
                 watch_ids: list[str] = []
                 if isinstance(watched, (list, tuple)):
                     watch_ids = [
                         str(item).strip() for item in watched if str(item).strip()
                     ]
-                if not watch_ids:
-                    # Self-monitoring default: the production reconcile
-                    # schedule itself uses OverlapPolicy=Skip, so its own
-                    # SkippedOverlap growth is actionable evidence that the
-                    # operational sweeper is starving.
-                    watch_ids = ["mm-operational:managed-session-reconcile"]
                 for schedule_id in watch_ids:
                     try:
                         described = await self._describe_operational_schedule(
@@ -10936,6 +10937,11 @@ class TemporalAgentRuntimeActivities:
                         continue
                     if described is not None:
                         descriptions[schedule_id] = described
+            if not descriptions:
+                # No schedule health input available (unit-test `{}` ticks
+                # with no reachable Temporal server, for example): leave the
+                # bounded reattach summary untouched.
+                return summary
             raw_previous = action_payload.get("scheduleSkippedPrevious")
             raw_alerted = action_payload.get("scheduleSkippedLastAlerted")
             raw_streaks = action_payload.get("scheduleSkippedStreakPrevious")
