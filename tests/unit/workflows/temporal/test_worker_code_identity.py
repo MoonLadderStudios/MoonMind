@@ -256,6 +256,17 @@ def test_readiness_body_reports_stale_code(monkeypatch: pytest.MonkeyPatch) -> N
     assert body["staleCode"]["currentRevision"].startswith("checkout-rev")
 
 
+def _fetch_readyz_no_proxy(port: int, timeout: float = 5.0) -> tuple[int | None, dict[str, Any]]:
+    """Fetch /readyz bypassing proxy env (localhost must never go via squid)."""
+
+    opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+    try:
+        raw = opener.open(f"http://127.0.0.1:{port}/readyz", timeout=timeout).read()
+        return None, json.loads(raw)
+    except urllib.error.HTTPError as exc:
+        return exc.code, json.loads(exc.read())
+
+
 @pytest.mark.asyncio
 async def test_readyz_serves_503_while_stale_and_200_after_restart(
     monkeypatch: pytest.MonkeyPatch, tmp_path
@@ -281,13 +292,7 @@ async def test_readyz_serves_503_while_stale_and_200_after_restart(
     loop = asyncio.get_running_loop()
 
     def _get() -> tuple[int | None, dict[str, Any]]:
-        try:
-            raw = urllib.request.urlopen(
-                f"http://127.0.0.1:{port}/readyz", timeout=5
-            ).read()
-            return None, json.loads(raw)
-        except urllib.error.HTTPError as exc:
-            return exc.code, json.loads(exc.read())
+        return _fetch_readyz_no_proxy(port)
 
     try:
         code, body = await loop.run_in_executor(None, _get)
@@ -351,8 +356,11 @@ def test_base_adapter_builders_stamp_worker_code_revision(
         provider_status="ACTIVE",
         normalized_status="running",
     )
-    assert handle.worker_code_revision == "worker-rev"
-    assert handle.metadata["workerCodeRevision"] == "worker-rev"
+    # The checkout may be dirty (e.g. remediation edits in flight), in which
+    # case the revision carries a '-dirty' suffix; the stamped env base is
+    # what matters here.
+    assert str(handle.worker_code_revision).startswith("worker-rev")
+    assert str(handle.metadata["workerCodeRevision"]).startswith("worker-rev")
 
     status = BaseExternalAgentAdapter.build_status(
         run_id="r",
@@ -361,7 +369,7 @@ def test_base_adapter_builders_stamp_worker_code_revision(
         provider_status="ACTIVE",
         normalized_status="running",
     )
-    assert status.worker_code_revision == "worker-rev"
+    assert str(status.worker_code_revision).startswith("worker-rev")
 
     result = BaseExternalAgentAdapter.build_result(
         run_id="r",
@@ -369,8 +377,8 @@ def test_base_adapter_builders_stamp_worker_code_revision(
         normalized_status="completed",
         provider_name="Jules",
     )
-    assert result.worker_code_revision == "worker-rev"
-    assert result.metadata["workerCodeRevision"] == "worker-rev"
+    assert str(result.worker_code_revision).startswith("worker-rev")
+    assert str(result.metadata["workerCodeRevision"]).startswith("worker-rev")
 
 
 class _FakeRunner:

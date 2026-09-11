@@ -16,6 +16,19 @@ import urllib.request
 import pytest
 
 from moonmind.workflows.temporal import worker_code_identity as wci
+
+
+def _fetch_readyz_no_proxy(port: int, timeout: float = 5.0) -> tuple[int | None, dict]:
+    """Fetch /readyz bypassing proxy env (localhost must never go via squid)."""
+
+    opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+    try:
+        raw = opener.open(f"http://127.0.0.1:{port}/readyz", timeout=timeout).read()
+        return None, json.loads(raw)
+    except urllib.error.HTTPError as exc:
+        return exc.code, json.loads(exc.read())
+
+
 from moonmind.workflows.temporal.worker_code_identity import (
     resolve_worker_code_identity,
 )
@@ -65,13 +78,7 @@ async def test_bind_mounted_module_change_reports_stale_code_until_restart(
     loop = asyncio.get_running_loop()
 
     def _get_readyz() -> tuple[int | None, dict]:
-        try:
-            raw = urllib.request.urlopen(
-                f"http://127.0.0.1:{port}/readyz", timeout=5
-            ).read()
-            return None, json.loads(raw)
-        except urllib.error.HTTPError as exc:
-            return exc.code, json.loads(exc.read())
+        return _fetch_readyz_no_proxy(port)
 
     try:
         code, body = await loop.run_in_executor(None, _get_readyz)
