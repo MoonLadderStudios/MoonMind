@@ -64,6 +64,7 @@ import {
 } from '../components/workflows/WorkflowWorkspaceSidebar';
 import { workflowWorkspaceRowFromDetail } from '../lib/workflowWorkspaceList';
 import { WorkflowActionsMenu } from '../components/WorkflowActionsMenu';
+import { IssueLifecyclePanel, issueLifecycleEvidenceFromExecution } from '../components/IssueLifecyclePanel';
 import { WorkflowChatNative } from './WorkflowChatNative';
 import {
   buildWorkflowActionMenuItems,
@@ -10650,6 +10651,10 @@ function WorkflowDetailPageContent({ payload }: { payload: BootPayload }) {
 
           {overviewTabActive && displayedMergeAutomation ? (
             <MergeAutomationPanel mergeAutomation={displayedMergeAutomation} />
+          ) : null}
+
+          {overviewTabActive ? (
+            <IssueLifecyclePanel apiBase={payload.apiBase} evidence={issueLifecycleEvidenceFromExecution(execution)} />
           ) : null}
 
           {stepsTabActive ? (
