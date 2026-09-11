@@ -1252,6 +1252,8 @@ class TemporalArtifactRepository:
                 db_models.TemporalArtifact.expires_at <= now,
                 db_models.TemporalArtifact.retention_class
                 != db_models.TemporalArtifactRetentionClass.PINNED,
+                db_models.TemporalArtifact.status
+                != db_models.TemporalArtifactStatus.DELETED,
                 ~pinned_exists,
             )
             .order_by(
@@ -1645,10 +1647,14 @@ class TemporalArtifactService:
         # No blanket service-principal bypass: a bare service principal
         # without an admitted user/execution scope is denied here; linked
         # execution ownership is checked by the async wrapper for
-        # non-service candidates.
+        # non-service candidates. Service-to-service readers (for example
+        # managed checkpoint restore) must carry the capture owner via
+        # ``admitted_principal``.
         if candidates == {principal} and self._is_service_principal(principal):
             raise TemporalArtifactAuthorizationError(
-                f"principal '{principal}' cannot read artifact {artifact.artifact_id}"
+                f"principal '{principal}' cannot read artifact "
+                f"{artifact.artifact_id} without an admitted scope; "
+                "service readers must carry admitted_principal"
             )
         if any(
             not self._is_service_principal(candidate) for candidate in candidates
@@ -1702,6 +1708,30 @@ class TemporalArtifactService:
                 f"principal '{principal}' cannot mutate artifact {artifact.artifact_id}"
             )
 
+    @staticmethod
+    def _is_quarantined(artifact: db_models.TemporalArtifact) -> bool:
+        """Metadata-based quarantine state for the raw-serving boundary."""
+        metadata = dict(artifact.metadata_json or {})
+        flagged = (
+            str(metadata.get("quarantine", "")).strip().lower()
+            not in {"", "false", "no", "0"}
+        )
+        marked = (
+            str(metadata.get("availability", "")).strip().lower() == "quarantined"
+        )
+        return bool(flagged or marked)
+
+    def _assert_not_quarantined(
+        self,
+        artifact: db_models.TemporalArtifact,
+    ) -> None:
+        if self._is_quarantined(artifact):
+            raise TemporalArtifactStateError(
+                "SAVED_WORK_QUARANTINED: artifact "
+                f"{artifact.artifact_id} is quarantined; raw bytes are "
+                "unavailable, use preview/diagnostics"
+            )
+
     def _raw_access_allowed(
         self,
         artifact: db_models.TemporalArtifact,
@@ -1709,6 +1739,11 @@ class TemporalArtifactService:
         principal: str,
         admitted_principal: str | None = None,
     ) -> bool:
+        if self._is_quarantined(artifact):
+            # Quarantined bytes are never served raw, even to the owner or
+            # an admitted scope; the trusted preview path reads through an
+            # explicit internal bypass instead.
+            return False
         if (
             artifact.redaction_level
             is not db_models.TemporalArtifactRedactionLevel.RESTRICTED
@@ -2080,6 +2115,48 @@ class TemporalArtifactService:
         )
         await self._repository.commit()
         return released
+
+    async def _observe_consumer_use(
+        self,
+        *,
+        artifact_id: str,
+        principal: str,
+        admitted_principal: str | None,
+        operation_kind: str,
+        ttl_seconds: int,
+    ) -> None:
+        """Best-effort in-flight consumer observation (#4017 impl-03).
+
+        Records a TTL-bounded use claim at each real serving boundary
+        (inline reads, streaming, signed downloads, preview derivation)
+        so lifecycle sweeps observe actual consumers instead of expiring
+        artifacts mid-use. Observation never blocks the operation:
+        admission/quota failures are logged and the read proceeds under
+        the sweep's row-lock recheck. Claims expire on their own and are
+        pruned by the sweeper; explicit long-lived operations should use
+        ``acquire_saved_work_use``/``release_saved_work_use`` instead.
+        """
+        owner = (admitted_principal or principal or "").strip()
+        if not owner:
+            return
+        try:
+            await self._repository.acquire_use_claim(
+                artifact_id=artifact_id,
+                owner_principal=owner,
+                request_id=f"{operation_kind}-{uuid4().hex}",
+                operation_kind=operation_kind,
+                expires_at=datetime.now(UTC)
+                + timedelta(seconds=max(60, int(ttl_seconds))),
+            )
+            await self._repository.commit()
+        except Exception as exc:  # noqa: BLE001 - observation is best-effort
+            logger.debug(
+                "Temporal artifact use observation skipped artifact_id=%s "
+                "kind=%s error=%s",
+                artifact_id,
+                operation_kind,
+                type(exc).__name__,
+            )
 
     @staticmethod
     def _normalize_parts(parts: list[dict[str, Any]] | None) -> list[dict[str, Any]]:
@@ -2775,9 +2852,10 @@ class TemporalArtifactService:
         """Read bytes under the uniform saved-work owner policy (#4017 impl-06).
 
         ``allow_restricted_raw`` is retained for backward compatibility but is
-        never a generic permission: quarantined bytes still require owner,
-        admitted user/execution scope, or linked-execution ownership. A bare
-        ``service:`` principal without ``admitted_principal`` is denied.
+        never a generic permission: quarantined bytes are unavailable through
+        this raw surface even to the owner or an admitted scope; use the
+        preview/diagnostics path instead. A bare ``service:`` principal
+        without ``admitted_principal`` is denied.
         """
         artifact = await self._repository.get_artifact(artifact_id)
         await self._assert_artifact_read_access(
@@ -2786,8 +2864,16 @@ class TemporalArtifactService:
         if artifact.status is not db_models.TemporalArtifactStatus.COMPLETE:
             raise TemporalArtifactStateError("artifact is not readable")
         _ = allow_restricted_raw
+        self._assert_not_quarantined(artifact)
         await self._assert_artifact_raw_access(
             artifact, principal=principal, admitted_principal=admitted_principal
+        )
+        await self._observe_consumer_use(
+            artifact_id=artifact.artifact_id,
+            principal=principal,
+            admitted_principal=admitted_principal,
+            operation_kind="restore",
+            ttl_seconds=300,
         )
         try:
             data = await asyncio.get_running_loop().run_in_executor(
@@ -2818,8 +2904,16 @@ class TemporalArtifactService:
         if artifact.status is not db_models.TemporalArtifactStatus.COMPLETE:
             raise TemporalArtifactStateError("artifact is not readable")
         _ = allow_restricted_raw
+        self._assert_not_quarantined(artifact)
         await self._assert_artifact_raw_access(
             artifact, principal=principal, admitted_principal=admitted_principal
+        )
+        await self._observe_consumer_use(
+            artifact_id=artifact.artifact_id,
+            principal=principal,
+            admitted_principal=admitted_principal,
+            operation_kind="restore",
+            ttl_seconds=300,
         )
         return artifact, self._store.read_chunks(
             artifact.storage_key, chunk_size=chunk_size
@@ -2840,8 +2934,16 @@ class TemporalArtifactService:
         if artifact.status is not db_models.TemporalArtifactStatus.COMPLETE:
             raise TemporalArtifactStateError("artifact is not readable")
         _ = allow_restricted_raw
+        self._assert_not_quarantined(artifact)
         await self._assert_artifact_raw_access(
             artifact, principal=principal, admitted_principal=admitted_principal
+        )
+        await self._observe_consumer_use(
+            artifact_id=artifact.artifact_id,
+            principal=principal,
+            admitted_principal=admitted_principal,
+            operation_kind="restore",
+            ttl_seconds=300,
         )
         try:
             path = await asyncio.get_running_loop().run_in_executor(
@@ -3005,6 +3107,7 @@ class TemporalArtifactService:
         )
         if artifact.status is not db_models.TemporalArtifactStatus.COMPLETE:
             raise TemporalArtifactStateError("artifact is not readable")
+        self._assert_not_quarantined(artifact)
         await self._assert_artifact_raw_access(
             artifact, principal=principal, admitted_principal=admitted_principal
         )
@@ -3016,6 +3119,16 @@ class TemporalArtifactService:
         bounded_ttl, _revocation = self._bounded_download_ttl(
             artifact=artifact,
             use_ttl_seconds=use_ttl_seconds,
+        )
+        # The bearer URL outlives this call, so hold a matching use claim
+        # for the URL lifetime; the sweeper observes it as an in-flight
+        # consumer instead of expiring the artifact mid-download.
+        await self._observe_consumer_use(
+            artifact_id=artifact.artifact_id,
+            principal=principal,
+            admitted_principal=admitted_principal,
+            operation_kind="download",
+            ttl_seconds=bounded_ttl,
         )
         expires_at = datetime.now(UTC) + timedelta(seconds=bounded_ttl)
         if artifact.storage_backend is db_models.TemporalArtifactStorageBackend.S3:
@@ -3459,6 +3572,31 @@ class TemporalArtifactService:
                 storage_backend=artifact.storage_backend,
                 storage_key=artifact.storage_key,
             ):
+                # Publish the tombstone + deletion intent before touching
+                # the object store (mirroring hard_delete): a crash after
+                # this commit leaves a truthful tombstone and a persisted
+                # intent for sweeper reconciliation instead of rolling back
+                # to COMPLETE with missing bytes.
+                await self._repository.record_deletion_intent(
+                    artifact_id=artifact.artifact_id, principal=principal
+                )
+                await self._repository.commit()
+                # Re-acquire under row lock and recheck: a creator that
+                # committed a new live reference just before our publish
+                # must keep the bytes.
+                artifact = await self._repository.get_artifact_for_update(
+                    artifact.artifact_id
+                )
+                if await self._repository.has_live_storage_reference(
+                    storage_backend=artifact.storage_backend,
+                    storage_key=artifact.storage_key,
+                ):
+                    await self._repository.clear_deletion_intent(
+                        artifact.artifact_id
+                    )
+                    await self._repository.commit()
+                    hard_deleted += 1
+                    continue
                 try:
                     await self._delete_object_recoverably(
                         artifact=artifact, principal=principal
@@ -3466,8 +3604,10 @@ class TemporalArtifactService:
                 except TemporalArtifactStateError:
                     # Intent persisted; reconciliation converges later. The
                     # tombstone row stays truthful about the pending delete.
+                    await self._repository.commit()
                     continue
                 await self._repository.clear_deletion_intent(artifact.artifact_id)
+                await self._repository.commit()
             hard_deleted += 1
 
         reconciled = await self.reconcile_deletion_intents(
@@ -3505,17 +3645,32 @@ class TemporalArtifactService:
         authorization as a raw read: a bare service principal cannot mint a
         preview of another owner's quarantined bytes. The returned preview
         artifact carries its own redacted bytes; raw bytes never flow to an
-        unauthorized caller through this path.
+        unauthorized caller through this path. Quarantined artifacts are
+        readable here through a trusted internal bypass so a safe preview
+        can still be generated while direct raw surfaces stay blocked.
         """
         artifact = await self._repository.get_artifact(artifact_id)
         await self._assert_artifact_read_access(
             artifact, principal=principal, admitted_principal=admitted_principal
         )
-        _artifact, payload = await self.read(
-            artifact_id=artifact_id,
+        await self._assert_artifact_raw_access(
+            artifact, principal=principal, admitted_principal=admitted_principal
+        )
+        if artifact.status is not db_models.TemporalArtifactStatus.COMPLETE:
+            raise TemporalArtifactStateError("artifact is not readable")
+        await self._observe_consumer_use(
+            artifact_id=artifact.artifact_id,
             principal=principal,
             admitted_principal=admitted_principal,
+            operation_kind="restore",
+            ttl_seconds=3600,
         )
+        try:
+            payload = await asyncio.get_running_loop().run_in_executor(
+                None, self._store.read_bytes, artifact.storage_key
+            )
+        except Exception as exc:
+            raise TemporalArtifactStateError("artifact bytes are missing") from exc
         await self._create_preview_if_required(
             artifact=artifact,
             principal=principal,

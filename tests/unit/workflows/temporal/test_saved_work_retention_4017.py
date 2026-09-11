@@ -745,35 +745,42 @@ async def test_bare_service_denied_across_data_plane_with_admitted_scope(
                 item.artifact_id for item, _links in listed
             }
 
-            # Carrying the admitted user scope succeeds on every surface.
-            _meta, payload = await service.read(
-                artifact_id=artifact.artifact_id,
-                principal=bare,
-                admitted_principal="owner-1",
-            )
-            assert payload == b"quarantined-bytes"
-            _meta, _chunks = await service.read_chunks(
-                artifact_id=artifact.artifact_id,
-                principal=bare,
-                admitted_principal="owner-1",
-            )
-            _meta, _path = await service.read_path(
-                artifact_id=artifact.artifact_id,
-                principal=bare,
-                admitted_principal="owner-1",
-            )
+            # Carrying the admitted user scope passes authorization, but
+            # quarantined bytes stay unavailable on every raw surface: only
+            # safe diagnostics and the trusted preview path may serve them.
+            for make_raw_call in (
+                lambda: service.read(
+                    artifact_id=artifact.artifact_id,
+                    principal=bare,
+                    admitted_principal="owner-1",
+                ),
+                lambda: service.read_chunks(
+                    artifact_id=artifact.artifact_id,
+                    principal=bare,
+                    admitted_principal="owner-1",
+                ),
+                lambda: service.read_path(
+                    artifact_id=artifact.artifact_id,
+                    principal=bare,
+                    admitted_principal="owner-1",
+                ),
+                lambda: service.presign_download(
+                    artifact_id=artifact.artifact_id,
+                    principal=bare,
+                    admitted_principal="owner-1",
+                ),
+            ):
+                with pytest.raises(
+                    TemporalArtifactStateError, match="QUARANTINED"
+                ):
+                    await make_raw_call()
             _meta, _links, _pinned, policy = await service.get_metadata(
                 artifact_id=artifact.artifact_id,
                 principal=bare,
                 admitted_principal="owner-1",
             )
             assert policy is not None
-            _art, _expires, url = await service.presign_download(
-                artifact_id=artifact.artifact_id,
-                principal=bare,
-                admitted_principal="owner-1",
-            )
-            assert url
+            assert policy.raw_access_allowed is False
             preview = await service.compute_preview(
                 artifact_id=artifact.artifact_id,
                 principal=bare,
@@ -898,3 +905,150 @@ async def test_phantom_insert_blocked_across_transactions_during_hard_delete(
     finally:
         await engine_a.dispose()
         await engine_b.dispose()
+
+
+async def test_expired_query_skips_deleted_rows_for_bounded_pages(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Bounded expiry pages must not stall on already-deleted rows."""
+    monkeypatch.setattr(settings.oidc, "AUTH_PROVIDER", "oidc")
+    async with temporal_db(tmp_path) as session_maker:
+        async with session_maker() as session:
+            service = _service(
+                session, tmp_path, lifecycle_hard_delete_after_seconds=3600
+            )
+            deleted_ids: list[str] = []
+            for _ in range(3):
+                artifact = await _complete_artifact(
+                    service, principal="owner-1"
+                )
+                row = await service._repository.get_artifact(
+                    artifact.artifact_id
+                )
+                row.expires_at = datetime.now(UTC) - timedelta(seconds=60)
+                await service._repository.commit()
+                await service.soft_delete(
+                    artifact_id=artifact.artifact_id, principal="owner-1"
+                )
+                deleted_ids.append(artifact.artifact_id)
+            fresh = await _complete_artifact(service, principal="owner-1")
+            fresh_row = await service._repository.get_artifact(
+                fresh.artifact_id
+            )
+            fresh_row.expires_at = datetime.now(UTC) - timedelta(seconds=1)
+            await service._repository.commit()
+
+            sweep = await service.sweep_lifecycle(
+                principal="service:lifecycle", run_id="page-skip", limit=3
+            )
+            assert sweep.expired_candidate_count <= 3
+            assert all(
+                candidate_id not in deleted_ids
+                for candidate_id in [
+                    artifact.artifact_id
+                    for artifact in await service._repository.list_expired_artifacts(
+                        now=datetime.now(UTC), limit=10
+                    )
+                ]
+            )
+            refreshed = await service._repository.get_artifact(fresh.artifact_id)
+            assert refreshed.status is TemporalArtifactStatus.DELETED
+
+
+async def test_sweep_hard_delete_commits_tombstone_before_object_delete(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A failed sweep object delete leaves a committed tombstone + intent."""
+    monkeypatch.setattr(settings.oidc, "AUTH_PROVIDER", "oidc")
+    db_path = tmp_path / "sweep_tombstone.db"
+    db_url = f"sqlite+aiosqlite:///{db_path}"
+    engine_a = create_async_engine(db_url, future=True)
+    engine_b = create_async_engine(db_url, future=True)
+    try:
+        async with engine_a.begin() as conn:
+            await conn.run_sync(Base.metadata.create_all)
+        maker_a = sessionmaker(
+            engine_a, class_=AsyncSession, expire_on_commit=False
+        )
+        maker_b = sessionmaker(
+            engine_b, class_=AsyncSession, expire_on_commit=False
+        )
+        async with maker_a() as session_a:
+            service_a = _service(
+                session_a, tmp_path, lifecycle_hard_delete_after_seconds=0
+            )
+            artifact = await _complete_artifact(
+                service_a, principal="owner-1", payload=b"sweep-tombstone-bytes"
+            )
+            row = await service_a._repository.get_artifact(artifact.artifact_id)
+            row.expires_at = datetime.now(UTC) - timedelta(seconds=60)
+            await service_a._repository.commit()
+            await service_a.soft_delete(
+                artifact_id=artifact.artifact_id, principal="owner-1"
+            )
+            row = await service_a._repository.get_artifact(artifact.artifact_id)
+            row.deleted_at = datetime.now(UTC) - timedelta(seconds=60)
+            await service_a._repository.commit()
+
+            real_delete = service_a._store.delete
+
+            def _failing_delete(_storage_key: str) -> None:
+                raise OSError("object-store unavailable")
+
+            monkeypatch.setattr(service_a._store, "delete", _failing_delete)
+            sweep = await service_a.sweep_lifecycle(
+                principal="service:lifecycle", run_id="tombstone-1"
+            )
+            assert sweep.hard_deleted_count == 0
+            monkeypatch.setattr(service_a._store, "delete", real_delete)
+
+        # An independent transaction observes the committed tombstone and
+        # the persisted deletion intent (no rollback to COMPLETE).
+        async with maker_b() as session_b:
+            service_b = _service(session_b, tmp_path)
+            observed = await service_b._repository.get_artifact(
+                artifact.artifact_id
+            )
+            assert observed.hard_deleted_at is not None
+            assert (
+                await service_b._repository.get_deletion_intent(
+                    artifact.artifact_id
+                )
+            ) is not None
+
+        # Reconciliation converges once the object store recovers.
+        async with maker_a() as session_a2:
+            service_a2 = _service(session_a2, tmp_path)
+            reconciled = await service_a2.reconcile_deletion_intents(
+                principal="service:lifecycle"
+            )
+            assert reconciled >= 1
+    finally:
+        await engine_a.dispose()
+        await engine_b.dispose()
+
+
+async def test_serving_boundaries_observe_consumer_use_for_sweeper(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Signed downloads hold a live claim the sweeper must respect."""
+    monkeypatch.setattr(settings.oidc, "AUTH_PROVIDER", "oidc")
+    async with temporal_db(tmp_path) as session_maker:
+        async with session_maker() as session:
+            service = _service(session, tmp_path)
+            artifact = await _complete_artifact(service, principal="owner-1")
+            _artifact, _expires, url = await service.presign_download(
+                artifact_id=artifact.artifact_id, principal="owner-1"
+            )
+            assert url
+            assert await service._repository.has_live_use_claim(
+                artifact.artifact_id, now=datetime.now(UTC)
+            )
+            row = await service._repository.get_artifact(artifact.artifact_id)
+            row.expires_at = datetime.now(UTC) - timedelta(seconds=1)
+            await service._repository.commit()
+            sweep = await service.sweep_lifecycle(
+                principal="service:lifecycle", run_id="use-held"
+            )
+            assert sweep.soft_deleted_count == 0
+            assert sweep.skipped_in_use_count >= 1
