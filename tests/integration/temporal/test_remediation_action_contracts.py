@@ -96,6 +96,7 @@ async def test_remediation_action_contract_publishes_request_result_and_verifica
             authority_result=authority.to_dict(),
             guard_result=guard.to_dict(),
             principal="service:test",
+            admitted_principal="service:remediation-context",
         )
 
         request_payload = await _read_artifact_json(
@@ -257,6 +258,7 @@ async def test_remediation_lifecycle_repair_prevention_summary_artifacts(
             authority_result=authority.to_dict(),
             guard_result=guard.to_dict(),
             principal="service:test",
+            admitted_principal="service:remediation-context",
         )
 
         repair = build_remediation_repair_decision(

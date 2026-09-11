@@ -30,8 +30,10 @@ from .managed_api_key_resolve import resolve_github_token_for_launch
 
 # Checkpoint archive/manifest artifacts are written by the capture path under the
 # ``system`` owner. The artifact service only grants cross-owner reads to
-# ``service:``-prefixed principals, so the restore reader must use one.
+# callers carrying an admitted scope, so each restore read carries the capture
+# owner explicitly instead of relying on a bare service-principal grant.
 _CHECKPOINT_RESTORE_PRINCIPAL = "service:checkpoint_restore"
+_CHECKPOINT_CAPTURE_PRINCIPAL = "system"
 
 
 def _digest(payload: bytes) -> str:
@@ -61,12 +63,19 @@ class ManagedCheckpointRestoreService:
         self.run_store = run_store
         self._locks: dict[str, asyncio.Lock] = {}
 
-    async def _read(self, ref: str, *, content_types: set[str]) -> bytes:
+    async def _read(
+        self,
+        ref: str,
+        *,
+        content_types: set[str],
+        admitted_principal: str | None = _CHECKPOINT_CAPTURE_PRINCIPAL,
+    ) -> bytes:
         try:
             if self.artifact_service is not None:
                 artifact, payload = await self.artifact_service.read(
                     artifact_id=ref,
                     principal=_CHECKPOINT_RESTORE_PRINCIPAL,
+                    admitted_principal=admitted_principal,
                     allow_restricted_raw=True,
                 )
                 content_type = str(getattr(artifact, "content_type", ""))
@@ -318,7 +327,10 @@ class ManagedCheckpointRestoreService:
         return result.stdout
 
     async def restore(
-        self, raw: Mapping[str, Any] | ManagedWorkspaceRestoreRequest
+        self,
+        raw: Mapping[str, Any] | ManagedWorkspaceRestoreRequest,
+        *,
+        admitted_principal: str | None = _CHECKPOINT_CAPTURE_PRINCIPAL,
     ) -> dict[str, Any]:
         req = (
             raw
@@ -335,12 +347,17 @@ class ManagedCheckpointRestoreService:
             with lock_path.open("a+") as lock:
                 fcntl.flock(lock.fileno(), fcntl.LOCK_EX)
                 try:
-                    return await self._restore_locked(req)
+                    return await self._restore_locked(
+                        req, admitted_principal=admitted_principal
+                    )
                 finally:
                     fcntl.flock(lock.fileno(), fcntl.LOCK_UN)
 
     async def _restore_locked(
-        self, req: ManagedWorkspaceRestoreRequest
+        self,
+        req: ManagedWorkspaceRestoreRequest,
+        *,
+        admitted_principal: str | None = _CHECKPOINT_CAPTURE_PRINCIPAL,
     ) -> dict[str, Any]:
         record_dir = self.root / "managed_restores"
         record_dir.mkdir(parents=True, exist_ok=True)
@@ -400,6 +417,7 @@ class ManagedCheckpointRestoreService:
         checkpoint_bytes = await self._read(
             req.source.checkpoint_ref,
             content_types={"application/vnd.moonmind.step-execution-checkpoint+json;version=1"},
+            admitted_principal=admitted_principal,
         )
         try:
             checkpoint = json.loads(checkpoint_bytes)
@@ -441,13 +459,18 @@ class ManagedCheckpointRestoreService:
                 raise CheckpointRestoreError(
                     "CHECKPOINT_SOURCE_IDENTITY_MISMATCH", f"checkpoint {key} mismatch"
                 )
-        archive = await self._read(req.checkpoint.archive_ref, content_types={"application/vnd.moonmind.worktree-archive"})
+        archive = await self._read(
+            req.checkpoint.archive_ref,
+            content_types={"application/vnd.moonmind.worktree-archive"},
+            admitted_principal=admitted_principal,
+        )
         manifest_bytes = await self._read(
             req.checkpoint.manifest_ref,
             content_types={
                 "application/json",
                 "application/vnd.moonmind.managed-workspace-checkpoint-manifest+json;version=1",
             },
+            admitted_principal=admitted_principal,
         )
         if _digest(archive) != req.checkpoint.archive_digest:
             raise CheckpointRestoreError(

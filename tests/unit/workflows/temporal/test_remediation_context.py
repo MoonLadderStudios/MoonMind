@@ -2083,19 +2083,28 @@ async def test_remediation_evidence_tools_read_only_context_declared_evidence(
         context_reads = 0
         original_read = artifact_service.read
 
-        async def read_spy(*, artifact_id, principal):
+        async def read_spy(*, artifact_id, principal, admitted_principal=None):
             nonlocal context_reads
             if artifact_id == build_result.artifact.artifact_id:
                 context_reads += 1
-            return await original_read(artifact_id=artifact_id, principal=principal)
+            return await original_read(
+                artifact_id=artifact_id,
+                principal=principal,
+                admitted_principal=admitted_principal,
+            )
 
         artifact_service.read = read_spy
-        context = await tools.get_context(remediation_workflow_id=remediation.workflow_id)
+        context = await tools.get_context(
+            remediation_workflow_id=remediation.workflow_id,
+            admitted_principal="service:remediation-context",
+        )
         assert context["target"]["workflowId"] == target.workflow_id
 
         payload = await tools.read_target_artifact(
             remediation_workflow_id=remediation.workflow_id,
             artifact_ref={"artifact_id": target_artifact.artifact_id},
+            principal="service:test",
+            admitted_principal="service:remediation-context",
         )
         assert payload == b"target artifact"
 
@@ -2104,6 +2113,7 @@ async def test_remediation_evidence_tools_read_only_context_declared_evidence(
             agent_run_id="tr_allowed",
             stream="merged",
             tail_lines=999999,
+            admitted_principal="service:remediation-context",
         )
         assert logs.lines == ("line 1", "line 2")
         assert reader.calls == [
@@ -2120,12 +2130,14 @@ async def test_remediation_evidence_tools_read_only_context_declared_evidence(
             await tools.read_target_artifact(
                 remediation_workflow_id=remediation.workflow_id,
                 artifact_ref="art_not_in_context",
+                admitted_principal="service:remediation-context",
             )
         with pytest.raises(RemediationEvidenceToolError, match="not listed"):
             await tools.read_target_logs(
                 remediation_workflow_id=remediation.workflow_id,
                 agent_run_id="tr_blocked",
                 stream="stdout",
+                admitted_principal="service:remediation-context",
             )
 
 @pytest.mark.asyncio
@@ -2204,6 +2216,7 @@ async def test_remediation_evidence_tools_gate_live_follow_by_context_policy(
             await tools.follow_target_logs(
                 remediation_workflow_id=remediation.workflow_id,
                 agent_run_id="tr_live",
+                admitted_principal="service:remediation-context",
             )
 
         context = dict(result.payload)
@@ -2241,6 +2254,7 @@ async def test_remediation_evidence_tools_gate_live_follow_by_context_policy(
         live = await tools.follow_target_logs(
             remediation_workflow_id=remediation.workflow_id,
             agent_run_id="tr_live",
+            admitted_principal="service:test",
         )
         assert live.events[0].text == "live line"
         assert follower.calls == [{"agent_run_id": "tr_live", "from_sequence": 42}]
@@ -2252,6 +2266,7 @@ async def test_remediation_evidence_tools_gate_live_follow_by_context_policy(
             await tools.follow_target_logs(
                 remediation_workflow_id=remediation.workflow_id,
                 agent_run_id="tr_other",
+                admitted_principal="service:test",
             )
 
 @pytest.mark.asyncio
@@ -2332,6 +2347,7 @@ async def test_remediation_evidence_tools_prepare_action_request_rereads_target_
         preparation = await tools.prepare_action_request(
             remediation_workflow_id=remediation.workflow_id,
             action_kind="session.terminate",
+            admitted_principal="service:remediation-context",
         )
 
         assert preparation.remediation_workflow_id == remediation.workflow_id
@@ -2410,6 +2426,7 @@ async def test_remediation_execute_action_delegates_and_publishes_lifecycle_arti
             authority_result=authority.to_dict(),
             guard_result=guard.to_dict(),
             principal="service:test",
+            admitted_principal="service:remediation-context",
         )
 
         artifact_links = (
@@ -2532,6 +2549,7 @@ async def test_execute_action_preserves_approval_lifecycle_artifact_refs(
                 guard_result=guard.to_dict(),
                 approval_ref=link.approval_state["approvalRef"],
                 principal="service:test",
+                admitted_principal="service:remediation-context",
             )
 
         assert link.approval_state["artifactRefs"] == {
@@ -2650,12 +2668,14 @@ async def test_remediation_execute_action_reuses_retry_artifacts(
             authority_result=authority.to_dict(),
             guard_result=guard.to_dict(),
             principal="service:test",
+            admitted_principal="service:remediation-context",
         )
         second = await tools.execute_action(
             remediation_workflow_id=remediation.workflow_id,
             authority_result=authority.to_dict(),
             guard_result=guard.to_dict(),
             principal="service:test",
+            admitted_principal="service:remediation-context",
         )
 
         assert second["artifactRefs"] == first["artifactRefs"]
@@ -2746,6 +2766,7 @@ async def test_remediation_execute_action_publishes_v1_request_and_result_artifa
             authority_result=authority.to_dict(),
             guard_result=guard.to_dict(),
             principal="service:test",
+            admitted_principal="service:remediation-context",
         )
 
         request_payload = await _read_artifact_json(
@@ -2839,6 +2860,7 @@ async def test_remediation_execute_action_rejects_unsupported_result_status(
                 authority_result=authority.to_dict(),
                 guard_result=guard.to_dict(),
                 principal="service:test",
+                admitted_principal="service:remediation-context",
             )
 
 @pytest.mark.asyncio
@@ -2902,6 +2924,7 @@ async def test_remediation_execute_action_rejects_mismatched_authority_or_guard_
                 authority_result=stale_authority,
                 guard_result=guard.to_dict(),
                 principal="service:test",
+                admitted_principal="service:remediation-context",
             )
 
         stale_guard = guard.to_dict()
@@ -2912,6 +2935,7 @@ async def test_remediation_execute_action_rejects_mismatched_authority_or_guard_
                 authority_result=authority.to_dict(),
                 guard_result=stale_guard,
                 principal="service:test",
+                admitted_principal="service:remediation-context",
             )
 
         stale_run_guard = guard.to_dict()
@@ -2925,6 +2949,7 @@ async def test_remediation_execute_action_rejects_mismatched_authority_or_guard_
                 authority_result=authority.to_dict(),
                 guard_result=stale_run_guard,
                 principal="service:test",
+                admitted_principal="service:remediation-context",
             )
 
         assert executor.calls == []
@@ -3390,6 +3415,7 @@ async def test_remediation_action_authority_uses_prepared_action_context(
         preparation = await tools.prepare_action_request(
             remediation_workflow_id=remediation.workflow_id,
             action_kind="execution.pause",
+            admitted_principal="service:remediation-context",
         )
 
         service = RemediationActionAuthorityService(session=session)
@@ -4086,6 +4112,7 @@ async def _run_verified_cancel(session, tmp_path, mock_client_adapter, *, after_
         authority_result=authority.to_dict(),
         guard_result=guard.to_dict(),
         principal="service:test",
+        admitted_principal="service:remediation-context",
     )
     link = await session.get(TemporalExecutionRemediationLink, remediation.workflow_id)
     verification_payload = await _read_artifact_json(
@@ -4249,6 +4276,7 @@ async def test_execute_action_reuses_persisted_verification_on_retry_dedup(
             authority_result=authority.to_dict(),
             guard_result=guard.to_dict(),
             principal="service:test",
+            admitted_principal="service:remediation-context",
         )
         assert first_result["verification"]["outcome"] == "verified_resolved"
 
@@ -4278,6 +4306,7 @@ async def test_execute_action_reuses_persisted_verification_on_retry_dedup(
             authority_result=authority2.to_dict(),
             guard_result=guard2.to_dict(),
             principal="service:test",
+            admitted_principal="service:remediation-context",
         )
 
         assert (
@@ -4342,6 +4371,7 @@ async def test_lifecycle_summary_records_resolution_without_clobbering_delivery(
             authority_result=authority.to_dict(),
             guard_result=guard.to_dict(),
             principal="service:test",
+            admitted_principal="service:remediation-context",
         )
 
         link = await session.get(
