@@ -630,6 +630,11 @@ RUN_TRUSTED_ISSUE_BRIEF_AUTHORITY_PATCH = "run-trusted-issue-brief-authority-v1"
 # enrichment for opt-in issue-search presets. Gated so in-flight histories
 # replay without the new memo/search-attribute commands.
 RUN_ISSUE_SEARCH_TITLE_ENRICHMENT_PATCH = "run-issue-search-title-enrichment-v1"
+# MoonLadderStudios/MoonMind#4099: gate the repaired legacy title-update path
+# so in-flight histories that already recorded the old command-free
+# ``update_title`` update replay without the new memo/search-attribute
+# commands.
+RUN_LEGACY_TITLE_UPDATE_TRANSITION_PATCH = "run-legacy-title-update-transition-v1"
 RUN_MOONSPEC_VERIFY_ATTACHMENT_HANDOFF_PATCH = (
     "run-moonspec-verify-attachment-handoff-v1"
 )
@@ -9927,6 +9932,24 @@ class MoonMindRunWorkflow:
         if isinstance(repository, Mapping):
             repository = repository.get("name") or repository.get("full_name")
         repository_text = str(repository or "").strip()
+        if not repository_text:
+            # Production success payloads nest both repository and number
+            # under outputs["issue"] (story_output_tools builds that object
+            # with no top-level repository); read the same nested mapping
+            # used for the issue number so enrichment actually runs.
+            for nested_key in ("issue", "githubIssue", "github_issue"):
+                nested = outputs.get(nested_key)
+                if not isinstance(nested, Mapping):
+                    continue
+                nested_repo = nested.get("repository", nested.get("repo"))
+                if isinstance(nested_repo, Mapping):
+                    nested_repo = nested_repo.get("name") or nested_repo.get(
+                        "full_name"
+                    )
+                nested_text = str(nested_repo or "").strip()
+                if nested_text:
+                    repository_text = nested_text
+                    break
         raw_number = outputs.get("issueNumber", outputs.get("issue_number"))
         if raw_number is None and isinstance(outputs.get("issue"), Mapping):
             issue_map = outputs.get("issue")
@@ -11506,6 +11529,8 @@ class MoonMindRunWorkflow:
                 try:
                     self._title_revision = int(carried.get("revision") or 0)
                 except (TypeError, ValueError):
+                    # Keep the memo-derived revision when the carried snapshot
+                    # has a missing/non-numeric revision; the title stays usable.
                     pass
                 carried_target = carried.get("target")
                 if isinstance(carried_target, Mapping):
@@ -25087,9 +25112,23 @@ class MoonMindRunWorkflow:
     def update_title_legacy(self, new_title: str) -> None:
         """Legacy alias for the pre-repair unnamed update.
 
-        Preserved so in-flight callers using the old method name keep working;
-        it forwards through the same shared transition as ``SetTitle``.
+        Preserved so in-flight callers using the old method name keep working.
+        Histories that already recorded the legacy command-free assignment
+        replay that exact behavior; only patched histories forward through
+        the repaired shared transition as ``SetTitle``.
         """
+        from moonmind.workflows.executions.title_derivation import (
+            normalize_display_title,
+        )
+
+        if not self._patched_or_false_outside_workflow(
+            RUN_LEGACY_TITLE_UPDATE_TRANSITION_PATCH
+        ):
+            # Replay-compatible legacy behavior: the original handler only
+            # assigned the title with no memo/search-attribute commands.
+            normalized = normalize_display_title(new_title)
+            self._title = normalized if normalized is not None else new_title
+            return
         self.update_title(new_title)
 
     @workflow.update
