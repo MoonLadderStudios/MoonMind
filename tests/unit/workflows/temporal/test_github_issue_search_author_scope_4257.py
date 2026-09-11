@@ -358,7 +358,7 @@ def test_include_all_authors_parsing_is_strict() -> None:
 
 @pytest.mark.asyncio
 async def test_loader_revalidates_fresh_detail_author(monkeypatch: pytest.MonkeyPatch) -> None:
-    import moonmind.workflows.temporal.story_output_tools as tools
+    from moonmind.workflows.temporal import story_output_tools as tools
 
     selected = _candidate(11, SELF)
     requests: list[str] = []
@@ -657,7 +657,7 @@ async def test_completed_brief_carries_author_evidence_without_research(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """The trusted brief outputs keep scope/identity/counters for downstream use."""
-    import moonmind.workflows.temporal.story_output_tools as tools
+    from moonmind.workflows.temporal import story_output_tools as tools
     from types import SimpleNamespace
 
     selected = _candidate(50, SELF)
@@ -752,7 +752,7 @@ async def test_identity_lookup_is_isolated_per_credential(
     for the same account and a token for another account resolve
     independently (hermetic credential isolation without shared state).
     """
-    import moonmind.workflows.adapters.github_service as service_module
+    from moonmind.workflows.adapters import github_service as service_module
 
     async def _fake_get(self: Any, url: str, **kwargs: Any) -> _Response:
         assert url == "https://api.github.com/user"
