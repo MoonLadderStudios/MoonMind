@@ -141,16 +141,15 @@ def test_closed_disposition_never_reports_success() -> None:
         # Idempotent close retry reconciles an already-closed issue.
         ("closed", "to_closed", {"completion_verified": True}, "retry", True, "allowed"),
         ("closed", "to_closed", {}, "retry", False, "missing_guard"),
-        # Idempotent self-transitions reconcile to already_applied instead of
-        # failing the workflow: already in the desired state is success.
+        # Idempotent code-review retry reconciles to already_applied instead
+        # of failing the workflow: already in review with verified PR
+        # evidence is success. All other unlisted pairs still need an
+        # explicit decision; there is no reason-only release to Available.
         ("code_review", "to_code_review",
          {"gates_satisfied": True, "pr_url_verified": "https://github.com/o/r/pull/1"}, "publish", True, "allowed"),
         ("code_review", "to_code_review", {"gates_satisfied": True}, "publish", False, "missing_guard"),
         ("code_review", "to_code_review",
          {"gates_satisfied": True, "pr_url_verified": "https://github.com/o/r/pull/1"}, "", False, "missing_guard"),
-        ("available", "to_available", {}, "release", True, "allowed"),
-        ("recovery_needed", "to_recovery_needed", {}, "still waiting", True, "allowed"),
-        ("needs_attention", "to_needs_attention", {}, "still blocked", True, "allowed"),
         # Unsupported transitions require an explicit authority decision.
         ("available", "to_recovery_needed", {"admission_passed": True}, "x", False, "unsupported_transition"),
         # Terminal and blocked states deny new transitions.
@@ -514,6 +513,8 @@ async def test_finalize_when_already_in_code_review_is_already_applied(monkeypat
     # Second PR is still linked for the review journey.
     assert "comment" in result.outputs["appliedActions"]
     assert "status: code-review" in result.outputs["confirmedLabels"]
+    # Contention is explicit: both PRs stay visible, review owner decides.
+    assert any("already in code-review" in w for w in result.outputs.get("warnings", []))
 
 
 @pytest.mark.asyncio

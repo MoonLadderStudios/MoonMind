@@ -505,25 +505,20 @@ def plan_transition(
         )
     required = _TRANSITION_REQUIREMENTS.get((from_settled, to_target))
     if required is None:
-        # Idempotent self-transitions: already in the desired state is success,
-        # not a workflow failure. This is one generic capability-derived rule
-        # instead of one enumerated row per settled state. A lost retry, a
-        # re-run finalize, or a losing contender that already observed the
-        # winner's label reconciles to already_applied (empty mutation plan)
-        # rather than failed_unrecoverable. Existing table entries (e.g.
-        # in_progress self, closed self) keep their stricter guards.
+        # Idempotent code-review retry: already in the desired state is
+        # success, not a workflow failure. A lost finalize retry, a re-run,
+        # or a losing contender that observed the winner's code-review label
+        # reconciles to already_applied (empty mutation plan) rather than
+        # failed_unrecoverable. Same evidence bar as a normal move to code
+        # review: do not claim already-in-review without verified PR
+        # evidence. All other unlisted pairs still require an explicit
+        # decision; in particular there is no reason-only release to
+        # Available that could publish false release evidence.
         if (
-            from_settled in _SETTLED_TO_LABEL
-            and to_target in _TARGET_TO_LABEL
-            and _SETTLED_TO_LABEL.get(from_settled)
-            == _TARGET_TO_LABEL.get(to_target)
+            from_settled == SETTLED_CODE_REVIEW
+            and to_target == TO_CODE_REVIEW
         ):
-            if to_target == TO_CODE_REVIEW:
-                # Same bar as a normal move to code review: do not claim
-                # already-in-review without verified PR evidence.
-                required = ("gates_satisfied", "pr_url_verified")
-            else:
-                required = ()
+            required = ("gates_satisfied", "pr_url_verified")
         else:
             return TransitionDecision(
                 allowed=False,
@@ -547,11 +542,7 @@ def plan_transition(
             missing_evidence=missing,
             summary=f"Transition {from_settled} -> {to_target} is missing required guard evidence: {', '.join(missing)}.",
         )
-    if (
-        to_target == TO_AVAILABLE
-        and from_settled != SETTLED_AVAILABLE
-        and not _truthy_evidence(evidence_mapping.get("terminal_proof"))
-    ):
+    if to_target == TO_AVAILABLE and not _truthy_evidence(evidence_mapping.get("terminal_proof")):
         return TransitionDecision(
             allowed=False,
             from_settled=from_settled,
