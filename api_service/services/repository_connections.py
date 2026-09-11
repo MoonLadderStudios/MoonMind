@@ -329,7 +329,7 @@ class RepositoryConnectionService:
         record = await self._get_record(connection.id)
         if record is None or record.tombstone:
             raise RepositoryRouteError(REPOSITORY_SETUP_REQUIRED, "connection not found")
-        current = self._check_use(
+        self._check_use(
             record=record,
             principal_ref=principal_ref,
             principal_scope=principal_scope,

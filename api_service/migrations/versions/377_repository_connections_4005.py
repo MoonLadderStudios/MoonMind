@@ -19,7 +19,14 @@ import sqlalchemy as sa
 from alembic import op
 from sqlalchemy.dialects import postgresql
 
-__all__ = ["revision", "down_revision", "upgrade", "downgrade"]
+__all__ = [
+    "revision",
+    "down_revision",
+    "branch_labels",
+    "depends_on",
+    "upgrade",
+    "downgrade",
+]
 
 revision: str = "377_repository_connections_4005"
 down_revision: Union[str, None] = "376_drop_manifest_registry_4192"
