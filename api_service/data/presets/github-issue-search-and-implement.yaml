@@ -5,7 +5,9 @@ description: Search GitHub issues for the best eligible match under the shared l
   is a continuation candidate only with sufficient stopped-writer, prior-work, retry,
   and policy evidence), or the first eligible unblocked issue when the search is blank,
   then implement it following the GitHub Issue Implement workflow, adopting any safely
-  recoverable partial PR and updating the issue.
+  recoverable partial PR and updating the issue. By default only issues created by
+  the GitHub account used for this search are eligible; enable Include issues created
+  by other users to broaden author eligibility.
 scope: global
 tags:
 - github
@@ -60,6 +62,15 @@ annotations:
           scan for the first eligible candidate without blocking dependencies. Safe
           recoveries within equivalent scope/priority are preferred under a bounded
           fair policy so one difficult issue cannot monopolize recurring runs.
+          By default only issues created by the GitHub account used for this search
+          are eligible; enable Include issues created by other users to search other
+          accounts.
+      include_all_authors:
+        type: boolean
+        title: Include issues created by other users
+        description: By default, only issues created by the GitHub account used for
+          this search are eligible.
+        default: false
       repository:
         type: string
         title: Repository
@@ -81,6 +92,7 @@ annotations:
       widget: text
       advanced: true
   defaults:
+    include_all_authors: false
     run_verify: true
 inputs:
 - name: issue_search
@@ -88,6 +100,11 @@ inputs:
   type: text
   required: false
   default: ''
+- name: include_all_authors
+  label: Include issues created by other users
+  type: boolean
+  required: false
+  default: false
 - name: repository
   label: Repository
   type: text
@@ -139,8 +156,13 @@ steps:
 
     The trusted brief tool announces before expensive assessment and settles this
     attempt's own announcement/writers before any recandidation on a detected
-    competitor. Preserve the resolved issue and predecessor across replay/retry and
+    competitor.     Preserve the resolved issue and predecessor across replay/retry and
     never repeat search during recovery of an already selected issue.
+
+    By default only issues created by the GitHub account used for this search are
+    eligible. Enable Include issues created by other users to broaden author
+    eligibility; that opt-in never bypasses repository, open-state, lifecycle,
+    blocker, attempt, recovery, retry, verification, or publication policy.
   tool:
     id: github.load_issue_preset_brief
     requiredCapabilities:
@@ -148,6 +170,7 @@ steps:
     inputs:
       repository: '{{ inputs.repository or context.get(''repository'', '''') }}'
       issueSearch: '{{ inputs.issue_search }}'
+      includeAllAuthors: '{{ inputs.include_all_authors }}'
       artifactPath: artifacts/github-issue-implement-brief.json
       predecessorStopped: '{{ context.get(''predecessorStopped'', context.get(''predecessor_stopped'', '''')) }}'
       handoffUsable: '{{ context.get(''handoffUsable'', context.get(''handoff_usable'', '''')) }}'

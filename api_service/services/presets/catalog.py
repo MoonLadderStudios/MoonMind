@@ -3077,6 +3077,48 @@ class PresetCatalogService:
                         }
                     ],
                 )
+            if input_type == "boolean":
+                # Strict typed boundary (MoonLadderStudios/MoonMind#4257): only
+                # actual booleans are accepted. Omitted inputs arrive as the
+                # schema default; an explicit empty string for an optional
+                # boolean is treated as omitted so unfilled forms materialize
+                # the default. Explicit null, strings ("true"/"false"), numbers,
+                # arrays, or objects must fail rather than coerce by truthiness.
+                if name in submitted and submitted[name] in (None, ""):
+                    if submitted[name] is None:
+                        raise PresetValidationError(
+                            f"Input '{name}' must be a boolean value.",
+                            errors=[
+                                {
+                                    "path": f"preset.inputs.{name}",
+                                    "message": f"{definition.get('label') or name} must be a boolean value.",
+                                    "code": "invalid_type",
+                                    "recoverable": True,
+                                }
+                            ],
+                        )
+                    # Empty-string submission for an optional boolean is
+                    # treated as omitted so unfilled forms materialize the
+                    # schema default.
+                    resolved[name] = default
+                    continue
+                if isinstance(raw_value, bool):
+                    resolved[name] = raw_value
+                    continue
+                if raw_value in (None, ""):
+                    resolved[name] = raw_value
+                    continue
+                raise PresetValidationError(
+                    f"Input '{name}' must be a boolean value.",
+                    errors=[
+                        {
+                            "path": f"preset.inputs.{name}",
+                            "message": f"{definition.get('label') or name} must be a boolean value.",
+                            "code": "invalid_type",
+                            "recoverable": True,
+                        }
+                    ],
+                )
             if raw_value in (None, ""):
                 resolved[name] = raw_value
                 continue
@@ -3141,20 +3183,6 @@ class PresetCatalogService:
                         ],
                     )
                 resolved[name] = object_value
-                continue
-            if input_type == "boolean":
-                if isinstance(raw_value, bool):
-                    resolved[name] = raw_value
-                else:
-                    lowered = str(raw_value).strip().lower()
-                    if lowered in {"1", "true", "yes", "on"}:
-                        resolved[name] = True
-                    elif lowered in {"0", "false", "no", "off"}:
-                        resolved[name] = False
-                    else:
-                        raise PresetValidationError(
-                            f"Input '{name}' must be a boolean value."
-                        )
                 continue
             if input_type == "enum":
                 options = [str(item).strip() for item in definition.get("options", [])]

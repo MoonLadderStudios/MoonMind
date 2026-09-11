@@ -90,11 +90,19 @@ async def test_search_publication_recovers_missing_pr_before_status(
         "body": "Preserve active dependencies and durable evidence.\n" * 180
         + "Keep the complete acceptance criteria.",
         "html_url": f"https://github.com/{repository}/issues/{number}",
+        "user": {"id": 4227001, "login": "publication-searcher"},
         "labels": [],
+    }
+    search_identity = {
+        "id": 4227001,
+        "login": "publication-searcher",
+        "type": "User",
     }
 
     def github_http(request):
         operations.append((request.method, request.url.path))
+        if request.url.path.rstrip("/").endswith("/user"):
+            return httpx.Response(200, json=dict(search_identity))
         if "/comments" in request.url.path:
             # Live comment readability gate expects a GitHub comment list.
             return httpx.Response(200, json=[])

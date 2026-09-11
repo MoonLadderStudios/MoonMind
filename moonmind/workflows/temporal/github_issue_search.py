@@ -269,6 +269,177 @@ def is_lifecycle_selectable_candidate(
     return True
 
 
+# Author scope for GitHub Issue Search and Implement (issue #4257). The
+# default work-selection boundary admits only issues created by the
+# authenticated GitHub account performing the search; an explicit all-author
+# opt-in removes that automatic constraint. Self-authorship never bypasses
+# repository, open-state, lifecycle, blocker, attempt, recovery, retry,
+# verification, or publication policy.
+AUTHOR_SCOPE_SELF = "authenticated_user"
+AUTHOR_SCOPE_ALL = "all"
+
+SELF_ONLY_IDENTITY_ERROR = (
+    "MoonMind could not determine the GitHub account used for this search. "
+    'Use a user-associated GitHub credential, or explicitly enable "Include '
+    'issues created by other users".'
+)
+
+CONFLICTING_AUTHOR_FILTER_ERROR = (
+    "GitHub issue search includes an author filter for another account. "
+    'Enable "Include issues created by other users" to search issues created '
+    "by other accounts."
+)
+
+
+def parse_include_all_authors(value: Any) -> bool:
+    """Strictly parse the author-scope boundary value.
+
+    Only actual booleans are accepted; omitted input becomes ``False``.
+    Strings (including ``"true"``/``"false"``), numbers, null, arrays, and
+    objects are rejected rather than coerced by truthiness.
+    """
+    if value is None:
+        return False
+    if isinstance(value, bool):
+        return value
+    raise ValueError(
+        'GitHub issue search scope "include_all_authors" must be a boolean value.'
+    )
+
+
+def candidate_author_id(candidate: Mapping[str, Any]) -> int | None:
+    """Return the candidate's author account ID, or None when missing/malformed.
+
+    The durable account ID is authoritative: a matching login with a different
+    ID does not qualify, while a matching ID with an updated login is the same
+    account. Bot-created issues carry the actual creating account.
+    """
+    user = candidate.get("user")
+    if not isinstance(user, Mapping):
+        return None
+    account_id = user.get("id")
+    if type(account_id) is not int or account_id <= 0:
+        return None
+    return account_id
+
+
+def candidate_author_login(candidate: Mapping[str, Any]) -> str:
+    """Return the candidate's author login, or "" when absent."""
+    user = candidate.get("user")
+    if not isinstance(user, Mapping):
+        return ""
+    login = user.get("login")
+    return login.strip() if isinstance(login, str) else ""
+
+
+_AUTHOR_QUALIFIER_RE = re.compile(r"(?i)(?:^|[\s(])(?P<neg>-)?author:(?P<value>\S+)")
+_NOT_AUTHOR_QUALIFIER_RE = re.compile(r"(?i)(?:^|[\s()])(?:NOT)\s+author:(?P<value>\S+)")
+
+
+def _strip_quoted_literals(query: str) -> str:
+    """Remove double/single-quoted spans so literal text is never a qualifier."""
+    return re.sub(r'"[^"]*"|\'[^\']*\'', " ", query)
+
+
+def _author_qualifier_values(query: str) -> tuple[list[str], list[str]]:
+    """Split author qualifier values into included and excluded login sets."""
+    stripped = _strip_quoted_literals(query)
+    included: list[str] = []
+    excluded: list[str] = []
+    not_excluded: set[str] = set()
+    for match in _NOT_AUTHOR_QUALIFIER_RE.finditer(stripped):
+        value = match.group("value").strip().strip(",;()")
+        if value:
+            excluded.append(value)
+            not_excluded.add(value.lower())
+    for match in _AUTHOR_QUALIFIER_RE.finditer(stripped):
+        # GitHub logins never contain these delimiters; strip surrounding
+        # grouping/punctuation so "(author:@me)" normalizes instead of
+        # conflicting.
+        value = match.group("value").strip().strip(",;()")
+        if not value:
+            continue
+        if value.lower() in not_excluded:
+            # Already captured as a NOT-exclusion; the plain scan also sees
+            # the token but the negation owns its meaning.
+            continue
+        (excluded if match.group("neg") else included).append(value)
+    return included, excluded
+
+
+def plan_author_scoped_query(
+    *, query: str, login: str, include_all_authors: bool,
+) -> tuple[str | None, dict[str, str] | None]:
+    """Build the effective provider query for the requested author scope.
+
+    Returns ``(effective_query, None)`` on success, or ``(None, failure)``
+    with a field-addressable ``error``/``reasonCode`` when the authored query
+    conflicts with the enforced scope. In all-author mode the authored query
+    passes through unchanged. An empty effective remainder means the authored
+    query carried only a normalized self-author qualifier.
+    """
+    if include_all_authors:
+        return query, None
+    normalized_login = login.strip()
+    if not normalized_login:
+        return None, {
+            "error": SELF_ONLY_IDENTITY_ERROR,
+            "reasonCode": "identity_unavailable",
+        }
+    included, excluded = _author_qualifier_values(query)
+    self_lower = normalized_login.lower()
+    for value in included:
+        if value.lower() not in {"@me", self_lower}:
+            return None, {
+                "error": CONFLICTING_AUTHOR_FILTER_ERROR,
+                "reasonCode": "conflicting_author_filter",
+            }
+    for value in excluded:
+        if value.lower() in {"@me", self_lower}:
+            return None, {
+                "error": CONFLICTING_AUTHOR_FILTER_ERROR,
+                "reasonCode": "conflicting_author_filter",
+            }
+    if len(set(value.lower() for value in included)) > 1:
+        return None, {
+            "error": CONFLICTING_AUTHOR_FILTER_ERROR,
+            "reasonCode": "conflicting_author_filter",
+        }
+    has_top_or = (
+        re.search(
+            r"(?i)(?:^|[\s()])(?:OR)(?:$|[\s()])",
+            _strip_quoted_literals(f" {query} "),
+        )
+        is not None
+    )
+    if has_top_or and (included or excluded):
+        # An author qualifier combined with top-level OR cannot be normalized
+        # without rewriting authored meaning; reject rather than widen.
+        return None, {
+            "error": CONFLICTING_AUTHOR_FILTER_ERROR,
+            "reasonCode": "conflicting_author_filter",
+        }
+    # Normalize accepted self-author qualifiers away so the provider request
+    # carries exactly one author constraint. Accepted NOT-exclusions of other
+    # accounts are redundant under the automatic self constraint and are
+    # removed wholly so no dangling NOT can negate the applied constraint.
+    remainder = _NOT_AUTHOR_QUALIFIER_RE.sub(" ", query)
+    remainder = _AUTHOR_QUALIFIER_RE.sub(" ", remainder)
+    remainder = re.sub(r"\(\s*\)", " ", remainder)
+    remainder = re.sub(r"\s+", " ", remainder).strip()
+    if has_top_or and remainder:
+        # Parenthesize so the author constraint governs the whole expression
+        # instead of binding to one side of an OR. Candidate-side ID
+        # validation remains authoritative regardless of provider parsing.
+        remainder = f"({remainder})"
+    effective = (
+        f"{remainder} author:{normalized_login}".strip()
+        if remainder
+        else f"author:{normalized_login}"
+    )
+    return effective, None
+
+
 def _recovery_handoff_usable(handoff: Mapping[str, Any] | None) -> bool:
     """Return True when supplied handoff evidence can drive a continuation."""
     if not isinstance(handoff, Mapping):
@@ -303,6 +474,7 @@ async def resolve_issue(
     active_attempt_comments: Sequence[Mapping[str, Any]] | None = None,
     own_announcement_abandoned: bool | None = None,
     writers_settled: bool | None = None,
+    include_all_authors: bool = False,
 ) -> tuple[int | None, dict[str, Any]]:
     """Select the best search match, or first unblocked open issue, within 500 rows.
 
@@ -310,6 +482,18 @@ async def resolve_issue(
     states and skips issues already marked with an in-progress status label so
     concurrent work is not selected twice. Supplied unresolved active-attempt
     evidence blocks admission even when the label is missing.
+
+    Author scope (issue #4257): unless ``include_all_authors`` is true, only
+    issues created by the authenticated GitHub account performing the search
+    are eligible. The search credential is resolved once and reused for the
+    authenticated ``GET /user`` identity lookup, candidate discovery, and
+    provider query scoping; the durable account ID (not the login) validates
+    returned candidates before any expensive dependency/attempt check or
+    announcement. Identity failures stop selection with an actionable
+    diagnostic and never fall back to all authors. The checkbox broadens only
+    author eligibility: repository, open-state, lifecycle, blocker, attempt,
+    recovery, and retry policy still apply, and dependency reads are never
+    author-filtered.
 
     A Recovery-needed candidate additionally requires usable handoff evidence
     (``predecessor_stopped`` plus ``handoff_usable``): without it the later
@@ -332,6 +516,12 @@ async def resolve_issue(
         raise ValueError(
             "GitHub issue search requires an explicit owner/repository scope."
         )
+    if not isinstance(include_all_authors, bool):
+        raise ValueError(
+            'GitHub issue search scope "include_all_authors" must be a boolean value.'
+        )
+    author_scope = AUTHOR_SCOPE_ALL if include_all_authors else AUTHOR_SCOPE_SELF
+    blank_search = not str(query or "").strip()
     # Req 4 recandidate gate (issue #4178): a search may consider another
     # candidate only after its own abandoned announcement and writers are
     # conclusively settled. Ordinary first selections pass no signals and
@@ -345,17 +535,21 @@ async def resolve_issue(
         if not gate["allowed"]:
             return None, {
                 "searchEvidence": {
-                    "fallbackScanning": not query,
+                    "fallbackScanning": blank_search,
                     "pagesExamined": 0,
                     "candidatesExamined": 0,
+                    "authorScope": author_scope,
+                    "authorMismatchesSkipped": 0,
                 },
                 "error": gate["summary"],
             }
     evidence: dict[str, Any] = {
         "searchEvidence": {
-            "fallbackScanning": not query,
+            "fallbackScanning": blank_search,
             "pagesExamined": 0,
             "candidatesExamined": 0,
+            "authorScope": author_scope,
+            "authorMismatchesSkipped": 0,
         }
     }
     counts = evidence["searchEvidence"]
@@ -366,12 +560,63 @@ async def resolve_issue(
             "error": error or "GitHub issue search is unavailable.",
         }
 
+    authenticated_user: dict[str, Any] | None = None
+    effective_query = query
+
     async with httpx.AsyncClient(timeout=30.0) as client:
+        if not include_all_authors:
+            # Resolve the search credential's account once within this
+            # operation and reuse the same credential for identity,
+            # discovery, and provider query scoping. The lookup is one
+            # bounded request outside the candidate/prerequisite budgets.
+            get_user = getattr(
+                github_service,
+                "get_authenticated_user",
+                GitHubService.get_authenticated_user,
+            )
+            authenticated_user, identity_failure = await get_user(
+                token=token, client=client
+            )
+            if identity_failure is not None or authenticated_user is None:
+                failure = identity_failure or {}
+                return None, {
+                    **evidence,
+                    "error": str(
+                        failure.get("error") or SELF_ONLY_IDENTITY_ERROR
+                    ),
+                    "reasonCode": str(
+                        failure.get("reasonCode") or "identity_unavailable"
+                    ),
+                }
+            counts["authenticatedUser"] = {
+                "id": authenticated_user["id"],
+                "login": authenticated_user["login"],
+            }
+            if not blank_search:
+                planned, query_failure = plan_author_scoped_query(
+                    query=query,
+                    login=str(authenticated_user["login"]),
+                    include_all_authors=False,
+                )
+                if query_failure is not None or planned is None:
+                    failure = query_failure or {}
+                    return None, {
+                        **evidence,
+                        "error": str(
+                            failure.get("error") or CONFLICTING_AUTHOR_FILTER_ERROR
+                        ),
+                        "reasonCode": str(
+                            failure.get("reasonCode") or "conflicting_author_filter"
+                        ),
+                        "field": "issueSearch",
+                        "inputPath": "preset.inputs.issue_search",
+                    }
+                effective_query = planned
         for page in range(1, 6):
-            if query:
+            if not blank_search:
                 url = "https://api.github.com/search/issues"
                 params = {
-                    "q": f"{query} repo:{repository} is:issue is:open",
+                    "q": f"{effective_query} repo:{repository} is:issue is:open",
                     "per_page": 100,
                     "page": page,
                 }
@@ -384,6 +629,8 @@ async def resolve_issue(
                     "per_page": 100,
                     "page": page,
                 }
+                if not include_all_authors and authenticated_user is not None:
+                    params["creator"] = str(authenticated_user["login"])
             try:
                 response = await client.get(
                     url, params=params, headers=github_service._github_headers(token)
@@ -396,7 +643,7 @@ async def resolve_issue(
                     "error": f"GitHub issue search failed: {type(exc).__name__}.",
                 }
             counts["pagesExamined"] += 1
-            if query and (
+            if not blank_search and (
                 not isinstance(payload, Mapping)
                 or payload.get("incomplete_results") is not False
             ):
@@ -404,7 +651,7 @@ async def resolve_issue(
                     **evidence,
                     "error": "GitHub returned incomplete or malformed search evidence.",
                 }
-            candidates = payload.get("items") if query else payload
+            candidates = payload.get("items") if not blank_search else payload
             if not isinstance(candidates, list) or len(candidates) > 100:
                 return None, {
                     **evidence,
@@ -424,6 +671,17 @@ async def resolve_issue(
                         **evidence,
                         "error": "GitHub candidate identity, state, or blocker evidence is invalid.",
                     }
+                if not include_all_authors and authenticated_user is not None:
+                    author_id = candidate_author_id(candidate)
+                    if author_id is None:
+                        return None, {
+                            **evidence,
+                            "error": "GitHub returned invalid author evidence for a candidate.",
+                            "reasonCode": "invalid_author_evidence",
+                        }
+                    if author_id != authenticated_user["id"]:
+                        counts["authorMismatchesSkipped"] += 1
+                        continue
                 normalized = dict(candidate)
                 labels = candidate["labels"]
                 normalized["labels"] = [label["name"] for label in labels]
@@ -470,12 +728,42 @@ async def resolve_issue(
                     continue
                 if candidate_blockers:
                     continue
+                if not include_all_authors and authenticated_user is not None:
+                    counts["selectedIssueAuthor"] = {
+                        "id": authenticated_user["id"],
+                        "login": candidate_author_login(candidate)
+                        or str(authenticated_user["login"]),
+                    }
+                else:
+                    counts["selectedIssueAuthor"] = {
+                        "id": candidate_author_id(candidate),
+                        "login": candidate_author_login(candidate),
+                    }
                 return candidate["number"], evidence
             if len(candidates) < 100:
+                if not include_all_authors:
+                    return None, {
+                        **evidence,
+                        "error": (
+                            "No eligible open GitHub issue created by the "
+                            "authenticated search account found; candidate pages "
+                            "exhausted."
+                        ),
+                        "reasonCode": "no_eligible_self_authored_issue",
+                    }
                 return None, {
                     **evidence,
                     "error": "No eligible open GitHub issue found; candidate pages exhausted.",
                 }
+    if not include_all_authors:
+        return None, {
+            **evidence,
+            "error": (
+                "No eligible open GitHub issue created by the authenticated "
+                "search account found within the 500-candidate scan limit."
+            ),
+            "reasonCode": "no_eligible_self_authored_issue",
+        }
     return None, {
         **evidence,
         "error": "No eligible GitHub issue found within the 500-candidate scan limit.",

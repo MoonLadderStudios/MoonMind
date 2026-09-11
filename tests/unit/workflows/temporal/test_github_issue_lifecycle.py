@@ -1270,6 +1270,7 @@ def _search_candidate(number: int, labels: list[str]) -> dict[str, Any]:
         "title": f"candidate {number}",
         "body": "Build the thing.",
         "html_url": f"https://github.com/o/r/issues/{number}",
+        "user": {"id": 7001, "login": "lifecycle-searcher"},
         "labels": [{"name": label} for label in labels],
     }
 
@@ -1287,6 +1288,11 @@ class _SearchFakeResponse:
 
 class _SearchFakeHttpClient:
     payload: dict[str, Any] = {}
+    user_payload: dict[str, Any] = {
+        "id": 7001,
+        "login": "lifecycle-searcher",
+        "type": "User",
+    }
 
     def __init__(self, *args: Any, **kwargs: Any) -> None:
         pass
@@ -1298,6 +1304,8 @@ class _SearchFakeHttpClient:
         return None
 
     async def get(self, url: str, **kwargs: Any):
+        if url.rstrip("/").endswith("/user"):
+            return _SearchFakeResponse(dict(type(self).user_payload))
         return _SearchFakeResponse(dict(type(self).payload))
 
 

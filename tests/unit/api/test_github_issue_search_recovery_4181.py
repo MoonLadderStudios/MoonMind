@@ -110,10 +110,14 @@ def _issue(number=4025, **overrides):
         "title": "Recovery acceptance",
         "body": "Acceptance body.",
         "html_url": f"https://github.com/{REPOSITORY}/issues/{number}",
+        "user": {"id": 4181001, "login": "recovery-searcher"},
         "labels": [{"name": "bug"}],
     }
     base.update(overrides)
     return base
+
+
+_RECOVERY_IDENTITY = {"id": 4181001, "login": "recovery-searcher", "type": "User"}
 
 
 @pytest.fixture
@@ -124,6 +128,8 @@ def activity_boundary(monkeypatch):
 
     def handler(request):
         requests.append(request)
+        if request.url.path.rstrip("/").endswith("/user"):
+            return httpx.Response(200, json=dict(_RECOVERY_IDENTITY))
         if "/comments" in request.url.path:
             if request.method == "GET":
                 return httpx.Response(200, json=[])

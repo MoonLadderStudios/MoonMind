@@ -90,6 +90,16 @@ GITHUB_CHECK_ISSUE_BLOCKERS_TOOL_NAME = "github.check_issue_blockers"
 GITHUB_UPDATE_ISSUE_STATUS_TOOL_NAME = "github.update_issue_status"
 GITHUB_FINALIZE_FAILED_ATTEMPT_TOOL_NAME = "github.finalize_failed_attempt"
 GITHUB_RESOLVE_PULL_REQUEST_TARGET_TOOL_NAME = "github.resolve_pull_request_target"
+# Author scope for GitHub Issue Search and Implement (issue #4257). The
+# automatic search path admits only issues created by the authenticated
+# search account unless the authoring-time checkbox explicitly opts into all
+# authors. Explicit issue-number paths are never author-scoped.
+_GITHUB_ISSUE_SEARCH_PRESET_SLUG = "github-issue-search-and-implement"
+_AUTHOR_SCOPE_REFRESH_ERROR = (
+    "This saved workflow was created before GitHub Issue Search defaulted to "
+    "issues created by the authenticated search account. Refresh (reapply) the "
+    "preset so the author scope choice is recorded, then retry."
+)
 # The status tool runs inside a 60-second activity. One fetch plus the targeted
 # label operations and optional comment must leave enough time for the activity
 # to classify results.
@@ -4496,6 +4506,9 @@ def _github_issue_payload(data: Mapping[str, Any], repository: str) -> dict[str,
         number = int(str(number_raw).strip())
     except (TypeError, ValueError):
         number = 0
+    raw_user = data.get("user")
+    raw_author_id = raw_user.get("id") if isinstance(raw_user, Mapping) else None
+    raw_author_login = raw_user.get("login") if isinstance(raw_user, Mapping) else None
     return {
         "repository": repository,
         "number": number,
@@ -4504,6 +4517,15 @@ def _github_issue_payload(data: Mapping[str, Any], repository: str) -> dict[str,
         "url": _string(data.get("html_url") or data.get("url")),
         "state": _string(data.get("state")),
         "labels": normalized_labels,
+        # Preserve the provider's author identity through normalization so
+        # the trusted brief carries the validated author for downstream
+        # evidence. Comparison authority stays with the account ID.
+        "author": {
+            "id": raw_author_id if type(raw_author_id) is int else None,
+            "login": raw_author_login.strip()
+            if isinstance(raw_author_login, str) and raw_author_login.strip()
+            else "",
+        },
     }
 
 
@@ -4637,6 +4659,155 @@ def _github_brief_prior_work_pr(
     return ""
 
 
+def _github_issue_search_scope_present(inputs: Mapping[str, Any]) -> bool:
+    """Return True when the author-scope choice was recorded at authoring time."""
+    return "includeAllAuthors" in inputs or "include_all_authors" in inputs
+
+
+def _github_saved_schedule_context(
+    inputs: Mapping[str, Any], context: Mapping[str, Any] | None
+) -> bool:
+    """Detect a pre-change frozen saved-plan launch without a scope choice.
+
+    Saved schedules launching new executions carry recurrence provenance
+    (``system.recurrence.definitionId``) or applied preset templates. Fresh
+    authoring through the current catalog always records the scope choice,
+    so its absence together with this provenance means the plan was expanded
+    before the author-scope contract existed.
+    """
+    for source in (inputs, context):
+        if not isinstance(source, Mapping):
+            continue
+        system = source.get("system")
+        if isinstance(system, Mapping):
+            recurrence = system.get("recurrence")
+            if isinstance(recurrence, Mapping) and (
+                recurrence.get("definitionId") or recurrence.get("definition_id")
+            ):
+                return True
+        for key in ("workflow", "task"):
+            node = source.get(key)
+            if not isinstance(node, Mapping):
+                continue
+            for template in node.get("appliedStepTemplates") or []:
+                if not isinstance(template, Mapping):
+                    continue
+                if (
+                    str(template.get("slug") or "").strip()
+                    == _GITHUB_ISSUE_SEARCH_PRESET_SLUG
+                ):
+                    return True
+                for child in template.get("includes") or []:
+                    if (
+                        isinstance(child, Mapping)
+                        and str(child.get("slug") or "").strip()
+                        == _GITHUB_ISSUE_SEARCH_PRESET_SLUG
+                    ):
+                        return True
+    return False
+
+
+def _parse_issue_search_author_scope(
+    inputs: Mapping[str, Any], context: Mapping[str, Any] | None
+) -> tuple[bool, dict[str, Any] | None]:
+    """Parse the trusted author-scope boundary for the automatic search path.
+
+    Returns ``(include_all_authors, None)`` on success. Omitted current input
+    materializes ``False``; explicit booleans are preserved. Malformed values
+    (strings, numbers, null, arrays, objects) fail validation. A frozen saved
+    plan without a recorded scope choice fails with an actionable
+    refresh-required outcome before any selection; fresh direct tool calls
+    default to self-only.
+    """
+    raw = (
+        inputs.get("includeAllAuthors")
+        if "includeAllAuthors" in inputs
+        else inputs.get("include_all_authors")
+    )
+    if raw is None and not _github_issue_search_scope_present(inputs):
+        if _github_saved_schedule_context(inputs, context):
+            return False, {
+                "reasonCode": "author_scope_refresh_required",
+                "refreshRequired": True,
+                "field": "issueSearch",
+                "inputPath": "preset.inputs.include_all_authors",
+                "error": _AUTHOR_SCOPE_REFRESH_ERROR,
+            }
+        return False, None
+    if isinstance(raw, bool):
+        return raw, None
+    return False, {
+        "reasonCode": "invalid_author_scope",
+        "field": "includeAllAuthors",
+        "inputPath": "preset.inputs.include_all_authors",
+        "error": 'GitHub issue search scope "include_all_authors" must be a boolean value.',
+    }
+
+
+def _confirm_selected_issue_author(
+    *,
+    issue_data: Mapping[str, Any],
+    search_evidence: Mapping[str, Any],
+    include_all_authors: bool,
+) -> tuple[dict[str, Any] | None, dict[str, Any] | None]:
+    """Revalidate the selected issue's author against fresh issue detail.
+
+    Returns ``(author, None)`` with the validated ``{"id", "login"}`` on
+    success, or ``(None, failure)`` before any announcement, label, or
+    dispatch for implementation. In all-author mode the fresh author is
+    recorded without constraint. Identity comparison uses the durable
+    account ID; a matching login with a different ID never qualifies.
+    """
+    inner = search_evidence.get("searchEvidence")
+    scope_evidence = dict(inner) if isinstance(inner, Mapping) else {}
+    fresh_user = issue_data.get("user")
+    fresh_id = (
+        fresh_user.get("id") if isinstance(fresh_user, Mapping) else None
+    )
+    fresh_login = (
+        fresh_user.get("login") if isinstance(fresh_user, Mapping) else None
+    )
+    fresh_login = (
+        fresh_login.strip()
+        if isinstance(fresh_login, str) and fresh_login.strip()
+        else ""
+    )
+    if include_all_authors:
+        if type(fresh_id) is not int or fresh_id <= 0:
+            return None, {
+                "reasonCode": "invalid_author_evidence",
+                "error": "GitHub returned invalid author evidence for the selected issue.",
+            }
+        return {"id": fresh_id, "login": fresh_login}, None
+    authenticated = scope_evidence.get("authenticatedUser")
+    expected_id = (
+        authenticated.get("id") if isinstance(authenticated, Mapping) else None
+    )
+    if type(expected_id) is not int or expected_id <= 0:
+        return None, {
+            "reasonCode": "identity_unavailable",
+            "error": (
+                "MoonMind could not determine the GitHub account used for this "
+                "search. Use a user-associated GitHub credential, or explicitly "
+                'enable "Include issues created by other users".'
+            ),
+        }
+    if type(fresh_id) is not int or fresh_id <= 0:
+        return None, {
+            "reasonCode": "invalid_author_evidence",
+            "error": "GitHub returned invalid author evidence for the selected issue.",
+        }
+    if fresh_id != expected_id:
+        return None, {
+            "reasonCode": "selected_issue_wrong_author",
+            "error": (
+                "The selected GitHub issue was not created by the authenticated "
+                "search account."
+            ),
+        }
+    return {"id": fresh_id, "login": fresh_login}, None
+
+
 async def load_github_issue_preset_brief(
     inputs: Mapping[str, Any],
     _context: Mapping[str, Any] | None = None,
@@ -4648,6 +4819,9 @@ async def load_github_issue_preset_brief(
     search_evidence: dict[str, Any] = {}
     prerequisite_lookup = PrerequisiteLookup()
     recovery_handoff: dict[str, Any] = _github_brief_recovery_handoff(inputs, _context)
+    # Automatic-search author scope (issue #4257). Explicit issue-number
+    # paths never consult this value.
+    include_all_authors = False
 
     async def blockers_for_issue(issue: Mapping[str, Any]) -> list[dict[str, Any]]:
         return await _resolved_github_blockers(
@@ -4659,6 +4833,18 @@ async def load_github_issue_preset_brief(
 
     if "issueSearch" in inputs:
         repository = _string(inputs.get("repository"))
+        # Author scope (issue #4257): the automatic search path defaults to
+        # self-authored issues; an explicit boolean opts into all authors.
+        # Frozen saved plans without a recorded choice stop here with an
+        # actionable refresh-required outcome before any selection.
+        include_all_authors, scope_failure = _parse_issue_search_author_scope(
+            inputs, _context
+        )
+        if scope_failure is not None:
+            return ToolResult(
+                status="FAILED",
+                outputs={"repository": repository, **scope_failure},
+            )
         # A recovery candidate without usable handoff evidence would fail
         # deterministically at the start transition (it requires
         # predecessor_stopped plus handoff_usable); the routed handoff above
@@ -4693,6 +4879,7 @@ async def load_github_issue_preset_brief(
                 writers_settled=_recandidate.get("writers_settled")
                 if _recandidate.get("present")
                 else None,
+                include_all_authors=include_all_authors,
             )
         except ValueError as exc:
             return ToolResult(status="FAILED", outputs={"error": str(exc)})
@@ -4767,6 +4954,38 @@ async def load_github_issue_preset_brief(
                 "error": "Selected GitHub issue changed or could not be confirmed before brief loading.",
             },
         )
+    if search_evidence:
+        # Author confirmation (issue #4257): revalidate the selected issue's
+        # author against fresh issue detail before the trusted brief/admission
+        # handoff. A wrong-author or unverifiable candidate never reaches
+        # announcement, labeling, or implementation dispatch. Explicit
+        # issue-number paths skip this automatic-search restriction.
+        confirmed_author, author_failure = _confirm_selected_issue_author(
+            issue_data=issue_data if isinstance(issue_data, Mapping) else {},
+            search_evidence=search_evidence,
+            include_all_authors=include_all_authors,
+        )
+        if author_failure is not None or confirmed_author is None:
+            failure = author_failure or {}
+            return ToolResult(
+                status="FAILED",
+                outputs={
+                    **search_evidence,
+                    "repository": repository,
+                    "issueNumber": issue_number,
+                    "reasonCode": str(
+                        failure.get("reasonCode") or "selected_issue_wrong_author"
+                    ),
+                    "error": str(
+                        failure.get("error")
+                        or "The selected GitHub issue was not created by the "
+                        "authenticated search account."
+                    ),
+                },
+            )
+        inner_evidence = search_evidence.get("searchEvidence")
+        if isinstance(inner_evidence, dict):
+            inner_evidence["selectedIssueAuthor"] = confirmed_author
     if not search_evidence and (
         not is_complete_open_issue(issue_data, repository)
         or issue_data["number"] != issue_number
