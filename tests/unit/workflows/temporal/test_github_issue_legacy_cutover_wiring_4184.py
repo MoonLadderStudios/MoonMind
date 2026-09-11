@@ -166,9 +166,11 @@ def test_assess_is_read_only_and_reports_incomplete_evidence() -> None:
         cutover_acts.assess_legacy_cutover_issue(repository=REPO, issue_number=ISSUE, service=service)
     )
     assert assessed["ok"] is True
-    # Plain notes carry no legacy signal: complete with no destructive findings.
+    # Plain notes carry no versioned handoff: absent metadata is incomplete
+    # evidence, never proof of no work. The assessment stays complete (all
+    # supplied evidence examined) but reports missing history for triage.
     assert assessed["complete"] is True
-    assert assessed["findings"] == []
+    assert any(f["finding"] == cutover.FINDING_MISSING_HISTORY for f in assessed["findings"])
     empty_service = _FakeCutoverService(issue={"state": "open", "labels": []}, comments=[])
     empty = _run(
         cutover_acts.assess_legacy_cutover_issue(
