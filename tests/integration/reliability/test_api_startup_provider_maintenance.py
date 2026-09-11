@@ -53,6 +53,19 @@ async def test_http_serves_while_bootstrap_waits_and_lifespan_owns_cleanup(
     monkeypatch.delattr(
         api_main.app.state, "omnigent_bootstrap_reconciliation_task", raising=False
     )
+    monkeypatch.delattr(api_main.app.state, "omnigent_inventory_task", raising=False)
+    from api_service.services import omnigent_agent_profile_service as inventory_service
+
+    inventory_calls = []
+    inventory_refreshed = asyncio.Event()
+
+    async def refresh_inventory():
+        inventory_calls.append(True)
+        if len(inventory_calls) > 1:
+            inventory_refreshed.set()
+
+    monkeypatch.setattr(inventory_service, "refresh_upstream_inventory", refresh_inventory)
+    monkeypatch.setattr(api_main, "_OMNIGENT_INVENTORY_REFRESH_INTERVAL_SECONDS", 0.05)
 
     # MoonLadderStudios/MoonMind#4192: native RAG retrieval is retired, so
     # startup no longer touches a retrieval service; no stub is needed.
@@ -157,6 +170,9 @@ async def test_http_serves_while_bootstrap_waits_and_lifespan_owns_cleanup(
             task = api_main.app.state.omnigent_bootstrap_reconciliation_task
             assert not task.done()
             assert not available.is_set(), "Startup must preserve the active lease"
+            await asyncio.wait_for(inventory_refreshed.wait(), timeout=1)
+            inventory_task = api_main.app.state.omnigent_inventory_task
+            assert not inventory_task.done()
             response = await client.get("/healthz")
             assert response.status_code == replay["expected"]["healthStatus"]
             assert response.json()["db"] == "connected"
@@ -179,5 +195,6 @@ async def test_http_serves_while_bootstrap_waits_and_lifespan_owns_cleanup(
             await engine.dispose()
 
     assert task.done(), "API shutdown must own reconciliation cleanup"
+    assert inventory_task.done(), "API shutdown must also stop inventory refresh"
     assert exited.is_set()
     assert cancelled == (not release_wait)
