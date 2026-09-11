@@ -736,7 +736,7 @@ async def test_issuer_timeout_and_scope_mismatch(adapter_kind: str) -> None:
         await acquirer.acquire(
             AcquisitionRequest(snapshot=_snapshot_for(conn), execution_owner="exec:t")
         )
-    assert exc_info.value.code == "BOUND_ISSUER_FAILED"
+    assert exc_info.value.code == BOUND_ISSUER_FAILED
 
     if adapter_kind == "pat":
         narrow: FakeExpiringAdapter | PatAdapter = PatAdapter(
