@@ -1128,7 +1128,7 @@ async def test_async_branch_lookup_keeps_event_loop_responsive(
             "ghp_test_token", "Octo/Repo"
         )
     )
-    await ticker_task
+    _ = await ticker_task
 
     assert [option.value for option in options] == ["main"]
     assert error is None

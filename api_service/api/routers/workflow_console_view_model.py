@@ -541,7 +541,6 @@ def _fetch_github_branch_exact(
                 raise
     except (httpx.HTTPError, ValueError):
         return False, None, "GitHub branch lookup is unavailable.", True
-    return False, None, "GitHub branch lookup is unavailable.", True
 
 
 async def _fetch_github_branch_exact_async(
@@ -600,7 +599,6 @@ async def _fetch_github_branch_exact_async(
                 raise
     except (httpx.HTTPError, ValueError):
         return False, None, "GitHub branch lookup is unavailable.", True
-    return False, None, "GitHub branch lookup is unavailable.", True
 
 def _github_repository_options_cache_key(token: str) -> str:
     return sha256(token.encode("utf-8")).hexdigest()
