@@ -855,11 +855,10 @@ async def test_default_preset_resolves_and_preserves_issue_across_agent_steps(
     mutations = [
         request for request in activity_boundary.requests if request.method != "GET"
     ]
-    # 2 claim POSTs from load (advisory in-progress) + 2 from the explicit
-    # In Progress step.
+    # 1 claim POST from load (advisory in-progress labels) + 2 from the
+    # explicit In Progress step (labels + handoff comment).
     assert [(request.method, request.url.path) for request in mutations] == [
         ("POST", f"/repos/{REPOSITORY}/issues/4025/labels"),
-        ("POST", f"/repos/{REPOSITORY}/issues/4025/comments"),
         ("POST", f"/repos/{REPOSITORY}/issues/4025/labels"),
         ("POST", f"/repos/{REPOSITORY}/issues/4025/comments"),
     ]
