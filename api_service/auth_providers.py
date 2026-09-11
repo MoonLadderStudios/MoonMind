@@ -3,7 +3,7 @@ import logging
 import os
 import uuid
 
-from fastapi import Depends, HTTPException
+from fastapi import Depends, HTTPException, Request
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from api_service.auth import (
@@ -115,6 +115,165 @@ async def get_default_user_from_db(
         raise HTTPException(status_code=500, detail="Default user not found")
     return user
 
+async def _resolve_advanced_user(
+    request: Request,
+    session: AsyncSession,
+    bearer_user,
+    *,
+    optional: bool,
+):
+    """Resolve the current user in `oidc`/`header` advanced modes.
+
+    Shared cookie/session-store and trusted-proxy authorities participate
+    in the main per-request current-user boundary (not only in the
+    dedicated login/proxy-me routes):
+
+    * `oidc`: the MoonMind session cookie issued by the callback is
+      validated through the shared ``resolve_current_user`` authority
+      (signature/purpose/expiry/revocation/generation/principal checks).
+      Requests without the cookie fall back to the bearer dependency so
+      worker/API-key callers keep working.
+    * `header`: the trusted-proxy asserted identity is validated (trusted
+      peer, single well-formed header, enrolled principal) and resolved
+      through the same #4119 authority as ``/proxy/me``. Requests without
+      the identity header fall back to the bearer dependency.
+
+    A presented-but-invalid advanced credential fails closed (401/403);
+    a missing one falls back to bearer, and a missing bearer fails with
+    401 (or ``None`` when ``optional``).
+    """
+    from moonmind.security import omnigent_auth_qualification as _q
+    from moonmind.security.auth_modes_4120 import get_request_production_mode as _mode
+
+    mode = _mode()
+
+    if mode == "oidc":
+        try:
+            control_config = build_moonmind_control_plane_config()
+        except Exception:
+            control_config = None
+        cookie_token = None
+        if control_config is not None:
+            try:
+                cookie_token = request.cookies.get(control_config.cookie_name)
+            except Exception:
+                cookie_token = None
+        if cookie_token:
+            from api_service.services.session_store import (
+                DbAccountStore,
+                DbRevocationStore,
+            )
+
+            account = await _q.resolve_current_user(
+                cookie_token=cookie_token,
+                bearer_token=None,
+                account_store=DbAccountStore(session),
+                revocation=DbRevocationStore(session),
+                config=control_config,
+                optional=False,
+            )
+            user = await session.get(User, account.user_id)
+            if user is None or not user.is_active:
+                from fastapi import HTTPException as _HTTP
+
+                raise _HTTP(status_code=403, detail="inactive")
+            return user
+    elif mode == "header":
+        presented: list[str] = []
+        try:
+            from api_service.services.advanced_auth_service_4124 import (
+                AdvancedAdmissionPolicy,
+                extract_proxy_identity_from_request,
+                resolve_proxy_user,
+                validate_advanced_mode_config,
+            )
+
+            proxy_config = validate_advanced_mode_config("header")
+            try:
+                raw_headers: list[tuple[str, str]] = [
+                    (k.decode("latin-1"), v.decode("latin-1"))
+                    for (k, v) in request.scope.get("headers", [])
+                ]
+            except Exception:
+                raw_headers = list(request.headers.items())
+            wanted = proxy_config.header_name.strip().lower()
+            presented = [
+                v for (k, v) in raw_headers if str(k).strip().lower() == wanted
+            ]
+            if presented:
+                peer_ip = (
+                    (request.client.host if request.client else "") or ""
+                )
+                identity = extract_proxy_identity_from_request(
+                    raw_headers,
+                    peer_ip=peer_ip,
+                    config=proxy_config,
+                    forwarded_host=request.headers.get("x-forwarded-host"),
+                    forwarded_proto=request.headers.get("x-forwarded-proto"),
+                )
+                user = await resolve_proxy_user(
+                    session, identity, policy=AdvancedAdmissionPolicy()
+                )
+                if not user.is_active:
+                    from fastapi import HTTPException as _HTTP
+
+                    raise _HTTP(status_code=403, detail="inactive")
+                return user
+        except Exception as exc:
+            from fastapi import HTTPException as _HTTP
+
+            # A presented proxy assertion that fails validation fails
+            # closed; only a fully missing header falls back to bearer.
+            if isinstance(exc, _HTTP):
+                raise
+            code = getattr(exc, "code", None)
+            if code == "misconfigured":
+                raise _HTTP(status_code=503, detail="unavailable")
+            if code in ("enrollment_required", "email_taken"):
+                raise _HTTP(status_code=403, detail="enrollment_required")
+            if isinstance(exc, _q.ForbiddenError):
+                raise _HTTP(
+                    status_code=403,
+                    detail=getattr(exc, "code", "forbidden") or "forbidden",
+                )
+            if isinstance(exc, _q.UnavailableError):
+                raise _HTTP(status_code=503, detail="unavailable")
+            if presented:
+                raise _HTTP(status_code=401, detail="auth_invalid")
+            # Missing header (AuthRequiredError with nothing presented):
+            # fall through to the bearer dependency below.
+
+    if bearer_user is not None:
+        return bearer_user
+    if optional:
+        return None
+    from fastapi import HTTPException as _HTTP
+
+    raise _HTTP(status_code=401, detail="auth_required")
+
+
+async def _advanced_current_user(
+    request: Request,
+    session: AsyncSession = Depends(get_async_session),
+    bearer_user=Depends(current_active_user_optional),
+):
+    """Strict advanced-mode current-user dependency (401 when missing)."""
+    return await _resolve_advanced_user(
+        request, session, bearer_user, optional=False
+    )
+
+
+async def _advanced_current_user_optional(
+    request: Request,
+    session: AsyncSession = Depends(get_async_session),
+    bearer_user=Depends(current_active_user_optional),
+):
+    """Optional advanced-mode current-user dependency (None when missing)."""
+    return await _resolve_advanced_user(
+        request, session, bearer_user, optional=True
+    )
+
+
 def get_current_user():
     """Return a dependency that yields the current user.
 
@@ -135,6 +294,13 @@ def get_current_user():
     global _cached_current_user_dependency
     from moonmind.security.auth_modes_4120 import get_request_production_mode
 
+    if get_request_production_mode() in ("oidc", "header"):
+        # #4124 advanced modes: the shared cookie/session-store (oidc) and
+        # trusted-proxy (header) authorities participate in the main
+        # per-request boundary with bearer fallback, so sessions minted by
+        # the callback and proxy assertions are honored by every protected
+        # router, not only the dedicated auth routes.
+        return _advanced_current_user
     if get_request_production_mode() != "disabled":
         # Authenticated modes share the current bearer validation until the
         # #4124-era session contracts replace it; retired selectors fail at
@@ -189,7 +355,10 @@ def get_current_user_optional():
     Worker-token authenticated endpoints use this helper so header-only workers
     are not blocked by FastAPI resolving a strict bearer-auth dependency first.
     """
+    from moonmind.security.auth_modes_4120 import get_request_production_mode as _m
 
+    if get_request_production_mode() in ("oidc", "header"):
+        return _advanced_current_user_optional
     if not is_disabled_local_mode():
         return current_active_user_optional
     return get_current_user()

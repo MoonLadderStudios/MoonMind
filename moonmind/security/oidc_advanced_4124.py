@@ -52,7 +52,7 @@ import secrets
 import time
 from dataclasses import dataclass, field
 from typing import Any, Callable, Mapping, Protocol
-from urllib.parse import urlencode, urlsplit, urlunsplit
+from urllib.parse import urlencode, urlsplit
 
 logger = logging.getLogger(__name__)
 
@@ -415,6 +415,16 @@ def fetch_discovery(
         )
     except (KeyError, TypeError, ValueError) as exc:
         raise OidcLoginError("idp_unavailable", "identity provider misconfigured") from exc
+    # Issuer-mix-up guard: the discovery document must describe the
+    # configured issuer exactly. A document for a different tenant must
+    # never supply token/JWKS endpoints trusted under our issuer.
+    try:
+        advertised_issuer = str(doc.get("issuer") or "").strip().rstrip("/")
+        expected_issuer = str(config.issuer or "").strip().rstrip("/")
+    except Exception as exc:
+        raise OidcLoginError("idp_unavailable", "identity provider misconfigured") from exc
+    if not advertised_issuer or advertised_issuer != expected_issuer:
+        raise OidcLoginError("idp_unavailable", "identity provider misconfigured")
     # Scope check: discovered endpoints are trusted protocol results only
     # when they are absolute http(s) URLs (https outside loopback).
     for endpoint in (

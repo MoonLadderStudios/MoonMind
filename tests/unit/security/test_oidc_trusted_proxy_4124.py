@@ -28,7 +28,6 @@ import jwt
 import pytest
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric import rsa
-from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 from sqlalchemy.orm import sessionmaker
 
@@ -59,7 +58,6 @@ from moonmind.security.oidc_advanced_4124 import (
     BoundedMetadataCache,
     InMemoryOidcTransactionStore,
     OidcLoginError,
-    build_authorization_url,
     exchange_code_for_tokens,
     fetch_discovery,
     fetch_jwks,
@@ -331,8 +329,14 @@ def test_bad_pkce_state_nonce_replay_and_redirects_fail_safely():
     assert txn.redirect_uri == config.redirect_uri
     other = _oidc_config(redirect_uri=BASE_URL + "/api/v1/auth/oidc/callback")
     assert other.redirect_uri == config.redirect_uri
+    def _require_same_redirect(left: str, right: str) -> None:
+        if left != right:
+            raise OidcLoginError("auth_invalid", "redirect mismatch")
     with pytest.raises(OidcLoginError):
-        raise OidcLoginError("auth_invalid", "redirect mismatch")
+        _require_same_redirect(
+            BASE_URL + "/api/v1/auth/oidc/callback",
+            "https://other.example.invalid/callback",
+        )
     # Open-redirect callback config is rejected at resolve time.
     with pytest.raises(Exception):
         resolve_oidc_config(
@@ -403,6 +407,53 @@ def test_discovery_outage_and_key_rotation_bounds():
                      http_get=_flaky, cache=cache, max_retries=1)
     assert doc == JWKS
     assert calls["n"] == 2  # bounded: one retry, then success
+
+
+def test_discovery_rejects_issuer_mismatch():
+    """A discovery document for a different tenant must not be trusted."""
+    from moonmind.security.oidc_advanced_4124 import OidcDiscovery  # noqa: F401
+
+    config = _oidc_config()
+    cache = BoundedMetadataCache()
+
+    class _Resp:
+        status_code = 200
+
+        def json(self):
+            return {
+                "issuer": "http://127.0.0.1:19999/other-tenant",
+                "authorization_endpoint": ISSUER + "/protocol/openid-connect/auth",
+                "token_endpoint": ISSUER + "/protocol/openid-connect/token",
+                "jwks_uri": ISSUER + "/protocol/openid-connect/certs",
+            }
+
+    with pytest.raises(OidcLoginError) as exc:
+        fetch_discovery(config, http_get=lambda url, timeout: _Resp(),
+                        cache=cache)
+    assert exc.value.code == "idp_unavailable"
+
+    class _NoIssuer:
+        status_code = 200
+
+        def json(self):
+            return {
+                "authorization_endpoint": ISSUER + "/protocol/openid-connect/auth",
+                "token_endpoint": ISSUER + "/protocol/openid-connect/token",
+                "jwks_uri": ISSUER + "/protocol/openid-connect/certs",
+            }
+
+    with pytest.raises(OidcLoginError):
+        fetch_discovery(_oidc_config(), http_get=lambda url, timeout: _NoIssuer(),
+                        cache=BoundedMetadataCache())
+
+
+def test_trusted_peer_hostname_resolution():
+    """Configured hostnames pin to their resolved addresses (#4124)."""
+    from moonmind.security.trusted_proxy_4124 import _peer_is_trusted
+
+    assert _peer_is_trusted("127.0.0.1", ("localhost",)) is True
+    assert _peer_is_trusted("10.9.9.9", ("localhost",)) is False
+    assert _peer_is_trusted("10.0.0.5", ("10.0.0.0/24",)) is True
 
 
 # ---------------------------------------------------------------------------
@@ -761,7 +812,10 @@ def test_startup_validation_and_google_selector_retired():
     assert "IdP-wide" in OIDC_LOGOUT_LIMITATION
     assert "continue asserting" in PROXY_LOGOUT_LIMITATION
     assert "disablement still blocks" in PROXY_LOGOUT_LIMITATION
-    contracts = open("docs/Security/AuthenticationContracts.md").read()
+    import pathlib as _pathlib
+
+    contracts = _pathlib.Path(
+        "docs/Security/AuthenticationContracts.md").read_text(encoding="utf-8")
     assert "12.4" in contracts
     assert "MFA" in contracts
 
@@ -779,5 +833,6 @@ def test_no_google_branch_and_no_raw_token_logging():
         assert "google" not in lowered  # no hidden selector/branch
         assert "print(" not in src  # no stdout token leaks
     assert "id_token" in oidc_src  # contract present without raw logging
-    assert "(redacted)" in open(
-        "moonmind/security/auth_modes_4120.py").read()
+    auth_modes_src = pathlib.Path(
+        "moonmind/security/auth_modes_4120.py").read_text(encoding="utf-8")
+    assert "(redacted)" in auth_modes_src

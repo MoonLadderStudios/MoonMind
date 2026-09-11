@@ -332,3 +332,31 @@ prematurely.
   matching email, verified domain, or upstream admin list never grants
   MoonMind superuser authority. Live-provider and MFA qualification is
   recorded separately from hermetic CI per §12.1.
+
+### 12.5 Advanced-mode operator configuration (#4124)
+
+Runnable Compose inputs (see `.env-template` for the full list):
+
+```env
+# Generic OIDC (AUTH_PROVIDER=oidc)
+AUTH_PROVIDER="oidc"
+MOONMIND_PUBLIC_BASE_URL="https://app.example.invalid"
+MOONMIND_OIDC_ISSUER="https://idp.example.invalid/realms/moonmind"
+MOONMIND_OIDC_CLIENT_ID="moonmind"
+MOONMIND_OIDC_CLIENT_SECRET="<operator-held secret>"
+# Optional: MOONMIND_OIDC_CALLBACK_URL defaults to
+# MOONMIND_PUBLIC_BASE_URL + /api/v1/auth/oidc/callback (must be same-origin).
+# Optional opt-in auto-provisioning: MOONMIND_OIDC_AUTO_PROVISION="1".
+
+# Trusted proxy (AUTH_PROVIDER=header)
+AUTH_PROVIDER="header"
+MOONMIND_TRUSTED_INGRESS="1"
+MOONMIND_TRUSTED_PROXIES="10.0.0.5,10.0.0.0/24"
+MOONMIND_PROXY_IDENTITY_NAMESPACE="corp-sso"
+# Optional: MOONMIND_PROXY_IDENTITY_HEADER="X-Moonmind-User" (default),
+# MOONMIND_PROXY_ALLOW_EMAIL_IDENTITIES="1" (default "0": email-shaped
+# proxy subjects need explicit enrollment and never auto-provision).
+```
+
+Selecting `oidc` or `header` without these inputs fails startup with an
+actionable error; omitted values never silently select a mode.
