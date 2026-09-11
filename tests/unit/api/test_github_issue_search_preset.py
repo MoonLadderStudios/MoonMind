@@ -1025,3 +1025,57 @@ async def test_identity_handoff_rejects_untrusted_or_conflicting_issue(
             {"repository": repository, "previousOutputs": previous, "mode": "start"},
         )
     assert activity_boundary.requests == []
+
+
+@pytest.mark.asyncio
+async def test_finalize_with_mixed_labels_and_published_pr_ends_degraded_completed(
+    activity_boundary, tmp_path
+):
+    """MoonLadderStudios/MoonMind#4225: step-09 label conflict steers to needs-attention.
+
+    Preset journey: the search preset selected the issue, step 08 published PR
+    4210, and step 09 (``github.update_issue_status`` mode
+    ``finalize_after_pr_or_done``) observes the 2026-09-10 conflict
+    (``status: in-progress`` + ``status: code-review``). The run must end
+    COMPLETED with a degraded attention outcome, not FAILED.
+    """
+    pr_url = "https://github.com/MoonLadderStudios/MoonMind/pull/4210"
+    pr_artifact = tmp_path / "pr-4210.json"
+    pr_artifact.write_text(json.dumps({"pullRequestUrl": pr_url}), encoding="utf-8")
+    verify_artifact = tmp_path / "verify.json"
+    verify_artifact.write_text(json.dumps({"verdict": "FULLY_IMPLEMENTED"}), encoding="utf-8")
+    activity_boundary.detail.update(
+        {
+            "number": 4177,
+            "state": "open",
+            "labels": [{"name": "status: in-progress"}, {"name": "status: code-review"}],
+        }
+    )
+    result = await activity_boundary.execute(
+        "github.update_issue_status",
+        {
+            "repository": REPOSITORY,
+            "issueNumber": 4177,
+            "mode": "finalize_after_pr_or_done",
+            "pullRequestArtifactPath": str(pr_artifact),
+            "verificationArtifactPath": str(verify_artifact),
+        },
+    )
+    assert result.status == "COMPLETED", result.outputs
+    assert result.outputs["decision"] == "attention"
+    assert result.outputs["degraded"] is True
+    assert result.outputs["pullRequestUrl"] == pr_url
+    assert result.outputs["previousLifecycleSettled"] == "blocked_mixed"
+    assert result.outputs["transition"]["toTarget"] == "to_needs_attention"
+    confirmed = [str(label["name"]).lower() for label in activity_boundary.detail["labels"]]
+    assert "status: needs-attention" in confirmed
+    assert "status: in-progress" in confirmed
+    assert "status: code-review" in confirmed
+    assert "degraded" in result.outputs["summary"].lower()
+    comment_posts = [
+        request
+        for request in activity_boundary.requests
+        if request.method == "POST" and request.url.path.endswith("/comments")
+    ]
+    assert comment_posts, "expected the PR handoff comment to be posted"
+    assert any(pr_url in request.content.decode() for request in comment_posts)
