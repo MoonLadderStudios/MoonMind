@@ -17,8 +17,10 @@ from api_service.db.models import (
     Base,
     ContainerJobRecord,
     TemporalArtifact,
+    TemporalArtifactDeletionIntent,
     TemporalArtifactLink,
     TemporalArtifactPin,
+    TemporalArtifactUseClaim,
 )
 from api_service.services.container_jobs import (
     ContainerJobNotFoundError,
@@ -45,6 +47,8 @@ _TABLES = [
     TemporalArtifact.__table__,
     TemporalArtifactLink.__table__,
     TemporalArtifactPin.__table__,
+    TemporalArtifactUseClaim.__table__,
+    TemporalArtifactDeletionIntent.__table__,
     ContainerJobRecord.__table__,
 ]
 _FIXTURE = Path(__file__).with_name("fixtures") / "container_job_long_owner.json"

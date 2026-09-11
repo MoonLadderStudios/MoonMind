@@ -1741,9 +1741,16 @@ class TemporalArtifactService:
     ) -> bool:
         if self._is_quarantined(artifact):
             # Quarantined bytes are never served raw, even to the owner or
-            # an admitted scope; the trusted preview path reads through an
-            # explicit internal bypass instead.
+            # an admitted scope, and even in local mode: quarantine is a
+            # data-safety state, not an authentication decision. The trusted
+            # preview path reads through an explicit internal bypass instead.
             return False
+        if is_disabled_local_mode():
+            # Consistent with the read/mutation gates: without
+            # authentication any principal string is self-asserted, so the
+            # raw gate cannot enforce ownership here either. Authenticated
+            # deployments still enforce the owner/admitted/linked policy.
+            return True
         if (
             artifact.redaction_level
             is not db_models.TemporalArtifactRedactionLevel.RESTRICTED
@@ -2116,6 +2123,12 @@ class TemporalArtifactService:
         await self._repository.commit()
         return released
 
+    @staticmethod
+    def _consumer_claim_owner(
+        *, principal: str, admitted_principal: str | None
+    ) -> str:
+        return (admitted_principal or principal or "").strip()
+
     async def _observe_consumer_use(
         self,
         *,
@@ -2124,7 +2137,7 @@ class TemporalArtifactService:
         admitted_principal: str | None,
         operation_kind: str,
         ttl_seconds: int,
-    ) -> None:
+    ) -> str | None:
         """Best-effort in-flight consumer observation (#4017 impl-03).
 
         Records a TTL-bounded use claim at each real serving boundary
@@ -2132,30 +2145,66 @@ class TemporalArtifactService:
         so lifecycle sweeps observe actual consumers instead of expiring
         artifacts mid-use. Observation never blocks the operation:
         admission/quota failures are logged and the read proceeds under
-        the sweep's row-lock recheck. Claims expire on their own and are
-        pruned by the sweeper; explicit long-lived operations should use
-        ``acquire_saved_work_use``/``release_saved_work_use`` instead.
+        the sweep's row-lock recheck. Returns the claim request id when
+        recorded so bounded operations can release it on completion;
+        bearer uses (signed URLs) hold the claim for its TTL instead.
+        Claims expire on their own and are pruned by the sweeper; explicit
+        long-lived operations should use ``acquire_saved_work_use`` /
+        ``release_saved_work_use`` instead.
         """
-        owner = (admitted_principal or principal or "").strip()
+        owner = self._consumer_claim_owner(
+            principal=principal, admitted_principal=admitted_principal
+        )
         if not owner:
-            return
+            return None
+        request_id = f"{operation_kind}-{uuid4().hex}"
         try:
             await self._repository.acquire_use_claim(
                 artifact_id=artifact_id,
                 owner_principal=owner,
-                request_id=f"{operation_kind}-{uuid4().hex}",
+                request_id=request_id,
                 operation_kind=operation_kind,
                 expires_at=datetime.now(UTC)
                 + timedelta(seconds=max(60, int(ttl_seconds))),
             )
             await self._repository.commit()
-        except Exception as exc:  # noqa: BLE001 - observation is best-effort
+        except Exception:  # noqa: BLE001 - observation is best-effort
             logger.debug(
                 "Temporal artifact use observation skipped artifact_id=%s "
-                "kind=%s error=%s",
+                "kind=%s",
                 artifact_id,
                 operation_kind,
-                type(exc).__name__,
+            )
+            return None
+        return request_id
+
+    async def _release_observed_use(
+        self,
+        *,
+        artifact_id: str,
+        principal: str,
+        admitted_principal: str | None,
+        request_id: str | None,
+    ) -> None:
+        """Best-effort release of a bounded-operation observation claim."""
+        if not request_id:
+            return
+        owner = self._consumer_claim_owner(
+            principal=principal, admitted_principal=admitted_principal
+        )
+        if not owner:
+            return
+        try:
+            await self._repository.release_use_claim(
+                artifact_id=artifact_id,
+                owner_principal=owner,
+                request_id=request_id,
+            )
+            await self._repository.commit()
+        except Exception:  # noqa: BLE001 - observation is best-effort
+            logger.debug(
+                "Temporal artifact use observation release skipped artifact_id=%s",
+                artifact_id,
             )
 
     @staticmethod
@@ -2868,7 +2917,7 @@ class TemporalArtifactService:
         await self._assert_artifact_raw_access(
             artifact, principal=principal, admitted_principal=admitted_principal
         )
-        await self._observe_consumer_use(
+        observed_request_id = await self._observe_consumer_use(
             artifact_id=artifact.artifact_id,
             principal=principal,
             admitted_principal=admitted_principal,
@@ -2881,6 +2930,13 @@ class TemporalArtifactService:
             )
         except Exception as exc:
             raise TemporalArtifactStateError("artifact bytes are missing") from exc
+        finally:
+            await self._release_observed_use(
+                artifact_id=artifact.artifact_id,
+                principal=principal,
+                admitted_principal=admitted_principal,
+                request_id=observed_request_id,
+            )
         logger.info(
             "Temporal artifact read operation principal=%s artifact_id=%s",
             principal,
@@ -2915,6 +2971,8 @@ class TemporalArtifactService:
             operation_kind="restore",
             ttl_seconds=300,
         )
+        # Streaming iterables outlive this call, so the claim is held for
+        # its TTL (then pruned) rather than released on return.
         return artifact, self._store.read_chunks(
             artifact.storage_key, chunk_size=chunk_size
         )
@@ -2938,7 +2996,7 @@ class TemporalArtifactService:
         await self._assert_artifact_raw_access(
             artifact, principal=principal, admitted_principal=admitted_principal
         )
-        await self._observe_consumer_use(
+        observed_request_id = await self._observe_consumer_use(
             artifact_id=artifact.artifact_id,
             principal=principal,
             admitted_principal=admitted_principal,
@@ -2946,16 +3004,26 @@ class TemporalArtifactService:
             ttl_seconds=300,
         )
         try:
-            path = await asyncio.get_running_loop().run_in_executor(
-                None, self._store.read_path, artifact.storage_key
+            try:
+                path = await asyncio.get_running_loop().run_in_executor(
+                    None, self._store.read_path, artifact.storage_key
+                )
+            except TemporalArtifactValidationError:
+                raise
+            except Exception as exc:
+                raise TemporalArtifactStateError(
+                    "artifact bytes are missing"
+                ) from exc
+            if not path.exists():
+                raise TemporalArtifactStateError("artifact bytes are missing")
+            return artifact, path
+        finally:
+            await self._release_observed_use(
+                artifact_id=artifact.artifact_id,
+                principal=principal,
+                admitted_principal=admitted_principal,
+                request_id=observed_request_id,
             )
-        except TemporalArtifactValidationError:
-            raise
-        except Exception as exc:
-            raise TemporalArtifactStateError("artifact bytes are missing") from exc
-        if not path.exists():
-            raise TemporalArtifactStateError("artifact bytes are missing")
-        return artifact, path
 
     async def get_read_policy(
         self,
@@ -3653,12 +3721,18 @@ class TemporalArtifactService:
         await self._assert_artifact_read_access(
             artifact, principal=principal, admitted_principal=admitted_principal
         )
-        await self._assert_artifact_raw_access(
-            artifact, principal=principal, admitted_principal=admitted_principal
-        )
+        if self._is_quarantined(artifact):
+            # Trusted preview path: quarantined bytes are never served raw,
+            # but an authorized caller may still derive a safe preview.
+            # The raw-access gate stays enforced for non-quarantined content.
+            pass
+        else:
+            await self._assert_artifact_raw_access(
+                artifact, principal=principal, admitted_principal=admitted_principal
+            )
         if artifact.status is not db_models.TemporalArtifactStatus.COMPLETE:
             raise TemporalArtifactStateError("artifact is not readable")
-        await self._observe_consumer_use(
+        observed_request_id = await self._observe_consumer_use(
             artifact_id=artifact.artifact_id,
             principal=principal,
             admitted_principal=admitted_principal,
@@ -3666,17 +3740,27 @@ class TemporalArtifactService:
             ttl_seconds=3600,
         )
         try:
-            payload = await asyncio.get_running_loop().run_in_executor(
-                None, self._store.read_bytes, artifact.storage_key
+            try:
+                payload = await asyncio.get_running_loop().run_in_executor(
+                    None, self._store.read_bytes, artifact.storage_key
+                )
+            except Exception as exc:
+                raise TemporalArtifactStateError(
+                    "artifact bytes are missing"
+                ) from exc
+            await self._create_preview_if_required(
+                artifact=artifact,
+                principal=principal,
+                payload=payload,
+                policy=policy or "manual",
             )
-        except Exception as exc:
-            raise TemporalArtifactStateError("artifact bytes are missing") from exc
-        await self._create_preview_if_required(
-            artifact=artifact,
-            principal=principal,
-            payload=payload,
-            policy=policy or "manual",
-        )
+        finally:
+            await self._release_observed_use(
+                artifact_id=artifact.artifact_id,
+                principal=principal,
+                admitted_principal=admitted_principal,
+                request_id=observed_request_id,
+            )
         preview_id = (artifact.metadata_json or {}).get("preview_artifact_id")
         if not preview_id:
             raise TemporalArtifactStateError("preview artifact is unavailable")
