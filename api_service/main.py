@@ -2043,6 +2043,7 @@ async def _auto_seed_provider_profiles() -> list[str]:
                 "runtime_materialization_mode": RuntimeMaterializationMode.COMPOSITE,
                 "secret_refs": {},
                 "clear_env_keys": [
+                    "OPENCODE_API_KEY",
                     "OPENCODE_AUTH_CONTENT",
                     "OPENCODE_CONFIG",
                     "OPENCODE_CONFIG_CONTENT",
