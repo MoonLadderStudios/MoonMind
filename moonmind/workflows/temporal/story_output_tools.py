@@ -6058,7 +6058,6 @@ async def _finalize_blocked_to_needs_attention(
                 )
                 comment_response.raise_for_status()
                 applied.append("comment")
-                comment_body = ""
             except httpx.HTTPStatusError as exc:
                 summary = service._github_permission_summary(exc.response)
                 return ToolResult(
@@ -6091,6 +6090,8 @@ async def _finalize_blocked_to_needs_attention(
     try:
         confirmed_settled = interpret_issue(updated_issue).settled
     except Exception:
+        # Keep the pre-mutation settlement when re-interpretation fails;
+        # read-back labels are already confirmed above.
         pass
     transition = {
         "allowed": True,
