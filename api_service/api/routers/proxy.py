@@ -92,11 +92,25 @@ async def proxy_pass_through(
 
     target_url = f"{config['base_url']}/{path}"
 
-    # Forward headers safely
+    # Forward headers safely. The trusted-proxy identity assertion is an
+    # ingress-only transport claim: strip it (any casing) so an
+    # ingress-injected X-Moonmind-User is never disclosed upstream, and
+    # never let runtime credentials flow implicitly either.
     headers = dict(request.headers)
     headers.pop("host", None)
     headers.pop("authorization", None)
     headers.pop("x-api-key", None)
+    for _key in [k for k in headers if k.strip().lower() == "x-moonmind-user"]:
+        headers.pop(_key, None)
+    try:
+        from moonmind.security.trusted_proxy_4124 import safe_outbound_headers as _strip
+        from moonmind.security.trusted_proxy_4124 import (
+            DEFAULT_PROXY_HEADER as _proxy_header,
+        )
+
+        headers = _strip(headers, proxy_header=_proxy_header)
+    except Exception:
+        pass
     
     header_key = config["auth_header_key"]
     header_val = config["auth_header_format"].format(token=provider_secret)

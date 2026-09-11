@@ -138,6 +138,38 @@ def proxy_issuer_for_namespace(namespace: str) -> str:
     return f"proxy:{text}"
 
 
+def _resolve_config_hostnames(entry: str) -> set[str]:
+    """Return pinned IP literals for a configured hostname entry.
+
+    Numeric literals and CIDR values resolve to themselves (empty set:
+    the caller compares them directly). DNS names are resolved once per
+    call with getaddrinfo and pinned as literal addresses; resolution
+    failure yields an empty set so the entry simply never matches rather
+    than failing open.
+    """
+    item = (entry or "").strip().lower().strip("[]")
+    if not item or "/" in item:
+        return set()
+    try:
+        ipaddress.ip_address(item)
+        return set()
+    except ValueError:
+        pass
+    try:
+        import socket as _socket
+
+        infos = _socket.getaddrinfo(item, None, family=_socket.AF_UNSPEC)
+    except Exception:
+        return set()
+    resolved: set[str] = set()
+    for info in infos:
+        try:
+            resolved.add(str(info[4][0]).strip().lower().strip("[]"))
+        except Exception:
+            continue
+    return resolved
+
+
 def _peer_is_trusted(peer: str, trusted_proxies: tuple[str, ...]) -> bool:
     candidate = (peer or "").strip().lower().strip("[]")
     if not candidate:
@@ -158,6 +190,17 @@ def _peer_is_trusted(peer: str, trusted_proxies: tuple[str, ...]) -> bool:
                 continue
         elif candidate == item:
             return True
+        else:
+            # Hostname entries (accepted by the shared config validator)
+            # are pinned at comparison time: production request.client.host
+            # is normally a numeric peer address, so compare the candidate
+            # against the entry's resolved addresses as well.
+            try:
+                ipaddress.ip_address(item)
+            except ValueError:
+                if candidate in _resolve_config_hostnames(item):
+                    return True
+            continue
     return False
 
 

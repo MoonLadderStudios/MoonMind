@@ -238,7 +238,23 @@ async def resolve_oidc_user(
                     "operator enrollment is required, automatic linking is refused",
                 )
             user.email = identity.email
-            await session.flush()
+            try:
+                await session.flush()
+            except Exception as exc:
+                # Concurrent claimants can both pass the pre-check above;
+                # the losing flush raises IntegrityError on the unique
+                # email. Like the shared get_or_create_user_for_identity
+                # path, converge to a controlled enrollment error (403
+                # enrollment_required), never a 401 auth_invalid.
+                from sqlalchemy.exc import IntegrityError as _IntegrityError
+
+                if isinstance(exc, _IntegrityError):
+                    raise ControlledEnrollmentRequiredError(
+                        "email_taken",
+                        "email was claimed concurrently; explicit operator "
+                        "enrollment is required, automatic linking is refused",
+                    ) from exc
+                raise
         return user
     if not policy.auto_provision:
         raise policy.require_enrollment(

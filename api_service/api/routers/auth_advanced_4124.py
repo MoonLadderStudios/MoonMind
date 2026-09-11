@@ -93,6 +93,7 @@ async def oidc_login(
         except OidcLoginError:
             safe_return = "/"
 
+        import asyncio as _asyncio
         import httpx as _httpx
 
         def _get(url: str, timeout: float):
@@ -102,15 +103,35 @@ async def oidc_login(
             request.app.state, "oidc_metadata_cache", None
         ) or BoundedMetadataCache()
         request.app.state.oidc_metadata_cache = cache
-        discovery = fetch_discovery(config, http_get=_get, cache=cache)
+        # Keep synchronous IdP I/O off the async event loop: the API
+        # entrypoint runs a single Uvicorn worker, so a slow IdP must not
+        # stall health/dashboard/API requests on the loop.
+        discovery = await _asyncio.to_thread(
+            fetch_discovery, config, http_get=_get, cache=cache
+        )
         txn, url = begin_oidc_login(config, discovery, return_path=safe_return)
         store = DbOidcTransactionStore(session)
         await store.save(txn)
         await session.commit()
+        # Bounded maintenance: login traffic would otherwise grow
+        # moonmind_oidc_transactions with expired rows (prune_expired has
+        # no other caller). Best-effort; a prune failure must not fail
+        # the login itself.
+        try:
+            await store.prune_expired()
+            await session.commit()
+        except Exception:
+            try:
+                await session.rollback()
+            except Exception:
+                # Best-effort maintenance only; login already succeeded.
+                pass
     except Exception as exc:  # noqa: BLE001 - fail closed with stable codes
         try:
             await session.rollback()
         except Exception:
+            # Best-effort cleanup only: the outer handler already fails
+            # closed below, so a rollback failure must not mask it.
             pass
         code = getattr(exc, "code", None)
         if code == "idp_unavailable":
@@ -136,10 +157,7 @@ async def oidc_callback(
     if _production_mode() != "oidc":
         return _error(404, "auth_invalid")
     from moonmind.security import oidc_advanced_4124 as oidc_mod
-    from moonmind.security.session_authority_4121 import (
-        assert_no_token_in_json,
-        build_set_cookie_header,
-    )
+    from moonmind.security.session_authority_4121 import build_set_cookie_header
     from api_service.services.advanced_auth_service_4124 import (
         AdvancedAdmissionPolicy,
         DbOidcTransactionStore,
@@ -152,8 +170,15 @@ async def oidc_callback(
         moonmind_config = _moonmind_session_config()
         store = DbOidcTransactionStore(session)
         txn = await store.consume(state)
+        # Single-use guarantee: commit the consumption in its own
+        # transaction before any fallible exchange/validation work, so a
+        # later failure (and its rollback) cannot resurrect this state
+        # for replay.
+        await session.commit()
         if txn.redirect_uri != config.redirect_uri:
             raise oidc_mod.OidcLoginError("auth_invalid", "redirect mismatch")
+
+        import asyncio as _asyncio
 
         import httpx as _httpx
 
@@ -161,12 +186,14 @@ async def oidc_callback(
             request.app.state, "oidc_metadata_cache", None
         ) or oidc_mod.BoundedMetadataCache()
         request.app.state.oidc_metadata_cache = cache
-        discovery = oidc_mod.fetch_discovery(
-            config,
-            http_get=lambda url, timeout: _httpx.get(
-                url, timeout=timeout, follow_redirects=False
-            ),
-            cache=cache,
+
+        def _sync_get(url: str, timeout: float):
+            return _httpx.get(url, timeout=timeout, follow_redirects=False)
+
+        # Keep synchronous IdP I/O off the async event loop (single
+        # Uvicorn worker): discovery and JWKS fetches run on threads.
+        discovery = await _asyncio.to_thread(
+            oidc_mod.fetch_discovery, config, http_get=_sync_get, cache=cache
         )
 
         async def _post(url: str, data: dict, timeout: float):
@@ -174,22 +201,29 @@ async def oidc_callback(
                 resp = await client.post(url, data=data, timeout=timeout)
                 body: dict = {}
                 try:
-                    body = resp.json()
+                    parsed = resp.json()
+                    body = parsed if isinstance(parsed, dict) else {}
                 except Exception:
                     body = {}
+                # staticmethod: resp.json() must return the captured body,
+                # not the bound response instance.
                 return type(
-                    "R", (), {"status_code": resp.status_code, "json": lambda s=body: s}
+                    "R",
+                    (),
+                    {
+                        "status_code": resp.status_code,
+                        "json": staticmethod(lambda _body=body: _body),
+                    },
                 )()
 
         tokens = await oidc_mod.exchange_code_for_tokens(
             code, config=config, discovery=discovery, txn=txn, http_post=_post
         )
-        jwks = oidc_mod.fetch_jwks(
+        jwks = await _asyncio.to_thread(
+            oidc_mod.fetch_jwks,
             discovery.jwks_uri,
             timeout_seconds=config.timeout_seconds,
-            http_get=lambda url, timeout: _httpx.get(
-                url, timeout=timeout, follow_redirects=False
-            ),
+            http_get=_sync_get,
             cache=cache,
         )
         # Bounded rotation retry: on unknown-key, refresh once and retry.
@@ -204,12 +238,11 @@ async def oidc_callback(
         except oidc_mod.OidcLoginError as exc:
             if exc.code == "auth_invalid" and "key" in (exc.detail or ""):
                 cache.invalidate_jwks(discovery.jwks_uri)
-                jwks = oidc_mod.fetch_jwks(
+                jwks = await _asyncio.to_thread(
+                    oidc_mod.fetch_jwks,
                     discovery.jwks_uri,
                     timeout_seconds=config.timeout_seconds,
-                    http_get=lambda url, timeout: _httpx.get(
-                        url, timeout=timeout, follow_redirects=False
-                    ),
+                    http_get=_sync_get,
                     cache=cache,
                     max_retries=0,
                 )
@@ -236,9 +269,12 @@ async def oidc_callback(
         token, _ = await issue_session_for_user(
             session, user, identity, moonmind_config
         )
-        payload = {"ok": True, "return_path": txn.return_path}
-        assert_no_token_in_json(payload)
-        resp = JSONResponse(status_code=200, content=payload)
+        # Browser flow: navigate back to the validated same-origin return
+        # path (txn.return_path was validated at transaction creation) and
+        # attach the session cookie to the redirect. There is no frontend
+        # handler for raw callback JSON, so returning JSON would strand
+        # the browser on the callback URL.
+        resp = RedirectResponse(url=txn.return_path or "/", status_code=302)
         resp.headers["Set-Cookie"] = build_set_cookie_header(
             token=token,
             cookie_name=moonmind_config.cookie_name,
@@ -251,6 +287,10 @@ async def oidc_callback(
         try:
             await session.rollback()
         except Exception:
+            # Best-effort cleanup only: the callback already failed, so a
+            # rollback failure must not mask the stable error mapping below.
+            # Note: the consumed transaction row was committed independently
+            # before the exchange, so this rollback cannot resurrect it.
             pass
         code = getattr(exc, "code", None)
         if code == "idp_unavailable":
@@ -286,6 +326,26 @@ async def oidc_logout(
 
     moonmind_config = _moonmind_session_config()
     cookie_name = moonmind_config.cookie_name
+    # CSRF/origin gate before consuming or revoking the session cookie:
+    # SameSite=Lax does not isolate ports, so a same-site cross-origin
+    # page could otherwise force a victim logout. Fail closed through
+    # the shared authority (safe methods / missing base URL handled
+    # there); a rejection returns 401, never revokes.
+    try:
+        from moonmind.security.session_authority_4121 import enforce_csrf_origin
+
+        enforce_csrf_origin(
+            method=request.method,
+            cookie_present=cookie_name in request.cookies,
+            origin=request.headers.get("origin"),
+            referer=request.headers.get("referer"),
+            host=request.headers.get("host"),
+            base_url=(os.environ.get("MOONMIND_PUBLIC_BASE_URL") or "").strip(),
+        )
+    except Exception as exc:
+        code = getattr(exc, "code", None) or "auth_invalid"
+        logger.info("auth_event mode=oidc reason=logout_csrf_rejected")
+        return _error(401, code if isinstance(code, str) else "auth_invalid")
     token = request.cookies.get(cookie_name)
     if not token:
         resp = JSONResponse(status_code=200, content={"ok": True})
@@ -312,6 +372,33 @@ async def oidc_logout(
     try:
         config = _oidc_config_from_env()
         end_session = getattr(config, "end_session_endpoint", "") or ""
+        if not end_session:
+            # Providers that advertise logout only through standard
+            # discovery: resolve it from the cached discovery document
+            # (no new config surface; best-effort, never blocks logout).
+            try:
+                import asyncio as _logout_asyncio
+
+                import httpx as _discovery_httpx
+
+                from moonmind.security import oidc_advanced_4124 as _oidc
+
+                _cache = getattr(request.app.state, "oidc_metadata_cache", None)
+                if _cache is None:
+                    _cache = _oidc.BoundedMetadataCache()
+                    request.app.state.oidc_metadata_cache = _cache
+
+                def _dget(url: str, timeout: float):
+                    return _discovery_httpx.get(
+                        url, timeout=timeout, follow_redirects=False
+                    )
+
+                _discovery = await _logout_asyncio.to_thread(
+                    _oidc.fetch_discovery, config, http_get=_dget, cache=_cache
+                )
+                end_session = getattr(_discovery, "end_session_endpoint", "") or ""
+            except Exception:
+                end_session = ""
     except Exception:
         end_session = ""
     import httpx as _httpx
@@ -384,6 +471,8 @@ async def proxy_me(
         try:
             await session.rollback()
         except Exception:
+            # Best-effort cleanup only: proxy identity resolution already
+            # failed, so a rollback failure must not mask it.
             pass
         code = getattr(exc, "code", None)
         if code == "auth_required":
