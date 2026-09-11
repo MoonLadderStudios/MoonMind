@@ -47,6 +47,7 @@ present, are listed with their supported condition below.
 | `MoonMind.CheckpointBranchTurn` <a id="moonmindcheckpointbranchturn"></a> | `moonmind.workflows.temporal.workflows.checkpoint_branch_turn.MoonMindCheckpointBranchTurnWorkflow` | `operator` | [lifecycle](#moonmindcheckpointbranchturn) |
 | `MoonMind.ContainerJob` <a id="moonmindcontainerjob"></a> | `moonmind.workflows.temporal.workflows.container_job.MoonMindContainerJobWorkflow` | `operator` | [lifecycle](#moonmindcontainerjob) |
 | `MoonMind.ControlStopContinuation` <a id="moonmindcontrolstopcontinuation"></a> | `moonmind.workflows.temporal.workflows.control_stop_continuation.MoonMindControlStopContinuationWorkflow` | `operator` | [lifecycle](#moonmindcontrolstopcontinuation) |
+| `MoonMind.GitHubIssueReconcile` <a id="moonmindgithubissuereconcile"></a> | `moonmind.workflows.temporal.workflows.github_issue_reconcile.MoonMindGitHubIssueReconcileWorkflow` | `operator` | [lifecycle](#moonmindgithubissuereconcile) |
 | `MoonMind.ManagedRuntimeWorkspaceCleanup` <a id="moonmindmanagedruntimeworkspacecleanup"></a> | `moonmind.workflows.temporal.workflows.managed_runtime_workspace_cleanup.MoonMindManagedRuntimeWorkspaceCleanupWorkflow` | `excluded` | [lifecycle](#moonmindmanagedruntimeworkspacecleanup) |
 | `MoonMind.ManagedSessionReconcile` <a id="moonmindmanagedsessionreconcile"></a> | `moonmind.workflows.temporal.workflows.managed_session_reconcile.MoonMindManagedSessionReconcileWorkflow` | `excluded` | [lifecycle](WorkflowTypeCatalogAndLifecycle.md#116-moonmindmanagedsessionreconcile-lifecycle) |
 | `MoonMind.MergeAutomation` <a id="moonmindmergeautomation"></a> | `moonmind.workflows.temporal.workflows.merge_automation.MoonMindMergeAutomationWorkflow` | `operator` | [lifecycle](WorkflowTypeCatalogAndLifecycle.md#119-moonmindmergeautomation-lifecycle) |
@@ -155,6 +156,7 @@ with deterministic workflow code, not Temporal Local Activities.
 | `execution.notify_completion` | `agent_runtime` | `mm.activity.agent_runtime` |
 | `execution.record_terminal_state` | `artifacts` | `mm.activity.artifacts` |
 | `github_issue.finalize_failed_attempt` | `integrations` | `mm.activity.integrations` |
+| `github_issue.reconcile_handoffs` | `integrations` | `mm.activity.integrations` |
 | `integration.codex_cloud.cancel` | `integrations` | `mm.activity.integrations` |
 | `integration.codex_cloud.fetch_result` | `integrations` | `mm.activity.integrations` |
 | `integration.codex_cloud.start` | `integrations` | `mm.activity.integrations` |

@@ -125,6 +125,11 @@ STATIC_WORKFLOW_REGISTRATIONS = (
         "MoonMindPublicationRecoveryWorkflow",
         "operator",
     ),
+    WorkflowRegistration(
+        "moonmind.workflows.temporal.workflows.github_issue_reconcile",
+        "MoonMindGitHubIssueReconcileWorkflow",
+        "operator",
+    ),
 )
 
 
