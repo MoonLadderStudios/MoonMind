@@ -36,6 +36,7 @@ from moonmind.core.artifacts import assert_model_agnostic_metadata
 from moonmind.schemas.saved_work_models import (
     assert_complete_payload_matches as _assert_saved_work_complete_matches,
 )
+from moonmind.schemas import saved_work_retention as _saved_work_retention
 
 logger = logging.getLogger(__name__)
 
@@ -147,6 +148,9 @@ class LifecycleSweepSummary:
     expired_candidate_count: int
     soft_deleted_count: int
     hard_deleted_count: int
+    skipped_in_use_count: int = 0
+    reconciled_deletion_count: int = 0
+    pruned_claim_count: int = 0
 
 @dataclass(slots=True, frozen=True)
 class _StorageLifecycleConfig:
@@ -1180,6 +1184,7 @@ class TemporalArtifactRepository:
         self,
         *,
         now: datetime,
+        limit: int = 500,
     ) -> list[db_models.TemporalArtifact]:
         pinned_exists = (
             exists()
@@ -1203,6 +1208,7 @@ class TemporalArtifactRepository:
                 db_models.TemporalArtifact.expires_at.asc(),
                 db_models.TemporalArtifact.created_at.asc(),
             )
+            .limit(max(1, int(limit)))
         )
         result = await self._session.execute(stmt)
         return list(result.scalars().all())
@@ -1211,6 +1217,7 @@ class TemporalArtifactRepository:
         self,
         *,
         cutoff: datetime,
+        limit: int = 500,
     ) -> list[db_models.TemporalArtifact]:
         stmt: Select[tuple[db_models.TemporalArtifact]] = (
             select(db_models.TemporalArtifact)
@@ -1222,6 +1229,238 @@ class TemporalArtifactRepository:
                 db_models.TemporalArtifact.hard_deleted_at.is_(None),
             )
             .order_by(db_models.TemporalArtifact.deleted_at.asc())
+            .limit(max(1, int(limit)))
+        )
+        result = await self._session.execute(stmt)
+        return list(result.scalars().all())
+
+    async def get_artifact_for_update(
+        self, artifact_id: str
+    ) -> db_models.TemporalArtifact:
+        """Return the artifact row locked for a destructive-action recheck."""
+        stmt: Select[tuple[db_models.TemporalArtifact]] = (
+            select(db_models.TemporalArtifact)
+            .where(db_models.TemporalArtifact.artifact_id == artifact_id)
+            .with_for_update()
+        )
+        result = await self._session.execute(stmt)
+        artifact = result.scalars().first()
+        if artifact is None:
+            raise TemporalArtifactNotFoundError(artifact_id)
+        return artifact
+
+    async def acquire_use_claim(
+        self,
+        *,
+        artifact_id: str,
+        owner_principal: str,
+        request_id: str,
+        operation_kind: str,
+        expires_at: datetime,
+    ) -> db_models.TemporalArtifactUseClaim:
+        """Insert one operation-scoped use claim (idempotent per request)."""
+        owner = (owner_principal or "").strip()
+        request = (request_id or "").strip()
+        kind = (operation_kind or "").strip().lower()
+        if not owner:
+            raise TemporalArtifactValidationError("use claim owner must not be blank")
+        if not request:
+            raise TemporalArtifactValidationError(
+                "use claim request_id must not be blank"
+            )
+        if kind not in _saved_work_retention.SAVED_WORK_OPERATION_KINDS:
+            raise TemporalArtifactValidationError(
+                f"unsupported use-claim operation kind {operation_kind!r}"
+            )
+        existing_stmt: Select[tuple[db_models.TemporalArtifactUseClaim]] = (
+            select(db_models.TemporalArtifactUseClaim)
+            .where(
+                db_models.TemporalArtifactUseClaim.artifact_id == artifact_id,
+                db_models.TemporalArtifactUseClaim.owner_principal == owner,
+                db_models.TemporalArtifactUseClaim.request_id == request,
+            )
+            .limit(1)
+        )
+        existing = (await self._session.execute(existing_stmt)).scalars().first()
+        if existing is not None:
+            return existing
+        claim = db_models.TemporalArtifactUseClaim(
+            id=uuid4(),
+            artifact_id=artifact_id,
+            owner_principal=owner,
+            request_id=request,
+            operation_kind=kind,
+            expires_at=expires_at,
+        )
+        self._session.add(claim)
+        await self._session.flush()
+        return claim
+
+    async def release_use_claim(
+        self,
+        *,
+        artifact_id: str,
+        owner_principal: str,
+        request_id: str,
+    ) -> bool:
+        """Release exactly one operation's claim; never touches other claims."""
+        stmt = delete(db_models.TemporalArtifactUseClaim).where(
+            db_models.TemporalArtifactUseClaim.artifact_id == artifact_id,
+            db_models.TemporalArtifactUseClaim.owner_principal == owner_principal,
+            db_models.TemporalArtifactUseClaim.request_id == request_id,
+        )
+        result = await self._session.execute(stmt)
+        return (result.rowcount or 0) > 0
+
+    async def list_use_claims(
+        self, artifact_id: str
+    ) -> list[db_models.TemporalArtifactUseClaim]:
+        stmt: Select[tuple[db_models.TemporalArtifactUseClaim]] = (
+            select(db_models.TemporalArtifactUseClaim)
+            .where(db_models.TemporalArtifactUseClaim.artifact_id == artifact_id)
+            .order_by(
+                db_models.TemporalArtifactUseClaim.created_at.asc(),
+                db_models.TemporalArtifactUseClaim.id.asc(),
+            )
+        )
+        result = await self._session.execute(stmt)
+        return list(result.scalars().all())
+
+    async def list_live_use_claims(
+        self, artifact_id: str, *, now: datetime
+    ) -> list[db_models.TemporalArtifactUseClaim]:
+        stmt: Select[tuple[db_models.TemporalArtifactUseClaim]] = (
+            select(db_models.TemporalArtifactUseClaim)
+            .where(
+                db_models.TemporalArtifactUseClaim.artifact_id == artifact_id,
+                db_models.TemporalArtifactUseClaim.expires_at > now,
+            )
+            .order_by(
+                db_models.TemporalArtifactUseClaim.created_at.asc(),
+                db_models.TemporalArtifactUseClaim.id.asc(),
+            )
+        )
+        result = await self._session.execute(stmt)
+        return list(result.scalars().all())
+
+    async def has_live_use_claim(self, artifact_id: str, *, now: datetime) -> bool:
+        stmt = (
+            select(db_models.TemporalArtifactUseClaim.id)
+            .where(
+                db_models.TemporalArtifactUseClaim.artifact_id == artifact_id,
+                db_models.TemporalArtifactUseClaim.expires_at > now,
+            )
+            .limit(1)
+        )
+        result = await self._session.execute(stmt)
+        return result.scalar() is not None
+
+    async def prune_expired_use_claims(self, *, now: datetime) -> int:
+        """Delete expired claims so stale cleanup never pins data forever."""
+        stmt = delete(db_models.TemporalArtifactUseClaim).where(
+            db_models.TemporalArtifactUseClaim.expires_at <= now
+        )
+        result = await self._session.execute(stmt)
+        return int(result.rowcount or 0)
+
+    async def count_live_claims_for_owner(
+        self, owner_principal: str, *, now: datetime
+    ) -> int:
+        from sqlalchemy import func as _func
+
+        stmt = select(_func.count()).where(
+            db_models.TemporalArtifactUseClaim.owner_principal == owner_principal,
+            db_models.TemporalArtifactUseClaim.expires_at > now,
+        )
+        result = await self._session.execute(stmt)
+        return int(result.scalar() or 0)
+
+    async def quota_usage_for_scope(self, scope: str) -> dict[str, int]:
+        """Compute per-scope logical vs physical byte usage from live rows."""
+        from sqlalchemy import func as _func
+
+        logical_stmt = select(
+            _func.coalesce(_func.sum(db_models.TemporalArtifact.size_bytes), 0)
+        ).where(
+            db_models.TemporalArtifact.created_by_principal == scope,
+            db_models.TemporalArtifact.hard_deleted_at.is_(None),
+        )
+        logical = int((await self._session.execute(logical_stmt)).scalar() or 0)
+        physical_stmt = (
+            select(
+                db_models.TemporalArtifact.storage_key,
+                _func.max(db_models.TemporalArtifact.size_bytes),
+            )
+            .where(
+                db_models.TemporalArtifact.created_by_principal == scope,
+                db_models.TemporalArtifact.hard_deleted_at.is_(None),
+                db_models.TemporalArtifact.size_bytes.is_not(None),
+            )
+            .group_by(db_models.TemporalArtifact.storage_key)
+        )
+        rows = (await self._session.execute(physical_stmt)).all()
+        # Physical bytes deduplicate per storage key within the scope: shared
+        # blobs count once physically while each logical reference keeps its
+        # own logical charge.
+        physical = int(sum(int(row[1] or 0) for row in rows))
+        return {"logicalBytes": logical, "physicalBytes": physical}
+
+    async def record_deletion_intent(
+        self, *, artifact_id: str, principal: str
+    ) -> db_models.TemporalArtifactDeletionIntent:
+        existing = await self._session.get(
+            db_models.TemporalArtifactDeletionIntent, artifact_id
+        )
+        if existing is not None:
+            return existing
+        intent = db_models.TemporalArtifactDeletionIntent(
+            artifact_id=artifact_id,
+            initiated_by_principal=principal,
+            attempts=0,
+            last_error=None,
+        )
+        self._session.add(intent)
+        await self._session.flush()
+        return intent
+
+    async def get_deletion_intent(
+        self, artifact_id: str
+    ) -> db_models.TemporalArtifactDeletionIntent | None:
+        return await self._session.get(
+            db_models.TemporalArtifactDeletionIntent, artifact_id
+        )
+
+    async def note_deletion_attempt(
+        self, *, artifact_id: str, error: str | None
+    ) -> None:
+        intent = await self._session.get(
+            db_models.TemporalArtifactDeletionIntent, artifact_id
+        )
+        if intent is None:
+            return
+        intent.attempts = int(intent.attempts or 0) + 1
+        intent.last_error = error
+        intent.updated_at = datetime.now(UTC)
+        await self._session.flush()
+
+    async def clear_deletion_intent(self, artifact_id: str) -> None:
+        intent = await self._session.get(
+            db_models.TemporalArtifactDeletionIntent, artifact_id
+        )
+        if intent is not None:
+            await self._session.delete(intent)
+            await self._session.flush()
+
+    async def list_pending_deletion_intents(
+        self, *, limit: int = 500
+    ) -> list[db_models.TemporalArtifactDeletionIntent]:
+        stmt: Select[tuple[db_models.TemporalArtifactDeletionIntent]] = (
+            select(db_models.TemporalArtifactDeletionIntent)
+            .order_by(
+                db_models.TemporalArtifactDeletionIntent.created_at.asc(),
+                db_models.TemporalArtifactDeletionIntent.artifact_id.asc(),
+            )
+            .limit(max(1, int(limit)))
         )
         result = await self._session.execute(stmt)
         return list(result.scalars().all())
@@ -1429,6 +1668,305 @@ class TemporalArtifactService:
             artifact_id=artifact.artifact_id,
             principal=principal,
         )
+
+    async def _assert_saved_work_read_access(
+        self,
+        artifact: db_models.TemporalArtifact,
+        *,
+        principal: str,
+        admitted_principal: str | None = None,
+    ) -> None:
+        """Uniform owner policy for saved-work reads (#4017 impl-06).
+
+        Ownership or linked-execution ownership grants access. A bare
+        ``service:`` principal or an ``allow_restricted_raw`` flag is never a
+        generic permission: service-to-service reads must carry the admitted
+        user/execution scope explicitly via ``admitted_principal``.
+        Source-connection provenance, content-hash equality, and knowledge of
+        an artifact/manifest id grant nothing on their own.
+        """
+        if is_disabled_local_mode():
+            return
+        owner = self._owner_principal(artifact)
+        candidates = {principal, *( [admitted_principal] if admitted_principal else [])}
+        candidates = {str(item or "").strip() for item in candidates} - {""}
+        if owner and owner in candidates:
+            return
+        for candidate in candidates:
+            if self._is_service_principal(candidate):
+                continue
+            if await self._repository.principal_owns_linked_execution(
+                artifact_id=artifact.artifact_id,
+                principal=candidate,
+            ):
+                return
+        raise TemporalArtifactAuthorizationError(
+            f"principal '{principal}' cannot read saved-work artifact "
+            f"{artifact.artifact_id}"
+        )
+
+    @staticmethod
+    def saved_work_availability_of(
+        artifact: db_models.TemporalArtifact,
+        *,
+        bytes_missing: bool = False,
+        digest_mismatch: bool = False,
+        never_verified_complete: bool = False,
+        now: datetime | None = None,
+    ) -> str:
+        """Evidence-based availability; never inferred from COMPLETE alone."""
+        metadata = dict(artifact.metadata_json or {})
+        quarantined = (
+            artifact.redaction_level
+            is db_models.TemporalArtifactRedactionLevel.RESTRICTED
+            and str(metadata.get("quarantine", "")).strip().lower()
+            not in {"", "false", "no", "0"}
+        ) or str(metadata.get("availability", "")).strip().lower() == "quarantined"
+        reference_now = now or datetime.now(UTC)
+        expires_at = artifact.expires_at
+        if expires_at is not None and expires_at.tzinfo is None:
+            expires_at = expires_at.replace(tzinfo=UTC)
+        expired = expires_at is not None and expires_at <= reference_now
+        deletion_started = (
+            artifact.status is db_models.TemporalArtifactStatus.DELETED
+            or artifact.deleted_at is not None
+            or artifact.hard_deleted_at is not None
+        )
+        status_value = getattr(artifact.status, "value", artifact.status)
+        return _saved_work_retention.describe_artifact_availability(
+            status=str(status_value) if status_value is not None else None,
+            expires_at_expired=expired,
+            bytes_missing=bytes_missing,
+            digest_mismatch=digest_mismatch,
+            quarantined=quarantined,
+            deletion_started=deletion_started,
+            never_verified_complete=never_verified_complete,
+        )
+
+    async def validate_saved_work_manifest_dependencies(
+        self,
+        dependencies: Any,
+        *,
+        principal: str,
+        admitted_principal: str | None = None,
+    ) -> dict[str, Any]:
+        """Validate a manifest's bounded dependency graph (#4017 impl-01)."""
+        entries = _saved_work_retention.validate_saved_work_dependency_entries(
+            dependencies
+        )
+
+        async def _resolve(artifact_id: str) -> dict[str, Any] | None:
+            try:
+                artifact = await self._repository.get_artifact(artifact_id)
+            except TemporalArtifactNotFoundError:
+                return None
+            status_value = getattr(artifact.status, "value", artifact.status)
+            metadata = dict(artifact.metadata_json or {})
+            raw = metadata.get("dependencies") or metadata.get("childIds") or []
+            return {
+                "artifactId": artifact.artifact_id,
+                "status": str(status_value),
+                "sha256": artifact.sha256,
+                "sizeBytes": artifact.size_bytes,
+                "dependencies": [str(item) for item in list(raw)],
+            }
+
+        cache: dict[str, dict[str, Any] | None] = {}
+
+        async def _cached(artifact_id: str) -> dict[str, Any] | None:
+            if artifact_id not in cache:
+                cache[artifact_id] = await _resolve(artifact_id)
+            result = cache[artifact_id]
+            return dict(result) if result is not None else None
+
+        def _sync_resolve(artifact_id: str) -> Mapping[str, Any] | None:
+            # The graph validator walks synchronously over already-fetched
+            # evidence; the service pre-resolves the bounded entry set first.
+            return cache.get(artifact_id)
+
+        for entry in entries:
+            evidence = await _cached(entry["artifactId"])
+            if evidence is None:
+                continue
+            try:
+                artifact = await self._repository.get_artifact(entry["artifactId"])
+            except TemporalArtifactNotFoundError:
+                continue
+            await self._assert_saved_work_read_access(
+                artifact,
+                principal=principal,
+                admitted_principal=admitted_principal,
+            )
+            status_value = getattr(artifact.status, "value", artifact.status)
+            if str(status_value).lower() != "complete":
+                if entry["kind"] == "required":
+                    raise TemporalArtifactStateError(
+                        "SAVED_WORK_DEP_UNAVAILABLE: required dependency "
+                        f"{entry['artifactId']!r} is not restorable "
+                        f"(status {status_value})"
+                    )
+                continue
+
+        def _authorize(artifact_id: str) -> bool:
+            # Authorization was already enforced per entry above; the graph
+            # validator re-checks through this callback for closure nodes.
+            return True
+
+        # Pre-resolve one bounded closure level so cycle detection cannot fan
+        # out into an unbounded walk.
+        for entry in entries:
+            evidence = cache.get(entry["artifactId"])
+            if not evidence:
+                continue
+            for child in list(evidence.get("dependencies") or [])[
+                : _saved_work_retention.SAVED_WORK_MAX_DEPENDENCIES
+            ]:
+                await _cached(str(child))
+
+        return _saved_work_retention.validate_saved_work_dependency_graph(
+            entries,
+            resolve_artifact=_sync_resolve,
+            authorize_artifact=_authorize,
+        )
+
+    @staticmethod
+    def download_policy_statement() -> str:
+        """Honest revocation limitation for every signed-download surface."""
+        return _saved_work_retention.SAVED_WORK_DOWNLOAD_REVOCATION_LIMITATIONS
+
+    def _bounded_download_ttl(
+        self,
+        *,
+        artifact: db_models.TemporalArtifact,
+        use_ttl_seconds: int | None = None,
+    ) -> tuple[int, str]:
+        metadata = dict(artifact.metadata_json or {})
+        artifact_ttl: int | None = None
+        raw_ttl = metadata.get("downloadTtlSeconds")
+        if raw_ttl is not None:
+            try:
+                artifact_ttl = max(1, int(raw_ttl))
+            except (TypeError, ValueError):
+                artifact_ttl = None
+        return _saved_work_retention.resolve_download_ttl_seconds(
+            configured_ttl_seconds=self._presign_ttl_seconds,
+            artifact_ttl_seconds=artifact_ttl,
+            use_ttl_seconds=use_ttl_seconds,
+            restricted_content=artifact.redaction_level
+            is db_models.TemporalArtifactRedactionLevel.RESTRICTED,
+        )
+
+    async def check_saved_work_quota(
+        self,
+        *,
+        scope: str,
+        logical_bytes: int = 0,
+        physical_bytes: int = 0,
+        claims: int = 0,
+        quotas: Mapping[str, int] | None = None,
+        now: datetime | None = None,
+    ) -> dict[str, int]:
+        """Enforce per-scope quotas from live DB evidence (#4017 impl-08)."""
+        effective = dict(_saved_work_retention.SAVED_WORK_DEFAULT_QUOTAS)
+        if quotas:
+            effective.update({str(k): int(v) for k, v in dict(quotas).items()})
+        usage = await self._repository.quota_usage_for_scope(scope)
+        reference_now = now or datetime.now(UTC)
+        live_claims = await self._repository.count_live_claims_for_owner(
+            scope, now=reference_now
+        )
+        logical_after = usage["logicalBytes"] + max(0, logical_bytes)
+        physical_after = usage["physicalBytes"] + max(0, physical_bytes)
+        claims_after = live_claims + max(0, claims)
+        if logical_after > effective["max_logical_bytes_per_scope"]:
+            raise TemporalArtifactValidationError(
+                "SAVED_WORK_QUOTA_LOGICAL: scope "
+                f"{scope!r} exceeds retained-content quota "
+                f"({logical_after} > {effective['max_logical_bytes_per_scope']})"
+            )
+        if physical_after > effective["max_physical_bytes_per_scope"]:
+            raise TemporalArtifactValidationError(
+                "SAVED_WORK_QUOTA_PHYSICAL: scope "
+                f"{scope!r} exceeds restore-resource quota "
+                f"({physical_after} > {effective['max_physical_bytes_per_scope']})"
+            )
+        if claims_after > effective["max_live_use_claims_per_scope"]:
+            raise TemporalArtifactValidationError(
+                "SAVED_WORK_QUOTA_CLAIMS: scope "
+                f"{scope!r} exceeds live-use quota "
+                f"({claims_after} > {effective['max_live_use_claims_per_scope']})"
+            )
+        return {
+            "scope": scope,
+            "logicalBytesUsed": usage["logicalBytes"],
+            "physicalBytesUsed": usage["physicalBytes"],
+            "liveClaimsUsed": live_claims,
+        }
+
+    async def acquire_saved_work_use(
+        self,
+        *,
+        artifact_id: str,
+        principal: str,
+        request_id: str,
+        operation_kind: str,
+        ttl_seconds: int = 3600,
+        admitted_principal: str | None = None,
+        quotas: Mapping[str, int] | None = None,
+    ) -> db_models.TemporalArtifactUseClaim:
+        """Admit one restore/publication/download use (#4017 impl-03/04).
+
+        Admission and eligibility-to-delete share the row-lock protocol: the
+        artifact row is locked, state is rechecked (expired/deleting/
+        unavailable yields an explicit error), and only then is the claim
+        recorded. A use request therefore either holds protection before GC
+        selects the dependency or receives an explicit terminal state.
+        """
+        artifact = await self._repository.get_artifact_for_update(artifact_id)
+        await self._assert_saved_work_read_access(
+            artifact,
+            principal=principal,
+            admitted_principal=admitted_principal,
+        )
+        reference_now = datetime.now(UTC)
+        availability = self.saved_work_availability_of(artifact, now=reference_now)
+        if availability != "available":
+            raise TemporalArtifactStateError(
+                f"SAVED_WORK_USE_{availability.upper()}: artifact {artifact_id} "
+                f"is {availability}, not admitted for {operation_kind}"
+            )
+        await self.check_saved_work_quota(
+            scope=principal,
+            claims=1,
+            quotas=quotas,
+            now=reference_now,
+        )
+        claim = await self._repository.acquire_use_claim(
+            artifact_id=artifact_id,
+            owner_principal=principal,
+            request_id=request_id,
+            operation_kind=operation_kind,
+            expires_at=reference_now
+            + timedelta(seconds=max(60, int(ttl_seconds))),
+        )
+        await self._repository.commit()
+        return claim
+
+    async def release_saved_work_use(
+        self,
+        *,
+        artifact_id: str,
+        principal: str,
+        request_id: str,
+    ) -> bool:
+        """Release exactly one operation's protection (#4017 impl-03)."""
+        released = await self._repository.release_use_claim(
+            artifact_id=artifact_id,
+            owner_principal=principal,
+            request_id=request_id,
+        )
+        await self._repository.commit()
+        return released
 
     @staticmethod
     def _normalize_parts(parts: list[dict[str, Any]] | None) -> list[dict[str, Any]]:
@@ -2312,6 +2850,7 @@ class TemporalArtifactService:
         *,
         artifact_id: str,
         principal: str,
+        use_ttl_seconds: int | None = None,
     ) -> tuple[db_models.TemporalArtifact, datetime, str]:
         artifact = await self._repository.get_artifact(artifact_id)
         await self._assert_artifact_read_access(artifact, principal=principal)
@@ -2319,7 +2858,15 @@ class TemporalArtifactService:
             raise TemporalArtifactStateError("artifact is not readable")
         await self._assert_artifact_raw_access(artifact, principal=principal)
 
-        expires_at = datetime.now(UTC) + timedelta(seconds=self._presign_ttl_seconds)
+        # Bound signed-download validity by artifact/use/security policy
+        # (#4017 impl-07): restricted content always uses the short bound.
+        # Issued URLs are bearer tokens until expiry; UI state never retracts
+        # them (see download_policy_statement()).
+        bounded_ttl, _revocation = self._bounded_download_ttl(
+            artifact=artifact,
+            use_ttl_seconds=use_ttl_seconds,
+        )
+        expires_at = datetime.now(UTC) + timedelta(seconds=bounded_ttl)
         if artifact.storage_backend is db_models.TemporalArtifactStorageBackend.S3:
             is_json = (artifact.content_type or "").split(";", 1)[
                 0
@@ -2329,7 +2876,7 @@ class TemporalArtifactService:
             )
             url = self._store.presign_download(
                 storage_key=artifact.storage_key,
-                expires_in_seconds=self._presign_ttl_seconds,
+                expires_in_seconds=bounded_ttl,
                 download_filename=download_filename,
             )
         else:
@@ -2461,13 +3008,42 @@ class TemporalArtifactService:
         *,
         artifact_id: str,
         principal: str,
+        admin: bool = False,
+        admin_reason: str | None = None,
     ) -> db_models.TemporalArtifact:
-        artifact = await self._repository.get_artifact(artifact_id)
+        # Eligibility and admission share one row-lock recheck (#4017
+        # impl-04): a soft delete either observes no live protection or is an
+        # explicit administrator deletion with a stated reason.
+        artifact = await self._repository.get_artifact_for_update(artifact_id)
         self._assert_mutation_access(artifact, principal=principal)
         if artifact.status is db_models.TemporalArtifactStatus.DELETED:
             return artifact
+        reference_now = datetime.now(UTC)
+        live_claims = await self._repository.list_live_use_claims(
+            artifact_id, now=reference_now
+        )
+        if live_claims and not admin:
+            holders = sorted({claim.owner_principal for claim in live_claims})
+            raise TemporalArtifactStateError(
+                "SAVED_WORK_DELETE_BLOCKED: artifact "
+                f"{artifact_id} has live use protection "
+                f"({', '.join(holders)}); use explicit administrator deletion"
+            )
+        if admin and not (admin_reason or "").strip():
+            raise TemporalArtifactValidationError(
+                "administrator deletion requires an explicit reason"
+            )
+        if admin and live_claims:
+            logger.warning(
+                "Temporal artifact admin soft_delete overrides live use "
+                "principal=%s artifact_id=%s consumers=%s reason=%s",
+                principal,
+                artifact.artifact_id,
+                ",".join(sorted({c.owner_principal for c in live_claims})),
+                admin_reason,
+            )
         artifact.status = db_models.TemporalArtifactStatus.DELETED
-        artifact.deleted_at = datetime.now(UTC)
+        artifact.deleted_at = reference_now
         await self._repository.unpin_artifact(artifact.artifact_id)
         await self._repository.commit()
         logger.info(
@@ -2477,13 +3053,125 @@ class TemporalArtifactService:
         )
         return artifact
 
+    async def admin_delete(
+        self,
+        *,
+        artifact_id: str,
+        principal: str,
+        reason: str,
+    ) -> dict[str, Any]:
+        """Explicit administrator deletion, separate from ordinary expiry.
+
+        Active consumers are named (not silently dropped): their use claims
+        stay on the row so subsequent reads/admissions observe an explicit
+        deleting state instead of silent loss.
+        """
+        artifact = await self.soft_delete(
+            artifact_id=artifact_id,
+            principal=principal,
+            admin=True,
+            admin_reason=reason,
+        )
+        reference_now = datetime.now(UTC)
+        live_claims = await self._repository.list_live_use_claims(
+            artifact_id, now=reference_now
+        )
+        return {
+            "artifactId": artifact.artifact_id,
+            "status": str(getattr(artifact.status, "value", artifact.status)),
+            "adminReason": reason,
+            "activeConsumers": sorted({c.owner_principal for c in live_claims}),
+        }
+
+    async def _delete_object_recoverably(
+        self,
+        *,
+        artifact: db_models.TemporalArtifact,
+        principal: str,
+    ) -> None:
+        """Delete object bytes through a persisted intent (#4017 impl-05)."""
+        await self._repository.record_deletion_intent(
+            artifact_id=artifact.artifact_id, principal=principal
+        )
+        await self._repository.flush()
+        try:
+            await asyncio.get_running_loop().run_in_executor(
+                None, self._store.delete, artifact.storage_key
+            )
+        except FileNotFoundError as exc:
+            # Absent objects already converge to gone; reconcile, don't fail.
+            await self._repository.note_deletion_attempt(
+                artifact_id=artifact.artifact_id,
+                error=f"object-absent:{exc}",
+            )
+            return
+        except Exception as exc:  # noqa: BLE001 - recorded for reconciliation
+            await self._repository.note_deletion_attempt(
+                artifact_id=artifact.artifact_id,
+                error=f"{type(exc).__name__}:{exc}",
+            )
+            raise TemporalArtifactStateError(
+                "SAVED_WORK_DELETE_RETRY: object-store delete failed for "
+                f"{artifact.artifact_id}; intent persisted for sweeper "
+                "reconciliation"
+            ) from exc
+        await self._repository.note_deletion_attempt(
+            artifact_id=artifact.artifact_id, error=None
+        )
+
+    async def reconcile_deletion_intents(
+        self,
+        *,
+        principal: str,
+        limit: int = 500,
+    ) -> int:
+        """Converge persisted deletion intents after failures/restarts."""
+        reconciled = 0
+        for intent in await self._repository.list_pending_deletion_intents(
+            limit=limit
+        ):
+            try:
+                artifact = await self._repository.get_artifact(intent.artifact_id)
+            except TemporalArtifactNotFoundError:
+                await self._repository.clear_deletion_intent(intent.artifact_id)
+                reconciled += 1
+                continue
+            if artifact.hard_deleted_at is None:
+                # DB commit never landed: the tombstone is still missing, so
+                # the artifact must not be reported as deleted. Keep the
+                # intent for the next pass instead of clearing it.
+                await self._repository.note_deletion_attempt(
+                    artifact_id=artifact.artifact_id,
+                    error="tombstone-missing: db commit never landed",
+                )
+                continue
+            if await self._repository.has_live_storage_reference(
+                storage_backend=artifact.storage_backend,
+                storage_key=artifact.storage_key,
+            ):
+                # Another logical owner still references the bytes; only the
+                # intent clears.
+                await self._repository.clear_deletion_intent(artifact.artifact_id)
+                reconciled += 1
+                continue
+            try:
+                await self._delete_object_recoverably(
+                    artifact=artifact, principal=principal
+                )
+            except TemporalArtifactStateError:
+                continue
+            await self._repository.clear_deletion_intent(artifact.artifact_id)
+            reconciled += 1
+        await self._repository.commit()
+        return reconciled
+
     async def hard_delete(
         self,
         *,
         artifact_id: str,
         principal: str,
     ) -> db_models.TemporalArtifact:
-        artifact = await self._repository.get_artifact(artifact_id)
+        artifact = await self._repository.get_artifact_for_update(artifact_id)
         self._assert_mutation_access(artifact, principal=principal)
         if artifact.hard_deleted_at is not None:
             return artifact
@@ -2496,6 +3184,16 @@ class TemporalArtifactService:
             storage_backend=artifact.storage_backend,
             storage_key=artifact.storage_key,
         )
+        # Recheck under the shared protocol: a use claim admitted just before
+        # this lock must block physical deletion rather than race it.
+        reference_now = datetime.now(UTC)
+        if await self._repository.has_live_use_claim(
+            artifact_id, now=reference_now
+        ):
+            raise TemporalArtifactStateError(
+                "SAVED_WORK_DELETE_BLOCKED: artifact "
+                f"{artifact_id} has a live use claim; refusing hard delete"
+            )
         now = datetime.now(UTC)
         artifact.hard_deleted_at = now
         artifact.tombstoned_at = now
@@ -2504,9 +3202,10 @@ class TemporalArtifactService:
             storage_backend=artifact.storage_backend,
             storage_key=artifact.storage_key,
         ):
-            await asyncio.get_running_loop().run_in_executor(
-                None, self._store.delete, artifact.storage_key
+            await self._delete_object_recoverably(
+                artifact=artifact, principal=principal
             )
+        await self._repository.clear_deletion_intent(artifact.artifact_id)
         await self._repository.commit()
         logger.info(
             "Temporal artifact hard_delete principal=%s artifact_id=%s",
@@ -2521,22 +3220,43 @@ class TemporalArtifactService:
         principal: str,
         run_id: str | None = None,
         now: datetime | None = None,
+        limit: int = 500,
     ) -> LifecycleSweepSummary:
+        """Bounded, paginated, idempotent, observable lifecycle sweep."""
         sweep_now = now or datetime.now(UTC)
         lifecycle_run_id = run_id or str(uuid4())
-        expired = await self._repository.list_expired_artifacts(now=sweep_now)
+        page_size = max(1, int(limit))
+        pruned = await self._repository.prune_expired_use_claims(now=sweep_now)
+        expired = await self._repository.list_expired_artifacts(
+            now=sweep_now, limit=page_size
+        )
 
         soft_deleted = 0
+        skipped_in_use = 0
         for artifact in expired:
-            if artifact.status is not db_models.TemporalArtifactStatus.DELETED:
-                artifact.status = db_models.TemporalArtifactStatus.DELETED
-                artifact.deleted_at = sweep_now
-                soft_deleted += 1
+            if artifact.status is db_models.TemporalArtifactStatus.DELETED:
+                artifact.last_lifecycle_run_id = lifecycle_run_id
+                continue
+            # Recheck protection at the sweep boundary: expiry eligibility
+            # alone never removes content under a live claim or operator pin.
+            if await self._repository.has_live_use_claim(
+                artifact.artifact_id, now=sweep_now
+            ):
+                skipped_in_use += 1
+                artifact.last_lifecycle_run_id = lifecycle_run_id
+                continue
+            if await self._repository.get_pin(artifact.artifact_id) is not None:
+                skipped_in_use += 1
+                artifact.last_lifecycle_run_id = lifecycle_run_id
+                continue
+            artifact.status = db_models.TemporalArtifactStatus.DELETED
+            artifact.deleted_at = sweep_now
+            soft_deleted += 1
             artifact.last_lifecycle_run_id = lifecycle_run_id
 
         cutoff = sweep_now - self._lifecycle.hard_delete_after
         hard_candidates = await self._repository.list_deleted_for_hard_delete(
-            cutoff=cutoff
+            cutoff=cutoff, limit=page_size
         )
         hard_deleted = 0
         for artifact in hard_candidates:
@@ -2544,6 +3264,12 @@ class TemporalArtifactService:
                 storage_backend=artifact.storage_backend,
                 storage_key=artifact.storage_key,
             )
+            if await self._repository.has_live_use_claim(
+                artifact.artifact_id, now=sweep_now
+            ):
+                skipped_in_use += 1
+                artifact.last_lifecycle_run_id = lifecycle_run_id
+                continue
             artifact.hard_deleted_at = sweep_now
             artifact.tombstoned_at = sweep_now
             artifact.last_lifecycle_run_id = lifecycle_run_id
@@ -2552,11 +3278,20 @@ class TemporalArtifactService:
                 storage_backend=artifact.storage_backend,
                 storage_key=artifact.storage_key,
             ):
-                await asyncio.get_running_loop().run_in_executor(
-                    None, self._store.delete, artifact.storage_key
-                )
+                try:
+                    await self._delete_object_recoverably(
+                        artifact=artifact, principal=principal
+                    )
+                except TemporalArtifactStateError:
+                    # Intent persisted; reconciliation converges later. The
+                    # tombstone row stays truthful about the pending delete.
+                    continue
+                await self._repository.clear_deletion_intent(artifact.artifact_id)
             hard_deleted += 1
 
+        reconciled = await self.reconcile_deletion_intents(
+            principal=principal, limit=page_size
+        )
         await self._repository.commit()
         logger.info(
             "Temporal artifact sweep_lifecycle principal=%s run_id=%s soft_deleted=%s hard_deleted=%s",
@@ -2570,6 +3305,9 @@ class TemporalArtifactService:
             expired_candidate_count=len(expired),
             soft_deleted_count=soft_deleted,
             hard_deleted_count=hard_deleted,
+            skipped_in_use_count=skipped_in_use,
+            reconciled_deletion_count=reconciled,
+            pruned_claim_count=pruned,
         )
 
     async def compute_preview(
