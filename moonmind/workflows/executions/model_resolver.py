@@ -34,6 +34,7 @@ from moonmind.workflows.executions.runtime_defaults import (
 __all__ = [
     "RequestedModelTierUnavailableError",
     "ResolvedModelEffort",
+    "coerce_effort_for_model",
     "provider_profile_version",
     "resolve_effective_model",
     "resolve_model_effort",
@@ -310,6 +311,36 @@ def resolve_model_effort(
         advisory_preview,
         profile=profile,
     )
+
+
+def coerce_effort_for_model(model: str | None, effort: str | None) -> str | None:
+    """Validate effort against the selected model's actual supported values.
+
+    MoonLadderStudios/MoonMind#4021 req-3: the seeded ``xhigh`` default must
+    not be assumed for every model. Known OpenCode models use their recorded
+    values via ``validate_effort_for_model``; unknown models and non-OpenCode
+    routes fall back to the generic validator. Exact-ID execution selection
+    itself stays with the bootstrap/profile/plan consumers
+    (``resolve_model_exact``); this helper only coerces effort truthfully.
+    """
+    if effort is None:
+        return None
+    cleaned_model = str(model or "").strip()
+    cleaned_effort = str(effort or "").strip()
+    if not cleaned_effort:
+        return effort
+    if not cleaned_model or "/" not in cleaned_model:
+        from moonmind.omnigent.bootstrap.opencode import validate_effort
+
+        return validate_effort(cleaned_effort)
+    try:
+        from moonmind.omnigent.bootstrap.opencode import validate_effort_for_model
+
+        return validate_effort_for_model(cleaned_effort, cleaned_model)
+    except ImportError:
+        from moonmind.omnigent.bootstrap.opencode import validate_effort  # type: ignore[no-redef]
+
+        return validate_effort(cleaned_effort)
 
 
 def _clean(value: Any | None) -> str | None:
