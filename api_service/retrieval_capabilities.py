@@ -199,9 +199,10 @@ class RetrievalCapabilityRegistry:
         raise RetrievalCapabilityError(
             "retired",
             "Built-in vector retrieval has been retired "
-            "(MoonLadderStudios/MoonMind#4105, #4107). Remove retired retrieval fields "
-            "and use explicit attachments, artifact refs, or scoped workspace "
-            "access instead. Historical details remain readable.",
+            "(MoonLadderStudios/MoonMind#4105, #4107). Remove retired follow-up "
+            "retrieval request fields and use explicit attachments, artifact "
+            "refs, or scoped workspace access instead. Historical details "
+            "remain readable.",
         )
 
     def resolve(
