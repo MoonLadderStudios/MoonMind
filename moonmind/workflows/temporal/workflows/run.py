@@ -626,6 +626,15 @@ RUN_ASSESSMENT_CONSUMER_HANDOFF_PATCH = "run-assessment-consumer-handoff-v1"
 RUN_ASSESSMENT_ATTACHMENT_HANDOFF_PATCH = "run-assessment-attachment-handoff-v1"
 RUN_ISSUE_BRIEF_ATTACHMENT_HANDOFF_PATCH = "run-issue-brief-attachment-handoff-v1"
 RUN_TRUSTED_ISSUE_BRIEF_AUTHORITY_PATCH = "run-trusted-issue-brief-authority-v1"
+# MoonLadderStudios/MoonMind#4099: automatic "<base>: #<number>" display-title
+# enrichment for opt-in issue-search presets. Gated so in-flight histories
+# replay without the new memo/search-attribute commands.
+RUN_ISSUE_SEARCH_TITLE_ENRICHMENT_PATCH = "run-issue-search-title-enrichment-v1"
+# MoonLadderStudios/MoonMind#4099: gate the repaired legacy title-update path
+# so in-flight histories that already recorded the old command-free
+# ``update_title`` update replay without the new memo/search-attribute
+# commands.
+RUN_LEGACY_TITLE_UPDATE_TRANSITION_PATCH = "run-legacy-title-update-transition-v1"
 RUN_MOONSPEC_VERIFY_ATTACHMENT_HANDOFF_PATCH = (
     "run-moonspec-verify-attachment-handoff-v1"
 )
@@ -1582,6 +1591,17 @@ class MoonMindRunWorkflow:
         self._runtime_inheritance_parameters: dict[str, Any] = {}
         self._close_status: Optional[str] = None
         self._title: Optional[str] = None
+        # MoonLadderStudios/MoonMind#4099: shared title-transition state.
+        # _title_base is the frozen generated label, _title_provenance is
+        # "user_explicit" (protected) or "generated" (enrichment-eligible),
+        # _title_revision orders title decisions, _title_target holds compact
+        # accepted-issue provenance (repo/number refs, never bodies).
+        self._title_base: Optional[str] = None
+        self._title_provenance: str = "generated"
+        self._title_revision: int = 0
+        self._title_target: dict[str, Any] | None = None
+        self._title_source: Optional[str] = None
+        self._title_confidence: Optional[str] = None
         self._summary: str = "Execution initialized."
         self._correlation_id: Optional[str] = None
         self._pull_request_url: Optional[str] = None
@@ -4118,6 +4138,22 @@ class MoonMindRunWorkflow:
             published_head = self._publish_context.get("acceptedPublishedHead")
             if isinstance(published_head, Mapping):
                 continuation["acceptedPublishedHead"] = dict(published_head)
+        if self._patched_or_false_outside_workflow(
+            RUN_ISSUE_SEARCH_TITLE_ENRICHMENT_PATCH
+        ):
+            # MoonLadderStudios/MoonMind#4099: carry the shared title-transition
+            # state across Continue-As-New (Temporal does not inherit memo), so
+            # an enriched or renamed title survives the new run. Compact refs
+            # only; the key is additive so old histories still restore.
+            continuation["titleTransition"] = {
+                "base": self._title_base,
+                "display": self._title,
+                "provenance": self._title_provenance,
+                "revision": self._title_revision,
+                "target": dict(self._title_target) if self._title_target else None,
+                "source": self._title_source,
+                "confidence": self._title_confidence,
+            }
         if workflow.patched(RUN_REMEDIATION_ISSUE_AUTHORITY_CONTINUATION_PATCH):
             continuation["assessmentContext"] = {
                 key: value
@@ -9865,6 +9901,164 @@ class MoonMindRunWorkflow:
         if context:
             self._trusted_issue_context = context
 
+    def _maybe_enrich_title_from_trusted_issue(
+        self, outputs: Mapping[str, Any]
+    ) -> bool:
+        """Enrich the display title from the accepted GitHub resolver result.
+
+        MoonLadderStudios/MoonMind#4099: metadata-only transition shared with
+        manual ``SetTitle``. Scoped to opt-in presets (pinned
+        ``titleEnrichment`` declaration); search text, failures, no-match,
+        invalid, or unrelated results never trigger. Idempotent for duplicate
+        accepted results. Returns True when the title changed.
+        """
+        from moonmind.workflows.executions.title_derivation import (
+            TITLE_PROVENANCE_GENERATED,
+            TITLE_PROVENANCE_USER_EXPLICIT,
+            TitleTransitionState,
+            apply_issue_enrichment_title,
+        )
+
+        if not self._issue_title_enrichment_enabled():
+            return False
+        if not isinstance(outputs, Mapping):
+            return False
+        if (
+            str(outputs.get("trustedSource") or "").strip()
+            != "moonmind.github.get_issue"
+        ):
+            return False
+        repository = outputs.get("repository")
+        if isinstance(repository, Mapping):
+            repository = repository.get("name") or repository.get("full_name")
+        repository_text = str(repository or "").strip()
+        if not repository_text:
+            # Production success payloads nest both repository and number
+            # under outputs["issue"] (story_output_tools builds that object
+            # with no top-level repository); read the same nested mapping
+            # used for the issue number so enrichment actually runs.
+            for nested_key in ("issue", "githubIssue", "github_issue"):
+                nested = outputs.get(nested_key)
+                if not isinstance(nested, Mapping):
+                    continue
+                nested_repo = nested.get("repository", nested.get("repo"))
+                if isinstance(nested_repo, Mapping):
+                    nested_repo = nested_repo.get("name") or nested_repo.get(
+                        "full_name"
+                    )
+                nested_text = str(nested_repo or "").strip()
+                if nested_text:
+                    repository_text = nested_text
+                    break
+        raw_number = outputs.get("issueNumber", outputs.get("issue_number"))
+        if raw_number is None and isinstance(outputs.get("issue"), Mapping):
+            issue_map = outputs.get("issue")
+            raw_number = issue_map.get("number", issue_map.get("issueNumber"))
+        if raw_number is None and isinstance(outputs.get("githubIssue"), Mapping):
+            issue_map = outputs.get("githubIssue")
+            raw_number = issue_map.get("number", issue_map.get("issueNumber"))
+        try:
+            issue_number = int(raw_number) if not isinstance(raw_number, bool) else 0
+        except (TypeError, ValueError):
+            return False
+        if not repository_text or issue_number <= 0:
+            return False
+        if not (self._title_base or self._title):
+            return False
+        # Evaluate eligibility at the authoritative mutation point so a stale
+        # accepted result cannot overwrite a newer (explicit) title decision.
+        current = TitleTransitionState(
+            base_title=self._title_base or self._title,
+            display_title=self._title,
+            provenance=self._title_provenance
+            if self._title_provenance
+            in (TITLE_PROVENANCE_USER_EXPLICIT, TITLE_PROVENANCE_GENERATED)
+            else TITLE_PROVENANCE_GENERATED,
+            revision=self._title_revision or 0,
+        )
+        transition = apply_issue_enrichment_title(
+            current,
+            issue_number,
+            expected_revision=current.revision,
+        )
+        if not transition.changed:
+            return False
+        self._title_base = transition.state.base_title
+        self._title = transition.state.display_title
+        self._title_provenance = transition.state.provenance
+        self._title_revision = transition.state.revision
+        self._title_source = "integration_target"
+        self._title_confidence = "high"
+        self._title_target = {
+            "provider": "github",
+            "repository": repository_text[:200],
+            "issueNumber": issue_number,
+            "source": "moonmind.github.get_issue",
+        }
+        self._update_memo()
+        self._update_search_attributes()
+        return True
+
+    def _issue_title_enrichment_enabled(self) -> bool:
+        """Whether the pinned plan opts into automatic title enrichment."""
+        try:
+            parameters: Mapping[str, Any] = {}
+            original = getattr(self, "_original_input_payload", None)
+            if isinstance(original, Mapping):
+                maybe_params = original.get("initialParameters") or original.get(
+                    "initial_parameters"
+                )
+                if isinstance(maybe_params, Mapping):
+                    parameters = maybe_params
+            candidates: list[Mapping[str, Any]] = []
+            for payload in (
+                parameters,
+                parameters.get("workflow")
+                if isinstance(parameters.get("workflow"), Mapping)
+                else None,
+                parameters.get("task")
+                if isinstance(parameters.get("task"), Mapping)
+                else None,
+            ):
+                if isinstance(payload, Mapping):
+                    candidates.append(payload)
+                    task_payload = payload.get("workflow")
+                    if isinstance(task_payload, Mapping):
+                        candidates.append(task_payload)
+                    task_payload = payload.get("task")
+                    if isinstance(task_payload, Mapping):
+                        candidates.append(task_payload)
+            for candidate in candidates:
+                enrichment = candidate.get("titleEnrichment") or candidate.get(
+                    "title_enrichment"
+                )
+                if isinstance(enrichment, Mapping):
+                    enabled = enrichment.get("enabled", enrichment.get("enable"))
+                    if enabled is True:
+                        return True
+            slugs: set[str] = set()
+            try:
+                task_payload: Mapping[str, Any] = {}
+                workflow_payload = parameters.get("workflow")
+                if isinstance(workflow_payload, Mapping):
+                    task_payload = workflow_payload
+                elif isinstance(parameters.get("task"), Mapping):
+                    task_payload = parameters.get("task")  # type: ignore[assignment]
+                slugs = self._task_applied_template_slugs(parameters, task_payload)
+                template = task_payload.get("taskTemplate") or task_payload.get(
+                    "task_template"
+                )
+                if isinstance(template, Mapping):
+                    for key in ("slug", "name", "id"):
+                        value = self._coerce_text(template.get(key), max_chars=120)
+                        if value:
+                            slugs.add(value.lower())
+            except Exception:
+                slugs = set()
+            return "github-issue-search-and-implement" in slugs
+        except Exception:
+            return False
+
     @staticmethod
     def _patched_or_false_outside_workflow(patch_id: str) -> bool:
         try:
@@ -11269,6 +11463,85 @@ class MoonMindRunWorkflow:
             input_payload,
             "title",
         )
+        # MoonLadderStudios/MoonMind#4099: rehydrate shared title-transition
+        # state from memo (fresh runs start generated at revision 0).
+        memo_snapshot = workflow.memo() or {}
+        self._title_base = (
+            self._optional_string(memo_snapshot, "titleBase", "title_base")
+            or self._title
+        )
+        raw_provenance = self._optional_string(
+            memo_snapshot, "titleProvenance", "title_provenance"
+        ) or (
+            "user_explicit"
+            if memo_snapshot.get("titleSource") == "user_explicit"
+            else "generated"
+        )
+        self._title_provenance = (
+            raw_provenance
+            if raw_provenance in ("user_explicit", "generated")
+            else "generated"
+        )
+        self._title_source = self._optional_string(
+            memo_snapshot, "titleSource", "title_source"
+        ) or (
+            "user_explicit"
+            if self._title_provenance == "user_explicit"
+            else "preset_template"
+        )
+        self._title_confidence = self._optional_string(
+            memo_snapshot, "titleConfidence", "title_confidence"
+        ) or ("high" if self._title_provenance == "user_explicit" else "medium")
+        try:
+            self._title_revision = int(
+                memo_snapshot.get(
+                    "titleRevision", memo_snapshot.get("title_revision", 0)
+                )
+                or 0
+            )
+        except (TypeError, ValueError):
+            self._title_revision = 0
+        self._title_target = None
+        if (
+            "titleRevision" not in memo_snapshot
+            and "title_revision" not in memo_snapshot
+        ):
+            # MoonLadderStudios/MoonMind#4099: Continue-As-New starts with an
+            # empty memo; restore the carried title-transition snapshot so the
+            # new run keeps the enriched/renamed title. Fresh runs have no
+            # continuation snapshot and keep the memo-derived defaults above.
+            carried = (self._remediation_loop_continuation or {}).get(
+                "titleTransition"
+            )
+            if isinstance(carried, Mapping):
+                carried_base = carried.get("base")
+                carried_display = carried.get("display")
+                if isinstance(carried_base, str) and carried_base.strip():
+                    self._title_base = carried_base
+                    self._title = (
+                        carried_display
+                        if isinstance(carried_display, str) and carried_display.strip()
+                        else carried_base
+                    )
+                carried_provenance = carried.get("provenance")
+                if carried_provenance in ("user_explicit", "generated"):
+                    self._title_provenance = carried_provenance
+                try:
+                    self._title_revision = int(carried.get("revision") or 0)
+                except (TypeError, ValueError):
+                    # Keep the memo-derived revision when the carried snapshot
+                    # has a missing/non-numeric revision; the title stays usable.
+                    pass
+                carried_target = carried.get("target")
+                if isinstance(carried_target, Mapping):
+                    self._title_target = dict(carried_target)
+                for attr, key in (
+                    ("_title_source", "source"),
+                    ("_title_confidence", "confidence"),
+                ):
+                    value = carried.get(key)
+                    if isinstance(value, str) and value.strip():
+                        setattr(self, attr, value)
         self._summary = workflow.memo().get("summary") or "Execution initialized."
         self._owner_type, self._owner_id = self._trusted_owner_metadata()
 
@@ -14297,6 +14570,25 @@ class MoonMindRunWorkflow:
                     )
                 ):
                     self._record_trusted_issue_context(outputs_for_story_output)
+                    if (
+                        agent_request_for_context is None
+                        and tool_name in ISSUE_BRIEF_LOADER_TOOL_NAMES
+                        and workflow.patched(RUN_ISSUE_SEARCH_TITLE_ENRICHMENT_PATCH)
+                    ):
+                        # MoonLadderStudios/MoonMind#4099: opt-in automatic
+                        # display-title enrichment from the accepted typed
+                        # resolver result. Direct internal transition (no extra
+                        # agent step, no self HTTP call). Cosmetic failures are
+                        # contained and never mask the business outcome.
+                        try:
+                            self._maybe_enrich_title_from_trusted_issue(
+                                outputs_for_story_output
+                            )
+                        except Exception as exc:
+                            self._get_logger().warning(
+                                "Issue title enrichment skipped",
+                                extra={"error": str(exc)},
+                            )
                 previous_step_outputs = outputs_for_story_output
                 story_output_result = outputs_for_story_output.get("storyOutput")
                 if isinstance(story_output_result, Mapping):
@@ -24103,7 +24395,24 @@ class MoonMindRunWorkflow:
         memo_dict: dict[str, Any] = {
             "title": self._title or "Run",
             "summary": self._summary,
+            # MoonLadderStudios/MoonMind#4099: shared title-transition state so
+            # manual renames, automatic enrichment, and refreshes stay
+            # consistent (base label, explicit-vs-generated provenance, and
+            # revision guard; compact target refs only, never issue bodies).
+            "titleBase": self._title_base or self._title or "Run",
+            "titleProvenance": self._title_provenance,
+            "titleRevision": self._title_revision,
+            "titleSource": self._title_source
+            or (
+                "user_explicit"
+                if self._title_provenance == "user_explicit"
+                else "preset_template"
+            ),
+            "titleConfidence": self._title_confidence
+            or ("high" if self._title_provenance == "user_explicit" else "medium"),
         }
+        if self._title_target:
+            memo_dict["titleTarget"] = dict(self._title_target)
         if isinstance(self._step_count, int) and self._step_count > 0:
             memo_dict["mm_current_step_order"] = self._step_count
         if workflow.patched("run-memo-runtime-skill-visibility"):
@@ -24756,9 +25065,71 @@ class MoonMindRunWorkflow:
         self._update_memo()
         return True
 
-    @workflow.update
-    def update_title(self, new_title: str) -> None:
-        self._title = new_title
+    # MoonLadderStudios/MoonMind#4099: repair the public SetTitle path. The
+    # canonical API name is ``SetTitle`` with an object payload
+    # ``{"title": ...}``; the workflow owns the single shared title
+    # transition (manual rename + automatic issue enrichment).
+    @workflow.update(name="SetTitle")
+    def update_title(self, payload: Any = None) -> dict[str, Any]:
+        from moonmind.workflows.executions.title_derivation import (
+            TITLE_PROVENANCE_GENERATED,
+            TITLE_PROVENANCE_USER_EXPLICIT,
+            TitleTransitionState,
+            apply_manual_title,
+            normalize_display_title,
+        )
+
+        if isinstance(payload, Mapping):
+            raw_title = payload.get("title", payload.get("new_title"))
+        else:
+            raw_title = payload
+        normalized = normalize_display_title(raw_title)
+        if normalized is None:
+            raise ValueError("title is required and must be display-safe text")
+        current = TitleTransitionState(
+            base_title=self._title_base or self._title or normalized,
+            display_title=self._title,
+            provenance=self._title_provenance
+            if self._title_provenance
+            in (TITLE_PROVENANCE_USER_EXPLICIT, TITLE_PROVENANCE_GENERATED)
+            else TITLE_PROVENANCE_GENERATED,
+            revision=self._title_revision or 0,
+        )
+        transition = apply_manual_title(current, normalized)
+        if not transition.changed:
+            return {"accepted": True, "applied": "immediate", "title": self._title}
+        self._title_base = transition.state.base_title
+        self._title = transition.state.display_title
+        self._title_provenance = transition.state.provenance
+        self._title_revision = transition.state.revision
+        self._title_source = "user_explicit"
+        self._title_confidence = "high"
+        self._update_memo()
+        self._update_search_attributes()
+        return {"accepted": True, "applied": "immediate", "title": self._title}
+
+    @workflow.update(name="update_title")
+    def update_title_legacy(self, new_title: str) -> None:
+        """Legacy alias for the pre-repair unnamed update.
+
+        Preserved so in-flight callers using the old method name keep working.
+        Histories that already recorded the legacy command-free assignment
+        replay that exact behavior; only patched histories forward through
+        the repaired shared transition as ``SetTitle``.
+        """
+        from moonmind.workflows.executions.title_derivation import (
+            normalize_display_title,
+        )
+
+        if not self._patched_or_false_outside_workflow(
+            RUN_LEGACY_TITLE_UPDATE_TRANSITION_PATCH
+        ):
+            # Replay-compatible legacy behavior: the original handler only
+            # assigned the title with no memo/search-attribute commands.
+            normalized = normalize_display_title(new_title)
+            self._title = normalized if normalized is not None else new_title
+            return
+        self.update_title(new_title)
 
     @workflow.update
     def update_parameters(self, new_parameters: dict[str, Any]) -> None:

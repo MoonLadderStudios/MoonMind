@@ -57,6 +57,12 @@ def activity_boundary(monkeypatch):
 
     def handler(request):
         requests.append(request)
+        if "/comments" in request.url.path:
+            # Live comment readability gate expects a GitHub comment list.
+            # GET returns the list; POST creates one comment.
+            if request.method == "GET":
+                return httpx.Response(200, json=[])
+            return httpx.Response(200, json={"id": 1})
         if request.method == "POST" and request.url.path.endswith("/labels"):
             for label in json.loads(request.content)["labels"]:
                 if {"name": label} not in detail["labels"]:
@@ -403,7 +409,14 @@ async def test_rendered_child_lists_control_selection_and_preflight(
             and not request.url.path.endswith(f"/{parent['number']}")
         }
         assert requested_children == set(case["children"]), case["name"]
-        assert all(request.method == "GET" for request in activity_boundary.requests)
+        # Req-2 advisory claim (issue #4178) adds in-progress POSTs plus a
+        # comment-readability GET; prerequisite fetching itself stays read-only.
+        assert all(
+            request.method == "GET"
+            or request.url.path.endswith("/labels")
+            or "/comments" in request.url.path
+            for request in activity_boundary.requests
+        )
 
 
 @pytest.mark.parametrize("separator", ["-", "–", "—"])
@@ -508,7 +521,12 @@ async def test_child_issue_replay_selection_and_fresh_preflight(
     assert not any(
         request.url.path.endswith("/4103") for request in activity_boundary.requests
     )
-    assert all(request.method == "GET" for request in activity_boundary.requests)
+    assert all(
+        request.method == "GET"
+        or request.url.path.endswith("/labels")
+        or "/comments" in request.url.path
+        for request in activity_boundary.requests
+    )
 
 
 @pytest.mark.asyncio
@@ -608,7 +626,8 @@ async def test_scan_reuses_prerequisite_evidence_across_all_500_candidates(
     )
     assert result.status == "COMPLETED"
     assert result.outputs["searchEvidence"]["candidatesExamined"] == 500
-    assert len(activity_boundary.requests) == 5 + 11 + 1
+    # +5 for live comment readability (1 GET) + advisory claim (2 POSTs + 2 re-reads).
+    assert len(activity_boundary.requests) == 5 + 11 + 1 + 5
 
 
 @pytest.mark.asyncio
@@ -649,7 +668,8 @@ async def test_selected_issue_confirmation_refreshes_cached_prerequisite_state(
     )
     assert result.status == "FAILED"
     assert "changed or could not be confirmed" in result.outputs["error"]
-    assert len(activity_boundary.requests) == 4
+    # +1 for live comment readability GET before confirmation re-read.
+    assert len(activity_boundary.requests) == 4 + 1
 
 
 @pytest.mark.asyncio
@@ -667,7 +687,8 @@ async def test_maximum_prerequisite_list_has_fresh_confirmation_budget(
         "github.load_issue_preset_brief", {"repository": REPOSITORY, "issueSearch": ""}
     )
     assert result.status == "COMPLETED"
-    assert len(activity_boundary.requests) == 1 + 100 + 1 + 100
+    # +5 for live comment readability + advisory claim.
+    assert len(activity_boundary.requests) == 1 + 100 + 1 + 100 + 5
 
 
 @pytest.mark.asyncio
@@ -698,7 +719,8 @@ async def test_prerequisite_cache_preserves_cross_repository_identity(
     )
     assert result.status == "COMPLETED"
     assert result.outputs["searchEvidence"]["candidatesExamined"] == 3
-    assert len(activity_boundary.requests) == 5
+    # +5 for live comment readability + advisory claim.
+    assert len(activity_boundary.requests) == 5 + 5
 
 
 @pytest.mark.asyncio
@@ -734,7 +756,12 @@ async def test_dependency_gate_selection_and_preflight_use_fresh_github_state(
     )
     assert preflight.outputs["decision"] == "blocked"
     assert preflight.outputs["blockingIssues"][0]["number"] == 2615
-    assert all(request.method == "GET" for request in activity_boundary.requests)
+    assert all(
+        request.method == "GET"
+        or request.url.path.endswith("/labels")
+        or "/comments" in request.url.path
+        for request in activity_boundary.requests
+    )
 
 
 @pytest.mark.asyncio
@@ -807,6 +834,9 @@ async def test_default_preset_resolves_and_preserves_issue_across_agent_steps(
         }
     )
     assert previous["searchEvidence"] == result.outputs["searchEvidence"]
+    # Req-2 claim already applied in-progress during load; reset to Available
+    # so the explicit In Progress step exercises its own mutation path.
+    activity_boundary.detail["labels"] = [{"name": "bug"}]
     # No local workspace, issue-number injection, or assistant-text parsing.
     for step in steps[2:4]:
         tool = step["tool"]
@@ -825,7 +855,10 @@ async def test_default_preset_resolves_and_preserves_issue_across_agent_steps(
     mutations = [
         request for request in activity_boundary.requests if request.method != "GET"
     ]
+    # 1 claim POST from load (advisory in-progress labels) + 2 from the
+    # explicit In Progress step (labels + handoff comment).
     assert [(request.method, request.url.path) for request in mutations] == [
+        ("POST", f"/repos/{REPOSITORY}/issues/4025/labels"),
         ("POST", f"/repos/{REPOSITORY}/issues/4025/labels"),
         ("POST", f"/repos/{REPOSITORY}/issues/4025/comments"),
     ]
@@ -911,13 +944,18 @@ async def test_query_search_and_previous_explicit_issue_payload(activity_boundar
         == f"dashboard repo:{REPOSITORY} is:issue is:open"
     )
     activity_boundary.requests.clear()
+    # Req-2 claim mutates the mocked issue labels; reset to Available for the
+    # explicit lookup so it exercises direct fetch + readability + claim.
+    activity_boundary.detail.clear()
+    activity_boundary.detail.update(issue())
     # Existing persisted explicit issue inputs keep their original direct lookup.
     result = await activity_boundary.execute(
         "github.load_issue_preset_brief",
         {"repository": REPOSITORY, "issueNumber": 4025},
     )
     assert result.status == "COMPLETED"
-    assert len(activity_boundary.requests) == 1
+    # 1 detail fetch + 1 comment readability + 4 claim/re-read requests.
+    assert len(activity_boundary.requests) == 1 + 5
     assert "searchEvidence" not in result.outputs
     workflow = MoonMindRunWorkflow()
     workflow._record_trusted_issue_context(result.outputs)
