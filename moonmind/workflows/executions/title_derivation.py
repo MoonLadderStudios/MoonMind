@@ -815,6 +815,11 @@ def normalize_display_title(value: Any) -> str | None:
     text = str(value).strip() if isinstance(value, (str, int)) else ""
     if not text:
         return None
+    # Check raw (stripped) text for control characters before whitespace
+    # collapsing: str.split() treats U+001C..U+001F (among others) as
+    # whitespace, which would otherwise silently convert them to spaces.
+    if _TITLE_CONTROL_CHARS_RE.search(text):
+        return None
     text = " ".join(text.split())
     if not text:
         return None
