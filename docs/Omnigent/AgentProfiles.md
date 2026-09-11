@@ -4,7 +4,7 @@ Status: **Desired-State Design**
 Document Class: System / Feature Design View
 Owners: MoonMind Engineering  
 Issue: MoonLadderStudios/MoonMind#3517  
-Last updated: 2026-09-06
+Last updated: 2026-09-10
 
 ## Implementation status
 
@@ -50,6 +50,14 @@ Profiles never contain credentials, OAuth homes, registration secrets, Dockerfil
 ## Discovery and launch security
 
 MoonMind synchronizes the stock `/v1/agents` built-in catalog through its authenticated bridge boundary into a bounded last-known projection keyed by endpoint plus stable upstream id and version. The stock catalog's session bindability is projected as the canonical `session.start` capability. MoonMind records harness, capabilities, health, provenance, compatibility, successful-sync time, attempt time, and redacted error state. An outage retains the prior snapshot but marks it stale. Missing or incompatible agents block new launches; historical snapshots remain readable.
+
+The API refreshes discovery every two minutes independently of credential leases,
+provider validation, and deployment qualification. Each refresh has a fifteen-second
+deadline covering HTTP pagination and persistence. Authoring refreshes stale or
+missing discovery once before admission, then revalidates the exact selected
+upstream identity and version. Refresh commits only discovery in its own transaction;
+it cannot commit partial workflow authoring, change a selected profile, or replace
+an unavailable version. Failed refreshes remain actionable admission failures.
 
 Workflow, schedule, checkpoint-branch, and remediation authoring expose
 Runtime and one Profile selection. Runtime stays visible and names a stable
