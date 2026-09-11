@@ -83,6 +83,10 @@ services:
       - TEMPORAL_ARTIFACT_S3_SECRET_ACCESS_KEY=${TEMPORAL_ARTIFACT_S3_SECRET_ACCESS_KEY:-minioadmin}
       - TEMPORAL_DASHBOARD_SUBMIT_ENABLED=true
       - TEMPORAL_WORKFLOW_EDITING_ENABLED=${TEMPORAL_WORKFLOW_EDITING_ENABLED:-true}
+      # Stale worker-code admission (MoonLadderStudios/MoonMind#4224) runs in
+      # the API: it needs the same default workflow readiness target as the
+      # workflow worker itself, otherwise the gate silently disables itself.
+      - TEMPORAL_WORKFLOW_READINESS_URL=${TEMPORAL_WORKFLOW_READINESS_URL:-http://temporal-worker-workflow:8080/readyz}
       - MOONMIND_CONTAINER_JOBS_ENABLED=${MOONMIND_CONTAINER_JOBS_ENABLED:-true}
       # `ContainerJobService.submit()` resolves the deployment's declared image
       # sources before it creates durable job identity, so the API must see the
@@ -236,6 +240,7 @@ services:
     volumes:
       - ./api_service:/app/api_service
       - ./moonmind:/app/moonmind:ro
+      - ./services:/app/services:ro
       - ./docs:/app/docs:ro
       - ./.agents:/app/.agents:ro
       - ./deploy/state:/workspace/deployment_state:ro
@@ -942,6 +947,11 @@ services:
       - TEMPORAL_WORKER_FLEET=deployment
       - TEMPORAL_ACTIVITY_DEPLOYMENT_TASK_QUEUE=${TEMPORAL_ACTIVITY_DEPLOYMENT_TASK_QUEUE:-mm.activity.deployment}
       - TEMPORAL_DEPLOYMENT_WORKER_CONCURRENCY=${TEMPORAL_DEPLOYMENT_WORKER_CONCURRENCY:-1}
+      # Stale worker-code recovery (MoonLadderStudios/MoonMind#4224) runs in
+      # this worker: it needs the same default workflow readiness target as
+      # the workflow worker itself, otherwise recovery silently keeps
+      # image-only behavior.
+      - TEMPORAL_WORKFLOW_READINESS_URL=${TEMPORAL_WORKFLOW_READINESS_URL:-http://temporal-worker-workflow:8080/readyz}
       - TEMPORAL_WORKER_COMMAND=${TEMPORAL_WORKER_COMMAND:-python -m
         moonmind.workflows.temporal.worker_runtime}
       - TEMPORAL_ARTIFACT_BACKEND=${TEMPORAL_ARTIFACT_BACKEND:-s3}

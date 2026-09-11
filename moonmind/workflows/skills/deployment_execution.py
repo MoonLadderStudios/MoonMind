@@ -1189,7 +1189,7 @@ class DeploymentUpdateExecutor:
         command_log: dict[str, Any],
         progress_events: list[dict[str, str]],
         write_evidence: Callable[[str, Mapping[str, Any]], Awaitable[str]],
-    ) -> None:
+    ) -> str | None:
         """Restart workers still running stale modules after recreation.
 
         Idle stale workers restart immediately; busy ones are drained rather
@@ -1201,7 +1201,7 @@ class DeploymentUpdateExecutor:
         """
 
         if self.stale_worker_checker is None:
-            return
+            return None
         from moonmind.workflows.temporal.worker_code_identity import (
             format_stale_code_message,
             plan_stale_worker_recovery,
@@ -1213,7 +1213,27 @@ class DeploymentUpdateExecutor:
         stale = [dict(item) for item in await self.stale_worker_checker()]
         if not stale:
             command_log["workerCodeFreshness"] = {"status": "healthy", "stale": []}
-            return
+            return None
+        actionable = [
+            item for item in stale if str(item.get("status") or "stale") == "stale"
+        ]
+        if not actionable:
+            # Fail-open for unidentifiable workers (unreachable endpoints or
+            # envelopes without identities): an unknown worker must not wedge
+            # the update, but it is recorded as unknown — never healthy.
+            command_log["workerCodeFreshness"] = {
+                "status": "unknown",
+                "stale": [],
+                "unknown": [
+                    {
+                        "worker": str(item.get("worker") or item.get("name") or "unknown"),
+                        "startupRevision": str(item.get("startupRevision") or "unknown"),
+                        "currentRevision": str(item.get("currentRevision") or "unknown"),
+                    }
+                    for item in stale
+                ],
+            }
+            return None
         freshness = [
             WorkerCodeFreshness(
                 name=str(item.get("worker") or item.get("name") or "unknown"),
@@ -1221,11 +1241,11 @@ class DeploymentUpdateExecutor:
                 startup_revision=str(item.get("startupRevision") or "unknown"),
                 current_revision=str(item.get("currentRevision") or "unknown"),
             )
-            for item in stale
+            for item in actionable
         ]
         busy = {
             str(item.get("worker") or item.get("name") or "").strip()
-            for item in stale
+            for item in actionable
             if item.get("busy") is True
         }
         plan = plan_stale_worker_recovery(
@@ -1247,7 +1267,8 @@ class DeploymentUpdateExecutor:
         if self.stale_worker_restarter is None:
             recovery["recovery"] = {"status": "no_restarter"}
             command_log["workerCodeFreshness"] = recovery
-            await write_evidence("worker-code-freshness", recovery)
+            recovery_ref = await write_evidence("worker-code-freshness", recovery)
+            recovery["recoveryArtifactRef"] = recovery_ref
             raise ToolFailure(
                 error_code="DEPLOYMENT_STALE_WORKER_CODE",
                 message=format_stale_code_message(freshness)
@@ -1256,12 +1277,30 @@ class DeploymentUpdateExecutor:
                 details={"stack": stack, "reasonCode": "stale_code",
                          "staleWorkers": [item.to_payload() for item in freshness]},
             )
-        outcome = dict(await self.stale_worker_restarter(stale))
+        outcome = dict(await self.stale_worker_restarter(actionable))
         recovery["recovery"] = outcome
-        remaining = [dict(item) for item in await self.stale_worker_checker()]
+        # Post-restart verification requires known freshness: an unreachable
+        # or not-yet-ready endpoint reports ``unknown``, which is absence of
+        # evidence — not proof the replacement is fresh. Retry to a bounded
+        # terminal state instead of recording success on an empty list.
+        actionable_names = {item.name for item in freshness}
+        remaining: list[dict[str, Any]] = []
+        for attempt in range(3):
+            rechecked = [dict(item) for item in await self.stale_worker_checker()]
+            remaining = [
+                item
+                for item in rechecked
+                if str(item.get("worker") or item.get("name") or "") in actionable_names
+                and str(item.get("status") or "stale") in ("stale", "unknown")
+            ]
+            if not remaining:
+                break
+            if attempt < 2:
+                await asyncio.sleep(5)
         recovery["remaining"] = remaining
         command_log["workerCodeFreshness"] = recovery
-        await write_evidence("worker-code-freshness", recovery)
+        recovery_ref = await write_evidence("worker-code-freshness", recovery)
+        recovery["recoveryArtifactRef"] = recovery_ref
         failed = list(outcome.get("failed") or [])
         if remaining or failed:
             raise ToolFailure(
@@ -1273,6 +1312,7 @@ class DeploymentUpdateExecutor:
                          "staleWorkers": [item.to_payload() for item in freshness],
                          "recovery": outcome},
             )
+        return recovery_ref
 
     async def execute(
         self,
@@ -1318,6 +1358,7 @@ class DeploymentUpdateExecutor:
         after_ref: str | None = None
         command_ref: str | None = None
         verification_ref: str | None = None
+        worker_code_recovery_ref: str | None = None
         verification: ComposeVerification | None = None
         final_status: str | None = None
         failure_reason: str | None = None
@@ -1473,12 +1514,17 @@ class DeploymentUpdateExecutor:
                 _ensure_command_succeeded("up", up_result)
                 command_ref = await write_evidence("command-log", command_log)
 
-                await self._reconcile_stale_workers(
+                worker_code_recovery_ref = await self._reconcile_stale_workers(
                     stack=parsed["stack"],
                     command_log=command_log,
                     progress_events=progress_events,
                     write_evidence=write_evidence,
                 )
+                # The reconcile step mutates command_log after the first
+                # command-log write above: rewrite it so
+                # commandLogArtifactRef contains the workerCodeFreshness
+                # evidence instead of a pre-reconcile snapshot.
+                command_ref = await write_evidence("command-log", command_log)
 
                 _add_progress(progress_events, "VERIFYING", "Verifying deployed state.")
                 verification = await self.runner.verify(
@@ -1570,6 +1616,8 @@ class DeploymentUpdateExecutor:
             "verificationArtifactRef": verification_ref,
             "audit": _redact_sensitive(audit_snapshot(completed=True)),
         }
+        if worker_code_recovery_ref is not None:
+            outputs["workerCodeFreshnessArtifactRef"] = worker_code_recovery_ref
         if final_status != "SUCCEEDED":
             outputs["failure"] = {
                 "class": "verification_failure",
@@ -1605,6 +1653,8 @@ def build_env_stale_worker_checker(
 
     from moonmind.workflows.temporal.worker_code_identity import (
         collect_worker_code_freshness,
+        payload_busy_hint,
+        probe_worker_readiness,
         readiness_urls_from_env,
     )
 
@@ -1613,35 +1663,78 @@ def build_env_stale_worker_checker(
         return None
 
     async def _check() -> Sequence[Mapping[str, Any]]:
+        payload_by_url: dict[str, Any] = {}
+
+        def _recording_probe(url: str) -> Any:
+            payload = probe_worker_readiness(url)
+            payload_by_url[url] = payload
+            return payload
+
         freshness = await asyncio.to_thread(
-            collect_worker_code_freshness, targets
+            collect_worker_code_freshness, targets, probe=_recording_probe
         )
-        return [
-            {
-                "worker": item.name,
-                "startupRevision": item.startup_revision,
-                "currentRevision": item.current_revision,
-                "busy": False,
-                "service": _compose_service_for_worker(item.name),
-            }
-            for item in freshness
-            if item.status == "stale"
-        ]
+        url_by_name = dict(targets)
+        items: list[dict[str, Any]] = []
+        for item in freshness:
+            # Surface stale workers for restart and unknown workers for
+            # post-restart verification; healthy workers need no action.
+            if item.status not in ("stale", "unknown"):
+                continue
+            url = url_by_name.get(item.name)
+            if url is None and "/" in item.name:
+                # Workflow-group lane ("<group>/<lane>"): the busy signal
+                # lives on the group's envelope payload.
+                url = url_by_name.get(item.name.split("/", 1)[0])
+            payload = payload_by_url.get(url or "")
+            busy = (
+                payload_busy_hint(payload)
+                if isinstance(payload, Mapping)
+                else True
+            )
+            items.append(
+                {
+                    "worker": item.name,
+                    "status": item.status,
+                    "startupRevision": item.startup_revision,
+                    "currentRevision": item.current_revision,
+                    "busy": busy,
+                    "service": _compose_service_for_worker(item.name),
+                }
+            )
+        return items
 
     return _check
 
 
 def _compose_service_for_worker(worker_name: str) -> str | None:
-    """Map a readiness worker name to its Compose service, when known."""
+    """Map a readiness worker name to its Compose service, when known.
+
+    Workflow-group lane names look like ``"<group>/<lane>"``: they
+    restart through the group service Compose knows. A raw URL is never
+    a service name — unnamed readiness targets resolve their hostname
+    in ``readiness_urls_from_env``, and anything URL-shaped left over is
+    rejected here so recovery cannot hand a URL to ``docker compose
+    restart``. A bare ``temporal-worker-*`` hostname (from an unnamed
+    readiness URL) is already the Compose service name.
+    """
 
     try:
         from moonmind.workflows.temporal.workers import _FLEET_SERVICE_NAMES
     except Exception:
         return None
-    normalized = str(worker_name or "").strip().lower()
-    for fleet, service in _FLEET_SERVICE_NAMES.items():
-        if normalized in {fleet, service}:
-            return service
+    raw = str(worker_name or "").strip()
+    candidates = [raw]
+    if "/" in raw:
+        candidates.append(raw.split("/", 1)[0].strip())
+    for candidate in candidates:
+        if not candidate or "://" in candidate or "/" in candidate:
+            continue
+        normalized = candidate.lower()
+        for fleet, service in _FLEET_SERVICE_NAMES.items():
+            if normalized in {fleet, service}:
+                return service
+        if normalized.startswith("temporal-worker-"):
+            return candidate
     return None
 
 
@@ -1734,6 +1827,21 @@ def build_compose_stale_worker_restarter(
                     ),
                     None,
                 ) or _compose_service_for_worker(name) or name
+                if not service or "://" in service or "/" in service:
+                    # Unnamed readiness targets have no mapped Compose
+                    # service: failing loudly beats handing a URL to
+                    # ``docker compose restart`` as the service name.
+                    failed.append(
+                        {
+                            "worker": name,
+                            "error": (
+                                "no restartable Compose service for worker "
+                                f"'{name}': configure a service=name=url "
+                                "readiness entry"
+                            ),
+                        }
+                    )
+                    continue
                 if service in excluded:
                     skipped.append(name)
                     continue

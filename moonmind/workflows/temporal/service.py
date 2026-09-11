@@ -606,9 +606,8 @@ class TemporalExecutionService:
         is configured or reachable.
         """
 
-        import logging
-
         from moonmind.workflows.temporal.worker_code_identity import (
+            WorkerCodeAdmissionError,
             collect_worker_code_freshness,
             enforce_worker_code_admission,
             readiness_urls_from_env,
@@ -621,13 +620,9 @@ class TemporalExecutionService:
         try:
             enforce_worker_code_admission(freshness)
         except Exception as exc:
-            from moonmind.workflows.temporal.worker_code_identity import (
-                WorkerCodeAdmissionError,
-            )
-
             if isinstance(exc, WorkerCodeAdmissionError):
                 raise TemporalExecutionValidationError(str(exc)) from exc
-            logging.getLogger(__name__).warning(
+            logger.warning(
                 "Worker code freshness gate degraded: %s", exc
             )
 
